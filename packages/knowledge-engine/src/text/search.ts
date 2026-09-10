@@ -27,7 +27,7 @@
  * changing this tool's contract.
  */
 
-import { documentAnchor, parseDocumentBlocks, type DocumentBlockType } from "./levels.js";
+import { documentAnchor, parseDocumentBlocks, resolveDocumentAnchor, type DocumentBlock, type DocumentBlockType } from "./levels.js";
 
 export interface KbSearchDocumentInput {
   readonly docId: string;
@@ -179,4 +179,135 @@ export function searchBlocks(input: {
   }
 
   return { kbId: input.kbId, query: input.query, hits, truncated, ...(hits.length === 0 ? { note: "terms matched no passage blocks" } : {}) };
+}
+
+// ------------------------------------------------------------------ kb_expand
+
+/** `{docId}:{elementType}:{index}` → docId, parsed from the right so docIds
+ *  containing colons cannot shift the split (mirrors resolveDocumentAnchor). */
+export function docIdFromAnchor(anchorId: string): string | null {
+  const parts = anchorId.split(":");
+  if (parts.length < 3) return null;
+  parts.pop();
+  parts.pop();
+  const docId = parts.join(":");
+  return docId.length > 0 ? docId : null;
+}
+
+export type KbExpandResult =
+  | {
+      readonly found: true;
+      readonly kbId: string;
+      readonly anchorId: string;
+      readonly docId: string;
+      readonly docTitle: string | null;
+      readonly block: { anchorId: string; type: DocumentBlockType; section: string | null; lineStart: number; text: string };
+      readonly before: { anchorId: string; type: DocumentBlockType; text: string } | null;
+      readonly after: { anchorId: string; type: DocumentBlockType; text: string } | null;
+    }
+  | { readonly found: false; readonly reason: "anchor-not-found" };
+
+/** W8 `kb_expand` — read an anchor's block plus its neighbours. The pure
+ *  companion to kb_search: an agent that found a hit reads the surrounding
+ *  passage instead of trusting the snippet alone. */
+export function expandAnchor(input: {
+  kbId: string;
+  anchorId: string;
+  document: KbSearchDocumentInput;
+}): KbExpandResult {
+  const blocks = parseDocumentBlocks(input.document.fulltext);
+  const hit = resolveDocumentAnchor(blocks, input.anchorId);
+  if (!hit) return { found: false, reason: "anchor-not-found" };
+  const toAnchor = (block: DocumentBlock) => ({
+    anchorId: documentAnchor(input.document.docId, block),
+    type: block.type,
+    text: block.text,
+  });
+  return {
+    found: true,
+    kbId: input.kbId,
+    anchorId: input.anchorId,
+    docId: input.document.docId,
+    docTitle: input.document.title,
+    block: {
+      anchorId: input.anchorId,
+      type: hit.block.type,
+      section: hit.block.section,
+      lineStart: hit.block.lineStart,
+      text: hit.block.text,
+    },
+    before: hit.before ? toAnchor(hit.before) : null,
+    after: hit.after ? toAnchor(hit.after) : null,
+  };
+}
+
+// ------------------------------------------------------------------ doc_grep
+
+export interface DocGrepMatch {
+  readonly docId: string;
+  readonly docTitle: string | null;
+  /** 1-based fulltext line. */
+  readonly line: number;
+  readonly text: string;
+}
+
+export interface DocGrepResult {
+  readonly kbId: string;
+  readonly pattern: string;
+  readonly matches: readonly DocGrepMatch[];
+  readonly scannedDocs: number;
+  /** true when matches were cut by maxMatches — more exist. */
+  readonly truncated: boolean;
+  /** Present when the pattern is not a valid regex (agent retry hint). */
+  readonly error?: string;
+}
+
+const GREP_LINE_CAP = 200;
+
+/** W8 `doc_grep` — regex over document fulltexts, line-grained like grep.
+ *  Case-insensitive by default; deterministic doc-then-line order. An invalid
+ *  pattern returns a structured error (never throws) so the agent can retry. */
+export function grepDocuments(input: {
+  kbId: string;
+  pattern: string;
+  documents: readonly KbSearchDocumentInput[];
+  maxMatches?: number;
+}): DocGrepResult {
+  const maxMatches = Math.max(1, Math.min(input.maxMatches ?? 20, 50));
+  const empty = (error?: string): DocGrepResult => ({
+    kbId: input.kbId,
+    pattern: input.pattern,
+    matches: [],
+    scannedDocs: input.documents.length,
+    truncated: false,
+    ...(error ? { error } : {}),
+  });
+  if (input.pattern.length === 0 || input.pattern.length > 200) {
+    return empty("pattern must be 1-200 characters");
+  }
+  let regex: RegExp;
+  try {
+    regex = new RegExp(input.pattern, "i");
+  } catch (cause) {
+    return empty(`invalid regex: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+
+  const matches: DocGrepMatch[] = [];
+  let truncated = false;
+  for (const document of input.documents) {
+    const lines = document.fulltext.split("\n");
+    for (let i = 0; i < lines.length; i += 1) {
+      const raw = lines[i]!;
+      if (!regex.test(raw)) continue;
+      const text = raw.trim().slice(0, GREP_LINE_CAP);
+      if (text.length === 0) continue;
+      if (matches.length >= maxMatches) {
+        truncated = true;
+        break;
+      }
+      matches.push({ docId: document.docId, docTitle: document.title, line: i + 1, text });
+    }
+    if (truncated) break;
+  }
+  return { kbId: input.kbId, pattern: input.pattern, matches, scannedDocs: input.documents.length, truncated };
 }

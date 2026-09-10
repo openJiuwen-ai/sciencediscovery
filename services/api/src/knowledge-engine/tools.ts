@@ -22,15 +22,20 @@ import {
   buildResidentSummary,
   conceptExplore,
   deepDive,
+  docIdFromAnchor,
   entityUnifiedSearch,
+  expandAnchor,
   findGaps,
+  grepDocuments,
   searchBlocks,
   validateEntities,
   type DeepDiveResult,
+  type DocGrepResult,
   type EntityUnifiedSearchResult,
   type ExploreDataAccess,
   type ExploreResult,
   type GapAnalysis,
+  type KbExpandResult,
   type KbSearchResult,
   type ResidentSummary,
   type ValidateEntitiesResult,
@@ -62,6 +67,12 @@ export interface KnowledgeEngineToolPort {
   ): Promise<GapAnalysis>;
   /** W8: keyword document search with block-level anchor hits (kb_search). */
   kbSearch(kbId: string, query: string, opts: { topK?: number; docLimit?: number }): Promise<KbSearchResult>;
+  /** W8: read an anchor's block plus neighbours (kb_expand) — structured
+   *  not-found reasons instead of exceptions for missing docs/anchors. */
+  kbExpand(kbId: string, anchorId: string): Promise<KbExpandResult>;
+  /** W8: regex over document fulltexts, line-grained (doc_grep). Invalid
+   *  patterns come back as a structured error, not a throw. */
+  docGrep(kbId: string, pattern: string, opts: { maxMatches?: number }): Promise<DocGrepResult>;
   /** Resident summary for context injection; null when the KB has no graph. */
   residentSummary(kbId: string): Promise<ResidentSummary | null>;
 }
@@ -147,6 +158,37 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
         .filter((document): document is NonNullable<typeof document> => Boolean(document?.fulltext))
         .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
       return searchBlocks({ kbId, query, documents, topK: opts.topK });
+    },
+
+    async kbExpand(kbId, anchorId) {
+      requireKb(kbId);
+      const docId = docIdFromAnchor(anchorId);
+      const document = docId ? store.getDocument(docId) : undefined;
+      // Structured reasons for every miss: the agent retries with a corrected
+      // anchor instead of decoding an exception message.
+      if (!document || document.kbId !== kbId) {
+        return { found: false as const, reason: "document-not-found" as const };
+      }
+      if (!document.fulltext) {
+        return { found: false as const, reason: "document-not-parsed" as const };
+      }
+      return expandAnchor({
+        kbId,
+        anchorId,
+        document: { docId: document.id, title: document.title, fulltext: document.fulltext },
+      });
+    },
+
+    async docGrep(kbId, pattern, opts) {
+      requireKb(kbId);
+      // Regex is the point (kb_search is keyword-only), so this scans ready
+      // documents directly instead of going through FTS recall. The 200-doc
+      // bound is a guardrail against unbounded reads, not a pagination rule.
+      const documents = store
+        .listDocuments(kbId, { status: "ready", limit: 200 })
+        .filter((document) => Boolean(document.fulltext))
+        .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
+      return grepDocuments({ kbId, pattern, documents, maxMatches: opts.maxMatches });
     },
 
     async residentSummary(kbId) {

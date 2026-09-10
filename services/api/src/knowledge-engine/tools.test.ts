@@ -197,3 +197,95 @@ test("tools: kbSearch returns anchor-level passage hits from FTS recall", async 
     (error: unknown) => error instanceof KeKbNotFoundError,
   );
 });
+
+test("tools: kbExpand resolves anchors with structured miss reasons", async (context) => {
+  const root = tempRoot("ke-tools-kbexpand");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const doc = store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p1",
+    title: "mAb114 neutralizes Ebola",
+    status: "ready",
+    fulltext: "# Intro\n\nmAb114 binds the Ebola glycoprotein and neutralizes the virus.",
+  });
+  const otherKb = store.createKnowledgeBase({ name: "Other" });
+
+  const hit = await tools.kbExpand(kb.id, `${doc.id}:paragraph:0`);
+  assert.equal(hit.found, true);
+  if (hit.found) {
+    assert.equal(hit.docId, doc.id);
+    assert.ok(hit.block.text.includes("neutralizes"));
+    assert.equal(hit.before?.type, "heading");
+    assert.equal(hit.after, null);
+  }
+
+  const badIndex = await tools.kbExpand(kb.id, `${doc.id}:paragraph:9`);
+  assert.deepEqual(badIndex, { found: false, reason: "anchor-not-found" });
+
+  const unparsed = store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/pending",
+    title: "Pending",
+    status: "pending",
+  });
+  assert.deepEqual(await tools.kbExpand(kb.id, `${unparsed.id}:paragraph:0`), {
+    found: false,
+    reason: "document-not-parsed",
+  });
+
+  // A doc from another KB must not be readable through this KB's tool call.
+  assert.deepEqual(await tools.kbExpand(otherKb.id, `${doc.id}:paragraph:0`), {
+    found: false,
+    reason: "document-not-found",
+  });
+  assert.deepEqual(await tools.kbExpand(kb.id, "not-an-anchor"), {
+    found: false,
+    reason: "document-not-found",
+  });
+});
+
+test("tools: docGrep regex-scans ready documents with structured errors", async (context) => {
+  const root = tempRoot("ke-tools-docgrep");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p1",
+    title: "Binding study",
+    status: "ready",
+    fulltext: "The IC50 was 4 nM.\nNo effect on mice.",
+  });
+  // Pending docs are out of scope for grep.
+  store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/pending",
+    title: "Pending",
+    status: "pending",
+    fulltext: "IC50 pending",
+  });
+
+  const result = await tools.docGrep(kb.id, "ic\\d+", {});
+  assert.equal(result.error, undefined);
+  assert.equal(result.scannedDocs, 1);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.matches[0]!.line, 1);
+  assert.ok(result.matches[0]!.text.includes("IC50"));
+
+  const invalid = await tools.docGrep(kb.id, "([unclosed", {});
+  assert.match(invalid.error ?? "", /invalid regex/i);
+
+  const none = await tools.docGrep(kb.id, "zebraquantum", {});
+  assert.deepEqual(none.matches, []);
+
+  await assert.rejects(
+    () => tools.docGrep("nonexistent", "x", {}),
+    (error: unknown) => error instanceof KeKbNotFoundError,
+  );
+});

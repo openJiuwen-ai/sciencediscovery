@@ -14,7 +14,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { extractQueryTerms, searchBlocks, type KbSearchDocumentInput } from "./search.js";
+import { docIdFromAnchor, expandAnchor, extractQueryTerms, grepDocuments, searchBlocks, type KbSearchDocumentInput } from "./search.js";
 
 const DOC_A: KbSearchDocumentInput = {
   docId: "doc-a",
@@ -94,4 +94,64 @@ test("searchBlocks skips reference blocks and is deterministic", () => {
   const again = searchBlocks({ kbId: "kb1", query: "mAb114", documents: [DOC_A] });
   const third = searchBlocks({ kbId: "kb1", query: "mAb114", documents: [DOC_A] });
   assert.deepEqual(again, third);
+});
+
+test("docIdFromAnchor parses from the right and rejects short shapes", () => {
+  assert.equal(docIdFromAnchor("doc-a:paragraph:0"), "doc-a");
+  assert.equal(docIdFromAnchor("weird:id:formula:3"), "weird:id");
+  assert.equal(docIdFromAnchor("nocolonatall"), null);
+  assert.equal(docIdFromAnchor("only:one"), null);
+  assert.equal(docIdFromAnchor(""), null);
+});
+
+test("expandAnchor returns the block with neighbours and honest misses", () => {
+  const hit = expandAnchor({ kbId: "kb1", anchorId: "doc-a:paragraph:0", document: DOC_A });
+  assert.equal(hit.found, true);
+  if (hit.found) {
+    // paragraph:0 is the Methods paragraph; its neighbours are the Methods
+    // heading (before) and the display formula (after).
+    assert.equal(hit.docTitle, "Antibodycocktail");
+    assert.equal(hit.before?.type, "heading");
+    assert.equal(hit.after?.type, "formula");
+    assert.ok(hit.block.text.includes("neutralization assay"));
+    assert.match(hit.before!.anchorId, /^doc-a:heading:\d+$/);
+  }
+  const miss = expandAnchor({ kbId: "kb1", anchorId: "doc-a:paragraph:99", document: DOC_A });
+  assert.deepEqual(miss, { found: false, reason: "anchor-not-found" });
+  const wrongType = expandAnchor({ kbId: "kb1", anchorId: "doc-a:zebra:0", document: DOC_A });
+  assert.equal(wrongType.found, false);
+});
+
+test("grepDocuments matches case-insensitively with line numbers and caps", () => {
+  const result = grepDocuments({ kbId: "kb1", pattern: "mAb114", documents: [DOC_A, DOC_B] });
+  assert.equal(result.error, undefined);
+  assert.equal(result.scannedDocs, 2);
+  assert.equal(result.matches.length, 1);
+  const match = result.matches[0]!;
+  assert.equal(match.docId, "doc-a");
+  assert.equal(match.line, 5);
+  assert.ok(match.text.includes("mAb114"));
+
+  // Regex semantics (not plain keywords) and case-insensitivity by default.
+  const kd = grepDocuments({ kbId: "kb1", pattern: "k_d\\s*=", documents: [DOC_A] });
+  assert.equal(kd.matches.length, 1);
+  assert.equal(kd.matches[0]!.line, 8);
+
+  const capped = grepDocuments({ kbId: "kb1", pattern: "nM|antibod", documents: [DOC_A, DOC_B], maxMatches: 1 });
+  assert.equal(capped.matches.length, 1);
+  assert.equal(capped.truncated, true);
+});
+
+test("grepDocuments returns structured errors, never throws", () => {
+  const invalid = grepDocuments({ kbId: "kb1", pattern: "([unclosed", documents: [DOC_A] });
+  assert.deepEqual(invalid.matches, []);
+  assert.match(invalid.error ?? "", /invalid regex/i);
+
+  const empty = grepDocuments({ kbId: "kb1", pattern: "", documents: [DOC_A] });
+  assert.match(empty.error ?? "", /1-200/);
+
+  const none = grepDocuments({ kbId: "kb1", pattern: "zebraquantum", documents: [DOC_A] });
+  assert.deepEqual(none.matches, []);
+  assert.equal(none.error, undefined);
+  assert.equal(none.truncated, false);
 });

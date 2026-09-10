@@ -1710,6 +1710,14 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
       calls.push(`kb_search:${kbId}:${query}`);
       return { hits: [], truncated: false };
     },
+    kbExpand: async (kbId: string, anchorId: string) => {
+      calls.push(`kb_expand:${kbId}:${anchorId}`);
+      return { found: false, reason: "anchor-not-found" };
+    },
+    docGrep: async (kbId: string, pattern: string) => {
+      calls.push(`doc_grep:${kbId}:${pattern}`);
+      return { matches: [], scannedDocs: 0, truncated: false };
+    },
   };
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
@@ -1725,6 +1733,8 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
     "validate_entities",
     "gap_candidates",
     "kb_search",
+    "kb_expand",
+    "doc_grep",
   ]) {
     assert.ok(names.includes(expected), `${expected} should be registered`);
   }
@@ -1741,13 +1751,27 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
   assert.deepEqual(calls, ["concept_explore:kb1:mAb114", "kb_search:kb1:neutralization assay"]);
   assert.equal((searchResult.details as { truncated: boolean }).truncated, false);
 
-  // Without the port, none of the six tools exist.
+  // kb_expand / doc_grep forward their parameters and surface the payload.
+  const expand = tools.find((tool) => tool.name === "kb_expand")!;
+  const expandResult = await expand.execute("ke-call", { kbId: "kb1", anchorId: "doc1:paragraph:0" });
+  assert.deepEqual(calls, [
+    "concept_explore:kb1:mAb114",
+    "kb_search:kb1:neutralization assay",
+    "kb_expand:kb1:doc1:paragraph:0",
+  ]);
+  assert.equal((expandResult.details as { reason: string }).reason, "anchor-not-found");
+  const grep = tools.find((tool) => tool.name === "doc_grep")!;
+  const grepResult = await grep.execute("ke-call", { kbId: "kb1", pattern: "IC50" });
+  assert.deepEqual(calls.at(-1), "doc_grep:kb1:IC50");
+  assert.equal((grepResult.details as { truncated: boolean }).truncated, false);
+
+  // Without the port, none of the tools exist.
   const bare = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
   });
   const bareNames = new Set(bare.map((tool) => tool.name));
-  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases", "kb_search"]) {
+  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases", "kb_search", "kb_expand", "doc_grep"]) {
     assert.equal(bareNames.has(absent), false, `${absent} must not register without the port`);
   }
 });

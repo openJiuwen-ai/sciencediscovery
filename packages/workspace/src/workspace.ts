@@ -322,6 +322,8 @@ export interface WorkspaceToolOptions {
       opts: { topN?: number; signals?: Array<"holes" | "conflicts" | "transfers"> },
     ) => Promise<unknown>;
     kbSearch: (kbId: string, query: string, opts: { topK?: number; docLimit?: number }) => Promise<unknown>;
+    kbExpand: (kbId: string, anchorId: string) => Promise<unknown>;
+    docGrep: (kbId: string, pattern: string, opts: { maxMatches?: number }) => Promise<unknown>;
   };
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
    * `declare_evidence` LLM tool). Returns a structured error code instead of
@@ -1275,6 +1277,30 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           knowledgeEngine.kbSearch(params.kbId, params.query, {
             ...(params.topK === undefined ? {} : { topK: params.topK }),
             ...(params.docLimit === undefined ? {} : { docLimit: params.docLimit }),
+          }),
+      ),
+      keTool(
+        "kb_expand",
+        "Expand a document anchor",
+        "Read the full block behind an anchorId from kb_search (or an evidence card), plus its neighbouring before/after blocks — the passage in context instead of a snippet. Anchors have the form {docId}:{blockType}:{index}. Structured not-found reasons: document-not-found (wrong docId), document-not-parsed (no fulltext yet), anchor-not-found (block type/index does not exist in this document).",
+        Type.Object({
+          kbId: kbIdField,
+          anchorId: Type.String({ minLength: 1, description: "Anchor id from kb_search hits or evidence cards" }),
+        }),
+        (params) => knowledgeEngine.kbExpand(params.kbId, params.anchorId),
+      ),
+      keTool(
+        "doc_grep",
+        "Regex search document texts",
+        "Case-insensitive regular-expression search over a knowledge base's document fulltexts, line-grained like grep: each match reports the document, a 1-based line number, and the matched line. Use it when you need an exact pattern (a measurement like 'IC50', a gene variant spelling, a table token) rather than the keyword recall of kb_search. Invalid regex returns a structured error you can fix and retry. LIMITATION: matches are per line (multi-line patterns do not span lines); truncated=true means more matches exist beyond maxMatches.",
+        Type.Object({
+          kbId: kbIdField,
+          pattern: Type.String({ minLength: 1, maxLength: 200, description: "JavaScript regex source (case-insensitive)" }),
+          maxMatches: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
+        }),
+        (params) =>
+          knowledgeEngine.docGrep(params.kbId, params.pattern, {
+            ...(params.maxMatches === undefined ? {} : { maxMatches: params.maxMatches }),
           }),
       ),
       keTool(
