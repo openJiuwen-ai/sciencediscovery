@@ -185,7 +185,7 @@ class IdeaTreeEngine:
         candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
         best = sorted((n for n in candidates if n['score'] is not None), key=lambda n: n['score'], reverse=self.state['settings']['scoreDirection'] == 'maximize')[:10]
         selected = {n['id']: n for n in directions[:20] + candidates[-20:] + best}
-        return [dict(id=n['id'], parentId=n['parentId'], depth=n['depth'], kind=n['kind'], hypothesis=n['hypothesis'], score=n['score'], status=n['status'], insight=(n['insight'] or '')[:1200]) for n in selected.values()]
+        return [dict(id=n['id'], parentId=n['parentId'], depth=n['depth'], kind=n['kind'], hypothesis=n['hypothesis'][:600], score=n['score'], status=n['status'], insight=(n['insight'] or '')[:1200]) for n in selected.values()]
 
     async def stage(self, candidate, role, payload):
         if role not in candidate['stages']:
@@ -225,23 +225,31 @@ class IdeaTreeEngine:
 
     def ancestors(self, candidate):
         tree = ResearchTree(self.state['nodes'])
-        return [dict(id=n.data['id'], insight=n.data['insight']) for n in tree.get_ancestors(tree.find(candidate['id']).index)]
+        return [dict(id=n.data['id'], insight=(n.data['insight'] or '')[:1200]) for n in tree.get_ancestors(tree.find(candidate['id']).index)]
 
     def find(self, identifier):
         return ResearchTree(self.state['nodes']).find(identifier).data
 
     async def propagate(self, candidate):
         completed = candidate.setdefault('propagatedTo', [])
+        changed = candidate
         for ancestor in self.ancestors(candidate):
             identifier = ancestor['id']
-            if identifier in completed:
-                continue
             parent = self.find(identifier)
+            if identifier in completed:
+                changed = parent
+                continue
             children = [self.find(i) for i in parent['childrenIds']]
+            # Incremental summarization: retain prior lessons and the changed branch,
+            # together with a bounded set of recent and best sibling findings.
+            assessed = [n for n in children if n['score'] is not None]
+            best = sorted(assessed, key=lambda n: n['score'], reverse=self.state['settings']['scoreDirection'] == 'maximize')[:5]
+            relevant = {n['id']: n for n in children[-10:] + best + [changed]}
             self.state.update(phase='propagate', currentNodeId=identifier)
             self.save()
-            summary = await self.ask('propagate', {**self.context(), 'parent': parent['hypothesis'], 'ownAssessment': parent['stages'].get('aggregate'), 'children': [dict(hypothesis=n['hypothesis'], score=n['score'], insight=n['insight']) for n in children if n['insight']]})
+            summary = await self.ask('propagate', {**self.context(), 'parent': parent['hypothesis'], 'isRoot': identifier == 'ROOT', 'priorSummary': (parent['insight'] or '')[:4000], 'ownAssessment': parent['stages'].get('aggregate'), 'children': [dict(hypothesis=n['hypothesis'][:600], score=n['score'], insight=n['insight'][:1200]) for n in relevant.values() if n['insight']]})
             parent['insight'] = summary['text']
+            changed = parent
             completed.append(identifier)
             self.save()
 

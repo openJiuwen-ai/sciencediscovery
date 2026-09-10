@@ -7,7 +7,7 @@ import type { RunTokenRegistry } from "../evolution/llm-proxy.js";
 export function createIdeaResearchClient(options: {
   url: string; token?: string; apiOrigin: string; store: SessionStore; tokens: RunTokenRegistry;
 }) {
-  const grants = new Map<string, string>();
+  const grants = new Map<string, { sessionId: string; token: string }>();
   const pending = new Set<string>();
   async function invoke(sessionId: string, operation: string, input: Record<string, unknown> = {}): Promise<any> {
     const session = operation === "list" || operation === "get" || operation === "defaults"
@@ -26,13 +26,14 @@ export function createIdeaResearchClient(options: {
       const researchId = previous?.research.id ?? `research-${randomUUID()}`;
       options.tokens.revoke(researchId);
       const token = options.tokens.issue(researchId, sessionId, model.id);
-      grants.set(researchId, sessionId);
+      grants.set(researchId, { sessionId, token });
       issued = researchId;
       payload = { ...payload, researchId, modelId: model.id,
         ...(operation === "create" ? { settings: { ...options.store.getIdeaTreeSettings(), ...(input.settings as object ?? {}) } } : {}),
         llm: { token, url: `${options.apiOrigin}/internal/evolve-llm/${researchId}/v1/chat/completions` } };
     }
     try {
+      const observedGrants = new Map(grants);
       const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/command`, {
         method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
         body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000),
@@ -41,7 +42,7 @@ export function createIdeaResearchClient(options: {
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
       const views: IdeaResearchView[] = body.items ?? (body.research ? [body] : []);
       for (const view of views) {
-        if (!["running", "pausing"].includes(view.research.status) && grants.has(view.research.id)) {
+        if (!["running", "pausing"].includes(view.research.status) && grants.has(view.research.id) && grants.get(view.research.id) === observedGrants.get(view.research.id)) {
           options.tokens.revoke(view.research.id);
           grants.delete(view.research.id);
         }
@@ -54,7 +55,7 @@ export function createIdeaResearchClient(options: {
   }
   // Retire credentials even when the user closes the page. No execution is scheduled here.
   const timer = setInterval(() => {
-    for (const [researchId, sessionId] of grants) {
+    for (const [researchId, { sessionId }] of grants) {
       if (!pending.has(sessionId)) void command(sessionId, "get", { researchId }).catch(() => undefined);
     }
   }, 5000);
@@ -72,7 +73,7 @@ export function createIdeaResearchClient(options: {
       body: JSON.stringify({operation: "delete", projectId, sessionId}), signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) throw new Error(`Research cleanup failed: HTTP ${response.status}`);
-    for (const [id, owner] of grants) if (owner === sessionId) { options.tokens.revoke(id); grants.delete(id); }
+    for (const [id, owner] of grants) if (owner.sessionId === sessionId) { options.tokens.revoke(id); grants.delete(id); }
   }
   return { command, cleanup, close() { clearInterval(timer); for (const id of grants.keys()) options.tokens.revoke(id); } };
 }

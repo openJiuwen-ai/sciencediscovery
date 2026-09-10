@@ -22,7 +22,10 @@ is calculated by Python; do not replace it. Do not invent absent evidence or use
 PROPAGATE = """Summarize the supplied completed child results and reusable lessons for this
 research direction. Preserve negative findings and uncertainty, distinguish assessed hypotheses
 from measurements, and identify useful next questions. Do not invent results for pending nodes.
-Keep the summary under 250 words. Do not use tools."""
+Update priorSummary with the supplied changed/recent/best branches; omitted branches are not new failures.
+For isRoot, also recommend the current most promising candidate, its advantages and risks,
+and the first experiments and controls. Clearly separate evidence from hypotheses.
+Keep the summary under 400 words. Do not use tools."""
 # Established assessment dimensions, without the old Subagent output envelope.
 CRITERIA = {
     "activity": """# Rubric: Assessment Screening Agent A — Catalytic Activity
