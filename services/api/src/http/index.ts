@@ -1194,10 +1194,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         // Only the Runner knows whether a card opens inside its sandbox, so
         // refuse anything its probe did not clear rather than storing a tick
-        // that would fail at execution time.
+        // that would fail at execution time. Asked of the Runner here rather
+        // than read from the stored machine: `runnerStatus` is connection
+        // state this layer attaches while listing machines and never persists,
+        // so a stored record has none and every card would look absent.
         const inventory = runnerId === LOCAL_RUNNER_ID
           ? await runnerClient.resources().then((resources) => resources.npu).catch(() => undefined)
-          : store.getRemoteHost(runnerId)?.runnerStatus?.resources?.npu;
+          : (await remoteCompute.runnerStatusWithResources(runnerId)).resources?.npu;
         const resolved = resolveNpuSelection(devices as number[], inventory);
         if (resolved.rejected.length > 0) {
           return sendError(response, 409, resolved.rejected.map((entry) => entry.reason).join(" "));
