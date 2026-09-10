@@ -1192,22 +1192,36 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!Array.isArray(devices) || devices.some((entry) => typeof entry !== "number")) {
           return sendError(response, 400, "Select NPU cards by their host index");
         }
-        // Only the Runner knows whether a card opens inside its sandbox, so
-        // refuse anything its probe did not clear rather than storing a tick
-        // that would fail at execution time. Asked of the Runner here rather
-        // than read from the stored machine: `runnerStatus` is connection
-        // state this layer attaches while listing machines and never persists,
-        // so a stored record has none and every card would look absent.
-        const inventory = runnerId === LOCAL_RUNNER_ID
-          ? await runnerClient.resources().then((resources) => resources.npu).catch(() => undefined)
-          : (await remoteCompute.runnerStatusWithResources(runnerId)).resources?.npu;
-        const resolved = resolveNpuSelection(devices as number[], inventory);
-        if (resolved.rejected.length > 0) {
-          return sendError(response, 409, resolved.rejected.map((entry) => entry.reason).join(" "));
+        // Only cards being *added* are judged. A card that was usable when it
+        // was ticked and has since been claimed elsewhere must still be
+        // removable: judging the whole set would refuse the very request that
+        // takes the unusable card out, and the operator could never get rid of
+        // it. Removing needs no verdict — it grants nothing.
+        const requested = [...new Set(devices as number[])].sort((left, right) => left - right);
+        const previous = store.npuDeviceSelection(runnerId);
+        const added = requested.filter((hostIndex) => !previous.includes(hostIndex));
+        if (added.length > 0) {
+          // Re-probed rather than read from a cache: a card's availability on a
+          // shared machine changes by the minute, and this is the moment the
+          // product promises the operator that a ticked card works.
+          let inventory;
+          try {
+            inventory = runnerId === LOCAL_RUNNER_ID
+              ? (await runnerClient.npuDevices({ refresh: true }))
+              : (await remoteCompute.runnerClient(runnerId).npuDevices({ refresh: true }));
+          } catch (error) {
+            return sendError(response, 409, `Could not read the NPU cards of Runner ${runnerId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`);
+          }
+          const resolved = resolveNpuSelection(added, inventory);
+          if (resolved.rejected.length > 0) {
+            return sendError(response, 409, resolved.rejected.map((entry) => entry.reason).join(" "));
+          }
         }
         try {
           sendJson(response, 200, {
-            devices: await store.setNpuDeviceSelection(runnerId, resolved.accepted),
+            devices: await store.setNpuDeviceSelection(runnerId, requested),
             runnerId,
           });
         } catch (error) {
