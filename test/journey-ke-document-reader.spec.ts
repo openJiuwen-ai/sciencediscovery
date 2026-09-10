@@ -38,15 +38,14 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
  * CostSideEffects: no external cost; knowledge-base records live inside the disposable isolated data dir.
  */
-// fixme (not a product bug): unskipped once the W7 reader is wired into
-// KnowledgeEnginePage — blocked by the uncommitted W6 restyle of that file.
-// Wiring contract this spec expects: document rows expose `ke-document-<docId>`
-// buttons that open <KeDocumentReader>; entity evidence cards expose one
-// `ke-evidence-source` button per quote that opens the reader with
-// highlightQuote set. Node-click targeting and the stub evidence_quote
-// (verbatim-in-fixture) are calibrated at wiring time — same as J-KE1's
-// placeholder calibration note.
-test.fixme("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
+// Wiring contract (landed with W7): document rows are `ke-document-<docId>`
+// buttons opening <KeDocumentReader>; each entity evidence card with a docId
+// exposes a `ke-evidence-source` button opening it with highlightQuote set.
+// The stub evidence_quote is calibrated VERBATIM against the recorded fixture
+// corpus (first seed hit, arXiv 1901.02624 parsed by the same paper worker):
+// it appears on one line of the parsed fulltext, so the provenance gate keeps
+// the relation on that document and the reader highlights the exact block.
+test("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
   test.setTimeout(600_000);
   journey.scenario({
     goal: "知识库建成后，研究人员点开任意文档三级阅读（摘要/结构/原文），"
@@ -54,13 +53,16 @@ test.fixme("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async 
     preconditions: [
       "隔离栈以 fixture 模式启动（SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR 指向 test/fixtures/scholarly），不出网",
       "浏览器已持有本实例的访问 token，语言为 zh-CN",
-      "抽取管线模型由旅程注册的本地 stub 提供（evidence_quote 需逐字命中 fixture 全文，接线时校准）",
+      "抽取管线模型由旅程注册的本地 stub 提供（evidence_quote 已对 fixture 语料逐字校准）",
     ],
   });
   await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
 
   const seedQuery = "Ebola virus glycoprotein antibody neutralization";
   const kbName = `J-KE4 知识库 ${Date.now()}`;
+  // Verbatim sentence from the parsed fulltext of the first seed hit
+  // (arXiv 1901.02624, pdfplumber output) — see the note above the test.
+  const evidenceQuote = "localized on the virus spike glycoprotein leading to neutralization of viral infection";
   const stub = await kePipelineStub({
     entities: [
       { name: "Ebola virus glycoprotein", type: "protein" },
@@ -71,7 +73,7 @@ test.fixme("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async 
         source: "mAb114",
         target: "Ebola virus glycoprotein",
         type: "binds",
-        evidence_quote: "mAb114 binds the Ebola virus glycoprotein and neutralizes the virus",
+        evidence_quote: evidenceQuote,
       },
     ],
   });
@@ -122,9 +124,9 @@ test.fixme("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async 
 
     await journey.step(
       "L0 摘要层",
-      "点开第一篇就绪文档，阅读器默认落在 L0：确定性摘要非空、章节标签渲染。",
+      "点开第一篇就绪文档（✓），阅读器默认落在 L0：确定性摘要非空、章节标签渲染。",
       async () => {
-        await page.locator('[data-testid^="ke-document-"]').first().click();
+        await page.locator('[data-testid^="ke-document-"]').filter({ hasText: "✓" }).first().click();
         await expect(page.getByTestId("ke-doc-reader")).toBeVisible();
         await expect(page.getByTestId("ke-doc-level-L0")).toHaveAttribute("aria-selected", "true");
         await expect(page.getByTestId("ke-doc-summary")).not.toBeEmpty();
@@ -149,19 +151,33 @@ test.fixme("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async 
 
     await journey.step(
       "证据卡跳转原文高亮",
-      "实体详情面板的证据卡点查看原文，阅读器回到 L1 并高亮包含逐字引文的块（未逐字命中时显示诚实提示）。",
+      "实体详情面板的证据卡点查看原文，阅读器自动切到 L1 并高亮包含逐字引文的块。",
       async () => {
         await page.getByTestId("ke-doc-close").click();
         await page.locator('[data-testid^="ke-kb-"]').filter({ hasText: kbName }).click();
-        await expect(page.getByTestId("ke-graph-canvas")).toBeVisible({ timeout: 60_000 });
-        // Selecting a node opens the bottom detail panel with evidence cards;
-        // node-hit calibration happens at wiring time (cytoscape canvas).
-        await page.locator('[data-testid="ke-graph-canvas"] canvas').first().click({ position: { x: 200, y: 120 } });
+        await expect(
+          page.getByTestId("ke-graph-canvas").or(page.getByTestId("ke-roots")),
+        ).toBeVisible({ timeout: 60_000 });
+        // Roots (community bubbles) may render first; the reader journey needs
+        // the entity graph, so drill to the full view when it does.
+        if (await page.getByTestId("ke-roots").isVisible().catch(() => false)) {
+          await page.getByTestId("ke-breadcrumb-all").click();
+          await expect(page.getByTestId("ke-graph-canvas")).toBeVisible({ timeout: 30_000 });
+        }
+        // Deterministic node tap through the canvas test hook (same as J-KE2)
+        // — blind-clicking canvas pixels is flaky.
+        await page.evaluate(() => {
+          const cy = (window as unknown as { __keGraphCy?: { nodes(): { first(): { emit(e: string): void } } } }).__keGraphCy;
+          cy?.nodes().first().emit("tap");
+        });
+        const detail = page.getByTestId("ke-entity-detail");
+        await expect(detail).toBeVisible({ timeout: 30_000 });
         await page.getByTestId("ke-evidence-source").first().click();
         await expect(page.getByTestId("ke-doc-reader")).toBeVisible();
-        await expect(
-          page.getByTestId("ke-doc-highlight").or(page.getByTestId("ke-doc-highlight-miss")),
-        ).toBeVisible({ timeout: 30_000 });
+        // The stub quote is verbatim in the ingested fulltext, so the reader
+        // must land on the highlighted block (the miss notice would be a bug).
+        await expect(page.getByTestId("ke-doc-highlight")).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByTestId("ke-doc-highlight")).toContainText("glycoprotein");
       },
     );
   } finally {

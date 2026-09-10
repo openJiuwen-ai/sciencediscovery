@@ -25,6 +25,7 @@ import type {
   KeKb,
 } from "../api/knowledge-engine.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
+import { KeDocumentReader } from "./KeDocumentReader.js";
 import { KeGraphCanvas } from "./KeGraphCanvas.js";
 import { KeGrowPanel } from "./KeGrowPanel.js";
 import { KeRootsView } from "./KeRootsView.js";
@@ -170,6 +171,9 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   // it had stopped (no active jobs) — a plain refresh alone would leave the
   // recursive timeout dead and the grow progress frozen.
   const [pollNonce, setPollNonce] = useState(0);
+  // W7 three-level reader overlay: opened from a document row (no quote) or
+  // an evidence card (with its verbatim quote for click-through highlight).
+  const [readerDoc, setReaderDoc] = useState<{ docId: string; highlightQuote: string | null } | null>(null);
 
   // Stale-response guards: a refresh that resolves after the user switched
   // KBs (or after unmount) must not land.
@@ -400,6 +404,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                   setJobs([]);
                   setGrowStatus(undefined);
                   setRoots(undefined);
+                  setReaderDoc(null);
                 }}
                 style={{
                   display: "block", width: "100%", textAlign: "left", margin: "4px 0", padding: 8,
@@ -510,15 +515,33 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
               <h4 style={{ ...SECTION_TITLE_STYLE, marginTop: 20 }}>{t("ke.docs.title")}</h4>
               <div data-testid="ke-documents" style={{ fontSize: 12, color: "var(--text-secondary, #475569)" }}>
                 {documents.map((doc) => (
-                  <div key={doc.id} title={doc.title}>
+                  <button
+                    key={doc.id}
+                    type="button"
+                    data-testid={`ke-document-${doc.id}`}
+                    title={`${t("ke.doc.open")} — ${doc.title}`}
+                    onClick={() => setReaderDoc({ docId: doc.id, highlightQuote: null })}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      margin: "4px 0",
+                      padding: "4px 6px",
+                      border: "none",
+                      borderRadius: "var(--radius-m, 6px)",
+                      background: "transparent",
+                      color: "inherit",
+                      cursor: "pointer",
+                    }}
+                  >
                     {doc.status === "ready" ? "✓" : doc.status === "error" ? "✗" : "…"} {doc.title.slice(0, 40) || doc.id.slice(0, 8)}
-                  </div>
+                  </button>
                 ))}
               </div>
             </>
           ) : null}
         </aside>
-        <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative" }}>
           {error ? <div role="alert" style={{ padding: 8, color: "var(--danger, #b91c1c)" }}>{error}</div> : null}
           <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
             {countsBadgeText ? (
@@ -621,6 +644,27 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                               ? t("ke.detail.evidence", { doc: item.docTitle, quote: item.quote ?? "" })
                               : item.quote ?? ""}
                           </div>
+                          {item.docId ? (
+                            <button
+                              type="button"
+                              data-testid="ke-evidence-source"
+                              onClick={() => {
+                                if (item.docId) setReaderDoc({ docId: item.docId, highlightQuote: item.quote });
+                              }}
+                              style={{
+                                marginTop: 6,
+                                fontSize: 11,
+                                padding: "2px 8px",
+                                borderRadius: "var(--radius-m, 6px)",
+                                border: "1px solid var(--border, #e2e8f0)",
+                                background: "transparent",
+                                color: "var(--accent, #2563eb)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {t("ke.detail.viewSource")}
+                            </button>
+                          ) : null}
                         </div>
                       );
                     })}
@@ -629,6 +673,15 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
               </>
             )}
           </section>
+          {activeKbId && readerDoc ? (
+            <KeDocumentReader
+              client={client}
+              kbId={activeKbId}
+              docId={readerDoc.docId}
+              highlightQuote={readerDoc.highlightQuote}
+              onClose={() => setReaderDoc(null)}
+            />
+          ) : null}
         </main>
       </div>
     </div>

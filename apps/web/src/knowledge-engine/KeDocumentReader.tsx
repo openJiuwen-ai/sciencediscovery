@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import katex from "katex";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { KeDocumentBlock, KeDocumentLevel, KeDocumentRead } from "../api/knowledge-engine.js";
 import { KnowledgeEngineApiClient } from "../api/knowledge-engine.js";
-import { useLocale } from "../i18n/index.js";
+import { useLocale, type MessageKey } from "../i18n/index.js";
+import { MarkdownRenderer } from "../Markdown.js";
 
 export interface KeDocumentReaderProps {
   client: KnowledgeEngineApiClient;
@@ -27,39 +29,6 @@ export interface KeDocumentReaderProps {
   highlightQuote?: string | null;
   onClose: () => void;
 }
-
-/**
- * W7 three-level document reader: L0 deterministic abstract → L1 anchored
- * blocks → L2 fulltext (the DA wiki pyramid, compiled on demand). Level
- * preference persists across opens. Anchors (`{docId}:{type}:{index}`) are
- * the address space shared with chat evidence links (W8).
- *
- * Standalone by design during the W6/W7 transition: copy lives in a local
- * bilingual map pending migration to `ke.doc.*` i18n keys once the W6
- * messages.ts changes land; the component is wired into KnowledgeEnginePage
- * in the same step.
- */
-const STRINGS = {
-  levelL0: { en: "L0 · Abstract", "zh-CN": "L0 · 摘要" },
-  levelL1: { en: "L1 · Structure", "zh-CN": "L1 · 结构" },
-  levelL2: { en: "L2 · Full text", "zh-CN": "L2 · 原文" },
-  close: { en: "Close", "zh-CN": "关闭" },
-  loading: { en: "Loading…", "zh-CN": "加载中…" },
-  loadFailed: { en: "Failed to load document", "zh-CN": "文档加载失败" },
-  retry: { en: "Retry", "zh-CN": "重试" },
-  pendingDoc: { en: "This document has not been parsed yet — no fulltext levels available.", "zh-CN": "该文档尚未解析完成——暂无正文层级。" },
-  outline: { en: "Outline", "zh-CN": "目录" },
-  blocksCount: { en: "{count} blocks", "zh-CN": "{count} 个块" },
-  sourceAbstract: { en: "summary from abstract", "zh-CN": "摘要来自摘要段" },
-  sourceBody: { en: "summary from first paragraph", "zh-CN": "摘要来自正文首段" },
-  sourceTitle: { en: "summary from title", "zh-CN": "摘要来自标题" },
-  tagsLabel: { en: "Tags", "zh-CN": "标签" },
-  noTags: { en: "no section tags", "zh-CN": "暂无章节标签" },
-  highlightMiss: { en: "evidence passage not found verbatim in this version", "zh-CN": "证据原文在此版本中未逐字命中" },
-  lineRef: { en: "line {line}", "zh-CN": "第 {line} 行" },
-} as const;
-
-type LocaleKey = "en" | "zh-CN";
 
 const LEVEL_STORAGE_KEY = "keDocDefaultLevel";
 
@@ -84,14 +53,65 @@ function blockForQuote(blocks: KeDocumentBlock[], quote: string): KeDocumentBloc
   return blocks.find((block) => normalize(block.text).includes(needle)) ?? null;
 }
 
+/** Inline `$..$` math segments rendered via KaTeX. Conservative: an inner
+ *  segment that starts or ends with whitespace stays literal text — that shape
+ *  is prose with two currency dollars ("$5 … $10"), never a formula. */
+const INLINE_MATH = /\$([^$\n]{1,200})\$/g;
+
+function renderTex(tex: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(tex, { displayMode, throwOnError: false });
+  } catch {
+    // Unreachable with throwOnError:false in practice; keep the source visible.
+    return "";
+  }
+}
+
+function inlineMathNodes(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+  for (const match of text.matchAll(INLINE_MATH)) {
+    const tex = match[1]!;
+    if (tex.trim().length === 0 || tex !== tex.trim()) continue;
+    if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
+    const html = renderTex(tex, false);
+    if (html) {
+      nodes.push(<span key={key++} dangerouslySetInnerHTML={{ __html: html }} />);
+    } else {
+      nodes.push(match[0]);
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor === 0) return [text];
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
+
+/** Block body: formula blocks are pure LaTeX (the `$$`-fenced jats.ts shape)
+ *  and render in display mode; prose-like blocks get inline `$..$` math;
+ *  table/reference/code stay literal for source fidelity. */
+function blockBody(block: KeDocumentBlock): ReactNode {
+  if (block.type === "formula") {
+    const html = renderTex(block.text, true);
+    if (html) return <span data-testid="ke-doc-formula" dangerouslySetInnerHTML={{ __html: html }} />;
+    return block.text;
+  }
+  if (block.type === "paragraph" || block.type === "heading" || block.type === "list" || block.type === "figure") {
+    return <>{inlineMathNodes(block.text)}</>;
+  }
+  return block.text;
+}
+
+/**
+ * W7 three-level document reader: L0 deterministic abstract → L1 anchored
+ * blocks → L2 fulltext (the DA wiki pyramid, compiled on demand). Level
+ * preference persists across opens. Anchors (`{docId}:{type}:{index}`) are
+ * the address space shared with chat evidence links (W8). KaTeX renders the
+ * `$..$` formulas the JATS pipeline emits (CSS is loaded once in main.tsx).
+ */
 export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose }: KeDocumentReaderProps) {
-  const { locale } = useLocale();
-  const lang: LocaleKey = locale === "zh-CN" ? "zh-CN" : "en";
-  const say = useCallback((key: keyof typeof STRINGS, vars?: Record<string, string | number>): string => {
-    const template: string = STRINGS[key][lang];
-    if (!vars) return template;
-    return Object.entries(vars).reduce<string>((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), template);
-  }, [lang]);
+  const { t } = useLocale();
 
   const [level, setLevel] = useState<KeDocumentLevel>(readDefaultLevel);
   const [doc, setDoc] = useState<KeDocumentRead | null>(null);
@@ -129,13 +149,13 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
       })
       .catch(() => {
         if (cancelled) return;
-        setError(say("loadFailed"));
+        setError(t("ke.doc.loadFailed"));
         setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [client, kbId, docId, level, say, reloadToken]);
+  }, [client, kbId, docId, level, t, reloadToken]);
 
   const selectLevel = useCallback((next: KeDocumentLevel) => {
     setLevel(next);
@@ -224,7 +244,7 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
                 cursor: "pointer",
               }}
             >
-              {say(`level${option}` as keyof typeof STRINGS)}
+              {t(`ke.doc.level.${option}` as MessageKey)}
             </button>
           ))}
         </div>
@@ -242,12 +262,12 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
             cursor: "pointer",
           }}
         >
-          {say("close")}
+          {t("ke.doc.close")}
         </button>
       </div>
 
       <div ref={containerRef} style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
-        {loading && <div style={{ color: "var(--text-secondary, #64748b)", fontSize: 13 }}>{say("loading")}</div>}
+        {loading && <div style={{ color: "var(--text-secondary, #64748b)", fontSize: 13 }}>{t("ke.doc.loading")}</div>}
         {!loading && error && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--danger, #dc2626)", fontSize: 13 }}>
             <span>{error}</span>
@@ -256,7 +276,7 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
               setError(null);
               setReloadToken((token) => token + 1);
             }} style={{ fontSize: 12, cursor: "pointer" }}>
-              {say("retry")}
+              {t("ke.doc.retry")}
             </button>
           </div>
         )}
@@ -266,12 +286,12 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
               {doc.l0?.summary ?? doc.abstract ?? ""}
             </p>
             <div style={{ fontSize: 11, color: "var(--text-faint, #94a3b8)", marginBottom: 12 }}>
-              {doc.l0 ? say(`source${doc.l0.source[0]!.toUpperCase()}${doc.l0.source.slice(1)}` as keyof typeof STRINGS) : ""}
+              {doc.l0 ? t(`ke.doc.source.${doc.l0.source}` as MessageKey) : ""}
               {doc.year ? ` · ${doc.year}` : ""}
               {doc.venue ? ` · ${doc.venue}` : ""}
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, color: "var(--text-faint, #94a3b8)" }}>{say("tagsLabel")}:</span>
+              <span style={{ fontSize: 11, color: "var(--text-faint, #94a3b8)" }}>{t("ke.doc.tagsLabel")}:</span>
               {(doc.l0?.tags ?? []).map((tag) => (
                 <span
                   key={tag}
@@ -281,13 +301,13 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
                   {tag}
                 </span>
               ))}
-              {(doc.l0?.tags ?? []).length === 0 && <span style={{ fontSize: 11, color: "var(--text-faint, #94a3b8)" }}>{say("noTags")}</span>}
+              {(doc.l0?.tags ?? []).length === 0 && <span style={{ fontSize: 11, color: "var(--text-faint, #94a3b8)" }}>{t("ke.doc.noTags")}</span>}
             </div>
           </div>
         )}
         {!loading && !error && doc && level === "L1" && (
           <div>
-            {(blocks ?? []).length === 0 && <div style={{ color: "var(--text-secondary, #64748b)", fontSize: 13 }}>{say("pendingDoc")}</div>}
+            {(blocks ?? []).length === 0 && <div style={{ color: "var(--text-secondary, #64748b)", fontSize: 13 }}>{t("ke.doc.pending")}</div>}
             {(blocks ?? []).length > 0 && (
               <>
                 {outline.length > 0 && (
@@ -313,7 +333,7 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
                   </div>
                 )}
                 <div data-testid="ke-doc-blocks" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {say("blocksCount", { count: doc.blockCount ?? (blocks ?? []).length })}
+                  {t("ke.doc.blocksCount", { count: doc.blockCount ?? (blocks ?? []).length })}
                   {(blocks ?? []).map((block) => {
                     const highlighted = block.anchorId === highlightAnchorId;
                     return (
@@ -331,20 +351,21 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
                           cursor: "pointer",
                           fontSize: block.type === "heading" ? 14 : 13,
                           fontWeight: block.type === "heading" ? 600 : 400,
-                          fontFamily: block.type === "formula" || block.type === "code" || block.type === "table" ? "ui-monospace, monospace" : "inherit",
-                          whiteSpace: block.type === "formula" || block.type === "code" || block.type === "table" ? "pre" : "normal",
+                          fontFamily: block.type === "code" || block.type === "table" ? "ui-monospace, monospace" : "inherit",
+                          whiteSpace: block.type === "code" || block.type === "table" ? "pre" : "normal",
                           color: block.type === "figure" || block.type === "reference" ? "var(--text-secondary, #64748b)" : "inherit",
                           lineHeight: 1.6,
+                          overflowX: block.type === "code" || block.type === "table" ? "auto" : "visible",
                         }}
                       >
-                        {block.text}
+                        {blockBody(block)}
                       </div>
                     );
                   })}
                 </div>
                 {highlightAnchorId === "__miss__" && (
                   <div data-testid="ke-doc-highlight-miss" style={{ marginTop: 8, fontSize: 11, color: "var(--warning, #d97706)" }}>
-                    {say("highlightMiss")}
+                    {t("ke.doc.highlightMiss")}
                   </div>
                 )}
               </>
@@ -353,10 +374,10 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
         )}
         {!loading && !error && doc && level === "L2" && (
           <div>
-            {(doc.fulltext ?? "").length === 0 && <div style={{ color: "var(--text-secondary, #64748b)", fontSize: 13 }}>{say("pendingDoc")}</div>}
-            <pre data-testid="ke-doc-fulltext" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 12, lineHeight: 1.6, fontFamily: "inherit", margin: 0 }}>
-              {doc.fulltext ?? ""}
-            </pre>
+            {(doc.fulltext ?? "").length === 0 && <div style={{ color: "var(--text-secondary, #64748b)", fontSize: 13 }}>{t("ke.doc.pending")}</div>}
+            <div data-testid="ke-doc-fulltext">
+              <MarkdownRenderer content={doc.fulltext ?? ""} />
+            </div>
           </div>
         )}
       </div>

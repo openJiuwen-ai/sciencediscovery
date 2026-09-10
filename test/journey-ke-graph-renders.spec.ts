@@ -62,8 +62,8 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
   // Extraction JSON follows packages/knowledge-engine/src/extraction/parse.ts:
   // entities {name,type}; relations {source,target,type,evidence_quote} where
   // evidence_quote must appear VERBATIM in the ingested fulltext or the
-  // provenance gate drops the relation. The quote below is a placeholder to
-  // calibrate against the recorded fixture corpus at the stage gate.
+  // provenance gate drops the relation. Calibrated against the first seed hit
+  // (arXiv 1901.02624 parsed by the same paper worker) — see J-KE4.
   const stub = await kePipelineStub({
     entities: [
       { name: "Ebola virus glycoprotein", type: "protein" },
@@ -74,7 +74,7 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
         source: "mAb114",
         target: "Ebola virus glycoprotein",
         type: "binds",
-        evidence_quote: "mAb114 binds the Ebola virus glycoprotein and neutralizes the virus",
+        evidence_quote: "localized on the virus spike glycoprotein leading to neutralization of viral infection",
       },
     ],
   });
@@ -153,8 +153,11 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
         const detail = page.getByTestId("ke-entity-detail");
         await expect(detail).toBeVisible({ timeout: 30_000 });
         await expect(detail).toContainText(/Ebola virus glycoprotein|mAb114/);
-        // Evidence-quote display is asserted once the stub quotes are
-        // calibrated against the recorded fulltext (stage-gate calibration).
+        // The calibrated quote passes the provenance gate verbatim, so the
+        // tapped entity (both stub entities sit on the surviving edge) shows
+        // an evidence card citing the source document.
+        await expect(detail).toContainText("neutralization of viral infection");
+        await expect(page.getByTestId("ke-evidence-source").first()).toBeVisible();
       },
     );
 

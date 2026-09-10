@@ -62,7 +62,7 @@ test("J-KE3 会话内消费知识图谱", { tag: "@mocked" }, async ({ journey, 
 
   const seedQuery = "Ebola virus glycoprotein antibody neutralization";
   const kbName = `J-KE3 知识库 ${Date.now()}`;
-  const evidenceQuote = "mAb114 binds the Ebola virus glycoprotein and neutralizes the virus";
+  const evidenceQuote = "localized on the virus spike glycoprotein leading to neutralization of viral infection";
   let kbId = "";
   const extraction = await kePipelineStub({
     entities: [

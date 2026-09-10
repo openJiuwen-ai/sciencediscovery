@@ -913,6 +913,25 @@ export const en = {
   "ke.method.louvain": "Louvain",
   "ke.method.byType": "by type",
   "ke.legend.title": "Entity types",
+
+  // Three-level document reader (W7): L0 abstract → L1 anchored blocks → L2 fulltext.
+  "ke.doc.open": "Read document",
+  "ke.doc.level.L0": "L0 · Abstract",
+  "ke.doc.level.L1": "L1 · Structure",
+  "ke.doc.level.L2": "L2 · Full text",
+  "ke.doc.close": "Close",
+  "ke.doc.loading": "Loading…",
+  "ke.doc.loadFailed": "Failed to load document",
+  "ke.doc.retry": "Retry",
+  "ke.doc.pending": "This document has not been parsed yet — no fulltext levels available.",
+  "ke.doc.blocksCount": "{count} blocks",
+  "ke.doc.source.abstract": "summary from abstract",
+  "ke.doc.source.body": "summary from first paragraph",
+  "ke.doc.source.title": "summary from title",
+  "ke.doc.tagsLabel": "Tags",
+  "ke.doc.noTags": "no section tags",
+  "ke.doc.highlightMiss": "evidence passage not found verbatim in this version",
+  "ke.detail.viewSource": "Source",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -1810,4 +1829,23 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "ke.method.louvain": "Louvain",
   "ke.method.byType": "按类型",
   "ke.legend.title": "实体类型",
+
+  // 三级文档阅读（W7）：L0 摘要 → L1 锚点块 → L2 原文。
+  "ke.doc.open": "阅读文档",
+  "ke.doc.level.L0": "L0 · 摘要",
+  "ke.doc.level.L1": "L1 · 结构",
+  "ke.doc.level.L2": "L2 · 原文",
+  "ke.doc.close": "关闭",
+  "ke.doc.loading": "加载中…",
+  "ke.doc.loadFailed": "文档加载失败",
+  "ke.doc.retry": "重试",
+  "ke.doc.pending": "该文档尚未解析完成——暂无正文层级。",
+  "ke.doc.blocksCount": "{count} 个块",
+  "ke.doc.source.abstract": "摘要来自摘要段",
+  "ke.doc.source.body": "摘要来自正文首段",
+  "ke.doc.source.title": "摘要来自标题",
+  "ke.doc.tagsLabel": "标签",
+  "ke.doc.noTags": "暂无章节标签",
+  "ke.doc.highlightMiss": "证据原文在此版本中未逐字命中",
+  "ke.detail.viewSource": "查看原文",
 } as const;
