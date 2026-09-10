@@ -98,7 +98,7 @@ export interface ResearchTriedAction {
   lastTriedAt: string;
 }
 
-interface ResearchStateFile {
+export interface ResearchStateFile {
   version: 1;
   goal?: string;
   goalSetAt?: string;
@@ -284,6 +284,8 @@ export interface ResearchStatePort {
   }): Promise<ResearchMarkTriedResult>;
   /** Read-only dedup check: has this action been tried? (no state mutation) */
   checkTried(input: { workspaceRoot: string; action: string }): Promise<{ tried: boolean; count: number; previousResult?: string }>;
+  /** Full raw state dump (audit/debug; prefer summary for context injection). */
+  get(input: { workspaceRoot: string }): Promise<{ state: ResearchStateFile; corrupt: boolean }>;
   /** Compact digest — the anti-drift view designed for context injection. */
   summary(input: { workspaceRoot: string }): Promise<ResearchSummary>;
   clear(input: { workspaceRoot: string }): Promise<{ cleared: boolean }>;
@@ -476,6 +478,10 @@ export function createResearchStatePort(clock: () => Date = () => new Date()): R
       return existing
         ? { tried: true, count: existing.count, ...(existing.result === undefined ? {} : { previousResult: existing.result }) }
         : { tried: false, count: 0 };
+    },
+
+    async get(input) {
+      return readState(researchStatePath(input.workspaceRoot));
     },
 
     async summary(input) {

@@ -28,6 +28,8 @@ import {
 } from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
 import { createEvidenceLedgerPort } from "./ke-evidence-ledger.js";
+import { createResearchStatePort } from "./research-state.js";
+import { computeDivergence, rankFromVerdicts } from "./tournament-rank.js";
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
@@ -1387,6 +1389,197 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           }),
       ),
     );
+  }
+  // Research world model + tournament ranking — always-on session tools
+  // (not KE-scoped): the state file lives under the session workspace, and
+  // the ranking math is pure computation. Ported from DeepAnalyze
+  // (research_state / tournament_rank) — see research-state.ts /
+  // tournament-rank.ts headers for semantics and deliberate divergences.
+  {
+    const researchStateTool: AgentTool<TSchema> = {
+      description:
+        "A persistent per-session research world model (survives context compaction): pin the research goal (set-goal), keep a plan with status lifecycle (plan-add / plan-update pending|in_progress|done|dropped), track open questions (question-add / question-resolve answered|dropped), record ruled-out directions with reasons so dead branches stay dead (rule-out), and dedupe attempted actions (mark-tried records; check-tried is the read-only pre-flight — call it BEFORE re-running a search/retrieval action to avoid repeat work). get returns the full state; summary returns the compact anti-drift digest (goal, active plan items, top open questions, recent ruled-out, tried counts). Refs accept an exact id (p1/q1/r1…) or a unique case-insensitive text substring.",
+      execute: async (_toolCallId, params) => {
+        const input = params as Record<string, unknown>;
+        const port = createResearchStatePort();
+        const action = String(input.action ?? "");
+        const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : undefined);
+        let result: unknown;
+        switch (action) {
+          case "set-goal":
+            result = await port.setGoal({ workspaceRoot, goal: text("goal") ?? "" });
+            break;
+          case "plan-add":
+            result = await port.addPlanItems({
+              workspaceRoot,
+              items: Array.isArray(input.items) ? (input.items as unknown[]).map((item) => String(item)) : [],
+            });
+            break;
+          case "plan-update":
+            result = await port.updatePlanItem({
+              workspaceRoot,
+              ref: text("ref") ?? "",
+              status: text("status") as "pending" | "in_progress" | "done" | "dropped",
+              ...(text("note") === undefined ? {} : { note: text("note") }),
+            });
+            break;
+          case "question-add":
+            result = await port.addQuestion({ workspaceRoot, text: text("text") ?? "" });
+            break;
+          case "question-resolve":
+            result = await port.resolveQuestion({
+              workspaceRoot,
+              ref: text("ref") ?? "",
+              status: text("status") as "answered" | "dropped",
+              ...(text("answer") === undefined ? {} : { answer: text("answer") }),
+            });
+            break;
+          case "rule-out":
+            result = await port.addRuledOut({
+              workspaceRoot,
+              what: text("what") ?? "",
+              why: text("why") ?? "",
+              ...(text("source") === undefined ? {} : { source: text("source") }),
+            });
+            break;
+          case "mark-tried":
+            result = await port.markTried({
+              workspaceRoot,
+              action: text("tried") ?? text("text") ?? "",
+              ...(text("tool") === undefined ? {} : { tool: text("tool") }),
+              ...(text("result") === undefined ? {} : { result: text("result") }),
+            });
+            break;
+          case "check-tried":
+            result = await port.checkTried({ workspaceRoot, action: text("tried") ?? text("text") ?? "" });
+            break;
+          case "get":
+            result = await port.get({ workspaceRoot });
+            break;
+          case "summary":
+            result = await port.summary({ workspaceRoot });
+            break;
+          case "clear":
+            result = await port.clear({ workspaceRoot });
+            break;
+          default:
+            throw new Error(
+              `Unknown action: ${action}. Supported: set-goal, plan-add, plan-update, question-add, question-resolve, rule-out, mark-tried, check-tried, get, summary, clear`,
+            );
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      // Read-modify-write on a single JSON file — serialize same-turn calls
+      // (the DA original used a file lock for the same reason).
+      isConcurrencySafe: () => false,
+      label: "Research state",
+      name: "research_state",
+      parameters: Type.Object({
+        action: Type.Union([
+          Type.Literal("set-goal"),
+          Type.Literal("plan-add"),
+          Type.Literal("plan-update"),
+          Type.Literal("question-add"),
+          Type.Literal("question-resolve"),
+          Type.Literal("rule-out"),
+          Type.Literal("mark-tried"),
+          Type.Literal("check-tried"),
+          Type.Literal("get"),
+          Type.Literal("summary"),
+          Type.Literal("clear"),
+        ]),
+        goal: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "set-goal: the research objective" })),
+        items: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), { description: "plan-add: plan step texts" })),
+        ref: Type.Optional(Type.String({ description: "plan-update/question-resolve: exact id (p1/q1/…) or unique text substring" })),
+        status: Type.Optional(
+          Type.Union(
+            [
+              Type.Literal("pending"),
+              Type.Literal("in_progress"),
+              Type.Literal("done"),
+              Type.Literal("dropped"),
+              Type.Literal("answered"),
+            ],
+            { description: "plan-update: pending|in_progress|done|dropped; question-resolve: answered|dropped" },
+          ),
+        ),
+        note: Type.Optional(Type.String({ maxLength: 1000, description: "plan-update: optional note (e.g. prune reason)" })),
+        text: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "question-add: question text; mark-tried/check-tried fallback for the action description" })),
+        answer: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "question-resolve answered: answer summary" })),
+        what: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "rule-out: the ruled-out direction" })),
+        why: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: "rule-out: why it was ruled out" })),
+        source: Type.Optional(Type.String({ maxLength: 1000, description: "rule-out: optional evidence pointer" })),
+        tried: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "mark-tried/check-tried: one-line action description incl. key parameters" })),
+        tool: Type.Optional(Type.String({ description: "mark-tried: the tool used" })),
+        result: Type.Optional(Type.String({ maxLength: 1000, description: "mark-tried: one-line outcome" })),
+      }),
+    };
+    tools.push(researchStateTool);
+
+    const tournamentRankTool: AgentTool<TSchema> = {
+      description:
+        "Deterministic tournament ranking math (no LLM, no network). action=rank: given candidate labels (items) and pairwise verdicts (matches: a, b from items, scoreA∈[0,1] = a's score against b, 1=a wins / 0.5=tie / 0=a loses), compute each item's Elo (K=32, initial 1000), win rate, and match count, sorted by Elo descending. Pair orientation does not matter (reversed submissions flip automatically); pairs without a verdict are filled as 0.5 ties and honestly counted in autoTies; duplicate pairs are overridden by the later submission and counted in duplicatePairs. action=divergence: given texts, return the mean pairwise token-Jaccard divergence (0=identical, 1=completely different) — a heuristic for whether a set of perspective outputs actually diverges; whitespace-free text (e.g. Chinese sentences) falls back to character bigrams. LIMITATIONS: garbage in, garbage out — verdict quality is entirely the caller's responsibility; Elo is only comparable within the same item set; the round-robin follows the items array order (later matches weigh more) — re-run with shuffled items and aggregate if order sensitivity matters; divergence is not a semantic measure.",
+      execute: async (_toolCallId, params) => {
+        const input = params as Record<string, unknown>;
+        const action = String(input.action ?? "");
+        let result: unknown;
+        switch (action) {
+          case "rank": {
+            const items = Array.isArray(input.items) ? (input.items as unknown[]).map((item) => String(item)) : [];
+            const verdicts = Array.isArray(input.matches)
+              ? (input.matches as Array<Record<string, unknown> | null>).map((match) => ({
+                  a: String(match?.a ?? ""),
+                  b: String(match?.b ?? ""),
+                  scoreA: Number(match?.scoreA),
+                }))
+              : [];
+            // Deliberate divergence from this file's throw-on-invalid
+            // convention (mirrors the DA original): validation failures are
+            // returned as an { error } payload in a 200-style result instead
+            // of throwing — the LLM corrects and retries within the turn.
+            try {
+              result = await rankFromVerdicts(items, verdicts);
+            } catch (err) {
+              result = { error: err instanceof Error ? err.message : String(err) };
+            }
+            break;
+          }
+          case "divergence": {
+            const texts = Array.isArray(input.texts)
+              ? (input.texts as unknown[]).filter((text): text is string => typeof text === "string" && text.trim().length > 0)
+              : [];
+            if (texts.length < 2) {
+              result = { error: "divergence requires texts (at least 2 non-empty strings)." };
+            } else {
+              result = { divergence: Number(computeDivergence(texts).toFixed(3)), count: texts.length };
+            }
+            break;
+          }
+          default:
+            result = { error: `Unknown action: ${action}. Supported: rank, divergence` };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      isConcurrencySafe: () => true,
+      label: "Tournament rank",
+      name: "tournament_rank",
+      parameters: Type.Object({
+        action: Type.Union([Type.Literal("rank"), Type.Literal("divergence")]),
+        items: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "rank: candidate labels (unique)" })),
+        matches: Type.Optional(
+          Type.Array(
+            Type.Object({
+              a: Type.String({ minLength: 1 }),
+              b: Type.String({ minLength: 1 }),
+              scoreA: Type.Number({ minimum: 0, maximum: 1 }),
+            }),
+            { description: "rank: pairwise verdicts (scoreA = a's score against b in [0,1])" },
+          ),
+        ),
+        texts: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "divergence: the set of texts" })),
+      }),
+    };
+    tools.push(tournamentRankTool);
   }
   if (options.runSubagent) {
     const specialistSummary = summarizeSpecialistsForTaskTool(options.specialists);
