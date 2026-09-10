@@ -49,6 +49,7 @@ import {
   resolveEgressBridge,
 } from "./egress-bridge.js";
 import type { EgressGatewayRegistry } from "./egress-gateway.js";
+import type { SandboxNpu } from "./npu-devices.js";
 import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
@@ -698,6 +699,8 @@ export function buildSandboxLaunch(options: {
   hostInterpreterMasks: string[];
   hostRuntimeSupport: HostRuntimeSupport;
   language: "python" | "r" | "shell";
+  /** Selected NPU cards, already renumbered from 0; absent keeps the sandbox without NPUs. */
+  npu?: SandboxNpu;
   pathEnv: string;
   procMode: SandboxProcMode;
   pythonPathEnv?: string;
@@ -707,7 +710,13 @@ export function buildSandboxLaunch(options: {
   // Runner-owned baseline first; profile variables never override it
   // (profileKeyAllowed re-checks the reserved/blocked policy defensively).
   const env: Record<string, string> = { HOME: "/tmp", PATH: options.pathEnv };
-  if (options.pythonPathEnv) env.PYTHONPATH = options.pythonPathEnv;
+  // CANN's operator compiler is imported as ordinary Python, so its search path
+  // has to join PYTHONPATH rather than replace whatever the environment set.
+  const pythonPathEntries = [
+    ...(options.pythonPathEnv ? [options.pythonPathEnv] : []),
+    ...(options.npu?.pythonPath ?? []),
+  ];
+  if (pythonPathEntries.length > 0) env.PYTHONPATH = pythonPathEntries.join(":");
   if (options.language === "python" || options.pythonPathEnv) env.PYTHONNOUSERSITE = "1";
   if (options.language === "r") env.R_ENVIRON_USER = "/dev/null";
   if (options.skillRoots) {
@@ -715,6 +724,7 @@ export function buildSandboxLaunch(options: {
     env[SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE] = SANDBOX_SKILL_EXTENSIONS_ROOT;
   }
   Object.assign(env, options.hostRuntimeSupport.env);
+  Object.assign(env, options.npu?.env ?? {});
   Object.assign(env, options.egress?.env ?? {});
   for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
     if (profileKeyAllowed(name)) env[name] = value;
@@ -733,7 +743,11 @@ export function buildSandboxLaunch(options: {
       "--symlink", "usr/lib", "/lib",
       "--symlink", "usr/lib64", "/lib64",
       ...procMountArguments(options.procMode),
+      // A fresh /dev, then only the selected cards. Binding the host's /dev
+      // instead would offer every card at once, and the Ascend driver fails the
+      // whole enumeration when any visible card cannot be claimed.
       "--dev", "/dev",
+      ...(options.npu?.bindArgs ?? []),
       ...options.hostInterpreterMasks,
       "--tmpfs", "/tmp",
       ...options.environmentBinds,
@@ -848,6 +862,8 @@ export interface PreparedSandboxOptions {
   hostInterpreterMasks: string[];
   hostRuntimeSupport: HostRuntimeSupport;
   language: "python" | "r" | "shell";
+  /** Selected NPU cards for this execution; absent keeps the sandbox without NPUs. */
+  npu?: SandboxNpu;
   pathEnv: string;
   pythonPathEnv?: string;
   readOnlyWorkspaceRoot?: string;
