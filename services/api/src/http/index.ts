@@ -56,6 +56,8 @@ import {
 } from "../evolution/routes.js";
 import {
   handleKeCreateKb,
+  handleKeGetDocument,
+  handleKeGetDocumentAnchor,
   handleKeGetEntity,
   handleKeGetGraph,
   handleKeGetGrow,
@@ -69,6 +71,7 @@ import {
   handleKeStartResolution,
   handleKeListMerges,
   handleKeUnmerge,
+  parseKeDocumentLevel,
 } from "../knowledge-engine/routes.js";
 import type {
   ArtifactCandidate,
@@ -2241,6 +2244,32 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const keDocsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents$/);
       if (keDocsMatch && request.method === "GET") {
         handleKeListDocuments(response, knowledgeEngineStore, decodeURIComponent(keDocsMatch[1]!));
+        return;
+      }
+      // Anchor resolution first — the doc match's `[^/]+$` cannot capture it,
+      // but keeping the pair adjacent documents the route family in one place.
+      const keDocAnchorMatch = url.pathname.match(
+        /^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents\/([^/]+)\/anchors\/([^/]+)$/,
+      );
+      if (keDocAnchorMatch && request.method === "GET") {
+        handleKeGetDocumentAnchor(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keDocAnchorMatch[1]!),
+          decodeURIComponent(keDocAnchorMatch[2]!),
+          decodeURIComponent(keDocAnchorMatch[3]!),
+        );
+        return;
+      }
+      const keDocMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents\/([^/]+)$/);
+      if (keDocMatch && request.method === "GET") {
+        handleKeGetDocument(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keDocMatch[1]!),
+          decodeURIComponent(keDocMatch[2]!),
+          parseKeDocumentLevel(url.searchParams.get("level")),
+        );
         return;
       }
       const keJobsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/jobs$/);

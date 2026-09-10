@@ -134,6 +134,8 @@ Subject knowledge bases: literature ingestion, entity/relation graph, growth cyc
 | `GET /api/knowledge-engine/kbs/:id` | none | `200`, KB with stats |
 | `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}` (1–25) | `202`, `{jobId, enqueued}` |
 | `GET /api/knowledge-engine/kbs/:id/documents` | none | `200`, lean document list |
+| `GET /api/knowledge-engine/kbs/:id/documents/:docId` | `?level=L0\|L1\|L2` (default `L0`) | `200`, three-level read: L0 deterministic abstract (summary/tags/source), L1 anchored blocks (`{docId}:{type}:{index}`), L2 fulltext; `404` cross-KB doc |
+| `GET /api/knowledge-engine/kbs/:id/documents/:docId/anchors/:anchorId` | none | `200`, anchor block + neighbor context; `404` unknown anchor, `409` document not parsed |
 | `GET /api/knowledge-engine/kbs/:id/jobs` | none | `200`, recent jobs |
 | `GET /api/knowledge-engine/kbs/:id/graph` | none | `200`, lean entities + edges (no fulltext/embeddings) |
 | `GET /api/knowledge-engine/kbs/:id/roots` | none | `200`, community roots (fingerprint-cached, stale-while-revalidate) |

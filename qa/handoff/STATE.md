@@ -6,6 +6,8 @@
 stage: III（W5 已提交 395bdfe——六波全齐，终局 E2E 窗口待会话空闲）
 wave: W4 完成——阶段 II 门开启
 stage_gate_pending: true    # 13:0x 置位（W4 完工通知）
+PAUSED: true    # 2026-09-10 09:3x 用户暂停巡航：先做 DA↔SD 功能差距深度分析（论文解析/三级展示/构图/Agent 消费/反幻觉），分析期间 cron 只记日志
+dev_mode: zcode-developer    # 2026-09-10 10:0x 用户策略变更：ZCode 转开发主力（QA 兼），Claude+K3 后续精细化补充；目标=SD 体验对标 Science Agent + 业界 SOTA。路线图见 qa/analysis/2026-09-10-da-sd-gap-analysis.md §4（W7-W11）；ZCode 每完成一块开发须在 to-claude/ 写交接文档（用户转交 Claude）。W7 后端先行（避开 W6 未提交的前端文件）
 qa_mode: stage-gate
 turn: zcode
 lock:

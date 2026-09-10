@@ -27,6 +27,14 @@ import { readJson } from "../http/body.js";
 import { sendJson } from "../http/response.js";
 import { ApiStatusError } from "../runs/index.js";
 
+import {
+  buildDeterministicL0,
+  documentAnchor,
+  parseDocumentBlocks,
+  resolveDocumentAnchor,
+  type DocumentBlock,
+} from "@sciencediscovery/knowledge-engine";
+
 import type { KeOrchestrator } from "./orchestrator.js";
 import { DEFAULT_CRAWL_BUDGET, KE_GROW_JOB, type CrawlBudget } from "./grow.js";
 import type { GraphRootsService } from "./graph-roots.js";
@@ -192,6 +200,124 @@ export function handleKeListDocuments(
   requireKb(store, kbId);
   sendJson(response, 200, {
     documents: store.listDocumentsLean(kbId).map(leanDocument),
+  });
+}
+
+// ------------------------------------------------------- document levels
+
+export type KeDocumentLevel = "L0" | "L1" | "L2";
+
+/** `?level=` — absent means L0 (cheapest projection, the reading default). */
+export function parseKeDocumentLevel(raw: string | null): KeDocumentLevel {
+  if (raw === null || raw === "") return "L0";
+  if (raw === "L0" || raw === "L1" || raw === "L2") return raw;
+  throw new KeApiError(`level must be one of L0|L1|L2, got "${raw}"`, 400, "KE_INVALID_INPUT");
+}
+
+/** Cross-KB document ids 404 rather than leak — the id alone is not proof
+ *  of membership, so kbId scoping is enforced on every document read. */
+function requireKbDocument(store: KnowledgeEngineStore, kbId: string, docId: string): KeDocumentRow {
+  requireKb(store, kbId);
+  const document = store.getDocument(docId);
+  if (!document || document.kbId !== kbId) {
+    throw new KeApiError(`document ${docId} not found in knowledge base ${kbId}`, 404, "KE_DOCUMENT_NOT_FOUND");
+  }
+  return document;
+}
+
+function anchoredBlock(docId: string, block: DocumentBlock): Record<string, unknown> {
+  return {
+    anchorId: documentAnchor(docId, block),
+    type: block.type,
+    text: block.text,
+    section: block.section,
+    lineStart: block.lineStart,
+    preview: block.preview,
+  };
+}
+
+/**
+ * W7 three-level read: L0 = deterministic extractive abstract (summary,
+ * tags from section headings, honest `source` label); L1 = anchored blocks
+ * compiled on demand from the stored fulltext markdown; L2 = fulltext as
+ * stored. Pending documents (no fulltext yet) answer L0/L1 with empty
+ * bodies instead of erroring — the UI shows the status pill anyway.
+ */
+export function handleKeGetDocument(
+  response: ServerResponse,
+  store: KnowledgeEngineStore,
+  kbId: string,
+  docId: string,
+  level: KeDocumentLevel,
+): void {
+  const document = requireKbDocument(store, kbId, docId);
+  if (level === "L2") {
+    sendJson(response, 200, {
+      docId: document.id,
+      kbId,
+      title: document.title,
+      level,
+      status: document.status,
+      abstract: document.abstract ?? null,
+      fulltext: document.fulltext ?? "",
+    });
+    return;
+  }
+  const blocks = document.fulltext ? parseDocumentBlocks(document.fulltext) : [];
+  if (level === "L1") {
+    sendJson(response, 200, {
+      docId: document.id,
+      kbId,
+      title: document.title,
+      level,
+      status: document.status,
+      blockCount: blocks.length,
+      blocks: blocks.map((block) => anchoredBlock(document.id, block)),
+    });
+    return;
+  }
+  const l0 = buildDeterministicL0({ title: document.title, abstract: document.abstract, blocks });
+  sendJson(response, 200, {
+    docId: document.id,
+    kbId,
+    title: document.title,
+    level: "L0",
+    status: document.status,
+    year: document.year,
+    venue: document.venue,
+    abstract: document.abstract ?? null,
+    l0: { summary: l0.summary, tags: l0.tags, source: l0.source },
+  });
+}
+
+/** Evidence click-through: an anchor id resolves to its block plus capped
+ *  neighbors — enough for a hover preview and for the reading view to
+ *  scroll/highlight. Unknown anchors 404 (KE_ANCHOR_NOT_FOUND). */
+export function handleKeGetDocumentAnchor(
+  response: ServerResponse,
+  store: KnowledgeEngineStore,
+  kbId: string,
+  docId: string,
+  anchorId: string,
+): void {
+  const document = requireKbDocument(store, kbId, docId);
+  if (!document.fulltext) {
+    throw new KeApiError(`document ${docId} has no parsed fulltext`, 409, "KE_DOCUMENT_NOT_PARSED");
+  }
+  const blocks = parseDocumentBlocks(document.fulltext);
+  const hit = resolveDocumentAnchor(blocks, anchorId);
+  if (!hit) {
+    throw new KeApiError(`anchor ${anchorId} not found in document ${docId}`, 404, "KE_ANCHOR_NOT_FOUND");
+  }
+  sendJson(response, 200, {
+    docId: document.id,
+    kbId,
+    title: document.title,
+    anchor: anchoredBlock(document.id, hit.block),
+    context: {
+      before: hit.before ? anchoredBlock(document.id, hit.before) : null,
+      after: hit.after ? anchoredBlock(document.id, hit.after) : null,
+    },
   });
 }
 

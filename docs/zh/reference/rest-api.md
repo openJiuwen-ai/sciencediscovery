@@ -138,6 +138,8 @@ curl -X POST http://127.0.0.1:4310/api/proxy/servers \
 | `GET /api/knowledge-engine/kbs/:id` | 无 | `200`，带统计的 KB |
 | `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}`（1–25） | `202`，`{jobId, enqueued}` |
 | `GET /api/knowledge-engine/kbs/:id/documents` | 无 | `200`，精简文档列表 |
+| `GET /api/knowledge-engine/kbs/:id/documents/:docId` | `?level=L0\|L1\|L2`（默认 `L0`） | `200`，三级阅读：L0 确定性摘要（summary/tags/source）、L1 带锚点块（`{docId}:{type}:{index}`）、L2 全文；跨 KB 文档 `404` |
+| `GET /api/knowledge-engine/kbs/:id/documents/:docId/anchors/:anchorId` | 无 | `200`，锚点块 + 邻块上下文；锚点不存在 `404`，文档未解析 `409` |
 | `GET /api/knowledge-engine/kbs/:id/jobs` | 无 | `200`，最近作业 |
 | `GET /api/knowledge-engine/kbs/:id/graph` | 无 | `200`，精简实体+边（无全文/embedding） |
 | `GET /api/knowledge-engine/kbs/:id/roots` | 无 | `200`，社区 roots（指纹缓存，SWR） |
