@@ -19,6 +19,7 @@ export * from "./specialist.js";
 export * from "./subagent.js";
 export * from "./remote-job.js";
 export * from "./npu-job.js";
+export * from "./npu-device.js";
 export * from "./artifact-provenance.js";
 export * from "./memory-graph.js";
 export * from "./evolution.js";

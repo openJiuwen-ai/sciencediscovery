@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { NpuInventory } from "./npu-device.js";
 import type { PermissionDecision } from "./permission.js";
 
 /** Shared by capability presentation, authorization and SSH deployment. */
@@ -254,6 +255,11 @@ export interface RunnerResources {
   loadAverage1m: number;
   memoryTotalBytes: number;
   memoryFreeBytes: number;
+  /**
+   * Ascend NPU cards on this machine, including whether each one can actually
+   * be opened inside the sandbox. Absent on machines without Ascend tooling.
+   */
+  npu?: NpuInventory;
   uptimeSeconds: number;
   workspaceDisk: {
     path: string;
