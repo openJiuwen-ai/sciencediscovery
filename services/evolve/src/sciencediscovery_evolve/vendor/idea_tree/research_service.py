@@ -23,7 +23,7 @@ class Settings(BaseModel):
     maxNodes: int = Field(default=100, ge=2, le=10000)
     maxDepth: int = Field(default=5, ge=1, le=20)
     maxTokens: int | None = Field(default=None, ge=1)
-    maxTokensPerCall: int = Field(default=4000, ge=256, le=32000)
+    maxTokensPerCall: int = Field(default=32768, ge=256, le=32768)
     designSystemPrompt: str | None = Field(default=None, max_length=24000)
     aggregatorSystemPrompt: str | None = Field(default=None, max_length=24000)
     propagateInsightSystemPrompt: str | None = Field(default=None, max_length=24000)
