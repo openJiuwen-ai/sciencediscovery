@@ -214,10 +214,12 @@
 .remote-resource-stats strong { font-size: 14px; font-variant-numeric: tabular-nums; }
 .remote-host-connection { gap: 7px; }
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
-.remote-npu { display: grid; gap: 7px; min-width: 0; }
+/* The card list is a full-width list, not a side column: squeezed into half
+   the details grid its readings wrap away from the card name. */
+.remote-npu { grid-column: 1 / -1; display: grid; gap: 7px; min-width: 0; }
 .remote-npu-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; }
 .remote-npu-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.remote-npu-list > li { display: grid; gap: 3px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }
+.remote-npu-list > li { display: grid; gap: 2px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }
 /* The checkbox, the card name and its readings share one reading line; they
    wrap as a group rather than the label splitting away from its control. */
 .remote-npu-list label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; cursor: pointer; }
