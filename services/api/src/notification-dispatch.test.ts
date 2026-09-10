@@ -5,8 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { SessionRun } from "@sciencediscovery/schema";
 import { AgentNotifications } from "./agent-notifications.js";
-import { NotificationDispatcher, notificationPrompt } from "./notification-dispatch.js";
+import { NotificationDispatcher, notificationPrompt, runtimeNotice } from "./notification-dispatch.js";
 import type { SessionStore } from "./store.js";
+import { messagePromptContent } from "./workbench/index.js";
 
 test("busy inbox waits; idle dispatch persists context once without reopening stopped gates", async (t) => {
   const db = new DatabaseSync(":memory:"); t.after(() => db.close());
@@ -48,6 +49,27 @@ test("failed enqueue retains unread; child notices are never redirected to Main"
   await assert.rejects(dispatcher.tick(), /storage failed/);
   assert.equal(notifications.unread(main).length, 1);
   dispatcher.close(); await dispatcher.tick(); assert.equal(attempts, 1);
+});
+
+test("a delivery is counted for the transcript and re-attached only for the model", async (t) => {
+  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  let now = 1000;
+  const notifications = new AgentNotifications(db, () => false, () => now);
+  const owner = { sessionId: "session", agentId: "main" };
+  notifications.complete(owner, "job-one", "first execution done");
+  notifications.complete(owner, "job-two", "second execution done");
+  notifications.createTimer(owner, { dueAt: 2000, message: "check later" });
+  now = 3000; notifications.poll();
+  const notice = runtimeNotice(notifications.prepareDelivery(owner)!);
+  assert.deepEqual({ executions: notice.executions, timers: notice.timers }, { executions: 2, timers: 1 });
+
+  // A wake carries no user-authored body, so the transcript body stays empty
+  // while the model still receives the full record set.
+  assert.equal(messagePromptContent({ content: "", runtimeNotice: notice }), notice.prompt);
+  assert.match(messagePromptContent({ content: "", runtimeNotice: notice }), /^\[Execution notifications\]/);
+  // A real request keeps its own text first and is never rewritten by the delivery.
+  assert.equal(messagePromptContent({ content: "summarize the run", runtimeNotice: notice }),
+    `summarize the run\n\n${notice.prompt}`);
 });
 
 test("child dispatch preserves owner and requires a saved idle context", async (t) => {

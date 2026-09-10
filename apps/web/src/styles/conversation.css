@@ -210,6 +210,14 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .message.timeout-notice { border: 1px solid var(--danger-border); border-radius: 10px; background: var(--danger-soft); padding: 12px; }
 .message.timeout-notice .avatar { background: var(--danger); color: var(--surface); }
 
+/* A runtime wake is bookkeeping, not conversation: it stays quiet next to real
+   turns, and its model-facing text is only reachable on demand. */
+.message.wake-notice { border: 1px dashed var(--border); border-radius: 10px; background: transparent; padding: 8px 12px; font-size: 13px; }
+.message.wake-notice .avatar { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+.message.wake-notice .message-role { color: var(--muted); }
+.wake-notice-records > summary { cursor: pointer; color: var(--muted); }
+.wake-notice-records > pre { margin: 8px 0 0; padding: 8px; max-height: 220px; overflow: auto; border-radius: 8px; background: var(--surface-hover); color: var(--muted); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+
 @media (max-width: 820px) {
   .subagent-session-bar { align-items: flex-start; flex-wrap: wrap; }
   .subagent-session-bar-title { width: 100%; }

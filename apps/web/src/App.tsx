@@ -189,6 +189,7 @@ import { SkillManager } from "./SkillManager.js";
 import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
 import { SubagentConversation } from "./SubagentConversation.js";
+import { WakeNotice } from "./WakeNotice.js";
 import {
   QuotaSettingsEditor,
   RuntimeStatusPanel,
@@ -4429,6 +4430,8 @@ export function App() {
                           reviews={artifactReviews}
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
+                      ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
+                        <WakeNotice notice={block.message.runtimeNotice} />
                       ) : (
                         <article className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
                           <div className="avatar">{block.message.role === "user" ? t("app.roleYou") : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
@@ -4445,6 +4448,9 @@ export function App() {
                           {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label={t("app.copyMessage")} /> : null}
                         </article>
                       )}
+                      {block.message.kind !== "wake_notice" && block.message.runtimeNotice
+                        ? <WakeNotice notice={block.message.runtimeNotice} />
+                        : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
                       <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.byMessage.get(block.message.id) ?? []} />
                     </Fragment>

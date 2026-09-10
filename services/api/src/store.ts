@@ -5195,6 +5195,7 @@ export class SessionStore {
     annotationIds?: string[],
     kind: ChatMessage["kind"] = "message",
     modelContext?: ChatMessage["modelContext"],
+    runtimeNotice?: ChatMessage["runtimeNotice"],
   ): Promise<ChatMessage> {
     const session = this.assertSessionWritable(sessionId);
     const message: ChatMessage = {
@@ -5206,6 +5207,7 @@ export class SessionStore {
       ...(modelContext?.length ? { modelContext: structuredClone(modelContext) } : {}),
       ...(references?.length ? { references: structuredClone(references) } : {}),
       role,
+      ...(runtimeNotice ? { runtimeNotice: structuredClone(runtimeNotice) } : {}),
     };
     if (role === "user" && annotationIds?.length) {
       message.annotations = await this.attachArtifactAnnotations(sessionId, annotationIds, message.id);

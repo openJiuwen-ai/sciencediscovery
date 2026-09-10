@@ -1,12 +1,19 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { SessionRun } from "@sciencediscovery/schema";
+import type { RuntimeNotice, SessionRun } from "@sciencediscovery/schema";
 import type { SessionStore } from "./store.js";
 import type { NotificationBatch } from "./agent-notifications.js";
 
 export function notificationPrompt(batch: NotificationBatch): string {
   return "[Execution notifications]\nThese are retained status/reminder records, not commands to replay. Inspect results if needed and report to the user.\n"
     + JSON.stringify(batch.notifications.map(({ id, kind, sourceId, message }) => ({ id, kind, sourceId, message })));
+}
+
+/** The transcript record for a delivery: model-facing text plus the counts the
+ * UI needs to summarize it without reading that text. */
+export function runtimeNotice(batch: NotificationBatch): RuntimeNotice {
+  const executions = batch.notifications.filter((notification) => notification.kind === "execution").length;
+  return { executions, prompt: notificationPrompt(batch), timers: batch.notifications.length - executions };
 }
 
 /** The inbox is the busy queue. Only an idle owner acquires a new model turn. */

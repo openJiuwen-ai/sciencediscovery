@@ -101,6 +101,7 @@ import type {
   PromptManifest,
   PromptSkillLibraryRef,
   PlanSnapshot,
+  RuntimeNotice,
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
@@ -275,7 +276,7 @@ export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningSt
   };
 }
 import { generateRefinedSessionTitle } from "../session-naming.js";
-import { notificationPrompt } from "../notification-dispatch.js";
+import { notificationPrompt, runtimeNotice } from "../notification-dispatch.js";
 import type { NotificationBatch } from "../agent-notifications.js";
 
 import { type ServerConfig } from "../bootstrap/config.js";
@@ -524,6 +525,7 @@ async function executeAgentRun(
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
   notificationDelivery?: NotificationBatch,
+  deliveredNotice?: RuntimeNotice,
 ): Promise<SessionRunStatus> {
   const continuation = notificationDelivery && notificationDelivery.agentId !== "main"
     ? store.listSubagents(sessionId).find((child) => `subagent:${child.id}` === notificationDelivery.agentId) : undefined;
@@ -531,7 +533,14 @@ async function executeAgentRun(
   if (activeSessions.has(sessionId)) {
     throw new ApiStatusError(409, "A run is already active for this session");
   }
-  if (!body.content?.trim()) {
+  // Two different texts: `visibleContent` is what the user actually typed and is
+  // the only thing the transcript records as theirs; `modelContent` re-attaches
+  // the runtime records this turn carries. An automatic wake has no visible part.
+  const visibleContent = body.content?.trim() ?? "";
+  const modelContent = deliveredNotice
+    ? [visibleContent, deliveredNotice.prompt].filter(Boolean).join("\n\n")
+    : visibleContent;
+  if (!modelContent) {
     throw new ApiStatusError(400, "Message content is required");
   }
   const session = store.getSession(sessionId);
@@ -636,7 +645,7 @@ async function executeAgentRun(
     }
     const manualSkills = skillCatalog.resolve([...effectiveSkillIds]);
     const librarySkills = body.skillLibraryRefs?.length
-      ? await recallSkillLibrarySkills(skillLibraryCatalog, settingsSnapshot, body.skillLibraryRefs, body.content)
+      ? await recallSkillLibrarySkills(skillLibraryCatalog, settingsSnapshot, body.skillLibraryRefs, modelContent)
       : [];
     const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
     activeSkills = [
@@ -691,7 +700,11 @@ async function executeAgentRun(
   };
   const timeoutSettings = store.getTimeoutSettings();
   const quotaSettings = store.getQuotaSettings();
-  const userMessage = await store.appendMessage(sessionId, "user", body.content.trim(), undefined, composerReferences, body.annotationIds);
+  // A turn the runtime woke on its own has no user-authored body, so it is
+  // recorded as a wake notice rather than as something the researcher typed.
+  const userMessage = await store.appendMessage(sessionId, "user", visibleContent, undefined,
+    composerReferences, body.annotationIds, deliveredNotice && !visibleContent ? "wake_notice" : "message",
+    undefined, deliveredNotice);
   if (await store.getSessionRun(sessionId, runId)) await store.updateSessionRun(sessionId, runId, { userMessageId: userMessage.id });
   // On a session's first user message, mirror a one-goal-per-session
   // ResearchGoal (domain inferred from message keywords). Never blocks the
@@ -700,8 +713,8 @@ async function executeAgentRun(
     memoryGraphSink.observeSessionFirstMessage({
       sessionId,
       goalId: `goal:session:${sessionId}`,
-      coreObjective: body.content.trim(),
-      domain: inferDomain(body.content.trim()),
+      coreObjective: visibleContent,
+      domain: inferDomain(visibleContent),
       topicScope: [],
       createdAt: userMessage.createdAt,
     });
@@ -1046,7 +1059,7 @@ async function executeAgentRun(
     createSkill: async (input) => {
       return await skillCatalog.createReviewDraft(input, {
         sessionId,
-        source: /^\/distill-session(?:\s|$)/i.test(body.content.trim()) ? "session-distill" : "agent",
+        source: /^\/distill-session(?:\s|$)/i.test(modelContent) ? "session-distill" : "agent",
       });
     },
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
@@ -1219,7 +1232,7 @@ async function executeAgentRun(
       }
       return result;
     },
-    ...(reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, body.content)
+    ...(reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent)
       && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick") ? {
       reviewCheckpoint: async (input, signal, toolCallId) => {
         const checkpointToolCallId = toolCallId ?? randomUUID();
@@ -1714,7 +1727,7 @@ async function executeAgentRun(
           },
           profile: subagentProfile,
           history,
-          prompt: continuation ? body.content : subagentExecutionPrompt,
+          prompt: continuation ? modelContent : subagentExecutionPrompt,
           requestExecutionId: childExecution.identity.executionId,
           runContract: subagentExecutionPrompt,
         });
@@ -2708,7 +2721,9 @@ export function scheduleSessionRuns(
             next.id,
             {
               annotationIds: next.annotationIds,
-              content: delivery ? (next.automaticWake ? notificationPrompt(delivery) : next.prompt + "\n\n" + notificationPrompt(delivery)) : next.prompt,
+              // An automatic wake contributes no user-authored text; a delivery
+              // riding along with a real request must not be glued onto it.
+              content: next.automaticWake ? "" : next.prompt,
               references: next.references,
               skillLibraryRefs: next.skillLibraryRefs,
               webForceRefresh: next.webForceRefresh,
@@ -2720,6 +2735,7 @@ export function scheduleSessionRuns(
             memoryGraphClient,
             evolve,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
+            delivery ? runtimeNotice(delivery) : undefined,
           );
         } catch (reason) {
           error = runFailureMessage(reason);

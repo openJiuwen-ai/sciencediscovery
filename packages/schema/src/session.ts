@@ -117,18 +117,32 @@ export interface ComposerReference {
   version?: number;
 }
 
+/** Runtime-originated records delivered with a turn: completed background
+ * Executions and fired timers. `prompt` is model-facing text and is never the
+ * user-visible message body; the counts let the UI summarize it without
+ * parsing that text. */
+export interface RuntimeNotice {
+  executions: number;
+  prompt: string;
+  timers: number;
+}
+
 export interface ChatMessage {
   annotations?: ArtifactAnnotation[];
   content: string;
   createdAt: string;
   id: string;
-  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice";
+  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice" | "wake_notice";
   modelId?: string;
   modelName?: string;
   /** Canonical provider transcript for this assistant turn. It is replayed to
    * the configured model but is not used as the user-visible message body. */
   modelContext?: Array<Record<string, unknown>>;
   references?: ComposerReference[];
+  /** Runtime records that rode along with this turn. The model input re-attaches
+   * `prompt`; the transcript keeps it out of `content` so a runtime wake is
+   * never rendered as something the user typed. */
+  runtimeNotice?: RuntimeNotice;
   reviewerCheckpoint?: {
     error?: string;
     /** Persisted live progress for the current Reviewer Specialist stage. */
