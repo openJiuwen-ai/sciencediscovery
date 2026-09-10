@@ -103,9 +103,12 @@ function npuMemory(usedMb: number | undefined, totalMb: number | undefined): str
  * registered one can, and an operator must be able to tick either without the
  * two behaving differently. Every card is listed, including the ones that
  * cannot be used — hiding them would leave someone wondering where NPU 0 went.
- * An unusable card is shown with its checkbox disabled and the driver's own
- * reason on the row, so the refusal is understood while ticking rather than
- * during an execution.
+ * An unusable card is shown with the driver's own reason on the row, so the
+ * refusal is understood while ticking rather than during an execution. Its
+ * checkbox is disabled only while it is unticked: a card that was usable when
+ * it was ticked and has since been claimed by someone else must still be
+ * removable, and disabling the whole row would leave the operator stuck with
+ * a selection every execution then refuses.
  */
 export function NpuDeviceSelector({ client, inventory, onError, onSelected, runnerId, selected }: {
   client: ApiClient;
@@ -145,12 +148,13 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
       : <ul className="remote-npu-list">
         {inventory.devices.map((device) => {
           const memory = npuMemory(device.hbmUsedMb, device.hbmTotalMb);
+          const isTicked = ticked.has(device.hostIndex);
           return <li key={device.hostIndex} className={device.sandboxUsable ? "" : "unusable"}>
             <label>
               <input
                 type="checkbox"
-                checked={ticked.has(device.hostIndex)}
-                disabled={!device.sandboxUsable || saving}
+                checked={isTicked}
+                disabled={(!device.sandboxUsable && !isTicked) || saving}
                 onChange={(event) => { void toggle(device.hostIndex, event.target.checked); }}
               />
               <span className="remote-npu-name">NPU {device.hostIndex} · {device.chipName}</span>
@@ -163,7 +167,10 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
             </label>
             {device.sandboxUsable
               ? null
-              : <small className="remote-npu-reason">{device.sandboxUnusableReason ?? "This card cannot be opened inside the sandbox."}</small>}
+              : <small className="remote-npu-reason">
+                {device.sandboxUnusableReason ?? "This card cannot be opened inside the sandbox."}
+                {isTicked ? " Executions using it will fail until it is free again; untick it to run without it." : null}
+              </small>}
           </li>;
         })}
       </ul>}
