@@ -471,6 +471,17 @@ async function npuChain(selection: number[] | undefined) {
   const runnerClient = {
     execute: async (request: Record<string, unknown>) => { payloads.push(request); return { ...result, executionId: String(request.executionId) }; },
     executeShell: async (request: Record<string, unknown>) => { payloads.push(request); return { ...result, executionId: String(request.executionId) }; },
+    // The managed shell tool submits through this call instead, so it needs its
+    // own capture: a request that skipped the field here would still be a
+    // sandbox without cards, however well `executeShell` behaves.
+    startShellExecution: async (request: Record<string, unknown>) => {
+      payloads.push(request);
+      return {
+        agentId: "main", id: String(request.executionId), sessionId: session.id, state: "completed",
+        startedAt: new Date().toISOString(), version: { digest: "sha256:test", workspaceId: "workspace" },
+        result: { ...result, executionId: String(request.executionId), workspaceSnapshot: { id: "snapshot", capturedAt: new Date().toISOString(), files: [], workspace: "workspace" } },
+      };
+    },
     health: async () => ({ sandbox: "bubblewrap" }),
     listEnvironmentRevisions: async () => [],
     listEnvironments: async () => [],
@@ -499,10 +510,11 @@ test("cards ticked for a Runner reach the Runner request of every execution kind
     await bindings.executePython!("print('python')");
     await bindings.executeShell!("echo shell", "ephemeral");
     await bindings.executeScientific!("python", "print('scientific')", undefined, "ephemeral");
+    await bindings.shellExecutions!.start("echo managed", {});
   } finally {
     await cleanup();
   }
-  assert.equal(payloads.length, 3, "each execution must reach the Runner");
+  assert.equal(payloads.length, 4, "each execution must reach the Runner");
   // The tick is worthless unless it arrives here: this is the field the Runner
   // reads to decide which cards to bind into the sandbox.
   for (const payload of payloads) assert.deepEqual(payload.npuDevices, [4]);
@@ -514,10 +526,11 @@ test("an unticked Runner sends no NPU field at all, leaving the sandbox unchange
     await bindings.executePython!("print('python')");
     await bindings.executeShell!("echo shell", "ephemeral");
     await bindings.executeScientific!("python", "print('scientific')", undefined, "ephemeral");
+    await bindings.shellExecutions!.start("echo managed", {});
   } finally {
     await cleanup();
   }
-  assert.equal(payloads.length, 3);
+  assert.equal(payloads.length, 4);
   // Absent rather than an empty array: an empty array would still be a decision.
   for (const payload of payloads) assert.equal(Object.hasOwn(payload, "npuDevices"), false);
 });
