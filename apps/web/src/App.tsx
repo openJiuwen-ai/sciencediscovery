@@ -3373,7 +3373,10 @@ export function App() {
     const ideaCommand = message.trim().match(/^\/idea-tree(?:-team)?(?:\s+|$)/u);
     if (ideaCommand) {
       try {
-        await client.ideaResearchCommand(activeSessionId, {operation: "create", content: message.trim()});
+        const submittedSessionId = activeSessionId;
+        await client.ideaResearchCommand(submittedSessionId, {operation: "create", content: message.trim()});
+        const refreshed = await client.getSession(submittedSessionId);
+        setSession(current => current?.id === submittedSessionId ? refreshed : current);
         window.dispatchEvent(new CustomEvent("idea-research-updated", {detail: {sessionId: activeSessionId}}));
         setMessage("");
       } catch (reason) {

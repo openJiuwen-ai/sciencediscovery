@@ -47,6 +47,7 @@ export interface EvolveToolRuntime {
   createEvolveRun(input: EvolveRunProposal, signal?: AbortSignal): Promise<EvolveRunProposalResult>;
   /** Read one finished or running search back into the conversation. */
   getEvolveRun(runId?: string): Promise<EvolveRunSummary>;
+  getIdeaResearch?(researchId?: string): Promise<unknown>;
 }
 
 /**
@@ -275,5 +276,17 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     parameters: evolveParameters,
   };
   tools.push(createEvolveRun);
+  if (runtime.getIdeaResearch) {
+    const parameters = Type.Object({researchId: Type.Optional(Type.String({maxLength: 200}))});
+    const getIdeaResearch: AgentTool<typeof parameters> = {
+      name: "get_idea_research", label: "Read Idea Tree research", parameters,
+      description: "Read this session's Idea Tree research status, stage progress and candidate findings. Omit researchId for the latest research. Use before explaining results. Python runs the iterations independently; do not poll this tool to wait, create a replacement plan, or claim these are Subagent executions.",
+      execute: async (_id, params) => {
+        const summary = await runtime.getIdeaResearch!(params.researchId);
+        return {content: [{type: "text", text: JSON.stringify(summary)}], details: summary};
+      },
+    };
+    tools.push(getIdeaResearch);
+  }
   return tools;
 }

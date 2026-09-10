@@ -4,6 +4,8 @@ import { createServer } from "node:http";
 export async function ideaResearchModel() {
   const requests: Array<{ system: string; payload: any }> = [];
   let hold = true;
+  let holdAssessments = false;
+  const assessmentReleases: Array<() => void> = [];
   let release: (() => void) | undefined;
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -14,6 +16,9 @@ export async function ideaResearchModel() {
     requests.push({ system, payload });
     if (hold && payload.hypothesis && !payload.candidate && !payload.children) {
       await new Promise<void>(resolve => { release = resolve; });
+    }
+    if (holdAssessments && payload.perspective) {
+      await new Promise<void>(resolve => assessmentReleases.push(resolve));
     }
     let answer: object;
     if (payload.maximumCandidates) {
@@ -34,8 +39,10 @@ export async function ideaResearchModel() {
   const address = server.address() as { port: number };
   return {
     apiToken: "local-stub", baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "idea-research-stub", requests,
+    holdAssessments() { holdAssessments = true; },
+    releaseAssessments() { holdAssessments = false; assessmentReleases.splice(0).forEach(release => release()); },
     holdDesign() { hold = true; release = undefined; },
     resume() { hold = false; release?.(); },
-    async stop() { hold = false; release?.(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
+    async stop() { holdAssessments = false; assessmentReleases.splice(0).forEach(release => release()); hold = false; release?.(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };
 }

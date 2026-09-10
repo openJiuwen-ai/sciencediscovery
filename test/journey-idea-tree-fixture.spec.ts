@@ -26,7 +26,8 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   test.setTimeout(180_000);
   const stub = await ideaResearchModel();
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
-  const panel = page.getByRole("region", { name: "Idea Tree 研究控制" });
+  const card = page.getByRole("region", { name: "Idea Tree 研究控制" });
+  const panel = page.getByRole("dialog", {name: "Idea Tree explorer"});
   const read = async () => {
     const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`, {headers: authorizationHeader()});
     expect(response.ok()).toBe(true);
@@ -56,6 +57,9 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await expect(page.getByLabel("给定材料", {exact: true})).toHaveCount(0);
       await expect(page.getByRole("dialog", {name: "Idea Tree explorer"})).toHaveCount(0);
       await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE"))).toBe(true);
+      await expect(page.getByText(/已启动 Idea Tree 研究/)).toBeVisible();
+      await card.getByRole("button", {name: /查看研究进度/}).click();
+      await expect(panel.getByRole("list", {name: "研究执行进度"})).toContainText("设计候选");
     });
     await journey.step("暂停正在设计的候选", "先显示正在暂停，响应结束后保持暂停且尚无评分", async () => {
       await panel.getByRole("button", {name: "暂停", exact: true}).click();
@@ -68,7 +72,18 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       expect(stub.requests.some(r => r.payload.perspective)).toBe(false);
     });
     await journey.step("手动继续并完成三轮", "三个候选完成独立评估，后续构思拿到前轮洞察，刷新后结果仍存在", async () => {
+      stub.holdAssessments();
       await panel.getByRole("button", {name: "继续", exact: true}).click();
+      const progress = panel.getByRole("list", {name: "研究执行进度"});
+      for (const role of ["活性评估", "稳定性评估", "可持续性评估"]) {
+        await expect(progress.getByRole("listitem").filter({hasText: role})).toContainText("执行中");
+      }
+      // Reload while model calls are still waiting: the stream starts with the
+      // persisted current state, so all three in-flight stages remain visible.
+      await page.reload();
+      await card.getByRole("button", {name: /查看研究进度/}).click();
+      await expect(progress.getByRole("listitem").filter({hasText: "执行中"})).toHaveCount(3);
+      stub.releaseAssessments();
       await expect.poll(async () => (await read())[0].research.status, {timeout: 30_000}).toBe("completed");
       const [{graph, research}] = await read();
       expect(research.round).toBe(3);
@@ -80,8 +95,9 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       const runs = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`, {headers: authorizationHeader()});
       expect(await runs.json()).toEqual([]);
       await page.reload();
-      await expect(panel).toContainText("第 3 / 3 轮");
-      const explorer = panel.getByRole("region", {name: "Idea Tree explorer"});
+      await expect(card).toContainText("第 3 / 3 轮");
+      await card.getByRole("button", {name: /查看研究进度/}).click();
+      const explorer = panel;
       await expect(explorer).toContainText("Shared insight: improve recovery");
       await expect(explorer).not.toContainText("Result handle");
       await expect(explorer).not.toContainText("revision 0");
@@ -93,6 +109,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Termination check");
       await page.getByRole("button", {name: /^(Run analysis|运行分析)$/}).click();
       await expect.poll(() => stub.requests.length).toBeGreaterThanOrEqual(previous + 2);
+      await card.getByRole("button", {name: /查看研究进度/}).click();
       await panel.getByRole("button", {name: "结束研究", exact: true}).click();
       await expect(panel).toContainText("结束后不能继续");
       await panel.getByRole("button", {name: "确认结束"}).click();

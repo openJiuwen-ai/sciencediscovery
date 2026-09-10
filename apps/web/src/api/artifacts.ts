@@ -151,6 +151,29 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {method: "POST", body: JSON.stringify(body)});
   }
 
+  async subscribeIdeaResearch(sessionId: string, researchId: string, onView: (view: import("@sciencediscovery/schema").IdeaResearchView) => void, signal: AbortSignal): Promise<void> {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research/${encodeURIComponent(researchId)}/events`, {
+      headers: {accept: "text/event-stream", authorization: `Bearer ${this.token}`}, signal,
+    });
+    if (!response.ok || !response.body) throw new Error(`Idea Tree stream failed: HTTP ${response.status}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const {done, value} = await reader.read();
+        buffer += decoder.decode(value, {stream: !done});
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const data = frame.split("\n").filter(line => line.startsWith("data: ")).map(line => line.slice(6)).join("\n");
+          if (data) onView(JSON.parse(data));
+        }
+        if (done) break;
+      }
+    } finally { reader.releaseLock(); }
+  }
+
   ideaResearchDefaults(sessionId: string): Promise<{prompts: Record<string, string>; criteria: Record<string, string>}> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {method: "POST", body: JSON.stringify({operation: "defaults"})});
   }

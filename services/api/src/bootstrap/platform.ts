@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createIdeaResearchClient } from "../idea-tree/research.js";
 import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
@@ -203,6 +204,8 @@ export function createPlatformServices(
   // Run-scoped model tokens. In memory only: a token that outlived the process
   // would outlive the run it belongs to, and that is the property it exists for.
   const evolveRunTokens = new RunTokenRegistry();
+  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken,
+    apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`, store, tokens: evolveRunTokens });
   const evolveCas = new CasStore(config.dataDir);
   const evolveCandidates = new CandidateSources(
     config.dataDir, process.env.SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR?.trim() || undefined,
@@ -352,6 +355,7 @@ export function createPlatformServices(
         releaseWait?.();
       }
     },
+    getIdeaResearch: (researchId?: string) => ideaResearch.summary(turn.sessionId, researchId),
     getEvolveRun: async (runId?: string) => {
       // The id is optional and prefix-tolerant, because the caller is a model
       // whose context routinely does not contain it: a search started in an
@@ -385,6 +389,7 @@ export function createPlatformServices(
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    ideaResearch,
     ideaTreeAuthorities,
     ideaTreeRepository,
     mcpBroker,

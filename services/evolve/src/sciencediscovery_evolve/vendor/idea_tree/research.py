@@ -59,6 +59,7 @@ def validate_result(role: str, value: Any) -> dict:
 class ResearchStore:
     def __init__(self, root: Path):
         self.root = root
+        self.listeners: dict[str, set[asyncio.Queue]] = {}
 
     def path(self, project: str, session: str, research: str) -> Path:
         for part in (project, session, research):
@@ -84,6 +85,13 @@ class ResearchStore:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+        # Publish only after the checkpoint is durable. Each subscriber needs the
+        # latest state, not a backlog of full trees while its network is slow.
+        for queue in self.listeners.get(state['id'], ()):
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(True)
 
     def read(self, project: str, session: str, research: str) -> dict:
         return json.loads(self.path(project, session, research).read_text())
@@ -139,6 +147,25 @@ class IdeaTreeEngine:
                 raise
 
     async def ask(self, role: str, payload: dict) -> dict:
+        activity = dict(role=role, nodeId=self.state.get('currentNodeId'),
+                        round=self.state['round'] + (1 if role == 'ideate' else 0), status='running', startedAt=now(), finishedAt=None, error=None)
+        self.state.setdefault('activities', []).append(activity)
+        self.save()
+        try:
+            result = await self._ask(role, payload)
+            activity['status'] = 'completed'
+            return result
+        except (Interrupted, BudgetReached):
+            activity['status'] = 'stopped'
+            raise
+        except Exception as error:
+            activity.update(status='failed', error=str(error))
+            raise
+        finally:
+            activity['finishedAt'] = now()
+            self.save()
+
+    async def _ask(self, role: str, payload: dict) -> dict:
         self.check_stop()
         shape = '{"candidates":[{"parentId":"existing id or omit", "direction":"new direction", "hypothesis":"..."}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in prompts.CRITERIA else '{"text":"..."}')
         system = self.role_prompt(role) + '\nReturn JSON only, matching: ' + shape

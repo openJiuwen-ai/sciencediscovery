@@ -1,4 +1,3 @@
-import { createIdeaResearchClient } from "../idea-tree/research.js";
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -302,6 +301,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    ideaResearch,
     ideaTreeAuthorities,
     ideaTreeRepository,
     mcpBroker,
@@ -319,8 +319,6 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     store,
     webBroker,
   } = platform;
-  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken,
-    apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`, store, tokens: evolveRunTokens });
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
   const reviewerAuditCoordinator = new ReviewerAuditCoordinator(store, {
@@ -2672,6 +2670,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listArtifactAnnotations(artifactAnnotationsMatch[1]!, artifactAnnotationsMatch[2]!));
         return;
       }
+      const researchEventsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/research\/([^/]+)\/events$/);
+      if (researchEventsMatch && request.method === "GET") {
+        const controller = new AbortController();
+        response.once("close", () => controller.abort());
+        try {
+          const body = await ideaResearch.events(researchEventsMatch[1]!, researchEventsMatch[2]!, controller.signal);
+          response.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"});
+          response.flushHeaders();
+          for await (const chunk of body) response.write(chunk);
+          response.end();
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            if (response.headersSent) response.destroy(error instanceof Error ? error : new Error(String(error)));
+            else sendError(response, 502, error instanceof Error ? error.message : String(error));
+          }
+        }
+        return;
+      }
       const researchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/research$/);
       if (researchMatch && (request.method === "GET" || request.method === "POST")) {
         const sid = researchMatch[1]!;
@@ -2679,7 +2695,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const input = request.method === "POST" ? await readJson<Record<string, unknown>>(request) : {};
         const operation = request.method === "GET" ? "list" : String(input.operation ?? "create");
         if (!["list", "get", "create", "pause", "continue", "end", "defaults"].includes(operation)) return sendError(response, 400, "Unknown research operation");
-        try { sendJson(response, 200, await ideaResearch.command(sid, operation, input)); }
+        try {
+          const result = await ideaResearch.command(sid, operation, input);
+          if (operation === "create" && typeof input.content === "string") {
+            await store.appendMessage(sid, "user", input.content);
+            await store.appendMessage(sid, "assistant", `已启动 Idea Tree 研究（${result.research.id}）。Python 引擎正在后台执行构思、设计、独立评估和迭代。请在 Idea Tree 卡片查看实时进度，也可以稍后询问研究结果。`);
+          }
+          sendJson(response, 200, result);
+        }
         catch (error) { sendError(response, 400, error instanceof Error ? error.message : String(error)); }
         return;
       }
