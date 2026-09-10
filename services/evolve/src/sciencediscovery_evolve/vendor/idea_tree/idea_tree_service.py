@@ -183,6 +183,8 @@ _store: IdeaTreeStore | None = None
 
 @router.post("/command")
 def command(request: TreeCommand) -> dict[str, Any]:
+    if request.operation not in {"list", "view", "check", "readTree", "readGraph", "listTreeIds", "listExecutions", "listVerifiedResults", "readExecution", "readVerifiedResult", "deleteAll"}:
+        raise HTTPException(409, detail=dict(code="LEGACY_TREE_READ_ONLY", message="Legacy trees are read-only. Start a new research in the Idea Tree panel."))
     global _store
     if _store is None:
         _store = IdeaTreeStore(Path(os.environ.get("SCIENCE_AGENT_DATA_DIR", ".sciencediscovery-data")) / "idea-trees")

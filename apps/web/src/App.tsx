@@ -3370,6 +3370,12 @@ export function App() {
   async function submitMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (!activeSessionId || !session || !message.trim() || session.archivedAt) return;
+    const ideaCommand = message.trim().match(/^\/idea-tree(?:-team)?(?:\s+|$)/u);
+    if (ideaCommand) {
+      window.dispatchEvent(new CustomEvent("idea-research-create", {detail: {sessionId: activeSessionId, objective: message.trim().slice(ideaCommand[0].length)}}));
+      setMessage("");
+      return;
+    }
     if (message.trim() === "/web-usage") {
       try {
         const usage = await client.getWebUsage();

@@ -1,3 +1,4 @@
+import { createIdeaResearchClient } from "../idea-tree/research.js";
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -318,6 +319,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     store,
     webBroker,
   } = platform;
+  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken,
+    apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`, store, tokens: evolveRunTokens });
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
   const reviewerAuditCoordinator = new ReviewerAuditCoordinator(store, {
@@ -1832,6 +1835,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
         }
         await store.deleteProject(projectMatch[1]!, body.confirmationId ?? "");
+        void Promise.all(impact.sessionIds.map(sid => ideaResearch.cleanup(projectMatch[1]!, sid))).catch(error => {
+          console.warn("Could not clean up deleted Project research:", error);
+        });
         // Idea Tree owns its lifecycle and never relies on MemoryGraph's
         // best-effort mirror cleanup to remove authoritative records.
         void Promise.all(ideaTreeRepositories.map((repository) => repository.deleteAll())).catch((error) => {
@@ -2072,7 +2078,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if ((await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available) {
           await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         }
+        const researchProjectId = store.getSession(sessionMatch[1]!)!.projectId;
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
+        void ideaResearch.cleanup(researchProjectId, sessionMatch[1]!).catch(error => {
+          console.warn("Could not clean up deleted Session research:", error);
+        });
         void ideaTreeState?.deleteAll().catch((error) => {
           console.warn("Could not clean up deleted Session Idea Trees:", error);
         });
@@ -2662,6 +2672,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listArtifactAnnotations(artifactAnnotationsMatch[1]!, artifactAnnotationsMatch[2]!));
         return;
       }
+      const researchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/research$/);
+      if (researchMatch && (request.method === "GET" || request.method === "POST")) {
+        const sid = researchMatch[1]!;
+        if (!store.getSession(sid)) return sendError(response, 404, "Session not found");
+        const input = request.method === "POST" ? await readJson<Record<string, unknown>>(request) : {};
+        const operation = request.method === "GET" ? "list" : String(input.operation ?? "create");
+        if (!["list", "get", "create", "pause", "continue", "end", "defaults"].includes(operation)) return sendError(response, 400, "Unknown research operation");
+        try { sendJson(response, 200, await ideaResearch.command(sid, operation, input)); }
+        catch (error) { sendError(response, 400, error instanceof Error ? error.message : String(error)); }
+        return;
+      }
       const ideaTreeGraphMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/graph$/);
       if (ideaTreeGraphMatch && request.method === "GET") {
         const sessionId = ideaTreeGraphMatch[1]!;
@@ -3116,6 +3137,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     }
   });
   server.once("close", () => remoteCompute.close());
+  server.once("close", () => ideaResearch.close());
   const dispatcher = new NotificationDispatcher(store,
     (batch) => createNotificationRun(store, skillLibraryCatalog, batch),
     (sessionId) => scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker,

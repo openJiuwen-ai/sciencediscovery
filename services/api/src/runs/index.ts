@@ -570,6 +570,7 @@ async function executeAgentRun(
     detail?: { nodeId?: string; treeId?: string },
   ) => emit({ ...detail, phase, type: "idea_tree.phase" });
   const artifactResolver = createIdeaTreeArtifactResolver(store, provenanceRecorder.cas);
+  Object.assign(settingsSnapshot, { ideaTreeEnabled: false, ideaTreeExecutor: undefined, ideaTreeSettings: undefined });
   const ideaTreeExecutor = settingsSnapshot.ideaTreeExecutor;
   if (settingsSnapshot.ideaTreeEnabled && !ideaTreeExecutor) {
     throw new ApiStatusError(400, "Queued Idea Tree Run is missing its frozen executor snapshot");
@@ -2571,70 +2572,14 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
 
 async function computeQueuedSettingsSnapshot(
   store: SessionStore,
-  skillCatalog: SkillCatalog,
-  ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
+  _skillCatalog: SkillCatalog,
+  _ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
   sessionId: string,
-  ideaTreeEnabled: boolean,
-  ideaTreeRepository: IdeaTreePersistence,
+  _ideaTreeEnabled: boolean,
+  _ideaTreeRepository: IdeaTreePersistence,
 ): Promise<SessionRun["settingsSnapshot"]> {
   const snapshot = computeSettingsSnapshot(store, sessionId);
-  const configuredSkillIds = snapshot.enabledSkillIds;
-  const hasIdeaTreeHistory = !ideaTreeEnabled && (await store.listSessionRuns(sessionId))
-    .some((run) => run.settingsSnapshot.ideaTreeEnabled);
-  if (!ideaTreeEnabled && !hasIdeaTreeHistory) {
-    return {
-      ...snapshot,
-      ...freezeIdeaTreeRunSelection({ configuredSkillIds, ideaTreeEnabled: false }),
-    };
-  }
-  const executorSkillId = "idea-tree-team";
-  let ideaTreeSettings = store.getIdeaTreeSettings();
-  let resumedExecutor: NonNullable<SessionRun["settingsSnapshot"]["ideaTreeExecutor"]> | undefined;
-  try {
-    const resumeRuntime = new IdeaTreeRuntime(ideaTreeRepository, { runId: `queue-${randomUUID()}` });
-    resumedExecutor = await resumeRuntime.resumeExecutor(executorSkillId) ?? undefined;
-    // A follow-up keeps tools for an unfinished tree, even without a slash command.
-    if (!ideaTreeEnabled && !resumedExecutor) {
-      return { ...snapshot, ...freezeIdeaTreeRunSelection({ configuredSkillIds, ideaTreeEnabled: false }) };
-    }
-    ideaTreeSettings = await resumeRuntime.resumeSettings(executorSkillId) ?? ideaTreeSettings;
-  } catch (error) {
-    if (error instanceof IdeaTreeRuntimeError) {
-      if (error.code === "REVISION_CONFLICT") throw new ApiStatusError(409, error.message);
-      if (error.code === "PERSISTENCE_UNAVAILABLE" || error.code === "STORAGE_ERROR") {
-        throw new ApiStatusError(503, error.message);
-      }
-    }
-    throw new ApiStatusError(400, error instanceof Error ? error.message : "Idea Tree executor Workflow Skill is unavailable");
-  }
-  const resolvedExecutor = await resolveExecutorCapability({
-    ideaTreeAuthorities,
-    skillCatalog,
-    skillId: executorSkillId,
-  });
-  if (!resolvedExecutor.capability.available || !resolvedExecutor.executor || !resolvedExecutor.workflowSkill) {
-    throw new ApiStatusError(
-      400,
-      resolvedExecutor.capability.reason ?? "Idea Tree executor Workflow Skill is unavailable",
-    );
-  }
-  resolvedExecutor.executor = createExecutorDescriptor({
-    ...resolvedExecutor.executor,
-    scoreSpec: { ...resolvedExecutor.executor.scoreSpec, direction: ideaTreeSettings.scoreDirection },
-  });
-  if (resumedExecutor && !executorSnapshotMatches(resumedExecutor, resolvedExecutor.executor)) {
-    throw new ApiStatusError(
-      400,
-      "A persisted Idea Tree uses an incompatible hard contract; restore the compatible runtime or start a new Session",
-    );
-  }
-  return {
-    ...snapshot,
-    enabledSkillIds: ideaTreeSkillIds(configuredSkillIds, resolvedExecutor.workflowSkill.id),
-    ideaTreeExecutor: resumedExecutor ?? resolvedExecutor.executor,
-    ideaTreeSettings,
-    ideaTreeEnabled: true,
-  };
+  return { ...snapshot, ...freezeIdeaTreeRunSelection({ configuredSkillIds: snapshot.enabledSkillIds, ideaTreeEnabled: false }) };
 }
 
 export async function createQueuedRun(
@@ -2651,13 +2596,10 @@ export async function createQueuedRun(
   if (session.archivedAt) throw new ApiStatusError(409, "Session is archived and read-only");
   const submittedPrompt = body.content?.trim();
   const slashRefresh = submittedPrompt?.startsWith("/web-refresh ");
-  const ideaTreeCommand = submittedPrompt?.match(/^\/idea-tree(?:-team)?\s+/u)?.[0];
-  const slashIdeaTree = Boolean(ideaTreeCommand);
-  const prompt = slashRefresh
-    ? submittedPrompt!.slice("/web-refresh ".length).trim()
-    : slashIdeaTree
-      ? submittedPrompt!.slice(ideaTreeCommand!.length).trim()
-      : submittedPrompt;
+  if (/^\/idea-tree(?:-team)?(?:\s+|$)/u.test(submittedPrompt ?? "")) {
+    throw new ApiStatusError(409, "Start Idea Tree from the research panel or POST /api/sessions/:sessionId/idea-tree/research; it no longer runs as an Agent message");
+  }
+  const prompt = slashRefresh ? submittedPrompt!.slice("/web-refresh ".length).trim() : submittedPrompt;
   if (!prompt) throw new ApiStatusError(400, "Message content is required");
   let references: ComposerReference[];
   try {
@@ -2672,7 +2614,7 @@ export async function createQueuedRun(
       skillCatalog,
       ideaTreeAuthorities,
       sessionId,
-      slashIdeaTree === true,
+      false,
       ideaTreeRepository,
     );
   } catch (error) {

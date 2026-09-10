@@ -143,6 +143,18 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifact-dashboard`);
   }
 
+  listIdeaResearch(sessionId: string): Promise<{items: import("@sciencediscovery/schema").IdeaResearchView[]}> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`);
+  }
+
+  ideaResearchCommand(sessionId: string, body: Record<string, unknown>): Promise<import("@sciencediscovery/schema").IdeaResearchView> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {method: "POST", body: JSON.stringify(body)});
+  }
+
+  ideaResearchDefaults(sessionId: string): Promise<{prompts: Record<string, string>; criteria: Record<string, string>}> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {method: "POST", body: JSON.stringify({operation: "defaults"})});
+  }
+
   getIdeaTreeGraph(sessionId: string, treeId?: string): Promise<{
     graph: IdeaTreeGraph | null;
     hasIdeaTreeRun: boolean;
