@@ -174,8 +174,10 @@ test("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async ({ jou
         await expect(detail).toBeVisible({ timeout: 30_000 });
         await page.getByTestId("ke-evidence-source").first().click();
         await expect(page.getByTestId("ke-doc-reader")).toBeVisible();
-        // The stub quote is verbatim in the ingested fulltext, so the reader
-        // must land on the highlighted block (the miss notice would be a bug).
+        // The reader auto-switches to L1 from any stored level and locates the
+        // block with gate parity (verbatim substring OR ≥85% word overlap —
+        // the same arms that admitted the evidence), so the highlight must
+        // land; a total miss would be a real product bug.
         await expect(page.getByTestId("ke-doc-highlight")).toBeVisible({ timeout: 30_000 });
         await expect(page.getByTestId("ke-doc-highlight")).toContainText("glycoprotein");
       },

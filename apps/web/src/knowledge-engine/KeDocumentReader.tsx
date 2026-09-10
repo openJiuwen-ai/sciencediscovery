@@ -45,17 +45,44 @@ function normalize(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** Locate the L1 block whose text contains the verbatim quote (whitespace-
- *  normalized, same leniency as the provenance gate's substring arm). */
-function blockForQuote(blocks: KeDocumentBlock[], quote: string): KeDocumentBlock | null {
+function wordSet(text: string): Set<string> {
+  return new Set(normalize(text).toLowerCase().split(" ").filter((word) => word.length > 1));
+}
+
+/** Gate-parity quote location — the SAME verification standard as the
+ *  extraction provenance gate, so a quote the gate admitted always locates:
+ *  verbatim substring first, then the best ≥85% word-overlap block (the
+ *  quote may have been gate-passed through the overlap arm, e.g. a PDF whose
+ *  parsed text differs in punctuation/one word). */
+function blockForQuote(blocks: KeDocumentBlock[], quote: string): { block: KeDocumentBlock; exact: boolean } | null {
   const needle = normalize(quote);
   if (!needle) return null;
-  return blocks.find((block) => normalize(block.text).includes(needle)) ?? null;
+  const verbatim = blocks.find((block) => normalize(block.text).includes(needle));
+  if (verbatim) return { block: verbatim, exact: true };
+  const quoteWords = wordSet(needle);
+  if (quoteWords.size === 0) return null;
+  let best: KeDocumentBlock | null = null;
+  let bestRatio = 0.85;
+  for (const block of blocks) {
+    if (block.type === "reference") continue;
+    const blockWords = wordSet(block.text);
+    if (blockWords.size === 0) continue;
+    let hit = 0;
+    for (const word of quoteWords) {
+      if (blockWords.has(word)) hit += 1;
+    }
+    const ratio = hit / quoteWords.size;
+    if (ratio > bestRatio) {
+      best = block;
+      bestRatio = ratio;
+    }
+  }
+  return best ? { block: best, exact: false } : null;
 }
 
 /** Inline `$..$` math segments rendered via KaTeX. Conservative: an inner
- *  segment that starts or ends with whitespace stays literal text — that shape
- *  is prose with two currency dollars ("$5 … $10"), never a formula. */
+ *  segment that starts or ends with whitespace, or contains no letter and no
+ *  backslash ("$5-$10" is money talk, never a formula), stays literal. */
 const INLINE_MATH = /\$([^$\n]{1,200})\$/g;
 
 function renderTex(tex: string, displayMode: boolean): string {
@@ -73,7 +100,7 @@ function inlineMathNodes(text: string): ReactNode[] {
   let key = 0;
   for (const match of text.matchAll(INLINE_MATH)) {
     const tex = match[1]!;
-    if (tex.trim().length === 0 || tex !== tex.trim()) continue;
+    if (tex !== tex.trim() || !/[\p{L}\\]/u.test(tex)) continue;
     if (match.index > cursor) nodes.push(text.slice(cursor, match.index));
     const html = renderTex(tex, false);
     if (html) {
@@ -118,16 +145,23 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [highlightAnchorId, setHighlightAnchorId] = useState<string | null>(null);
+  const [highlightFuzzy, setHighlightFuzzy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const cache = useRef(new Map<KeDocumentLevel, KeDocumentRead>());
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Armed by the reset effect (new doc / new quote); consumed once by the
+  // resolver below — a manual level switch afterwards never bounces back.
+  const pendingHighlight = useRef<string | null>(null);
 
   useEffect(() => {
     cache.current.clear();
     setDoc(null);
     setError(null);
     setLoading(true);
-  }, [docId]);
+    setHighlightAnchorId(null);
+    setHighlightFuzzy(false);
+    pendingHighlight.current = highlightQuote ?? null;
+  }, [docId, kbId, highlightQuote]);
 
   useEffect(() => {
     const cached = cache.current.get(level);
@@ -167,26 +201,36 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
   }, []);
 
   const blocks = doc?.blocks ?? null;
-  const pendingHighlight = useRef<string | null>(null);
 
-  // Evidence click-through: once L1 blocks are in hand, find the block whose
-  // text contains the quote, reveal it, and scroll it into view.
+  // Evidence click-through resolver: the pending quote drives ONE automatic
+  // switch to L1 (whichever level the reader opened at), then locates the
+  // block. Order matters — the level switch must be decided BEFORE checking
+  // blocks (blocks only exist in the L1 payload, so gating on them first
+  // would make the switch unreachable from L0/L2).
   useEffect(() => {
-    if (!highlightQuote || !blocks || blocks.length === 0) return;
+    if (pendingHighlight.current === null) return;
     if (level !== "L1") {
-      pendingHighlight.current = highlightQuote;
       selectLevel("L1");
       return;
     }
-    const quote = pendingHighlight.current ?? highlightQuote;
+    if (!blocks || blocks.length === 0) {
+      // L1 loaded but unparsed — resolve honestly instead of waiting forever.
+      if (!loading && doc) {
+        pendingHighlight.current = null;
+        setHighlightAnchorId("__miss__");
+      }
+      return;
+    }
+    const quote = pendingHighlight.current;
     pendingHighlight.current = null;
-    const target = blockForQuote(blocks, quote);
-    setHighlightAnchorId(target ? target.anchorId : "__miss__");
-    if (target && containerRef.current) {
-      const element = containerRef.current.querySelector<HTMLElement>(`[data-anchor="${target.anchorId}"]`);
+    const located = blockForQuote(blocks, quote);
+    setHighlightAnchorId(located ? located.block.anchorId : "__miss__");
+    setHighlightFuzzy(located ? !located.exact : false);
+    if (located && containerRef.current) {
+      const element = containerRef.current.querySelector<HTMLElement>(`[data-anchor="${located.block.anchorId}"]`);
       element?.scrollIntoView({ block: "center", behavior: "smooth" });
     }
-  }, [highlightQuote, blocks, level, selectLevel]);
+  }, [blocks, level, loading, doc, selectLevel]);
 
   const outline = useMemo(
     () => (blocks ?? []).filter((block) => block.type === "heading"),
@@ -366,6 +410,11 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
                 {highlightAnchorId === "__miss__" && (
                   <div data-testid="ke-doc-highlight-miss" style={{ marginTop: 8, fontSize: 11, color: "var(--warning, #d97706)" }}>
                     {t("ke.doc.highlightMiss")}
+                  </div>
+                )}
+                {highlightAnchorId !== "__miss__" && highlightFuzzy && (
+                  <div data-testid="ke-doc-highlight-fuzzy" style={{ marginTop: 8, fontSize: 11, color: "var(--warning, #d97706)" }}>
+                    {t("ke.doc.highlightFuzzy")}
                   </div>
                 )}
               </>

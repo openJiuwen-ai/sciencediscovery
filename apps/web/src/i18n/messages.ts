@@ -931,6 +931,7 @@ export const en = {
   "ke.doc.tagsLabel": "Tags",
   "ke.doc.noTags": "no section tags",
   "ke.doc.highlightMiss": "evidence passage not found verbatim in this version",
+  "ke.doc.highlightFuzzy": "highlighted block matches by ≥85% word overlap — the parsed text differs slightly from the quoted sentence",
   "ke.detail.viewSource": "Source",
 } as const;
 
@@ -1847,5 +1848,6 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "ke.doc.tagsLabel": "标签",
   "ke.doc.noTags": "暂无章节标签",
   "ke.doc.highlightMiss": "证据原文在此版本中未逐字命中",
+  "ke.doc.highlightFuzzy": "高亮块按 ≥85% 词重叠近似命中——解析文本与引文略有出入",
   "ke.detail.viewSource": "查看原文",
 } as const;
