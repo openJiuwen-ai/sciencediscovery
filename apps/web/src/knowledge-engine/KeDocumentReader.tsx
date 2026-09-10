@@ -51,9 +51,10 @@ function wordSet(text: string): Set<string> {
 
 /** Gate-parity quote location — the SAME verification standard as the
  *  extraction provenance gate, so a quote the gate admitted always locates:
- *  verbatim substring first, then the best ≥85% word-overlap block (the
- *  quote may have been gate-passed through the overlap arm, e.g. a PDF whose
- *  parsed text differs in punctuation/one word). */
+ *  verbatim substring first, then the best ≥85% word-overlap block. The gate
+ *  compares against the FULLTEXT, but a PDF page break can split the quote's
+ *  words across two blocks (each ~half the words) — for that gate-passed
+ *  shape, fall back to the best block at ≥60% overlap and mark it fuzzy. */
 function blockForQuote(blocks: KeDocumentBlock[], quote: string): { block: KeDocumentBlock; exact: boolean } | null {
   const needle = normalize(quote);
   if (!needle) return null;
@@ -77,7 +78,25 @@ function blockForQuote(blocks: KeDocumentBlock[], quote: string): { block: KeDoc
       bestRatio = ratio;
     }
   }
-  return best ? { block: best, exact: false } : null;
+  if (best) return { block: best, exact: false };
+  // Split-across-blocks fallback: same scan with a 0.6 floor.
+  let fallback: KeDocumentBlock | null = null;
+  let fallbackRatio = 0.6;
+  for (const block of blocks) {
+    if (block.type === "reference") continue;
+    const blockWords = wordSet(block.text);
+    if (blockWords.size === 0) continue;
+    let hit = 0;
+    for (const word of quoteWords) {
+      if (blockWords.has(word)) hit += 1;
+    }
+    const ratio = hit / quoteWords.size;
+    if (ratio > fallbackRatio) {
+      fallback = block;
+      fallbackRatio = ratio;
+    }
+  }
+  return fallback ? { block: fallback, exact: false } : null;
 }
 
 /** Inline `$..$` math segments rendered via KaTeX. Conservative: an inner

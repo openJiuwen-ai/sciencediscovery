@@ -151,6 +151,12 @@ test("J-KE5 会话内检索论文原文段落", { tag: "@mocked" }, async ({ jou
         };
         fixture = { project: created.project, session: created.firstSession };
 
+        // The app fetches /api/models once at boot; the API-side provider
+        // registration above is invisible to this long-lived page until a
+        // reload (registration through the settings UI would update it in
+        // place — the journeys register out of band, so refresh first).
+        await page.reload();
+        await expect(page.getByRole("heading", { name: created.firstSession.title })).toBeVisible({ timeout: 30_000 });
         await page.getByLabel("本任务使用的模型").click();
         const picker = page.getByRole("dialog", { name: "选择模型" });
         const modelOption = picker.getByRole("option", { name: new RegExp(agent.model.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")) });
