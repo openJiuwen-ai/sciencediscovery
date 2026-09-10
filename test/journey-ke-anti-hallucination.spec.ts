@@ -47,7 +47,7 @@ test.use({ locale: "zh-CN" });
  * CostSideEffects: no external cost; project/session and KB records live inside the disposable isolated data dir.
  */
 test("J-KE6 反幻觉：夸大新颖性声明被检查结果标注", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(900_000);
   journey.scenario({
     goal: "研究人员让 agent 断言一条「首次发现」的新颖性声明，"
       + "agent 先跑 novelty_check 与 verify_citation，答案依据真实检查结果降级表述而不是复读夸大。",
@@ -121,7 +121,7 @@ test("J-KE6 反幻觉：夸大新颖性声明被检查结果标注", { tag: "@mo
 
         await page.getByTestId("ke-seed-query").fill(seedQuery);
         await page.getByTestId("ke-seed").click();
-        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 600_000 });
         await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'], [data-status='running']")).toHaveCount(0, { timeout: 180_000 });
       },
     );

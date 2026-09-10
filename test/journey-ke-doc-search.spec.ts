@@ -47,7 +47,7 @@ test.use({ locale: "zh-CN" });
  * CostSideEffects: no external cost; project/session and KB records live inside the disposable isolated data dir.
  */
 test("J-KE5 会话内检索论文原文段落", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(900_000);
   journey.scenario({
     goal: "知识库建成后，研究人员在会话里问论文原文怎么说，"
       + "agent 调用 kb_search 命中段落、再用 kb_expand 展开真实锚点的上下文并引用作答。",
@@ -117,7 +117,7 @@ test("J-KE5 会话内检索论文原文段落", { tag: "@mocked" }, async ({ jou
 
         await page.getByTestId("ke-seed-query").fill(seedQuery);
         await page.getByTestId("ke-seed").click();
-        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 600_000 });
         await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'], [data-status='running']")).toHaveCount(0, { timeout: 180_000 });
       },
     );

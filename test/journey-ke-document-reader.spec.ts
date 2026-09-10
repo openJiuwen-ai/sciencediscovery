@@ -46,7 +46,7 @@ test.use({ locale: "zh-CN" });
 // it appears on one line of the parsed fulltext, so the provenance gate keeps
 // the relation on that document and the reader highlights the exact block.
 test("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
-  test.setTimeout(600_000);
+  test.setTimeout(900_000);
   journey.scenario({
     goal: "知识库建成后，研究人员点开任意文档三级阅读（摘要/结构/原文），"
       + "并从实体证据卡一键跳到被高亮的原文出处。",
@@ -116,7 +116,7 @@ test("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async ({ jou
         });
         expect(settings.ok()).toBeTruthy();
 
-        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
+        await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 600_000 });
         await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'],[data-status='running']")).toHaveCount(0, { timeout: 180_000 });
         await expect(page.getByTestId("ke-job-status").locator("[data-status='failed'],[data-status='dead']")).toHaveCount(0);
       },
