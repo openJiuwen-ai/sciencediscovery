@@ -25,8 +25,8 @@ test.use({ locale: "zh-CN", actionTimeout: 15_000 });
  *   桌面与 390px 窄屏都无横向溢出。本旅程用浏览器路由注入可用的假 910B 清单，
  *   因为当前环境没有 Ascend 驱动（真实接口返回所有卡 sandboxUsable:false）。
  * Steps:
- *   1. 打开系统设置 → 远程计算分组：本地 Runner 卡片内出现 NPU cards 区，头部计数为“3 on this machine · 2 usable in the sandbox”。
- *   2. 每个卡行展示 NPU 编号与芯片名、健康徽章、HBM 用量、AI core 百分比与温度；复选框与名称在同一阅读行。
+ *   1. 打开系统设置 → 远程计算分组：本地 Runner 卡片内出现 NPU 卡区，头部计数为“本机 3 张 · 沙箱内可用 2 张”。
+ *   2. 每个卡行展示 NPU 编号与芯片名、健康徽章、HBM 用量、AI Core 百分比与温度；复选框与名称在同一阅读行。
  *   3. 不可用卡（hostIndex 2）复选框禁用并附原因文本；可选卡（hostIndex 0/4）复选框可勾选。
  *   4. 勾选 hostIndex 4 保存到 runnerId=local；再勾选 hostIndex 0 请求体按升序为 [0,4]；取消勾选 hostIndex 4 后请求体为 [0]。
  *   5. 远端 Runner 卡片展示独立的 NPU 清单（hostIndex 1/3/5），勾选保存到它自己的 runnerId，且不影响 local 的选择。
@@ -151,35 +151,35 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
   try {
     await journey.step(
       "打开远程计算分组：本地 Runner 卡片列出 NPU 卡",
-      "系统设置内点开“远程计算”，本地 Runner 卡片里出现 NPU cards 区，头部显示“3 on this machine · 2 usable in the sandbox”，并提示沙箱内从 0 重新编号。",
+      "系统设置内点开“远程计算”，本地 Runner 卡片里出现 NPU 卡区，头部显示“本机 3 张 · 沙箱内可用 2 张”，并提示沙箱内从 0 重新编号。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openRemoteSettings();
         await expect(dialog.getByRole("heading", { name: "Runners" })).toBeVisible();
-        const localCard = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID: local" });
+        const localCard = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" });
         await expect(localCard).toBeVisible();
-        const npu = localCard.locator("section[aria-label='NPU cards']");
+        const npu = localCard.locator("section[aria-label='NPU 卡']");
         await expect(npu).toBeVisible();
-        await expect(npu.locator(":scope > .remote-npu-header strong")).toHaveText("NPU cards");
-        await expect(npu).toContainText("3 on this machine · 2 usable in the sandbox");
-        await expect(npu).toContainText(/renumbered from 0 inside the sandbox/);
+        await expect(npu.locator(":scope > .remote-npu-header strong")).toHaveText("NPU 卡");
+        await expect(npu).toContainText("本机 3 张 · 沙箱内可用 2 张");
+        await expect(npu).toContainText(/从 0 开始重新编号/);
       },
     );
 
     await journey.step(
-      "卡行展示编号、芯片、健康、HBM、AI core 与温度",
-      "每行 NPU {hostIndex} · {chipName} 与复选框同行；OK/Alarm 徽章、HBM 用量、AI core 百分比和温度在右侧同行。",
+      "卡行展示编号、芯片、健康、HBM、AI Core 与温度",
+      "每行 NPU {hostIndex} · {chipName} 与复选框同行；OK/Alarm 徽章、HBM 用量、AI Core 百分比和温度在右侧同行。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        const npu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID: local" })
-          .locator("section[aria-label='NPU cards']");
+        const npu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" })
+          .locator("section[aria-label='NPU 卡']");
         await expect(npu.getByText("NPU 0 · 910B3", { exact: true })).toBeVisible();
         await expect(npu.getByText("NPU 4 · 910B3", { exact: true })).toBeVisible();
         await expect(npu).toContainText("3.4 / 64.0 GiB");
-        await expect(npu).toContainText("0% AI core");
+        await expect(npu).toContainText("AI Core 0%");
         await expect(npu).toContainText("45 °C");
-        await expect(npu).toContainText("12% AI core");
+        await expect(npu).toContainText("AI Core 12%");
         const row0 = npu.locator("li", { hasText: "NPU 0" });
         const box = await row0.getByRole("checkbox").boundingBox();
         const nameBox = await row0.locator(".remote-npu-name").boundingBox();
@@ -193,8 +193,8 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
       "hostIndex 2 的卡行带 unusable 样式、复选框禁用，并显示驱动拒绝原因；hostIndex 0/4 复选框可用且未勾选。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        const npu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID: local" })
-          .locator("section[aria-label='NPU cards']");
+        const npu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" })
+          .locator("section[aria-label='NPU 卡']");
         const unusable = npu.locator("li.unusable", { hasText: "NPU 2" });
         await expect(unusable.getByRole("checkbox")).toBeDisabled();
         await expect(unusable).toContainText(/because the device is used\. ret is -8020/);
@@ -210,8 +210,8 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
       + "取消勾选 NPU 4 后请求体为 [0]，界面复选框状态与保存一致。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        const npu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID: local" })
-          .locator("section[aria-label='NPU cards']");
+        const npu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" })
+          .locator("section[aria-label='NPU 卡']");
         const npu4 = npu.locator("li", { hasText: "NPU 4" }).getByRole("checkbox");
         await npu4.click();
         await expect.poll(() => npuPuts.at(-1)).toEqual({ devices: [4], runnerId: "local" });
@@ -234,15 +234,15 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const remoteCard = dialog.locator(".remote-host-list article.remote-host-card").filter({ hasText: "910B analysis" });
         await expect(remoteCard).toBeVisible();
-        const npu = remoteCard.locator("section[aria-label='NPU cards']");
+        const npu = remoteCard.locator("section[aria-label='NPU 卡']");
         await expect(npu).toBeVisible();
-        await expect(npu).toContainText("3 on this machine · 2 usable in the sandbox");
+        await expect(npu).toContainText("本机 3 张 · 沙箱内可用 2 张");
         await expect(npu.getByText("NPU 1 · 910B3", { exact: true })).toBeVisible();
         await expect(npu.getByText("NPU 3 · 910B3", { exact: true })).toBeVisible();
         await expect(npu.locator("li.unusable", { hasText: "NPU 5" })).toContainText("Card is claimed by another tenant.");
         // 与 local 清单互不串卡。
-        const localNpu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID: local" })
-          .locator("section[aria-label='NPU cards']");
+        const localNpu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" })
+          .locator("section[aria-label='NPU 卡']");
         await expect(localNpu.getByText("NPU 1", { exact: false })).toHaveCount(0);
         await npu.locator("li", { hasText: "NPU 1" }).getByRole("checkbox").click();
         await expect.poll(() => npuPuts.at(-1)).toEqual({ devices: [1], runnerId: "e2e-npu-host" });
@@ -259,12 +259,12 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         const reopened = await openRemoteSettings();
-        const localNpu = reopened.locator("article.remote-host-card").filter({ hasText: "Runner ID: local" })
-          .locator("section[aria-label='NPU cards']");
+        const localNpu = reopened.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" })
+          .locator("section[aria-label='NPU 卡']");
         await expect(localNpu.locator("li", { hasText: "NPU 0" }).getByRole("checkbox")).toBeChecked();
         await expect(localNpu.locator("li", { hasText: "NPU 4" }).getByRole("checkbox")).not.toBeChecked();
         const remoteNpu = reopened.locator(".remote-host-list article.remote-host-card").filter({ hasText: "910B analysis" })
-          .locator("section[aria-label='NPU cards']");
+          .locator("section[aria-label='NPU 卡']");
         await expect(remoteNpu.locator("li", { hasText: "NPU 1" }).getByRole("checkbox")).toBeChecked();
       },
     );
@@ -275,8 +275,8 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
       async () => {
         await page.setViewportSize({ width: 390, height: 844 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        const localCard = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID: local" });
-        const npu = localCard.locator("section[aria-label='NPU cards']");
+        const localCard = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" });
+        const npu = localCard.locator("section[aria-label='NPU 卡']");
         await npu.scrollIntoViewIfNeeded();
         await expect(npu.locator("li", { hasText: "NPU 0" }).getByRole("checkbox")).toBeVisible();
         await expect(npu.locator("li", { hasText: "NPU 2" })).toContainText(/because the device is used\. ret is -8020/);
