@@ -383,7 +383,16 @@ try {
     assert.ok(requests.some((input) => input.messages?.some((message) => typeof message.content === "string" && message.content.includes(automatic.notificationDelivery.notifications[0].sourceId) && message.content.includes("[Execution notifications]"))), "completion must reach the model");
     const file = await fetch(`${api}/api/sessions/${target.id}/file?path=wake.txt`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(await file.text(), "wake-complete");
-    return "Background completion created a distinct completed automatic run; model received its Execution ID; command output was written exactly once";
+    // The wake reaches the model but must never appear as something the user typed.
+    const { messages } = await json(`/api/sessions/${target.id}`);
+    assert.ok(!messages.some((message) => message.role === "user" && message.kind !== "wake_notice"
+      && message.content.includes("[Execution notifications]")), JSON.stringify(messages.map((message) => ({ kind: message.kind, role: message.role, content: message.content.slice(0, 80) }))));
+    const notice = messages.find((message) => message.kind === "wake_notice");
+    assert.ok(notice, "the wake must be recorded as a wake notice");
+    assert.equal(notice.content, "");
+    assert.ok(notice.runtimeNotice.executions >= 1);
+    assert.match(notice.runtimeNotice.prompt, /^\[Execution notifications\]/);
+    return "Background completion created a distinct completed automatic run; model received its Execution ID; the transcript recorded a wake notice instead of a user message; command output was written exactly once";
   });
   await step("10. 一次性提醒到期唤醒", "模型创建、查询和取消提醒；未取消的提醒到期进入新回合，不执行 Shell。", async () => {
     const target = await json(`/api/projects/${session.projectId}/sessions`, { title: "Timer wake", modelId: session.modelId, approvalMode: "always_allow" });
@@ -414,6 +423,11 @@ try {
       let resumed;
       await until(async () => { resumed = (await json(`/api/sessions/${target.id}/runs`)).find((run) => run.id === resume.id); return resumed?.status === "completed"; });
       assert.ok(resumed.notificationDelivery?.notifications.some((notice) => notice.kind === "execution"));
+      // Retained records ride along with the user's request without being written into it.
+      const { messages } = await json(`/api/sessions/${target.id}`);
+      const request = messages.findLast((message) => message.role === "user");
+      assert.equal(request.content, "Please resume and summarize retained notifications without repeating commands.");
+      assert.match(request.runtimeNotice.prompt, /^\[Execution notifications\]/);
       const file = await fetch(`${api}/api/sessions/${target.id}/file?path=wake.txt`, { headers: { authorization: `Bearer ${token}` } });
       assert.equal(await file.text(), "wake-complete");
     }
