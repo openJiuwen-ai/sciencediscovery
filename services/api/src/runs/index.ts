@@ -223,6 +223,57 @@ function formatSubagentToolInput(args: Record<string, unknown>): string {
   }
   return JSON.stringify(args);
 }
+
+export function cloneRunEventDetails(details: unknown): unknown | undefined {
+  try {
+    return structuredClone(details);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(details));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+type ToolExecutionEndRunEvent = {
+  isError: boolean;
+  result: { content?: unknown; details?: unknown };
+  toolCallId: string;
+  toolName: string;
+  type: "tool_execution_end";
+};
+
+function clonedDetailsEntry(details: unknown): { details?: unknown } {
+  const cloned = details !== undefined ? cloneRunEventDetails(details) : undefined;
+  return cloned !== undefined ? { details: cloned } : {};
+}
+
+export function buildCompletedToolTrace(event: ToolExecutionEndRunEvent, text = aggregateToolText(event.result)): ToolTrace {
+  return {
+    id: event.toolCallId,
+    name: event.toolName,
+    ...clonedDetailsEntry(event.result.details),
+    ...(text !== undefined
+      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId) }
+      : {}),
+    status: event.isError ? "failed" : "completed",
+  };
+}
+
+export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningStep?: SubagentStep): SubagentStep {
+  return {
+    content: aggregateToolText(event.result) ?? (event.isError ? "Tool failed" : "Tool completed"),
+    createdAt: runningStep?.createdAt ?? new Date().toISOString(),
+    ...clonedDetailsEntry(event.result.details),
+    id: event.toolCallId,
+    ...(runningStep ? { input: runningStep.input ?? runningStep.content } : {}),
+    kind: "tool",
+    status: event.isError ? "failed" : "completed",
+    toolCallId: event.toolCallId,
+    toolName: event.toolName,
+  };
+}
 import { generateRefinedSessionTitle } from "../session-naming.js";
 import { notificationPrompt } from "../notification-dispatch.js";
 import type { NotificationBatch } from "../agent-notifications.js";
@@ -1640,16 +1691,7 @@ async function executeAgentRun(
           if (event.type === "tool_execution_end") {
             activeMessageStep = undefined;
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
-            publishStep({
-              content: aggregateToolText(event.result) ?? (event.isError ? "Tool failed" : "Tool completed"),
-              createdAt: runningStep?.createdAt ?? new Date().toISOString(),
-              id: event.toolCallId,
-              ...(runningStep ? { input: runningStep.input ?? runningStep.content } : {}),
-              kind: "tool",
-              status: event.isError ? "failed" : "completed",
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-            });
+            publishStep(buildSubagentToolStep(event, runningStep));
           }
           if (event.type === "usage") {
             subagent.usage = event.usage;
@@ -1845,14 +1887,7 @@ async function executeAgentRun(
       if (text !== undefined) {
         void emit({ chunk: text, toolCallId: event.toolCallId, type: "tool.output" });
       }
-      const trace: ToolTrace = {
-        id: event.toolCallId,
-        name: event.toolName,
-        ...(text !== undefined
-          ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId) }
-          : {}),
-        status: event.isError ? "failed" : "completed",
-      };
+      const trace = buildCompletedToolTrace(event, text);
       traces.set(trace.id, trace);
       void emit({ trace, type: "tool.completed" });
       workspaceRefreshQueue = workspaceRefreshQueue

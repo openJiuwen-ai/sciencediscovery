@@ -19,7 +19,14 @@ import { test } from "node:test";
 
 import { installApiTestModelCatalog } from "../model-catalog.fixture.js";
 import { SessionStore } from "../store.js";
-import { computeSettingsSnapshot, skillAuthoringCommandPrompt, splitArtifactVersionSuffix } from "./index.js";
+import {
+  buildCompletedToolTrace,
+  buildSubagentToolStep,
+  cloneRunEventDetails,
+  computeSettingsSnapshot,
+  skillAuthoringCommandPrompt,
+  splitArtifactVersionSuffix,
+} from "./index.js";
 
 // Regression for the artifact-chip failure: some models collapse the
 // artifact_id and version into one string ("uuid#v1") inside
@@ -81,12 +88,100 @@ test("Skill authoring slash commands expand into guarded Agent workflows", () =>
   assert.equal(skillAuthoringCommandPrompt("ordinary message"), undefined);
 });
 
+test("run event details clone falls back to JSON-safe values", () => {
+  const details = { id: "tool-1", nested: { ok: true }, callback: () => "not cloneable" };
+  assert.deepEqual(cloneRunEventDetails(details), {
+    id: "tool-1",
+    nested: { ok: true },
+  });
+});
+
+test("run event details clone omits values that cannot be safely serialized", () => {
+  const details = { callback: () => "not cloneable", value: 1n };
+  assert.equal(cloneRunEventDetails(details), undefined);
+});
+
+test("completed tool traces retain cloneable details through the assembly path", () => {
+  const trace = buildCompletedToolTrace({
+    isError: false,
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      details: { attempt: 1, nested: { status: "ok" } },
+    },
+    toolCallId: "call-1",
+    toolName: "run_shell",
+    type: "tool_execution_end",
+  });
+
+  assert.deepEqual(trace, {
+    details: { attempt: 1, nested: { status: "ok" } },
+    id: "call-1",
+    name: "run_shell",
+    outputChars: 2,
+    outputStream: "tool-call-1",
+    status: "completed",
+  });
+});
+
+test("subagent tool steps retain cloneable details through the assembly path", () => {
+  const step = buildSubagentToolStep({
+    isError: true,
+    result: {
+      content: [{ type: "text", text: "failed" }],
+      details: { error: { code: "TOOL_EXECUTION_FAILED" }, retryable: false },
+    },
+    toolCallId: "call-2",
+    toolName: "mcp__papers__search",
+    type: "tool_execution_end",
+  }, {
+    content: "papers query",
+    createdAt: "2026-09-10T01:02:03.000Z",
+    id: "call-2",
+    input: "query: papers",
+    kind: "tool",
+    status: "running",
+    toolCallId: "call-2",
+    toolName: "mcp__papers__search",
+  });
+
+  assert.deepEqual(step, {
+    content: "failed",
+    createdAt: "2026-09-10T01:02:03.000Z",
+    details: { error: { code: "TOOL_EXECUTION_FAILED" }, retryable: false },
+    id: "call-2",
+    input: "query: papers",
+    kind: "tool",
+    status: "failed",
+    toolCallId: "call-2",
+    toolName: "mcp__papers__search",
+  });
+});
+
+test("tool trace assembly omits details that cannot be cloned or serialized", () => {
+  const trace = buildCompletedToolTrace({
+    isError: false,
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      details: { callback: () => "not cloneable", value: 1n },
+    },
+    toolCallId: "call-3",
+    toolName: "unstable",
+    type: "tool_execution_end",
+  });
+
+  assert.equal("details" in trace, false);
+  assert.equal(trace.status, "completed");
+});
+
 test("run snapshots narrow legacy Responses max to the selected model wire capability", async (context) => {
   installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
   const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
   await store.load();
   const provider = await store.createProvider({ apiToken: "test-token", presetId: "openai" });
   const model = await store.materializeProviderModel(provider.id, "gpt-5.5");

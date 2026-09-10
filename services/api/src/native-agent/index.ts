@@ -706,7 +706,10 @@ class NativeAgent implements NativeAgentHandle {
           type: "tool_execution_end",
           toolCallId: event.call.id,
           toolName: event.call.name,
-          result: { content: [{ type: "text", text: event.content }], details: {} },
+          result: {
+            content: [{ type: "text", text: event.content }],
+            ...(event.details !== undefined ? { details: event.details } : {}),
+          },
           isError: event.isError,
         });
         break;

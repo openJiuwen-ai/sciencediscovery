@@ -182,7 +182,7 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     await this.refs.commit(this.store, name, this.refs.head(name), this.context);
   }
 
-  async recordObservation(input: { call: RuntimeToolCall; content: string; isError: boolean; sequence: number }): Promise<void> {
+  async recordObservation(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number }): Promise<void> {
     const content = await this.store.put("agent-state", input.content, "text/plain;charset=utf-8");
     const ref = await this.store.putRecord("ToolObservation", jsonValue({ ...input, content }));
     this.turnObservations.push({ sequence: input.sequence, ref });

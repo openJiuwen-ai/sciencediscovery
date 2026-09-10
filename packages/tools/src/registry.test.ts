@@ -6,7 +6,8 @@ import test from "node:test";
 import { Type } from "typebox";
 
 import { ToolOutputGuard } from "./bounded-output.js";
-import { ToolRegistry } from "./registry.js";
+import { ToolLoopGuard } from "./loop-guard.js";
+import { sanitizeToolDetails, ToolRegistry } from "./registry.js";
 import { ToolOutputStore } from "./tool-output-store.js";
 
 const resultMessage = (call: { id: string; name: string }, content: string, output?: { ref: string }) => ({
@@ -52,13 +53,29 @@ test("tool scheduling is fail-closed and only exact true enables parallel execut
   assert.equal(registry.executionMode({ args: {}, id: "4", name: "missing" }), "exclusive");
 });
 
-test("returned tool failures keep their raw result and error flag through durable observations", async () => {
-  const observed: Array<{ content: string; isError: boolean }> = [];
-  const recorded: Array<{ content: string; isError: boolean }> = [];
+test("returned tool failures keep their result, metadata, and error flag through durable observations", async () => {
+  const observed: Array<{ content: string; details?: unknown; isError: boolean }> = [];
+  const recorded: Array<{ content: string; details?: unknown; isError: boolean }> = [];
   const content = JSON.stringify({ state: "failed", result: { exitCode: 1, stderr: "RuntimeError: " + "y".repeat(650) } });
+  const details = { apiToken: "secret-token", exitCode: 1, stderr: "RuntimeError", stdout: "" };
+  const sanitizedDetails = {
+    __detailsBoundary: {
+      maxArrayItems: 100,
+      maxDepth: 8,
+      maxObjectKeys: 100,
+      maxStringChars: 4096,
+      maxTotalStringChars: 64000,
+      omittedPayloadFields: true,
+      truncated: false,
+    },
+    apiToken: "[redacted]",
+    exitCode: 1,
+    stderr: "[omitted]",
+    stdout: "[omitted]",
+  };
   const registry = new ToolRegistry([{
     name: "run_shell", label: "Shell", description: "Shell", parameters: Type.Object({}),
-    async execute() { return { isError: true, content: [{ type: "text", text: content }], details: {} }; },
+    async execute() { return { isError: true, content: [{ type: "text", text: content }], details }; },
   }], {
     createResultMessage: resultMessage,
     recordResult: async (result) => { recorded.push(result); },
@@ -67,11 +84,13 @@ test("returned tool failures keep their raw result and error flag through durabl
   const result = await registry.execute({ id: "failed-shell", name: "run_shell", args: {} }, new AbortController().signal);
   assert.equal(result.isError, true);
   assert.equal(result.content, content);
+  assert.deepEqual(result.details, sanitizedDetails);
   assert.equal(result.message.content, content);
   for (const results of [recorded, observed]) {
     assert.equal(results.length, 1);
     assert.equal(results[0]?.isError, true);
     assert.equal(results[0]?.content, content);
+    assert.deepEqual(results[0]?.details, sanitizedDetails);
   }
 });
 
@@ -150,7 +169,20 @@ test("batch policies supersede earlier calls without executing them", async () =
     superseded: true,
     supersededBy: "last",
   });
+  assert.deepEqual(results[0]?.details, {
+    ok: true,
+    superseded: true,
+    supersededBy: "last",
+  });
   assert.equal(results[1]?.isError, true);
+  assert.deepEqual(results[1]?.details, {
+    ok: false,
+    error: {
+      code: "UNKNOWN_TOOL",
+      message: "Unknown tool: missing",
+      retryable: false,
+    },
+  });
   assert.equal(results[2]?.content, "last");
 });
 
@@ -167,9 +199,121 @@ test("dynamic availability hides and blocks tools without changing handlers", as
   const blocked = await registry.execute({ args: {}, id: "1", name: "execute" }, new AbortController().signal);
   assert.equal(blocked.isError, true);
   assert.match(blocked.content, /not available under the current run capability policy/u);
+  assert.deepEqual(blocked.details, {
+    ok: false,
+    error: {
+      code: "TOOL_UNAVAILABLE",
+      message: "Error: Tool 'execute' is not available under the current run capability policy.",
+      retryable: true,
+    },
+  });
   active = true;
   assert.deepEqual(registry.visibleSpecs().map((spec) => spec.name), ["execute"]);
   assert.equal((await registry.execute({ args: {}, id: "2", name: "execute" }, new AbortController().signal)).content, "done");
+});
+
+test("deferred tool search results are traceable without exposing tool payloads", async () => {
+  const observed: Array<{ content: string; details?: unknown; isError: boolean }> = [];
+  const recorded: Array<{ content: string; details?: unknown; isError: boolean }> = [];
+  const registry = new ToolRegistry([{
+    deferred: true,
+    name: "mcp__papers__search",
+    label: "Search papers",
+    description: "Search scientific papers",
+    parameters: Type.Object({ query: Type.String() }),
+    async execute() { return { content: [{ type: "text", text: "paper" }], details: { ok: true } }; },
+  }], {
+    createResultMessage: resultMessage,
+    recordResult: async (result) => { recorded.push(result); },
+    onResult: (result) => { observed.push(result); },
+  });
+  const result = await registry.execute({
+    args: { query: "papers" },
+    id: "search",
+    name: "tool_search",
+  }, new AbortController().signal);
+  assert.equal(result.isError, false);
+  assert.match(result.content, /mcp__papers__search/u);
+  const details = result.details as { catalogHash: string; matchedToolNames: string[]; ok: true; promotedToolNames: string[]; query: string };
+  assert.match(details.catalogHash, /^[0-9a-f]{16}$/u);
+  assert.deepEqual({ ...details, catalogHash: "<hash>" }, {
+    catalogHash: "<hash>",
+    matchedToolNames: ["mcp__papers__search"],
+    ok: true,
+    promotedToolNames: ["mcp__papers__search"],
+    query: "papers",
+  });
+  for (const results of [recorded, observed]) {
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.isError, false);
+    assert.deepEqual(results[0]?.details, result.details);
+  }
+});
+
+test("loop guard warning and stop decisions keep structured details", async () => {
+  let executed = 0;
+  const registry = new ToolRegistry([{
+    name: "echo", label: "echo", description: "echo", parameters: Type.Object({ value: Type.String() }),
+    async execute() {
+      executed += 1;
+      return { content: [{ type: "text", text: "ok" }], details: { ok: true } };
+    },
+  }], {
+    createResultMessage: resultMessage,
+    loopGuard: new ToolLoopGuard(2, 3),
+  });
+  assert.equal((await registry.execute({ args: { value: "same" }, id: "1", name: "echo" }, new AbortController().signal)).content, "ok");
+  const warning = await registry.execute({ args: { value: "same" }, id: "2", name: "echo" }, new AbortController().signal);
+  assert.equal(warning.isError, false);
+  assert.equal((warning.details as { warning?: { code?: string } }).warning?.code, "REPEATED_TOOL_CALL");
+  const stopped = await registry.execute({ args: { value: "same" }, id: "3", name: "echo" }, new AbortController().signal);
+  assert.equal(stopped.isError, true);
+  assert.equal((stopped.details as { error?: { code?: string } }).error?.code, "TOOL_LOOP_DETECTED");
+  assert.equal(executed, 1);
+});
+
+test("tool details sanitizer truncates nested, cyclic, and oversized structures", () => {
+  let nested: Record<string, unknown> = { leaf: "ok" };
+  for (let index = 0; index < 9; index += 1) nested = { next: nested };
+  const depthLimited = sanitizeToolDetails(nested) as Record<string, unknown>;
+  let cursor: unknown = depthLimited;
+  for (let index = 0; index < 8; index += 1) cursor = (cursor as Record<string, unknown>).next;
+  assert.equal(cursor, "[max-depth]");
+  assert.equal((depthLimited.__detailsBoundary as { truncated?: boolean }).truncated, true);
+
+  const cyclic: Record<string, unknown> = { name: "root" };
+  cyclic.self = cyclic;
+  const cycleLimited = sanitizeToolDetails(cyclic) as Record<string, unknown>;
+  assert.equal(cycleLimited.self, "[circular]");
+  assert.equal((cycleLimited.__detailsBoundary as { truncated?: boolean }).truncated, true);
+});
+
+test("tool details sanitizer enforces key and array budgets", () => {
+  const arrayLimited = sanitizeToolDetails({ values: Array.from({ length: 105 }, (_, index) => index) }) as { values: unknown[]; __detailsBoundary: { truncated: boolean } };
+  assert.equal(arrayLimited.values.length, 101);
+  assert.equal(arrayLimited.values.at(-1), "[5 items omitted]");
+  assert.equal(arrayLimited.__detailsBoundary.truncated, true);
+
+  const wide = Object.fromEntries(Array.from({ length: 105 }, (_, index) => [`key${index}`, index]));
+  const keyLimited = sanitizeToolDetails(wide) as Record<string, unknown>;
+  assert.equal(keyLimited.key0, 0);
+  assert.equal(keyLimited.key99, 99);
+  assert.equal("key100" in keyLimited, false);
+  assert.equal(keyLimited.__omittedKeys, 5);
+  assert.equal((keyLimited.__detailsBoundary as { truncated?: boolean }).truncated, true);
+});
+
+test("tool details sanitizer wraps non-object roots when boundaries apply", () => {
+  const sanitized = sanitizeToolDetails("x".repeat(5_000)) as { value: string; __detailsBoundary: { truncated: boolean } };
+  assert.match(sanitized.value, /^x+\[truncated\]$/u);
+  assert.ok(sanitized.value.length < 5_000);
+  assert.equal(sanitized.__detailsBoundary.truncated, true);
+});
+
+test("tool details sanitizer does not treat shared references as circular", () => {
+  const shared = ["same"];
+  const sanitized = sanitizeToolDetails({ left: shared, right: shared }) as Record<string, unknown>;
+  assert.deepEqual(sanitized, { left: ["same"], right: ["same"] });
 });
 
 test("every result crosses the output bound before it becomes a history message", async () => {

@@ -72,6 +72,8 @@ export interface SubagentUsage {
 export interface SubagentStep {
   content: string;
   createdAt: string;
+  /** Full structured tool result details, when the step records a completed tool call. */
+  details?: unknown;
   id: string;
   /** Raw tool input retained when a completed tool step replaces its running snapshot. */
   input?: string;
