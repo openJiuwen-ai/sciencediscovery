@@ -716,7 +716,13 @@ export function buildSandboxLaunch(options: {
 }): SandboxLaunch {
   // Runner-owned baseline first; profile variables never override it
   // (profileKeyAllowed re-checks the reserved/blocked policy defensively).
-  const env: Record<string, string> = { HOME: "/tmp", PATH: options.pathEnv };
+  // Ascend host tools such as npu-smi ship in /usr/local/bin, which `/usr` is
+  // bound into the sandbox but the ordinary PATH omits; expose it only when
+  // the launch carries NPUs so non-NPU sandboxes stay byte-for-byte unchanged.
+  const env: Record<string, string> = {
+    HOME: "/tmp",
+    PATH: options.npu ? `/usr/local/bin:${options.pathEnv}` : options.pathEnv,
+  };
   // CANN's operator compiler is imported as ordinary Python, so its search path
   // has to join PYTHONPATH rather than replace whatever the environment set.
   const pythonPathEntries = [
