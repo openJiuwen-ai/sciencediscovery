@@ -23,6 +23,7 @@ import type {
   Session,
   UpdateSessionRequest,
 } from "@sciencediscovery/schema";
+import { selectableNpuDevices } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
@@ -85,6 +86,85 @@ export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): Rea
       <div><small>{t("remote.uptime")}</small><strong>{Math.floor(resources.uptimeSeconds / 3600)} <small>{t("remote.hoursUnit")}</small></strong></div>
     </div>
   </div>;
+}
+
+/** `3445 / 65536 MiB` as `3.4 / 64.0 GiB`, which is how operators talk about HBM. */
+function npuMemory(usedMb: number | undefined, totalMb: number | undefined): string | undefined {
+  if (usedMb === undefined || totalMb === undefined || totalMb <= 0) return undefined;
+  return `${(usedMb / 1024).toFixed(1)} / ${(totalMb / 1024).toFixed(1)} GiB`;
+}
+
+/**
+ * The machine's NPU cards and which of them may be handed to sandboxes.
+ *
+ * Every card is listed, including the ones that cannot be used: hiding them
+ * would leave an operator wondering where card 0 went. An unusable card is
+ * shown with its checkbox disabled and the driver's own reason on the row, so
+ * the failure is understood while ticking rather than during an execution.
+ */
+export function NpuDeviceSelector({ client, host, onError, onHostChange }: {
+  client: ApiClient;
+  host: RemoteHostTarget;
+  onError: (message: string) => void;
+  onHostChange: (host: RemoteHostTarget) => void;
+}): ReactNode {
+  const [saving, setSaving] = useState(false);
+  const inventory = host.runnerStatus?.resources?.npu;
+  if (!inventory) return null;
+  const selected = new Set(host.npuDevices ?? []);
+  const usableCount = selectableNpuDevices(inventory).length;
+
+  const toggle = async (hostIndex: number, checked: boolean): Promise<void> => {
+    const next = new Set(selected);
+    if (checked) next.add(hostIndex); else next.delete(hostIndex);
+    setSaving(true);
+    try {
+      onHostChange(await client.setRemoteHostNpuDevices(host.id, [...next].sort((a, b) => a - b)));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <section className="remote-npu" aria-label="NPU cards">
+    <div className="remote-npu-header">
+      <strong>NPU cards</strong>
+      <small>{inventory.devices.length} on this machine · {usableCount} usable in the sandbox</small>
+    </div>
+    {inventory.error ? <small role="alert">{inventory.error}</small> : null}
+    {inventory.devices.length === 0
+      ? <small>No Ascend cards were reported by this machine.</small>
+      : <ul className="remote-npu-list">
+        {inventory.devices.map((device) => {
+          const memory = npuMemory(device.hbmUsedMb, device.hbmTotalMb);
+          return <li key={device.hostIndex} className={device.sandboxUsable ? "" : "unusable"}>
+            <label>
+              <input
+                type="checkbox"
+                checked={selected.has(device.hostIndex)}
+                disabled={!device.sandboxUsable || saving}
+                onChange={(event) => { void toggle(device.hostIndex, event.target.checked); }}
+              />
+              <span className="remote-npu-name">NPU {device.hostIndex} · {device.chipName}</span>
+              <span className="remote-npu-metrics">
+                {device.health ? <span className={`remote-detail-badge ${device.health === "OK" ? "neutral" : "warning"}`}>{device.health}</span> : null}
+                {memory ? <small>{memory}</small> : null}
+                {device.aiCorePercent === undefined ? null : <small>{device.aiCorePercent}% AI core</small>}
+                {device.temperatureCelsius === undefined ? null : <small>{device.temperatureCelsius} °C</small>}
+              </span>
+            </label>
+            {device.sandboxUsable
+              ? null
+              : <small className="remote-npu-reason">{device.sandboxUnusableReason ?? "This card cannot be opened inside the sandbox."}</small>}
+          </li>;
+        })}
+      </ul>}
+    {usableCount === 0 && inventory.devices.length > 0
+      ? <small role="alert">No card on this machine can currently be opened inside a sandbox, so none can be selected.</small>
+      : null}
+    <small>Selected cards are renumbered from 0 inside the sandbox, so code can target device 0.</small>
+  </section>;
 }
 
 /**
@@ -576,6 +656,12 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
             {publicKey ? <details className="remote-host-public-key"><summary>{t("remote.publicKey")}</summary><div className="remote-host-pubkey-line"><code>{publicKey}</code><CopyButton getText={() => publicKey} label={t("remote.copyPublicKey")} /></div></details> : null}
           </section>
           <RunnerResourceSummary host={host} />
+          <NpuDeviceSelector
+            client={client}
+            host={host}
+            onError={onError}
+            onHostChange={(updated) => { setHosts((current) => (current ?? []).map((entry) => entry.id === updated.id ? { ...entry, ...updated } : entry)); }}
+          />
         </div>
         </details>
         {renderHostKeyPrompt(host.id)}
