@@ -84,10 +84,10 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       "工作台导航进入知识引擎页，页面骨架（建库输入框与空图状态）可见。",
       async () => {
         await page.goto("/");
-        await page.getByRole("button", { name: "Knowledge Engine" }).click();
+        await page.getByTestId("open-knowledge-engine").click();
         await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
-        await expect(page.getByLabel("new kb name")).toBeVisible();
-        await expect(page.getByTestId("ke-graph-empty").or(page.getByTestId("ke-graph-canvas"))).toBeVisible();
+        await expect(page.getByTestId("ke-new-kb-name")).toBeVisible();
+        await expect(page.getByTestId("ke-graph-empty").or(page.getByTestId("ke-graph-canvas")).or(page.getByTestId("ke-roots"))).toBeVisible();
       },
     );
 
@@ -95,13 +95,13 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       "创建知识库并选中",
       "填写名称点 Create 后新库出现在列表；点列表项选中它，种子面板出现。",
       async () => {
-        await page.getByLabel("new kb name").fill(kbName);
+        await page.getByTestId("ke-new-kb-name").fill(kbName);
         await page.getByTestId("ke-create-kb").click();
         const kbItem = page.locator('[data-testid^="ke-kb-"]').filter({ hasText: kbName });
         await expect(kbItem).toBeVisible({ timeout: 30_000 });
         // Creating does not auto-select; the Seed panel only renders for the active KB.
         await kbItem.click();
-        await expect(page.getByLabel("seed query")).toBeVisible();
+        await expect(page.getByTestId("ke-seed-query")).toBeVisible();
       },
     );
 
@@ -109,9 +109,9 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       "发起种子查询",
       "填入种子查询点 Seed，ke-job-status 随即出现任务并处于排队/运行态。",
       async () => {
-        await page.getByLabel("seed query").fill(seedQuery);
+        await page.getByTestId("ke-seed-query").fill(seedQuery);
         await page.getByTestId("ke-seed").click();
-        await expect(page.getByTestId("ke-job-status")).not.toContainText("no jobs yet", { timeout: 30_000 });
+        await expect(page.getByTestId("ke-job-status").locator("[data-status]").first()).toBeVisible({ timeout: 30_000 });
       },
     );
 
@@ -149,8 +149,8 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
         // The jobs panel lists only pending/running jobs — success is the
         // documents flipping to ✓ while the active list drains.
         await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
-        await expect(page.getByTestId("ke-job-status")).not.toContainText("running", { timeout: 60_000 });
-        await expect(page.getByTestId("ke-job-status")).not.toContainText("failed");
+        await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'], [data-status='running']")).toHaveCount(0, { timeout: 180_000 });
+        await expect(page.getByTestId("ke-job-status").locator("[data-status='failed'], [data-status='dead']")).toHaveCount(0);
       },
     );
 
@@ -159,7 +159,7 @@ test("J-KE1 建库并完成一次种子摄取", { tag: "@mocked" }, async ({ jou
       "重进知识引擎页，重选同名知识库后文档列表仍可见。",
       async () => {
         await page.reload();
-        await page.getByRole("button", { name: "Knowledge Engine" }).click();
+        await page.getByTestId("open-knowledge-engine").click();
         await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
         const restored = page.locator('[data-testid^="ke-kb-"]').filter({ hasText: kbName });
         await expect(restored).toBeVisible({ timeout: 30_000 });

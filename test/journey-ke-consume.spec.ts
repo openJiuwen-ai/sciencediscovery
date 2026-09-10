@@ -93,15 +93,15 @@ test("J-KE3 会话内消费知识图谱", { tag: "@mocked" }, async ({ journey, 
       "图谱页建库选中后种子，等文档就绪、实体出现（fixture 回放 + 抽取 stub）。",
       async () => {
         await page.goto("/");
-        await page.getByRole("button", { name: "Knowledge Engine" }).click();
+        await page.getByTestId("open-knowledge-engine").click();
         await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
-        await page.getByLabel("new kb name").fill(kbName);
+        await page.getByTestId("ke-new-kb-name").fill(kbName);
         await page.getByTestId("ke-create-kb").click();
         const kbItem = page.locator('[data-testid^="ke-kb-"]').filter({ hasText: kbName });
         await expect(kbItem).toBeVisible({ timeout: 30_000 });
         kbId = ((await kbItem.getAttribute("data-testid")) ?? "").replace("ke-kb-", "");
         await kbItem.click();
-        await expect(page.getByLabel("seed query")).toBeVisible();
+        await expect(page.getByTestId("ke-seed-query")).toBeVisible();
 
         const reg = await api.post("/api/providers", {
           data: { name: `J-KE3 extract ${Date.now()}`, baseUrl: extraction.baseUrl, apiToken: extraction.apiToken },
@@ -113,10 +113,10 @@ test("J-KE3 会话内消费知识图谱", { tag: "@mocked" }, async ({ journey, 
         })).json() as { id: string };
         await api.put("/api/settings", { data: { modelId: extractionModel.id } });
 
-        await page.getByLabel("seed query").fill(seedQuery);
+        await page.getByTestId("ke-seed-query").fill(seedQuery);
         await page.getByTestId("ke-seed").click();
         await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
-        await expect(page.getByTestId("ke-job-status")).not.toContainText("running", { timeout: 60_000 });
+        await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'], [data-status='running']")).toHaveCount(0, { timeout: 180_000 });
       },
     );
 

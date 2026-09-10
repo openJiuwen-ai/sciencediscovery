@@ -15,33 +15,44 @@
 import type { CSSProperties } from "react";
 
 import type { KeGraphRoots } from "../api/knowledge-engine.js";
+import { useLocale } from "../i18n/index.js";
 
 export interface KeRootsViewProps {
   roots: KeGraphRoots;
   onSelectCommunity: (communityId: number) => void;
 }
 
-const PALETTE = ["#2563eb", "#059669", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#be185d", "#4d7c0f"];
+/** Community bubble palette (Science Agent reference: AntV-G6 category hues). */
+const PALETTE = [
+  "#5B8FF9", "#5AD8A6", "#5D7092", "#F6BD16", "#E8684A",
+  "#6DC8EC", "#9270CA", "#FF9D4D", "#269A99", "#A7B7C7",
+];
 
 /**
  * Community-bubble overview: one bubble per Louvain community, sized by
  * member count. This is the entry level of the progressive drill-down
  * (roots → community members → entity focus). Inter-community relation
- * strength is summarized under each bubble pair count — the member view
- * shows the actual edges.
+ * strength is summarized in each bubble's tooltip — the member view shows
+ * the actual edges.
  */
 export function KeRootsView({ roots, onSelectCommunity }: KeRootsViewProps) {
+  const { t } = useLocale();
   const maxSize = Math.max(1, ...roots.communities.map((community) => community.size));
   return (
-    <div data-testid="ke-roots" style={{ padding: 24, overflowY: "auto" }}>
-      <div style={{ color: "#64748b", fontSize: 13, marginBottom: 16 }}>
-        {roots.entityCount} entities · {roots.edgeCount} edges · {roots.communities.length} communities
-        {roots.method === "entity-type" ? " (grouped by type — graph too large for Louvain)" : ""}
-        {" — "}click a community to drill in
+    <div data-testid="ke-roots" style={{ padding: 24, overflowY: "auto", height: "100%", boxSizing: "border-box" }}>
+      <div style={{ color: "var(--text-secondary, #64748b)", fontSize: 13, marginBottom: 16 }}>
+        {t("ke.roots.summary", {
+          entities: roots.entityCount,
+          edges: roots.edgeCount,
+          count: roots.communities.length,
+        })}
+        {roots.method === "entity-type" ? t("ke.roots.groupedByType") : ""}
+        {" — "}
+        {t("ke.roots.drillHint")}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center" }}>
         {roots.communities.map((community, index) => {
-          const diameter = 72 + Math.round(88 * Math.sqrt(community.size / maxSize));
+          const diameter = Math.min(160, 64 + Math.round(72 * Math.sqrt(community.size / maxSize)));
           const color = PALETTE[index % PALETTE.length];
           const style: CSSProperties = {
             width: diameter,
@@ -66,14 +77,18 @@ export function KeRootsView({ roots, onSelectCommunity }: KeRootsViewProps) {
               key={community.id}
               type="button"
               data-testid={`ke-community-${community.id}`}
-              title={`${community.size} entities · ${bridgeWeight} cross-community support · top: ${community.topEntities
-                .map((entity) => entity.name)
-                .join(", ")}`}
+              title={t("ke.roots.bubbleTip", {
+                size: community.size,
+                weight: bridgeWeight,
+                names: community.topEntities.map((entity) => entity.name).join(", "),
+              })}
               onClick={() => onSelectCommunity(community.id)}
               style={style}
             >
               <span style={{ fontWeight: 600, fontSize: 13, color }}>{community.name}</span>
-              <span style={{ fontSize: 12, color: "#64748b" }}>{community.size} entities</span>
+              <span style={{ fontSize: 12, color: "var(--text-secondary, #64748b)" }}>
+                {t("ke.roots.bubbleSize", { size: community.size })}
+              </span>
             </button>
           );
         })}

@@ -4104,7 +4104,7 @@ export function App() {
         <div className="sidebar-quick-actions" aria-label="Workbench navigation">
           <button type="button" onClick={() => void openGlobalSearch()}><span><SearchIcon size={16} /></span><span>{t("app.search")}</span><kbd>Ctrl K</kbd></button>
           <button type="button" className={workspaceView === "usage" ? "active" : undefined} onClick={() => void openUsageView()}><span><SparkleIcon size={16} /></span><span>{t("app.usage")}</span></button>
-          <button type="button" onClick={() => setKnowledgeEngineOpen(true)}><span><SparkleIcon size={16} /></span><span>Knowledge Engine</span></button>
+          <button type="button" data-testid="open-knowledge-engine" onClick={() => setKnowledgeEngineOpen(true)}><span><SparkleIcon size={16} /></span><span>{t("app.knowledgeEngine")}</span></button>
           <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
         </div>
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>

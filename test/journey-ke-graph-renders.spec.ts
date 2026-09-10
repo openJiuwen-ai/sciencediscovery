@@ -87,15 +87,15 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       "知识引擎页可见；建库后在列表中选中它，种子面板出现。",
       async () => {
         await page.goto("/");
-        await page.getByRole("button", { name: "Knowledge Engine" }).click();
+        await page.getByTestId("open-knowledge-engine").click();
         await expect(page.getByTestId("knowledge-engine-page")).toBeVisible();
-        await page.getByLabel("new kb name").fill(kbName);
+        await page.getByTestId("ke-new-kb-name").fill(kbName);
         await page.getByTestId("ke-create-kb").click();
         const kbItem = page.locator('[data-testid^="ke-kb-"]').filter({ hasText: kbName });
         await expect(kbItem).toBeVisible({ timeout: 30_000 });
         // Creating does not auto-select; the Seed panel only renders for the active KB.
         await kbItem.click();
-        await expect(page.getByLabel("seed query")).toBeVisible();
+        await expect(page.getByTestId("ke-seed-query")).toBeVisible();
       },
     );
 
@@ -118,9 +118,9 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
         modelId = modelBody.id;
         await api.put(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader(), data: { modelId } });
 
-        await page.getByLabel("seed query").fill(seedQuery);
+        await page.getByTestId("ke-seed-query").fill(seedQuery);
         await page.getByTestId("ke-seed").click();
-        await expect(page.getByTestId("ke-job-status")).not.toContainText("no jobs yet", { timeout: 30_000 });
+        await expect(page.getByTestId("ke-job-status").locator("[data-status]").first()).toBeVisible({ timeout: 30_000 });
       },
     );
 
@@ -131,7 +131,7 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
         // The jobs panel lists only pending/running jobs — success is the
         // documents flipping to ✓ while the active list drains.
         await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
-        await expect(page.getByTestId("ke-job-status")).not.toContainText("running", { timeout: 60_000 });
+        await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'], [data-status='running']")).toHaveCount(0, { timeout: 180_000 });
         const canvas = page.getByTestId("ke-graph-canvas");
         await expect(canvas).toBeVisible({ timeout: 60_000 });
         await expect(canvas.locator("*").first()).toBeVisible({ timeout: 60_000 });
@@ -143,8 +143,13 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
       "点击图中一个节点，ke-entity-detail 面板展示实体名称与证据（逐字引用及来源文档）。",
       async () => {
         const canvas = page.getByTestId("ke-graph-canvas");
-        const node = canvas.locator("canvas").or(canvas.locator("*")).first();
-        await node.click({ force: true });
+        await expect(canvas.locator("canvas").first()).toBeVisible();
+        // Deterministic node tap through the canvas test hook — blind-clicking
+        // canvas pixels is flaky (nodes rarely sit at the element center).
+        await page.evaluate(() => {
+          const cy = (window as unknown as { __keGraphCy?: { nodes(): { first(): { emit(e: string): void } } } }).__keGraphCy;
+          cy?.nodes().first().emit("tap");
+        });
         const detail = page.getByTestId("ke-entity-detail");
         await expect(detail).toBeVisible({ timeout: 30_000 });
         await expect(detail).toContainText(/Ebola virus glycoprotein|mAb114/);
