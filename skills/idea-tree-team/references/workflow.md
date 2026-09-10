@@ -81,6 +81,16 @@ The table fixes role ownership and ordering for enabled stages. It does not defi
 
 A leaf hypothesis may be specific enough to name a material concept or mechanism. It crosses the boundary when it becomes a final candidate description, assessment, score, or cross-assessment conclusion.
 
+## Tree Mutations and Retries
+
+- Submit mutations to the same tree sequentially. Wait for each call to succeed before submitting the next dependent mutation; do not batch concurrent `tree_add_node` calls for that tree. Independent Specialist assessments may still run in parallel.
+- Read the initial revision with `tree_view`. For each subsequent mutation, use the revision actually returned by the preceding successful call; if it is absent or may be stale, call `tree_view` again. Never predict revisions by incrementing a counter or preassigning them to planned calls.
+- If a mutation fails, stop dependent mutations. On `REVISION_CONFLICT`, call `tree_view`, inspect the current state, and confirm the intended change is still valid before retrying with the returned revision.
+- Assign an `idempotency_key` to each logical operation. If its response is lost or the same operation must be retried, reuse that key and the same operation payload; after a revision conflict, only refresh `expected_revision`. Use a new key for a genuinely new operation or a changed payload.
+- An idempotent retry can return the original success response, including its old revision. If other mutations may have occurred since that operation, call `tree_view` before starting a new operation instead of treating the replayed revision as current.
+
+For example: `tree_view` → add A with the observed revision → wait for success → read the returned revision → add B with that revision. If adding A fails, resolve that failure before proceeding to B.
+
 ## Step 0: INIT or RESUME
 
 1. Call `tree_list`; do not depend on a remembered tree id.

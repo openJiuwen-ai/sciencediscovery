@@ -25,13 +25,14 @@ The user prompt controls which stages are enabled, skipped, or narrowed. It does
 
 ## When to Use
 
-- The user sends a prompt prefixed with `/idea-tree-team` to start structured hypothesis exploration.
+- The user sends a prompt prefixed with `/idea-tree` or `/idea-tree-team` to start structured hypothesis exploration.
+- The Runtime retains Idea Tree tools for a follow-up in a Session with an unfinished, compatible tree. The user does not need to repeat the prefix to continue.
 - The Lead needs to create, resume, or update an Idea Tree.
 - The Lead needs to plan and dispatch shared-context or terminal-leaf Specialists.
 
 ## Do NOT Use For
 
-- Standard Sessions without the `/idea-tree-team` prefix.
+- Standard Sessions where the Runtime has not enabled Idea Tree tools through an explicit command or an unfinished-tree continuation.
 - Performing literature retrieval or evidence extraction when those stages are enabled.
 - Producing a concrete material candidate that belongs to `creative-material-design`.
 - Scoring or evaluating a candidate that belongs to `assessment-screening`.
