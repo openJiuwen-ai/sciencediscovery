@@ -13,7 +13,9 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { mkdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
+import { describe, test, type TestContext } from "node:test";
 
 import {
   npuDeviceMapping,
@@ -23,7 +25,7 @@ import {
   type NpuInventory,
 } from "@sciencediscovery/schema";
 
-import { buildSandboxLaunch } from "./executor.js";
+import { buildSandboxLaunch, executePython, executeShell, type ExecutorConfig } from "./executor.js";
 import {
   NpuInventoryCache,
   npuDeviceBindArguments,
@@ -484,5 +486,86 @@ describe("validating a selection at launch time", () => {
       bwrapPath: "/usr/bin/bwrap",
       npuInventory: inventory([usable(4)]),
     }, [4, 5]), /NPU 5/u);
+  });
+});
+
+describe("an execution request drives the sandbox's cards", () => {
+  // These run the real product entry points on this machine. It has no Ascend
+  // cards, which is exactly what makes the negative case meaningful and lets
+  // the positive case be observed through the bind bwrap refuses to make.
+  const fixture = async (context: TestContext, npu?: () => Promise<NpuInventory>) => {
+    const dataDir = resolve(process.cwd(), ".tmp", `npu-request-${process.pid}-${Date.now()}-${Math.random()}`);
+    const workspaceRoot = resolve(dataDir, "projects", "project", "sessions", "session", "workspace");
+    await mkdir(workspaceRoot, { recursive: true });
+    context.after(() => rm(dataDir, { force: true, recursive: true }));
+    const config: ExecutorConfig = {
+      bwrapPath: process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap",
+      dataDir,
+      execTimeoutMs: 60_000,
+      maxOutputBytes: 1_000_000,
+      maxWorkspaceBytes: 0,
+      npuInventory: npu,
+    };
+    return { config, request: {
+      agentId: "main",
+      executionId: `npu-request-${Math.random()}`,
+      permissionEpoch: {
+        createdAt: new Date().toISOString(),
+        environmentRevisionId: "system-python3-bwrap-v1",
+        id: "epoch-npu",
+        mounts: [{ mode: "read-write" as const, source: "workspace" as const }],
+        networkPolicy: "none" as const,
+        reason: "test",
+        secretRefs: [],
+        sessionId: "session-test",
+      },
+      workspaceRoot,
+    } };
+  };
+  const inventory = (devices: NpuDeviceStatus[]) => async (): Promise<NpuInventory> => ({
+    capturedAt: "2026-09-10T00:00:00.000Z", devices, supported: true,
+  });
+
+  test("a request without ticked cards leaves the sandbox with no NPU device at all", async (context) => {
+    const { config, request } = await fixture(context);
+    const python = await executePython(config, {
+      ...request,
+      code: "import os\nprint('davinci=' + ','.join(sorted(n for n in os.listdir('/dev') if n.startswith('davinci'))))",
+    });
+    assert.equal(python.exitCode, 0, python.stderr);
+    assert.match(python.stdout, /^davinci=$/mu);
+    const shell = await executeShell(config, {
+      ...request,
+      code: "printf 'davinci=%s\\n' \"$(ls /dev | grep davinci | wc -l)\"",
+      executionId: "npu-request-shell-empty",
+    });
+    assert.equal(shell.exitCode, 0, shell.stderr);
+    assert.match(shell.stdout, /^davinci=0$/mu);
+  });
+
+  test("a card named on the request is bound into the sandbox by that request alone", async (context) => {
+    // Nothing else in the execution mentions NPU 4: the bind bwrap reports can
+    // only have come from `request.npuDevices`, which is the wiring under test.
+    const { config, request } = await fixture(context, inventory([
+      { chipName: "910B3", health: "OK", hostIndex: 4, sandboxUsable: true },
+    ]));
+    const python = await executePython(config, { ...request, code: "print('unreached')", npuDevices: [4] });
+    assert.notEqual(python.exitCode, 0);
+    assert.match(python.stderr, /\/dev\/davinci4/u);
+    const shell = await executeShell(config, {
+      ...request, code: "echo unreached", executionId: "npu-request-shell-bound", npuDevices: [4],
+    });
+    assert.match(shell.stderr, /\/dev\/davinci4/u);
+  });
+
+  test("a request naming a card this machine cannot open fails by name instead of running without it", async (context) => {
+    const { config, request } = await fixture(context, inventory([
+      { chipName: "910B3", health: "OK", hostIndex: 4, sandboxUsable: false,
+        sandboxUnusableReason: "NPU 4 cannot be opened inside the sandbox: device is used" },
+    ]));
+    await assert.rejects(
+      executePython(config, { ...request, code: "print('unreached')", npuDevices: [4] }),
+      /NPU 4 cannot be opened inside the sandbox: device is used/u,
+    );
   });
 });
