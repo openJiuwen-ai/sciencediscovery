@@ -58,6 +58,8 @@ const NPU_SMI_CANDIDATES = ["/usr/local/bin/npu-smi", "/usr/local/sbin/npu-smi",
 /** Ascend install roots. Overridable for hosts that relocate the toolkit. */
 const ASCEND_ROOT = "/usr/local/Ascend";
 const ASCEND_TOOLKIT = `${ASCEND_ROOT}/ascend-toolkit/latest`;
+/** The driver's install record; the sandbox needs it or the driver warns. */
+const ASCEND_INSTALL_INFO = "/etc/ascend_install.info";
 
 /** Only 910B is in scope; other chips are listed but never offered. */
 const SUPPORTED_CHIP_PATTERN = /910B/iu;
@@ -135,6 +137,10 @@ const CHIP_METRICS_PATTERN = /^(\S+)\s+(\S+)\s*\/\s*(\S+)\s+(\S+)\s*\/\s*(\S+)\s
 export function parseNpuSmiInfo(text: string): NpuDeviceStatus[] {
   const devices: NpuDeviceStatus[] = [];
   for (const line of text.split("\n")) {
+    // `npu-smi info` prints a second table of running processes below the
+    // devices, and its rows start with the same "<npu> <chip>" shape. Without
+    // this stop every process would be listed as another card.
+    if (line.includes("Process id")) break;
     if (!line.startsWith("|")) continue;
     const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
     if (cells.length < 3) continue;
@@ -155,6 +161,9 @@ export function parseNpuSmiInfo(text: string): NpuDeviceStatus[] {
     if (!head) continue;
     const hostIndex = Number(head[1]);
     if (!Number.isSafeInteger(hostIndex)) continue;
+    // A card name always carries letters ("910B3"); a bare number here means
+    // the row belongs to some other table rather than the device listing.
+    if (!/[A-Za-z]/u.test(head[2] ?? "")) continue;
     const metrics = HEAD_METRICS_PATTERN.exec(cells[2] ?? "");
     devices.push({
       chipName: head[2] ?? "",
@@ -407,7 +416,15 @@ export async function prepareSandboxNpu(
   const resolved = tools ?? await resolveNpuHostTools();
   const managementDevices = await availableNpuManagementDevices();
   return {
-    bindArgs: npuDeviceBindArguments(mapping.map((entry) => entry.hostIndex), managementDevices),
+    bindArgs: [
+      ...npuDeviceBindArguments(mapping.map((entry) => entry.hostIndex), managementDevices),
+      // Without this the driver prints "The driver package may not be
+      // completely installed", which reads like a broken host but only means
+      // it could not find its own install record inside the sandbox.
+      ...(await exists(ASCEND_INSTALL_INFO)
+        ? ["--ro-bind", ASCEND_INSTALL_INFO, ASCEND_INSTALL_INFO]
+        : []),
+    ],
     env: npuSandboxEnvironment(resolved),
     mapping,
     pythonPath: npuSandboxPythonPath(resolved),
