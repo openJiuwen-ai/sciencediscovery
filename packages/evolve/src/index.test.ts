@@ -76,3 +76,15 @@ test("Idea Tree status reader returns the actual background research to the agen
   assert.deepEqual(calls, [undefined]);
   assert.deepEqual(result.details, summary);
 });
+
+test("Idea Tree handoff sends prepared evidence to Python and returns its run id", async () => {
+  let received: unknown;
+  const input = {objective: "Compare Fe/Mn catalysts", materials: "Supplied study: leaching is unresolved; source: study-A."};
+  const tool = createEvolveTools(runtime({createIdeaResearch: async args => {
+    received = args;
+    return {researchId: "research-new", status: "running"};
+  }})).find(tool => tool.name === "create_idea_research")!;
+  const result = await tool.execute("create", input as never, new AbortController().signal);
+  assert.deepEqual(received, input);
+  assert.deepEqual(result.details, {researchId: "research-new", status: "running"});
+});

@@ -12,7 +12,24 @@ export async function ideaResearchModel() {
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString());
     const system = body.messages[0].content as string;
-    const payload = JSON.parse(body.messages[1].content);
+    if (body.stream) {
+      const hasTool = body.tools?.some((t: any) => t.function?.name === 'create_idea_research');
+      const lastUser = [...body.messages].reverse().find((m: any) => m.role === 'user');
+      const latestUserIndex = body.messages.lastIndexOf(lastUser);
+      const handedOff = body.messages.slice(latestUserIndex + 1).some((m: any) => m.role === 'tool');
+      const objective = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content);
+      const action = hasTool && !handedOff;
+      const delta = action ? {role: 'assistant', tool_calls: [{index: 0, id: 'create-research', type: 'function', function: {name: 'create_idea_research', arguments: JSON.stringify({objective, materials: 'User supplied: near-neutral water, recovery and leaching matter. Retrieval explicitly skipped for this demo.'})}}]} : {role: 'assistant', content: hasTool ? '已启动 Idea Tree 研究，请查看树卡片。' : 'Catalyst research'};
+      res.writeHead(200, {'content-type': 'text/event-stream'});
+      res.write(`data: ${JSON.stringify({id:'lead', object:'chat.completion.chunk', choices:[{index:0, delta, finish_reason:null}]})}\n\n`);
+      res.write(`data: ${JSON.stringify({id:'lead', object:'chat.completion.chunk', choices:[{index:0, delta:{}, finish_reason:action ? 'tool_calls' : 'stop'}],usage:{prompt_tokens:100,completion_tokens:50,total_tokens:150}})}\n\n`);
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    // Session title generation is an ordinary non-streaming model call.
+    let payload: any;
+    try { payload = JSON.parse(body.messages[1].content); }
+    catch { res.writeHead(200, {'content-type':'application/json'}); res.end(JSON.stringify({choices:[{message:{role:'assistant',content:'Catalyst research'},finish_reason:'stop'}]})); return; }
     requests.push({ system, payload });
     if (hold && payload.hypothesis && !payload.candidate && !payload.children) {
       await new Promise<void>(resolve => { release = resolve; });
@@ -22,7 +39,7 @@ export async function ideaResearchModel() {
     }
     let answer: object;
     if (payload.maximumCandidates) {
-      answer = { candidates: [{ direction: `Direction ${payload.round % 2}`, hypothesis: `Candidate ${payload.round}: reduce metal leaching` }], reason: "Compare alternatives and improve prior weaknesses" };
+      answer = { candidates: [{ direction: `Direction ${payload.round % 2}`, refinements: Array.from({length: Math.max(0, payload.maxDepth - 2)}, (_, i) => `Refinement ${i + 1}`), hypothesis: `Candidate ${payload.round}: reduce metal leaching` }], reason: "Compare alternatives and improve prior weaknesses" };
     } else if (payload.perspective) {
       answer = { text: `${payload.perspective}: assess uncertainty`, score: 7 };
     } else if (payload.children) {
