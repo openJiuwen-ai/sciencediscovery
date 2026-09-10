@@ -258,10 +258,10 @@ export function findMarkdownFigureArtifact(
   return basenameMatches.length === 1 ? basenameMatches[0] : undefined;
 }
 
-function imageLabel(alt: string | undefined, source: string | undefined): string {
+function imageLabel(alt: string | undefined, source: string | undefined, fallback: string): string {
   if (alt?.trim()) return alt.trim();
   const path = source?.split(/[?#]/, 1)[0]?.replaceAll("\\", "/");
-  return path?.split("/").filter(Boolean).at(-1) || "image";
+  return path?.split("/").filter(Boolean).at(-1) || fallback;
 }
 
 function MarkdownImageFailure({ alt, onOpenArtifacts, source }: {
@@ -269,8 +269,8 @@ function MarkdownImageFailure({ alt, onOpenArtifacts, source }: {
   onOpenArtifacts?: () => void;
   source?: string;
 }) {
-  const label = imageLabel(alt, source);
   const { t } = useLocale();
+  const label = imageLabel(alt, source, t("markdown.imageFallback"));
   return (
     <span aria-label={t("markdown.imageUnavailableLabel", { label })} className="markdown-image-state error" role="img">
       <strong>{t("markdown.imageUnavailable")}</strong>
@@ -336,8 +336,8 @@ function MarkdownImage({
     return <MarkdownImageFailure alt={alt} onOpenArtifacts={onOpenArtifacts} source={src} />;
   }
   return (
-    <span aria-label={t("markdown.loadingImage", { label: imageLabel(alt, src) })} className="markdown-image-state loading" role="status">
-      {t("markdown.loadingImage", { label: imageLabel(alt, src) })}
+    <span aria-label={t("markdown.loadingImage", { label: imageLabel(alt, src, t("markdown.imageFallback")) })} className="markdown-image-state loading" role="status">
+      {t("markdown.loadingImage", { label: imageLabel(alt, src, t("markdown.imageFallback")) })}
     </span>
   );
 }
@@ -352,6 +352,7 @@ export function MarkdownRenderer({
   references,
   workspaceSessionId,
 }: MarkdownRendererProps) {
+  const { t } = useLocale();
   const chipIndex = useMemo(() => buildChipIndex(references), [references]);
   const components = useMemo<Components>(() => ({
     a: ({ href, node: _node, ...props }) => {
@@ -387,7 +388,7 @@ export function MarkdownRenderer({
       return (
         <div className="markdown-code">
           <pre {...props} ref={preRef}>{children}</pre>
-          <CopyButton className="code-copy" getText={() => preRef.current?.textContent ?? ""} label="Copy code" />
+          <CopyButton className="code-copy" getText={() => preRef.current?.textContent ?? ""} label={t("markdown.copyCode")} />
         </div>
       );
     },
@@ -396,7 +397,7 @@ export function MarkdownRenderer({
         <table {...props}>{children}</table>
       </div>
     ),
-  }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, workspaceSessionId]);
+  }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, t, workspaceSessionId]);
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
       <Markdown

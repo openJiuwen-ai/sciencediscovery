@@ -25,36 +25,39 @@ import {
 
 import type { ApiClient } from "./api.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
+import { useLocale, type MessageKey } from "./i18n/index.js";
+
+type Translate = ReturnType<typeof useLocale>["t"];
 
 const TIMEOUT_FIELDS: Array<{
-  description: string;
+  descriptionKey: MessageKey;
   field: keyof SystemTimeoutSettings;
-  label: string;
+  labelKey: MessageKey;
 }> = [
   {
-    description: "Stops the current turn when the Agent has no streamed output or progress for too long.",
+    descriptionKey: "runtime.timeouts.gatewayIdle.description",
     field: "gatewayIdleTimeoutMs",
-    label: "Agent idle",
+    labelKey: "runtime.timeouts.gatewayIdle.label",
   },
   {
-    description: "Limits one complete Agent turn, including the model, tools, and streamed output.",
+    descriptionKey: "runtime.timeouts.gatewayTurn.description",
     field: "gatewayTurnTimeoutMs",
-    label: "Agent turn",
+    labelKey: "runtime.timeouts.gatewayTurn.label",
   },
   {
-    description: "Wall-clock limit for one Runner code execution.",
+    descriptionKey: "runtime.timeouts.runnerExec.description",
     field: "runnerExecTimeoutMs",
-    label: "Runner execution",
+    labelKey: "runtime.timeouts.runnerExec.label",
   },
   {
-    description: "Releases a persistent Kernel after it has been inactive.",
+    descriptionKey: "runtime.timeouts.kernelIdle.description",
     field: "kernelIdleTimeoutMs",
-    label: "Kernel idle",
+    labelKey: "runtime.timeouts.kernelIdle.label",
   },
   {
-    description: "How long a run waits for a permission decision.",
+    descriptionKey: "runtime.timeouts.permissionWait.description",
     field: "permissionWaitTimeoutMs",
-    label: "Permission wait",
+    labelKey: "runtime.timeouts.permissionWait.label",
   },
 ];
 
@@ -62,11 +65,11 @@ function seconds(milliseconds: number): string {
   return milliseconds === 0 ? "" : String(milliseconds / 1000);
 }
 
-function duration(milliseconds: number): string {
-  if (milliseconds === 0) return "Unlimited";
-  if (milliseconds % 60_000 === 0) return `${milliseconds / 60_000} min`;
-  if (milliseconds % 1000 === 0) return `${milliseconds / 1000} s`;
-  return `${milliseconds} ms`;
+function duration(milliseconds: number, t: Translate): string {
+  if (milliseconds === 0) return t("runtime.unlimited");
+  if (milliseconds % 60_000 === 0) return t("runtime.unitMinutes", { count: milliseconds / 60_000 });
+  if (milliseconds % 1000 === 0) return t("runtime.unitSeconds", { count: milliseconds / 1000 });
+  return t("runtime.unitMilliseconds", { count: milliseconds });
 }
 
 export function TimeoutSettingsEditor({
@@ -76,6 +79,7 @@ export function TimeoutSettingsEditor({
   onChange: (settings: SystemTimeoutSettings) => void;
   settings: SystemTimeoutSettings;
 }) {
+  const { t } = useLocale();
   function setUnlimited(field: keyof SystemTimeoutSettings, unlimited: boolean): void {
     onChange({
       ...settings,
@@ -91,20 +95,21 @@ export function TimeoutSettingsEditor({
 
   return <section className="timeout-settings">
     <div className="settings-detail-header">
-      <span className="eyebrow">Runtime deadlines</span>
-      <h3>Timeouts</h3>
-      <p>Set product wall-clock limits globally. Unlimited disables that timer. Internal request-signature safety windows are not changed here.</p>
+      <span className="eyebrow">{t("runtime.timeouts.eyebrow")}</span>
+      <h3>{t("settings.groups.timeouts.label")}</h3>
+      <p>{t("runtime.timeouts.help")}</p>
     </div>
     <div className="timeout-grid">
-      {TIMEOUT_FIELDS.map(({ description, field, label }) => {
+      {TIMEOUT_FIELDS.map(({ descriptionKey, field, labelKey }) => {
+        const label = t(labelKey);
         const unlimited = settings[field] === 0;
         return <fieldset key={field}>
           <legend>{label}</legend>
-          <p>{description}</p>
+          <p>{t(descriptionKey)}</p>
           <label className="timeout-value">
-            <span>Seconds</span>
+            <span>{t("runtime.timeouts.seconds")}</span>
             <input
-              aria-label={`${label} timeout in seconds`}
+              aria-label={t("runtime.timeouts.aria", { label })}
               disabled={unlimited}
               min="0.001"
               onChange={(event) => setSeconds(field, event.target.value)}
@@ -119,24 +124,24 @@ export function TimeoutSettingsEditor({
               onChange={(event) => setUnlimited(field, event.target.checked)}
               type="checkbox"
             />
-            <span>Unlimited</span>
+            <span>{t("runtime.unlimited")}</span>
           </label>
-          <small>Draft: {duration(settings[field])}</small>
+          <small>{t("runtime.draft", { value: duration(settings[field], t) })}</small>
         </fieldset>;
       })}
     </div>
-    <div className="settings-actions"><span className="settings-source">Changes take effect only after using the dialog Save action.</span></div>
+    <div className="settings-actions"><span className="settings-source">{t("runtime.timeouts.saveNote")}</span></div>
   </section>;
 }
 
 const GIB = 1_073_741_824;
 const MIB = 1_048_576;
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "Unlimited";
+function formatBytes(bytes: number, t: Translate): string {
+  if (bytes === 0) return t("runtime.unlimited");
   if (bytes % GIB === 0) return `${bytes / GIB} GiB`;
   if (bytes % MIB === 0) return `${bytes / MIB} MiB`;
-  return `${bytes} bytes`;
+  return t("runtime.unitBytes", { count: bytes });
 }
 
 /** Avoid binary/decimal float noise in number inputs (e.g. 1000000/MiB → 0.953…). */
@@ -154,6 +159,7 @@ export function QuotaSettingsEditor({
   onChange: (settings: SystemQuotaSettings) => void;
   settings: SystemQuotaSettings;
 }) {
+  const { t } = useLocale();
   function setGiBField(field: keyof SystemQuotaSettings, value: string): void {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed < 0) return;
@@ -167,21 +173,18 @@ export function QuotaSettingsEditor({
 
   return <section className="timeout-settings">
     <div className="settings-detail-header">
-      <span className="eyebrow">Runner and upload volume limits</span>
-      <h3>Quotas</h3>
-      <p>
-        Limit Session workspace size, retained execution output, and multipart upload sizes.
-        Unlimited sets that value to 0. Workspace total applies to both runner execution and upload accumulation.
-      </p>
+      <span className="eyebrow">{t("runtime.quotas.eyebrow")}</span>
+      <h3>{t("settings.groups.quotas.label")}</h3>
+      <p>{t("runtime.quotas.help")}</p>
     </div>
     <div className="timeout-grid">
       <fieldset>
-        <legend>Upload per file</legend>
-        <p>Maximum size of one uploaded file. Shown on the workspace upload control. Default is 1 GiB.</p>
+        <legend>{t("runtime.quotas.uploadFile.label")}</legend>
+        <p>{t("runtime.quotas.uploadFile.description")}</p>
         <label className="timeout-value">
           <span>GiB</span>
           <input
-            aria-label="Upload per-file quota in GiB"
+            aria-label={t("runtime.quotas.uploadFile.aria")}
             disabled={uploadFileUnlimited}
             min="1"
             onChange={(event) => setGiBField("uploadMaxFileBytes", event.target.value)}
@@ -199,17 +202,17 @@ export function QuotaSettingsEditor({
             })}
             type="checkbox"
           />
-          <span>Unlimited</span>
+          <span>{t("runtime.unlimited")}</span>
         </label>
-        <small>Draft: {formatBytes(settings.uploadMaxFileBytes)}</small>
+        <small>{t("runtime.draft", { value: formatBytes(settings.uploadMaxFileBytes, t) })}</small>
       </fieldset>
       <fieldset>
-        <legend>Upload per request</legend>
-        <p>Maximum size of one multipart upload request (all files combined). Default is 10 GiB.</p>
+        <legend>{t("runtime.quotas.uploadRequest.label")}</legend>
+        <p>{t("runtime.quotas.uploadRequest.description")}</p>
         <label className="timeout-value">
           <span>GiB</span>
           <input
-            aria-label="Upload per-request quota in GiB"
+            aria-label={t("runtime.quotas.uploadRequest.aria")}
             disabled={uploadRequestUnlimited}
             min="1"
             onChange={(event) => setGiBField("uploadMaxRequestBytes", event.target.value)}
@@ -227,17 +230,17 @@ export function QuotaSettingsEditor({
             })}
             type="checkbox"
           />
-          <span>Unlimited</span>
+          <span>{t("runtime.unlimited")}</span>
         </label>
-        <small>Draft: {formatBytes(settings.uploadMaxRequestBytes)}</small>
+        <small>{t("runtime.draft", { value: formatBytes(settings.uploadMaxRequestBytes, t) })}</small>
       </fieldset>
       <fieldset>
-        <legend>Workspace total</legend>
-        <p>Maximum total size of files in the Session workspace (runner + uploads). Default is 10 GiB.</p>
+        <legend>{t("runtime.quotas.workspace.label")}</legend>
+        <p>{t("runtime.quotas.workspace.description")}</p>
         <label className="timeout-value">
           <span>GiB</span>
           <input
-            aria-label="Workspace total quota in GiB"
+            aria-label={t("runtime.quotas.workspace.aria")}
             disabled={workspaceUnlimited}
             min="1"
             onChange={(event) => setGiBField("runnerMaxWorkspaceBytes", event.target.value)}
@@ -255,17 +258,17 @@ export function QuotaSettingsEditor({
             })}
             type="checkbox"
           />
-          <span>Unlimited</span>
+          <span>{t("runtime.unlimited")}</span>
         </label>
-        <small>Draft: {formatBytes(settings.runnerMaxWorkspaceBytes)}</small>
+        <small>{t("runtime.draft", { value: formatBytes(settings.runnerMaxWorkspaceBytes, t) })}</small>
       </fieldset>
       <fieldset>
-        <legend>Execution output</legend>
-        <p>Retained stdout+stderr budget for one execution. Default is 1 GiB. Oversized output is truncated with a marker; the run still succeeds. Unlimited keeps the full stream in memory.</p>
+        <legend>{t("runtime.quotas.output.label")}</legend>
+        <p>{t("runtime.quotas.output.description")}</p>
         <label className="timeout-value">
           <span>GiB</span>
           <input
-            aria-label="Runner output budget in GiB"
+            aria-label={t("runtime.quotas.output.aria")}
             disabled={outputUnlimited}
             min="1"
             onChange={(event) => setGiBField("runnerMaxOutputBytes", event.target.value)}
@@ -283,12 +286,12 @@ export function QuotaSettingsEditor({
             })}
             type="checkbox"
           />
-          <span>Unlimited</span>
+          <span>{t("runtime.unlimited")}</span>
         </label>
-        <small>Draft: {formatBytes(settings.runnerMaxOutputBytes)}</small>
+        <small>{t("runtime.draft", { value: formatBytes(settings.runnerMaxOutputBytes, t) })}</small>
       </fieldset>
     </div>
-    <div className="settings-actions"><span className="settings-source">Changes take effect only after using the dialog Save action. Env vars seed defaults on first boot.</span></div>
+    <div className="settings-actions"><span className="settings-source">{t("runtime.quotas.saveNote")}</span></div>
   </section>;
 }
 
@@ -308,6 +311,7 @@ export function SandboxNetworkSettingsEditor({
   proxySettings?: ProxySettingsDetails;
   settings: SandboxNetworkSettings;
 }) {
+  const { t } = useLocale();
   const [draft, setDraft] = useState(settings.allowedDomains.join("\n"));
   const [domainError, setDomainError] = useState<string>();
 
@@ -319,70 +323,59 @@ export function SandboxNetworkSettingsEditor({
       setDomainError(undefined);
       onChange({ ...settings, allowedDomains: entries });
     } catch (error) {
-      setDomainError(error instanceof Error ? error.message : "Invalid allowed domain");
+      setDomainError(error instanceof Error ? error.message : t("runtime.sandbox.invalidDomain"));
     }
   }
 
   const allowlist = settings.mode === "domain-allowlist";
   return <section className="timeout-settings">
     <div className="settings-detail-header">
-      <span className="eyebrow">Sandbox code execution</span>
-      <h3>Sandbox network access</h3>
+      <span className="eyebrow">{t("runtime.sandbox.eyebrow")}</span>
+      <h3>{t("runtime.sandbox.title")}</h3>
       <p>
-        Controls whether commands run by <code>run_shell</code> can
-        reach the network. The sandbox never gets a network interface: with a domain allowlist, outbound traffic
-        leaves only through this deployment&apos;s egress gateway, which allows the domains listed here.
-        Web and MCP outbound servers are configured separately under Network proxies and do not affect sandbox code.
+        {t("runtime.sandbox.helpBefore")}<code>run_shell</code>{t("runtime.sandbox.helpAfter")}
       </p>
     </div>
     <div className="timeout-grid">
       <fieldset>
-        <legend>Mode</legend>
-        <p>
-          No network is the default and matches a sandbox with no network at all.
-          Domain allowlist keeps the sandbox isolated and permits only the listed domains.
-        </p>
+        <legend>{t("runtime.sandbox.modeLabel")}</legend>
+        <p>{t("runtime.sandbox.modeHelp")}</p>
         <label className="timeout-value">
-          <span>Mode</span>
+          <span>{t("runtime.sandbox.modeLabel")}</span>
           <select
-            aria-label="Sandbox network mode"
+            aria-label={t("runtime.sandbox.modeAria")}
             onChange={(event) => onChange({
               ...settings,
               mode: event.target.value === "domain-allowlist" ? "domain-allowlist" : "none",
             })}
             value={settings.mode}
           >
-            <option value="none">No network</option>
-            <option value="domain-allowlist">Domain allowlist</option>
+            <option value="none">{t("runtime.sandbox.modeNone")}</option>
+            <option value="domain-allowlist">{t("runtime.sandbox.modeAllowlist")}</option>
           </select>
         </label>
       </fieldset>
       <fieldset>
-        <legend>Allowed domains</legend>
+        <legend>{t("runtime.sandbox.domainsLegend")}</legend>
         <p>
-          One entry per line: <code>example.org</code>, <code>*.example.org</code> for subdomains,
-          optionally with <code>:443</code> to restrict the port. Traffic is filtered by host name only —
-          TLS is not inspected, so a broad entry stays a broad grant.
+          {t("runtime.sandbox.domainsHelpIntro")} <code>example.org</code>, <code>*.example.org</code>{t("runtime.sandbox.domainsHelpMiddle")}
+          <code>:443</code>{t("runtime.sandbox.domainsHelpEnd")}
         </p>
         <label className="timeout-value">
-          <span>Domains</span>
+          <span>{t("runtime.sandbox.domainsLabel")}</span>
           <textarea
-            aria-label="Allowed domains"
+            aria-label={t("runtime.sandbox.domainsLegend")}
             disabled={!allowlist}
             onChange={(event) => commitDomains(event.target.value)}
             rows={6}
             value={draft}
           />
         </label>
-        {domainError ? <small role="alert">{domainError}</small> : <small>Draft: {settings.allowedDomains.length} domains</small>}
+        {domainError ? <small role="alert">{domainError}</small> : <small>{t("runtime.sandbox.domainsDraft", { count: settings.allowedDomains.length })}</small>}
       </fieldset>
       <fieldset>
-        <legend>Private addresses</legend>
-        <p>
-          Off by default: an allowed domain that resolves to a loopback, link-local or private address is
-          rejected, so sandbox code cannot reach this deployment&apos;s own services. Turn it on only for an
-          internal mirror or registry.
-        </p>
+        <legend>{t("runtime.sandbox.privateLegend")}</legend>
+        <p>{t("runtime.sandbox.privateHelp")}</p>
         <label className="timeout-unlimited">
           <input
             checked={settings.allowPrivateNetwork}
@@ -390,32 +383,26 @@ export function SandboxNetworkSettingsEditor({
             onChange={(event) => onChange({ ...settings, allowPrivateNetwork: event.target.checked })}
             type="checkbox"
           />
-          <span>Allow private and loopback addresses</span>
+          <span>{t("runtime.sandbox.privateAllow")}</span>
         </label>
       </fieldset>
       <fieldset>
-        <legend>Outbound route</legend>
+        <legend>{t("runtime.sandbox.routeLegend")}</legend>
         <p>
-          Applied only <em>after</em> a domain is allowed. The allowed request then leaves this deployment
-          the same way a model call does: follow the default configured under Network proxies, connect
-          directly, or pick one server registered there. A refused domain is answered here and never offered
-          onward, and sandbox code never sees the address or credentials of the server chosen.
+          {t("runtime.sandbox.routeHelpBefore")}<em>{t("runtime.sandbox.routeEmphasis")}</em>{t("runtime.sandbox.routeHelpAfter")}
         </p>
         {proxySettings
           ? <ProxyPolicySelect
             disabled={!allowlist}
-            label="Outbound route for allowed traffic"
+            label={t("runtime.sandbox.routeLabel")}
             onChange={(egressProxyPolicy) => onChange({ ...settings, egressProxyPolicy })}
             settings={proxySettings}
             value={settings.egressProxyPolicy}
           />
-          : <p className="muted">Loading the registered servers…</p>}
+          : <p className="muted">{t("runtime.sandbox.loadingServers")}</p>}
       </fieldset>
     </div>
-    <p className="muted">
-      Saving a change rotates the Permission Epoch of every open Session and clears its persistent kernels and
-      shell, because the policy is frozen into the epoch each execution runs under.
-    </p>
+    <p className="muted">{t("runtime.sandbox.epochNote")}</p>
   </section>;
 }
 
@@ -432,6 +419,7 @@ export function RuntimeStatusPanel({
   onError: (message?: string) => void;
   onNotice: (message: string) => void;
 }) {
+  const { t } = useLocale();
   const [status, setStatus] = useState<RuntimeStatus>();
   const [tearingDownKernelId, setTearingDownKernelId] = useState<string>();
 
@@ -439,7 +427,7 @@ export function RuntimeStatusPanel({
     try {
       setStatus(await client.getRuntimeStatus());
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not load runtime status");
+      onError(error instanceof Error ? error.message : t("runtime.status.loadFailed"));
     }
   }, [client, onError]);
 
@@ -456,11 +444,11 @@ export function RuntimeStatusPanel({
     try {
       const result = await client.teardownKernel(kernelId);
       onNotice(result.count
-        ? `Kernel ${kernelId} was torn down`
-        : `Kernel ${kernelId} was already inactive`);
+        ? t("runtime.status.kernelTornDown", { id: kernelId })
+        : t("runtime.status.kernelInactive", { id: kernelId }));
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not tear down Kernel");
+      onError(error instanceof Error ? error.message : t("runtime.status.teardownFailed"));
     } finally {
       setTearingDownKernelId(undefined);
     }
@@ -468,53 +456,53 @@ export function RuntimeStatusPanel({
 
   return <section className="runtime-status">
     <div className="settings-detail-header">
-      <span className="eyebrow">Live operations</span>
-      <h3>Runtime status</h3>
-      <p>Running Sessions, queued or running Runner jobs, and persistent Kernels. This view refreshes every three seconds.</p>
+      <span className="eyebrow">{t("runtime.status.eyebrow")}</span>
+      <h3>{t("settings.groups.runtime.label")}</h3>
+      <p>{t("runtime.status.help")}</p>
     </div>
-    {!status ? <p className="muted">Loading runtime status…</p> : <>
+    {!status ? <p className="muted">{t("runtime.status.loading")}</p> : <>
       <div className="runtime-status-summary">
-        <article><strong>{status.sessions.length}</strong><span>Running sessions</span></article>
-        <article><strong>{status.runner.activeExecutions.length}</strong><span>Runner jobs</span></article>
-        <article><strong>{status.runner.kernels.length}</strong><span>Active kernels</span></article>
+        <article><strong>{status.sessions.length}</strong><span>{t("runtime.status.runningSessions")}</span></article>
+        <article><strong>{status.runner.activeExecutions.length}</strong><span>{t("runtime.status.runnerJobs")}</span></article>
+        <article><strong>{status.runner.kernels.length}</strong><span>{t("runtime.status.activeKernels")}</span></article>
       </div>
 
       <div className="runtime-status-section">
-        <h4>Sessions</h4>
+        <h4>{t("runtime.status.sessions")}</h4>
         {status.sessions.length ? status.sessions.map((run) => <article key={run.runId}>
           <div><strong>{run.title}</strong><small>{run.sessionId}</small></div>
           <span className={`timeline-status ${run.status}`}>{run.status}</span>
-          <small>Started {timestamp(run.startedAt)} · activity {timestamp(run.lastActivityAt)}</small>
-        </article>) : <p>No Session run is active.</p>}
+          <small>{t("runtime.status.sessionLine", { started: timestamp(run.startedAt), activity: timestamp(run.lastActivityAt) })}</small>
+        </article>) : <p>{t("runtime.status.noSessions")}</p>}
       </div>
 
       <div className="runtime-status-section">
-        <h4>Runner</h4>
+        <h4>{t("runtime.status.runner")}</h4>
         {status.runner.status === "unavailable" ? <p className="runtime-status-error">{status.runner.error}</p>
           : status.runner.activeExecutions.length
             ? status.runner.activeExecutions.map((execution) => <article key={execution.executionId}>
                 <div><strong>{execution.language} · {execution.kernelMode}</strong><small>{execution.executionId}</small></div>
                 <span className={`timeline-status ${execution.status}`}>{execution.status}</span>
-                <small>Session {execution.sessionId} · queued {timestamp(execution.queuedAt)}</small>
+                <small>{t("runtime.status.jobLine", { id: execution.sessionId, queued: timestamp(execution.queuedAt) })}</small>
               </article>)
-            : <p>Runner is healthy; no execution is active.</p>}
+            : <p>{t("runtime.status.runnerIdle")}</p>}
       </div>
 
       <div className="runtime-status-section">
-        <h4>Kernels</h4>
+        <h4>{t("runtime.status.kernels")}</h4>
         {status.runner.kernels.length ? status.runner.kernels.map((kernel) => <article key={kernel.id}>
-          <div><strong>{kernel.language} · persistent</strong><small>{kernel.id}</small></div>
+          <div><strong>{kernel.language} · {t("runtime.status.persistent")}</strong><small>{kernel.id}</small></div>
           <button
-            aria-label={`Teardown Kernel ${kernel.id}`}
+            aria-label={t("runtime.status.teardownAria", { id: kernel.id })}
             className="secondary-button runtime-teardown-button"
             disabled={tearingDownKernelId === kernel.id}
             onClick={() => void teardownKernel(kernel.id)}
             type="button"
-          >{tearingDownKernelId === kernel.id ? "Tearing down…" : "Teardown"}</button>
-          <small>Session {kernel.sessionId} · last used {timestamp(kernel.lastUsedAt)}{kernel.expiresAt ? ` · expires ${timestamp(kernel.expiresAt)}` : " · idle timeout unlimited"}</small>
-        </article>) : <p>No persistent Kernel is active.</p>}
+          >{tearingDownKernelId === kernel.id ? t("runtime.status.tearingDown") : t("runtime.status.teardown")}</button>
+          <small>{t("runtime.status.kernelLine", { session: kernel.sessionId, lastUsed: timestamp(kernel.lastUsedAt), expiry: kernel.expiresAt ? t("runtime.status.kernelExpiry", { expires: timestamp(kernel.expiresAt) }) : t("runtime.status.kernelNoExpiry") })}</small>
+        </article>) : <p>{t("runtime.status.noKernels")}</p>}
       </div>
-      <small className="settings-source">Captured {timestamp(status.capturedAt)}</small>
+      <small className="settings-source">{t("runtime.status.captured", { timestamp: timestamp(status.capturedAt) })}</small>
     </>}
   </section>;
 }

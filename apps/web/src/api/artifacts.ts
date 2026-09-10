@@ -50,6 +50,7 @@ import type {
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
 import type { ArtifactDashboard, ArtifactPreviewPayload } from "../artifact-dashboard.js";
+import { translateActive } from "../i18n/index.js";
 
 import { RunsApiClient } from "./runs.js";
 
@@ -131,7 +132,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error("Could not load artifact version");
+      throw new Error(translateActive("error.loadArtifactVersion"));
     }
     return await response.blob();
   }
@@ -393,7 +394,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error("Could not load artifact version");
+      throw new Error(translateActive("error.loadArtifactVersion"));
     }
     return await response.blob();
   }
@@ -478,7 +479,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error(`Could not load ${path}`);
+      throw new Error(translateActive("error.loadFile", { path }));
     }
     return await response.blob();
   }

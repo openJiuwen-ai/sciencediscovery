@@ -247,7 +247,7 @@ import { InlineErrorAlert, updateInlineErrors } from "./InlineErrorAlert.js";
 import { createSettingsErrorRouter } from "./settings-error-routing.js";
 import { isPrimaryViewChange, parseViewState, serializeViewState, type ViewState } from "./view-url.js";
 import { PermissionCards, PermissionGrantManager } from "./Permissions.js";
-import { useLocale, type MessageKey } from "./i18n/index.js";
+import { translateActive, useLocale, type MessageKey } from "./i18n/index.js";
 import { formatRunFailure } from "./run-failure.js";
 import {
   ComposerCommandChips,
@@ -431,9 +431,10 @@ function CompactPathTreeList<TLeaf extends PathTreeLeaf>({
   entries: readonly PathTreeEntry<TLeaf>[];
   renderLeaf: (leaf: TLeaf) => ReactNode;
 }): ReactNode {
+  const { t } = useLocale();
   return <div className={renderDirectoryControl ? "artifact-tree selection-mode" : "artifact-tree"}>
     {entries.map((entry) => entry.kind === "directory" ? <details className="artifact-tree-directory" key={`directory:${entry.path}`} open>
-      <summary aria-label={`Folder ${entry.path}`} className={renderDirectoryControl ? "selection-mode" : undefined}>
+      <summary aria-label={t("app.folderAria", { path: entry.path })} className={renderDirectoryControl ? "selection-mode" : undefined}>
         <ChevronRightIcon className="artifact-tree-chevron" size={14} />
         {renderDirectoryControl?.(entry)}
         <ProjectIcon className="artifact-tree-node-icon artifact-tree-folder-icon" size={14} />
@@ -458,6 +459,7 @@ export function ArtifactTreeList({
   onSelectionChange?: (artifacts: readonly ScientificArtifact[], selected: boolean) => void;
   selectedArtifactIds?: ReadonlySet<string>;
 }): ReactNode {
+  const { t } = useLocale();
   const selection = selectedArtifactIds && onSelectionChange
     ? { change: onSelectionChange, ids: selectedArtifactIds }
     : undefined;
@@ -470,7 +472,7 @@ export function ArtifactTreeList({
       const checked = allSelected ? true : selectedCount ? "mixed" as const : false;
       return <button
         aria-checked={checked}
-        aria-label={`${allSelected ? "Deselect" : "Select"} folder ${entry.path}`}
+        aria-label={allSelected ? t("app.deselectFolderAria", { path: entry.path }) : t("app.selectFolderAria", { path: entry.path })}
         className="artifact-tree-selection-control"
         onClick={(event) => {
           event.preventDefault();
@@ -483,7 +485,7 @@ export function ArtifactTreeList({
     } : undefined}
     renderLeaf={(entry) => selection ? <button
       aria-checked={selection.ids.has(entry.artifact.id)}
-      aria-label={`${selection.ids.has(entry.artifact.id) ? "Deselect" : "Select"} ${entry.artifact.name}`}
+      aria-label={selection.ids.has(entry.artifact.id) ? t("app.deselectItemAria", { name: entry.artifact.name }) : t("app.selectItemAria", { name: entry.artifact.name })}
       className={selection.ids.has(entry.artifact.id) ? "artifact-tree-file selection-mode selected" : "artifact-tree-file selection-mode"}
       onClick={() => selection.change([entry.artifact], !selection.ids.has(entry.artifact.id))}
       role="checkbox"
@@ -495,7 +497,7 @@ export function ArtifactTreeList({
       <span className="artifact-tree-label">{entry.name}</span>
     </button> : lifecycleActions ? <div className="artifact-tree-file-row">
       <button
-        aria-label={`Open ${entry.artifact.name}`}
+        aria-label={t("app.openItemAria", { name: entry.artifact.name })}
         className="artifact-tree-file"
         onClick={() => onOpen(entry.artifact)}
         title={entry.artifact.name}
@@ -507,7 +509,7 @@ export function ArtifactTreeList({
       </button>
       <ArtifactLifecycleControls artifact={entry.artifact} />
     </div> : <button
-      aria-label={`Open ${entry.artifact.name}`}
+      aria-label={t("app.openItemAria", { name: entry.artifact.name })}
       className="artifact-tree-file"
       onClick={() => onOpen(entry.artifact)}
       title={entry.artifact.name}
@@ -546,7 +548,7 @@ export function WorkspaceFileTreeList({
       const checked = allSelected ? true : selectedCount ? "mixed" as const : false;
       return <button
         aria-checked={checked}
-        aria-label={`${allSelected ? "Deselect" : "Select"} folder ${entry.path}`}
+        aria-label={allSelected ? t("app.deselectFolderAria", { path: entry.path }) : t("app.selectFolderAria", { path: entry.path })}
         className="artifact-tree-selection-control"
         onClick={(event) => {
           event.preventDefault();
@@ -559,7 +561,7 @@ export function WorkspaceFileTreeList({
     } : undefined}
     renderLeaf={(entry) => selection ? <button
       aria-checked={selection.paths.has(entry.file.path)}
-      aria-label={`${selection.paths.has(entry.file.path) ? "Deselect" : "Select"} ${entry.file.path}`}
+      aria-label={selection.paths.has(entry.file.path) ? t("app.deselectItemAria", { name: entry.file.path }) : t("app.selectItemAria", { name: entry.file.path })}
       className={selection.paths.has(entry.file.path)
         ? "artifact-tree-file workspace-file-tree-leaf selection-mode selected"
         : "artifact-tree-file workspace-file-tree-leaf selection-mode"}
@@ -573,7 +575,7 @@ export function WorkspaceFileTreeList({
       <span className="artifact-tree-label">{entry.name}</span>
     </button> : onShowProvenance ? <div className="workspace-file-tree-row">
       <button
-        aria-label={`Open ${entry.file.path}`}
+        aria-label={t("app.openItemAria", { name: entry.file.path })}
         className="artifact-tree-file workspace-file-tree-leaf"
         onClick={() => onOpen(entry.file)}
         title={entry.file.path}
@@ -591,7 +593,7 @@ export function WorkspaceFileTreeList({
         type="button"
       ><InfoIcon size={14} /></button>
     </div> : <button
-      aria-label={`Open ${entry.file.path}`}
+      aria-label={t("app.openItemAria", { name: entry.file.path })}
       className="artifact-tree-file workspace-file-tree-leaf"
       onClick={() => onOpen(entry.file)}
       title={entry.file.path}
@@ -792,7 +794,7 @@ export function SystemSettingsFooter({
 
 export function remoteCredentialDraftSaveError(editing: boolean): string | undefined {
   return editing
-    ? "Remote machine credentials use the Save credentials button on their machine card. Save or cancel that form before saving System settings."
+    ? translateActive("app.remoteCredentialDraftError")
     : undefined;
 }
 
@@ -808,7 +810,7 @@ function measureWorkspaceMaxWidth(): number {
 
 
 function formatByteLimit(bytes: number): string {
-  if (bytes === 0) return "unlimited";
+  if (bytes === 0) return translateActive("app.unlimited");
   if (bytes >= 1_073_741_824 && bytes % 1_073_741_824 === 0) return `${bytes / 1_073_741_824} GiB`;
   if (bytes >= 1_048_576 && bytes % 1_048_576 === 0) return `${bytes / 1_048_576} MiB`;
   if (bytes >= 1_000_000) return `${Math.round(bytes / 1_000_000)} MB`;
@@ -831,17 +833,21 @@ function SessionUsageChip({
   breakdown: string;
   sessionTokens: number | null | undefined;
 }) {
+  const { t } = useLocale();
   const hasReportedTokens = sessionTokens !== null && sessionTokens !== undefined;
+  const tokenCount = formatCompactTokenValue(sessionTokens);
   return (
     <div
       className={hasReportedTokens ? "session-usage-chip" : "session-usage-chip muted"}
-      aria-label="Model usage"
+      aria-label={t("usage.aria")}
       title={hasReportedTokens
-        ? `${formatCompactTokenValue(sessionTokens)} session tokens${breakdown ? `; ${breakdown}` : ""}`
-        : "No reported usage yet"}
+        ? breakdown
+          ? t("app.sessionUsageTokensBreakdown", { breakdown, count: tokenCount })
+          : t("app.sessionUsageTokens", { count: tokenCount })
+        : t("app.noReportedUsage")}
     >
-      <span>Usage</span>
-      <strong>{formatCompactTokenValue(sessionTokens)}</strong>
+      <span>{t("app.usage")}</span>
+      <strong>{tokenCount}</strong>
       {breakdown ? <small className="session-usage-chip-breakdown">{breakdown}</small> : null}
     </div>
   );
@@ -856,10 +862,11 @@ export function QueuedRunsPanel({
   onCancel?: (run: SessionRun) => void;
   runs: SessionRun[];
 }) {
+  const { t } = useLocale();
   if (!runs.length) return null;
   return (
-    <section aria-label="Queued runs" className="queued-runs-panel">
-      <div><strong>Queued</strong><span>{runs.length}</span></div>
+    <section aria-label={t("app.queuedRuns")} className="queued-runs-panel">
+      <div><strong>{t("app.queued")}</strong><span>{runs.length}</span></div>
       <ul>
         {runs.map((run) => {
           const cancelling = cancellingRunIds.has(run.id);
@@ -867,10 +874,10 @@ export function QueuedRunsPanel({
             <li key={run.id}>
               <p title={run.prompt}>{run.prompt}</p>
               {onCancel ? <button
-                aria-label="Cancel queued run"
+                aria-label={t("app.cancelQueuedRun")}
                 disabled={cancelling}
                 onClick={() => onCancel(run)}
-                title="Cancel queued run"
+                title={t("app.cancelQueuedRun")}
                 type="button"
               >
                 <CloseIcon size={14} />
@@ -913,6 +920,7 @@ function ArtifactPreview({
   onToggle: (expanded: boolean) => void;
   sessionId: string;
 }) {
+  const { t } = useLocale();
   const [chartUrl, setChartUrl] = useState<string>();
   const [table, setTable] = useState<string[][]>([]);
   const [document, setDocument] = useState<string>();
@@ -983,7 +991,7 @@ function ArtifactPreview({
   ].filter(Boolean).join(" · ");
   return (
     <details
-      aria-label="Analysis results"
+      aria-label={t("app.analysisResults")}
       className="result-preview"
       open={expanded}
       onToggle={(event) => {
@@ -993,15 +1001,15 @@ function ArtifactPreview({
       <summary>
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
         <span className="result-preview-heading">
-          <span><span className="eyebrow">Generated result</span><strong>{markdownFile ? "Research report" : "Workspace analysis"}</strong></span>
+          <span><span className="eyebrow">{t("app.generatedResult")}</span><strong>{markdownFile ? t("app.researchReport") : t("app.workspaceAnalysis")}</strong></span>
           <small>{previewedNames}</small>
-          <small className="result-preview-attribution">Grouped with the latest run by file modified time</small>
+          <small className="result-preview-attribution">{t("app.previewGrouping")}</small>
         </span>
-        <span className="status-dot">Ready</span>
+        <span className="status-dot">{t("app.previewReady")}</span>
       </summary>
       {expanded ? <div className="result-preview-body">
-        {loadFailed ? <p className="muted">Some preview files could not be read. The workspace file list may still open them directly.</p> : null}
-        {chartUrl ? <img src={chartUrl} alt="Bar chart of numeric column means" /> : null}
+        {loadFailed ? <p className="muted">{t("app.previewLoadFailed")}</p> : null}
+        {chartUrl ? <img src={chartUrl} alt={t("app.previewChartAlt")} /> : null}
         {table.length ? (
           <div className="table-scroll">
             <table>
@@ -1398,7 +1406,7 @@ export function App() {
   }, [client, activeProjectId]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;
-    if (!sessionId) throw new Error("No active Session is available for this image");
+    if (!sessionId) throw new Error(translateActive("error.noActiveSessionForImage"));
     try {
       return await client.readFile(sessionId, path, signal);
     } catch (error) {
@@ -1589,7 +1597,7 @@ export function App() {
     setArtifactModalName(undefined);
     setArtifactModalVersion(undefined);
     setArtifactModalSessionId(undefined);
-    pushToast("info", t("error.artifactNotFound"), `“${logicalName}” is not available in this Session`);
+    pushToast("info", t("error.artifactNotFound"), t("error.artifactUnavailableInSession", { name: logicalName }));
   }, [pushToast]);
 
   // Long-lived panels keep these in effect dependencies, so they must not be
@@ -2374,7 +2382,7 @@ export function App() {
       setProjectCreationOpen(false);
       setProjectsExpanded(false);
       setSessionsExpanded(true);
-      pushToast("success", "Project created", project.name);
+      pushToast("success", t("app.projectCreated"), project.name);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("error.createProject"));
     }
@@ -2392,7 +2400,7 @@ export function App() {
       isInFlight: () => sessionCreationInFlight.current,
       onCreated: (created) => {
         if (activeProjectIdRef.current !== projectId) {
-          pushToast("success", "Session created", created.title);
+          pushToast("success", t("app.sessionCreated"), created.title);
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
@@ -2405,7 +2413,7 @@ export function App() {
           setMessage(initialMessage);
           setComposerReferences([]);
         }
-        pushToast("success", "Session created", created.title);
+        pushToast("success", t("app.sessionCreated"), created.title);
       },
       onError: setError,
       setInFlight: (value) => { sessionCreationInFlight.current = value; },
@@ -2468,9 +2476,9 @@ export function App() {
       }
       saved = true;
       setError(undefined);
-      pushToast("success", target.kind === "project" ? "Project renamed" : "Session renamed", name);
+      pushToast("success", target.kind === "project" ? t("app.projectRenamed") : t("app.sessionRenamed"), name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Could not rename ${target.kind}`);
+      setError(reason instanceof Error ? reason.message : target.kind === "project" ? t("error.renameProject") : t("error.renameSession"));
     } finally {
       renameSavesInFlight.current.delete(key);
       setRenameSavingKeys((current) => {
@@ -2489,9 +2497,9 @@ export function App() {
       await client.createProxyServer(input);
       setProxySettings(await client.getProxySettings());
       setError(undefined);
-      pushToast("success", "Proxy server added", input.name.trim());
+      pushToast("success", t("app.proxyServerAdded"), input.name.trim());
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not add proxy server");
+      setError(reason instanceof Error ? reason.message : t("error.addProxyServer"));
       throw reason;
     }
   }
@@ -2503,15 +2511,15 @@ export function App() {
       // intentionally computed on GET and are not part of mutation responses.
       setProxySettings(await client.getProxySettings());
       setError(undefined);
-      pushToast("success", "Proxy server updated", saved.name);
+      pushToast("success", t("app.proxyServerUpdated"), saved.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not update proxy server");
+      setError(reason instanceof Error ? reason.message : t("error.updateProxyServer"));
       throw reason;
     }
   }
 
   async function deleteProxyServer(server: ProxyServer): Promise<void> {
-    if (!window.confirm(`Delete proxy server “${server.name}”?`)) return;
+    if (!window.confirm(t("proxy.server.deleteConfirm", { name: server.name }))) return;
     try {
       await client.deleteProxyServer(server.id);
       setProxySettings((current) => current ? {
@@ -2519,9 +2527,9 @@ export function App() {
         servers: current.servers.filter((item) => item.id !== server.id),
       } : current);
       setError(undefined);
-      pushToast("success", "Proxy server deleted", server.name);
+      pushToast("success", t("app.proxyServerDeleted"), server.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not delete proxy server");
+      setError(reason instanceof Error ? reason.message : t("error.deleteProxyServer"));
     }
   }
 
@@ -2529,9 +2537,9 @@ export function App() {
     try {
       setProxySettings(await client.updateProxySettings({ defaultPolicy }));
       setError(undefined);
-      pushToast("success", "Global proxy default updated");
+      pushToast("success", t("app.proxyDefaultUpdated"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not update the global proxy default");
+      setError(reason instanceof Error ? reason.message : t("error.updateProxyDefault"));
     }
   }
 
@@ -2542,9 +2550,9 @@ export function App() {
       const saved = await client.updateMcpProxyPolicies({ policies });
       setMcpProxyPolicies(saved.policies);
       setError(undefined);
-      pushToast("success", "MCP proxy policy updated", serverId);
+      pushToast("success", t("app.mcpProxyPolicyUpdated"), serverId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not update MCP proxy policy");
+      setError(reason instanceof Error ? reason.message : t("error.updateMcpProxyPolicy"));
     }
   }
 
@@ -2561,7 +2569,7 @@ export function App() {
     try {
       const saved = await client.updateWebSettings(input);
       setWebSettings(saved);
-      pushToast("success", "Web settings updated");
+      pushToast("success", t("app.webSettingsUpdated"));
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("error.saveWeb");
       reportSystemSettingsError(message);
@@ -2574,9 +2582,9 @@ export function App() {
     try {
       const saved = await client.updateMemoryGraphSettings(input);
       setMemoryGraphSettings(saved);
-      pushToast("success", "ScienceMemory settings updated");
+      pushToast("success", t("app.memoryGraphSettingsUpdated"));
     } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save ScienceMemory settings");
+      reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.saveMemoryGraph"));
       throw reason;
     }
   }
@@ -2742,8 +2750,8 @@ export function App() {
       pushToast(
         decision === "deny" ? "info" : "success",
         decision === "allow_matching" && result.resolvedRequests.length > 1
-          ? `${result.resolvedRequests.length} matching permissions granted`
-          : decision === "deny" ? "Permission denied" : "Permission granted",
+          ? t("app.matchingPermissionsGranted", { count: result.resolvedRequests.length })
+          : decision === "deny" ? t("timeline.permissionDenied") : t("timeline.permissionGranted"),
       );
     } catch (reason) {
       const conflict = permissionRequestFromConflict(reason);
@@ -2751,10 +2759,10 @@ export function App() {
         reconcilePermissionSnapshots(request.sessionId, [conflict]);
         setError(undefined);
         pushToast("info", conflict.state === "allowed"
-          ? "Permission was already granted"
+          ? t("app.permissionAlreadyGranted")
           : conflict.state === "denied"
-            ? "Permission was already denied"
-            : "Permission was cancelled");
+            ? t("app.permissionAlreadyDenied")
+            : t("app.permissionWasCancelled"));
         return;
       }
       if (request.sessionId) await refreshPermissionState(request.sessionId).catch(() => undefined);
@@ -2766,7 +2774,7 @@ export function App() {
     await settingsErrorRouter.run("revokePermission", async () => {
       await client.revokePermissionGrant(grant.id);
       setPermissionGrants((current) => current.filter((candidate) => candidate.id !== grant.id));
-      pushToast("success", "Permission grant revoked");
+      pushToast("success", t("app.permissionGrantRevoked"));
     }, t("error.revokePermission"));
   }
 
@@ -2793,7 +2801,7 @@ export function App() {
       } : item));
       setError(undefined);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not update Reviewer Specialist settings");
+      setError(reason instanceof Error ? reason.message : t("error.updateReviewerSettings"));
     } finally {
       setReviewerSessionSettingsBusy(false);
     }
@@ -2809,7 +2817,7 @@ export function App() {
     const messageId = crypto.randomUUID();
     const toolCallId = `manual-review:${messageId}`;
     const optimisticMessage: ChatMessage = {
-      content: "Reviewer Specialist review",
+      content: t("app.reviewerCheckpointContent"),
       createdAt: new Date().toISOString(),
       id: messageId,
       kind: "reviewer_checkpoint",
@@ -2826,9 +2834,9 @@ export function App() {
         setReviewerAuditTasks((current) => [...current.filter((task) => task.id !== result.task.id), result.task]);
       }
       setError(undefined);
-      pushToast("info", "Review started", "Reviewer Specialist is auditing in the background.");
+      pushToast("info", t("app.reviewStarted"), t("app.reviewStartedDetail"));
     } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : "Could not run Reviewer Specialist";
+      const detail = reason instanceof Error ? reason.message : t("error.runReviewer");
       if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
         setSession((current) => current?.id === targetSessionId ? {
           ...current,
@@ -2840,7 +2848,7 @@ export function App() {
         } : current);
       }
       setError(undefined);
-      pushToast("error", "Review failed", detail);
+      pushToast("error", t("app.reviewFailed"), detail);
     } finally {
       setManualReviewerBusyBySession((current) => {
         const { [targetSessionId]: _completed, ...remaining } = current;
@@ -2858,10 +2866,10 @@ export function App() {
     try {
       await client.cancelReviewerSpecialist(targetSessionId);
       setError(undefined);
-      pushToast("info", "Review stopped", "Reviewer Specialist review was stopped.");
+      pushToast("info", t("app.reviewStopped"), t("app.reviewStoppedDetail"));
     } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : "Could not stop Reviewer Specialist";
-      pushToast("error", "Could not stop review", detail);
+      const detail = reason instanceof Error ? reason.message : t("error.stopReviewer");
+      pushToast("error", t("error.stopReview"), detail);
     } finally {
       setStoppingReviewerSessionIds((current) => {
         const next = new Set(current);
@@ -2879,9 +2887,9 @@ export function App() {
       setRemoteJobs(jobs);
       if (updated.outputRecords.some((output) => output.localPath)) setFiles(await client.listFiles(activeSessionId));
       setError(updated.error);
-      if (!updated.error) pushToast(decision === "deny" ? "info" : "success", decision === "deny" ? "Remote job declined" : "Remote job approved");
+      if (!updated.error) pushToast(decision === "deny" ? "info" : "success", decision === "deny" ? t("app.remoteJobDeclined") : t("app.remoteJobApproved"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not decide remote job");
+      setError(reason instanceof Error ? reason.message : t("error.decideRemoteJob"));
     }
   }
 
@@ -2893,7 +2901,7 @@ export function App() {
       if (updated.outputRecords.some((output) => output.localPath)) setFiles(await client.listFiles(activeSessionId));
       setError(updated.error);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not refresh remote job");
+      setError(reason instanceof Error ? reason.message : t("error.refreshRemoteJob"));
     }
   }
 
@@ -2913,15 +2921,15 @@ export function App() {
         setProjectSettings(await client.getProjectSettings(activeProjectId));
         await refreshVisibleSessions();
       }
-      pushToast("success", "Global defaults saved");
-    }, "Could not save global settings");
+      pushToast("success", t("app.globalDefaultsSaved"));
+    }, t("error.saveGlobalSettings"));
   }
 
   async function saveTimeoutSettings(settings: SystemTimeoutSettings): Promise<void> {
     await settingsErrorRouter.run("saveTimeoutSettings", async () => {
       setTimeoutSettings(await client.replaceTimeoutSettings(settings));
-      pushToast("success", "Timeout settings saved");
-    }, "Could not save timeout settings");
+      pushToast("success", t("app.timeoutSettingsSaved"));
+    }, t("error.saveTimeoutSettings"));
   }
 
   async function saveQuotaSettings(settings: SystemQuotaSettings): Promise<void> {
@@ -2933,8 +2941,8 @@ export function App() {
         maxRequestBytes: saved.uploadMaxRequestBytes,
         maxWorkspaceBytes: saved.runnerMaxWorkspaceBytes,
       });
-      pushToast("success", "Quota settings saved");
-    }, "Could not save quota settings");
+      pushToast("success", t("app.quotaSettingsSaved"));
+    }, t("error.saveQuotaSettings"));
   }
 
   async function saveSandboxNetworkSettings(settings: SandboxNetworkSettings): Promise<void> {
@@ -2943,12 +2951,12 @@ export function App() {
       setSandboxNetworkSettings(saved);
       pushToast(
         "success",
-        "Sandbox network access saved",
+        t("app.sandboxNetworkSaved"),
         saved.mode === "domain-allowlist"
-          ? `${saved.allowedDomains.length} allowed domains. Open Sessions lost their persistent kernels and shell.`
-          : "Sandbox code has no network access. Open Sessions lost their persistent kernels and shell.",
+          ? t("app.sandboxNetworkAllowlistDetail", { count: saved.allowedDomains.length })
+          : t("app.sandboxNetworkNoneDetail"),
       );
-    }, "Could not save sandbox network access settings");
+    }, t("error.saveSandboxNetwork"));
   }
 
   async function openScopedSettings(target: ResourceTarget): Promise<void> {
@@ -2958,7 +2966,7 @@ export function App() {
       setScopedSettings(target.kind === "project"
         ? await client.getProjectSettings(target.id)
         : await client.getSessionSettings(target.id));
-    }, "Could not load settings");
+    }, t("error.loadScopedSettings"));
   }
 
   async function saveScopedSettings(overrides: RuntimeSettingsOverrides): Promise<void> {
@@ -2973,8 +2981,8 @@ export function App() {
         if (settingsTarget.id === activeProjectId) setProjectSettings(updated);
       }
       await refreshVisibleSessions();
-      pushToast("success", settingsTarget.kind === "project" ? "Project overrides saved" : "Session overrides saved");
-    }, "Could not save scoped settings");
+      pushToast("success", settingsTarget.kind === "project" ? t("app.projectOverridesSaved") : t("app.sessionOverridesSaved"));
+    }, t("error.saveScopedSettings"));
   }
 
   function closeScopedSettings(): void {
@@ -3000,9 +3008,9 @@ export function App() {
         syncSessionSummary(updated);
       }
       setError(undefined);
-      pushToast("success", action === "archive" ? "Session archived" : "Session restored");
+      pushToast("success", action === "archive" ? t("app.sessionArchivedToast") : t("app.sessionRestoredToast"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Could not ${action} Session`);
+      setError(reason instanceof Error ? reason.message : action === "archive" ? t("error.archiveSession") : t("error.restoreSession"));
     } finally {
       setLifecycleBusy(false);
     }
@@ -3018,7 +3026,7 @@ export function App() {
         : await client.getSessionDeletionImpact(target.id));
     } catch (reason) {
       setDeletionTarget(undefined);
-      setError(reason instanceof Error ? reason.message : "Could not preview deletion");
+      setError(reason instanceof Error ? reason.message : t("error.previewDeletion"));
     }
   }
 
@@ -3049,9 +3057,9 @@ export function App() {
       setDeletionImpact(undefined);
       setDeletionConfirmation("");
       setError(undefined);
-      pushToast("success", deletionTarget.kind === "project" ? "Project deleted" : "Session deleted", deletionTarget.label);
+      pushToast("success", deletionTarget.kind === "project" ? t("app.projectDeleted") : t("app.sessionDeleted"), deletionTarget.label);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not delete resource");
+      setError(reason instanceof Error ? reason.message : t("error.deleteResource"));
     } finally {
       setLifecycleBusy(false);
     }
@@ -3077,7 +3085,7 @@ export function App() {
       ? filesToUpload.filter((file) => file.size <= maxFileBytes)
       : filesToUpload;
     for (const file of oversized) {
-      pushToast("error", "Upload skipped", `${file.name} exceeds the ${formatByteLimit(maxFileBytes)} limit`);
+      pushToast("error", t("app.uploadSkipped"), t("app.uploadSkippedDetail", { limit: formatByteLimit(maxFileBytes), name: file.name }));
     }
     if (!accepted.length) return;
     const result = await client.uploadWorkspaceFiles(activeSessionId, accepted);
@@ -3085,23 +3093,23 @@ export function App() {
     if (activeProjectId) setArtifacts(await client.listProjectArtifacts(activeProjectId));
     for (const item of result.uploaded) {
       if (item.status === "failed") {
-        pushToast("error", "Upload failed", `${item.originalName}: ${item.error ?? "unknown error"}`);
+        pushToast("error", t("app.uploadFailed"), `${item.originalName}: ${item.error ?? t("app.unknownError")}`);
       } else {
-        pushToast("success", "File uploaded", item.path ?? item.originalName);
+        pushToast("success", t("app.fileUploaded"), item.path ?? item.originalName);
       }
     }
   }
 
   async function uploadPaper(file: File): Promise<void> {
     if (!activeSessionId || session?.archivedAt) return;
-    if (file.size > 50 * 1024 * 1024) throw new Error("PDF uploads are limited to 50 MiB");
+    if (file.size > 50 * 1024 * 1024) throw new Error(translateActive("error.pdfTooLarge"));
     setPaperBusy(true);
     try {
       const paper = await client.uploadPaper(activeSessionId, file);
       setPapers((current) => [...current, paper]);
       setFiles(await client.listFiles(activeSessionId));
       setError(undefined);
-      pushToast("success", "PDF uploaded", file.name);
+      pushToast("success", t("app.pdfUploaded"), file.name);
     } finally {
       setPaperBusy(false);
     }
@@ -3122,12 +3130,12 @@ export function App() {
   async function analyzePaperVision(paper: PaperAcquisition): Promise<void> {
     if (session?.archivedAt) return;
     if (!activeSessionId || !visionModelId) {
-      setError("Configure and select a vision-capable model first");
+      setError(t("error.visionModelRequired"));
       return;
     }
     const model = models.find((item) => item.id === visionModelId);
     if (!model?.hasApiToken) {
-      setError(`Save an API token for ${model?.name ?? "the vision model"} in Model settings`);
+      setError(t("error.modelTokenRequired", { model: model?.name ?? t("app.theVisionModel") }));
       return;
     }
     setPaperBusy(true);
@@ -3138,9 +3146,9 @@ export function App() {
       });
       setPaperVisionRuns((current) => [...current, run]);
       setFiles(await client.listFiles(activeSessionId));
-      pushToast("success", "Vision analysis finished");
+      pushToast("success", t("app.visionAnalysisFinished"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Vision analysis failed");
+      setError(reason instanceof Error ? reason.message : t("error.visionAnalysisFailed"));
     } finally {
       setPaperBusy(false);
     }
@@ -3330,7 +3338,7 @@ export function App() {
       if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) await refreshSession(sessionId);
     }).catch((reason) => {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : "Could not resume run events");
+        setError(reason instanceof Error ? reason.message : t("error.resumeRunEvents"));
       }
     }).finally(() => {
       if (runAbortControllers.current.get(sessionId) === controller) {
@@ -3348,24 +3356,30 @@ export function App() {
         const usage = await client.getWebUsage();
         pushToast(
           "success",
-          "Web usage",
-          `${usage.searches} searches · ${usage.fetches} fetches · ${usage.cacheHits} cache hits · ${usage.fallbacks} fallbacks · ${usage.failures} failures`,
+          t("app.webUsage"),
+          t("app.webUsageDetail", {
+            cacheHits: usage.cacheHits,
+            failures: usage.failures,
+            fallbacks: usage.fallbacks,
+            fetches: usage.fetches,
+            searches: usage.searches,
+          }),
         );
         setMessage("");
         setError(undefined);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Could not load web usage");
+        setError(reason instanceof Error ? reason.message : t("error.loadWebUsage"));
       }
       return;
     }
     const submittedSessionId = activeSessionId;
     const selectedModel = models.find((item) => item.id === session.modelId);
     if (!selectedModel) {
-      setError("Assign an available model to this task before running it");
+      setError(t("error.noTaskModelAssigned"));
       return;
     }
     if (!selectedModel.hasApiToken) {
-      setError(`Save an API token for ${selectedModel.name} in Model settings`);
+      setError(t("error.modelTokenRequired", { model: selectedModel.name }));
       return;
     }
     const content = message.trim();
@@ -3435,7 +3449,7 @@ export function App() {
       if (shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) await refreshSession(submittedSessionId);
     } catch (reason) {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : "Run failed");
+        setError(reason instanceof Error ? reason.message : t("error.runFailed"));
         if (autoNameFirstMessage) {
           void refreshSession(submittedSessionId).catch(() => undefined);
         }
@@ -3474,7 +3488,7 @@ export function App() {
       }
     } catch (reason) {
       if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : "Could not cancel queued run");
+        setError(reason instanceof Error ? reason.message : t("error.cancelQueuedRun"));
       }
     } finally {
       setCancellingQueuedRunIds((current) => {
@@ -3489,12 +3503,12 @@ export function App() {
   async function summarizeRunAsSkill(run: SessionRun): Promise<void> {
     if (!session || !canSummarizeRunAsSkill(run) || skillEvolutionSourceRunIds.has(run.id)) return;
     if (!session.modelId || !models.find((item) => item.id === session.modelId)?.hasApiToken) {
-      setError("Assign an available model with an API token before summarizing this run as a Skill");
+      setError(t("error.skillEvolutionModelRequired"));
       return;
     }
     const writableLibraries = skillLibraries.filter((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
     if (!writableLibraries.length) {
-      setError("Create a writable Skill Library before summarizing this run as a Skill");
+      setError(t("error.skillLibraryRequired"));
       return;
     }
     setSkillEvolutionSourceRunIds((current) => new Set(current).add(run.id));
@@ -3505,10 +3519,10 @@ export function App() {
       syncSessionRunActivity(session.id, nextRuns);
       setIsFollowingOutput(true);
       setError(undefined);
-      pushToast("info", "Skill proposal queued", `Run ${run.id.slice(0, 8)} will be summarized into a writable Skill Library.`);
+      pushToast("info", t("app.skillProposalQueued"), t("app.skillProposalQueuedDetail", { id: run.id.slice(0, 8) }));
       await refreshSession(session.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not queue Skill self-evolution";
+      const message = reason instanceof Error ? reason.message : t("error.queueSkillEvolution");
       setError(message);
     } finally {
       setSkillEvolutionSourceRunIds((current) => {
@@ -3539,7 +3553,7 @@ export function App() {
     try {
       await openWorkspacePath(file.path);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not open file");
+      setError(reason instanceof Error ? reason.message : t("error.openFile"));
     }
   }
 
@@ -3553,7 +3567,7 @@ export function App() {
         ? { ...current, provenance }
         : current);
     } catch (reason) {
-      const error = reason instanceof Error ? reason.message : "Could not load file provenance";
+      const error = reason instanceof Error ? reason.message : t("error.loadFileProvenance");
       setWorkspaceFileProvenanceTarget((current) => current?.sessionId === sessionId && current.file.path === file.path
         ? { ...current, error }
         : current);
@@ -3562,7 +3576,7 @@ export function App() {
 
   function openArtifact(artifact: ScientificArtifact): void {
     if (!activeSessionId) {
-      pushToast("info", "Artifact retained", "Create or select a Session to open this Project artifact.");
+      pushToast("info", t("app.artifactRetained"), t("app.artifactRetainedDetail"));
       return;
     }
     setArtifactModalVersion(undefined);
@@ -3644,7 +3658,7 @@ export function App() {
         const name = normalizeArtifactArchivePath(artifact.name);
         const versions = await client.listProjectArtifactVersions(activeProjectId, artifact.id);
         const version = versions.find((item) => item.version === artifact.currentVersion) ?? versions.at(-1);
-        if (!version) throw new Error("Artifact has no version");
+        if (!version) throw new Error(translateActive("error.artifactNoVersion"));
         return { artifact, name, version };
       }));
       const metadata = metadataResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
@@ -3712,7 +3726,7 @@ export function App() {
     if (workspaceView !== "usage") return;
     let active = true;
     void refreshUsageData().catch((reason: Error) => {
-      if (active) setError(reason instanceof Error ? reason.message : "Could not load model usage");
+      if (active) setError(reason instanceof Error ? reason.message : t("error.loadModelUsage"));
     });
     return () => { active = false; };
   }, [refreshUsageData, setError, workspaceView]);
@@ -3739,7 +3753,7 @@ export function App() {
       setActiveSessionId(sessionId);
       await refreshSession(sessionId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not open Session from usage");
+      setError(reason instanceof Error ? reason.message : t("error.openSessionFromUsage"));
     }
   }
 
@@ -3761,7 +3775,7 @@ export function App() {
         setArtifactModalName(result.path);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not open search result");
+      setError(reason instanceof Error ? reason.message : t("error.openSearchResult"));
     }
   }
 
@@ -3975,10 +3989,10 @@ export function App() {
   const visibleProjects = getVisibleProjects(projects, activeProjectId, projectsExpanded);
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
-    : "Workspace";
+    : t("app.workspace");
   const activeSessionLabel = session
     ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, session.title)
-    : "Start a research session";
+    : t("app.startResearchSession");
   const mainProjectRenameTarget = activeProject
     && renameTarget?.kind === "project"
     && renameTarget.id === activeProject.id
@@ -4062,7 +4076,7 @@ export function App() {
       });
       await refreshGovernedDownloads(session.id);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : "Could not prepare artifact download");
+      reportError(error instanceof Error ? error.message : t("error.prepareDownload"));
     }
   }
 
@@ -4073,7 +4087,7 @@ export function App() {
       else await client.retryMcpArtifactJob(session.id, job.id);
       await refreshGovernedDownloads(session.id);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : `Could not ${action} artifact job`);
+      reportError(error instanceof Error ? error.message : action === "cancel" ? t("error.cancelArtifactJob") : t("error.retryArtifactJob"));
     }
   }
 
@@ -4081,15 +4095,15 @@ export function App() {
     if (!session || !canSummarizeRunAsSkill(sourceRun)) return null;
     const missingLibrary = !skillLibraries.some((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
     const busy = skillEvolutionSourceRunIds.has(sourceRun.id);
-    return <section aria-label="Skill self-evolution" className="skill-evolution-card">
-      <header><span><SparkleIcon size={16} /></span><div><strong>Summarize as Skill</strong><small>default {SELF_EVOLUTION_LIBRARY_ID}</small></div></header>
+    return <section aria-label={t("app.skillEvolutionAria")} className="skill-evolution-card">
+      <header><span><SparkleIcon size={16} /></span><div><strong>{t("app.summarizeAsSkill")}</strong><small>{t("app.skillLibraryDefault", { id: SELF_EVOLUTION_LIBRARY_ID })}</small></div></header>
       <button
         className="secondary-button"
         disabled={busy || sessionArchived || !session.modelId || missingLibrary}
         onClick={() => void summarizeRunAsSkill(sourceRun)}
-        title={missingLibrary ? "Create a writable Skill Library first" : "Queue a self-evolution run for this completed run"}
+        title={missingLibrary ? t("app.skillEvolutionNeedLibrary") : t("app.skillEvolutionQueueTooltip")}
         type="button"
-      >{busy ? "Queuing..." : "Create proposal"}</button>
+      >{busy ? t("app.skillEvolutionQueuing") : t("app.createProposal")}</button>
     </section>;
   }
 
@@ -4150,7 +4164,7 @@ export function App() {
                   {inlineTarget ? <div className={project.id === activeProjectId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                     <span className="nav-icon"><ProjectIcon size={16} /></span>
                     <InlineRenameInput
-                      ariaLabel={`Rename Project ${project.name}`}
+                      ariaLabel={t("app.renameProjectAria", { name: project.name })}
                       className="nav-inline-rename"
                       disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                       onChange={setRenameDraft}
@@ -4167,7 +4181,7 @@ export function App() {
                       setSessionFilterOpen(false);
                     }}
                     onDoubleClick={() => beginInlineRename(target, "sidebar")}
-                    title={`${project.name} · Double-click to rename Project`}
+                    title={t("app.renameProjectHint", { name: project.name })}
                     type="button"
                   >
                     <span className="nav-icon"><ProjectIcon size={16} /></span><span title={project.name}>{label}</span>
@@ -4239,7 +4253,7 @@ export function App() {
                     {inlineTarget && !item.archivedAt ? <div className={item.id === activeSessionId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                       <span className="nav-icon"><SessionIcon size={15} /></span>
                       <InlineRenameInput
-                        ariaLabel={`Rename Session ${item.title}`}
+                        ariaLabel={t("app.renameSessionAria", { name: item.title })}
                         className="nav-inline-rename"
                         disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                         onChange={setRenameDraft}
@@ -4250,10 +4264,10 @@ export function App() {
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
                       onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
-                      title={`${item.title}${item.archivedAt ? " · Archived" : " · Double-click to rename Session"}`}
+                      title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: item.title })}
                       type="button"
                     >
-                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={`${item.title}${item.archivedAt ? " · Archived" : ""}`}>{label}{item.archivedAt ? " · Archived" : ""}</span>
+                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : item.title}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
                     </button>}
                     <SessionOverflowMenu
                       archived={Boolean(item.archivedAt)}
@@ -4280,7 +4294,7 @@ export function App() {
           </> : null}
         </div>
 
-        <div className="sidebar-quick-actions" aria-label="Workbench navigation">
+        <div className="sidebar-quick-actions" aria-label={t("app.workbenchNavigation")}>
           <button type="button" onClick={() => void openGlobalSearch()}><span><SearchIcon size={16} /></span><span>{t("app.search")}</span><kbd>Ctrl K</kbd></button>
           <button type="button" className={workspaceView === "usage" ? "active" : undefined} onClick={() => void openUsageView()}><span><SparkleIcon size={16} /></span><span>{t("app.usage")}</span></button>
           <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
@@ -4322,14 +4336,14 @@ export function App() {
           />
         ) : (
           <>
-        {sessionArchived ? <div className="archived-banner"><strong>Archived Session</strong><span>Historical messages, files, and audit records remain available. Restore this Session to make changes or start a run.</span></div> : null}
+        {sessionArchived ? <div className="archived-banner"><strong>{t("app.archivedBannerTitle")}</strong><span>{t("app.archivedBannerBody")}</span></div> : null}
 
         <div className={workspaceCollapsed ? "content-grid workspace-collapsed" : "content-grid"} style={workspaceCollapsed ? undefined : { gridTemplateColumns: `minmax(0, 1fr) ${workspaceWidth}px` }}>
           <section className="conversation">
             {activeProject || session ? <div className="session-bar">
               <div className="session-bar-title">
                 {mainProjectRenameTarget ? <InlineRenameInput
-                  ariaLabel={`Rename Project ${mainProjectRenameTarget.label}`}
+                  ariaLabel={t("app.renameProjectAria", { name: mainProjectRenameTarget.label })}
                   className="session-bar-project-rename"
                   disabled={renameSavingKeys.has(resourceTargetKey(mainProjectRenameTarget))}
                   onChange={setRenameDraft}
@@ -4338,12 +4352,12 @@ export function App() {
                 /> : activeProject ? <button
                   className="session-bar-project"
                   onDoubleClick={() => beginInlineRename({ id: activeProject.id, kind: "project", label: activeProject.name }, "main")}
-                  title={`${activeProjectLabel} · Double-click to rename Project`}
+                  title={t("app.renameProjectHint", { name: activeProjectLabel })}
                   type="button"
                 >{activeProjectLabel}</button> : <span className="session-bar-project">{activeProjectLabel}</span>}
                 {session ? <span aria-hidden="true" className="session-bar-sep">›</span> : null}
                 {mainSessionRenameTarget ? <InlineRenameInput
-                  ariaLabel={`Rename Session ${mainSessionRenameTarget.label}`}
+                  ariaLabel={t("app.renameSessionAria", { name: mainSessionRenameTarget.label })}
                   className="session-bar-session-rename"
                   disabled={renameSavingKeys.has(resourceTargetKey(mainSessionRenameTarget))}
                   onChange={setRenameDraft}
@@ -4357,7 +4371,7 @@ export function App() {
                       onClick={() => {
                         beginInlineRename({ id: session.id, kind: "session", label: session.title }, "main");
                       }}
-                      title={`${activeSessionLabel} · Rename session`}
+                      title={t("app.renameSessionTitle", { name: activeSessionLabel })}
                       type="button"
                     ><span>{activeSessionLabel}</span><EditIcon size={13} /></button>
                   ) : <span>{activeSessionLabel}</span>}</h1>
@@ -4365,9 +4379,9 @@ export function App() {
               </div>
               <div className="session-bar-meta">
                 {session ? <span className="session-runner-target" title={allowedRemoteHosts.length
-                  ? `Local runner stays available; this Session may also use: ${allowedRemoteHosts.map((host) => host.alias).join(", ")}`
-                  : "This Session runs on the local runner"}>
-                  {allowedRemoteHosts.length ? "Remote available" : "Local runner"}
+                  ? t("app.runnerRemoteTooltip", { hosts: allowedRemoteHosts.map((host) => host.alias).join(", ") })
+                  : t("app.runnerLocalTooltip")}>
+                  {allowedRemoteHosts.length ? t("app.runnerRemoteChip") : t("app.runnerLocalChip")}
                 </span> : null}
                 {session ? (
                   <SessionUsageChip
@@ -4375,7 +4389,7 @@ export function App() {
                     sessionTokens={sessionUsage?.totals.totalTokens}
                   />
                 ) : null}
-                <span className={error ? "connection bad" : "connection"} title={error ? `Needs attention: ${error}` : "Local API connected"}><i />{error ? "Needs attention" : null}</span>
+                <span className={error ? "connection bad" : "connection"} title={error ? t("app.connectionErrorTooltip", { error }) : t("app.connectionOkTooltip")}><i />{error ? t("app.connectionErrorChip") : null}</span>
               </div>
             </div> : null}
             {sessionPending ? (
@@ -4400,7 +4414,7 @@ export function App() {
                       <span className="eyebrow">{t("empty.sessionReady")}</span>
                       <h2>{t("empty.investigate")}</h2>
                       <p>{session.enabledConnectorIds.includes("pubmed") && session.enabledConnectorIds.includes("uniprot")
-                        ? "Try “Research human TP53 and create a cited evidence brief.”"
+                        ? t("app.sessionIntroPrompt")
                         : t("empty.sessionCsvHelp")}</p>
                     </div>
                   ) : null}
@@ -4417,8 +4431,8 @@ export function App() {
                         />
                       ) : (
                         <article className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
-                          <div className="avatar">{block.message.role === "user" ? "You" : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
-                          <div><span className="message-role">{block.message.role === "user" ? "Researcher" : block.message.kind === "review_notice" ? "Reviewer notice" : "ScienceDiscovery"}{block.message.modelName ? ` · ${block.message.modelName}` : ""}</span><MarkdownRenderer
+                          <div className="avatar">{block.message.role === "user" ? t("app.roleYou") : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
+                          <div><span className="message-role">{block.message.role === "user" ? t("app.roleResearcher") : block.message.kind === "review_notice" ? t("app.roleReviewerNotice") : "ScienceDiscovery"}{block.message.modelName ? ` · ${block.message.modelName}` : ""}</span><MarkdownRenderer
                             className="message-content"
                             content={block.message.content}
                             loadWorkspaceImage={block.message.role === "assistant" ? loadMarkdownImage : undefined}
@@ -4428,7 +4442,7 @@ export function App() {
                             workspaceSessionId={block.message.role === "assistant" ? session.id : undefined}
                           /></div>
                           <RunUsageInline run={messageUsageByMessageId.get(block.message.id)} />
-                          {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label="Copy message as Markdown" /> : null}
+                          {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label={t("app.copyMessage")} /> : null}
                         </article>
                       )}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
@@ -4510,14 +4524,14 @@ export function App() {
                     workspaceSessionId={session.id}
                   />
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
-                  {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>Latest activity <ChevronDownIcon size={15} /></button></div> : null}
+                  {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
                   {showEvolveAlgorithmPicker ? <EvolveAlgorithmPicker onSelect={selectEvolveAlgorithm} onDismiss={() => setEvolvePickerDismissed(true)} /> : null}
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
-                  {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={`Remove annotation: ${annotation.artifactLogicalName}: ${annotation.note}`} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
+                  {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={t("app.removeAnnotation", { name: annotation.artifactLogicalName, note: annotation.note })} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
                   <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => {
                     const value = event.target.value;
                     setMessage(value);
@@ -4574,7 +4588,7 @@ export function App() {
 
           {workspaceCollapsed ? null : <aside className="workspace-panel" ref={workspacePanel}>
             <div
-              aria-label="Resize workspace panel"
+              aria-label={t("app.resizeWorkspace")}
               aria-orientation="vertical"
               aria-valuemax={workspaceMaxWidth}
               aria-valuemin={MIN_WORKSPACE_WIDTH}
@@ -4624,7 +4638,7 @@ export function App() {
             {workspacePlans.length ? <details className="workspace-fold workspace-plan-section" open>
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
-                <strong>Tasks</strong>
+                <strong>{t("app.tasks")}</strong>
                 <span className="fold-meta">{workspacePlans.reduce((count, plan) => count + plan.items.filter((item) => item.status === "completed").length, 0)}/{workspacePlans.reduce((count, plan) => count + plan.items.length, 0)}</span>
               </summary>
               <div className="workspace-fold-body">
@@ -4645,7 +4659,7 @@ export function App() {
                 }} />
                 <span className="upload-icon"><UploadIcon size={19} /></span>
                 <strong>{t("app.dropFiles")}</strong>
-                <small>single or multiple · text and binary · {formatByteLimit(workspaceCapabilities?.maxFileBytes ?? 1_073_741_824)} max each</small>
+                <small>{t("app.dropHint", { size: formatByteLimit(workspaceCapabilities?.maxFileBytes ?? 1_073_741_824) })}</small>
               </label>
             ) : <p className="muted">{sessionArchived ? t("app.archivedWorkspace") : t("app.createSessionWorkspace")}</p>}
 
@@ -4766,8 +4780,8 @@ export function App() {
             /> : null}
 
             {session ? (
-              <details className="workspace-fold" aria-label="Paper search and extraction">
-                <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>Paper reader</strong><span className="fold-meta">{papers.length} parsed</span></summary>
+              <details className="workspace-fold" aria-label={t("app.paperSectionAria")}>
+                <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.paperReader")}</strong><span className="fold-meta">{t("app.paperParsedCount", { count: papers.length })}</span></summary>
                 <div className="workspace-fold-body">
                   <label className="pdf-upload">
                     <input type="file" accept="application/pdf,.pdf" disabled={paperBusy || sessionArchived} onChange={(event) => {
@@ -4775,11 +4789,11 @@ export function App() {
                       if (file) void uploadPaper(file).catch((reason: Error) => setError(reason.message));
                       event.target.value = "";
                     }} />
-                    <span><UploadIcon size={14} /> Upload full PDF</span><small>50 MiB · 200 pages max</small>
+                    <span><UploadIcon size={14} /> {t("app.uploadFullPdf")}</span><small>{t("app.pdfLimits")}</small>
                   </label>
                   {visionModels.length ? (
-                    <label className="vision-picker"><span>Optional vision model</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels, t)}</option>)}</select></label>
-                  ) : <p className="paper-note">Mark a model as vision capable in Model settings to analyze scanned pages or extracted figures. OCR is not run.</p>}
+                    <label className="vision-picker"><span>{t("app.visionModelLabel")}</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels, t)}</option>)}</select></label>
+                  ) : <p className="paper-note">{t("app.visionModelHelp")}</p>}
                   <div className="paper-library">
                     {papers.map((paper) => {
                       const analysisBase = paper.manifestPath.replace(/manifest\.json$/, "");
@@ -4788,44 +4802,44 @@ export function App() {
                       const visionRun = paperVisionRuns.filter((run) => run.paperId === paper.id).at(-1);
                       return (
                         <article key={paper.id}>
-                          <div><strong>{paper.title}</strong><small>{paper.extraction.pageCount} pages · {paper.extraction.tables.length} tables · {paper.extraction.images.length} figures</small></div>
+                          <div><strong>{paper.title}</strong><small>{t("app.paperStats", { figures: paper.extraction.images.length, pages: paper.extraction.pageCount, tables: paper.extraction.tables.length })}</small></div>
                           <div className="paper-actions">
                             <button type="button" onClick={() => void openWorkspacePath(paper.pdfPath).catch((reason: Error) => setError(reason.message))}>PDF</button>
-                            <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${paper.extraction.textPath}`).catch((reason: Error) => setError(reason.message))}>Full text</button>
-                            {table ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${table.csvPath}`).catch((reason: Error) => setError(reason.message))}>Table</button> : null}
-                            {image ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${image.path}`).catch((reason: Error) => setError(reason.message))}>Figure</button> : null}
-                            {visionModels.length ? <button type="button" disabled={paperBusy || sessionArchived} onClick={() => void analyzePaperVision(paper)}>Vision</button> : null}
-                            {visionRun ? <button type="button" onClick={() => void openWorkspacePath(visionRun.resultPath).catch((reason: Error) => setError(reason.message))}>Vision result</button> : null}
+                            <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${paper.extraction.textPath}`).catch((reason: Error) => setError(reason.message))}>{t("app.paperFullText")}</button>
+                            {table ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${table.csvPath}`).catch((reason: Error) => setError(reason.message))}>{t("app.paperTable")}</button> : null}
+                            {image ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${image.path}`).catch((reason: Error) => setError(reason.message))}>{t("app.paperFigure")}</button> : null}
+                            {visionModels.length ? <button type="button" disabled={paperBusy || sessionArchived} onClick={() => void analyzePaperVision(paper)}>{t("app.paperVision")}</button> : null}
+                            {visionRun ? <button type="button" onClick={() => void openWorkspacePath(visionRun.resultPath).catch((reason: Error) => setError(reason.message))}>{t("app.paperVisionResult")}</button> : null}
                           </div>
                           {paper.extraction.warnings.map((warning) => <p key={warning}>{warning}</p>)}
                         </article>
                       );
                     })}
-                    {!papers.length ? <p className="paper-note">Use the chat agent's MCP tools for governed literature downloads, or upload a local PDF here for extraction.</p> : null}
+                    {!papers.length ? <p className="paper-note">{t("app.paperEmptyNote")}</p> : null}
                   </div>
                 </div>
               </details>
             ) : null}
 
             {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} sessionId={activeSessionId} /> : null}
-            <details className="workspace-fold" aria-label="Provenance record">
-              <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>Provenance record</strong></summary>
+            <details className="workspace-fold" aria-label={t("app.provenanceAria")}>
+              <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.provenanceAria")}</strong></summary>
               <div className="workspace-fold-body">
                 <div className="trust-metrics">
-                  <div><strong>{executionRuns.length}</strong><span>Execution runs</span></div>
-                  <div><strong>{latestExecution?.language ?? "—"}</strong><span>Language</span></div>
-                  <div><strong>Fresh process</strong><span>Shell execution</span></div>
-                  <div><strong>{latestEnvironment?.name ?? "—"}</strong><span>Environment</span></div>
-                  <div><strong>{latestExecution?.environmentRevisionId?.slice(0, 12) ?? "—"}</strong><span>Environment revision</span></div>
-                  <div><strong>{derivations.length}</strong><span>Derivations</span></div>
-                  <div><strong>{promptManifests.length}</strong><span>Prompt manifests</span></div>
-                  <div><strong>{mcpInvocations.length}</strong><span>MCP invocations</span></div>
-                  <div><strong>{claims.length}</strong><span>Claims</span></div>
-                  <div><strong>{evidenceLinks.length}</strong><span>Evidence links</span></div>
+                  <div><strong>{executionRuns.length}</strong><span>{t("app.trustExecutionRuns")}</span></div>
+                  <div><strong>{latestExecution?.language ?? "—"}</strong><span>{t("app.trustLanguage")}</span></div>
+                  <div><strong>{t("app.trustFreshProcess")}</strong><span>{t("app.trustShellExecution")}</span></div>
+                  <div><strong>{latestEnvironment?.name ?? "—"}</strong><span>{t("app.trustEnvironment")}</span></div>
+                  <div><strong>{latestExecution?.environmentRevisionId?.slice(0, 12) ?? "—"}</strong><span>{t("app.trustEnvironmentRevision")}</span></div>
+                  <div><strong>{derivations.length}</strong><span>{t("app.trustDerivations")}</span></div>
+                  <div><strong>{promptManifests.length}</strong><span>{t("app.trustPromptManifests")}</span></div>
+                  <div><strong>{mcpInvocations.length}</strong><span>{t("app.trustMcpInvocations")}</span></div>
+                  <div><strong>{claims.length}</strong><span>{t("app.trustClaims")}</span></div>
+                  <div><strong>{evidenceLinks.length}</strong><span>{t("app.trustEvidenceLinks")}</span></div>
                 </div>
               </div>
             </details>
-            <div className="boundary-note"><span><ShieldCheckIcon size={15} /></span><p title="Shell runs Python, R and other tools in a sandbox with a read-only managed environment and an independent Agent × Runner workspace."><strong>Isolated execution</strong> · Epoch {permissionEpoch?.id.slice(0, 8) ?? "loading"}</p></div>
+            <div className="boundary-note"><span><ShieldCheckIcon size={15} /></span><p title={t("app.isolatedExecutionTitle")}><strong>{t("app.isolatedExecution")}</strong> · {t("app.epoch", { id: permissionEpoch?.id.slice(0, 8) ?? t("app.epochLoading") })}</p></div>
           </aside>}
           {workspaceCollapsed ? (
             <button aria-label={t("app.showWorkspace")} className="workspace-expander" onClick={() => setWorkspaceCollapsed(false)} title={t("app.showWorkspace")} type="button">
@@ -4841,10 +4855,10 @@ export function App() {
 
       {markdownDocument ? (
         <div className="document-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMarkdownDocument(undefined); }}>
-          <section aria-label={`Rendered Markdown: ${markdownDocument.path}`} aria-modal="true" className="document-panel" role="dialog">
+          <section aria-label={t("app.renderedMarkdownAria", { path: markdownDocument.path })} aria-modal="true" className="document-panel" role="dialog">
             <header className="document-header">
-              <div><span className="eyebrow">Rendered Markdown</span><h2>{markdownDocument.path.split("/").at(-1)}</h2><small title={markdownDocument.path}>{markdownDocument.path}</small></div>
-              <button aria-label="Close Markdown reader" className="icon-button" onClick={() => setMarkdownDocument(undefined)} title="Close Markdown reader"><CloseIcon size={20} /></button>
+              <div><span className="eyebrow">{t("app.renderedMarkdown")}</span><h2>{markdownDocument.path.split("/").at(-1)}</h2><small title={markdownDocument.path}>{markdownDocument.path}</small></div>
+              <button aria-label={t("app.closeMarkdownReader")} className="icon-button" onClick={() => setMarkdownDocument(undefined)} title={t("app.closeMarkdownReader")}><CloseIcon size={20} /></button>
             </header>
             <MarkdownRenderer className="document-markdown" content={markdownDocument.content} />
           </section>
@@ -5103,8 +5117,8 @@ export function App() {
 
       {settingsTarget ? (
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeScopedSettings(); }}>
-          <section aria-label={`${settingsTarget.kind} settings`} aria-modal="true" className="config-panel" role="dialog">
-            <div className="config-header"><div><span className="eyebrow">{settingsTarget.kind} overrides</span><h2>{settingsTarget.label}</h2></div><button className="icon-button" onClick={closeScopedSettings} aria-label="Close scoped settings" title="Close scoped settings"><CloseIcon size={20} /></button></div>
+          <section aria-label={t("app.scopedSettingsAria", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })} aria-modal="true" className="config-panel" role="dialog">
+            <div className="config-header"><div><span className="eyebrow">{t("app.scopedOverrides", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })}</span><h2>{settingsTarget.label}</h2></div><button className="icon-button" onClick={closeScopedSettings} aria-label={t("app.closeScopedSettings")} title={t("app.closeScopedSettings")}><CloseIcon size={20} /></button></div>
             {scopedSettingsErrors.map((detail) => <InlineErrorAlert
               detail={detail}
               key={detail}
@@ -5133,11 +5147,11 @@ export function App() {
               key={resourceTargetKey(settingsTarget)}
               models={models}
               onSave={saveScopedSettings}
-              scopeLabel={settingsTarget.kind === "project" ? "Project" : "Session"}
+              scopeLabel={t(settingsTarget.kind === "project" ? "settings.project" : "settings.session")}
               skillLibraries={skillLibraries}
               skillScope={settingsTarget.kind === "project" ? "project" : "session"}
               skills={skills}
-            /> : <p className="muted">Loading effective settings and sources…</p>}
+            /> : <p className="muted">{t("app.loadingScopedSettings")}</p>}
           </section>
         </div>
       ) : null}

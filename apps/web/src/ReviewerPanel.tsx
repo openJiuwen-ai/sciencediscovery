@@ -15,6 +15,8 @@
 import type { ArtifactReviewRun } from "@sciencediscovery/schema";
 import React, { useEffect, useState } from "react";
 
+import { useLocale, type MessageKey } from "./i18n/index.js";
+
 type ReviewerProgress = {
   artifactLogicalName: string;
   artifactCompleted?: number;
@@ -28,8 +30,9 @@ type ReviewerProgress = {
 };
 
 export function ReviewerSpecialistAvatar() {
+  const specialistName = useLocale().t("specialist.reviewerName");
   return (
-    <span aria-label="Reviewer Specialist" className="reviewer-specialist-avatar" role="img">
+    <span aria-label={specialistName} className="reviewer-specialist-avatar" role="img">
       <svg aria-hidden="true" fill="none" viewBox="0 0 40 40">
         <path d="M20 4 32 9v9c0 8.2-4.8 14.5-12 18-7.2-3.5-12-9.8-12-18V9z" fill="currentColor" opacity=".14" />
         <path d="M20 4 32 9v9c0 8.2-4.8 14.5-12 18-7.2-3.5-12-9.8-12-18V9z" stroke="currentColor" strokeWidth="2" />
@@ -39,53 +42,64 @@ export function ReviewerSpecialistAvatar() {
   );
 }
 
-function resultLabel(review: ArtifactReviewRun): { label: string; tone: string } {
-  if (review.status === "failed") return { label: "Review failed", tone: "failed" };
-  if (review.findings.some((finding) => finding.severity === "critical")) return { label: "Revision required", tone: "critical" };
-  if (review.findings.length) return { label: "Warnings found", tone: "warning" };
+type Translate = ReturnType<typeof useLocale>["t"];
+
+function resultLabel(review: ArtifactReviewRun, t: Translate): { label: string; tone: string } {
+  if (review.status === "failed") return { label: t("reviewer.result.failed"), tone: "failed" };
+  if (review.findings.some((finding) => finding.severity === "critical")) return { label: t("reviewer.result.revisionRequired"), tone: "critical" };
+  if (review.findings.length) return { label: t("reviewer.result.warnings"), tone: "warning" };
   if (review.decision === "ACCEPT_AND_PROCEED") {
-    return { label: review.smartStatus === "inconclusive" ? "Quick checks passed" : `${levelLabel(review)} review passed`, tone: "passed" };
+    return {
+      label: review.smartStatus === "inconclusive"
+        ? t("reviewer.result.quickPassed")
+        : t("reviewer.result.levelPassed", { level: levelLabel(review, t) }),
+      tone: "passed",
+    };
   }
-  if (review.decision === "SKIPPED") return { label: "No applicable checks", tone: "skipped" };
-  return { label: "Revision required", tone: "warning" };
+  if (review.decision === "SKIPPED") return { label: t("reviewer.result.noChecks"), tone: "skipped" };
+  return { label: t("reviewer.result.revisionRequired"), tone: "warning" };
 }
 
-function findingType(code: string): string {
-  const labels: Record<string, string> = {
-    CITATION_CLAIM_NOT_SUPPORTED: "Citation claim unsupported",
-    CITATION_EVIDENCE_ALIAS_UNRESOLVED: "Evidence reference missing",
-    CITATION_IDENTIFIER_MISSING: "Citation identifier missing",
-    CITATION_MARKER_MISSING: "Standard citation missing",
-    CITATION_REFERENCE_MISSING: "Citation reference missing",
-    CITATION_SOURCE_UNAVAILABLE: "Citation source unavailable",
-    ARTIFACT_JSON_INVALID: "Invalid JSON",
-    COMPUTATION_EVIDENCE_INSUFFICIENT: "Evidence content unavailable",
-    COMPUTATION_EVIDENCE_INTERPRETATION_OVERREACH: "Evidence interpretation overreaches",
-    COMPUTATION_EVIDENCE_SCOPE_MISMATCH: "Evidence scope mismatch",
-    COMPUTATION_EVIDENCE_VALUE_MISMATCH: "Evidence value mismatch",
-  };
-  return labels[code] ?? code.toLowerCase().replace(/_/gu, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const FINDING_KEYS: Record<string, MessageKey> = {
+  CITATION_CLAIM_NOT_SUPPORTED: "reviewer.finding.claimUnsupported",
+  CITATION_EVIDENCE_ALIAS_UNRESOLVED: "reviewer.finding.evidenceRefMissing",
+  CITATION_IDENTIFIER_MISSING: "reviewer.finding.identifierMissing",
+  CITATION_MARKER_MISSING: "reviewer.finding.markerMissing",
+  CITATION_REFERENCE_MISSING: "reviewer.finding.referenceMissing",
+  CITATION_SOURCE_UNAVAILABLE: "reviewer.finding.sourceUnavailable",
+  ARTIFACT_JSON_INVALID: "reviewer.finding.invalidJson",
+  COMPUTATION_EVIDENCE_INSUFFICIENT: "reviewer.finding.evidenceUnavailable",
+  COMPUTATION_EVIDENCE_INTERPRETATION_OVERREACH: "reviewer.finding.overreach",
+  COMPUTATION_EVIDENCE_SCOPE_MISMATCH: "reviewer.finding.scopeMismatch",
+  COMPUTATION_EVIDENCE_VALUE_MISMATCH: "reviewer.finding.valueMismatch",
+};
+
+function findingType(code: string, t: Translate): string {
+  const key = FINDING_KEYS[code];
+  // An unmapped code (a newer backend than this build) degrades to its own
+  // humanised form rather than showing a raw SCREAMING_CASE identifier.
+  if (key) return t(key);
+  return code.toLowerCase().replace(/_/gu, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function levelLabel(review: ArtifactReviewRun): string {
-  const level = review.reviewLevel === "smart" ? "deep" : review.reviewLevel ?? "quick";
-  return level[0]!.toUpperCase() + level.slice(1);
+function levelLabel(review: ArtifactReviewRun, t: Translate): string {
+  return configuredLevelLabel(review.reviewLevel, t);
 }
 
-function configuredLevelLabel(level: "quick" | "smart" | "deep" | undefined): string {
-  const normalized = level === "smart" ? "deep" : level ?? "quick";
-  return normalized[0]!.toUpperCase() + normalized.slice(1);
+function configuredLevelLabel(level: "quick" | "smart" | "deep" | undefined, t: Translate): string {
+  return t(level === "smart" || level === "deep" ? "reviewer.levelDeep" : "reviewer.levelQuick");
 }
 
 function CompletedReview({ review }: { review: ArtifactReviewRun }) {
-  const presentation = resultLabel(review);
+  const { t } = useLocale();
+  const presentation = resultLabel(review, t);
   return (
     <details className={`reviewer-specialist-card ${presentation.tone}`}>
       <summary className="reviewer-specialist-card-heading">
         <span aria-hidden="true" className="reviewer-specialist-card-chevron">›</span>
         <span className="reviewer-specialist-card-title">
           <strong>{review.artifactLogicalName}</strong>
-          <small>Version {review.artifactVersionId.slice(0, 8)} · {levelLabel(review)}</small>
+          <small>{t("reviewer.versionLine", { level: levelLabel(review, t), version: review.artifactVersionId.slice(0, 8) })}</small>
         </span>
         <i>{presentation.label}</i>
       </summary>
@@ -94,7 +108,7 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
           <ul className="reviewer-finding-list">
             {review.findings.map((finding) => (
               <li className={finding.severity} key={finding.id}>
-                <b>{findingType(finding.code)}</b>
+                <b>{findingType(finding.code, t)}</b>
                 <span>{finding.message}</span>
               </li>
             ))}
@@ -102,15 +116,15 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
         ) : null}
         {!review.findings.length ? (
           <p>{review.decision === "SKIPPED"
-            ? "This locked Artifact contains no additional applicable checks."
+            ? t("reviewer.summary.skipped")
             : (review.reviewLevel === "deep" || review.reviewLevel === "smart") && review.smartStatus !== "inconclusive"
-              ? "Citation identity, claim support, numeric Evidence, and Quick checks passed."
+              ? t("reviewer.summary.deepPassed")
               : review.checks?.includes("structure")
-                ? "The JSON structure and applicable Artifact provenance checks passed."
-                : "The applicable citation format and Artifact provenance checks passed."}</p>
+                ? t("reviewer.summary.structurePassed")
+                : t("reviewer.summary.citationPassed")}</p>
         ) : null}
         <footer>
-          <span>{review.reusedFromReviewId ? "Unchanged result reused" : `${levelLabel(review)} review`} · Locked Artifact</span>
+          <span>{t("reviewer.footer", { detail: review.reusedFromReviewId ? t("reviewer.reused") : t("reviewer.levelReview", { level: levelLabel(review, t) }) })}</span>
           <code>{review.artifactContentHash.slice(0, 12)}</code>
         </footer>
       </div>
@@ -129,57 +143,59 @@ function CheckpointOnlyReview({
   reviewLevel?: "quick" | "smart" | "deep";
   status: "completed" | "failed" | "running";
 }) {
+  const { t } = useLocale();
   const failed = status === "failed";
   const completed = status === "completed";
   const artifactCount = progress?.artifactTotal;
   const runningTitle = artifactCount
-    ? `Reviewing ${artifactCount} artifact${artifactCount === 1 ? "" : "s"}`
-    : "Reviewing Artifacts";
+    ? t(artifactCount === 1 ? "reviewer.reviewingCountOne" : "reviewer.reviewingCount", { count: artifactCount })
+    : t("reviewer.reviewingArtifacts");
   return (
     <details className={`reviewer-specialist-card ${failed ? "failed" : completed ? "skipped" : "running"}`}>
       <summary className="reviewer-specialist-card-heading">
         <span aria-hidden="true" className="reviewer-specialist-card-chevron">›</span>
         <span className="reviewer-specialist-card-title">
-          <strong>{failed ? "Review incomplete" : completed ? "Review completed" : runningTitle}</strong>
-          <small>{configuredLevelLabel(reviewLevel)} · {failed ? "Failed" : completed ? "Completed" : "Running"}</small>
+          <strong>{failed ? t("reviewer.incomplete") : completed ? t("reviewer.completed") : runningTitle}</strong>
+          <small>{configuredLevelLabel(reviewLevel, t)} · {failed ? t("reviewer.statusFailed") : completed ? t("reviewer.statusCompleted") : t("reviewer.statusRunning")}</small>
         </span>
-        <i>{status === "running" ? <><span className="reviewer-live-dot" />Running</> : failed ? "Review failed" : "No applicable checks"}</i>
+        <i>{status === "running" ? <><span className="reviewer-live-dot" />{t("reviewer.statusRunning")}</> : failed ? t("reviewer.result.failed") : t("reviewer.result.noChecks")}</i>
       </summary>
       <div className="reviewer-specialist-card-body">
         {progress ? <ReviewProgress progress={progress} /> : <p>{failed
-          ? error ?? "Reviewer Specialist could not complete this review."
+          ? error ?? t("reviewer.couldNotComplete")
           : completed
-            ? "No Artifact required an additional review result."
+            ? t("reviewer.noArtifactNeeded")
             : reviewLevel === "smart" || reviewLevel === "deep"
-              ? "Checking citation identity, Evidence support, and Artifact provenance integrity…"
-              : "Checking citation format and Artifact provenance integrity…"}</p>}
+              ? t("reviewer.checkingDeep")
+              : t("reviewer.checkingQuick")}</p>}
       </div>
     </details>
   );
 }
 
 function ReviewProgress({ progress }: { progress: ReviewerProgress }) {
+  const { t } = useLocale();
   const processed = progress.completed + progress.failed;
   const artifactProgress = progress.artifactTotal
-    ? `${progress.artifactCompleted ?? 0}/${progress.artifactTotal} Artifacts reviewed`
+    ? t("reviewer.artifactsReviewed", { completed: progress.artifactCompleted ?? 0, total: progress.artifactTotal })
     : undefined;
   const phaseLabel = progress.phase === "citation"
-    ? `Deep Citation queue · ${processed}/${progress.total} references processed`
+    ? t("reviewer.phaseCitation", { processed, total: progress.total })
     : progress.phase === "computation"
-      ? "Deep Computation · Comparing numeric Evidence"
+      ? t("reviewer.phaseComputation")
       : progress.phase === "quick"
-        ? "Quick review · Checking local integrity"
-        : "Deep review · Preparing locked Artifact";
+        ? t("reviewer.phaseQuick")
+        : t("reviewer.phaseDeep");
   const percent = progress.total ? Math.min(100, Math.round((processed / progress.total) * 100)) : undefined;
   return (
     <div className="reviewer-progress-card">
       <strong>{phaseLabel}</strong>
       <small>{artifactProgress ? `${artifactProgress} · ` : ""}{progress.artifactLogicalName}</small>
-      <p><span className="reviewer-rainbow-dot" /> {progress.running ?? "Reviewing Artifact"}</p>
-      <div aria-label="Review progress" className={`reviewer-progress-track${percent === undefined ? " indeterminate" : ""}`}>
+      <p><span className="reviewer-rainbow-dot" /> {progress.running ?? t("reviewer.reviewingArtifact")}</p>
+      <div aria-label={t("reviewer.progressAria")} className={`reviewer-progress-track${percent === undefined ? " indeterminate" : ""}`}>
         <span style={percent === undefined ? undefined : { width: `${percent}%` }} />
       </div>
-      {progress.total ? <footer><span>{progress.completed} completed</span><span>{progress.failed} inconclusive</span><span>{progress.queued} queued</span></footer> : null}
+      {progress.total ? <footer><span>{t("reviewer.countCompleted", { count: progress.completed })}</span><span>{t("reviewer.countInconclusive", { count: progress.failed })}</span><span>{t("reviewer.countQueued", { count: progress.queued })}</span></footer> : null}
     </div>
   );
 }
@@ -188,18 +204,23 @@ function batchSummary(
   reviews: ArtifactReviewRun[],
   status: "completed" | "failed" | "running" | undefined,
   progress: ReviewerProgress | undefined,
+  t: Translate,
 ): string {
   const artifactCount = progress?.artifactTotal ?? reviews.length;
-  if (status === "running") return `Reviewing ${artifactCount || "…"} artifact${artifactCount === 1 ? "" : "s"}`;
-  if (!reviews.length) return "Built-in Specialist";
+  if (status === "running") {
+    return artifactCount
+      ? t(artifactCount === 1 ? "reviewer.reviewingCountOne" : "reviewer.reviewingCount", { count: artifactCount })
+      : t("reviewer.reviewingCount", { count: "…" });
+  }
+  if (!reviews.length) return t("reviewer.builtInSpecialist");
   const passed = reviews.filter((review) => review.status !== "failed" && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length).length;
   const warning = reviews.filter((review) => review.status !== "failed" && review.findings.some((finding) => finding.severity === "warning")).length;
   const revision = reviews.filter((review) => review.status === "failed" || review.findings.some((finding) => finding.severity === "critical")).length;
   const parts = [
-    `${reviews.length} artifact${reviews.length === 1 ? "" : "s"}`,
-    passed ? `${passed} passed` : undefined,
-    warning ? `${warning} warning${warning === 1 ? "" : "s"}` : undefined,
-    revision ? `${revision} revision required` : undefined,
+    t(reviews.length === 1 ? "reviewer.artifactCountOne" : "reviewer.artifactCount", { count: reviews.length }),
+    passed ? t("reviewer.passedCount", { count: passed }) : undefined,
+    warning ? t(warning === 1 ? "reviewer.warningCountOne" : "reviewer.warningCount", { count: warning }) : undefined,
+    revision ? t("reviewer.revisionCount", { count: revision }) : undefined,
   ].filter(Boolean);
   return parts.join(" · ");
 }
@@ -219,8 +240,9 @@ export function ReviewerPanel({
   reviews: ArtifactReviewRun[];
   toolCallId: string;
 }) {
+  const { t } = useLocale();
   const scopedReviews = reviews.filter((review) => review.toolCallId === toolCallId);
-  const summary = batchSummary(scopedReviews, checkpointStatus, checkpointProgress);
+  const summary = batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
   const [expanded, setExpanded] = useState(checkpointStatus === "running");
   useEffect(() => {
     if (checkpointStatus === "running") setExpanded(true);
@@ -236,7 +258,7 @@ export function ReviewerPanel({
   if (!scopedReviews.length && checkpointStatus === "completed") return null;
   return (
     <details
-      aria-label="Reviewer Specialist activity"
+      aria-label={t("reviewer.panelAria")}
       aria-live="polite"
       className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : ""}`}
       onToggle={(event) => setExpanded(event.currentTarget.open)}
@@ -245,11 +267,11 @@ export function ReviewerPanel({
       <summary className="reviewer-specialist-panel-heading">
         <ReviewerSpecialistAvatar />
         <span>
-          <strong>Reviewer Specialist</strong>
+          <strong>{t("specialist.reviewerName")}</strong>
           <small>{summary}</small>
         </span>
-        {checkpointStatus === "running" ? <span className="reviewer-panel-live-status"><span className="reviewer-rainbow-dot" />Reviewing</span> : null}
-        <em>READ ONLY</em>
+        {checkpointStatus === "running" ? <span className="reviewer-panel-live-status"><span className="reviewer-rainbow-dot" />{t("reviewer.reviewing")}</span> : null}
+        <em>{t("reviewer.readOnly")}</em>
         <span aria-hidden="true" className="reviewer-specialist-panel-chevron">›</span>
       </summary>
       <div className="reviewer-specialist-results">

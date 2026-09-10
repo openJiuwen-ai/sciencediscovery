@@ -26,6 +26,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { translate, useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, TrashIcon } from "./icons.js";
 import { createSkillFolderArchive } from "./skill-folder-import.js";
 import { SkillWorkspaceDialog } from "./SkillWorkspaceDialog.js";
@@ -88,31 +89,37 @@ export function normalizeGitSkillLocation(input: GitImportLocation): GitImportLo
   }
 }
 
-function resourceValidationError(resources: SkillEditorResourceDraft[]): string | undefined {
+type SkillManagerTranslate = (key: MessageKey, variables?: Record<string, string | number>) => string;
+
+// validateSkillDraft is also exercised directly by unit tests without a React
+// tree, so callers may omit t and get the English catalogue.
+const translateEnglish: SkillManagerTranslate = (key, variables) => translate("en", key, variables);
+
+function resourceValidationError(resources: SkillEditorResourceDraft[], t: SkillManagerTranslate = translateEnglish): string | undefined {
   const paths = new Set<string>();
   for (const resource of resources) {
     const path = resource.path.trim();
-    if (!path) return "Every resource needs a relative package path.";
-    if (path === "SKILL.md") return "SKILL.md is generated from the Skill details and cannot be added as a resource.";
+    if (!path) return t("skillManager.error.resourceNeedsPath");
+    if (path === "SKILL.md") return t("skillManager.error.skillMdGenerated");
     if (path.includes("\\") || path.startsWith("/") || /^[A-Za-z]:/.test(path)
       || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
-      return `Resource path must be a safe relative path: ${path}`;
+      return t("skillManager.error.resourcePathUnsafe", { path });
     }
-    if (paths.has(path)) return `Resource path is duplicated: ${path}`;
+    if (paths.has(path)) return t("skillManager.error.resourcePathDuplicated", { path });
     paths.add(path);
   }
   return undefined;
 }
 
-export function validateSkillDraft(draft: SkillEditorDraft): string | undefined {
+export function validateSkillDraft(draft: SkillEditorDraft, t: SkillManagerTranslate = translateEnglish): string | undefined {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(draft.name) || draft.name.length > 64) {
-    return "Name must use 1–64 lowercase letters, digits, or single hyphens.";
+    return t("skillManager.error.nameInvalid");
   }
   const description = draft.description.trim();
-  if (!description || description.length > 1024) return "Description must contain 1–1024 characters.";
-  if (!draft.instructions.trim()) return "Markdown instructions are required.";
-  if (draft.compatibility.trim().length > 500) return "Compatibility must be at most 500 characters.";
-  return resourceValidationError(draft.resources ?? []);
+  if (!description || description.length > 1024) return t("skillManager.error.descriptionLength");
+  if (!draft.instructions.trim()) return t("skillManager.error.instructionsRequired");
+  if (draft.compatibility.trim().length > 500) return t("skillManager.error.compatibilityLength");
+  return resourceValidationError(draft.resources ?? [], t);
 }
 
 export function requestFromDraft(draft: SkillEditorDraft): CreateSkillPackageRequest {
@@ -190,9 +197,10 @@ function SkillManagerViewTabs({
   activeView: "libraries" | "skills";
   onViewChange: (view: "libraries" | "skills") => void;
 }) {
-  return <div aria-label="Skill manager views" className="skill-manager-tabs" role="tablist">
-    <button aria-selected={activeView === "skills"} className={activeView === "skills" ? "active" : ""} onClick={() => onViewChange("skills")} role="tab" type="button">Skills</button>
-    <button aria-selected={activeView === "libraries"} className={activeView === "libraries" ? "active" : ""} onClick={() => onViewChange("libraries")} role="tab" type="button">Libraries</button>
+  const { t } = useLocale();
+  return <div aria-label={t("skillManager.viewsAria")} className="skill-manager-tabs" role="tablist">
+    <button aria-selected={activeView === "skills"} className={activeView === "skills" ? "active" : ""} onClick={() => onViewChange("skills")} role="tab" type="button">{t("skillManager.tabSkills")}</button>
+    <button aria-selected={activeView === "libraries"} className={activeView === "libraries" ? "active" : ""} onClick={() => onViewChange("libraries")} role="tab" type="button">{t("skillManager.tabLibraries")}</button>
   </div>;
 }
 
@@ -222,6 +230,7 @@ function SkillCatalogManager({
   workspaceLaunch?: { requestId: number; skillId?: string };
 }) {
   const [query, setQuery] = useState("");
+  const { t } = useLocale();
   const [editorMode, setEditorMode] = useState<"create">();
   const [editorSection, setEditorSection] = useState<"details" | "resources">("details");
   const [draft, setDraft] = useState<SkillEditorDraft>(EMPTY_DRAFT);
@@ -255,13 +264,13 @@ function SkillCatalogManager({
         if (!active) return;
         setReviewDrafts(next);
       } catch (reason) {
-        if (active) onError(reason instanceof Error ? reason.message : "Could not load pending Skill drafts");
+        if (active) onError(reason instanceof Error ? reason.message : t("skillManager.error.loadDrafts"));
       }
     }
     void refreshPending();
     const interval = globalThis.setInterval(() => void refreshPending(), 3_000);
     return () => { active = false; globalThis.clearInterval(interval); };
-  }, [client, onError]);
+  }, [client, onError, t]);
 
   useEffect(() => {
     if (!workspaceLaunch) return;
@@ -276,7 +285,7 @@ function SkillCatalogManager({
       setWorkspaceOpen(true);
     }).catch((reason) => {
       if (!active) return;
-      const message = reason instanceof Error ? reason.message : "Could not open the generated Skill draft";
+      const message = reason instanceof Error ? reason.message : t("skillManager.error.openGeneratedDraft");
       setLocalError(message);
       onError(message);
       setWorkspaceSkillId(undefined);
@@ -287,7 +296,7 @@ function SkillCatalogManager({
       onWorkspaceLaunchHandled?.(requestId);
     });
     return () => { active = false; };
-  }, [client, onError, workspaceLaunch?.requestId]);
+  }, [client, onError, t, workspaceLaunch?.requestId]);
 
   async function refreshCatalog(): Promise<void> {
     const next = await client.listSkills();
@@ -348,7 +357,10 @@ function SkillCatalogManager({
     const normalized = normalizeGitSkillLocation(gitImport);
     if (normalized.adapted) {
       setGitImport({ ref: normalized.ref, repositoryUrl: normalized.repositoryUrl, subdirectory: normalized.subdirectory });
-      setGitLinkNotice(`GitHub folder link recognized · ${normalized.ref || "default branch"}${normalized.subdirectory ? ` / ${normalized.subdirectory}` : ""}`);
+      setGitLinkNotice(t("skillManager.gitLinkNotice", {
+        path: normalized.subdirectory ? ` / ${normalized.subdirectory}` : "",
+        ref: normalized.ref || t("skillManager.defaultBranch"),
+      }));
     }
     return normalized;
   }
@@ -374,7 +386,7 @@ function SkillCatalogManager({
         .filter((candidate) => candidate.status === "new" || candidate.status === "update")
         .map((candidate) => candidate.subdirectory));
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not inspect Git repository";
+      const message = reason instanceof Error ? reason.message : t("skillManager.error.inspectGit");
       setLocalError(message);
       onError(message);
     } finally {
@@ -398,7 +410,7 @@ function SkillCatalogManager({
       setGitInspection(undefined);
       setWorkspaceOpen(true);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not prepare Git Skill updates";
+      const message = reason instanceof Error ? reason.message : t("skillManager.error.prepareGitUpdates");
       setLocalError(message);
       onError(message);
     } finally {
@@ -408,10 +420,10 @@ function SkillCatalogManager({
 
   async function saveSkill(event: FormEvent): Promise<void> {
     event.preventDefault();
-    const validation = validateSkillDraft(draft);
+    const validation = validateSkillDraft(draft, t);
     if (validation) {
       setLocalError(validation);
-      if (resourceValidationError(draft.resources ?? [])) setEditorSection("resources");
+      if (resourceValidationError(draft.resources ?? [], t)) setEditorSection("resources");
       else setEditorSection("details");
       return;
     }
@@ -424,7 +436,7 @@ function SkillCatalogManager({
       setEditorMode(undefined);
       openWorkspace(saved.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not save skill";
+      const message = reason instanceof Error ? reason.message : t("skillManager.error.saveSkill");
       setLocalError(message);
       onError(message);
     } finally {
@@ -441,7 +453,7 @@ function SkillCatalogManager({
       await refreshCatalog();
       openWorkspace(imported.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not import skill";
+      const message = reason instanceof Error ? reason.message : t("skillManager.error.importSkill");
       setLocalError(message);
       onError(message);
     } finally {
@@ -460,7 +472,7 @@ function SkillCatalogManager({
       await refreshCatalog();
       openWorkspace(imported.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not import skill folder";
+      const message = reason instanceof Error ? reason.message : t("skillManager.error.importSkillFolder");
       setLocalError(message);
       onError(message);
     } finally {
@@ -471,96 +483,96 @@ function SkillCatalogManager({
 
   return <div className="skill-catalog-manager">
     <section className="skill-manager-hero">
-      <div><span className="eyebrow">Agent Skills</span><h3>Skill manager</h3></div>
+      <div><span className="eyebrow">{t("skillManager.eyebrow")}</span><h3>{t("skillManager.title")}</h3></div>
       <div className="skill-manager-hero-actions">
         <SkillManagerViewTabs activeView="skills" onViewChange={onViewChange} />
-        <div aria-label="Skill catalog summary" className="skill-manager-stats">
-          <span><strong>{skills.length}</strong><small>Installed</small></span>
-          <span><strong>{skills.filter((skill) => skill.source === "managed").length}</strong><small>Managed</small></span>
-          <span className={reviewDrafts.length ? "has-pending" : undefined}><strong>{reviewDrafts.length}</strong><small>Awaiting review</small></span>
+        <div aria-label={t("skillManager.statsAria")} className="skill-manager-stats">
+          <span><strong>{skills.length}</strong><small>{t("skillManager.statInstalled")}</small></span>
+          <span><strong>{skills.filter((skill) => skill.source === "managed").length}</strong><small>{t("skillManager.statManaged")}</small></span>
+          <span className={reviewDrafts.length ? "has-pending" : undefined}><strong>{reviewDrafts.length}</strong><small>{t("skillManager.statAwaitingReview")}</small></span>
         </div>
       </div>
     </section>
     <div className="skill-manager-toolbar">
-      <label className="skill-search-field"><span aria-hidden="true">⌕</span><input aria-label="Search skills" onChange={(event) => setQuery(event.target.value)} placeholder="Search by name or description" type="search" value={query} /></label>
-      <button className="skill-explorer-button" disabled={busy} onClick={() => openWorkspace()} type="button">Open Skills Explorer</button>
+      <label className="skill-search-field"><span aria-hidden="true">⌕</span><input aria-label={t("skillManager.searchAria")} onChange={(event) => setQuery(event.target.value)} placeholder={t("skillManager.searchPlaceholder")} type="search" value={query} /></label>
+      <button className="skill-explorer-button" disabled={busy} onClick={() => openWorkspace()} type="button">{t("skillManager.openExplorer")}</button>
       <details className="skill-toolbar-menu" name="skill-actions">
-        <summary aria-disabled={busy} onClick={(event) => { if (busy) event.preventDefault(); }}>Create Skill <span aria-hidden="true" className="skill-toolbar-chevron"><ChevronDownIcon size={15} /></span></summary>
+        <summary aria-disabled={busy} onClick={(event) => { if (busy) event.preventDefault(); }}>{t("skillManager.createSkillMenu")} <span aria-hidden="true" className="skill-toolbar-chevron"><ChevronDownIcon size={15} /></span></summary>
         <div className="skill-toolbar-popover">
-          <span className="skill-toolbar-popover-label">Create</span>
-          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); openCreate(); }} type="button"><span className="skill-action-icon">＋</span><span><strong>Blank Skill</strong><small>Start with an editable SKILL.md</small></span></button>
-          <button disabled={busy || !onStartSkillCreation} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); onStartSkillCreation?.(); }} type="button"><span className="skill-action-icon">✦</span><span><strong>Describe workflow</strong><small>Continue with /skill-creator in a new Session</small></span></button>
-          <button disabled={busy || !sessionId || !onDistillSession} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); onDistillSession?.(); }} title={sessionId ? "Continue with /distill-session in the active Session" : "Open a Session first"} type="button"><span className="skill-action-icon">◇</span><span><strong>Distill current Session</strong><small>Turn this conversation into a reviewable Skill</small></span></button>
+          <span className="skill-toolbar-popover-label">{t("skillManager.createGroupLabel")}</span>
+          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); openCreate(); }} type="button"><span className="skill-action-icon">＋</span><span><strong>{t("skillManager.blankSkill")}</strong><small>{t("skillManager.blankSkillHint")}</small></span></button>
+          <button disabled={busy || !onStartSkillCreation} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); onStartSkillCreation?.(); }} type="button"><span className="skill-action-icon">✦</span><span><strong>{t("skillManager.describeWorkflow")}</strong><small>{t("skillManager.describeWorkflowHint")}</small></span></button>
+          <button disabled={busy || !sessionId || !onDistillSession} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); onDistillSession?.(); }} title={sessionId ? t("skillManager.distillTitleActive") : t("skillManager.distillTitleNoSession")} type="button"><span className="skill-action-icon">◇</span><span><strong>{t("skillManager.distillSession")}</strong><small>{t("skillManager.distillSessionHint")}</small></span></button>
         </div>
       </details>
       <details className="skill-toolbar-menu skill-import-menu" name="skill-actions">
-        <summary aria-disabled={busy} onClick={(event) => { if (busy) event.preventDefault(); }}>Import <span aria-hidden="true" className="skill-toolbar-chevron"><ChevronDownIcon size={15} /></span></summary>
+        <summary aria-disabled={busy} onClick={(event) => { if (busy) event.preventDefault(); }}>{t("skillManager.importMenu")} <span aria-hidden="true" className="skill-toolbar-chevron"><ChevronDownIcon size={15} /></span></summary>
         <div className="skill-toolbar-popover">
-          <span className="skill-toolbar-popover-label">Import from</span>
-          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); importInput.current?.click(); }} type="button"><span className="skill-action-icon">↥</span><span><strong>SKILL.md or ZIP</strong><small>Choose a single package file</small></span></button>
-          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); importFolderInput.current?.click(); }} type="button"><span className="skill-action-icon">□</span><span><strong>Folder</strong><small>Import a complete local directory</small></span></button>
-          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setAuthoringMode("git"); setGitImport({ ref: "", repositoryUrl: "", subdirectory: "" }); setGitInspection(undefined); setGitLinkNotice(undefined); }} type="button"><span className="skill-action-icon">⑂</span><span><strong>Git repository</strong><small>Paste a repository or marketplace folder link</small></span></button>
+          <span className="skill-toolbar-popover-label">{t("skillManager.importGroupLabel")}</span>
+          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); importInput.current?.click(); }} type="button"><span className="skill-action-icon">↥</span><span><strong>{t("skillManager.importFile")}</strong><small>{t("skillManager.importFileHint")}</small></span></button>
+          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); importFolderInput.current?.click(); }} type="button"><span className="skill-action-icon">□</span><span><strong>{t("skillManager.importFolder")}</strong><small>{t("skillManager.importFolderHint")}</small></span></button>
+          <button disabled={busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setAuthoringMode("git"); setGitImport({ ref: "", repositoryUrl: "", subdirectory: "" }); setGitInspection(undefined); setGitLinkNotice(undefined); }} type="button"><span className="skill-action-icon">⑂</span><span><strong>{t("skillManager.importGit")}</strong><small>{t("skillManager.importGitHint")}</small></span></button>
         </div>
       </details>
-      <input accept=".md,.zip,text/markdown,application/zip" aria-label="Import SKILL.md or ZIP" className="visually-hidden" onChange={(event) => void importSkill(event.target.files?.[0])} ref={importInput} type="file" />
-      <input {...{ webkitdirectory: "" }} aria-label="Import skill folder" className="visually-hidden" multiple onChange={(event) => void importSkillFolder(event.target.files)} ref={importFolderInput} type="file" />
+      <input accept=".md,.zip,text/markdown,application/zip" aria-label={t("skillManager.importFileAria")} className="visually-hidden" onChange={(event) => void importSkill(event.target.files?.[0])} ref={importInput} type="file" />
+      <input {...{ webkitdirectory: "" }} aria-label={t("skillManager.importFolderAria")} className="visually-hidden" multiple onChange={(event) => void importSkillFolder(event.target.files)} ref={importFolderInput} type="file" />
     </div>
-    {reviewDrafts.length ? <section className="skill-review-queue"><span aria-hidden="true" className="skill-review-queue-icon">!</span><div><strong>{reviewDrafts.length} pending review{reviewDrafts.length === 1 ? "" : "s"}</strong><p>Review drafts and proposal history in the dedicated Explorer.</p></div><button disabled={busy} onClick={() => openWorkspace(reviewDrafts[0]?.name)} type="button">Open review workspace <span>{reviewDrafts.length}</span></button></section> : null}
+    {reviewDrafts.length ? <section className="skill-review-queue"><span aria-hidden="true" className="skill-review-queue-icon">!</span><div><strong>{t(reviewDrafts.length === 1 ? "skillManager.pendingReviewOne" : "skillManager.pendingReviewMany", { count: reviewDrafts.length })}</strong><p>{t("skillManager.reviewQueueHint")}</p></div><button disabled={busy} onClick={() => openWorkspace(reviewDrafts[0]?.name)} type="button">{t("skillManager.openReviewWorkspace")} <span>{reviewDrafts.length}</span></button></section> : null}
     {authoringMode === "git" ? <form className="skill-authoring-panel skill-git-import-panel" onSubmit={(event) => void inspectGitRepository(event)}>
-      <div className="skill-authoring-heading"><div><span className="eyebrow">Git source</span><h4>Scan a Skill repository</h4></div>{gitInspection ? <span className="skill-git-commit" title={gitInspection.commit}>commit {gitInspection.commit.slice(0, 12)}</span> : null}</div>
-      <label><span>Repository or marketplace folder URL</span><input autoFocus onBlur={adaptGitLocation} onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, repositoryUrl: event.target.value })); }} placeholder="https://github.com/org/repo/tree/main/skills" required value={gitImport.repositoryUrl} /></label>
-      {gitLinkNotice ? <div className="skill-git-link-notice"><span aria-hidden="true">✓</span><div><strong>GitHub link adapted</strong><small>{gitLinkNotice}</small></div></div> : null}
-      <div className="skill-editor-columns"><label><span>Ref (optional)</span><input onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, ref: event.target.value })); }} placeholder="main, a tag, or a branch" value={gitImport.ref} /></label><label><span>Search path (optional)</span><input onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, subdirectory: event.target.value })); }} placeholder="skills/my-skill" value={gitImport.subdirectory} /></label></div>
-      <p>Repository roots, marketplace directories, and direct Skill paths are supported. GitHub <code>/tree/ref/path</code> links automatically fill the repository, ref, and search path. The exact commit is saved with every confirmed version.</p>
-      {gitInspection ? <fieldset className="skill-git-candidates"><legend>Select Skill packages</legend>{gitInspection.candidates.map((candidate) => {
+      <div className="skill-authoring-heading"><div><span className="eyebrow">{t("skillManager.gitEyebrow")}</span><h4>{t("skillManager.gitHeading")}</h4></div>{gitInspection ? <span className="skill-git-commit" title={gitInspection.commit}>{t("skillManager.gitCommitBadge", { hash: gitInspection.commit.slice(0, 12) })}</span> : null}</div>
+      <label><span>{t("skillManager.gitUrlLabel")}</span><input autoFocus onBlur={adaptGitLocation} onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, repositoryUrl: event.target.value })); }} placeholder="https://github.com/org/repo/tree/main/skills" required value={gitImport.repositoryUrl} /></label>
+      {gitLinkNotice ? <div className="skill-git-link-notice"><span aria-hidden="true">✓</span><div><strong>{t("skillManager.gitLinkAdapted")}</strong><small>{gitLinkNotice}</small></div></div> : null}
+      <div className="skill-editor-columns"><label><span>{t("skillManager.gitRefLabel")}</span><input onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, ref: event.target.value })); }} placeholder={t("skillManager.gitRefPlaceholder")} value={gitImport.ref} /></label><label><span>{t("skillManager.gitPathLabel")}</span><input onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, subdirectory: event.target.value })); }} placeholder="skills/my-skill" value={gitImport.subdirectory} /></label></div>
+      <p>{t("skillManager.gitHelpBefore")}<code>/tree/ref/path</code>{t("skillManager.gitHelpAfter")}</p>
+      {gitInspection ? <fieldset className="skill-git-candidates"><legend>{t("skillManager.gitSelectLegend")}</legend>{gitInspection.candidates.map((candidate) => {
         const selectable = candidate.status === "new" || candidate.status === "update";
         const selected = gitSelected.includes(candidate.subdirectory);
         return <label className={`skill-git-candidate ${candidate.status}`} key={candidate.subdirectory}>
           <input checked={selected} disabled={!selectable || busy} onChange={(event) => setGitSelected((current) => event.target.checked ? [...current, candidate.subdirectory] : current.filter((path) => path !== candidate.subdirectory))} type="checkbox" />
           <span className="skill-git-candidate-copy"><strong>{candidate.name ?? candidate.subdirectory}</strong><small>{candidate.subdirectory}{candidate.description ? ` · ${candidate.description}` : ""}</small>{candidate.diagnostics.length ? <em>{candidate.diagnostics.join(" · ")}</em> : null}</span>
-          <span className={`skill-git-status ${candidate.status}`}>{candidate.status === "update" ? `Update r${candidate.currentRevision}` : candidate.status}</span>
+          <span className={`skill-git-status ${candidate.status}`}>{candidate.status === "update" ? t("skillManager.gitUpdateBadge", { revision: candidate.currentRevision ?? "" }) : candidate.status}</span>
         </label>;
       })}</fieldset> : null}
-      <div className="dialog-actions"><button className="secondary-button" onClick={() => { setAuthoringMode(undefined); setGitInspection(undefined); }} type="button">Cancel</button>{gitInspection ? <><button className="secondary-button" disabled={busy} type="submit">Scan again</button><button className="primary-button" disabled={busy || !gitSelected.length} onClick={() => void createGitReviewDrafts()} type="button">Review {gitSelected.length} selected update{gitSelected.length === 1 ? "" : "s"}</button></> : <button className="primary-button" disabled={busy} type="submit">Scan repository</button>}</div>
+      <div className="dialog-actions"><button className="secondary-button" onClick={() => { setAuthoringMode(undefined); setGitInspection(undefined); }} type="button">{t("common.cancel")}</button>{gitInspection ? <><button className="secondary-button" disabled={busy} type="submit">{t("skillManager.scanAgain")}</button><button className="primary-button" disabled={busy || !gitSelected.length} onClick={() => void createGitReviewDrafts()} type="button">{t(gitSelected.length === 1 ? "skillManager.reviewSelectedOne" : "skillManager.reviewSelectedMany", { count: gitSelected.length })}</button></> : <button className="primary-button" disabled={busy} type="submit">{t("skillManager.scanRepository")}</button>}</div>
     </form> : null}
     {localError ? <p className="skill-manager-error" role="alert">{localError}</p> : null}
-    <section aria-label="Skill catalog" className="skill-library-panel">
-      <header className="skill-library-heading"><div><strong>Skill library</strong><small>{query ? `${visibleSkills.length} results` : `${skills.length} available Skills`}</small></div><span>Select a Skill to open its files and history</span></header>
+    <section aria-label={t("skillManager.catalogAria")} className="skill-library-panel">
+      <header className="skill-library-heading"><div><strong>{t("skillManager.libraryTitle")}</strong><small>{query ? t("skillManager.resultsCount", { count: visibleSkills.length }) : t("skillManager.availableCount", { count: skills.length })}</small></div><span>{t("skillManager.selectHint")}</span></header>
       <div className="skill-library-list">
-        {visibleSkills.map((skill) => <button aria-label={`Open ${skill.name} in Skills Explorer`} className="skill-card" key={skill.id} onClick={() => openWorkspace(skill.id)} title={`Open ${skill.name} in Skills Explorer`} type="button">
+        {visibleSkills.map((skill) => <button aria-label={t("skillManager.openInExplorer", { name: skill.name })} className="skill-card" key={skill.id} onClick={() => openWorkspace(skill.id)} title={t("skillManager.openInExplorer", { name: skill.name })} type="button">
           <span aria-hidden="true" className={`skill-card-icon ${skill.source}`}>{skill.source === "built-in" ? "B" : "S"}</span>
-          <span className="skill-card-copy"><strong>{skill.name}</strong><small>{skill.description}</small><span className="skill-card-metadata"><span>v{skill.version}</span><span>{skill.resourceSummary.files} supporting file{skill.resourceSummary.files === 1 ? "" : "s"}</span></span></span>
-          <span className={`skill-source ${skill.source}`}>{skill.source === "built-in" ? "Built-in · read-only" : `Managed · r${skill.currentRevision}`}</span>
-          <span aria-hidden="true" className="skill-card-open"><span>Open</span><ChevronRightIcon size={17} /></span>
+          <span className="skill-card-copy"><strong>{skill.name}</strong><small>{skill.description}</small><span className="skill-card-metadata"><span>v{skill.version}</span><span>{t(skill.resourceSummary.files === 1 ? "skillManager.supportingFileOne" : "skillManager.supportingFiles", { count: skill.resourceSummary.files })}</span></span></span>
+          <span className={`skill-source ${skill.source}`}>{skill.source === "built-in" ? t("skillManager.builtInReadOnly") : t("skillManager.managedRevision", { revision: skill.currentRevision })}</span>
+          <span aria-hidden="true" className="skill-card-open"><span>{t("skillManager.openAction")}</span><ChevronRightIcon size={17} /></span>
         </button>)}
-        {!visibleSkills.length ? <div className="skill-library-empty"><span aria-hidden="true">⌕</span><strong>No matching Skills</strong><p>Try another name or description.</p></div> : null}
+        {!visibleSkills.length ? <div className="skill-library-empty"><span aria-hidden="true">⌕</span><strong>{t("skillManager.noMatches")}</strong><p>{t("skillManager.noMatchesHint")}</p></div> : null}
       </div>
     </section>
 
     {editorMode ? <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setEditorMode(undefined); }}>
-      <section aria-label="Create skill" aria-modal="true" className="skill-editor-dialog" role="dialog">
-        <header className="skill-editor-header"><div><span className="eyebrow">Agent Skills format</span><h2>Create skill</h2><p>Author the instructions and package supporting resources together.</p></div><button aria-label="Close create Skill dialog" className="icon-button" disabled={busy} onClick={() => setEditorMode(undefined)} type="button"><CloseIcon size={18} /></button></header>
+      <section aria-label={t("skillManager.createTitle")} aria-modal="true" className="skill-editor-dialog" role="dialog">
+        <header className="skill-editor-header"><div><span className="eyebrow">{t("skillManager.createEyebrow")}</span><h2>{t("skillManager.createTitle")}</h2><p>{t("skillManager.createIntro")}</p></div><button aria-label={t("skillManager.createCloseAria")} className="icon-button" disabled={busy} onClick={() => setEditorMode(undefined)} type="button"><CloseIcon size={18} /></button></header>
         <form onSubmit={(event) => void saveSkill(event)}>
-          <nav aria-label="Create Skill sections" className="skill-editor-tabs"><button className={editorSection === "details" ? "active" : ""} onClick={() => setEditorSection("details")} type="button"><strong>Skill details</strong><small>SKILL.md</small></button><button className={editorSection === "resources" ? "active" : ""} onClick={() => setEditorSection("resources")} type="button"><strong>Resources</strong><small>{draft.resources?.length ?? 0}</small></button></nav>
+          <nav aria-label={t("skillManager.createSectionsAria")} className="skill-editor-tabs"><button className={editorSection === "details" ? "active" : ""} onClick={() => setEditorSection("details")} type="button"><strong>{t("skillManager.tabDetails")}</strong><small>SKILL.md</small></button><button className={editorSection === "resources" ? "active" : ""} onClick={() => setEditorSection("resources")} type="button"><strong>{t("skillManager.tabResources")}</strong><small>{draft.resources?.length ?? 0}</small></button></nav>
           <div className="skill-editor-body">
-            {draftSourceSummary ? <p className="skill-preservation-note">{draftSourceSummary} This draft is inactive until you save it.</p> : null}
+            {draftSourceSummary ? <p className="skill-preservation-note">{t("skillManager.draftInactiveNote", { summary: draftSourceSummary })}</p> : null}
             {editorSection === "details" ? <div className="skill-editor-details">
-              <label><span>Name</span><input autoFocus disabled={busy} maxLength={64} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="literature-review" required value={draft.name} /></label>
-              <label><span>Description</span><textarea maxLength={1024} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} required rows={3} value={draft.description} /></label>
-              <div className="skill-editor-columns"><label><span>License (optional)</span><input onChange={(event) => setDraft((current) => ({ ...current, license: event.target.value }))} value={draft.license} /></label><label><span>Version (optional)</span><input onChange={(event) => setDraft((current) => ({ ...current, version: event.target.value }))} placeholder="1.0.0" value={draft.version} /></label></div>
-              <label><span>Compatibility (optional)</span><input maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, compatibility: event.target.value }))} value={draft.compatibility} /></label>
-              <label><span>Allowed tools (preserved, not enforced)</span><input onChange={(event) => setDraft((current) => ({ ...current, allowedTools: event.target.value }))} value={draft.allowedTools} /></label>
-              <label><span>Markdown instructions</span><textarea className="skill-markdown-editor" onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} required rows={12} value={draft.instructions} /></label>
+              <label><span>{t("skillManager.fieldName")}</span><input autoFocus disabled={busy} maxLength={64} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="literature-review" required value={draft.name} /></label>
+              <label><span>{t("skillManager.fieldDescription")}</span><textarea maxLength={1024} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} required rows={3} value={draft.description} /></label>
+              <div className="skill-editor-columns"><label><span>{t("skillManager.fieldLicense")}</span><input onChange={(event) => setDraft((current) => ({ ...current, license: event.target.value }))} value={draft.license} /></label><label><span>{t("skillManager.fieldVersion")}</span><input onChange={(event) => setDraft((current) => ({ ...current, version: event.target.value }))} placeholder="1.0.0" value={draft.version} /></label></div>
+              <label><span>{t("skillManager.fieldCompatibility")}</span><input maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, compatibility: event.target.value }))} value={draft.compatibility} /></label>
+              <label><span>{t("skillManager.fieldAllowedTools")}</span><input onChange={(event) => setDraft((current) => ({ ...current, allowedTools: event.target.value }))} value={draft.allowedTools} /></label>
+              <label><span>{t("skillManager.fieldInstructions")}</span><textarea className="skill-markdown-editor" onChange={(event) => setDraft((current) => ({ ...current, instructions: event.target.value }))} required rows={12} value={draft.instructions} /></label>
             </div> : <div className="skill-resource-authoring">
-              <header><div><strong>Package resources</strong><p>Add portable text files that ship with this Skill. Use conventional folders so Agents can disclose them progressively.</p></div><div><button onClick={() => addResource("reference")} type="button"><PlusIcon size={14} /> Reference</button><button onClick={() => addResource("script")} type="button"><PlusIcon size={14} /> Script</button><button onClick={() => addResource("other")} type="button"><PlusIcon size={14} /> Other file</button></div></header>
+              <header><div><strong>{t("skillManager.resourcesTitle")}</strong><p>{t("skillManager.resourcesIntro")}</p></div><div><button onClick={() => addResource("reference")} type="button"><PlusIcon size={14} />{` ${t("skillManager.addReference")}`}</button><button onClick={() => addResource("script")} type="button"><PlusIcon size={14} />{` ${t("skillManager.addScript")}`}</button><button onClick={() => addResource("other")} type="button"><PlusIcon size={14} />{` ${t("skillManager.addOtherFile")}`}</button></div></header>
               {(draft.resources?.length ?? 0) ? <div className="skill-resource-authoring-list">{draft.resources!.map((resource, index) => {
-                const kind = resource.path.startsWith("references/") ? "Reference" : resource.path.startsWith("scripts/") ? "Script" : resource.path.startsWith("assets/") ? "Asset" : "Resource";
-                return <article key={resource.id}><header><span aria-hidden="true"><FileIcon size={16} /></span><label><span>{kind} {index + 1}</span><input aria-label={`Resource ${index + 1} path`} onChange={(event) => updateResource(resource.id, { path: event.target.value })} placeholder="references/guide.md" spellCheck={false} value={resource.path} /></label><button aria-label={`Remove resource ${resource.path || index + 1}`} onClick={() => removeResource(resource.id)} title="Remove resource" type="button"><TrashIcon size={16} /></button></header><label><span>Text content</span><textarea aria-label={`Resource ${index + 1} content`} className="skill-resource-content-editor" onChange={(event) => updateResource(resource.id, { content: event.target.value })} rows={9} spellCheck={false} value={resource.content} /></label></article>;
-              })}</div> : <div className="skill-resource-authoring-empty"><span aria-hidden="true"><FileIcon size={24} /></span><strong>No supporting resources yet</strong><p>Add a reference, helper script, or another text file. For binary assets, use folder or ZIP import.</p><button onClick={() => addResource("reference")} type="button"><PlusIcon size={15} /> Add your first reference</button></div>}
+                const kind = resource.path.startsWith("references/") ? t("skillManager.resourceKind.reference") : resource.path.startsWith("scripts/") ? t("skillManager.resourceKind.script") : resource.path.startsWith("assets/") ? t("skillManager.resourceKind.asset") : t("skillManager.resourceKind.other");
+                return <article key={resource.id}><header><span aria-hidden="true"><FileIcon size={16} /></span><label><span>{kind} {index + 1}</span><input aria-label={t("skillManager.resourcePathAria", { index: index + 1 })} onChange={(event) => updateResource(resource.id, { path: event.target.value })} placeholder="references/guide.md" spellCheck={false} value={resource.path} /></label><button aria-label={t("skillManager.resourceRemoveAria", { path: resource.path || index + 1 })} onClick={() => removeResource(resource.id)} title={t("skillManager.resourceRemoveTitle")} type="button"><TrashIcon size={16} /></button></header><label><span>{t("skillManager.resourceContentLabel")}</span><textarea aria-label={t("skillManager.resourceContentAria", { index: index + 1 })} className="skill-resource-content-editor" onChange={(event) => updateResource(resource.id, { content: event.target.value })} rows={9} spellCheck={false} value={resource.content} /></label></article>;
+              })}</div> : <div className="skill-resource-authoring-empty"><span aria-hidden="true"><FileIcon size={24} /></span><strong>{t("skillManager.resourcesEmptyTitle")}</strong><p>{t("skillManager.resourcesEmptyHint")}</p><button onClick={() => addResource("reference")} type="button"><PlusIcon size={15} />{` ${t("skillManager.resourcesEmptyCta")}`}</button></div>}
             </div>}
           </div>
           <div className="skill-editor-error-slot">{localError ? <p className="skill-manager-error" role="alert">{localError}</p> : null}</div>
-          <footer><span>{draft.resources?.length ?? 0} supporting resource{(draft.resources?.length ?? 0) === 1 ? "" : "s"} will be packaged</span><div><button className="secondary-button" disabled={busy} onClick={() => setEditorMode(undefined)} type="button">Cancel</button><button className="primary-button" disabled={busy} type="submit">{busy ? "Saving…" : "Create skill"}</button></div></footer>
+          <footer><span>{t((draft.resources?.length ?? 0) === 1 ? "skillManager.resourcesPackagedOne" : "skillManager.resourcesPackagedMany", { count: draft.resources?.length ?? 0 })}</span><div><button className="secondary-button" disabled={busy} onClick={() => setEditorMode(undefined)} type="button">{t("common.cancel")}</button><button className="primary-button" disabled={busy} type="submit">{busy ? t("common.saving") : t("skillManager.createTitle")}</button></div></footer>
         </form>
       </section>
     </div> : null}
@@ -589,6 +601,7 @@ function SkillLibraryManager({
   onViewChange: (view: "libraries" | "skills") => void;
 }) {
   const [libraries, setLibraries] = useState<SkillLibrary[]>([]);
+  const { t } = useLocale();
   const [selectedId, setSelectedId] = useState<string>();
   const [versions, setVersions] = useState<SkillLibraryVersion[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState<string>();
@@ -683,10 +696,10 @@ function SkillLibraryManager({
       setLibraryId("");
       setLibraryName("");
       setCreateOpen(false);
-      setStatus(`Created library ${created.name}.`);
+      setStatus(t("skillLibrary.createdStatus", { name: created.name }));
       await refresh(created.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not create skill library";
+      const message = reason instanceof Error ? reason.message : t("skillLibrary.error.create");
       setStatus(message);
       onError(message);
     } finally {
@@ -710,11 +723,11 @@ function SkillLibraryManager({
       if (result.conflicts.length) {
         setStatus(result.conflicts.map((conflict) => conflict.message).join(" "));
       } else {
-        setStatus(dryRun ? `Dry run ready: ${diffCount(result.diff)} change(s).` : `Published version ${result.version?.id.slice(0, 8) ?? ""}.`);
+        setStatus(dryRun ? t("skillLibrary.dryRunReady", { count: diffCount(result.diff) }) : t("skillLibrary.publishedVersion", { id: result.version?.id.slice(0, 8) ?? "" }));
         if (!dryRun) await refresh(selectedLibrary.id);
       }
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not commit skill library version";
+      const message = reason instanceof Error ? reason.message : t("skillLibrary.error.commit");
       setStatus(message);
       onError(message);
     } finally {
@@ -729,9 +742,9 @@ function SkillLibraryManager({
     try {
       const next = await client.diffSkillLibraryVersions(selectedLibrary.id, fromVersionId, toVersionId);
       setDiff(next);
-      setStatus(`Loaded diff with ${diffCount(next)} change(s).`);
+      setStatus(t("skillLibrary.diffLoaded", { count: diffCount(next) }));
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not load skill library diff";
+      const message = reason instanceof Error ? reason.message : t("skillLibrary.error.loadDiff");
       setStatus(message);
       onError(message);
     } finally {
@@ -741,7 +754,7 @@ function SkillLibraryManager({
 
   async function rollback(): Promise<void> {
     if (!selectedLibrary || !selectedVersion) return;
-    if (!window.confirm(`Rollback library “${selectedLibrary.name}” to version ${selectedVersion.id.slice(0, 8)}? This publishes a new version with that content.`)) return;
+    if (!window.confirm(t("skillLibrary.rollbackConfirm", { id: selectedVersion.id.slice(0, 8), name: selectedLibrary.name }))) return;
     setBusy(true);
     setStatus(undefined);
     try {
@@ -751,10 +764,10 @@ function SkillLibraryManager({
         targetVersionId: selectedVersion.id,
       });
       setDiff(result.diff);
-      setStatus(result.conflicts.length ? result.conflicts.map((conflict) => conflict.message).join(" ") : `Rollback version ${result.version?.id.slice(0, 8) ?? ""} published.`);
+      setStatus(result.conflicts.length ? result.conflicts.map((conflict) => conflict.message).join(" ") : t("skillLibrary.rollbackPublished", { id: result.version?.id.slice(0, 8) ?? "" }));
       if (!result.conflicts.length) await refresh(selectedLibrary.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not rollback skill library";
+      const message = reason instanceof Error ? reason.message : t("skillLibrary.error.rollback");
       setStatus(message);
       onError(message);
     } finally {
@@ -771,11 +784,11 @@ function SkillLibraryManager({
       if (result.result.conflicts.length) {
         setStatus(result.result.conflicts.map((conflict) => conflict.message).join(" "));
       } else {
-        setStatus(`Published proposal ${proposalId.slice(0, 8)} as version ${result.result.version?.id.slice(0, 8) ?? ""}.`);
+        setStatus(t("skillLibrary.proposalPublished", { proposal: proposalId.slice(0, 8), version: result.result.version?.id.slice(0, 8) ?? "" }));
         await refresh(result.proposal.libraryId);
       }
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not publish skill library proposal";
+      const message = reason instanceof Error ? reason.message : t("skillLibrary.error.publishProposal");
       setStatus(message);
       onError(message);
     } finally {
@@ -793,12 +806,12 @@ function SkillLibraryManager({
       if (result.result.conflicts.length) {
         setStatus(result.result.conflicts.map((conflict) => conflict.message).join(" "));
       } else {
-        setStatus(`Published ${result.proposals.length} proposal(s) as version ${result.result.version?.id.slice(0, 8) ?? ""}.`);
+        setStatus(t("skillLibrary.proposalsPublished", { count: result.proposals.length, version: result.result.version?.id.slice(0, 8) ?? "" }));
         setSelectedProposalIds(new Set());
         await refresh(result.proposals[0]?.libraryId);
       }
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not publish skill library proposals";
+      const message = reason instanceof Error ? reason.message : t("skillLibrary.error.publishProposals");
       setStatus(message);
       onError(message);
     } finally {
@@ -820,10 +833,10 @@ function SkillLibraryManager({
     setStatus(undefined);
     try {
       const rejected = await client.rejectSkillLibraryProposal(proposalId);
-      setStatus(`Rejected proposal ${rejected.id.slice(0, 8)}.`);
+      setStatus(t("skillLibrary.proposalRejected", { id: rejected.id.slice(0, 8) }));
       await refresh(rejected.libraryId);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not reject skill library proposal";
+      const message = reason instanceof Error ? reason.message : t("skillLibrary.error.rejectProposal");
       setStatus(message);
       onError(message);
     } finally {
@@ -833,81 +846,81 @@ function SkillLibraryManager({
 
   return <div className="skill-library-manager">
     <section className="skill-manager-hero skill-library-hero">
-      <div><span className="eyebrow">Versioned collections</span><h3>Skill libraries</h3></div>
+      <div><span className="eyebrow">{t("skillLibrary.eyebrow")}</span><h3>{t("skillLibrary.title")}</h3></div>
       <div className="skill-manager-hero-actions">
         <SkillManagerViewTabs activeView="libraries" onViewChange={onViewChange} />
-        <div aria-label="Skill library summary" className="skill-manager-stats">
-          <span><strong>{libraries.length}</strong><small>Libraries</small></span>
-          <span><strong>{versions.length}</strong><small>Versions</small></span>
-          <span className={selectedLibraryProposals.length ? "has-pending" : undefined}><strong>{selectedLibraryProposals.length}</strong><small>Proposals</small></span>
+        <div aria-label={t("skillLibrary.statsAria")} className="skill-manager-stats">
+          <span><strong>{libraries.length}</strong><small>{t("skillLibrary.statLibraries")}</small></span>
+          <span><strong>{versions.length}</strong><small>{t("skillLibrary.statVersions")}</small></span>
+          <span className={selectedLibraryProposals.length ? "has-pending" : undefined}><strong>{selectedLibraryProposals.length}</strong><small>{t("skillLibrary.statProposals")}</small></span>
         </div>
       </div>
     </section>
-    {!createOpen ? <button className="secondary-button skill-library-create-toggle" disabled={busy} onClick={() => setCreateOpen(true)} type="button">New library</button> : null}
+    {!createOpen ? <button className="secondary-button skill-library-create-toggle" disabled={busy} onClick={() => setCreateOpen(true)} type="button">{t("skillLibrary.newLibrary")}</button> : null}
     {createOpen ? <form className="skill-library-create" onSubmit={(event) => void createLibrary(event)}>
-      <label><span>Library name</span><input onChange={(event) => setLibraryName(event.target.value)} placeholder="Evaluation skills" value={libraryName} /></label>
-      <label><span>Stable id</span><input onChange={(event) => setLibraryId(event.target.value)} placeholder="evaluation-skills" value={libraryId} /></label>
-      <div className="skill-library-create-actions"><button className="secondary-button" disabled={busy} onClick={() => { setLibraryId(""); setLibraryName(""); setCreateOpen(false); }} type="button">Cancel</button><button className="primary-button" disabled={busy} type="submit">Create library</button></div>
+      <label><span>{t("skillLibrary.nameLabel")}</span><input onChange={(event) => setLibraryName(event.target.value)} placeholder={t("skillLibrary.namePlaceholder")} value={libraryName} /></label>
+      <label><span>{t("skillLibrary.idLabel")}</span><input onChange={(event) => setLibraryId(event.target.value)} placeholder="evaluation-skills" value={libraryId} /></label>
+      <div className="skill-library-create-actions"><button className="secondary-button" disabled={busy} onClick={() => { setLibraryId(""); setLibraryName(""); setCreateOpen(false); }} type="button">{t("common.cancel")}</button><button className="primary-button" disabled={busy} type="submit">{t("skillLibrary.createLibrary")}</button></div>
     </form> : null}
     {status ? <p className="skill-manager-error" role="status">{status}</p> : null}
     <div className="skill-library-grid">
-      <div aria-label="Skill libraries" className="skill-library-catalog">
-        <header><strong>Libraries</strong><span>{libraries.length}</span></header>
+      <div aria-label={t("skillLibrary.title")} className="skill-library-catalog">
+        <header><strong>{t("skillLibrary.statLibraries")}</strong><span>{libraries.length}</span></header>
         {libraries.map((library) => {
           const headVersion = versions.find((version) => version.id === library.headVersionId);
           const isSelected = library.id === selectedId;
-          return <button aria-label={`Skill library ${library.name}`} className={isSelected ? "skill-library-card active" : "skill-library-card"} key={library.id} onClick={() => { setSelectedId(library.id); setSelectedProposalIds(new Set()); setDiff(undefined); }} title={library.name} type="button">
+          return <button aria-label={t("skillLibrary.cardAria", { name: library.name })} className={isSelected ? "skill-library-card active" : "skill-library-card"} key={library.id} onClick={() => { setSelectedId(library.id); setSelectedProposalIds(new Set()); setDiff(undefined); }} title={library.name} type="button">
           <span aria-hidden="true" className="skill-library-card-icon">L</span>
-          <span className="skill-library-card-copy"><strong>{library.name}</strong><small>{library.headVersionId ? `Head ${library.headVersionId.slice(0, 8)}` : "No published versions"}</small>{isSelected && headVersion ? <small>{headVersion.skills.length} skills · {headVersion.contentHash.slice(0, 12)}</small> : null}</span>
+          <span className="skill-library-card-copy"><strong>{library.name}</strong><small>{library.headVersionId ? t("skillLibrary.head", { id: library.headVersionId.slice(0, 8) }) : t("skillLibrary.noPublishedVersions")}</small>{isSelected && headVersion ? <small>{t("skillLibrary.skillsAndHash", { count: headVersion.skills.length, hash: headVersion.contentHash.slice(0, 12) })}</small> : null}</span>
           <span className="skill-source managed">{library.id}</span>
         </button>;
         })}
-        {!libraries.length ? <p className="skill-empty">Create a skill library to begin.</p> : null}
+        {!libraries.length ? <p className="skill-empty">{t("skillLibrary.emptyLibraries")}</p> : null}
       </div>
       <div className="skill-library-detail">
-        {!selectedLibrary ? <p className="skill-empty">Select or create a library.</p> : <>
-          <header><div><span className="skill-source managed">Versioned library</span><h4>{selectedLibrary.name}</h4><p>{selectedLibrary.id} · {versions.length} version(s)</p></div></header>
+        {!selectedLibrary ? <p className="skill-empty">{t("skillLibrary.selectLibrary")}</p> : <>
+          <header><div><span className="skill-source managed">{t("skillLibrary.versionedLibrary")}</span><h4>{selectedLibrary.name}</h4><p>{t("skillLibrary.versionCount", { count: versions.length, id: selectedLibrary.id })}</p></div></header>
           <section className="skill-library-section">
-            <h5>Versions</h5>
-            {versions.length ? <div className="skill-version-list">{versions.map((version) => <button className={version.id === selectedVersionId ? "active" : ""} key={version.id} onClick={() => setSelectedVersionId(version.id)} type="button"><strong>{version.id.slice(0, 8)}</strong><small>{version.skills.length} skills · {version.contentHash.slice(0, 12)}</small></button>)}</div> : <p className="skill-empty">No versions yet.</p>}
+            <h5>{t("skillLibrary.statVersions")}</h5>
+            {versions.length ? <div className="skill-version-list">{versions.map((version) => <button className={version.id === selectedVersionId ? "active" : ""} key={version.id} onClick={() => setSelectedVersionId(version.id)} type="button"><strong>{version.id.slice(0, 8)}</strong><small>{t("skillLibrary.skillsAndHash", { count: version.skills.length, hash: version.contentHash.slice(0, 12) })}</small></button>)}</div> : <p className="skill-empty">{t("skillLibrary.noVersions")}</p>}
           </section>
           <form className="skill-library-section" onSubmit={(event) => void commitVersion(event)}>
-            <h5>Commit SKILL.md</h5>
-            <textarea aria-label="Skill library package SKILL.md" onChange={(event) => setSkillMarkdown(event.target.value)} rows={9} value={skillMarkdown} />
-            <label className="skill-library-checkbox"><input checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} type="checkbox" /><span>Dry run</span></label>
-            <button className="primary-button" disabled={busy} type="submit">{dryRun ? "Preview commit" : "Publish version"}</button>
+            <h5>{t("skillLibrary.commitHeading")}</h5>
+            <textarea aria-label={t("skillLibrary.commitAria")} onChange={(event) => setSkillMarkdown(event.target.value)} rows={9} value={skillMarkdown} />
+            <label className="skill-library-checkbox"><input checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} type="checkbox" /><span>{t("skillLibrary.dryRun")}</span></label>
+            <button className="primary-button" disabled={busy} type="submit">{dryRun ? t("skillLibrary.previewCommit") : t("skillLibrary.publishVersion")}</button>
           </form>
           <section className="skill-library-section">
-            <h5>Pending proposals</h5>
+            <h5>{t("skillLibrary.pendingProposals")}</h5>
             {selectedLibraryProposals.length ? <>
               <div className="skill-library-proposal-toolbar">
-                <label className="skill-library-checkbox"><input checked={selectedPendingProposalIds.length === selectedLibraryProposals.length} onChange={(event) => setSelectedProposalIds(event.target.checked ? new Set(selectedLibraryProposals.map((proposal) => proposal.id)) : new Set())} type="checkbox" /><span>Select all</span></label>
-                <button className="primary-button" disabled={busy || !selectedPendingProposalIds.length} onClick={() => void publishSelectedProposals()} type="button">Publish selected</button>
+                <label className="skill-library-checkbox"><input checked={selectedPendingProposalIds.length === selectedLibraryProposals.length} onChange={(event) => setSelectedProposalIds(event.target.checked ? new Set(selectedLibraryProposals.map((proposal) => proposal.id)) : new Set())} type="checkbox" /><span>{t("skillLibrary.selectAll")}</span></label>
+                <button className="primary-button" disabled={busy || !selectedPendingProposalIds.length} onClick={() => void publishSelectedProposals()} type="button">{t("skillLibrary.publishSelected")}</button>
               </div>
               <div className="skill-version-list">
               {selectedLibraryProposals.map((proposal) => <article className="skill-library-proposal" key={proposal.id}>
-                <header><label className="skill-library-checkbox"><input checked={selectedProposalIds.has(proposal.id)} onChange={(event) => toggleProposalSelection(proposal.id, event.target.checked)} type="checkbox" /><strong>{proposal.id.slice(0, 8)}</strong></label><small>{proposal.status} · {diffCount(proposal.result.diff)} change(s)</small></header>
+                <header><label className="skill-library-checkbox"><input checked={selectedProposalIds.has(proposal.id)} onChange={(event) => toggleProposalSelection(proposal.id, event.target.checked)} type="checkbox" /><strong>{proposal.id.slice(0, 8)}</strong></label><small>{t("skillLibrary.proposalStatusChanges", { count: diffCount(proposal.result.diff), status: proposal.status })}</small></header>
                 <p>{proposal.rationale}</p>
-                <div className="skill-library-diff" aria-label={`Skill library proposal ${proposal.id} diff`}>
-                  {(["added", "modified", "deleted"] as const).map((kind) => <div key={kind}><strong>{kind}</strong>{proposal.result.diff[kind].length ? <ul>{proposal.result.diff[kind].map((entry) => <li key={`${proposal.id}-${kind}-${entry.skillId}`}>{entry.skillId}</li>)}</ul> : <p>None</p>}</div>)}
+                <div className="skill-library-diff" aria-label={t("skillLibrary.proposalDiffAria", { id: proposal.id })}>
+                  {(["added", "modified", "deleted"] as const).map((kind) => <div key={kind}><strong>{kind}</strong>{proposal.result.diff[kind].length ? <ul>{proposal.result.diff[kind].map((entry) => <li key={`${proposal.id}-${kind}-${entry.skillId}`}>{entry.skillId}</li>)}</ul> : <p>{t("skillLibrary.none")}</p>}</div>)}
                 </div>
                 {proposal.status === "pending" ? <div className="dialog-actions">
-                  <button className="secondary-button" disabled={busy} onClick={() => void rejectProposal(proposal.id)} type="button">Reject</button>
-                  <button className="primary-button" disabled={busy || Boolean(proposal.result.conflicts.length)} onClick={() => void publishProposal(proposal.id)} type="button">Publish</button>
+                  <button className="secondary-button" disabled={busy} onClick={() => void rejectProposal(proposal.id)} type="button">{t("skillLibrary.reject")}</button>
+                  <button className="primary-button" disabled={busy || Boolean(proposal.result.conflicts.length)} onClick={() => void publishProposal(proposal.id)} type="button">{t("skillLibrary.publish")}</button>
                 </div> : null}
               </article>)}
-            </div></> : <p className="skill-empty">No pending proposals.</p>}
+            </div></> : <p className="skill-empty">{t("skillLibrary.noPendingProposals")}</p>}
           </section>
           <section className="skill-library-section">
-            <h5>Diff and rollback</h5>
+            <h5>{t("skillLibrary.diffRollbackHeading")}</h5>
             <div className="skill-library-diff-controls">
-              <select aria-label="Diff from version" onChange={(event) => setFromVersionId(event.target.value)} value={fromVersionId}>{versions.map((version) => <option key={version.id} value={version.id}>{version.id.slice(0, 8)}</option>)}</select>
-              <select aria-label="Diff to version" onChange={(event) => setToVersionId(event.target.value)} value={toVersionId}>{versions.map((version) => <option key={version.id} value={version.id}>{version.id.slice(0, 8)}</option>)}</select>
-              <button disabled={busy || !fromVersionId || !toVersionId} onClick={() => void loadDiff()} type="button">Load diff</button>
-              <button className="danger-button" disabled={busy || !selectedVersion || selectedVersion.id === selectedLibrary.headVersionId} onClick={() => void rollback()} type="button">Rollback to selected</button>
+              <select aria-label={t("skillLibrary.diffFromAria")} onChange={(event) => setFromVersionId(event.target.value)} value={fromVersionId}>{versions.map((version) => <option key={version.id} value={version.id}>{version.id.slice(0, 8)}</option>)}</select>
+              <select aria-label={t("skillLibrary.diffToAria")} onChange={(event) => setToVersionId(event.target.value)} value={toVersionId}>{versions.map((version) => <option key={version.id} value={version.id}>{version.id.slice(0, 8)}</option>)}</select>
+              <button disabled={busy || !fromVersionId || !toVersionId} onClick={() => void loadDiff()} type="button">{t("skillLibrary.loadDiff")}</button>
+              <button className="danger-button" disabled={busy || !selectedVersion || selectedVersion.id === selectedLibrary.headVersionId} onClick={() => void rollback()} type="button">{t("skillLibrary.rollbackToSelected")}</button>
             </div>
-            {diff ? <div className="skill-library-diff" aria-label="Skill library diff">
-              {(["added", "modified", "deleted"] as const).map((kind) => <div key={kind}><strong>{kind}</strong>{diff[kind].length ? <ul>{diff[kind].map((entry) => <li key={`${kind}-${entry.skillId}`}>{entry.skillId}</li>)}</ul> : <p>None</p>}</div>)}
+            {diff ? <div className="skill-library-diff" aria-label={t("skillLibrary.diffAria")}>
+              {(["added", "modified", "deleted"] as const).map((kind) => <div key={kind}><strong>{kind}</strong>{diff[kind].length ? <ul>{diff[kind].map((entry) => <li key={`${kind}-${entry.skillId}`}>{entry.skillId}</li>)}</ul> : <p>{t("skillLibrary.none")}</p>}</div>)}
             </div> : null}
           </section>
         </>}

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { translateActive } from "../../i18n/index.js";
 import type {
   AppearanceSpec,
   ChartMappings,
@@ -58,7 +59,7 @@ function spec(
   },
 ): ChartSpec {
   return {
-    appearance: { ...DEFAULT_APPEARANCE, ...input.appearance },
+    appearance: { ...DEFAULT_APPEARANCE, title: translateActive("csv.untitledChart"), ...input.appearance },
     displayName: input.displayName ?? input.preset,
     displayFilters: [],
     id: input.id,
@@ -85,7 +86,7 @@ export function createCustomSpec(table: DataTable, sequence: number): ChartSpec 
   const quantitative = table.columns.filter((column) => column.kind === "quantitative").map((column) => column.id);
   const categorical = table.columns.find((column) => column.kind === "categorical")?.id;
   const identifier = table.columns.find((column) => column.kind === "identifier")?.id;
-  const displayName = `New chart ${sequence}`;
+  const displayName = translateActive("csv.newChart", { sequence });
   const type: ChartType = quantitative.length >= 2
     ? "scatter"
     : quantitative.length === 1
@@ -104,7 +105,7 @@ export function createCustomSpec(table: DataTable, sequence: number): ChartSpec 
       x: type === "table" ? undefined : quantitative[0],
       y: type === "scatter" ? quantitative[1] : undefined,
     },
-    preset: "Custom chart",
+    preset: translateActive("csv.presetCustomChart"),
     tableId: table.id,
     type,
   });
@@ -175,10 +176,10 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
   if (effect && significance) {
     const pValueY = !/^neg/i.test(significance);
     result.push(spec(tables, {
-      appearance: { subtitle: pValueY ? "Y values are displayed as -log10" : undefined, title: "Volcano plot" },
+      appearance: { subtitle: pValueY ? translateActive("csv.volcanoSubtitle") : undefined, title: translateActive("csv.chartTypeVolcano") },
       id: "uploaded-volcano",
       mappings: { colorBy: categorical[0], label: identifier, tooltip, x: effect, y: significance },
-      preset: "Volcano plot",
+      preset: translateActive("csv.chartTypeVolcano"),
       tableId: table.id,
       thresholds: [
         { axis: "x", color: "#a4262c", label: "-0.5", value: -0.5 },
@@ -191,7 +192,7 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
 
   if (table.kind === "matrix" && gene && group && meanExpression) {
     result.push(spec(tables, {
-      appearance: { title: "Marker expression dot plot" },
+      appearance: { title: translateActive("csv.titleMarkerDotPlot") },
       id: "artifact-marker-dotplot",
       mappings: {
         colorBy: meanExpression,
@@ -200,13 +201,13 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
         x: gene,
         y: group,
       },
-      preset: "Marker dot plot",
+      preset: translateActive("csv.presetMarkerDotPlot"),
       scales: { xScale: "category", yScale: "category" },
       tableId: table.id,
       type: "dot-matrix",
     }));
     result.push(spec(tables, {
-      appearance: { title: "Marker expression heatmap" },
+      appearance: { title: translateActive("csv.titleMarkerHeatmap") },
       id: "artifact-marker-heatmap",
       mappings: {
         colorBy: meanExpression,
@@ -214,7 +215,7 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
         x: gene,
         y: group,
       },
-      preset: "Marker heatmap",
+      preset: translateActive("csv.presetMarkerHeatmap"),
       scales: { xScale: "category", yScale: "category" },
       tableId: table.id,
       type: "heatmap",
@@ -224,7 +225,7 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
   if (term && quantitative.length) {
     const ranking = negLogSignificance ?? ratio ?? quantitative[0]!;
     result.push(spec(tables, {
-      appearance: { title: "Ranked enrichment results" },
+      appearance: { title: translateActive("csv.titleRankedEnrichment") },
       id: "uploaded-ranked",
       mappings: {
         colorBy: categorical[0],
@@ -233,14 +234,14 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
         x: ranking,
         y: term,
       },
-      preset: "Enrichment bar chart",
+      preset: translateActive("csv.presetEnrichmentBar"),
       scales: { yScale: "category" },
       tableId: table.id,
       type: "ranked-bar",
     }));
     if (ratio && hitCount) {
       result.push(spec(tables, {
-        appearance: { title: "Enrichment bubble chart" },
+        appearance: { title: translateActive("csv.presetEnrichmentBubble") },
         id: "artifact-enrichment-bubble",
         mappings: {
           colorBy: negLogSignificance ?? significance,
@@ -250,7 +251,7 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
           x: ratio,
           y: term,
         },
-        preset: "Enrichment bubble chart",
+        preset: translateActive("csv.presetEnrichmentBubble"),
         scales: { yScale: "category" },
         tableId: table.id,
         type: "ranked-bubble",
@@ -260,7 +261,7 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
 
   if (!embeddingPairs.some((embedding) => embedding.x && embedding.y) && quantitative.length >= 2) {
     result.push(spec(tables, {
-      appearance: { title: "Scatter plot" },
+      appearance: { title: translateActive("csv.chartTypeScatter") },
       id: "uploaded-scatter",
       mappings: {
         colorBy: categorical[0],
@@ -270,7 +271,7 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
         x: quantitative[0],
         y: quantitative[1],
       },
-      preset: "Scatter plot",
+      preset: translateActive("csv.chartTypeScatter"),
       tableId: table.id,
       type: "scatter",
     }));
@@ -280,28 +281,28 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
   const distributionField = quantitative.find((field) => !coordinatePattern.test(field)) ?? quantitative[0];
   if (quantitative[0]) {
     result.push(spec(tables, {
-      appearance: { title: `${distributionField} distribution` },
+      appearance: { title: translateActive("csv.titleDistribution", { field: String(distributionField) }) },
       id: "uploaded-histogram",
       mappings: { colorBy: categorical[0], tooltip, x: distributionField },
-      preset: "Histogram",
+      preset: translateActive("csv.chartTypeHistogram"),
       tableId: table.id,
       type: "histogram",
     }));
     if (categorical[0]) {
       result.push(spec(tables, {
-        appearance: { title: `${distributionField} grouped by ${categorical[0]}` },
+        appearance: { title: translateActive("csv.titleGroupedBy", { field: String(distributionField), group: String(categorical[0]) }) },
         id: "uploaded-box",
         mappings: { colorBy: categorical[0], tooltip, x: categorical[0], y: distributionField },
-        preset: "Box plot",
+        preset: translateActive("csv.chartTypeBox"),
         scales: { xScale: "category" },
         tableId: table.id,
         type: "box",
       }));
       result.push(spec(tables, {
-        appearance: { title: `${distributionField} expression distribution` },
+        appearance: { title: translateActive("csv.titleExpressionDistribution", { field: String(distributionField) }) },
         id: "artifact-violin",
         mappings: { colorBy: categorical[0], tooltip, x: categorical[0], y: distributionField },
-        preset: "Violin plot",
+        preset: translateActive("csv.chartTypeViolin"),
         scales: { xScale: "category" },
         tableId: table.id,
         type: "violin",
@@ -309,28 +310,30 @@ export function createDefaultSpecs(table: DataTable): ChartSpec[] {
     }
   }
   result.push(spec(tables, {
-    appearance: { title: `${table.label} records` },
+    appearance: { title: translateActive("csv.titleRecords", { label: table.label }) },
     id: "uploaded-table",
     mappings: { tooltip: [] },
-    preset: "Data table",
+    preset: translateActive("csv.presetDataTable"),
     tableId: table.id,
     type: "table",
   }));
   return result;
 }
 
-export const CHART_TYPE_LABELS: Record<ChartType, string> = {
-  box: "Box plot",
-  "dot-matrix": "Dot matrix",
-  heatmap: "Heatmap",
-  histogram: "Histogram",
-  "ranked-bar": "Ranked bar chart",
-  "ranked-bubble": "Ranked bubble chart",
-  scatter: "Scatter plot",
-  table: "Data table",
-  violin: "Violin plot",
-  volcano: "Volcano plot",
-};
+export function chartTypeLabels(): Record<ChartType, string> {
+  return {
+    box: translateActive("csv.chartTypeBox"),
+    "dot-matrix": translateActive("csv.chartTypeDotMatrix"),
+    heatmap: translateActive("csv.chartTypeHeatmap"),
+    histogram: translateActive("csv.chartTypeHistogram"),
+    "ranked-bar": translateActive("csv.chartTypeRankedBar"),
+    "ranked-bubble": translateActive("csv.chartTypeRankedBubble"),
+    scatter: translateActive("csv.chartTypeScatter"),
+    table: translateActive("csv.chartTypeTable"),
+    violin: translateActive("csv.chartTypeViolin"),
+    volcano: translateActive("csv.chartTypeVolcano"),
+  };
+}
 
 export function requiredMappings(type: ChartType): Array<keyof ChartMappings> {
   if (type === "histogram") return ["x"];

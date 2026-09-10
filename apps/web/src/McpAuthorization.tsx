@@ -97,7 +97,7 @@ export function McpAuthorization({ server, client, onChanged }: { server: Custom
         <button type="button" disabled={busy} className="text-button mcp-inline-command" title={t("mcp.oauth.clearHint")} onClick={() => void clear(false)}><LogOut size={14} />{t("mcp.oauth.clear")}</button>
       </>}
     </div>
-    {server.authorization?.scope ? <div className="mcp-oauth-scope">Scope: {server.authorization.scope}</div> : null}
+    {server.authorization?.scope ? <div className="mcp-oauth-scope">{t("mcp.oauth.scopeLabel", { scope: server.authorization.scope })}</div> : null}
     {error || server.authorization?.error ? <p className="mcp-server-error" role="alert">{error ?? server.authorization?.error}</p> : null}
   </div>;
 }

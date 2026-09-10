@@ -16,6 +16,7 @@ import { useState } from "react";
 
 import type { ArtifactJob, ArtifactPlan } from "@sciencediscovery/schema";
 
+import { translateActive, useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronRightIcon } from "./icons.js";
 import {
   activityCardId,
@@ -35,12 +36,24 @@ function downloadSummary(jobs: ArtifactJob[], actionable: number): string {
   const failed = jobs.filter((job) => job.state === "failed").length;
   const completed = jobs.filter((job) => job.state === "completed").length;
   return [
-    active ? `${active} active` : undefined,
-    failed ? `${failed} failed` : undefined,
-    completed ? `${completed} completed` : undefined,
-    actionable ? `${actionable} action${actionable === 1 ? "" : "s"} needed` : undefined,
-  ].filter(Boolean).join(" · ") || "Recorded";
+    active ? translateActive("downloads.summaryActive", { count: active }) : undefined,
+    failed ? translateActive("downloads.summaryFailed", { count: failed }) : undefined,
+    completed ? translateActive("downloads.summaryCompleted", { count: completed }) : undefined,
+    actionable
+      ? translateActive(actionable === 1 ? "downloads.summaryActionNeededOne" : "downloads.summaryActionNeeded", { count: actionable })
+      : undefined,
+  ].filter(Boolean).join(" · ") || translateActive("downloads.summaryRecorded");
 }
+
+const JOB_STATE_KEYS: Record<ArtifactJob["state"], MessageKey> = {
+  cancelled: "downloads.stateCancelled",
+  completed: "downloads.stateCompleted",
+  failed: "downloads.stateFailed",
+  queued: "downloads.stateQueued",
+  retrying: "downloads.stateRetrying",
+  running: "downloads.stateRunning",
+  verifying: "downloads.stateVerifying",
+};
 
 export function GovernedDownloadCards({
   candidates,
@@ -59,6 +72,7 @@ export function GovernedDownloadCards({
   onPrepare: (item: GovernedDownloadCandidate) => Promise<void>;
   plans: ArtifactPlan[];
 }) {
+  const { t } = useLocale();
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const plannedCandidateIds = new Set(plans.flatMap((plan) => plan.candidates.map((candidate) => candidate.id)));
   const unplanned = candidates.filter((item) => !plannedCandidateIds.has(item.candidate.id));
@@ -78,26 +92,26 @@ export function GovernedDownloadCards({
     }
   }
 
-  return <section aria-label="Governed downloads" className="governed-downloads-panel">
+  return <section aria-label={t("downloads.title")} className="governed-downloads-panel">
     <article className="governed-downloads-card">
       <button aria-expanded={expanded} className="governed-downloads-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span><strong>Governed downloads</strong><small>{downloadSummary(jobs, actionable)}</small></span>
+        <span><strong>{t("downloads.title")}</strong><small>{downloadSummary(jobs, actionable)}</small></span>
         <i>{unplanned.length + awaitingApproval.length + jobs.length}</i>
       </button>
       {expanded ? <div className="governed-downloads-body">
         {unplanned.map((item) => <article className="governed-download-item candidate" key={`${item.invocationId}:${item.candidate.id}`}>
-          <span><strong>{item.candidate.logicalName}</strong><small>{item.candidate.sourceId} · {item.candidate.format}{item.candidate.expectedBytes ? ` · ${item.candidate.expectedBytes.toLocaleString()} bytes` : ""}</small></span>
-          <button className="secondary-button" disabled={busyIds.has(item.candidate.id)} onClick={() => void runAction(item.candidate.id, () => onPrepare(item))} type="button">{busyIds.has(item.candidate.id) ? "Preparing…" : "Prepare download"}</button>
+          <span><strong>{item.candidate.logicalName}</strong><small>{item.candidate.sourceId} · {item.candidate.format}{item.candidate.expectedBytes ? ` · ${t("downloads.bytes", { count: item.candidate.expectedBytes.toLocaleString() })}` : ""}</small></span>
+          <button className="secondary-button" disabled={busyIds.has(item.candidate.id)} onClick={() => void runAction(item.candidate.id, () => onPrepare(item))} type="button">{busyIds.has(item.candidate.id) ? t("downloads.preparing") : t("downloads.prepare")}</button>
         </article>)}
         {awaitingApproval.map((plan) => <article className="governed-download-item awaiting-approval" key={plan.id}>
           <span><strong>{plan.candidates.find((item) => item.id === plan.selectedCandidateId)?.logicalName ?? plan.sourceRecordId}</strong><small>{plan.sourceId} → {plan.destination.path}</small></span>
-          <em>Waiting for approval</em>
+          <em>{t("downloads.waitingApproval")}</em>
         </article>)}
         {jobs.toReversed().map((job) => <article className={`governed-download-item ${job.state}`} key={job.id}>
-          <span><strong>{job.sourceId} · {job.sourceRecordId}</strong><small>{job.state.replaceAll("_", " ")} · {job.progress.percent ?? 0}% · {job.progress.bytesDownloaded.toLocaleString()} bytes</small>{job.finalPath ? <small>{job.finalPath}</small> : null}{job.error ? <small className="governed-download-error" role="alert">{job.error.message}</small> : null}</span>
-          {ACTIVE_STATES.has(job.state) ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "cancel"))} type="button">Cancel</button> : null}
-          {job.state === "failed" ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "retry"))} type="button">{busyIds.has(job.id) ? "Retrying…" : "Retry"}</button> : null}
+          <span><strong>{job.sourceId} · {job.sourceRecordId}</strong><small>{JOB_STATE_KEYS[job.state] ? t(JOB_STATE_KEYS[job.state]) : job.state.replaceAll("_", " ")} · {job.progress.percent ?? 0}% · {t("downloads.bytes", { count: job.progress.bytesDownloaded.toLocaleString() })}</small>{job.finalPath ? <small>{job.finalPath}</small> : null}{job.error ? <small className="governed-download-error" role="alert">{job.error.message}</small> : null}</span>
+          {ACTIVE_STATES.has(job.state) ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "cancel"))} type="button">{t("common.cancel")}</button> : null}
+          {job.state === "failed" ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "retry"))} type="button">{busyIds.has(job.id) ? t("downloads.retrying") : t("downloads.retry")}</button> : null}
         </article>)}
       </div> : null}
     </article>

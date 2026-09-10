@@ -14,6 +14,8 @@
 
 import { zip } from "fflate";
 
+import { translateActive } from "./i18n/index.js";
+
 export const MAX_ARTIFACT_ARCHIVE_FILES = 100;
 export const MAX_ARTIFACT_ARCHIVE_BYTES = 100 * 1024 * 1024;
 
@@ -25,11 +27,11 @@ export interface ArtifactArchiveEntry {
 export function normalizeArtifactArchivePath(name: string): string {
   const posix = name.replaceAll("\\", "/");
   if (posix.startsWith("/") || /^[a-zA-Z]:\//.test(posix)) {
-    throw new Error("Artifact path must be relative");
+    throw new Error(translateActive("downloads.pathMustBeRelative"));
   }
   const segments = posix.split("/").filter((segment) => segment && segment !== ".");
   if (!segments.length || segments.some((segment) => segment === "..")) {
-    throw new Error("Artifact path is unsafe");
+    throw new Error(translateActive("downloads.pathUnsafe"));
   }
   return segments.join("/");
 }
@@ -40,10 +42,10 @@ export function artifactDownloadFileName(name: string): string {
 
 export function artifactArchiveLimitError(fileCount: number, totalBytes: number): string | undefined {
   if (fileCount > MAX_ARTIFACT_ARCHIVE_FILES) {
-    return `Select at most ${MAX_ARTIFACT_ARCHIVE_FILES} artifacts per download.`;
+    return translateActive("downloads.tooManyArtifacts", { count: MAX_ARTIFACT_ARCHIVE_FILES });
   }
   if (totalBytes > MAX_ARTIFACT_ARCHIVE_BYTES) {
-    return "Selected artifacts exceed the 100 MiB download limit.";
+    return translateActive("downloads.archiveTooLarge");
   }
   return undefined;
 }
@@ -52,7 +54,7 @@ export async function createArtifactArchive(entries: readonly ArtifactArchiveEnt
   const files: Record<string, Uint8Array> = {};
   for (const entry of entries) {
     const path = normalizeArtifactArchivePath(entry.name);
-    if (files[path]) throw new Error(`Duplicate artifact path: ${path}`);
+    if (files[path]) throw new Error(translateActive("downloads.duplicatePath", { path }));
     files[path] = entry.content;
   }
   return new Promise((resolve, reject) => {

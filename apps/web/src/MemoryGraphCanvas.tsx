@@ -29,6 +29,8 @@ import { zoom, zoomIdentity, zoomTransform, type D3ZoomEvent } from "d3-zoom";
 
 import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
+import { translateActive } from "./i18n/index.js";
+
 /**
  * One colour per node label, drawn from a vivid, high-saturation palette
  * (each hue is pushed bright so the nine categories read at a glance even
@@ -114,7 +116,8 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
   // plural kind name ("Artifacts"/"Papers") so it reads as a stack to expand.
   if (extra.aggregated === true || node.id.startsWith("_group:")) {
     const kind = typeof extra.kind === "string" ? extra.kind : node.label;
-    return kind === "Artifact" ? "Artifacts" : kind === "Paper" ? "Papers" : kind;
+    return kind === "Artifact" ? translateActive("memory.aggregate.artifacts")
+      : kind === "Paper" ? translateActive("memory.aggregate.papers") : kind;
   }
   // Artifact versions are separate nodes on a composite key, so the caption
   // carries the version too: two circles both reading "evolve/e…" told the
@@ -1912,7 +1915,7 @@ export function MemoryGraphCanvas({
           // ToolCall 子节点时无内容可展开）。
           if (!node.childCount) return null;
           const hints = scopeHintsRef.current;
-          return node.folded ? (hints?.expand ?? "Click to expand") : (hints?.collapse ?? "Click to collapse");
+          return node.folded ? (hints?.expand ?? translateActive("scope.clickExpand")) : (hints?.collapse ?? translateActive("scope.clickCollapse"));
         }
         if (node.isAggregate) {
           // aggregate 节点：双击 toggle 成员展开。aggregateExpanded → 收起提示。
@@ -1920,8 +1923,8 @@ export function MemoryGraphCanvas({
           if (!node.aggregateCount) return null;
           const hints = scopeHintsRef.current;
           return node.aggregateExpanded
-            ? (hints?.collapse ?? "Click to collapse")
-            : (hints?.expand ?? "Click to expand");
+            ? (hints?.collapse ?? translateActive("scope.clickCollapse"))
+            : (hints?.expand ?? translateActive("scope.clickExpand"));
         }
         // 非 scope/aggregate 节点（规则3）：双击 toggle produces 成员。
         // producesExpanded → "双击收起节点"；否则 → "双击展开节点"。
@@ -1934,8 +1937,8 @@ export function MemoryGraphCanvas({
         if (!(foldedProducesCountsRef.current?.get(node.id) ?? 0)) return null;
         const hints = producesHintsRef.current ?? scopeHintsRef.current;
         return node.producesExpanded
-          ? (hints?.collapse ?? "Double-click to collapse")
-          : (hints?.expand ?? "Double-click to expand");
+          ? (hints?.collapse ?? translateActive("scope.clickCollapse"))
+          : (hints?.expand ?? translateActive("scope.clickExpand"));
       });
 
     // Live animation: d3-force's native rAF timer fires `on("tick")` at high

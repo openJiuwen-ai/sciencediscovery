@@ -14,17 +14,19 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useLocale } from "./i18n/index.js";
 import { CheckIcon, CopyIcon, WarningIcon } from "./icons.js";
 
 export function CopyButton({
   className,
   getText,
-  label = "Copy",
+  label,
 }: {
   className?: string;
   getText: () => string;
   label?: string;
 }) {
+  const { t } = useLocale();
   const [state, setState] = useState<"copied" | "failed" | "idle">("idle");
   const timer = useRef<number | undefined>(undefined);
 
@@ -56,7 +58,7 @@ export function CopyButton({
     timer.current = window.setTimeout(() => setState("idle"), 1600);
   };
 
-  const feedback = state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label;
+  const feedback = state === "copied" ? t("copy.copied") : state === "failed" ? t("copy.failed") : label ?? t("copy.default");
   return (
     <button
       aria-label={feedback}

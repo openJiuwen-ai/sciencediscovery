@@ -31,6 +31,7 @@ function ToolIoSection({
   onToggle: (open: boolean) => void;
   open: boolean;
 }) {
+  const { t } = useLocale();
   return (
     <details
       className="tool-io-section"
@@ -44,7 +45,7 @@ function ToolIoSection({
         <span className="tool-io-label">{label}</span>
         {/* Keep the copy click from toggling the section. */}
         <span className="tool-io-actions" onClick={(event) => event.preventDefault()}>
-          <CopyButton className="tool-io-copy" getText={() => content} label={`Copy ${label}`} />
+          <CopyButton className="tool-io-copy" getText={() => content} label={t("copy.section", { label })} />
         </span>
       </summary>
       <pre>{content}</pre>
@@ -76,7 +77,7 @@ export function ToolIoSections({
 
   return <div className="tool-io-sections">
     {inputText ? renderSection("input", t("timeline.input"), inputText) : null}
-    {trace.inputTruncated ? <p className="muted">The input was truncated by the retention policy.</p> : null}
+    {trace.inputTruncated ? <p className="muted">{t("timeline.inputTruncated")}</p> : null}
     {outputSections.length > 0
       ? outputSections.map((section) => renderSection(section.id, section.label, section.content))
       : (
@@ -86,6 +87,6 @@ export function ToolIoSections({
             ? t("timeline.loadingResult")
             : t("timeline.noOutput")}</pre>
       )}
-    {trace.outputTruncated ? <p className="muted">The result was truncated by the retention policy.</p> : null}
+    {trace.outputTruncated ? <p className="muted">{t("timeline.outputTruncated")}</p> : null}
   </div>;
 }

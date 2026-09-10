@@ -106,7 +106,7 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
   const app = source("App.tsx");
 
   assert.match(app, /<span title=\{project\.name\}>\{label\}<\/span>/);
-  assert.match(app, /<span title=\{`\$\{item\.title\}\$\{item\.archivedAt/);
+  assert.match(app, /<span title=\{item\.archivedAt \? `\$\{item\.title\} · \$\{t\("sidebar\.archived"\)\}` : item\.title\}>/);
   // Only the optional vision model picker still uses the long option label;
   // the composer mounts the ModelPicker popover instead of an inline select.
   assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels), t\)/g)?.length, 1);
@@ -123,8 +123,8 @@ test("the session bar constrains long names and preserves their full hover text"
 
   assert.match(conversation, /\.session-bar-session \{[^}]*min-width: 0;[^}]*flex: 1 1 0;/);
   assert.match(conversation, /\.session-bar-session-title \{[^}]*width: 100%;[^}]*max-width: 100%;/);
-  assert.match(app, /title=\{`\$\{activeProjectLabel\} · Double-click to rename Project`\}/);
-  assert.match(app, /title=\{`\$\{activeSessionLabel\} · Rename session`\}/);
+  assert.match(app, /title=\{t\("app\.renameProjectHint", \{ name: activeProjectLabel \}\)\}/);
+  assert.match(app, /title=\{t\("app\.renameSessionTitle", \{ name: activeSessionLabel \}\)\}/);
 });
 
 test("historical run labels use their recorded model instead of the Composer selection", () => {

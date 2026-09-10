@@ -23,7 +23,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { uniqueValues } from "../chart-spec/filters.js";
-import { CHART_TYPE_LABELS, requiredMappings } from "../chart-spec/presets.js";
+import { chartTypeLabels, requiredMappings } from "../chart-spec/presets.js";
+import { useLocale, type MessageKey } from "../../i18n/index.js";
 import type {
   ChartMappings,
   ChartSpec,
@@ -42,13 +43,13 @@ interface ChartConfigPanelProps {
   spec: ChartSpec;
 }
 
-const MAPPING_LABELS: Record<Exclude<keyof ChartMappings, "tooltip">, string> = {
-  colorBy: "Color field",
-  facetBy: "Facet field",
-  label: "Label field",
-  sizeBy: "Point size field",
-  x: "X axis",
-  y: "Y axis",
+const MAPPING_LABEL_KEYS: Record<Exclude<keyof ChartMappings, "tooltip">, MessageKey> = {
+  colorBy: "csv.mappingColorBy",
+  facetBy: "csv.mappingFacetBy",
+  label: "csv.mappingLabel",
+  sizeBy: "csv.mappingSizeBy",
+  x: "csv.mappingX",
+  y: "csv.mappingY",
 };
 
 function fieldOptions(
@@ -70,6 +71,7 @@ export function ChartConfigPanel({
   onResetSpec,
   spec,
 }: ChartConfigPanelProps) {
+  const { t } = useLocale();
   const categorical = useMemo(
     () => activeTable.columns.filter((column) => column.kind === "categorical" && column.uniqueCount <= 64),
     [activeTable.columns],
@@ -118,52 +120,52 @@ export function ChartConfigPanel({
   }
 
   return (
-    <aside className="csva-config-panel" aria-label="Chart settings">
+    <aside className="csva-config-panel" aria-label={t("csv.chartSettings")}>
       <div className="csva-panel-title">
         <span><Palette size={16} /></span>
-        <div><strong>Chart settings</strong><small>Current browser view</small></div>
+        <div><strong>{t("csv.chartSettings")}</strong><small>{t("csv.currentBrowserView")}</small></div>
         <button
-          aria-label="Delete current chart"
+          aria-label={t("csv.deleteCurrentChart")}
           className="csva-delete-chart"
           disabled={!canDelete}
           onClick={onDeleteSpec}
-          title={canDelete ? "Delete current chart" : "At least one chart is required"}
+          title={t(canDelete ? "csv.deleteCurrentChart" : "csv.oneChartRequired")}
           type="button"
         >
           <Trash2 size={15} />
         </button>
-        <button aria-label="Reset chart settings" onClick={onResetSpec} title="Reset chart settings" type="button"><RotateCcw size={15} /></button>
+        <button aria-label={t("csv.resetChartSettings")} onClick={onResetSpec} title={t("csv.resetChartSettings")} type="button"><RotateCcw size={15} /></button>
       </div>
 
       <section className="csva-config-section">
-        <h3><Database size={14} /> Data</h3>
+        <h3><Database size={14} /> {t("csv.dataSection")}</h3>
         <div className="csva-data-facts">
-          <span><strong>{activeTable.rows.length.toLocaleString()}</strong> rows</span>
-          <span><strong>{activeTable.columns.length}</strong> fields</span>
-          <span><strong>{activeTable.kind}</strong> type</span>
+          <span><strong>{activeTable.rows.length.toLocaleString()}</strong> {t("csv.rowsUnit")}</span>
+          <span><strong>{activeTable.columns.length}</strong> {t("csv.fieldsUnit")}</span>
+          <span><strong>{activeTable.kind}</strong> {t("csv.typeUnit")}</span>
         </div>
       </section>
 
       <section className="csva-config-section">
-        <h3><Braces size={14} /> Visual encoding</h3>
+        <h3><Braces size={14} /> {t("csv.visualEncoding")}</h3>
         <label>
-          <span>Display name</span>
+          <span>{t("csv.displayName")}</span>
           <input
             maxLength={80}
             onBlur={() => {
-              if (!spec.displayName.trim()) onChange({ ...spec, displayName: "Untitled chart" });
+              if (!spec.displayName.trim()) onChange({ ...spec, displayName: t("csv.untitledChart") });
             }}
             onChange={(event) => onChange({ ...spec, displayName: event.target.value })}
             value={spec.displayName}
           />
         </label>
         <label>
-          <span>Chart type</span>
+          <span>{t("csv.chartType")}</span>
           <select
             onChange={(event) => onChange({ ...spec, type: event.target.value as ChartType })}
             value={spec.type}
           >
-            {Object.entries(CHART_TYPE_LABELS).map(([value, label]) =>
+            {Object.entries(chartTypeLabels()).map(([value, label]) =>
               <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
@@ -172,12 +174,12 @@ export function ChartConfigPanel({
           if (spec.type === "histogram" && mapping === "y") return null;
           return (
             <label key={mapping}>
-              <span>{MAPPING_LABELS[mapping]}{required.has(mapping) ? <i>Required</i> : null}</span>
+              <span>{t(MAPPING_LABEL_KEYS[mapping])}{required.has(mapping) ? <i>{t("csv.required")}</i> : null}</span>
               <select
                 onChange={(event) => updateMapping(mapping, event.target.value)}
                 value={spec.mappings[mapping] ?? ""}
               >
-                <option value="">None</option>
+                <option value="">{t("csv.noMapping")}</option>
                 {fieldOptions(activeTable.columns, mapping).map((column) =>
                   <option key={column.id} value={column.id}>{column.id} / {column.kind}</option>)}
               </select>
@@ -185,7 +187,7 @@ export function ChartConfigPanel({
           );
         })}
         <details className="csva-tooltip-fields">
-          <summary>Hover fields <span>{spec.mappings.tooltip.length}</span></summary>
+          <summary>{t("csv.hoverFields")} <span>{spec.mappings.tooltip.length}</span></summary>
           <div>
             {activeTable.columns.map((column) => {
               const checked = spec.mappings.tooltip.includes(column.id);
@@ -208,19 +210,19 @@ export function ChartConfigPanel({
       </section>
 
       <section className="csva-config-section">
-        <h3><Filter size={14} /> Display filters</h3>
+        <h3><Filter size={14} /> {t("csv.displayFilters")}</h3>
         <label>
-          <span>Search visible rows</span>
+          <span>{t("csv.searchVisibleRows")}</span>
           <input
             onChange={(event) => updateSearch(event.target.value)}
-            placeholder="ID, group, gene..."
+            placeholder={t("csv.searchRowsPlaceholder")}
             type="search"
             value={searchFilter?.kind === "search" ? searchFilter.query : ""}
           />
         </label>
         {categorical.length ? <>
           <label>
-            <span>Category field</span>
+            <span>{t("csv.categoryField")}</span>
             <select onChange={(event) => setFilterField(event.target.value)} value={filterField}>
               {categorical.map((column) => <option key={column.id} value={column.id}>{column.id}</option>)}
             </select>
@@ -228,28 +230,28 @@ export function ChartConfigPanel({
           <div className="csva-filter-values">
             {filterValues.map((value) => {
               const checked = selectedValues.some((item) => String(item) === String(value));
-              return <label key={String(value)}><input checked={checked} onChange={() => toggleFilterValue(value)} type="checkbox" /><span>{String(value ?? "Missing")}</span></label>;
+              return <label key={String(value)}><input checked={checked} onChange={() => toggleFilterValue(value)} type="checkbox" /><span>{String(value ?? t("csv.missing"))}</span></label>;
             })}
           </div>
-        </> : <p className="csva-config-empty">No low-cardinality fields are available for filtering.</p>}
+        </> : <p className="csva-config-empty">{t("csv.noFilterableFields")}</p>}
       </section>
 
       <section className="csva-config-section">
-        <h3><Palette size={14} /> Appearance</h3>
+        <h3><Palette size={14} /> {t("csv.appearance")}</h3>
         <label>
-          <span>Title</span>
+          <span>{t("csv.title")}</span>
           <input value={spec.appearance.title} onChange={(event) => onChange({ ...spec, appearance: { ...spec.appearance, title: event.target.value } })} />
         </label>
         <label>
-          <span>Point opacity <output>{Math.round(spec.appearance.opacity * 100)}%</output></span>
+          <span>{t("csv.pointOpacity")} <output>{Math.round(spec.appearance.opacity * 100)}%</output></span>
           <input min="0.15" max="1" step="0.05" type="range" value={spec.appearance.opacity} onChange={(event) => onChange({ ...spec, appearance: { ...spec.appearance, opacity: Number(event.target.value) } })} />
         </label>
         {spec.mappings.facetBy ? <label>
-          <span>Facet columns <output>{spec.appearance.facetColumns}</output></span>
+          <span>{t("csv.facetColumns")} <output>{spec.appearance.facetColumns}</output></span>
           <input min="1" max="4" step="1" type="range" value={spec.appearance.facetColumns} onChange={(event) => onChange({ ...spec, appearance: { ...spec.appearance, facetColumns: Number(event.target.value) } })} />
         </label> : null}
-        <label className="csva-toggle-row"><input checked={spec.appearance.showLegend} onChange={(event) => onChange({ ...spec, appearance: { ...spec.appearance, showLegend: event.target.checked } })} type="checkbox" /><span>Show legend</span></label>
-        <label className="csva-toggle-row"><input checked={spec.appearance.showGrid} onChange={(event) => onChange({ ...spec, appearance: { ...spec.appearance, showGrid: event.target.checked } })} type="checkbox" /><span>Show grid</span></label>
+        <label className="csva-toggle-row"><input checked={spec.appearance.showLegend} onChange={(event) => onChange({ ...spec, appearance: { ...spec.appearance, showLegend: event.target.checked } })} type="checkbox" /><span>{t("csv.showLegend")}</span></label>
+        <label className="csva-toggle-row"><input checked={spec.appearance.showGrid} onChange={(event) => onChange({ ...spec, appearance: { ...spec.appearance, showGrid: event.target.checked } })} type="checkbox" /><span>{t("csv.showGrid")}</span></label>
       </section>
     </aside>
   );

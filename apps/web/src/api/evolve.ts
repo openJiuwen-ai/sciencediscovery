@@ -14,6 +14,7 @@
 
 import type { EvolveEventRecord, EvolveGoal, EvolveRun, SearchGraphView } from "@sciencediscovery/schema";
 
+import { translateActive } from "../i18n/index.js";
 import { SkillsApiClient } from "./skills.js";
 
 /**
@@ -82,9 +83,9 @@ export class EvolveApiClient extends SkillsApiClient {
     });
     if (!response.ok) {
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || `Evolve event stream failed (${response.status})`);
+      throw new Error(error.error || translateActive("error.evolveStreamFailed", { status: response.status }));
     }
-    if (!response.body) throw new Error("Evolve event stream has no body");
+    if (!response.body) throw new Error(translateActive("error.evolveStreamNoBody"));
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

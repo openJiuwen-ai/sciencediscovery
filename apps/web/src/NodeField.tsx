@@ -20,6 +20,7 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { useLocale } from "./i18n/LocaleProvider.js";
+import type { MessageKey } from "./i18n/messages.js";
 
 // --- Evidence field classification (shared with EvidenceModal) -------------
 // Known structured fields on an Evidence node's `extra`. Everything else falls
@@ -155,18 +156,19 @@ export function LinkField({ href, children }: { href: unknown; children?: ReactN
 /** A CAS hash field: shows decoded content when given, else collapses the raw
  *  hex under a <details> so it doesn't dominate the panel. */
 export function HashField({ hash, children }: { hash: unknown; children?: ReactNode }) {
+  const { t } = useLocale();
   const raw = typeof hash === "string" ? hash : "";
   const id = useId();
   if (children) {
     // Decoded content path: render the content, with the raw hash folded away.
     return <div className="node-hash">
       {children}
-      {raw ? <details className="node-hash-raw"><summary id={id}>原始 hash</summary><code className="node-hash-code">{raw}</code></details> : null}
+      {raw ? <details className="node-hash-raw"><summary id={id}>{t("node.rawHash")}</summary><code className="node-hash-code">{raw}</code></details> : null}
     </div>;
   }
   if (!raw) return null;
   return <details className="node-hash-raw">
-    <summary>原始 hash</summary>
+    <summary>{t("node.rawHash")}</summary>
     <code className="node-hash-code">{raw}</code>
   </details>;
 }
@@ -174,16 +176,26 @@ export function HashField({ hash, children }: { hash: unknown; children?: ReactN
 /** Collapsible "raw attributes" block for fields that don't warrant a primary
  *  surface (internal keys, routing ids). */
 export function RawAttributes({ pairs }: { pairs: { key: string; value: unknown }[] }) {
+  const { t } = useLocale();
   if (!pairs.length) return null;
   return <details className="node-raw-attrs">
-    <summary>原始属性（{pairs.length}）</summary>
+    <summary>{t("node.rawAttributes", { count: pairs.length })}</summary>
     <dl className="node-raw-attrs-list">
       {pairs.map(({ key, value }) => <div className="node-field node-raw-field" key={key}>
-        <dt className="node-field-label">{humanizeKey(key)}</dt>
+        <dt className="node-field-label">{nodeFieldLabel(t, key)}</dt>
         <dd className="node-field-value">{renderValue(value)}</dd>
       </div>)}
     </dl>
   </details>;
+}
+
+/** Look up a per-key translation (`node.field.<key>`) first so a known field
+ *  renders in the active locale; fall back to humanizeKey for keys with no
+ *  catalogue entry rather than showing raw snake_case. */
+function nodeFieldLabel(t: (key: MessageKey, variables?: Record<string, string | number>) => string, key: string): string {
+  const messageKey = `node.field.${key}` as MessageKey;
+  const translated = t(messageKey);
+  return translated === messageKey ? humanizeKey(key) : translated;
 }
 
 // --- Value rendering --------------------------------------------------------
