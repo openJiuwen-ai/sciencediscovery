@@ -6,7 +6,7 @@ description: Prepare supplied inputs for autonomous Idea Tree research and expla
 # Idea Tree Research
 
 Idea Tree is executed by the Python research engine, independently of the Lead conversation.
-Configure budgets and role prompts only in the workspace Idea Tree surface. Use `/idea-tree <task>`
+Configure budgets and role prompts in System Settings → Idea Tree. Use `/idea-tree <task>`
 or `/idea-tree-team <task>` in the composer to start research with those defaults.
 Objective and prepared materials are backend inputs, not a separate front-end form. Do not create a plan or invoke legacy
 `tree_*` tools to execute this workflow.

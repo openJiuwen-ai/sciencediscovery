@@ -8,7 +8,7 @@ import { ideaResearchModel } from "./helpers/idea-research-model.ts";
  * E2E-META
  * Purpose: Start autonomous research, pause an in-flight design, manually continue three rounds, inspect persisted results and end another research.
  * Steps:
- *   1. Configure tree budgets only in the tree surface; no separate research creation form.
+ *   1. Configure tree budgets in system settings and start from the composer without an input dialog.
  *   2. Pause during design and verify no assessments start from the late response.
  *   3. Continue manually and inspect three rounds, independent assessments and persisted ROOT insight after reload.
  *   4. End another research using the confirmation control.
@@ -34,23 +34,24 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   };
   journey.scenario({goal: "从给定材料自主探索多个方向，暂停后手动继续，并完成多轮改进", preconditions: ["隔离 API 与 Python evolve 服务", "本地模拟模型，实际后端与文件持久化，无 Subagent、Runner 或 Neo4j"]});
   try {
-    await journey.step("在树展示区域配置参数", "仅在树区域保存预算和提示词，系统设置不再提供树配置", async () => {
+    await journey.step("在系统设置配置研究", "保存三轮预算和设计提示词，再从会话启动，不创建输入弹窗或聊天计划", async () => {
       fixture = await createProjectAndSession(page, {model: {...stub, name: `Idea engine ${Date.now()}`}, projectName: `Idea engine ${Date.now()}`, sessionTitle: "自主催化剂探索"});
       await openProjectSession(page, fixture);
       await page.getByRole("button", {name: /^(System configuration|系统设置)/}).click();
       const dialog = page.getByRole("dialog", {name: /System configuration|系统设置/});
-      await expect(dialog.getByRole("button", {name: /^Idea Tree/})).toHaveCount(0);
-      await dialog.getByRole("button", {name: /close|关闭/}).first().click();
-      await panel.getByRole("button", {name: "树配置", exact: true}).click();
-      const settings = panel.locator(".idea-tree-settings");
+      await dialog.getByRole("button", {name: /^Idea Tree/}).click();
+      const settings = dialog.locator(".idea-tree-settings");
       await settings.getByLabel(/Maximum exploration rounds|最多探索轮数/).fill("3");
       await settings.getByLabel(/Candidates per round|每轮最多候选/).fill("1");
       await settings.getByLabel(/Max depth|最大深度/).fill("4");
       await settings.locator("textarea").nth(0).fill("DESIGN-OVERRIDE: design from supplied materials only.");
       await settings.getByRole("button", {name: /Save|保存/}).click();
       await expect.poll(async () => (await (await page.request.get(`${apiBaseUrl()}/api/settings/idea-tree`, {headers: authorizationHeader()})).json()).candidatesPerRound).toBe(1);
+      await dialog.getByRole("button", {name: /close|关闭/}).first().click();
       await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Compare low-cost Fe and Mn catalysts; no cobalt. User supplied: near-neutral water, recovery and leaching matter.");
       await page.getByRole("button", {name: /^(Run analysis|运行分析)$/}).click();
+      await expect(panel.getByRole("button", {name: "树配置", exact: true})).toHaveCount(0);
+      await expect(panel.locator(".idea-tree-settings")).toHaveCount(0);
       await expect(page.getByLabel("研究目标与约束")).toHaveCount(0);
       await expect(page.getByLabel("给定材料", {exact: true})).toHaveCount(0);
       await expect(page.getByRole("dialog", {name: "Idea Tree explorer"})).toHaveCount(0);
