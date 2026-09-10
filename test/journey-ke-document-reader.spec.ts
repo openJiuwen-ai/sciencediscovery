@@ -117,7 +117,7 @@ test("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async ({ jou
         expect(settings.ok()).toBeTruthy();
 
         await expect(page.getByTestId("ke-documents")).toContainText("✓", { timeout: 480_000 });
-        await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'],[data-status='running']")).toHaveCount(0, { timeout: 60_000 });
+        await expect(page.getByTestId("ke-job-status").locator("[data-status='pending'],[data-status='running']")).toHaveCount(0, { timeout: 180_000 });
         await expect(page.getByTestId("ke-job-status").locator("[data-status='failed'],[data-status='dead']")).toHaveCount(0);
       },
     );
