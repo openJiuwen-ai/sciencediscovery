@@ -13,6 +13,7 @@
 // limitations under the License.
 
 export * from "./runtime-settings.js";
+export * from "./idea-tree.js";
 export * from "./project.js";
 export * from "./plan.js";
 export * from "./specialist.js";

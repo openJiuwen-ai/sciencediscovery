@@ -16,6 +16,7 @@ import type {
   ApprovalMode,
   ArtifactReviewRun,
   ComposerReference,
+  IdeaTreePhase,
   PermissionDecision,
   PermissionRequest,
   RunStreamEvent,
@@ -47,6 +48,14 @@ function isGraphToolTrace(trace: ToolTrace): boolean {
 }
 
 export type RunTimelineEntry =
+  | {
+      id: string;
+      nodeId?: string;
+      phase: IdeaTreePhase;
+      status: "completed" | "running";
+      treeId?: string;
+      type: "idea-tree-phase";
+    }
   | {
       content: string;
       expanded: boolean;
@@ -230,6 +239,12 @@ function finishThinking(entries: RunTimelineEntry[]): RunTimelineEntry[] {
     .filter((entry): boolean => !(entry.type === "thinking" && entry.status === "completed" && !entry.content.trim())) as RunTimelineEntry[];
 }
 
+function finishIdeaTreePhases(entries: RunTimelineEntry[]): RunTimelineEntry[] {
+  return entries.map((entry) => entry.type === "idea-tree-phase" && entry.status === "running"
+    ? { ...entry, status: "completed" }
+    : entry);
+}
+
 function nextAnswerId(entries: RunTimelineEntry[]): string {
   return `answer-${entries.filter((entry) => entry.type === "assistant").length + 1}`;
 }
@@ -271,6 +286,26 @@ export function reduceRunTimeline(
 
   if (event.type === "subagent.step" || event.type === "subagent.usage") {
     return updateTimelineSubagent(entries, event.subagentId, event);
+  }
+
+  if (event.type === "idea_tree.phase") {
+    const finished = finishIdeaTreePhases(finishThinking(entries));
+    const previousPhaseIndex = finished.findLastIndex((entry) => entry.type === "idea-tree-phase");
+    const previousPhase = finished[previousPhaseIndex];
+    if (previousPhase?.type === "idea-tree-phase" && previousPhase.phase === event.phase
+      && previousPhase.nodeId === event.nodeId && previousPhase.treeId === event.treeId) {
+      return finished.map((entry, index) => index === previousPhaseIndex && entry.type === "idea-tree-phase"
+        ? { ...entry, status: "running" }
+        : entry);
+    }
+    return [...finished, {
+      id: `idea-tree-phase-${finished.filter((entry) => entry.type === "idea-tree-phase").length + 1}`,
+      ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+      phase: event.phase,
+      status: "running",
+      ...(event.treeId ? { treeId: event.treeId } : {}),
+      type: "idea-tree-phase",
+    }];
   }
 
   if (event.type === "agent.phase") {
@@ -452,7 +487,7 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "run.completed") {
-    const finished = finishThinking(entries);
+    const finished = finishIdeaTreePhases(finishThinking(entries));
     const messageReferences = event.message.references;
     // Thread the message's own chip references onto the assistant entry that
     // carries the same report prose. The terminal message is the authoritative
@@ -478,7 +513,7 @@ export function reduceRunTimeline(
     const summary = event.type === "run.failed"
       ? formatRunFailure(event.errorCode, event.error)
       : event.reason;
-    return finishThinking(entries).map((entry) => {
+    return finishIdeaTreePhases(finishThinking(entries)).map((entry) => {
       if (entry.type === "tool" && entry.trace.status === "running") {
         return { ...entry, expanded: false, trace: { ...entry.trace, status: "failed", summary } };
       }
@@ -492,7 +527,7 @@ export function reduceRunTimeline(
       || event.status === "cancelled"
       || event.status === "interrupted")) {
     const summary = event.reason ?? event.run.error ?? `Run ${event.status}`;
-    return finishThinking(entries).map((entry) => {
+    return finishIdeaTreePhases(finishThinking(entries)).map((entry) => {
       if (entry.type === "tool" && entry.trace.status === "running" && event.status !== "completed") {
         return { ...entry, expanded: false, trace: { ...entry.trace, status: "failed", summary } };
       }
@@ -635,6 +670,16 @@ export function RunTimeline({
   return (
     <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite">
       {entries.map((entry) => {
+        if (entry.type === "idea-tree-phase") {
+          const label = t(`ideaTree.phase.${entry.phase}`);
+          return (
+            <aside className={`boundary-note idea-tree-phase ${entry.status}`} key={entry.id}>
+              <span>{statusIcon(entry.status)}</span>
+              <p><strong>{label}</strong>{entry.nodeId ? ` · ${entry.nodeId}` : ""}</p>
+            </aside>
+          );
+        }
+
         if (entry.type === "history-truncated") {
           return (
             <aside className="boundary-note" key={entry.id}>

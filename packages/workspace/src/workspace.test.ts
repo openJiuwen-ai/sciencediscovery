@@ -38,6 +38,8 @@ import {
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
+import type { AgentTool } from "@sciencediscovery/tools";
+import { Type } from "typebox";
 
 test("normalizeWorkspaceRelativePath preserves nested names within each agent writable root", () => {
   const sessionRoot = resolve(process.cwd(), ".tmp", "session-root");
@@ -46,6 +48,34 @@ test("normalizeWorkspaceRelativePath preserves nested names within each agent wr
   assert.equal(normalizeWorkspaceRelativePath(sessionRoot, "e/./f/g.md"), "e/f/g.md");
   assert.equal(normalizeWorkspaceRelativePath(subagentRoot, "outputs/result.csv"), "outputs/result.csv");
   assert.throws(() => normalizeWorkspaceRelativePath(subagentRoot, "../escape.csv"), /escapes the workspace/);
+});
+
+test("run-scoped extra tools are injected before the established allow/deny policy", async () => {
+  const parameters = Type.Object({});
+  const extraTool: AgentTool<typeof parameters> = {
+    description: "Run-scoped fixture capability",
+    execute: async () => ({ content: [{ type: "text", text: "ok" }], details: { ok: true } }),
+    label: "Fixture tree view",
+    name: "tree_view",
+    parameters,
+  };
+  const options = {
+    enabledConnectorIds: [],
+    executePython: async () => ({}) as PythonExecutionResult,
+    extraTools: [extraTool],
+  };
+  const allowed = createWorkspaceTools(process.cwd(), {
+    ...options,
+    toolPolicy: { allowed: ["tree_view"] },
+  });
+  assert.deepEqual(allowed.map((tool) => tool.name), ["tree_view"]);
+  assert.deepEqual((await allowed[0]!.execute("extra-tool", {})).details, { ok: true });
+
+  const denied = createWorkspaceTools(process.cwd(), {
+    ...options,
+    toolPolicy: { disallowed: ["tree_view"] },
+  });
+  assert.equal(denied.some((tool) => tool.name === "tree_view"), false);
 });
 
 test("run_shell selects the latest environment by ID and preserves its execution parameters", async (context) => {
@@ -660,6 +690,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   assert.deepEqual(calls, [{ path: "outputs/result" }]);
   const declaredPayload = JSON.parse(declared.content[0]?.type === "text" ? declared.content[0].text : "{}") as Record<string, unknown>;
   assert.equal(declaredPayload.artifact_id, "artifact-1");
+  assert.equal(declaredPayload.version_id, "version-1");
   assert.equal("artifacts" in declaredPayload, false, "single-path response retains its original top-level shape");
 
   const batch = await declare.execute("declare-batch", {
@@ -678,9 +709,9 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     artifacts: Array<Record<string, unknown>>;
   };
   assert.deepEqual(batchPayload.artifacts, [
-    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/first", version: 1 },
+    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/first", version: 1, version_id: "version-1" },
     { error: "missing file", ok: false, path: "outputs/missing" },
-    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/last", version: 1 },
+    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/last", version: 1, version_id: "version-1" },
   ]);
   await assert.rejects(declare.execute("declare-empty", {}), /path or paths is required/);
   await assert.rejects(declare.execute("declare-empty-paths", { paths: [] }), /at least one path/);

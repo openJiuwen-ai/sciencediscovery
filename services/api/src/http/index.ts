@@ -79,11 +79,13 @@ import type {
   CreateSpecialistRequest,
   DecidePermissionRequest,
   DecideRemoteJobRequest,
+  IdeaTreeSettingsDetails,
   JsonSchema,
   Subagent,
   SubagentInput,
   UpdateSubagentBriefRequest,
   UpdateEnvironmentSourceSettingsRequest,
+  UpdateIdeaTreeSettingsRequest,
   UpdateMcpProxyPoliciesRequest,
   UpdateProxyServerRequest,
   UpdateProxySettingsRequest,
@@ -138,6 +140,11 @@ import {
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
+import {
+  IdeaTreePersistenceError,
+  IdeaTreeRuntimeError,
+  isIdeaTreeExecutorSkill,
+} from "@sciencediscovery/idea-tree";
 
 import { SessionStoreHttpError } from "../store.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
@@ -149,6 +156,8 @@ import {
   readablePrivateKey,
   stageGeneratedKey,
 } from "../store/ssh-config.js";
+import { ideaTreeSkillDeletionReferences } from "../idea-tree/deletion-impact.js";
+import { resolveExecutorCapability } from "../idea-tree/executor-capability.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
   inferMediaType,
@@ -292,6 +301,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    ideaResearch,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -498,6 +510,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       ...(user ? { user } : {}),
     };
   };
+  const resolveInstalledExecutorCapability = (skillId: string) => resolveExecutorCapability({
+    ideaTreeAuthorities,
+    skillCatalog,
+    skillId,
+  });
   const patchEphemeralCallback = (server: Server) => {
     // With an ephemeral port (tests), the configured tool-callback URL cannot
     // know the real port in advance; rewrite it from the bound address.
@@ -1033,6 +1050,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { ...details, memoryGraphStatus: health });
         return;
       }
+      if (url.pathname === "/api/settings/idea-tree" && request.method === "GET") {
+        sendJson(response, 200, store.getIdeaTreeSettingsDetails() satisfies IdeaTreeSettingsDetails);
+        return;
+      }
+      if (url.pathname === "/api/settings/idea-tree" && request.method === "PUT") {
+        const body = await readJson<UpdateIdeaTreeSettingsRequest>(request);
+        const updated = await store.updateIdeaTreeSettings(body);
+        sendJson(response, 200, updated satisfies IdeaTreeSettingsDetails);
+        return;
+      }
       if (url.pathname === "/api/web/usage" && request.method === "GET") {
         sendJson(response, 200, webBroker.usage());
         return;
@@ -1239,7 +1266,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/skills") {
-        sendJson(response, 200, skillCatalog.list());
+        sendJson(response, 200, await Promise.all(skillCatalog.list().map(async (descriptor) => {
+          if (!isIdeaTreeExecutorSkill(descriptor)) return descriptor;
+          const resolved = await resolveInstalledExecutorCapability(descriptor.id);
+          return { ...descriptor, ideaTreeExecutor: resolved.capability };
+        })));
         return;
       }
       if (url.pathname.startsWith("/api/skill-libraries") || url.pathname.startsWith("/api/skill-library-proposals")) {
@@ -1403,8 +1434,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillDeletionImpactMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/deletion-impact$/);
       if (skillDeletionImpactMatch && request.method === "GET") {
         const skillId = decodeURIComponent(skillDeletionImpactMatch[1]!);
-        if (!skillCatalog.get(skillId)) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
-        sendJson(response, 200, store.getSkillDeletionImpact(skillId));
+        const skill = skillCatalog.get(skillId);
+        if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
+        const impact = store.getSkillDeletionImpact(skillId);
+        const ideaTreeReferences = skill.ideaTreeExecutor
+          ? await ideaTreeSkillDeletionReferences(store, skillId)
+          : [];
+        impact.references = [...new Map([...impact.references, ...ideaTreeReferences]
+          .map((reference) => [`${reference.scope}:${reference.id}`, reference])).values()];
+        sendJson(response, 200, impact);
         return;
       }
 
@@ -1456,7 +1494,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (skillMatch && request.method === "DELETE") {
         const skillId = decodeURIComponent(skillMatch[1]!);
+        const skill = skillCatalog.get(skillId);
+        if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact: SkillDeletionImpact = store.getSkillDeletionImpact(skillId);
+        const ideaTreeReferences = skill.ideaTreeExecutor
+          ? await ideaTreeSkillDeletionReferences(store, skillId)
+          : [];
+        impact.references = [...new Map([...impact.references, ...ideaTreeReferences]
+          .map((reference) => [`${reference.scope}:${reference.id}`, reference])).values()];
         if (impact.references.length) {
           throw new SkillCatalogError("SKILL_CONFLICT", `Skill is referenced by ${impact.references.length} runtime settings document(s)`);
         }
@@ -1769,6 +1814,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (projectMatch && request.method === "DELETE") {
         const impact = store.getProjectDeletionImpact(projectMatch[1]!);
+        const ideaTreeRepositories = [];
+        for (const sessionId of impact.sessionIds) {
+          if ((await store.listSessionRuns(sessionId)).some((run) => run.settingsSnapshot.ideaTreeEnabled)) {
+            ideaTreeRepositories.push(ideaTreeRepository(sessionId));
+          }
+        }
         for (const sessionId of impact.sessionIds) {
           if (await sessionHasActiveRun(store, sessionId)) {
             return sendError(response, 409, "Cannot delete a Project while one of its Sessions has an active run");
@@ -1782,6 +1833,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
         }
         await store.deleteProject(projectMatch[1]!, body.confirmationId ?? "");
+        void Promise.all(impact.sessionIds.map(sid => ideaResearch.cleanup(projectMatch[1]!, sid))).catch(error => {
+          console.warn("Could not clean up deleted Project research:", error);
+        });
+        // Idea Tree owns its lifecycle and never relies on MemoryGraph's
+        // best-effort mirror cleanup to remove authoritative records.
+        void Promise.all(ideaTreeRepositories.map((repository) => repository.deleteAll())).catch((error) => {
+          console.warn("Could not clean up deleted Project Idea Trees:", error);
+        });
         // Physically delete every node of this project in the memory graph,
         // keyed by the pre-deletion session-id snapshot (private nodes carry
         // no project_id, so the session_ids set is the complete footprint).
@@ -1965,6 +2024,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionMatch && request.method === "PATCH") {
         const body = await readJson<UpdateSessionRequest>(request);
         const sessionId = sessionMatch[1]!;
+        const existingSession = store.getSession(sessionId);
+        if (!existingSession) return sendError(response, 404, "Session not found");
         const requestedApprovalMode = body.approvalMode;
         const { approvalMode: _approvalMode, ...remaining } = body;
         const hasRemainingChanges = Object.values(remaining).some((value) => value !== undefined);
@@ -2008,10 +2069,21 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return sendError(response, 409, "Cannot delete a Session during an active run");
         }
         const body = await readJson<DeleteResourceRequest>(request);
+        const ideaTreeState = (await store.listSessionRuns(sessionMatch[1]!))
+          .some((run) => run.settingsSnapshot.ideaTreeEnabled)
+          ? ideaTreeRepository(sessionMatch[1]!)
+          : undefined;
         if ((await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available) {
           await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         }
+        const researchProjectId = store.getSession(sessionMatch[1]!)!.projectId;
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
+        void ideaResearch.cleanup(researchProjectId, sessionMatch[1]!).catch(error => {
+          console.warn("Could not clean up deleted Session research:", error);
+        });
+        void ideaTreeState?.deleteAll().catch((error) => {
+          console.warn("Could not clean up deleted Session Idea Trees:", error);
+        });
         // Soft-mark this session's Artifact versions + physically delete its
         // private nodes in the memory graph. Fire-and-forget: the store deletion
         // has already committed; a degraded/unreachable graph never blocks the
@@ -2296,7 +2368,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionRunsMatch && request.method === "POST") {
         const sessionId = sessionRunsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, await readJson<SendMessageRequest>(request));
+        const run = await createQueuedRun(
+          store,
+          skillCatalog,
+          skillLibraryCatalog,
+          ideaTreeAuthorities,
+          sessionId,
+          await readJson<SendMessageRequest>(request),
+          ideaTreeRepository(sessionId),
+        );
         scheduleSessionRuns(
           store,
           runnerClient,
@@ -2310,6 +2390,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           remoteCompute,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(sessionId),
           memoryGraphSink,
           sessionId,
           config,
@@ -2384,6 +2466,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           store,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(sessionId),
           sessionId,
           runId,
           await readJson<CreateSkillEvolutionRunRequest>(request),
@@ -2401,6 +2485,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           remoteCompute,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(sessionId),
           memoryGraphSink,
           sessionId,
           config,
@@ -2582,6 +2668,63 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const artifactAnnotationsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/annotations$/);
       if (artifactAnnotationsMatch && request.method === "GET") {
         sendJson(response, 200, store.listArtifactAnnotations(artifactAnnotationsMatch[1]!, artifactAnnotationsMatch[2]!));
+        return;
+      }
+      const researchEventsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/research\/([^/]+)\/events$/);
+      if (researchEventsMatch && request.method === "GET") {
+        const controller = new AbortController();
+        response.once("close", () => controller.abort());
+        try {
+          const body = await ideaResearch.events(researchEventsMatch[1]!, researchEventsMatch[2]!, controller.signal);
+          response.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"});
+          response.flushHeaders();
+          for await (const chunk of body) response.write(chunk);
+          response.end();
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            if (response.headersSent) response.destroy(error instanceof Error ? error : new Error(String(error)));
+            else sendError(response, 502, error instanceof Error ? error.message : String(error));
+          }
+        }
+        return;
+      }
+      const researchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/research$/);
+      if (researchMatch && (request.method === "GET" || request.method === "POST")) {
+        const sid = researchMatch[1]!;
+        if (!store.getSession(sid)) return sendError(response, 404, "Session not found");
+        const input = request.method === "POST" ? await readJson<Record<string, unknown>>(request) : {};
+        const operation = request.method === "GET" ? "list" : String(input.operation ?? "create");
+        if (!["list", "get", "create", "pause", "continue", "end", "defaults"].includes(operation)) return sendError(response, 400, "Unknown research operation");
+        try {
+          const result = await ideaResearch.command(sid, operation, input);
+          if (operation === "create" && typeof input.content === "string") {
+            await store.appendMessage(sid, "user", input.content);
+            await store.appendMessage(sid, "assistant", `已启动 Idea Tree 研究（${result.research.id}）。Python 引擎正在后台执行构思、设计、独立评估和迭代。请在 Idea Tree 卡片查看实时进度，也可以稍后询问研究结果。`);
+          }
+          sendJson(response, 200, result);
+        }
+        catch (error) { sendError(response, 400, error instanceof Error ? error.message : String(error)); }
+        return;
+      }
+      const ideaTreeGraphMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/graph$/);
+      if (ideaTreeGraphMatch && request.method === "GET") {
+        const sessionId = ideaTreeGraphMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        const hasIdeaTreeRun = (await store.listSessionRuns(sessionId))
+          .some((run) => run.settingsSnapshot.ideaTreeEnabled);
+        if (!hasIdeaTreeRun) {
+          sendJson(response, 200, { graph: null, hasIdeaTreeRun: false, treeIds: [] });
+          return;
+        }
+        const repository = ideaTreeRepository(sessionId);
+        const treeIds = await repository.listTreeIds();
+        const requestedTreeId = url.searchParams.get("tree_id")?.trim();
+        const treeId = requestedTreeId || treeIds[0];
+        if (requestedTreeId && !treeIds.includes(requestedTreeId)) {
+          return sendError(response, 404, "Idea Tree not found");
+        }
+        const graph = treeId ? await repository.readGraph(treeId) : null;
+        sendJson(response, 200, { graph, hasIdeaTreeRun: true, treeIds });
         return;
       }
       const memorySubgraphMatch = url.pathname === "/api/memory/subgraph";
@@ -2957,6 +3100,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           remoteCompute,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(messagesMatch[1]!),
           memoryGraphSink,
           messagesMatch[1]!,
           await readJson<SendMessageRequest>(request),
@@ -2981,6 +3126,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const message = error instanceof Error ? error.message : "Request failed";
       if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);
       else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message);
+      else if (error instanceof IdeaTreePersistenceError || error instanceof IdeaTreeRuntimeError) {
+        sendError(
+          response,
+          error.code === "PERSISTENCE_UNAVAILABLE" ? 503 : error.code === "REVISION_CONFLICT" ? 409 : 500,
+          message,
+        );
+      }
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
         sendError(response, 413, error instanceof Error ? error.message : "Payload too large");
@@ -3008,11 +3160,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     }
   });
   server.once("close", () => remoteCompute.close());
+  server.once("close", () => ideaResearch.close());
   const dispatcher = new NotificationDispatcher(store,
     (batch) => createNotificationRun(store, skillLibraryCatalog, batch),
     (sessionId) => scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker,
       mcpRegistry, mcpCatalog, artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
-      memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory));
+      ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory));
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let notificationClosed = false;
   void ready.then(() => {

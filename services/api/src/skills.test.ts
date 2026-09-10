@@ -564,6 +564,7 @@ test("persists immutable managed revisions and enforces optimistic concurrency",
     const imported = await catalog.import("portable-skill.zip", archive);
     assert.equal(imported.currentRevision, 1);
     const frozen = catalog.resolve(["portable-skill"])[0]!;
+    assert.equal(frozen.metadata.version, "2.3.4");
 
     const updated = await catalog.update("portable-skill", {
       description: "A portable test skill used after editing.",
@@ -596,6 +597,18 @@ test("persists immutable managed revisions and enforces optimistic concurrency",
     const reloaded = new SkillCatalog(dataDir, repositoryRoot);
     await reloaded.load();
     assert.equal(reloaded.get("portable-skill")?.currentRevision, 2);
+    const restored = await reloaded.resolveRevision({
+      hash: frozen.hash,
+      id: frozen.id,
+      revision: frozen.revision,
+      version: frozen.version,
+    });
+    assert.equal(restored.metadata.version, "2.3.4");
+    assert.equal(restored.readResource("references/guide.md").revision, 1);
+    await assert.rejects(
+      reloaded.resolveRevision({ ...frozen, hash: "sha256:not-the-frozen-package" }),
+      (error: unknown) => error instanceof SkillCatalogError && error.code === "SKILL_CONFLICT",
+    );
     assert.equal(reloaded.readCurrentResource("portable-skill", "references/guide.md").content, "revision one");
     assert.equal(
       await readFile(resolve(dataDir, "skills", "portable-skill", "revisions", "1", "package", "scripts", "unused.py"), "utf8"),

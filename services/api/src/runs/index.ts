@@ -61,6 +61,7 @@ import type {
   CreateSpecialistRequest,
   DecidePermissionRequest,
   DecideRemoteJobRequest,
+  IdeaTreeSettings,
   JsonSchema,
   Subagent,
   SubagentInput,
@@ -119,6 +120,25 @@ import {
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
 import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import {
+  createIdeaTreeTools,
+  createExecutorDescriptor,
+  executorSnapshotMatches,
+  freezeIdeaTreeRunSelection,
+  IDEA_TREE_TEAM_CONTRACT,
+  ideaTreeSkillIds,
+  IdeaTreeAuthorityError,
+  type IdeaTreeAuthorityRegistry,
+  IdeaTreeCompositionError,
+  IdeaTreeRuntime,
+  IdeaTreeRuntimeError,
+  type IdeaTreePersistence,
+  scopeRuntimeSkills,
+  specialistConfigHash,
+} from "@sciencediscovery/idea-tree";
+import { ideaTreeLeadInstructions, ideaTreeRoleInstructions } from "../idea-tree/prompts.js";
+import { createIdeaTreeArtifactResolver } from "../idea-tree/artifact-resolver.js";
+import { resolveExecutorCapability } from "../idea-tree/executor-capability.js";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "@sciencediscovery/executor";
@@ -462,12 +482,14 @@ async function executeAgentRun(
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
   skillLibraryCatalog: SkillLibraryCatalog,
+  ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
+  ideaTreeRepository: IdeaTreePersistence,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   runId: string,
   body: SendMessageRequest,
   requestAbortController: AbortController,
-  settingsSnapshot: EffectiveRuntimeSettings,
+  settingsSnapshot: SessionRun["settingsSnapshot"],
   emit: RunEventSink,
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
@@ -543,6 +565,63 @@ async function executeAgentRun(
   } catch (error) {
     throw new ApiStatusError(503, error instanceof Error ? error.message : "Runner is unavailable");
   }
+  const emitIdeaTreePhase = async (
+    phase: import("@sciencediscovery/schema").IdeaTreePhase,
+    detail?: { nodeId?: string; treeId?: string },
+  ) => emit({ ...detail, phase, type: "idea_tree.phase" });
+  const artifactResolver = createIdeaTreeArtifactResolver(store, provenanceRecorder.cas);
+  Object.assign(settingsSnapshot, { ideaTreeEnabled: false, ideaTreeExecutor: undefined, ideaTreeSettings: undefined });
+  const ideaTreeExecutor = settingsSnapshot.ideaTreeExecutor;
+  if (settingsSnapshot.ideaTreeEnabled && !ideaTreeExecutor) {
+    throw new ApiStatusError(400, "Queued Idea Tree Run is missing its frozen executor snapshot");
+  }
+  const ideaTreeRuntime = settingsSnapshot.ideaTreeEnabled
+    ? new IdeaTreeRuntime(ideaTreeRepository, {
+        ...(settingsSnapshot.ideaTreeExecutor
+          ? { expectedExecutorFingerprint: settingsSnapshot.ideaTreeExecutor.fingerprint }
+          : {}),
+        runId,
+        settings: settingsSnapshot.ideaTreeSettings,
+        validateArtifactRef: (artifactRef) => Boolean(store.getArtifact(sessionId, artifactRef)),
+      })
+    : undefined;
+  if (ideaTreeRuntime) {
+    await ideaTreeRuntime.recover();
+    const trees = await ideaTreeRuntime.list();
+    const current = trees.trees.find((tree) => tree.treeId === trees.currentTreeId);
+    if (current?.runningNodeId) {
+      await emitIdeaTreePhase("executing_leaf", { nodeId: current.runningNodeId, treeId: current.treeId });
+    } else if (current?.pendingPropagationNodeId) {
+      await emitIdeaTreePhase("propagating_insight", { nodeId: current.pendingPropagationNodeId, treeId: current.treeId });
+    } else if (current) {
+      await emitIdeaTreePhase("building_tree", { treeId: current.treeId });
+    }
+  }
+  const ideaTreeAuthority = ideaTreeExecutor ? ideaTreeAuthorities.resolve(ideaTreeExecutor) : undefined;
+  const ideaTreeTools = ideaTreeRuntime
+    ? createIdeaTreeTools({
+        executor: ideaTreeExecutor,
+        onPhase: emitIdeaTreePhase,
+        resolveArtifactSnapshot: async (identity) => (await artifactResolver.resolve({
+          ...identity,
+          executor: ideaTreeExecutor!,
+          sessionId,
+        })).snapshot,
+        runtime: ideaTreeRuntime,
+      })
+    : [];
+  const authorityTools = ideaTreeRuntime && ideaTreeExecutor && ideaTreeAuthority
+    ? ideaTreeAuthority.createLeadTools({
+        artifacts: artifactResolver,
+        events: { emit: emitIdeaTreePhase },
+        runId,
+        runtime: ideaTreeRuntime,
+        sessionId,
+      }, ideaTreeExecutor)
+    : [];
+  const leadExtraTools = [...ideaTreeTools, ...authorityTools];
+  let leaseHeartbeatQueue = Promise.resolve();
+  let leaseHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
   const sessionSpecialist = store.getSpecialist(session.specialistId);
   const enabledBuiltinSpecialists = store
     .listSpecialists()
@@ -583,9 +662,19 @@ async function executeAgentRun(
     if (blockedSkillIds.length) {
       throw new Error(`These skills are not enabled for this Session: ${blockedSkillIds.join(", ")}`);
     }
-    const manualSkills = skillCatalog.resolve([...effectiveSkillIds]);
+    const resolvedSkills = skillCatalog.resolve([...effectiveSkillIds]);
+    if (settingsSnapshot.ideaTreeExecutor) {
+      const frozenWorkflow = await skillCatalog.resolveRevision(settingsSnapshot.ideaTreeExecutor.workflowSkill);
+      const currentIndex = resolvedSkills.findIndex((skill) => skill.id === frozenWorkflow.id);
+      if (currentIndex < 0) throw new Error(`Frozen Idea Tree Workflow Skill is not enabled: ${frozenWorkflow.id}`);
+      resolvedSkills[currentIndex] = frozenWorkflow;
+    }
+    const manualSkills = scopeRuntimeSkills(resolvedSkills, "lead");
     const librarySkills = body.skillLibraryRefs?.length
-      ? await recallSkillLibrarySkills(skillLibraryCatalog, settingsSnapshot, body.skillLibraryRefs, body.content)
+      ? scopeRuntimeSkills(
+          await recallSkillLibrarySkills(skillLibraryCatalog, settingsSnapshot, body.skillLibraryRefs, body.content),
+          "lead",
+        )
       : [];
     const manualSkillIds = new Set(manualSkills.map((skill) => skill.id));
     activeSkills = [
@@ -601,12 +690,13 @@ async function executeAgentRun(
   if (skillPackagesRoot) {
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
-  const runtimeSkills = activeSkills.map(({ content, description, hash, id, readResource, resources, revision, version }) => ({
+  const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, readResource, resources, revision, version }) => ({
     content,
     description,
     hash,
     id,
     ...(skillPackagesRoot ? { packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}` } : {}),
+    metadata,
     readResource,
     resources,
     revision,
@@ -629,6 +719,7 @@ async function executeAgentRun(
         ? { builtinSpecialists: enabledBuiltinSpecialists.map((specialist) => ({ description: specialist.description, name: specialist.name })) }
         : {}),
       subagentOrchestration: true,
+      workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
     },
   );
   const skillLibraryRefs = body.skillLibraryRefs?.length ? structuredClone(body.skillLibraryRefs) : undefined;
@@ -991,6 +1082,7 @@ async function executeAgentRun(
     },
   });
   const agentOptions: WorkspaceAgentOptions = {
+    workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
     config: agentConfig,
     createSkill: async (input) => {
       return await skillCatalog.createReviewDraft(input, {
@@ -999,6 +1091,7 @@ async function executeAgentRun(
       });
     },
     enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
+    ...(leadExtraTools.length ? { extraTools: leadExtraTools } : {}),
     memoryGraphEnabled: memoryGraphSink.enabled,
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
@@ -1271,6 +1364,12 @@ async function executeAgentRun(
     })(),
     runSubagent: async (input: SubagentInput, signal?: AbortSignal): Promise<Subagent> => {
       store.assertSessionWritable(sessionId);
+      if (ideaTreeRuntime) {
+        const activeIdeaTreeExecution = await ideaTreeRuntime.activeExecution();
+        if (activeIdeaTreeExecution && activeIdeaTreeExecution.ownerRunId !== runId) {
+          throw new Error(`Idea Tree leaf ${activeIdeaTreeExecution.nodeId} is leased to Run ${activeIdeaTreeExecution.ownerRunId}`);
+        }
+      }
       const subagentConfig = resolveSubagentConfig(input);
       const specialist = resolveSubagentSpecialist(store, session.specialistId, input);
       const subagentInput: SubagentInput = specialist && input.specialistId?.trim() !== specialist.id
@@ -1282,12 +1381,14 @@ async function executeAgentRun(
         let subagent = continuation ? await store.updateSubagent({ ...continuation, status: "running", finishedAt: undefined, error: undefined }) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
           model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
+          ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
           timeoutSeconds: subagentConfig.timeoutSeconds,
         });
         childId = subagent.id;
         const childController = new AbortController();
         activeSubagentAbortControllers.set(childId, childController);
         const childSignal = AbortSignal.any([signal ?? requestExecution.abortSignal, childController.signal]);
+        await ideaTreeRuntime?.recordSubagent(subagent.id);
         await emit({ subagent, type: "subagent.updated" });
         // Mirror the subagent's start into one scope SubTask node. objective /
         // created_at / role are written now; status / finishedAt / summary are
@@ -1385,7 +1486,7 @@ async function executeAgentRun(
           ])];
           const subagentConnectorIds = [...new Set([...settingsSnapshot.enabledConnectorIds, ...(specialist?.connectorIds ?? [])])];
           const subagentWorkspaceRoot = store.agentWorkspacePath(sessionId, subagent.id);
-          const subagentSnapshots = skillCatalog.resolve(subagentSkillIds);
+          const subagentSnapshots = scopeRuntimeSkills(skillCatalog.resolve(subagentSkillIds), "subagent");
           const subagentSkillPackagesRoot = subagentSnapshots.length
             ? store.skillPackagesPath(sessionId, skillPackageSetHash(subagentSnapshots))
             : undefined;
@@ -1594,7 +1695,7 @@ async function executeAgentRun(
             },
             ...(subagentSkillPackagesRoot ? { skillPackagesRoot: subagentSkillPackagesRoot } : {}),
             subagent: {
-              instructions: subagentConfig.systemPrompt,
+              instructions: [subagentConfig.systemPrompt, ideaTreeRoleInstructions(settingsSnapshot.ideaTreeSettings, specialist?.id ?? subagent.input.subagentType ?? "")].filter(Boolean).join("\n\n"),
               name: subagentConfig.name,
             },
             skills: subagentSkills,
@@ -1888,6 +1989,21 @@ async function executeAgentRun(
   workspaceSnapshot = new Map(
     (await listWorkspaceFiles(store, sessionId)).map((file) => [file.path, workspaceFileFingerprint(file)]),
   );
+  if (ideaTreeRuntime) {
+    leaseHeartbeatTimer = setInterval(() => {
+      leaseHeartbeatQueue = leaseHeartbeatQueue
+        .then(() => ideaTreeRuntime.renewOwnedExecutionLease())
+        .then(() => undefined)
+        .catch((error) => {
+          runLog.warn("idea_tree_lease_heartbeat_failed", {
+            errorMessage: error instanceof Error ? error.message : String(error),
+            runId,
+            sessionId,
+          });
+        });
+    }, 30_000);
+    leaseHeartbeatTimer.unref();
+  }
   try {
     assertRunActive();
     if (continuation) {
@@ -2083,6 +2199,25 @@ async function executeAgentRun(
     }
     return "failed";
   } finally {
+    if (leaseHeartbeatTimer) clearInterval(leaseHeartbeatTimer);
+    await leaseHeartbeatQueue;
+    if (ideaTreeRuntime) {
+      const cancelled = cancelledRuns.has(runId) || requestAbortController.signal.aborted;
+      try {
+        await ideaTreeRuntime.abandonOwnedExecution({
+          message: cancelled
+            ? "The owning Run was cancelled; immutable checkpoints are available for retry."
+            : "The owning Run ended before the claimed leaf completed; immutable checkpoints are available for retry.",
+          reasonCode: cancelled ? "run_cancelled" : "run_ended_incomplete",
+        });
+      } catch (error) {
+        runLog.error("idea_tree_execution_abandon_failed", {
+          errorMessage: error instanceof Error ? error.message : String(error),
+          runId,
+          sessionId,
+        });
+      }
+    }
     externalWaitByExecution.clear();
     // The decision poll dies with the run's abort signal, so the terminal
     // request state is published here to keep replays from ending on pending.
@@ -2435,19 +2570,33 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   return snapshot;
 }
 
+async function computeQueuedSettingsSnapshot(
+  store: SessionStore,
+  _skillCatalog: SkillCatalog,
+  _ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
+  sessionId: string,
+  _ideaTreeEnabled: boolean,
+  _ideaTreeRepository: IdeaTreePersistence,
+): Promise<SessionRun["settingsSnapshot"]> {
+  const snapshot = computeSettingsSnapshot(store, sessionId);
+  return { ...snapshot, ...freezeIdeaTreeRunSelection({ configuredSkillIds: snapshot.enabledSkillIds, ideaTreeEnabled: false }) };
+}
+
 export async function createQueuedRun(
   store: SessionStore,
   skillCatalog: SkillCatalog,
   skillLibraryCatalog: SkillLibraryCatalog,
+  ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
   sessionId: string,
   body: SendMessageRequest,
+  ideaTreeRepository: IdeaTreePersistence,
 ): Promise<SessionRun> {
   const session = store.assertSessionWritable(sessionId);
   const wakeGeneration = store.notifications.generation(sessionId);
   if (session.archivedAt) throw new ApiStatusError(409, "Session is archived and read-only");
   const submittedPrompt = body.content?.trim();
   const slashRefresh = submittedPrompt?.startsWith("/web-refresh ");
-  const prompt = slashRefresh ? submittedPrompt.slice("/web-refresh ".length).trim() : submittedPrompt;
+  const prompt = slashRefresh ? submittedPrompt!.slice("/web-refresh ".length).trim() : submittedPrompt;
   if (!prompt) throw new ApiStatusError(400, "Message content is required");
   let references: ComposerReference[];
   try {
@@ -2455,14 +2604,33 @@ export async function createQueuedRun(
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Composer references are invalid");
   }
+  let settingsSnapshot: SessionRun["settingsSnapshot"];
+  try {
+    settingsSnapshot = await computeQueuedSettingsSnapshot(
+      store,
+      skillCatalog,
+      ideaTreeAuthorities,
+      sessionId,
+      false,
+      ideaTreeRepository,
+    );
+  } catch (error) {
+    if (error instanceof ApiStatusError) throw error;
+    if (error instanceof IdeaTreeAuthorityError || error instanceof IdeaTreeCompositionError || error instanceof SkillCatalogError) {
+      throw new ApiStatusError(400, error.message);
+    }
+    throw error;
+  }
   let skillLibraryRefs: SessionRun["skillLibraryRefs"];
-  const settingsSnapshot = computeSettingsSnapshot(store, sessionId);
   try {
     const configuredRefs = await skillLibraryCatalog.resolveEnabledRefs(settingsSnapshot.enabledSkillLibraries);
     const declaredRefs = await skillLibraryCatalog.validateRefs(body.skillLibraryRefs);
     skillLibraryRefs = mergeSkillLibraryRefs(configuredRefs, declaredRefs);
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
+  }
+  if (/^\/idea-tree(?:-team)?(?:\s+|$)/u.test(prompt)) {
+    settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "idea-tree-team"])];
   }
   if (skillAuthoringCommandPrompt(prompt)) {
     settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "skill-creator"])];
@@ -2546,6 +2714,8 @@ export async function createSkillEvolutionRun(
   store: SessionStore,
   skillCatalog: SkillCatalog,
   skillLibraryCatalog: SkillLibraryCatalog,
+  ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
+  ideaTreeRepository: IdeaTreePersistence,
   sessionId: string,
   sourceRunId: string,
   request: CreateSkillEvolutionRunRequest = {},
@@ -2570,7 +2740,7 @@ export async function createSkillEvolutionRun(
   if (targetLibraryId && !writableLibraryIds.includes(targetLibraryId)) {
     throw new ApiStatusError(409, `Skill Library ${targetLibraryId} is not writable or does not exist`);
   }
-  return await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, {
+  return await createQueuedRun(store, skillCatalog, skillLibraryCatalog, ideaTreeAuthorities, sessionId, {
     content: buildSkillEvolutionPrompt({
       candidateLibraryIds: writableLibraryIds,
       defaultLibraryId: writableLibraryIds.includes(DEFAULT_SELF_EVOLUTION_LIBRARY_ID)
@@ -2580,7 +2750,7 @@ export async function createSkillEvolutionRun(
       session,
       sourceRun,
     }),
-  });
+  }, ideaTreeRepository);
 }
 
 export async function createNotificationRun(store: SessionStore, skillLibraryCatalog: SkillLibraryCatalog, batch: NotificationBatch): Promise<SessionRun> {
@@ -2605,6 +2775,8 @@ export function scheduleSessionRuns(
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
   skillLibraryCatalog: SkillLibraryCatalog,
+  ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
+  ideaTreeRepository: IdeaTreePersistence,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   serverConfig: ServerConfig,
@@ -2668,6 +2840,8 @@ export function scheduleSessionRuns(
             remoteCompute,
             skillCatalog,
             skillLibraryCatalog,
+            ideaTreeAuthorities,
+            ideaTreeRepository,
             memoryGraphSink,
             sessionId,
             next.id,
@@ -2732,6 +2906,8 @@ export function scheduleSessionRuns(
         remoteCompute,
         skillCatalog,
         skillLibraryCatalog,
+        ideaTreeAuthorities,
+        ideaTreeRepository,
         memoryGraphSink,
         sessionId,
         serverConfig,
@@ -2876,6 +3052,8 @@ export async function streamAgentRun(
   remoteCompute: RemoteComputeClient,
   skillCatalog: SkillCatalog,
   skillLibraryCatalog: SkillLibraryCatalog,
+  ideaTreeAuthorities: IdeaTreeAuthorityRegistry,
+  ideaTreeRepository: IdeaTreePersistence,
   memoryGraphSink: MemoryGraphSink,
   sessionId: string,
   body: SendMessageRequest,
@@ -2883,7 +3061,15 @@ export async function streamAgentRun(
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
 ): Promise<void> {
-  const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, body);
+  const run = await createQueuedRun(
+    store,
+    skillCatalog,
+    skillLibraryCatalog,
+    ideaTreeAuthorities,
+    sessionId,
+    body,
+    ideaTreeRepository,
+  );
   scheduleSessionRuns(
     store,
     runnerClient,
@@ -2897,6 +3083,8 @@ export async function streamAgentRun(
     remoteCompute,
     skillCatalog,
     skillLibraryCatalog,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     memoryGraphSink,
     sessionId,
     serverConfig,

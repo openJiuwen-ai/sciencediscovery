@@ -238,6 +238,111 @@ export interface UpdateMemoryGraphSettingsRequest {
   neo4jPassword?: string | null;
 }
 
+/**
+ * Assessor 子维度定义。每个 Assessor 评估四个子维度，管理员可覆盖维度名称和评分描述。
+ * 空值即默认：不填则使用 fixture 的默认维度 d1-d4。
+ */
+export interface IdeaTreeAssessorDimension {
+  name: string;
+  description?: string;
+}
+
+/**
+ * 单个 Assessor 的配置。三个 Assessor 分别对应 activity / stability / sustainability。
+ * 权重可选，三个权重必须求和为 1.0；不填则使用默认 0.35/0.35/0.30。
+ */
+export interface IdeaTreeAssessorConfig {
+  /** 覆盖该 Assessor 的 system prompt。空值使用 workflow skill 默认。 */
+  systemPrompt?: string;
+  /** 覆盖该 Assessor 的评分标准。空值使用默认维度。支持直接输入或上传文件内容。 */
+  scoringCriteria?: string;
+  /** 该 Assessor 的权重。三个权重必须求和为 1.0。 */
+  weight?: number;
+}
+
+/**
+ * Idea Tree 系统设置。存在于 System Settings 中，不在 Session 级别。
+ * 用户输入 /idea-tree 命令触发 idea-tree 功能，参数从此设置注入。
+ * 空值即默认：未填写的字段使用代码默认值。
+ * 生效时机：保存后对后续 Run 立即生效，进行中的 Run 不受影响。
+ */
+export interface IdeaTreeSettings {
+  maxRounds?: number;
+  candidatesPerRound?: number;
+  maxTokens?: number | null;
+  maxTokensPerCall?: number;
+  /** 建树默认参数 */
+  maxDepth: number;
+  maxNodes: number;
+  maxSearchRounds: number;
+  /** 评分方向 */
+  scoreDirection: "maximize" | "minimize";
+
+  /** Design 阶段（Creative Designer）system prompt 覆盖 */
+  designSystemPrompt?: string;
+
+  /** 三个 Assessor 的配置 */
+  assessorActivity: IdeaTreeAssessorConfig;
+  assessorStability: IdeaTreeAssessorConfig;
+  assessorSustainability: IdeaTreeAssessorConfig;
+
+  /** Aggregator 的 system prompt 覆盖 */
+  aggregatorSystemPrompt?: string;
+
+  /** PROPAGATE 阶段 insight 合成指令覆盖。只影响合成指令文本，不触碰 runtime 的 childDigest 校验与逐级传播队列 */
+  propagateInsightSystemPrompt?: string;
+}
+
+export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
+  maxRounds: 3,
+  candidatesPerRound: 3,
+  maxTokens: null,
+  maxTokensPerCall: 32768,
+  maxDepth: 5,
+  maxNodes: 100,
+  maxSearchRounds: 10,
+  scoreDirection: "maximize",
+  assessorActivity: {},
+  assessorStability: {},
+  assessorSustainability: {},
+};
+
+/** Idea Tree 设置返回给前端的视图 */
+export interface IdeaTreeSettingsDetails {
+  maxRounds?: number;
+  candidatesPerRound?: number;
+  maxTokens?: number | null;
+  maxTokensPerCall?: number;
+  maxDepth: number;
+  maxNodes: number;
+  maxSearchRounds: number;
+  scoreDirection: "maximize" | "minimize";
+  designSystemPrompt?: string;
+  assessorActivity: IdeaTreeAssessorConfig;
+  assessorStability: IdeaTreeAssessorConfig;
+  assessorSustainability: IdeaTreeAssessorConfig;
+  aggregatorSystemPrompt?: string;
+  propagateInsightSystemPrompt?: string;
+}
+
+/** Idea Tree 设置写入 payload。每个字段可选，独立更新。空值（空字符串/undefined）即使用默认。 */
+export interface UpdateIdeaTreeSettingsRequest {
+  maxRounds?: number;
+  candidatesPerRound?: number;
+  maxTokens?: number | null;
+  maxTokensPerCall?: number;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxSearchRounds?: number;
+  scoreDirection?: "maximize" | "minimize";
+  designSystemPrompt?: string | null;
+  assessorActivity?: IdeaTreeAssessorConfig;
+  assessorStability?: IdeaTreeAssessorConfig;
+  assessorSustainability?: IdeaTreeAssessorConfig;
+  aggregatorSystemPrompt?: string | null;
+  propagateInsightSystemPrompt?: string | null;
+}
+
 export interface RuntimeSessionRun {
   lastActivityAt: string;
   projectId: string;

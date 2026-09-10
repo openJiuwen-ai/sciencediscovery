@@ -22,6 +22,7 @@ import type {
 import type { ConnectorId } from "./connectors.js";
 import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
+import type { IdeaTreePhase, IdeaTreeRunSettingsSnapshot } from "./idea-tree.js";
 import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, PlanSnapshot } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
@@ -338,7 +339,7 @@ export interface SessionRun {
   references: ComposerReference[];
   retryOfRunId?: string;
   sessionId: string;
-  settingsSnapshot: EffectiveRuntimeSettings;
+  settingsSnapshot: EffectiveRuntimeSettings & IdeaTreeRunSettingsSnapshot;
   /** Version-pinned skill libraries declared as prompt sources for this run. */
   skillLibraryRefs?: PromptSkillLibraryRef[];
   startedAt?: string;
@@ -367,6 +368,7 @@ export type RunStreamEvent =
   | { reason?: string; runId: string; type: "run.cancelled" }
   | { droppedEvents: number; type: "run.history.truncated" }
   | { phase: "thinking"; turn: number; type: "agent.phase" }
+  | { nodeId?: string; phase: IdeaTreePhase; treeId?: string; type: "idea_tree.phase" }
   | { delta: string; turn: number; type: "assistant.thinking.delta" }
   | { content: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
   | { delta: string; type: "assistant.delta" }
@@ -385,6 +387,7 @@ export type RunStreamEvent =
    *  conversation. The card renders in the transcript where it was asked
    *  for, so the search sits next to the sentence that motivated it. */
   | { run: EvolveRun; type: "evolve_run.created" }
+  | { researchId: string; type: "idea_research.created" }
   | { request: PermissionRequest; type: "permission.required" }
   | { request: PermissionRequest; type: "permission.resolved" }
   | { review: ArtifactReviewRun; type: "artifact_review.completed" }

@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createIdeaResearchClient } from "../idea-tree/research.js";
 import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
+import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { CustomMcpServers } from "../mcp/custom-servers.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -55,6 +58,8 @@ export interface ApiServerDependencies {
   fetchModelCatalog?: (options: { proxy?: ResolvedProxy; url: string }) => Promise<ModelsDevPayload>;
   /** Test seam: resolve usage display exchange rates without touching the network. */
   fetchUsageExchangeRate?: typeof fetch;
+  /** Test/embedding seam. Production uses the Python tree service. */
+  ideaTreeRepository?: (scope: { projectId: string; sessionId: string }) => IdeaTreePersistence;
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
   /** Test seam: exercise remote-host HTTP flows without connecting to a real SSH machine. */
@@ -115,6 +120,7 @@ export function createPlatformServices(
   }, config.memoryGraph.neo4jPassword);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
   const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  const ideaTreeAuthorities = createIdeaTreeAuthorityRegistry();
 
   mgLog.setDataDir(config.dataDir);
   reviewerLog.setLogDir(resolve(config.dataDir, "logs"));
@@ -126,6 +132,14 @@ export function createPlatformServices(
   });
   const memoryGraphSink = new MemoryGraphSink(memoryGraphClient, () => store.getMemoryGraphSettings().enabled);
   const memoryGraphEnabled = () => store.getMemoryGraphSettings().enabled;
+  const ideaTreeRepository = (sessionId: string) => {
+    const session = store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    return dependencies.ideaTreeRepository?.({ projectId: session.projectId, sessionId }) ?? ideaTreeRepositoryForSession(
+      { token: config.evolve.internalToken, url: config.evolve.url },
+      { projectId: session.projectId, sessionId },
+    );
+  };
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createBuiltinMcpSourceRegistry();
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
@@ -190,6 +204,8 @@ export function createPlatformServices(
   // Run-scoped model tokens. In memory only: a token that outlived the process
   // would outlive the run it belongs to, and that is the property it exists for.
   const evolveRunTokens = new RunTokenRegistry();
+  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken,
+    apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`, store, tokens: evolveRunTokens });
   const evolveCas = new CasStore(config.dataDir);
   const evolveCandidates = new CandidateSources(
     config.dataDir, process.env.SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR?.trim() || undefined,
@@ -339,6 +355,12 @@ export function createPlatformServices(
         releaseWait?.();
       }
     },
+    createIdeaResearch: async (input) => {
+      const view = await ideaResearch.command(turn.sessionId, "create", input);
+      await turn.emit({type: "idea_research.created", researchId: view.research.id});
+      return {researchId: view.research.id, status: view.research.status, message: "Python engine started. Follow progress in the Idea Tree card."};
+    },
+    getIdeaResearch: (researchId?: string) => ideaResearch.summary(turn.sessionId, researchId),
     getEvolveRun: async (runId?: string) => {
       // The id is optional and prefix-tolerant, because the caller is a model
       // whose context routinely does not contain it: a search started in an
@@ -372,6 +394,9 @@ export function createPlatformServices(
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    ideaResearch,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpGateway,
@@ -409,6 +434,8 @@ export async function initializePlatformServices(
     evolutionStore,
     evolveOrchestrator,
     evolveRuntimeFactory,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -474,6 +501,8 @@ export async function initializePlatformServices(
         remoteCompute,
         skillCatalog,
         skillLibraryCatalog,
+        ideaTreeAuthorities,
+        ideaTreeRepository(session.id),
         memoryGraphSink,
         session.id,
         config,

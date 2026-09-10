@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from agentdescent.selection import Candidate, FlatPuct, SelectionContext
 
+from ...tree import Node as BaseNode, Tree
 from .program import Program
 
 #: The artifact id the selection rows carry. Only ever compared with itself.
@@ -63,11 +64,9 @@ def finite(value: Any) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 @dataclass
-class Node:
+class Node(BaseNode):
     """`futs.Node`, with the program payload this port carries alongside it."""
 
-    index: int
-    parent_index: Optional[int]
     program: Program
     score: float
     num_visits: int = 0
@@ -96,7 +95,7 @@ class Node:
 
 
 @dataclass
-class PuctTree:
+class PuctTree(Tree[Node]):
     """`futs.search`'s node list, made safe for N workers to expand at once.
 
     The only behavioural difference from upstream is *when* a visit is counted:

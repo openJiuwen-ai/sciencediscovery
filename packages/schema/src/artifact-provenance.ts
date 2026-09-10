@@ -17,7 +17,7 @@ import type { CasObjectRef, ExecutionRun, ReviewRun } from "./provenance.js";
 import type { ChatMessage, ComposerReference } from "./session.js";
 
 export type ScientificArtifactKind = "dataset" | "figure" | "html" | "json" | "latex" | "markdown" | "notebook" | "other" | "report" | "structure";
-export type ArtifactOrigin = "legacy_auto" | "llm_declared" | "mcp_download" | "user_upload";
+export type ArtifactOrigin = "legacy_auto" | "llm_declared" | "mcp_download" | "server_generated" | "user_upload";
 export type ArtifactOriginMeta = Record<string, boolean | number | string | null>;
 
 export interface ScientificArtifact {

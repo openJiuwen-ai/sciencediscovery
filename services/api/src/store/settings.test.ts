@@ -15,9 +15,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_WEB_SETTINGS } from "@sciencediscovery/schema";
+import { DEFAULT_IDEA_TREE_SETTINGS, DEFAULT_WEB_SETTINGS } from "@sciencediscovery/schema";
 
-import { normalizeWebSettings } from "./settings.js";
+import { normalizeIdeaTreeSettings, resolveIdeaTreeSettings, normalizeWebSettings } from "./settings.js";
 
 const base = {
   fetchCacheTtlSeconds: 86_400,
@@ -83,4 +83,26 @@ test("unknown engines and non-boolean switches are rejected rather than coerced"
     /paidSearchProviders must list supported paid search providers/,
   );
   assert.throws(() => normalizeWebSettings({ ...base, searchEngine: "bing" }), /Unknown web setting/);
+});
+
+
+test("Idea Tree research budgets survive storage and omitted fields retain their values", () => {
+  const updated = normalizeIdeaTreeSettings({maxRounds: 6, candidatesPerRound: 2, maxTokens: 120000, maxTokensPerCall: 6000}, DEFAULT_IDEA_TREE_SETTINGS);
+  const restored = resolveIdeaTreeSettings(JSON.parse(JSON.stringify(updated)));
+  assert.equal(restored.maxRounds, 6);
+  assert.equal(restored.candidatesPerRound, 2);
+  assert.equal(restored.maxTokens, 120000);
+  assert.equal(restored.maxTokensPerCall, 6000);
+  assert.equal(normalizeIdeaTreeSettings({maxDepth: 3}, restored).maxRounds, 6);
+  assert.equal(normalizeIdeaTreeSettings({maxTokens: null}, restored).maxTokens, null);
+  for (const input of [{maxRounds: 0}, {candidatesPerRound: 21}, {maxTokens: -1}, {maxTokensPerCall: 255}]) {
+    assert.throws(() => normalizeIdeaTreeSettings(input, restored));
+  }
+});
+
+
+test("Idea Tree accepts the server Lead Agent output ceiling", () => {
+  assert.equal(DEFAULT_IDEA_TREE_SETTINGS.maxTokensPerCall, 32768);
+  assert.equal(normalizeIdeaTreeSettings({maxTokensPerCall: 32768}, DEFAULT_IDEA_TREE_SETTINGS).maxTokensPerCall, 32768);
+  assert.throws(() => normalizeIdeaTreeSettings({maxTokensPerCall: 32769}, DEFAULT_IDEA_TREE_SETTINGS));
 });
