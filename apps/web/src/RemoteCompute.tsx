@@ -118,6 +118,7 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
   runnerId: string;
   selected: readonly number[];
 }): ReactNode {
+  const { t } = useLocale();
   const [saving, setSaving] = useState(false);
   if (!inventory) return null;
   const ticked = new Set(selected);
@@ -137,14 +138,14 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
     }
   };
 
-  return <section className="remote-npu" aria-label="NPU cards">
+  return <section className="remote-npu" aria-label={t("remote.npuTitle")}>
     <div className="remote-npu-header">
-      <strong>NPU cards</strong>
-      <small>{inventory.devices.length} on this machine · {usableCount} usable in the sandbox</small>
+      <strong>{t("remote.npuTitle")}</strong>
+      <small>{t("remote.npuCount", { total: inventory.devices.length, usable: usableCount })}</small>
     </div>
     {inventory.error ? <small role="alert">{inventory.error}</small> : null}
     {inventory.devices.length === 0
-      ? <small>No Ascend cards were reported by this machine.</small>
+      ? <small>{t("remote.npuNone")}</small>
       : <ul className="remote-npu-list">
         {inventory.devices.map((device) => {
           const memory = npuMemory(device.hbmUsedMb, device.hbmTotalMb);
@@ -157,27 +158,29 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
                 disabled={(!device.sandboxUsable && !isTicked) || saving}
                 onChange={(event) => { void toggle(device.hostIndex, event.target.checked); }}
               />
-              <span className="remote-npu-name">NPU {device.hostIndex} · {device.chipName}</span>
+              <span className="remote-npu-name">{t("remote.npuCard", { chip: device.chipName, index: device.hostIndex })}</span>
               <span className="remote-npu-metrics">
                 {device.health ? <span className={`remote-detail-badge ${device.health === "OK" ? "neutral" : "warning"}`}>{device.health}</span> : null}
                 {memory ? <small>{memory}</small> : null}
-                {device.aiCorePercent === undefined ? null : <small>{device.aiCorePercent}% AI core</small>}
-                {device.temperatureCelsius === undefined ? null : <small>{device.temperatureCelsius} °C</small>}
+                {device.aiCorePercent === undefined ? null : <small>{t("remote.npuAiCore", { percent: device.aiCorePercent })}</small>}
+                {device.temperatureCelsius === undefined ? null : <small>{t("remote.npuTemperature", { celsius: device.temperatureCelsius })}</small>}
               </span>
             </label>
             {device.sandboxUsable
               ? null
+              // The driver's own wording stays as the machine reported it; only
+              // what the product says around it is translated.
               : <small className="remote-npu-reason">
-                {device.sandboxUnusableReason ?? "This card cannot be opened inside the sandbox."}
-                {isTicked ? " Executions using it will fail until it is free again; untick it to run without it." : null}
+                {device.sandboxUnusableReason ?? t("remote.npuUnusable")}
+                {isTicked ? ` ${t("remote.npuUnusableSelected")}` : null}
               </small>}
           </li>;
         })}
       </ul>}
     {usableCount === 0 && inventory.devices.length > 0
-      ? <small role="alert">No card on this machine can currently be opened inside a sandbox, so none can be selected.</small>
+      ? <small role="alert">{t("remote.npuNoneUsable")}</small>
       : null}
-    <small>Selected cards are renumbered from 0 inside the sandbox, so code can target device 0.</small>
+    <small>{t("remote.npuRenumbered")}</small>
   </section>;
 }
 
