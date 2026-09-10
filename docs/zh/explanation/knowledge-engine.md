@@ -6,7 +6,7 @@
 - **存储是自持的 SQLite 域**（`<data-dir>/knowledge-engine/knowledge-engine.sqlite`，WAL），归 `services/api/src/knowledge-engine/store.ts` 所有，遵循 RefStore 先例：自带 `ke_migrations` 版本表，绝不往 catalog store 加表。
 - **纯领域逻辑在 `packages/knowledge-engine`**（零 IO：无 fs/网络/进程）：文本（trigram、余弦扫描、JATS→markdown）、抽取（溯源门、prompt）、增长（MMR/AA 选择、四收敛信号）、图谱（explore、gaps、resident summary、Louvain、roots）、消解（分层门、合并策略、批量助手）、评测 harness 核。
 - **组合层在 `services/api/src/knowledge-engine`**：store、job runner（崩溃可恢复的持久队列）、连接器（arXiv / Europe PMC(+JATS) / OpenAlex / PubMed / Semantic Scholar / Unpaywall）、orchestrator（seed/ingest/extract/grow/resolution 作业）、路由、agent 工具端口、上下文 contributor。
-- **agent 通过工具与上下文消费图谱**：六个 `knowledgeEngine` 工作区工具（`list_knowledge_bases`、`concept_explore`、`deep_dive`、`entity_unified_search`、`validate_entities`、`gap_candidates`）、resident-summary 上下文 contributor、两个内置技能包（`knowledge-engine-explore`、`knowledge-engine-grow`）。
+- **agent 通过工具与上下文消费图谱**：七个 `knowledgeEngine` 工作区工具（`list_knowledge_bases`、`concept_explore`、`deep_dive`、`entity_unified_search`、`validate_entities`、`gap_candidates`、`kb_search`）、resident-summary 上下文 contributor、两个内置技能包（`knowledge-engine-explore`、`knowledge-engine-grow`）。
 
 ## 2. 数据模型
 

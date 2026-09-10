@@ -43,4 +43,10 @@
 
 ## 下一步（ZCode 计划，可被用户改派）
 
-W6 提交后：KnowledgeEnginePage 接线（上文契约）+ ke.doc.* i18n 迁移 + J-KE4 启用与校准 → W8 kb_search（ke_documents_fts 已有，补 chunk 化+锚点命中）→ W9 运行时反幻觉。路线图全文见差距分析 §4。
+W6 提交后：KnowledgeEnginePage 接线（上文契约）+ ke.doc.* i18n 迁移 + J-KE4 启用与校准 → W9 运行时反幻觉。路线图全文见差距分析 §4。
+
+## W8 kb_search 已落地（2026-09-10 22:3x，第三笔提交——W6 仍未提交故继续纯后端）
+
+- **纯函数** `packages/knowledge-engine/src/text/search.ts`：`searchBlocks`——FTS 召回的文档按需重解析 W7 块 → 词项打分（presence+频率小帽，停用词过滤，CJK 保留）→ **锚点级命中**（anchorId 直达三级阅读器）；每文档 ≤2 命中分散来源；truncated/notes 诚实透出；reference 块不参与。**零迁移**（DA retrieval_chunks 持久 chunk 表显式延后——当前 KB 规模毫秒级，注释在文件头）。包测试 127/127（+5）。
+- **端口与注册**：tools.ts `kbSearch`（FTS5 召回 docLimit≤10 → searchBlocks，topK 默认 8≤20）+ workspace `kb_search` 工具（诚实 LIMITATION：keyword-only 无语义重排、改写不命中、miss≠absence 证据）。workspace 测试 37/37；services KE 域 79/79（+1 kbSearch 集成）。explanation 文档 en+zh 已 6→7 工具。
+- **agent 能力缺口补齐**：这是 SD 首个**文档正文检索**工具——此前 agent 对论文文本是盲的（只有图 evidence_quote 片段）。J-KE5（kb_search 旅程）待写：agent 问"实验设置"类问题 → kb_search → 答案带 anchorId 级引用（可走 ke-stub 扩展 turn2 调 kb_search）。

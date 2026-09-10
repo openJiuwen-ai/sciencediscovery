@@ -155,3 +155,45 @@ test("tools: residentSummary stages by engine state and stays under the cap", as
   assert.match(converged!.section, /最强关系/);
   assert.ok(converged!.section.length <= 2500);
 });
+
+test("tools: kbSearch returns anchor-level passage hits from FTS recall", async (context) => {
+  const root = tempRoot("ke-tools-kbsearch");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const doc = store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p1",
+    title: "mAb114 neutralizes Ebola",
+    status: "ready",
+    fulltext: "mAb114 binds the Ebola glycoprotein and neutralizes the virus.",
+  });
+  store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p2",
+    title: "Unrelated climate paper",
+    status: "ready",
+    fulltext: "Sea surface temperature rose by two degrees.",
+  });
+
+  const result = await tools.kbSearch(kb.id, "glycoprotein neutralizes", {});
+  assert.equal(result.hits.length, 1);
+  const hit = result.hits[0]!;
+  assert.equal(hit.docId, doc.id);
+  assert.equal(hit.docTitle, "mAb114 neutralizes Ebola");
+  assert.equal(hit.anchorId, `${doc.id}:paragraph:0`);
+  assert.equal(hit.blockType, "paragraph");
+  assert.ok(hit.snippet.includes("glycoprotein"));
+  assert.ok(hit.matchedTerms.includes("neutralizes"));
+
+  const empty = await tools.kbSearch(kb.id, "zebraquantum", {});
+  assert.deepEqual(empty.hits, []);
+  assert.equal(empty.note, "no documents matched the keyword recall");
+
+  await assert.rejects(
+    () => tools.kbSearch("nonexistent", "x", {}),
+    (error: unknown) => error instanceof KeKbNotFoundError,
+  );
+});

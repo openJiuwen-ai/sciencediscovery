@@ -24,12 +24,14 @@ import {
   deepDive,
   entityUnifiedSearch,
   findGaps,
+  searchBlocks,
   validateEntities,
   type DeepDiveResult,
   type EntityUnifiedSearchResult,
   type ExploreDataAccess,
   type ExploreResult,
   type GapAnalysis,
+  type KbSearchResult,
   type ResidentSummary,
   type ValidateEntitiesResult,
 } from "@sciencediscovery/knowledge-engine";
@@ -58,6 +60,8 @@ export interface KnowledgeEngineToolPort {
     kbId: string,
     opts: { topN?: number; signals?: Array<"holes" | "conflicts" | "transfers"> },
   ): Promise<GapAnalysis>;
+  /** W8: keyword document search with block-level anchor hits (kb_search). */
+  kbSearch(kbId: string, query: string, opts: { topK?: number; docLimit?: number }): Promise<KbSearchResult>;
   /** Resident summary for context injection; null when the KB has no graph. */
   residentSummary(kbId: string): Promise<ResidentSummary | null>;
 }
@@ -128,6 +132,21 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
         store.listEdges(kbId, { limit: 50_000 }),
         opts,
       );
+    },
+
+    async kbSearch(kbId, query, opts) {
+      requireKb(kbId);
+      // FTS5 recalls documents (title/abstract/fulltext); the pure layer
+      // re-derives W7 blocks on demand so every hit is an anchor into the
+      // three-level reader. docLimit stays small — block parsing is
+      // milliseconds per document at this scale.
+      const docLimit = Math.max(1, Math.min(opts.docLimit ?? 6, 10));
+      const documents = store
+        .searchDocumentIds(kbId, query, docLimit)
+        .map((docId) => store.getDocument(docId))
+        .filter((document): document is NonNullable<typeof document> => Boolean(document?.fulltext))
+        .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
+      return searchBlocks({ kbId, query, documents, topK: opts.topK });
     },
 
     async residentSummary(kbId) {

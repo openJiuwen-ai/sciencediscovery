@@ -6,7 +6,7 @@
 - **Storage is a self-contained SQLite domain** (`<data-dir>/knowledge-engine/knowledge-engine.sqlite`, WAL) owned by `services/api/src/knowledge-engine/store.ts`, following the RefStore precedent: its own `ke_migrations` version table, never touching the catalog store.
 - **Pure domain logic lives in `packages/knowledge-engine`** (zero IO: no fs/network/process): text (trigram, cosine scan, JATS→markdown), extraction (provenance gate, prompts), growth (MMR/AA selection, four convergence signals), graph (explore, gaps, resident summary, Louvain, roots), resolution (layered gates, merge policy, batch helpers), and eval harness cores.
 - **Composition lives in `services/api/src/knowledge-engine`**: store, job runner (crash-recoverable persistent queue), connectors (arXiv / Europe PMC(+JATS) / OpenAlex / PubMed / Semantic Scholar / Unpaywall), orchestrator (seed/ingest/extract/grow/resolution jobs), routes, agent-tool port, context contributor.
-- **The agent consumes the graph through tools and context**: six `knowledgeEngine` workspace tools (`list_knowledge_bases`, `concept_explore`, `deep_dive`, `entity_unified_search`, `validate_entities`, `gap_candidates`), a resident-summary context contributor, and two bundled skills (`knowledge-engine-explore`, `knowledge-engine-grow`).
+- **The agent consumes the graph through tools and context**: seven `knowledgeEngine` workspace tools (`list_knowledge_bases`, `concept_explore`, `deep_dive`, `entity_unified_search`, `validate_entities`, `gap_candidates`, `kb_search`), a resident-summary context contributor, and two bundled skills (`knowledge-engine-explore`, `knowledge-engine-grow`).
 
 ## 2. Data model
 

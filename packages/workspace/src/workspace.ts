@@ -321,6 +321,7 @@ export interface WorkspaceToolOptions {
       kbId: string,
       opts: { topN?: number; signals?: Array<"holes" | "conflicts" | "transfers"> },
     ) => Promise<unknown>;
+    kbSearch: (kbId: string, query: string, opts: { topK?: number; docLimit?: number }) => Promise<unknown>;
   };
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
    * `declare_evidence` LLM tool). Returns a structured error code instead of
@@ -1259,6 +1260,22 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           names: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
         }),
         (params) => knowledgeEngine.validateEntities(params.kbId, params.names),
+      ),
+      keTool(
+        "kb_search",
+        "Search knowledge-base documents",
+        "Keyword search over a knowledge base's documents, returning passage-level hits: each hit carries the document (docId/docTitle), an anchorId that resolves to the exact block in the three-level reader, the section, a snippet, matched terms, and a score. Use it for questions about what the papers SAY (methods, numbers, setup) — the graph tools cover extracted entities and relations. Hits are spread across at most 2 per document; truncated=true means more matches exist. LIMITATION: keyword matching only (no semantic/vector rerank in this build) — paraphrases of a term will not match; a miss is unknown, not evidence of absence.",
+        Type.Object({
+          kbId: kbIdField,
+          query: Type.String({ minLength: 1, description: "Free-text keyword query" }),
+          topK: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+          docLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10 })),
+        }),
+        (params) =>
+          knowledgeEngine.kbSearch(params.kbId, params.query, {
+            ...(params.topK === undefined ? {} : { topK: params.topK }),
+            ...(params.docLimit === undefined ? {} : { docLimit: params.docLimit }),
+          }),
       ),
       keTool(
         "gap_candidates",
