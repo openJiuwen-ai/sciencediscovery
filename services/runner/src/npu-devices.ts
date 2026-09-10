@@ -37,8 +37,14 @@
 import { access, constants } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { NpuDeviceMapping, NpuDeviceSelection, NpuDeviceStatus, NpuInventory } from "@sciencediscovery/schema";
-import { npuDeviceMapping } from "@sciencediscovery/schema";
+import type {
+  NpuDeviceMapping,
+  NpuDeviceSelection,
+  NpuDeviceStatus,
+  NpuInventory,
+  RejectedNpuDevice,
+} from "@sciencediscovery/schema";
+import { npuDeviceMapping, resolveNpuSelection } from "@sciencediscovery/schema";
 import { procMountArguments, type SandboxProcMode } from "@sciencediscovery/sandbox-capability";
 
 const execFileAsync = promisify(execFile);
@@ -406,6 +412,50 @@ export async function prepareSandboxNpu(
     mapping,
     pythonPath: npuSandboxPythonPath(resolved),
   };
+}
+
+/**
+ * An execution asked for cards this machine will not hand to a sandbox. Thrown
+ * before the launch so the failure names the cards and the driver's reason,
+ * rather than surfacing later as an unexplained framework error.
+ */
+export class NpuDevicesUnavailableError extends Error {
+  readonly rejected: readonly RejectedNpuDevice[];
+
+  constructor(rejected: readonly RejectedNpuDevice[]) {
+    super(`Requested NPU cards are not usable on this machine: ${
+      rejected.map((entry) => entry.reason).join(" ")
+    }`);
+    this.name = "NpuDevicesUnavailableError";
+    this.rejected = rejected;
+  }
+}
+
+/**
+ * Validate an execution's requested cards against the machine's current
+ * inventory and build the launch plumbing. Re-checking here rather than
+ * trusting the tick alone matters on a shared host: a card that was usable
+ * when the operator selected it can be claimed by someone else minutes later,
+ * and running anyway would fail deep inside the framework.
+ */
+export async function resolveExecutionNpu(
+  options: {
+    bwrapPath: string;
+    npuInventory?: () => Promise<NpuInventory>;
+  },
+  requested: NpuDeviceSelection | undefined,
+  probeProfile?: () => Promise<{ disableUserns: boolean; procMode: SandboxProcMode }>,
+): Promise<SandboxNpu | undefined> {
+  if (!requested || requested.length === 0) return undefined;
+  const inventory = options.npuInventory
+    ? await options.npuInventory()
+    : await collectNpuInventory({
+      bwrapPath: options.bwrapPath,
+      ...(probeProfile ? await probeProfile() : { disableUserns: false, procMode: "new" as SandboxProcMode }),
+    });
+  const resolved = resolveNpuSelection(requested, inventory);
+  if (resolved.rejected.length > 0) throw new NpuDevicesUnavailableError(resolved.rejected);
+  return await prepareSandboxNpu(resolved.accepted);
 }
 
 /** Cache one inventory per Runner process so a status poll never re-probes every card. */

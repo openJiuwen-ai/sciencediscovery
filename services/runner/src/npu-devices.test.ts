@@ -34,6 +34,7 @@ import {
   npuSandboxPythonPath,
   parseNpuSmiInfo,
   prepareSandboxNpu,
+  resolveExecutionNpu,
   type NpuProbeContext,
 } from "./npu-devices.js";
 
@@ -412,5 +413,63 @@ describe("sandbox launch with NPU cards", () => {
     });
     assert.ok(launch.env.PYTHONPATH?.startsWith("/env/site-packages:"));
     assert.ok(launch.env.PYTHONPATH?.includes("/python/site-packages"));
+  });
+});
+
+describe("validating a selection at launch time", () => {
+  const inventory = (devices: NpuDeviceStatus[]) => async () => ({
+    capturedAt: "2026-09-10T00:00:00.000Z",
+    devices,
+    supported: true,
+  });
+  const usable = (hostIndex: number): NpuDeviceStatus => ({
+    chipName: "910B3", health: "OK", hostIndex, sandboxUsable: true,
+  });
+
+  test("skips the inventory entirely for an execution that wants no card", async () => {
+    let consulted = false;
+    const npu = await resolveExecutionNpu({
+      bwrapPath: "/usr/bin/bwrap",
+      npuInventory: async () => { consulted = true; throw new Error("must not be consulted"); },
+    }, undefined);
+    assert.equal(npu, undefined);
+    assert.equal(consulted, false);
+  });
+
+  test("builds the device plumbing for cards that are still usable", async () => {
+    const npu = await resolveExecutionNpu({
+      bwrapPath: "/usr/bin/bwrap",
+      npuInventory: inventory([usable(4), usable(6)]),
+    }, [6, 4]);
+    assert.deepEqual(npu?.mapping, [
+      { hostIndex: 4, sandboxIndex: 0 },
+      { hostIndex: 6, sandboxIndex: 1 },
+    ]);
+  });
+
+  test("fails the execution by name when a card stopped being usable", async () => {
+    // A shared machine can lose a card between the tick and the run; failing
+    // here beats failing deep inside the framework with no card named.
+    await assert.rejects(
+      resolveExecutionNpu({
+        bwrapPath: "/usr/bin/bwrap",
+        npuInventory: inventory([
+          { chipName: "910B3", health: "OK", hostIndex: 4, sandboxUsable: false,
+            sandboxUnusableReason: "NPU 4 cannot be opened inside the sandbox: device is used" },
+        ]),
+      }, [4]),
+      (error: Error) => {
+        assert.equal(error.name, "NpuDevicesUnavailableError");
+        assert.match(error.message, /NPU 4 cannot be opened inside the sandbox: device is used/u);
+        return true;
+      },
+    );
+  });
+
+  test("refuses the whole execution rather than quietly running on fewer cards", async () => {
+    await assert.rejects(resolveExecutionNpu({
+      bwrapPath: "/usr/bin/bwrap",
+      npuInventory: inventory([usable(4)]),
+    }, [4, 5]), /NPU 5/u);
   });
 });
