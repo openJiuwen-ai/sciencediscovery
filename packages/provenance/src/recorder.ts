@@ -128,6 +128,13 @@ export interface RecordExecutionOptions {
   skillPackagesRoot?: string;
   /** Alias of the remote machine this execution runs on; absent means the local machine. */
   remoteHostAlias?: string;
+  /**
+   * NPU cards this Runner may hand to the sandbox, as ticked by an operator
+   * against that Runner's probe. Absent or empty keeps the sandbox without
+   * NPUs; the Runner re-validates the set before it launches, so a card that
+   * has since been claimed elsewhere fails the execution by name.
+   */
+  npuDevices?: number[];
   runnerId?: string;
   /** Logical runner-local workspace. When set, generated files remain remote until explicit pull. */
   runnerWorkspaceKey?: string;
@@ -596,6 +603,7 @@ export class ProvenanceRecorder {
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
+        ...(options.npuDevices?.length ? { npuDevices: options.npuDevices } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -758,6 +766,7 @@ export class ProvenanceRecorder {
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
+        ...(options.npuDevices?.length ? { npuDevices: options.npuDevices } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {

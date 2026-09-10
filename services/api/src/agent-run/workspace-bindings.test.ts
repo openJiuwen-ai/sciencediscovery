@@ -23,9 +23,9 @@ import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "../agent-notifications.js";
 
 import type { NpuJob } from "@sciencediscovery/schema";
-import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
-import type { SessionStore } from "../store.js";
+import { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
@@ -145,6 +145,8 @@ test("main and child execution bindings route by Runner ID and record isolated w
     store: {
       assertSessionWritable() {},
       // No network in this epoch, so the binding resolves no outbound route.
+      // No cards ticked on this Runner, so no NPU reaches the request.
+      npuDeviceSelection: () => [],
       resolveSandboxEgressProxy: () => undefined,
     } as unknown as SessionStore,
     workspaceRoot: "/workspace",
@@ -284,6 +286,7 @@ test("scientific executions forward the current outbound route and omit it for n
     sessionId: "session-1",
     store: {
       assertSessionWritable() {},
+      npuDeviceSelection: () => [],
       resolveSandboxEgressProxy: () => resolved,
     } as unknown as SessionStore,
     workspaceRoot: "/workspace",
@@ -409,6 +412,8 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
     store: {
       assertSessionWritable() {},
       // No network in this epoch, so the binding resolves no outbound route.
+      // No cards ticked on this Runner, so no NPU reaches the request.
+      npuDeviceSelection: () => [],
       resolveSandboxEgressProxy: () => undefined,
     } as unknown as SessionStore,
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
@@ -432,4 +437,97 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
   await assert.rejects(bindings.npuBroker!.submit({ environmentId: "epoch-revision", workloadId: "antibody.protenix.v1", inputs: {} }), /missing or not ready/);
 
   await assert.rejects(bindings.npuBroker!.get("foreign-job"), /NPU job not found in this Session/);
+});
+
+/**
+ * The whole chain, not a layer of it: a real store holding a real selection, a
+ * real ProvenanceRecorder, and a RunnerClient that captures exactly what the
+ * Runner would receive. Asserting on the recorder's options instead would
+ * prove nothing about the request the Runner actually gets.
+ */
+async function npuChain(selection: number[] | undefined) {
+  const dataDir = await mkdtemp(resolve(tmpdir(), "npu-wiring-"));
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "test-token", baseUrl: "https://models.example.test/v1",
+    model: "test-model", name: "Test model",
+  });
+  const project = await store.createProject("NPU wiring");
+  const session = await store.createSession(project.id, "NPU wiring", { modelId: model.id });
+  const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+  const workspaceRoot = store.workspacePath(session.id);
+  await mkdir(workspaceRoot, { recursive: true });
+  if (selection) await store.setNpuDeviceSelection("local", selection);
+  const payloads: Array<Record<string, unknown>> = [];
+  const result = {
+    createdFiles: [], environmentRevisionId: "system-python3-bwrap-v1",
+    environmentVariables: {}, exitCode: 0, finishedAt: new Date().toISOString(),
+    kernelId: "kernel", kernelMode: "ephemeral", language: "python", modifiedFiles: [],
+    networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap",
+    startedAt: new Date().toISOString(), stderr: "", stdout: "", workingDirectory: "/workspace",
+  };
+  const runnerClient = {
+    execute: async (request: Record<string, unknown>) => { payloads.push(request); return { ...result, executionId: String(request.executionId) }; },
+    executeShell: async (request: Record<string, unknown>) => { payloads.push(request); return { ...result, executionId: String(request.executionId) }; },
+    health: async () => ({ sandbox: "bubblewrap" }),
+    listEnvironmentRevisions: async () => [],
+    listEnvironments: async () => [],
+  } as unknown as RunnerClient;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
+    executionId: "run-npu",
+    permission: {
+      getEpoch: () => permissionEpoch,
+      requirePrivilege: async () => undefined,
+    } as unknown as AgentPermissionRuntime,
+    permissionScopeLabel: "in test",
+    provenanceRecorder: new ProvenanceRecorder(dataDir, store),
+    runnerClient,
+    scientificEnvironments: [],
+    sessionId: session.id,
+    store,
+    workspaceRoot,
+  });
+  return { bindings, cleanup: async () => { await rm(dataDir, { recursive: true, force: true }); }, payloads };
+}
+
+test("cards ticked for a Runner reach the Runner request of every execution kind", async () => {
+  const { bindings, cleanup, payloads } = await npuChain([4]);
+  try {
+    await bindings.executePython!("print('python')");
+    await bindings.executeShell!("echo shell", "ephemeral");
+    await bindings.executeScientific!("python", "print('scientific')", undefined, "ephemeral");
+  } finally {
+    await cleanup();
+  }
+  assert.equal(payloads.length, 3, "each execution must reach the Runner");
+  // The tick is worthless unless it arrives here: this is the field the Runner
+  // reads to decide which cards to bind into the sandbox.
+  for (const payload of payloads) assert.deepEqual(payload.npuDevices, [4]);
+});
+
+test("an unticked Runner sends no NPU field at all, leaving the sandbox unchanged", async () => {
+  const { bindings, cleanup, payloads } = await npuChain(undefined);
+  try {
+    await bindings.executePython!("print('python')");
+    await bindings.executeShell!("echo shell", "ephemeral");
+    await bindings.executeScientific!("python", "print('scientific')", undefined, "ephemeral");
+  } finally {
+    await cleanup();
+  }
+  assert.equal(payloads.length, 3);
+  // Absent rather than an empty array: an empty array would still be a decision.
+  for (const payload of payloads) assert.equal(Object.hasOwn(payload, "npuDevices"), false);
+});
+
+test("clearing a Runner's cards stops them reaching the next execution", async () => {
+  const { bindings, cleanup, payloads } = await npuChain([4, 6]);
+  try {
+    await bindings.executePython!("print('with cards')");
+  } finally {
+    await cleanup();
+  }
+  assert.deepEqual(payloads[0]?.npuDevices, [4, 6]);
 });

@@ -128,6 +128,7 @@ import type {
   RegisterRemoteHostRequest,
   RemoteHostTarget,
   RemoteRunnerStatus,
+  NpuRunnerSelectionsResponse,
   RemoteWorkspaceSyncRequest,
   PromptManifest,
   SubagentStep,
@@ -136,6 +137,7 @@ import type {
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
+  LOCAL_RUNNER_ID,
   UNTITLED_SESSION_TITLE,
   resolveNpuSelection,
 } from "@sciencediscovery/schema";
@@ -1170,24 +1172,44 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, await probeRegisteredSshHost(host.id, host.runnerCommand));
         return;
       }
-      const remoteHostNpuMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/npu-devices$/);
-      if (remoteHostNpuMatch && request.method === "PUT") {
-        const host = store.getRemoteHost(remoteHostNpuMatch[1]!);
-        if (!host) return sendError(response, 404, "Remote host not found");
+      if (request.method === "GET" && url.pathname === "/api/runners/npu") {
+        // One place to read every Runner's cards: the local machine's inventory
+        // is fetched live, remote ones ride along on their connection status.
+        const local = await runnerClient.resources()
+          .then((resources) => resources.npu ?? null)
+          .catch(() => null);
+        sendJson(response, 200, {
+          local,
+          selections: store.npuDeviceSelections(),
+        } satisfies NpuRunnerSelectionsResponse);
+        return;
+      }
+      const runnerNpuMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/npu-devices$/);
+      if (runnerNpuMatch && request.method === "PUT") {
+        const runnerId = decodeURIComponent(runnerNpuMatch[1]!);
         const body = await readJson<{ devices?: unknown }>(request);
         const devices = body.devices;
         if (!Array.isArray(devices) || devices.some((entry) => typeof entry !== "number")) {
           return sendError(response, 400, "Select NPU cards by their host index");
         }
-        // The Runner is the only place that knows whether a card opens inside a
-        // sandbox, so refuse anything its probe did not clear rather than
-        // storing a tick that would fail at execution time.
-        const inventory = host.runnerStatus?.resources?.npu;
+        // Only the Runner knows whether a card opens inside its sandbox, so
+        // refuse anything its probe did not clear rather than storing a tick
+        // that would fail at execution time.
+        const inventory = runnerId === LOCAL_RUNNER_ID
+          ? await runnerClient.resources().then((resources) => resources.npu).catch(() => undefined)
+          : store.getRemoteHost(runnerId)?.runnerStatus?.resources?.npu;
         const resolved = resolveNpuSelection(devices as number[], inventory);
         if (resolved.rejected.length > 0) {
           return sendError(response, 409, resolved.rejected.map((entry) => entry.reason).join(" "));
         }
-        sendJson(response, 200, await store.setRemoteHostNpuDevices(host.id, resolved.accepted));
+        try {
+          sendJson(response, 200, {
+            devices: await store.setNpuDeviceSelection(runnerId, resolved.accepted),
+            runnerId,
+          });
+        } catch (error) {
+          return sendError(response, 404, error instanceof Error ? error.message : "Runner not found");
+        }
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/remote-hosts/key-files") {

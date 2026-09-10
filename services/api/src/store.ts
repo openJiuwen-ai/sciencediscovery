@@ -141,6 +141,7 @@ import type {
   ResolvedModelPricing,
 } from "@sciencediscovery/schema";
 import {
+  LOCAL_RUNNER_ID,
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SKILL_SELECTION_MODE,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
@@ -225,6 +226,7 @@ import {
   knownConnectorIdSet,
   normalizeMcpProxyPolicies,
   normalizeMemoryGraphSettings,
+  normalizeNpuDeviceSelections,
   normalizeProxyDefaultPolicy,
   normalizeProxyPolicy,
   normalizeProxyUrl,
@@ -726,6 +728,9 @@ export class SessionStore {
       ? defaultGlobalSettings
       : normalizedGlobalSettings;
     const memoryGraphSettings = normalizeMemoryGraphSettings(saved.memoryGraphSettings);
+    // Per-Runner NPU selections. Unknown shapes are dropped rather than
+    // trusted: a malformed entry would otherwise reach a sandbox launch.
+    const npuDeviceSelections = normalizeNpuDeviceSelections(saved.npuDeviceSelections);
     const migratedMemoryGraphSettings = JSON.stringify(memoryGraphSettings) !== JSON.stringify(saved.memoryGraphSettings ?? null);
     // One-time backward-compat seed: if no password is stored yet but `.env`
     // still carries SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD (pre-frontend-
@@ -1033,6 +1038,7 @@ export class SessionStore {
       globalSettings,
       mcpProxyPolicies,
       memoryGraphSettings,
+      npuDeviceSelections,
       models,
       permissionEpochs,
       permissionGrants,
@@ -3605,25 +3611,37 @@ export class SessionStore {
     return this.describeRemoteHostSecrets(structuredClone(host));
   }
 
+  /** Which NPU cards a Runner may hand to its sandboxes; empty when it uses none. */
+  npuDeviceSelection(runnerId: string): number[] {
+    return [...this.catalog.npuDeviceSelections[runnerId] ?? []];
+  }
+
+  /** Every Runner's NPU selection, for the settings surface. */
+  npuDeviceSelections(): Record<string, number[]> {
+    return structuredClone(this.catalog.npuDeviceSelections);
+  }
+
   /**
-   * Record which NPU cards this machine may hand to sandboxes. The caller has
-   * already checked them against the Runner's probe; storing the host indices
-   * rather than a count keeps the mapping stable when cards come and go.
+   * Record which NPU cards one Runner may hand to sandboxes. The caller has
+   * already checked them against that Runner's probe; storing host indices
+   * rather than a count keeps the mapping meaningful as cards come and go.
+   * Keyed by Runner id so the local Runner, which has no machine record, is
+   * stored exactly like a remote one.
    */
-  async setRemoteHostNpuDevices(hostId: string, devices: readonly number[]): Promise<RemoteHostTarget> {
-    const host = this.catalog.remoteHosts.find((entry) => entry.id === hostId);
-    if (!host) throw new Error("Runner not found");
-    const selected = [...new Set(devices)]
-      .filter((index) => Number.isSafeInteger(index) && index >= 0 && index < 1024)
-      .sort((left, right) => left - right);
-    if (selected.length !== new Set(devices).size) {
+  async setNpuDeviceSelection(runnerId: string, devices: readonly number[]): Promise<number[]> {
+    const id = runnerId.trim();
+    if (!id) throw new Error("A Runner id is required to record an NPU selection");
+    if (id !== LOCAL_RUNNER_ID && !this.catalog.remoteHosts.some((host) => host.id === id)) {
+      throw new Error("Runner not found");
+    }
+    if (devices.some((index) => !Number.isSafeInteger(index) || index < 0 || index >= 1024)) {
       throw new Error("An NPU card must be identified by its non-negative host index");
     }
-    if (selected.length === 0) delete host.npuDevices;
-    else host.npuDevices = selected;
-    host.updatedAt = new Date().toISOString();
+    const selected = [...new Set(devices)].sort((left, right) => left - right);
+    if (selected.length === 0) delete this.catalog.npuDeviceSelections[id];
+    else this.catalog.npuDeviceSelections[id] = selected;
     await this.saveCatalog();
-    return this.describeRemoteHostSecrets(structuredClone(host));
+    return selected;
   }
 
   /**

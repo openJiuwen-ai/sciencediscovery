@@ -101,6 +101,17 @@ export function createWorkspaceExecutionBindings(
     return resolved ? { sandboxEgressProxy: resolved } : {};
   };
   /**
+   * The NPU cards the operator ticked for whichever Runner this execution
+   * lands on. Resolved per execution rather than per Session: the selection is
+   * a property of the machine, and a Session that switches machines must get
+   * that machine's cards. Spread so an empty selection leaves the field absent
+   * and the sandbox stays exactly as it is without NPUs.
+   */
+  const npuDevices = (runnerId: string): { npuDevices?: number[] } => {
+    const selected = options.store.npuDeviceSelection(runnerId);
+    return selected.length > 0 ? { npuDevices: selected } : {};
+  };
+  /**
    * Where one execution runs. Anything but the local machine has to be named
    * explicitly, and only names on this Session's allowlist resolve: being
    * allowed to use a remote machine never moves the default off this one.
@@ -193,6 +204,7 @@ export function createWorkspaceExecutionBindings(
         ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
         runnerId: target.runnerId,
         runnerClient: target.runnerClient,
+        ...npuDevices(target.runnerId),
         ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
         ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
         ...sandboxEgressProxy(),
@@ -343,6 +355,7 @@ export function createWorkspaceExecutionBindings(
         ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
         runnerId: target.runnerId,
         runnerClient: target.runnerClient,
+        ...npuDevices(target.runnerId),
         ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
         ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
         ...sandboxEgressProxy(),
@@ -484,6 +497,7 @@ export function createWorkspaceExecutionBindings(
           ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
           runnerId: target.runnerId,
           runnerClient: target.runnerClient,
+          ...npuDevices(target.runnerId),
           ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
           ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
           ...sandboxEgressProxy(),
