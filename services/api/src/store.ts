@@ -2610,7 +2610,7 @@ export class SessionStore {
     return withWorkspaceAdmission(new VersionStore(this.dataDir),
       resolve(this.dataDir, "projects", projectId, "sessions", session.id, "workspace"), async () => {
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
-    await writeFile(this.messagesPath(session.id), "[]\n", "utf8");
+    await this.writeArray(this.messagesPath(session.id), []);
     await mkdir(resolve(this.dataDir, "session-runs"), { recursive: true });
     await writeFile(this.sessionRunsPath(session.id), "[]\n", "utf8");
     await mkdir(resolve(this.dataDir, "projects", projectId, "sessions", session.id, "workspace"), { recursive: true });
@@ -3263,7 +3263,7 @@ export class SessionStore {
     const message = messages.find((candidate) => candidate.id === messageId);
     if (!message || message.references?.length) return;
     message.references = structuredClone(references);
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
   }
 
   async createArtifactVersion(input: {
@@ -5174,7 +5174,7 @@ export class SessionStore {
     const messages = await this.readMessages(sessionId);
     messages.push(message);
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     session.updatedAt = message.createdAt;
     await this.saveCatalog();
     return message;
@@ -5204,7 +5204,7 @@ export class SessionStore {
     };
     messages.push(message);
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     session.updatedAt = message.createdAt;
     await this.saveCatalog();
     return structuredClone(message);
@@ -5235,7 +5235,7 @@ export class SessionStore {
       ...(update.error ? { error: update.error } : {}),
     };
     message.content = update.content;
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     return structuredClone(message);
   }
 
@@ -5253,7 +5253,7 @@ export class SessionStore {
     }
     if (message.reviewerCheckpoint.status !== "running") return structuredClone(message);
     message.reviewerCheckpoint = { ...message.reviewerCheckpoint, ...(progress ? { progress } : {}) };
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     return structuredClone(message);
   }
 
@@ -5267,7 +5267,7 @@ export class SessionStore {
       throw new Error("Reviewer checkpoint message id is already in use");
     }
     messages.splice(index, 1);
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
   }
 
   async appendTimeoutMessage(
@@ -5289,7 +5289,7 @@ export class SessionStore {
     const stored = messages.find((candidate) => candidate.id === message.id);
     if (!stored) throw new Error("Timeout message disappeared before metadata persistence");
     stored.timeout = structuredClone(timeout);
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     return structuredClone(stored);
   }
 
