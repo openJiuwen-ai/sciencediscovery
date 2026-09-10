@@ -487,6 +487,33 @@ test("the same control saves against the local Runner when that is the machine",
   assert.deepEqual(calls, [{ devices: [4], runnerId: "local" }]);
 });
 
+test("a card that became unusable while ticked can still be unticked", async () => {
+  // The card was usable when the operator ticked it and has since been claimed
+  // by another tenant. Disabling its checkbox would leave the selection stuck
+  // with a card every execution refuses.
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: npuClient(calls), inventory: NPU_INVENTORY, onError: () => {},
+      onSelected: () => {}, runnerId: "host-1", selected: [0, 4],
+    } as never));
+  });
+  const unusable = renderer!.root.findAllByType("input")[0]!;
+  assert.equal(unusable.props.checked, true);
+  assert.equal(unusable.props.disabled, false, "a ticked card is always removable");
+  await act(async () => { unusable.props.onChange({ target: { checked: false } }); });
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "host-1" }]);
+  // It says why it is unusable and what unticking it achieves.
+  assert.match(JSON.stringify(renderer!.toJSON()), /untick it to run without it/);
+});
+
+test("an unusable card that is not ticked still cannot be ticked", () => {
+  const markup = renderNpu({ selected: [] });
+  const unusableRow = /<li class="unusable">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
+  assert.match(unusableRow, /disabled=""/);
+});
+
 test("a machine whose cards are all unusable says so instead of offering an empty tick list", () => {
   const inventory = { ...NPU_INVENTORY, devices: NPU_INVENTORY.devices.map((device) => ({ ...device, sandboxUsable: false })) };
   assert.match(renderNpu({ inventory }), /No card on this machine can currently be opened inside a sandbox/);
