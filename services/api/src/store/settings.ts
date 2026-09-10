@@ -416,3 +416,21 @@ export function normalizeMcpProxyPolicies(value: unknown): McpProxyPolicies {
   }
   return policies;
 }
+
+/**
+ * Per-Runner NPU selections read back from disk. A malformed entry is dropped
+ * rather than repaired: a bad card index would otherwise travel all the way to
+ * a sandbox launch, and an empty selection is the safe reading of "unknown".
+ */
+export function normalizeNpuDeviceSelections(value: unknown): Record<string, number[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, number[]> = {};
+  for (const [runnerId, devices] of Object.entries(value as Record<string, unknown>)) {
+    if (!runnerId.trim() || !Array.isArray(devices)) continue;
+    const selected = [...new Set(devices)]
+      .filter((index): index is number => Number.isSafeInteger(index) && (index as number) >= 0 && (index as number) < 1024)
+      .sort((left, right) => left - right);
+    if (selected.length > 0) result[runnerId] = selected;
+  }
+  return result;
+}

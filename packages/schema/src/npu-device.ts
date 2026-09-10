@@ -99,6 +99,30 @@ export interface ResolvedNpuSelection {
   rejected: RejectedNpuDevice[];
 }
 
+/**
+ * The local machine's Runner, addressed the same way a remote one is. A
+ * selection has to be storable for it too: the machine that hosts the product
+ * can itself carry the NPUs, and an operator must be able to tick its cards
+ * without registering it as a remote machine.
+ */
+export const LOCAL_RUNNER_ID = "local";
+
+/**
+ * Which cards each Runner may hand to its sandboxes, keyed by Runner id
+ * (`local`, or a registered machine's id). Keyed rather than embedded in the
+ * machine record because the local Runner has no machine record, and one
+ * storage keeps both paths behaving identically.
+ */
+export type NpuDeviceSelections = Readonly<Record<string, number[]>>;
+
+/** The cards a Runner may use, or an empty selection when it uses none. */
+export function npuSelectionFor(
+  selections: NpuDeviceSelections | undefined,
+  runnerId: string,
+): number[] {
+  return selections?.[runnerId] ?? [];
+}
+
 /** Cards an operator is allowed to tick: listed by the host *and* sandbox-usable. */
 export function selectableNpuDevices(inventory: NpuInventory | undefined): NpuDeviceStatus[] {
   return (inventory?.devices ?? []).filter((device) => device.sandboxUsable);
@@ -164,4 +188,11 @@ function npuDeviceMissingReason(hostIndex: number, inventory: NpuInventory | und
 export function npuMemorySummary(device: NpuDeviceStatus): string | undefined {
   if (device.hbmUsedMb === undefined || device.hbmTotalMb === undefined) return undefined;
   return `${device.hbmUsedMb} / ${device.hbmTotalMb} MiB`;
+}
+
+/** What the settings surface needs to render NPU selection for every Runner. */
+export interface NpuRunnerSelectionsResponse {
+  /** The local machine's cards, or null when it has none or could not be read. */
+  local: NpuInventory | null;
+  selections: NpuDeviceSelections;
 }

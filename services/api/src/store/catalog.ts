@@ -68,6 +68,8 @@ export interface Catalog {
   globalSettings: RuntimeSettingsOverrides;
   mcpProxyPolicies: McpProxyPolicies;
   memoryGraphSettings: MemoryGraphSettings;
+  /** Which NPU cards each Runner may hand to its sandboxes, keyed by Runner id. */
+  npuDeviceSelections: Record<string, number[]>;
   models: ModelProfile[];
   permissionEpochs: PermissionEpoch[];
   providers: ModelProvider[];
@@ -112,6 +114,7 @@ export function emptyCatalog(
     },
     mcpProxyPolicies: {},
     memoryGraphSettings: structuredClone(DEFAULT_MEMORY_GRAPH_SETTINGS),
+    npuDeviceSelections: {},
     models: [],
     permissionEpochs: [],
     providers: [],
