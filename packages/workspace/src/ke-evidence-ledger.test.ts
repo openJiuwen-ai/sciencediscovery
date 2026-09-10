@@ -27,7 +27,7 @@ test("evidence ledger: add, query, verify, and conflict detection round-trip", a
 
   const first = await port.add({ workspaceRoot: root, claim: "SP-D localizes on the viral glycoprotein", anchorId: "doc1:paragraph:0", docId: "doc1", quote: "localizes on the virus spike glycoprotein", kbId: "kb1" });
   assert.equal(first.entry.id, "e1");
-  const second = await port.add({ workspaceRoot: root, claim: "SP-D does not localize on the viral glycoprotein", anchorId: "doc2:paragraph:0", docId: "doc2", quote: "no detectable localization", kbId: "kb1" });
+  const second = await port.add({ workspaceRoot: root, claim: "SP-D localization on the viral glycoprotein observed", anchorId: "doc2:paragraph:0", docId: "doc2", quote: "no detectable localization", kbId: "kb1" });
   assert.equal(second.entry.id, "e2");
   assert.equal(second.total, 2);
 

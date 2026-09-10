@@ -20,8 +20,8 @@
  * unreadable ledger degrades to an empty ledger, never a crashed turn.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 export interface EvidenceLedgerEntry {
   readonly id: string;
@@ -68,10 +68,14 @@ export function ledgerPath(workspaceRoot: string): string {
 async function readLedger(path: string): Promise<{ entries: EvidenceLedgerEntry[]; nextId: number }> {
   try {
     const raw = JSON.parse(await readFile(path, "utf8")) as Partial<EvidenceLedgerFile>;
-    const entries = Array.isArray(raw.entries) ? raw.entries.filter((entry) => entry && typeof entry.claim === "string") : [];
+    const valid = Array.isArray(raw.entries);
+    const entries = (valid ? raw.entries : []).filter(
+      (entry): entry is EvidenceLedgerEntry =>
+        Boolean(entry) && typeof entry.claim === "string" && typeof entry.id === "string" && /^e\d+$/.test(entry.id),
+    );
     const nextId = entries.reduce((max, entry) => {
-      const parsed = Number(entry.id.replace(/^e/, ""));
-      return Number.isInteger(parsed) ? Math.max(max, parsed) : max;
+      const parsed = Number(entry.id.slice(1));
+      return Number.isFinite(parsed) ? Math.max(max, parsed) : max;
     }, 0) + 1;
     return { entries, nextId };
   } catch {
@@ -80,8 +84,12 @@ async function readLedger(path: string): Promise<{ entries: EvidenceLedgerEntry[
 }
 
 async function writeLedger(path: string, entries: readonly EvidenceLedgerEntry[]): Promise<void> {
-  await mkdir(resolve(path, ".."), { recursive: true });
-  await writeFile(path, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
+  await mkdir(dirname(path), { recursive: true });
+  // Atomic replace: a torn write would otherwise degrade to an empty ledger
+  // on the next read (fail-soft) and silently erase the audit trail.
+  const temp = `${path}.${process.pid}.tmp`;
+  await writeFile(temp, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
+  await rename(temp, path);
 }
 
 export interface LedgerConflict {
@@ -104,11 +112,20 @@ export function detectLedgerConflicts(entries: readonly EvidenceLedgerEntry[]): 
       const leftTerms = termSet(left.claim);
       const rightTerms = termSet(right.claim);
       const similarity = overlapRatio(leftTerms, rightTerms);
+      if (similarity < 0.6) continue;
+      // Negation flips outrank source divergence (a flipped claim from two
+      // docs is first a contradiction); entries without any source never
+      // count as "a different source".
+      const leftSourced = left.anchorId !== undefined || left.docId !== undefined;
+      const rightSourced = right.anchorId !== undefined || right.docId !== undefined;
       let reason: string | undefined;
-      if (similarity >= 0.6 && left.anchorId !== right.anchorId && left.docId !== right.docId) {
-        reason = "same-claim-different-source";
-      } else if (similarity >= 0.6 && isNegated(leftTerms) !== isNegated(rightTerms)) {
+      if (isNegated(leftTerms) !== isNegated(rightTerms)) {
         reason = "negation-flip";
+      } else if (
+        leftSourced && rightSourced
+        && left.anchorId !== right.anchorId && left.docId !== right.docId
+      ) {
+        reason = "same-claim-different-source";
       }
       if (reason) {
         seen.add(key);

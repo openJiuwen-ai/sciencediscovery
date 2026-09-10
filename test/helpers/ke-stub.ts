@@ -152,6 +152,24 @@ export async function keAgentStub(state: KeAgentStubState): Promise<KeAgentStub>
 }
 
 // ---------------------------------------------------------------------------
+// Shared body parsing for the result-reading stubs: the runtime sends tool
+// results as JSON-encoded STRING content inside the request body's messages,
+// so the quotes arrive backslash-escaped in the raw body and regex-over-raw-
+// body can never match. Parse the body and run patterns over the decoded
+// message content instead.
+function toolResultText(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { messages?: Array<{ content?: unknown }> };
+    const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+    return messages
+      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .join("\n");
+  } catch {
+    return body;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // J-KE6 stub: the anti-hallucination chain. Also parses tool results from the
 // request history — the final answer is DERIVED from what novelty_check and
 // verify_citation actually returned (verdict + citation state), so the
@@ -204,8 +222,9 @@ export async function keAntiHallucinationAgentStub(state: KeAntiHullucinationStu
         } else if (turn === 3) {
           toolCall("verify_citation", { kbId, quote: state.getQuote() }, `call-ke-ah-${turn}`);
         } else {
-          const verdict = body.match(/"verdict"\s*:\s*"([^"]+)"/)?.[1];
-          const citeState = body.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
+          const results = toolResultText(body);
+          const verdict = results.match(/"verdict"\s*:\s*"([^"]+)"/)?.[1];
+          const citeState = results.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
           if (!verdict || !citeState) {
             response.write(chunk({ content: "反幻觉检查结果未能解析——按规则不给出结论。", role: "assistant" }, null));
           } else {
@@ -286,8 +305,8 @@ export async function keSearchAgentStub(state: KeSearchAgentStubState): Promise<
           toolCall("kb_search", { kbId, query: state.getSearchQuery() }, `call-ke-search-${turn}`);
         } else {
           // The kb_search result is in the history this turn — lift the first
-          // anchorId out of it verbatim (no fabricated anchors).
-          const anchor = body.match(/"anchorId"\s*:\s*"([^"]+)"/)?.[1];
+          // anchorId out of the DECODED tool content (no fabricated anchors).
+          const anchor = toolResultText(body).match(/"anchorId"\s*:\s*"([^"]+)"/)?.[1];
           if (turn === 3 && anchor) {
             toolCall("kb_expand", { kbId, anchorId: anchor }, `call-ke-search-${turn}`);
           } else {

@@ -219,13 +219,14 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
         supportCount: edge.supportCount,
         quote: edge.evidenceQuote,
       }));
-      // Passage probe bound: recall is keyword-based, so a bounded scan of
-      // ready docs is representative and stays milliseconds-fast.
+      // Passage probe bound: 201 fetched so a hit on the 201st row surfaces
+      // the cap honestly (a capped scan's miss is not final).
       const documents = store
-        .listDocuments(kbId, { status: "ready", limit: 50 })
+        .listDocuments(kbId, { status: "ready", limit: 201 })
         .filter((document) => Boolean(document.fulltext))
         .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
-      return noveltyCheck({
+      const capped = documents.length > 200;
+      const result = noveltyCheck({
         kbId,
         claim,
         entities: entities.map((entity) => ({
@@ -235,17 +236,24 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
           aliases: entity.aliases,
         })),
         relations,
-        documents,
+        documents: capped ? documents.slice(0, 200) : documents,
       });
+      return capped ? { ...result, note: `${result.note} (passage probe scanned the first 200 ready documents — a miss there is not final)` } : result;
     },
 
     async verifyCitation(kbId, quote) {
       requireKb(kbId);
-      const documents: KbSearchDocumentInput[] = store
-        .listDocuments(kbId, { status: "ready", limit: 50 })
-        .filter((document) => Boolean(document.fulltext))
+      // 201 fetched so a hit on the 201st row surfaces the cap honestly —
+      // a capped scan's not-found must not read as "quote absent".
+      const rows = store.listDocuments(kbId, { status: "ready", limit: 201 })
+        .filter((document) => Boolean(document.fulltext));
+      const capped = rows.length > 200;
+      const documents: KbSearchDocumentInput[] = (capped ? rows.slice(0, 200) : rows)
         .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
-      return verifyCitation({ kbId, quote, documents });
+      const result = verifyCitation({ kbId, quote, documents });
+      return capped && result.state === "none"
+        ? { ...result, note: "quote not found in any scanned document — do not present it as a paper's wording (scan capped at the first 200 ready documents; a miss is not final)" }
+        : result;
     },
 
     async kbRiskSignals(kbId) {

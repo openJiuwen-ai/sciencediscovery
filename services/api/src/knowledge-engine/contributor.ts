@@ -81,7 +81,7 @@ export function createKeResidentSummaryFactory<TMessage extends RuntimeMessage>(
             {
               content: [
                 "<knowledge_engine>",
-                "The following knowledge bases are available. Query them with concept_explore / deep_dive / entity_unified_search (entity lookup with verbatim evidence), validate_entities (check names before citing), kb_search (passage search) + kb_expand (read the anchor's context), doc_grep (regex), gap_candidates (structural research gaps), novelty_check / verify_citation (anti-hallucination checks).",
+                "The following knowledge bases are available. Query them with concept_explore / deep_dive / entity_unified_search (entity lookup with verbatim evidence), validate_entities (check names before citing), kb_search (passage search) + kb_expand (read the anchor's context), doc_grep (regex), gap_candidates (structural research gaps), novelty_check / verify_citation (anti-hallucination checks), evidence_ledger (record the claims you will assert).",
                 ...parts,
                 "</knowledge_engine>",
               ].join("\n"),

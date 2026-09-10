@@ -263,6 +263,12 @@ export interface DocGrepResult {
 }
 
 const GREP_LINE_CAP = 200;
+/** Lines are capped HERE (before regex.test) — a bounded input bounds any
+ *  backtracking the agent-supplied pattern can induce. */
+const GREP_TEST_LINE_CAP = 2_000;
+/** Total character budget across the scan: the 50-match cap bounds matches,
+ *  not work; this bounds the work itself on the synchronous API event loop. */
+const GREP_SCAN_CHAR_BUDGET = 2_000_000;
 
 /** W8 `doc_grep` — regex over document fulltexts, line-grained like grep.
  *  Case-insensitive by default; deterministic doc-then-line order. An invalid
@@ -293,21 +299,30 @@ export function grepDocuments(input: {
   }
 
   const matches: DocGrepMatch[] = [];
+  let budget = GREP_SCAN_CHAR_BUDGET;
   let truncated = false;
-  for (const document of input.documents) {
+  let collect = true;
+  outer: for (const document of input.documents) {
     const lines = document.fulltext.split("\n");
     for (let i = 0; i < lines.length; i += 1) {
-      const raw = lines[i]!;
-      if (!regex.test(raw)) continue;
-      const text = raw.trim().slice(0, GREP_LINE_CAP);
-      if (text.length === 0) continue;
-      if (matches.length >= maxMatches) {
+      const raw = lines[i]!.slice(0, GREP_TEST_LINE_CAP);
+      budget -= raw.length;
+      if (budget <= 0) {
+        // Scan incomplete regardless of matches — more may exist.
         truncated = true;
-        break;
+        break outer;
       }
+      if (!regex.test(raw)) continue;
+      if (!collect) {
+        // Confirmation match past the cap: more matches exist — stop here.
+        truncated = true;
+        break outer;
+      }
+      const text = lines[i]!.trim().slice(0, GREP_LINE_CAP);
+      if (text.length === 0) continue;
       matches.push({ docId: document.docId, docTitle: document.title, line: i + 1, text });
+      if (matches.length >= maxMatches) collect = false;
     }
-    if (truncated) break;
   }
   return { kbId: input.kbId, pattern: input.pattern, matches, scannedDocs: input.documents.length, truncated };
 }

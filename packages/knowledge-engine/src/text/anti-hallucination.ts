@@ -244,6 +244,14 @@ export interface BriefKbUncertainty {
 
 const CONFLICT_TYPES = new Set(["contradicts", "contrasts_with"]);
 const BRIEF_MAX_CHARS = 2_000;
+const BRIEF_CLOSING = "\n</anti_hallucination>";
+
+/** Entity/conflict names are extraction-derived text — escape them before
+ *  they land inside the XML-ish markup (same hygiene as the digest's
+ *  escapeAttr in the contributor). */
+function escapeBriefText(value: string): string {
+  return value.replace(/[<>"&]/g, (char) => `&#${char.codePointAt(0)};`);
+}
 
 /**
  * The three-tier anti-hallucination context section. Tier 1 points at the
@@ -259,23 +267,26 @@ export function buildAntiHallucinationBrief(kbs: readonly BriefKbUncertainty[]):
   ];
   for (const kb of kbs) {
     if (kb.conflicts.length === 0 && kb.singleSource.length === 0) continue;
-    lines.push(`- KB ${kb.kbName}:`);
+    lines.push(`- KB ${escapeBriefText(kb.kbName)}:`);
     for (const conflict of kb.conflicts.slice(0, 5)) {
-      lines.push(`  conflict: ${conflict.aName} ${conflict.type} ${conflict.bName}${conflict.quote ? ` — “${conflict.quote.slice(0, 120)}”` : ""}`);
+      lines.push(`  conflict: ${escapeBriefText(conflict.aName)} ${escapeBriefText(conflict.type)} ${escapeBriefText(conflict.bName)}${conflict.quote ? ` — “${escapeBriefText(conflict.quote.slice(0, 120))}”` : ""}`);
     }
     if (kb.conflicts.length > 5) lines.push(`  … +${kb.conflicts.length - 5} more conflicts`);
     if (kb.singleSource.length > 0) {
-      lines.push(`  single-source entities (${kb.singleSource.length}): ${kb.singleSource.slice(0, 8).join(", ")}${kb.singleSource.length > 8 ? " …" : ""}`);
+      lines.push(`  single-source entities (${kb.singleSource.length}): ${kb.singleSource.slice(0, 8).map(escapeBriefText).join(", ")}${kb.singleSource.length > 8 ? " …" : ""}`);
     }
   }
   if (lines.length === 3) lines.push("- none: no open conflicts or single-source entities in the tracked KBs");
   lines.push(
     "FORBIDDEN (never): fabricate entities, relations, or quotes; present an unverified number as coming from a paper; treat 'not in the KB' as 'not in the literature'.",
-    "Before asserting: validate_entities (names), verify_citation (quotes), novelty_check (novelty claims). If a check fails or is unavailable — say so instead.",
+    "Before asserting: validate_entities (names), verify_citation (quotes), novelty_check (novelty claims), evidence_ledger (record what you will assert). If a check fails or is unavailable — say so instead.",
     "</anti_hallucination>",
   );
   const text = lines.join("\n");
-  return text.length <= BRIEF_MAX_CHARS ? text : `${text.slice(0, BRIEF_MAX_CHARS)}\n</anti_hallucination>`;
+  // The cap must hold for the WHOLE section including the closing tag.
+  return text.length <= BRIEF_MAX_CHARS
+    ? text
+    : `${text.slice(0, BRIEF_MAX_CHARS - BRIEF_CLOSING.length)}${BRIEF_CLOSING}`;
 }
 
 /** Extract the uncertain signals from raw entity/edge rows (composition

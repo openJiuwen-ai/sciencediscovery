@@ -1189,13 +1189,17 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       description: string,
       parameters: T,
       invoke: (params: Static<T>) => Promise<unknown>,
+      opts: { exclusive?: boolean } = {},
     ): AgentTool<T> => ({
       description,
       execute: async (_toolCallId, params) => {
         const result = await invoke(params);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
-      isConcurrencySafe: () => true,
+      // Every KE tool is a pure concurrent-safe store read — except the
+      // evidence ledger, whose unlocked read-modify-write file cycle must
+      // never run concurrently with itself (opts.exclusive).
+      isConcurrencySafe: () => !opts.exclusive,
       label,
       name,
       parameters,
@@ -1331,7 +1335,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "evidence_ledger",
         "Record and audit answer claims",
-        "A session-local audit trail for the claims you will assert: record each claim with its backing anchor/doc/quote (action=add), list them (query), re-check recorded quotes against a KB (verify — three-state verdicts), and detect internal contradictions (detect-conflicts: same claim from different sources, or negation flips). Recording a claim without a backing anchor or quote marks it as unsupported in the audit.",
+        "A session-local audit trail for the claims you will assert: record each claim with its backing anchor/doc/quote (action=add), list them (query), re-check recorded quotes against a KB (verify — three-state verdicts), and detect internal contradictions (detect-conflicts: same claim from different sources, or negation flips). A claim recorded without an anchor or quote has nothing to verify against — verify skips it, so back your claims when you record them.",
         Type.Object({
           action: Type.Union([Type.Literal("add"), Type.Literal("query"), Type.Literal("verify"), Type.Literal("detect-conflicts")]),
           claim: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: "add: the claim to record; query: substring filter" })),
@@ -1370,6 +1374,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           }
           return ledger.conflicts({ workspaceRoot });
         },
+        // Unlocked read-modify-write over the workspace ledger file — never
+        // schedule concurrently with itself (review P2).
+        { exclusive: true },
       ),
       keTool(
         "gap_candidates",
