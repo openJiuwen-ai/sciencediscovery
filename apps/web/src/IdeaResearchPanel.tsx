@@ -93,6 +93,6 @@ export function IdeaResearchPanel({client, sessionId, onError}: {client: ApiClie
       {!["completed", "ended"].includes(r.status) && <button type="button" disabled={busy} onClick={() => setConfirmEnd(r.id)}>结束研究</button>}
       {confirmEnd === r.id && <div role="alert">结束后不能继续，已有结果会保留。<button type="button" disabled={busy} onClick={() => void command("end", r.id)}>确认结束</button><button type="button" onClick={() => setConfirmEnd(undefined)}>取消</button></div>}
     </article>)}
-    {view && <IdeaTreeExplorer graph={view.graph} treeIds={items.map(i => i.research.id)} loading={false} onClose={() => setSelected(undefined)} onSelectTree={setSelected} />}
+    {view && <IdeaTreeExplorer autonomous graph={view.graph} treeIds={items.map(i => i.research.id)} loading={false} onClose={() => setSelected(undefined)} onSelectTree={setSelected} />}
   </section>;
 }

@@ -18,12 +18,16 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
-function IdeaTreeNodeDetail({ node, onOpenArtifact, onOpenSubagent }: { node?: IdeaTreeNode; onOpenArtifact?: (id: string) => void; onOpenSubagent?: (id: string) => void }) {
+function IdeaTreeNodeDetail({ node, autonomous, onOpenArtifact, onOpenSubagent }: { node?: IdeaTreeNode; autonomous?: boolean; onOpenArtifact?: (id: string) => void; onOpenSubagent?: (id: string) => void }) {
   if (!node) return <div className="idea-tree-detail-empty">
     <strong>Select a tree node</strong>
     <p>Click a node to inspect its hypothesis, result, score, execution state, and artifacts.</p>
   </div>;
-  const fields: Array<[string, unknown]> = [
+  const fields: Array<[string, unknown]> = autonomous ? [
+    ["类型", node.kind === "direction" ? "研究方向" : "候选方案"],
+    ["深度", node.depth], ["评分", node.score], ["父节点", node.parentId],
+    ["子节点", node.childrenIds],
+  ] : [
     ["Status", node.status],
     ["Search", node.searchStatus],
     ["Depth", node.depth],
@@ -41,14 +45,18 @@ function IdeaTreeNodeDetail({ node, onOpenArtifact, onOpenSubagent }: { node?: I
   return <article className="idea-tree-detail">
     <header>
       <span className="idea-tree-detail-id">{node.id}</span>
-      <span className="idea-tree-status" style={{ borderColor: IDEA_TREE_STATUS_COLORS[node.status], color: IDEA_TREE_STATUS_COLORS[node.status] }}>{node.status}</span>
+      <span className="idea-tree-status" style={{ borderColor: IDEA_TREE_STATUS_COLORS[node.status], color: IDEA_TREE_STATUS_COLORS[node.status] }}>{node.kind === "direction" ? "研究方向" : node.status}</span>
     </header>
     <section>
       <h3>Hypothesis</h3>
       <p>{node.hypothesis}</p>
     </section>
     {node.insight ? <section><h3>Insight</h3><p>{node.insight}</p></section> : null}
-    {node.result ? <section><h3>Result</h3><p>{node.result}</p></section> : null}
+    {!autonomous && node.result ? <section><h3>Result</h3><p>{node.result}</p></section> : null}
+    {autonomous && Object.entries(node.stages ?? {}).map(([role, result]) => <section key={role}>
+      <h3>{{design: "材料设计", activity: "活性评估", stability: "稳定性评估", sustainability: "可持续性评估", aggregate: "综合评估"}[role] ?? role}{result.score === undefined ? "" : ` · ${result.score}`}</h3>
+      <p>{result.text}</p>
+    </section>)}
     {node.pruneReason ? <section><h3>Prune reason</h3><p>{node.pruneReason}</p></section> : null}
     <section>{node.artifactRefs.map(id => <button key={id} type="button" onClick={() => onOpenArtifact?.(id)}>Artifact {id}</button>)}</section>
     <section>{node.subagentIds?.map((id, index) => <button key={id} type="button" onClick={() => onOpenSubagent?.(id)}>Subagent {index + 1}</button>)}</section>
@@ -60,6 +68,7 @@ function IdeaTreeNodeDetail({ node, onOpenArtifact, onOpenSubagent }: { node?: I
 
 export function IdeaTreeExplorer({
   graph,
+  autonomous = false,
   onOpenArtifact,
   onOpenSubagent,
   loading,
@@ -68,6 +77,7 @@ export function IdeaTreeExplorer({
   treeIds,
 }: {
   graph: IdeaTreeGraph;
+  autonomous?: boolean;
   onOpenArtifact?: (id: string) => void;
   onOpenSubagent?: (id: string) => void;
   loading?: boolean;
@@ -95,7 +105,7 @@ export function IdeaTreeExplorer({
   );
   const statusCounts = useMemo(() => {
     const counts = new Map<IdeaTreeNode["status"], number>();
-    for (const node of graph.nodes) counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
+    for (const node of graph.nodes.filter(n => n.kind !== "direction")) counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
     return counts;
   }, [graph.nodes]);
 
@@ -124,12 +134,12 @@ export function IdeaTreeExplorer({
             </select>
           </label> : null}
           <span>{graph.nodes.length} nodes</span>
-          <span>revision {graph.revision}</span>
+          {!autonomous && <span>revision {graph.revision}</span>}
           <button aria-label="Close Idea Tree" className="icon-button" onClick={onClose} type="button"><CloseIcon size={20} /></button>
         </div>
       </header>
       <div className="idea-tree-explorer-body">
-        <aside className="idea-tree-explorer-detail"><IdeaTreeNodeDetail node={selected} onOpenArtifact={onOpenArtifact} onOpenSubagent={onOpenSubagent} /></aside>
+        <aside className="idea-tree-explorer-detail"><IdeaTreeNodeDetail autonomous={autonomous} node={selected} onOpenArtifact={onOpenArtifact} onOpenSubagent={onOpenSubagent} /></aside>
         <main className="idea-tree-explorer-graph">
           <div className="idea-tree-toolbar">
             <label className="idea-tree-search">
