@@ -297,7 +297,7 @@ export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
   maxRounds: 3,
   candidatesPerRound: 3,
   maxTokens: null,
-  maxTokensPerCall: 4000,
+  maxTokensPerCall: 32768,
   maxDepth: 5,
   maxNodes: 100,
   maxSearchRounds: 10,

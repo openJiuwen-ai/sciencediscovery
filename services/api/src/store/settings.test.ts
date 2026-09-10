@@ -99,3 +99,10 @@ test("Idea Tree research budgets survive storage and omitted fields retain their
     assert.throws(() => normalizeIdeaTreeSettings(input, restored));
   }
 });
+
+
+test("Idea Tree accepts the server Lead Agent output ceiling", () => {
+  assert.equal(DEFAULT_IDEA_TREE_SETTINGS.maxTokensPerCall, 32768);
+  assert.equal(normalizeIdeaTreeSettings({maxTokensPerCall: 32768}, DEFAULT_IDEA_TREE_SETTINGS).maxTokensPerCall, 32768);
+  assert.throws(() => normalizeIdeaTreeSettings({maxTokensPerCall: 32769}, DEFAULT_IDEA_TREE_SETTINGS));
+});

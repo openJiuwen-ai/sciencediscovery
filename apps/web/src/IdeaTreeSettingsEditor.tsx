@@ -57,7 +57,7 @@ export function createIdeaTreeSettingsDraft(settings: IdeaTreeSettingsDetails): 
     maxRounds: String(settings.maxRounds ?? 3),
     candidatesPerRound: String(settings.candidatesPerRound ?? 3),
     maxTokens: String(settings.maxTokens ?? 0),
-    maxTokensPerCall: String(settings.maxTokensPerCall ?? 4000),
+    maxTokensPerCall: String(settings.maxTokensPerCall ?? 32768),
     maxDepth: String(settings.maxDepth),
     maxNodes: String(settings.maxNodes),
     maxSearchRounds: String(settings.maxSearchRounds),
@@ -219,7 +219,7 @@ export function IdeaTreeSettingsEditor({
     <h4 className="idea-tree-section-title">{t("ideaTree.defaults" as MessageKey)}</h4>
     <p className="config-note">{t("ideaTree.newResearchDefaults" as MessageKey)}</p>
     <div className="idea-tree-grid">
-      {([['maxRounds', 1, 100], ['candidatesPerRound', 1, 20], ['maxTokens', 0, Number.MAX_SAFE_INTEGER], ['maxTokensPerCall', 256, 32000]] as const).map(([key, min, max]) => <label className="idea-tree-field" key={key}>
+      {([['maxRounds', 1, 100], ['candidatesPerRound', 1, 20], ['maxTokens', 0, Number.MAX_SAFE_INTEGER], ['maxTokensPerCall', 256, 32768]] as const).map(([key, min, max]) => <label className="idea-tree-field" key={key}>
         <span>{t(`ideaTree.${key}` as MessageKey)}</span>
         <input type="number" min={min} max={max} value={draft[key]} onChange={event => onChange({...draft, [key]: event.target.value})} />
       </label>)}
