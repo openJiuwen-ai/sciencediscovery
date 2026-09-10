@@ -391,6 +391,15 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                 type="button"
                 data-testid={`ke-kb-${kb.id}`}
                 onClick={() => {
+                  // Re-clicking the ACTIVE KB is a manual refresh, not a
+                  // switch: the switch path clears per-KB state and the poll
+                  // chain only re-arms on an activeKbId CHANGE — clearing on
+                  // a same-id click left the panel blank forever (observed:
+                  // 0 entities · 0/0 docs after the data was already in).
+                  if (kb.id === activeKbId) {
+                    kickRefresh();
+                    return;
+                  }
                   // Clear every per-KB slice immediately: until the next
                   // refresh lands, the panels must not show the PREVIOUS
                   // KB's graph/documents/jobs (stale reads also fooled E2E

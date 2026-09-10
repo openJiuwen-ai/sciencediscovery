@@ -124,6 +124,9 @@ test("J-KE3 会话内消费知识图谱", { tag: "@mocked" }, async ({ journey, 
       "注册 agent stub 模型并创建会话",
       "agent stub 注册为可选模型；新建项目与会话，并在任务上选中它。",
       async () => {
+        // The knowledge-engine page is a full-page overlay covering the
+        // workbench sidebar — close it before reaching for 添加项目.
+        await page.getByTestId("ke-close").click();
         const reg = await api.post("/api/providers", {
           data: { name: `J-KE3 agent ${Date.now()}`, baseUrl: agent.baseUrl, apiToken: agent.apiToken },
         });

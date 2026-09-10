@@ -126,6 +126,9 @@ test("J-KE5 会话内检索论文原文段落", { tag: "@mocked" }, async ({ jou
       "注册 search agent stub 并创建会话",
       "search agent stub 注册为可选模型；新建项目与会话，并在任务上选中它。",
       async () => {
+        // The knowledge-engine page is a full-page overlay covering the
+        // workbench sidebar — close it before reaching for 添加项目.
+        await page.getByTestId("ke-close").click();
         const reg = await api.post("/api/providers", {
           data: { name: `J-KE5 agent ${Date.now()}`, baseUrl: agent.baseUrl, apiToken: agent.apiToken },
         });

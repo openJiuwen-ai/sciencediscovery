@@ -130,6 +130,9 @@ test("J-KE6 反幻觉：夸大新颖性声明被检查结果标注", { tag: "@mo
       "注册反幻觉 stub 并创建会话",
       "反幻觉 agent stub 注册为可选模型；新建项目与会话，并在任务上选中它。",
       async () => {
+        // The knowledge-engine page is a full-page overlay covering the
+        // workbench sidebar — close it before reaching for 添加项目.
+        await page.getByTestId("ke-close").click();
         const reg = await api.post("/api/providers", {
           data: { name: `J-KE6 agent ${Date.now()}`, baseUrl: agent.baseUrl, apiToken: agent.apiToken },
         });
