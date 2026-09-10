@@ -1,9 +1,9 @@
-import { IdeaResearchPanel } from "./IdeaResearchPanel.js";
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 
+import { IdeaResearchCard } from "./IdeaResearchCard.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { IdeaTreeGraph } from "@sciencediscovery/schema";
@@ -135,5 +135,5 @@ function LegacyIdeaTreeView({
 }
 
 export function IdeaTreeView(props: Parameters<typeof LegacyIdeaTreeView>[0]) {
-  return <><IdeaResearchPanel key={props.sessionId} client={props.client} sessionId={props.sessionId} onError={props.onError} /><LegacyIdeaTreeView {...props} /></>;
+  return <><IdeaResearchCard key={props.sessionId} client={props.client} sessionId={props.sessionId} onError={props.onError} /><LegacyIdeaTreeView {...props} /></>;
 }

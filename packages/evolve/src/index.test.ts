@@ -66,3 +66,13 @@ test("the tools reach the runtime they were built with", async () => {
   await get.execute("call-1", { runId: "run-1" } as never, new AbortController().signal);
   assert.deepEqual(calls, ["get:run-1"]);
 });
+
+test("Idea Tree status reader returns the actual background research to the agent", async () => {
+  const summary = {id: "research-1", status: "running", activities: [{role: "activity", status: "running"}]};
+  const calls: Array<string | undefined> = [];
+  const tool = createEvolveTools(runtime({getIdeaResearch: async id => { calls.push(id); return summary; }}))
+    .find(tool => tool.name === "get_idea_research")!;
+  const result = await tool.execute("read", {} as never, new AbortController().signal);
+  assert.deepEqual(calls, [undefined]);
+  assert.deepEqual(result.details, summary);
+});

@@ -179,3 +179,42 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             ended = await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='end'))
             self.assertEqual(ended['research']['status'], 'ended')
             self.assertNotIn(identifier, service._running)
+
+    async def test_parallel_assessments_publish_independent_progress(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        async def model(role, payload):
+            if role in ['activity', 'stability', 'sustainability']:
+                running = [a for a in self.state['activities'] if a['status'] == 'running']
+                if len(running) == 3:
+                    started.set()
+                await release.wait()
+            return await self.model(role, payload)
+        engine = IdeaTreeEngine(self.state, self.store, {}, model)
+        candidate = node('1', 'ROOT', 'Candidate', 'candidate', 1)
+        self.state['nodes'].append(candidate)
+        self.state['nodes'][0]['childrenIds'].append('1')
+        queue = asyncio.Queue(maxsize=1)
+        self.store.listeners['research-test'] = {queue}
+        task = asyncio.create_task(engine.evaluate(candidate))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            saved = self.store.read('p', 's', 'research-test')
+            running = [a for a in saved['activities'] if a['status'] == 'running']
+            self.assertEqual({a['role'] for a in running}, {'activity', 'stability', 'sustainability'})
+            self.assertEqual({a['nodeId'] for a in running}, {'1'})
+            self.assertFalse(queue.empty())
+        finally:
+            release.set()
+            await task
+        self.assertTrue(all(a['status'] == 'completed' and a['finishedAt'] for a in self.state['activities']))
+
+    async def test_failed_stage_is_visible_and_persisted(self):
+        async def broken(role, payload):
+            raise RuntimeError('provider unavailable')
+        engine = IdeaTreeEngine(self.state, self.store, {}, broken)
+        await engine.run()
+        saved = self.store.read('p', 's', 'research-test')
+        self.assertEqual(saved['status'], 'interrupted')
+        self.assertEqual(saved['activities'][0]['status'], 'failed')
+        self.assertEqual(saved['activities'][0]['error'], 'provider unavailable')

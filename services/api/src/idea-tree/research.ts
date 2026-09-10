@@ -81,5 +81,23 @@ export function createIdeaResearchClient(options: {
     if (!response.ok) throw new Error(`Research cleanup failed: HTTP ${response.status}`);
     for (const [id, owner] of grants) if (owner.sessionId === sessionId) { options.tokens.revoke(id); grants.delete(id); }
   }
-  return { command, cleanup, close() { clearInterval(timer); for (const id of grants.keys()) options.tokens.revoke(id); } };
+  async function events(sessionId: string, researchId: string, signal: AbortSignal) {
+    const session = options.store.getSession(sessionId);
+    if (!session) throw new Error("Session not found");
+    const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/events`, {
+      method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
+      body: JSON.stringify({operation: "get", projectId: session.projectId, sessionId, researchId}), signal,
+    });
+    if (!response.ok || !response.body) throw new Error(`Research stream failed: HTTP ${response.status}`);
+    return response.body;
+  }
+  async function summary(sessionId: string, researchId?: string) {
+    const view: IdeaResearchView | undefined = researchId
+      ? await command(sessionId, "get", {researchId}) : (await command(sessionId, "list")).items[0];
+    if (!view) return {message: "This session has no Idea Tree research yet."};
+    return { ...view.research, candidates: view.graph.nodes.filter(n => n.kind === "candidate").map(n => ({
+      id: n.id, hypothesis: n.hypothesis, status: n.status, score: n.score, insight: n.insight,
+    })), insight: view.graph.nodes.find(n => n.id === "ROOT")?.insight };
+  }
+  return { command, cleanup, events, summary, close() { clearInterval(timer); for (const id of grants.keys()) options.tokens.revoke(id); } };
 }

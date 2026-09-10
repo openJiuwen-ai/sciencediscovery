@@ -283,7 +283,17 @@ export interface IdeaResearchSettings {
   maxTokens?: number | null;
   maxTokensPerCall: number;
 }
+export interface IdeaResearchActivity {
+  role: string;
+  nodeId: string | null;
+  round: number;
+  status: "running" | "completed" | "stopped" | "failed";
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+}
 export interface IdeaResearchState {
+  activities?: IdeaResearchActivity[];
   id: string;
   status: "running" | "pausing" | "paused" | "interrupted" | "completed" | "ended";
   objective: string;

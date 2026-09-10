@@ -1,12 +1,14 @@
 """HTTP lifecycle for autonomous research; use one ASGI worker."""
 import asyncio
 import copy
+import json
 import os
 import shutil
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from ...auth import require_internal_token
@@ -77,6 +79,9 @@ def state_for(project, session, identifier):
     s = store().read(project, session, identifier)
     if s['status'] in ['running', 'pausing']:
         s.update(status='interrupted', reason='Service restarted; continue manually')
+        for activity in s.get('activities', []):
+            if activity['status'] == 'running':
+                activity.update(status='stopped', finishedAt=now(), error='Service restarted')
         store().save(s)
     return s
 
@@ -164,3 +169,32 @@ async def command(c: Command):
         raise HTTPException(404, 'Research not found') from error
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+
+
+@router.post('/events')
+async def events(c: Command):
+    try:
+        state_for(c.projectId, c.sessionId, c.researchId)
+    except FileNotFoundError as error:
+        raise HTTPException(404, 'Research not found') from error
+    queue = asyncio.Queue(maxsize=1)
+    listeners = store().listeners.setdefault(c.researchId, set())
+    listeners.add(queue)
+
+    async def stream():
+        try:
+            while True:
+                s = state_for(c.projectId, c.sessionId, c.researchId)
+                yield 'data: ' + json.dumps(view(s), ensure_ascii=False) + '\n\n'
+                if s['status'] not in ['running', 'pausing']:
+                    return
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield ': keepalive\n\n'
+        finally:
+            listeners.discard(queue)
+            if not listeners:
+                store().listeners.pop(c.researchId, None)
+
+    return StreamingResponse(stream(), media_type='text/event-stream')
