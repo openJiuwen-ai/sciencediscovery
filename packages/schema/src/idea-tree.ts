@@ -269,3 +269,30 @@ export interface IdeaTreeRunSettingsSnapshot {
   /** Whether idea-tree was triggered for this Run (via /idea-tree command). */
   ideaTreeEnabled?: boolean;
 }
+
+/** Autonomous Python research. These statuses are independent of chat runs. */
+export interface IdeaResearchSettings {
+  maxRounds: number;
+  candidatesPerRound: number;
+  maxSearchRounds: number;
+  maxNodes: number;
+  maxDepth: number;
+  maxTokens?: number | null;
+  maxTokensPerCall: number;
+}
+export interface IdeaResearchState {
+  id: string;
+  status: "running" | "pausing" | "paused" | "interrupted" | "completed" | "ended";
+  objective: string;
+  phase: string;
+  round: number;
+  batch: string[];
+  batchCompleted: number;
+  tokens: number;
+  usageKnown: boolean;
+  reason: string | null;
+  modelId: string;
+  currentNodeId: string | null;
+  settings: IdeaResearchSettings;
+}
+export interface IdeaResearchView { research: IdeaResearchState; graph: IdeaTreeGraph }

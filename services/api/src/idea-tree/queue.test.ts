@@ -28,7 +28,6 @@ import {
 import { createQueuedRun } from "../runs/index.js";
 import { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SessionStore } from "../store.js";
-import { ideaTreeSkillDeletionReferences } from "./deletion-impact.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 
@@ -80,76 +79,27 @@ test("standard queued runs freeze standard mode without creating Idea Tree state
   assert.deepEqual(calls, [], "ordinary queueing does not contact the tree service");
 });
 
-test("idea_tree queued runs freeze the exact Markdown Skill and server-owned contract", async (context) => {
+test("Idea Tree commands cannot start a legacy Agent run", async (context) => {
   const { dataDir, persistence, calls, session, skillCatalog, skillLibraryCatalog, store } = await fixture();
   context.after(() => rm(dataDir, { force: true, recursive: true }));
-  await store.updateSession(session.id, {});
-  const run = await createQueuedRun(
-    store,
-    skillCatalog,
-    skillLibraryCatalog,
-    createIdeaTreeAuthorityRegistry(),
-    session.id,
-    { content: "/idea-tree fixture tree task" },
-    persistence,
-  );
-  assert.equal(run.settingsSnapshot.ideaTreeEnabled, true);
-  assert.equal(run.settingsSnapshot.ideaTreeExecutor?.workflowSkill.id, "idea-tree-team");
-  assert.equal(run.settingsSnapshot.ideaTreeExecutor?.workflowSkill.version, "4.0.0");
-  assert.equal(run.settingsSnapshot.ideaTreeExecutor?.version, "5.0.0");
-  assert.equal(run.settingsSnapshot.ideaTreeExecutor?.preflightRequired, undefined);
-  assert.deepEqual(run.settingsSnapshot.ideaTreeExecutor?.preflightRoles, []);
-  assert.deepEqual(run.settingsSnapshot.ideaTreeExecutor?.leafRoles, []);
-  assert.match(run.settingsSnapshot.ideaTreeExecutor?.fingerprint ?? "", /^sha256:[a-f0-9]{64}$/u);
-  assert.deepEqual(calls, ["resumeExecutor", "resumeSettings"]);
-
-  await store.updateSession(session.id, {});
-  const reopened = new SessionStore(dataDir);
-  reopened.setAvailableSkillIds(skillCatalog.ids());
-  await reopened.load();
-  assert.equal(reopened.getSession(session.id)?.title, "Queue");
-  assert.equal((await reopened.getSessionRun(session.id, run.id))?.settingsSnapshot.ideaTreeEnabled, true);
-  assert.deepEqual(await ideaTreeSkillDeletionReferences(reopened, "idea-tree-team"), [{
-    id: session.id,
-    label: "Queue (Idea Tree workflow)",
-    scope: "session",
-  }]);
+  for (const content of ["/idea-tree", "/idea-tree-team research", "/idea-tree research"]) {
+    await assert.rejects(createQueuedRun(store, skillCatalog, skillLibraryCatalog,
+      createIdeaTreeAuthorityRegistry(), session.id, { content }, persistence), /research panel/);
+  }
+  assert.deepEqual(await store.listSessionRuns(session.id), []);
+  assert.deepEqual(calls, []);
 });
 
-test("queued follow-ups retain an unfinished tree executor and return to standard mode after completion", async (context) => {
-  const { dataDir, persistence, setResumedExecutor, session, skillCatalog, skillLibraryCatalog, store } = await fixture();
+test("ordinary follow-ups never recover the old tree executor", async (context) => {
+  const { dataDir, persistence, calls, session, skillCatalog, skillLibraryCatalog, store } = await fixture();
   context.after(() => rm(dataDir, { force: true, recursive: true }));
-  const authorities = createIdeaTreeAuthorityRegistry();
-  await store.updateSession(session.id, {});
-  const first = await createQueuedRun(
-    store,
-    skillCatalog,
-    skillLibraryCatalog,
-    authorities,
-    session.id,
-    { content: "/idea-tree freeze tree" },
-    persistence,
-  );
-  const executor = first.settingsSnapshot.ideaTreeExecutor;
-  assert.ok(executor);
-  setResumedExecutor(executor);
-  await store.updateSpecialist("builtin-creative-material-design", { enabled: false });
-  await store.updateSpecialist("builtin-creative-material-design", { enabled: true });
-  const resumed = await createQueuedRun(
-    store,
-    skillCatalog,
-    skillLibraryCatalog,
-    authorities,
-    session.id,
-    { content: "请继续，探索多节点" },
-    persistence,
-  );
-  assert.equal(resumed.settingsSnapshot.ideaTreeEnabled, true);
-  assert.equal(resumed.settingsSnapshot.ideaTreeExecutor?.fingerprint, executor.fingerprint);
-  setResumedExecutor(undefined);
-  const ordinary = await createQueuedRun(
-    store, skillCatalog, skillLibraryCatalog, authorities, session.id,
-    { content: "Explain a different topic" }, persistence,
-  );
-  assert.equal(ordinary.settingsSnapshot.ideaTreeEnabled, false);
+  const first = await createQueuedRun(store, skillCatalog, skillLibraryCatalog,
+    createIdeaTreeAuthorityRegistry(), session.id, { content: "ordinary task" }, persistence);
+  await store.updateSessionRun(session.id, first.id, {
+    settingsSnapshot: { ...first.settingsSnapshot, ideaTreeEnabled: true },
+  });
+  const followup = await createQueuedRun(store, skillCatalog, skillLibraryCatalog,
+    createIdeaTreeAuthorityRegistry(), session.id, { content: "请继续" }, persistence);
+  assert.equal(followup.settingsSnapshot.ideaTreeEnabled, false);
+  assert.deepEqual(calls, []);
 });

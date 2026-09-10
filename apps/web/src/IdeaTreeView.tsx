@@ -1,3 +1,4 @@
+import { IdeaResearchPanel } from "./IdeaResearchPanel.js";
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,7 +29,7 @@ function sameTreeIds(current: string[], incoming: string[]): boolean {
   return current.length === incoming.length && current.every((treeId, index) => treeId === incoming[index]);
 }
 
-export function IdeaTreeView({
+function LegacyIdeaTreeView({
   client,
   onOpenArtifact,
   onOpenSubagent,
@@ -119,7 +120,7 @@ export function IdeaTreeView({
         {graph.nodes.length} nodes · {graph.edges.length} branches · {completed} done
         {running ? <i>{running} running</i> : null}
       </span>
-      <span className="idea-tree-view-action">Open interactive tree →</span>
+      <span className="idea-tree-view-action">查看旧树（只读） →</span>
     </button>
     {open ? <IdeaTreeExplorer
       graph={graph}
@@ -131,4 +132,8 @@ export function IdeaTreeView({
       treeIds={treeIds}
     /> : null}
   </>;
+}
+
+export function IdeaTreeView(props: Parameters<typeof LegacyIdeaTreeView>[0]) {
+  return <><IdeaResearchPanel key={props.sessionId} client={props.client} sessionId={props.sessionId} onError={props.onError} /><LegacyIdeaTreeView {...props} /></>;
 }
