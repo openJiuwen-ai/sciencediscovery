@@ -62,9 +62,11 @@ import {
   MAX_RUNNER_FILE_BYTES,
   RESOURCE_LIMIT_MODE,
   RUNNER_VERSION,
+  sandboxLaunchProfile,
   validatedWorkspace,
   type ExecutorConfig,
 } from "./executor.js";
+import { collectNpuInventory, NpuInventoryCache } from "./npu-devices.js";
 import {
   EXECUTION_SIGNATURE_HEADER,
   EXECUTION_TIMESTAMP_HEADER,
@@ -444,6 +446,13 @@ export function createRunnerServer(
     maxOutputBytes: config.maxOutputBytes,
     maxWorkspaceBytes: config.maxWorkspaceBytes,
   }, profiles, gateways);
+  // Probing NPUs costs one throwaway sandbox per card, so the inventory is
+  // cached: a status poll must not re-probe the whole machine every few seconds.
+  const npuInventory = new NpuInventoryCache();
+  const readNpuInventory = async () => await npuInventory.get(async () => await collectNpuInventory({
+    bwrapPath: config.bwrapPath,
+    ...await sandboxLaunchProfile(config.bwrapPath),
+  }));
   const executionQueues = new KeyedTaskQueue();
   const managedExecutions = new ExecutionManager(config.dataDir);
   const workspaceVersions = new VersionStore(config.dataDir);
@@ -560,7 +569,16 @@ export function createRunnerServer(
         return;
       }
       if (request.method === "GET" && url.pathname === "/resources") {
-        sendJson(response, 200, await collectRunnerResources(config.dataDir));
+        sendJson(response, 200, await collectRunnerResources(config.dataDir, {
+          npuInventory: readNpuInventory,
+        }));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/npu/devices") {
+        // Same inventory the status surface shows, exposed on its own so the
+        // selection UI can force a refresh without waiting for a status poll.
+        if (url.searchParams.get("refresh") === "1") npuInventory.invalidate();
+        sendJson(response, 200, await readNpuInventory());
         return;
       }
       const skillMatch = /^\/skill-packages\/([a-f0-9]{64})$/.exec(url.pathname);
