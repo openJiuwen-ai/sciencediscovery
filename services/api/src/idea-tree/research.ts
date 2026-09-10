@@ -16,6 +16,12 @@ export function createIdeaResearchClient(options: {
     let payload: Record<string, unknown> = { ...input, operation, projectId: session.projectId, sessionId };
     let issued: string | undefined;
     if (operation === "create" || operation === "continue") {
+      if (operation === "create" && typeof input.content === "string") {
+        const objective = input.content.replace(/^\/idea-tree(?:-team)?(?:\s+|$)/u, "").trim();
+        if (!objective) throw new Error("请在 /idea-tree 后描述研究任务");
+        payload = {...payload, objective};
+        delete payload.content;
+      }
       const previous: IdeaResearchView | undefined = operation === "continue"
         ? await invoke(sessionId, "get", { researchId: input.researchId }) : undefined;
       if (previous && !["paused", "interrupted"].includes(previous.research.status)) throw new Error("Research is not resumable");

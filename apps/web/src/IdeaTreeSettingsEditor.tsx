@@ -28,6 +28,10 @@ export interface IdeaTreeAssessorDraft {
 }
 
 export interface IdeaTreeSettingsDraft {
+  maxRounds: string;
+  candidatesPerRound: string;
+  maxTokens: string;
+  maxTokensPerCall: string;
   maxDepth: string;
   maxNodes: string;
   maxSearchRounds: string;
@@ -50,6 +54,10 @@ function assessorDraft(config: IdeaTreeAssessorConfig | undefined): IdeaTreeAsse
 
 export function createIdeaTreeSettingsDraft(settings: IdeaTreeSettingsDetails): IdeaTreeSettingsDraft {
   return {
+    maxRounds: String(settings.maxRounds ?? 3),
+    candidatesPerRound: String(settings.candidatesPerRound ?? 3),
+    maxTokens: String(settings.maxTokens ?? 0),
+    maxTokensPerCall: String(settings.maxTokensPerCall ?? 4000),
     maxDepth: String(settings.maxDepth),
     maxNodes: String(settings.maxNodes),
     maxSearchRounds: String(settings.maxSearchRounds),
@@ -84,24 +92,28 @@ export function ideaTreeSettingsRequest(draft: IdeaTreeSettingsDraft): UpdateIde
   const maxNodes = Number(draft.maxNodes);
   const maxSearchRounds = Number(draft.maxSearchRounds);
   return {
+    maxRounds: Number(draft.maxRounds),
+    candidatesPerRound: Number(draft.candidatesPerRound),
+    maxTokens: Number(draft.maxTokens) || null,
+    maxTokensPerCall: Number(draft.maxTokensPerCall),
     ...(draft.maxDepth.trim() && Number.isFinite(maxDepth) ? { maxDepth } : {}),
     ...(draft.maxNodes.trim() && Number.isFinite(maxNodes) ? { maxNodes } : {}),
     ...(draft.maxSearchRounds.trim() && Number.isFinite(maxSearchRounds) ? { maxSearchRounds } : {}),
     scoreDirection: draft.scoreDirection,
     ...(() => {
       const value = trimToNullable(draft.designSystemPrompt);
-      return value ? { designSystemPrompt: value } : {};
+      return { designSystemPrompt: value };
     })(),
     assessorActivity: assessorRequest(draft.assessorActivity),
     assessorStability: assessorRequest(draft.assessorStability),
     assessorSustainability: assessorRequest(draft.assessorSustainability),
     ...(() => {
       const value = trimToNullable(draft.aggregatorSystemPrompt);
-      return value ? { aggregatorSystemPrompt: value } : {};
+      return { aggregatorSystemPrompt: value };
     })(),
     ...(() => {
       const value = trimToNullable(draft.propagateInsightSystemPrompt);
-      return value ? { propagateInsightSystemPrompt: value } : {};
+      return { propagateInsightSystemPrompt: value };
     })(),
   };
 }
@@ -205,7 +217,12 @@ export function IdeaTreeSettingsEditor({
       <p>{t("ideaTree.description" as MessageKey)}</p>
     </div>
     <h4 className="idea-tree-section-title">{t("ideaTree.defaults" as MessageKey)}</h4>
+    <p className="config-note">{t("ideaTree.newResearchDefaults" as MessageKey)}</p>
     <div className="idea-tree-grid">
+      {([['maxRounds', 1, 100], ['candidatesPerRound', 1, 20], ['maxTokens', 0, Number.MAX_SAFE_INTEGER], ['maxTokensPerCall', 256, 32000]] as const).map(([key, min, max]) => <label className="idea-tree-field" key={key}>
+        <span>{t(`ideaTree.${key}` as MessageKey)}</span>
+        <input type="number" min={min} max={max} value={draft[key]} onChange={event => onChange({...draft, [key]: event.target.value})} />
+      </label>)}
       <label className="idea-tree-field">
         <span>{t("ideaTree.maxDepth" as MessageKey)}</span>
         <input
@@ -220,7 +237,7 @@ export function IdeaTreeSettingsEditor({
         <span>{t("ideaTree.maxNodes" as MessageKey)}</span>
         <input
           max={10000}
-          min={1}
+          min={2}
           onChange={(event) => onChange({ ...draft, maxNodes: event.target.value })}
           type="number"
           value={draft.maxNodes}

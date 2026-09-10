@@ -494,8 +494,13 @@ export function normalizeIdeaTreeSettings(
   input: UpdateIdeaTreeSettingsRequest,
   current: IdeaTreeSettings,
 ): IdeaTreeSettings {
+  const maxRounds = boundedInteger(input.maxRounds, "maxRounds", 1, 100, current.maxRounds ?? 3);
+  const candidatesPerRound = boundedInteger(input.candidatesPerRound, "candidatesPerRound", 1, 20, current.candidatesPerRound ?? 3);
+  const maxTokensPerCall = boundedInteger(input.maxTokensPerCall, "maxTokensPerCall", 256, 32000, current.maxTokensPerCall ?? 4000);
+  const maxTokens = input.maxTokens === null ? null : input.maxTokens === undefined ? current.maxTokens ?? null
+    : boundedInteger(input.maxTokens, "maxTokens", 1, Number.MAX_SAFE_INTEGER, 1);
   const maxDepth = boundedInteger(input.maxDepth, "maxDepth", 1, 20, current.maxDepth);
-  const maxNodes = boundedInteger(input.maxNodes, "maxNodes", 1, 10_000, current.maxNodes);
+  const maxNodes = boundedInteger(input.maxNodes, "maxNodes", 2, 10_000, current.maxNodes);
   const maxSearchRounds = boundedInteger(
     input.maxSearchRounds,
     "maxSearchRounds",
@@ -536,6 +541,7 @@ export function normalizeIdeaTreeSettings(
     }
   }
   return {
+    maxRounds, candidatesPerRound, maxTokens, maxTokensPerCall,
     maxDepth,
     maxNodes,
     maxSearchRounds,
@@ -558,6 +564,10 @@ export function resolveIdeaTreeSettings(value: unknown): IdeaTreeSettings {
   if (value === undefined || value === null) return structuredClone(DEFAULT_IDEA_TREE_SETTINGS);
   if (!isRecord(value)) throw new Error("Idea Tree settings must be an object");
   const current: IdeaTreeSettings = {
+    maxRounds: typeof value.maxRounds === "number" ? value.maxRounds : 3,
+    candidatesPerRound: typeof value.candidatesPerRound === "number" ? value.candidatesPerRound : 3,
+    maxTokens: typeof value.maxTokens === "number" ? value.maxTokens : null,
+    maxTokensPerCall: typeof value.maxTokensPerCall === "number" ? value.maxTokensPerCall : 4000,
     maxDepth: typeof value.maxDepth === "number" ? value.maxDepth : DEFAULT_IDEA_TREE_SETTINGS.maxDepth,
     maxNodes: typeof value.maxNodes === "number" ? value.maxNodes : DEFAULT_IDEA_TREE_SETTINGS.maxNodes,
     maxSearchRounds: typeof value.maxSearchRounds === "number"

@@ -8,7 +8,7 @@ import { ideaResearchModel } from "./helpers/idea-research-model.ts";
  * E2E-META
  * Purpose: Start autonomous research, pause an in-flight design, manually continue three rounds, inspect persisted results and end another research.
  * Steps:
- *   1. Open the existing tree panel from /idea-tree and configure supplied materials, rounds and role prompt.
+ *   1. Configure tree budgets in system settings and start from the composer without an input dialog.
  *   2. Pause during design and verify no assessments start from the late response.
  *   3. Continue manually and inspect three rounds, independent assessments and persisted ROOT insight after reload.
  *   4. End another research using the confirmation control.
@@ -34,19 +34,25 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   };
   journey.scenario({goal: "从给定材料自主探索多个方向，暂停后手动继续，并完成多轮改进", preconditions: ["隔离 API 与 Python evolve 服务", "本地模拟模型，实际后端与文件持久化，无 Subagent、Runner 或 Neo4j"]});
   try {
-    await journey.step("从会话进入研究配置", "命令打开树面板，填写材料与三轮预算，不创建聊天计划", async () => {
+    await journey.step("在系统设置配置研究", "保存三轮预算和设计提示词，再从会话启动，不创建输入弹窗或聊天计划", async () => {
       fixture = await createProjectAndSession(page, {model: {...stub, name: `Idea engine ${Date.now()}`}, projectName: `Idea engine ${Date.now()}`, sessionTitle: "自主催化剂探索"});
       await openProjectSession(page, fixture);
-      await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Compare low-cost Fe and Mn catalysts; no cobalt.");
+      await page.getByRole("button", {name: /^(System configuration|系统设置)/}).click();
+      const dialog = page.getByRole("dialog", {name: /System configuration|系统设置/});
+      await dialog.getByRole("button", {name: /^Idea Tree/}).click();
+      const settings = dialog.locator(".idea-tree-settings");
+      await settings.getByLabel(/Maximum exploration rounds|最多探索轮数/).fill("3");
+      await settings.getByLabel(/Candidates per round|每轮最多候选/).fill("1");
+      await settings.getByLabel(/Max depth|最大深度/).fill("4");
+      await settings.locator("textarea").nth(0).fill("DESIGN-OVERRIDE: design from supplied materials only.");
+      await settings.getByRole("button", {name: /Save|保存/}).click();
+      await expect.poll(async () => (await (await page.request.get(`${apiBaseUrl()}/api/settings/idea-tree`, {headers: authorizationHeader()})).json()).candidatesPerRound).toBe(1);
+      await dialog.getByRole("button", {name: /close|关闭/}).first().click();
+      await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Compare low-cost Fe and Mn catalysts; no cobalt. User supplied: near-neutral water, recovery and leaching matter.");
       await page.getByRole("button", {name: /^(Run analysis|运行分析)$/}).click();
-      await expect(panel.getByLabel("研究目标与约束")).toHaveValue("Compare low-cost Fe and Mn catalysts; no cobalt.");
-      await panel.getByLabel("给定材料", {exact: true}).fill("User supplied: near-neutral water; recovery and leaching matter.");
-      await panel.getByLabel("最多探索轮数").fill("3");
-      await panel.getByLabel("每轮最多候选").fill("1");
-      await panel.getByLabel("最大深度").fill("4");
-      await panel.getByRole("button", {name: "查看或替换本次角色提示词"}).click();
-      await panel.getByLabel("设计提示词", {exact: true}).fill("DESIGN-OVERRIDE: design from supplied materials only.");
-      await panel.getByRole("button", {name: "启动研究", exact: true}).click();
+      await expect(page.getByLabel("研究目标与约束")).toHaveCount(0);
+      await expect(page.getByLabel("给定材料", {exact: true})).toHaveCount(0);
+      await expect(page.getByRole("dialog", {name: "Idea Tree explorer"})).toHaveCount(0);
       await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE"))).toBe(true);
     });
     await journey.step("暂停正在设计的候选", "先显示正在暂停，响应结束后保持暂停且尚无评分", async () => {
@@ -73,8 +79,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       expect(await runs.json()).toEqual([]);
       await page.reload();
       await expect(panel).toContainText("第 3 / 3 轮");
-      await panel.getByRole("button", {name: "查看树与结果"}).click();
-      const explorer = page.getByRole("dialog", {name: "Idea Tree explorer"});
+      const explorer = panel.getByRole("region", {name: "Idea Tree explorer"});
       await expect(explorer).toContainText("Shared insight: improve recovery");
       await expect(explorer).not.toContainText("Result handle");
       await expect(explorer).not.toContainText("revision 0");
@@ -83,9 +88,8 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await page.reload();
       const previous = stub.requests.length;
       stub.holdDesign();
-      await panel.getByRole("button", {name: "新建研究"}).click();
-      await panel.getByLabel("研究目标与约束").fill("Termination check");
-      await panel.getByRole("button", {name: "启动研究", exact: true}).click();
+      await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Termination check");
+      await page.getByRole("button", {name: /^(Run analysis|运行分析)$/}).click();
       await expect.poll(() => stub.requests.length).toBeGreaterThanOrEqual(previous + 2);
       await panel.getByRole("button", {name: "结束研究", exact: true}).click();
       await expect(panel).toContainText("结束后不能继续");
