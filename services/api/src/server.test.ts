@@ -170,6 +170,51 @@ function subagentSseGoldens(stream: string): string[][] {
   return [...lanes.values()].sort((left, right) => left.join(",").localeCompare(right.join(",")));
 }
 
+/**
+ * Compact SSE summary for an assertion message.
+ *
+ * A bare count assertion fails as "1 !== 2", which says nothing about which
+ * call went missing or where the switch landed relative to it. This keeps both
+ * answers in the CI log without dumping the stream: per-type counts, then the
+ * ordered type sequence with consecutive repeats collapsed and the tail capped.
+ */
+function sseDiagnostics(events: TestSseEvent[]): string {
+  const counts = new Map<string, number>();
+  for (const event of events) counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+  const tally = [...counts.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([type, count]) => `${type}=${count}`)
+    .join(" ");
+
+  const sequence: Array<{ count: number; type: string }> = [];
+  for (const event of events) {
+    const last = sequence.at(-1);
+    if (last?.type === event.type) last.count += 1;
+    else sequence.push({ count: 1, type: event.type });
+  }
+  const rendered = sequence.map((run) => run.count > 1 ? `${run.type}x${run.count}` : run.type);
+  const capped = rendered.length > 40
+    ? [...rendered.slice(0, 20), `…(${rendered.length - 40} more)…`, ...rendered.slice(-20)]
+    : rendered;
+
+  return `counts{ ${tally} } order[ ${capped.join(" > ")} ]`;
+}
+
+/**
+ * Compact permission-authorization summary for an assertion message: the fields
+ * these tests actually turn on, so a failure shows whether a call was prompted
+ * and under which mode instead of only how many records exist.
+ */
+function authorizationDiagnostics(records: readonly PermissionAuthorization[]): string {
+  const rows = records.map((record) => [
+    record.source,
+    record.approvalMode,
+    record.outcome,
+    record.permissionRequestId ? "prompted" : "unprompted",
+  ].join("/"));
+  return `authorizations(${records.length})[ ${rows.join(" | ")} ]`;
+}
+
 function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerConfig {
   return {
     authToken: "test-token",
@@ -4641,7 +4686,11 @@ test("switching to always-allow during a run stops asking for the tool calls tha
   let permissionRequestId: string | undefined;
   while (!permissionRequestId) {
     const chunk = await reader.read();
-    assert.equal(chunk.done, false, "run ended before the first tool asked for permission");
+    assert.equal(
+      chunk.done,
+      false,
+      `run ended before the first tool asked for permission — ${sseDiagnostics(parseSseEvents(stream))}`,
+    );
     stream += decoder.decode(chunk.value, { stream: true });
     const completed = stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2));
     const required = parseSseEvents(completed).find((event) => event.type === "permission.required");
@@ -4661,28 +4710,43 @@ test("switching to always-allow during a run stops asking for the tool calls tha
     stream += decoder.decode(chunk.value, { stream: true });
   }
   stream += decoder.decode();
-  assert.match(stream, /"type":"run.completed"/);
+  assert.ok(
+    /"type":"run\.completed"/.test(stream),
+    `the run must reach run.completed — ${sseDiagnostics(parseSseEvents(stream))}`,
+  );
 
   const events = parseSseEvents(stream);
-  assert.equal(
-    events.filter((event) => event.type === "tool.completed").length,
-    2,
-    "both Python calls must have run",
-  );
-  assert.equal(
-    events.filter((event) => event.type === "permission.required").length,
-    1,
-    "only the call made before the switch may ask",
-  );
+  // This case has failed on CI as a bare "1 !== 2". The authorizations are read
+  // before the first count assertion — a read-only GET — so every assertion
+  // below can name the stream and the permission records it disagreed with.
   const authorizations = await jsonRequest<PermissionAuthorization[]>(
     `${origin}/api/sessions/${session.body.id}/permission-authorizations`,
     { headers: authorization },
   );
-  assert.equal(authorizations.body.length, 2);
+  const diagnostics = `${sseDiagnostics(events)} ${authorizationDiagnostics(authorizations.body)}`;
+  assert.equal(
+    events.filter((event) => event.type === "tool.completed").length,
+    2,
+    `both Python calls must have run — ${diagnostics}`,
+  );
+  assert.equal(
+    events.filter((event) => event.type === "permission.required").length,
+    1,
+    `only the call made before the switch may ask — ${diagnostics}`,
+  );
+  assert.equal(
+    authorizations.body.length,
+    2,
+    `each Python call must record one authorization — ${diagnostics}`,
+  );
   const unprompted = authorizations.body.filter((record) => !record.permissionRequestId);
-  assert.equal(unprompted.length, 1, "the call after the switch must not go through a request");
-  assert.equal(unprompted[0]?.source, "always_allow");
-  assert.equal(unprompted[0]?.approvalMode, "always_allow");
+  assert.equal(
+    unprompted.length,
+    1,
+    `the call after the switch must not go through a request — ${diagnostics}`,
+  );
+  assert.equal(unprompted[0]?.source, "always_allow", `unprompted authorization source — ${diagnostics}`);
+  assert.equal(unprompted[0]?.approvalMode, "always_allow", `unprompted authorization mode — ${diagnostics}`);
 
   // The switch is auditable from the run's own persisted timeline, so a reload
   // replays it rather than depending on the live stream.
