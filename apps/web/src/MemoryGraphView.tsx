@@ -119,20 +119,20 @@ export function MemoryGraphView({ subgraph, health, onOpenExplorer }: MemoryGrap
     return <section className="memory-graph-view memory-graph-empty">
       <h3>ScienceMemory</h3>
       <p className="memory-graph-hint">
-        ScienceMemory is enabled but Neo4j is not reachable. Start Neo4j, then open System Settings → ScienceMemory and set the Neo4j password.
+        {t("memory.view.neo4jUnreachable")}
       </p>
     </section>;
   }
   if (subgraph.reason && !subgraph.nodes.length) {
     return <section className="memory-graph-view memory-graph-empty">
       <h3>ScienceMemory</h3>
-      <p className="memory-graph-hint">ScienceMemory is not available right now.</p>
+      <p className="memory-graph-hint">{t("memory.view.unavailable")}</p>
     </section>;
   }
   if (!subgraph.nodes.length) {
     return <section className="memory-graph-view memory-graph-empty">
       <h3>ScienceMemory</h3>
-      <p className="memory-graph-hint">No nodes yet. Run a task that produces an artifact to populate the graph.</p>
+      <p className="memory-graph-hint">{t("memory.view.empty")}</p>
     </section>;
   }
 

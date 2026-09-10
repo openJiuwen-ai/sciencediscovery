@@ -15,8 +15,10 @@
 import type { ComposerReference, Subagent } from "@sciencediscovery/schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useLocale } from "./i18n/index.js";
 import { BrandIcon, ChevronDownIcon, ChevronRightIcon, WarningIcon } from "./icons.js";
 import { MarkdownRenderer } from "./Markdown.js";
+import { subagentStatusLabel } from "./Orchestration.js";
 import { RunTimeline, type RunTimelineEntry } from "./timeline/RunTimeline.js";
 
 const TURN_STARTED = /^Turn (\d+) started$/i;
@@ -69,13 +71,19 @@ export function subagentTimelineEntries(subagent: Subagent): RunTimelineEntry[] 
   return entries;
 }
 
-function subagentModelLabel(subagent: Subagent): string {
-  return subagent.model?.name ?? subagent.model?.model ?? "Model unavailable";
+type Translate = ReturnType<typeof useLocale>["t"];
+
+function subagentModelLabel(subagent: Subagent, t: Translate): string {
+  return subagent.model?.name ?? subagent.model?.model ?? t("subagent.modelUnavailable");
 }
 
-function subagentUsageLabel(subagent: Subagent): string {
-  if (!subagent.usage) return "Usage unavailable";
-  return `${subagent.usage.totalTokens.toLocaleString()} tokens · ${subagent.usage.inputTokens.toLocaleString()} in / ${subagent.usage.outputTokens.toLocaleString()} out`;
+function subagentUsageLabel(subagent: Subagent, t: Translate): string {
+  if (!subagent.usage) return t("subagent.usageUnavailable");
+  return t("subagent.usageLine", {
+    input: subagent.usage.inputTokens.toLocaleString(),
+    output: subagent.usage.outputTokens.toLocaleString(),
+    total: subagent.usage.totalTokens.toLocaleString(),
+  });
 }
 
 export function SubagentConversation({
@@ -101,6 +109,7 @@ export function SubagentConversation({
   subagent: Subagent;
   workspaceSessionId?: string;
 }) {
+  const { t } = useLocale();
   const baseEntries = useMemo(() => subagentTimelineEntries(subagent), [subagent]);
   const [expansion, setExpansion] = useState<{
     entries: Record<string, boolean>;
@@ -134,11 +143,11 @@ export function SubagentConversation({
     viewport?.scrollTo({ behavior: "smooth", top: viewport.scrollHeight });
   }
 
-  const roleLabel = specialistName ? `SubAgent · ${specialistName}` : "SubAgent";
-  return <section aria-label={`SubAgent: ${subagent.input.description}`} className="conversation subagent-conversation">
+  const roleLabel = specialistName ? t("subagent.roleWithSpecialist", { name: specialistName }) : t("subagent.role");
+  return <section aria-label={t("subagent.pageAria", { description: subagent.input.description })} className="conversation subagent-conversation">
     <header className="session-bar subagent-session-bar">
       <div className="subagent-session-bar-title">
-        <button aria-label="Back to main Agent" className="icon-button subagent-back-button" onClick={onBack} title="Back to main Agent" type="button"><ChevronRightIcon size={17} /></button>
+        <button aria-label={t("subagent.backToMain")} className="icon-button subagent-back-button" onClick={onBack} title={t("subagent.backToMain")} type="button"><ChevronRightIcon size={17} /></button>
         <div className="session-bar-title">
           <span className="session-bar-project" title={projectName}>{projectName}</span>
           <span aria-hidden="true" className="session-bar-sep">›</span>
@@ -148,10 +157,10 @@ export function SubagentConversation({
         </div>
       </div>
       <div className="subagent-page-meta">
-        <span title={subagentModelLabel(subagent)}>{subagentModelLabel(subagent)}</span>
-        <span>{subagent.turnCount}/{subagent.maxTurns} turns</span>
-        <span title={subagentUsageLabel(subagent)}>{subagentUsageLabel(subagent)}</span>
-        <em className={subagent.status}>{subagent.status}</em>
+        <span title={subagentModelLabel(subagent, t)}>{subagentModelLabel(subagent, t)}</span>
+        <span>{t("subagent.turns", { count: subagent.turnCount, max: subagent.maxTurns })}</span>
+        <span title={subagentUsageLabel(subagent, t)}>{subagentUsageLabel(subagent, t)}</span>
+        <em className={subagent.status}>{subagentStatusLabel(t, subagent.status)}</em>
       </div>
     </header>
 
@@ -159,7 +168,7 @@ export function SubagentConversation({
       <article className="message user subagent-prompt-message">
         <div className="avatar"><BrandIcon size={18} /></div>
         <div>
-          <span className="message-role">Coordinator</span>
+          <span className="message-role">{t("subagent.coordinator")}</span>
           <MarkdownRenderer className="message-content" content={subagent.input.prompt} />
         </div>
       </article>
@@ -181,9 +190,9 @@ export function SubagentConversation({
         references={references}
         workspaceSessionId={workspaceSessionId}
       />
-      {!entries.length ? <div className="subagent-empty-state"><strong>{subagent.status === "running" ? "SubAgent is starting" : "No SubAgent activity was recorded"}</strong></div> : null}
+      {!entries.length ? <div className="subagent-empty-state"><strong>{t(subagent.status === "running" ? "subagent.starting2" : "subagent.noActivity")}</strong></div> : null}
       {subagent.error ? <aside className="boundary-note subagent-page-error"><span><WarningIcon size={15} /></span><p>{subagent.error}</p></aside> : null}
-      {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" onClick={scrollToLatest} type="button">Latest activity <ChevronDownIcon size={15} /></button></div> : null}
+      {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" onClick={scrollToLatest} type="button">{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
     </div>
   </section>;
 }

@@ -35,25 +35,25 @@ test("mixed action rows assign semantic button classes", () => {
   assert.match(source("Orchestration.tsx"), /className="specialist-actions"><button className="primary-button"/);
 
   const environments = source("EnvironmentManager.tsx");
-  assert.match(environments, /<button className="primary-button"[^>]*type="submit">Create</);
-  assert.match(environments, /<button className="secondary-button".*?Install packages/);
-  assert.match(environments, /window\.confirm\(`Delete named environment/);
+  assert.match(environments, /<button className="primary-button"[^>]*type="submit">\{t\("environment\.create"\)\}</);
+  assert.match(environments, /<button className="secondary-button".*?environment\.installPackages/);
+  assert.match(environments, /window\.confirm\(t\("environment\.confirmDelete"/);
 
   const remoteCompute = source("RemoteCompute.tsx");
-  assert.match(remoteCompute, /<button className="primary-button"[^>]*>Probe and add</);
-  assert.match(remoteCompute, /<button className="secondary-button".*?Refresh probe/);
-  assert.match(remoteCompute, /className="remote-host-actions">.*?Refresh probe.*?Delete/s);
-  assert.match(remoteCompute, /window\.confirm\(`Delete \$\{host\.alias\} from the machine catalog/);
+  assert.match(remoteCompute, /<button className="primary-button"[^>]*>\{t\("remote\.probeAndAdd"\)\}</);
+  assert.match(remoteCompute, /<button className="secondary-button".*?\{t\("remote\.refreshProbe"\)\}/);
+  assert.match(remoteCompute, /className="remote-host-actions">.*?\{t\("remote\.refreshProbe"\)\}.*?\{t\("common\.delete"\)\}/s);
+  assert.match(remoteCompute, /window\.confirm\(t\("remote\.confirmDelete", \{ alias: host\.alias \}\)\)/);
 
   const proxySettings = source("ProxySettingsEditor.tsx");
   assert.match(proxySettings, /className="proxy-server-actions">[\s\S]*?className="secondary-button compact-button"[\s\S]*?className="danger-button compact-button"/);
   assert.match(proxySettings, /className="secondary-button proxy-add-button"/);
 
   const artifacts = source("ScientificArtifacts.tsx");
-  assert.match(artifacts, /className="secondary-button compact-button"[\s\S]*?>Download script</);
-  assert.match(artifacts, /className="secondary-button compact-button"[\s\S]*?>Attach to next message</);
-  assert.match(artifacts, /aria-label="Zoom dashboard out" className="icon-button"/);
-  assert.match(artifacts, /aria-label="Zoom dashboard in" className="icon-button"/);
+  assert.match(artifacts, /className="secondary-button compact-button"[\s\S]*?>\{t\("artifact\.downloadScript"\)\}</);
+  assert.match(artifacts, /className="secondary-button compact-button"[\s\S]*?>\{t\("artifact\.attachToMessage"\)\}</);
+  assert.match(artifacts, /aria-label=\{t\("artifact\.zoomOut"\)\} className="icon-button"/);
+  assert.match(artifacts, /aria-label=\{t\("artifact\.zoomIn"\)\} className="icon-button"/);
 });
 
 test("container-styled button groups retain their dedicated skeleton", () => {
@@ -81,8 +81,8 @@ test("environment settings poll bootstrap progress and expose a failed retry act
   assert.match(environments, /setup\?\.state !== "installing"/);
   assert.match(environments, /window\.setInterval/);
   assert.match(environments, /setup\.components\[card\.key\]/);
-  assert.match(environments, /Reported error/);
-  assert.match(environments, /Retry micromamba setup/);
-  assert.match(environments, /Retry Conda environment setup/);
+  assert.match(environments, /environment\.reportedError/);
+  assert.match(environments, /environment\.actionRetryMicromamba/);
+  assert.match(environments, /environment\.actionRetryConda/);
   assert.doesNotMatch(environments, /Install managed Python and R environments/);
 });

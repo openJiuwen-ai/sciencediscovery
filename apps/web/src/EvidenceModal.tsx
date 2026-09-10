@@ -27,7 +27,7 @@ import type { MemoryGraphChainResult, MemoryGraphNode, MemorySubgraph } from "@s
 import type { ApiClient } from "./api.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { firstContentValue, humanizeKey, partitionEvidenceExtra } from "./NodeField.js";
-import { useLocale } from "./i18n/index.js";
+import { translateActive, useLocale } from "./i18n/index.js";
 
 // Memory graph explorer is heavy; lazy-load to avoid a circular import with
 // the artifact panel that re-exports it. Matches ScientificArtifacts.tsx.
@@ -51,6 +51,7 @@ function SourceFilePreview({
    * `listArtifacts(sessionId)` finds the user_upload artifact for the file. */
   sessionId: string;
 }) {
+  const { t } = useLocale();
   const [contentUrl, setContentUrl] = useState<string | undefined>();
   const [mediaType, setMediaType] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -105,7 +106,7 @@ function SourceFilePreview({
         }
         if (!active) return;
         if (!blob) {
-          setError(`File "${baseName}" is no longer in this session's artifacts.`);
+          setError(translateActive("evidence.fileMissing", { name: baseName }));
           setLoading(false);
           return;
         }
@@ -115,7 +116,7 @@ function SourceFilePreview({
         setLoading(false);
       } catch (err) {
         if (active) {
-          setError(err instanceof Error ? err.message : "Could not load file content.");
+          setError(err instanceof Error ? err.message : translateActive("evidence.loadFileFailed"));
           setLoading(false);
         }
       }
@@ -123,7 +124,7 @@ function SourceFilePreview({
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [client, fileNode.id, sessionId, filePath]);
 
-  if (loading) return <p className="artifact-empty compact">Loading file preview…</p>;
+  if (loading) return <p className="artifact-empty compact">{t("evidence.loadingFilePreview")}</p>;
   if (error) return <p className="artifact-empty compact">{error}</p>;
   if (!contentUrl || !mediaType) return null;
 
@@ -138,7 +139,7 @@ function SourceFilePreview({
   // file's logical name is already in the section heading above.
   return (
     <p className="evidence-source-paper-abstract">
-      <a className="evidence-source-paper-link" href={contentUrl} download={fileNode.id.split(":").pop()}>Download {fileNode.id.split(":").pop()}</a>
+      <a className="evidence-source-paper-link" href={contentUrl} download={fileNode.id.split(":").pop()}>{t("evidence.downloadFile", { name: fileNode.id.split(":").pop() ?? "" })}</a>
       <span> ({mediaType})</span>
     </p>
   );
@@ -244,13 +245,13 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
       // not-yet-mirrored node gets a friendly error instead of a blank graph.
       const present = subgraph.nodes.some((n) => n.id === evidenceId);
       if (!present) {
-        setError("This evidence is not yet in the ScienceMemory.");
+        setError(t("evidence.notInMemory"));
         return;
       }
       setError(undefined);
       setChainExplorer({ nodeId: evidenceId, subgraph });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load ScienceMemory.");
+      setError(err instanceof Error ? err.message : t("evidence.loadMemoryFailed"));
     }
   }
 
@@ -265,16 +266,16 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
 
   return (
     <div className="artifact-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section aria-label={`Evidence: ${titleText}`} aria-modal="true" className="artifact-modal-panel" role="dialog">
+      <section aria-label={t("evidence.dialogLabel", { title: titleText })} aria-modal="true" className="artifact-modal-panel" role="dialog">
         <header className="artifact-modal-header">
-          <div><span className="eyebrow">Evidence</span><h2 className="evidence-title" title={loading || !titleHover ? undefined : titleHover}>{loading ? "Loading evidence…" : titleText}</h2></div>
+          <div><span className="eyebrow">{t("evidence.eyebrow")}</span><h2 className="evidence-title" title={loading || !titleHover ? undefined : titleHover}>{loading ? t("evidence.loading") : titleText}</h2></div>
           <div className="artifact-modal-controls">
-            <button aria-label="Close evidence viewer" className="icon-button" onClick={onClose} title="Close evidence viewer" type="button">✕</button>
+            <button aria-label={t("evidence.close")} className="icon-button" onClick={onClose} title={t("evidence.close")} type="button">✕</button>
           </div>
         </header>
         <nav className="artifact-mode-tabs">
-          <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">Preview</button>
-          <button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">Provenance</button>
+          <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">{t("artifact.tabPreview")}</button>
+          <button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">{t("artifact.tabProvenance")}</button>
           {memoryGraphEnabled ? <button className="view-chain-btn" onClick={() => void viewChain()} type="button">{t("chain.viewInMemoryX", { x: t("chain.evidence") })}</button> : null}
         </nav>
         <div className="artifact-modal-body">
@@ -303,7 +304,7 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
               ) : null}
               {rawPairs.length ? (
                 <details className="evidence-raw-attrs">
-                  <summary>Raw attributes</summary>
+                  <summary>{t("evidence.rawAttributes")}</summary>
                   <dl className="memory-graph-detail-props">
                     {rawPairs.map(({ key, value }) => (
                       <div className="memory-graph-detail-prop" key={key}>
@@ -314,7 +315,7 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
                   </dl>
                 </details>
               ) : null}
-              {!loading && !evidence && !error ? <p className="artifact-empty">Evidence not found.</p> : null}
+              {!loading && !evidence && !error ? <p className="artifact-empty">{t("evidence.notFound")}</p> : null}
             </div>
           ) : (
             <div className="evidence-source-papers">
@@ -323,12 +324,12 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
                 const paperTitle = String(extra.title ?? paper.id);
                 return (
                   <article className="evidence-source-paper expanded" key={paper.id}>
-                    <h4 className="evidence-source-paper-label">Paper</h4>
+                    <h4 className="evidence-source-paper-label">{t("evidence.paper")}</h4>
                     <h5 className="evidence-source-paper-title">{paperTitle}</h5>
                     <div className="evidence-source-paper-detail">
                       {typeof extra.abstract === "string" && extra.abstract ? (
                         <p className="evidence-source-paper-abstract">{extra.abstract}</p>
-                      ) : <p className="artifact-empty compact">No abstract recorded.</p>}
+                      ) : <p className="artifact-empty compact">{t("evidence.noAbstract")}</p>}
                       {typeof extra.link === "string" && extra.link ? (
                         <a className="evidence-source-paper-link" href={extra.link} rel="noreferrer" target="_blank">{extra.link}</a>
                       ) : null}
@@ -347,7 +348,7 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
                 const sourceSessionId = sourceFile.id.split(":")[2] ?? sessionId;
                 return (
                   <article className="evidence-source-paper expanded" key={sourceFile.id}>
-                    <h4 className="evidence-source-paper-label">Source file</h4>
+                    <h4 className="evidence-source-paper-label">{t("evidence.sourceFile")}</h4>
                     <h5 className="evidence-source-paper-title">{fileName}</h5>
                     <div className="evidence-source-paper-detail">
                       <SourceFilePreview client={client} fileNode={sourceFile} sessionId={sourceSessionId} />
@@ -356,7 +357,7 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
                 );
               }) : null}
               {!papers.length && !sourceFiles.length ? (
-                <p className="artifact-empty">No source recorded for this evidence.</p>
+                <p className="artifact-empty">{t("evidence.noSource")}</p>
               ) : null}
             </div>
           )}

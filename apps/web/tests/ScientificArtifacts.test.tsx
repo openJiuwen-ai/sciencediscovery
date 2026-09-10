@@ -187,11 +187,25 @@ function switchLabelsAndHandlers(node: unknown): Array<{ click: () => void; labe
   return nested;
 }
 
+// Hooks (useLocale) only run during a React render, so a component that uses
+// them cannot be invoked as a plain function outside one. Render a probe that
+// calls the component during render — the default locale context applies —
+// and captures the returned element tree for the handler walk above.
+function renderComponentTree(render: () => unknown): unknown {
+  let tree: unknown;
+  function Probe() {
+    tree = render();
+    return null;
+  }
+  renderToStaticMarkup(createElement(Probe));
+  return tree;
+}
+
 test("both view switches report the view they select, in either starting view", () => {
   for (const view of ["table", "raw"] as const) {
     const seen: string[] = [];
     const switches = switchLabelsAndHandlers(
-      DatasetPreview({ ...TABULAR_JSON, onViewChange: (next) => seen.push(next), view }),
+      renderComponentTree(() => DatasetPreview({ ...TABULAR_JSON, onViewChange: (next) => seen.push(next), view })),
     );
     assert.deepEqual(switches.map((item) => item.label), ["Table", "Raw JSON"], `starting from ${view}`);
     for (const item of switches) item.click();

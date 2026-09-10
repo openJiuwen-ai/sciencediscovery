@@ -49,9 +49,15 @@ const SKILL_MODE_LABELS = {
   selected: "settings.skillModeSelected",
 } satisfies Record<SkillSelectionMode, MessageKey>;
 
-function sourceLabel(source: RuntimeSettingsSource | undefined): string {
-  if (!source || source === "unset") return "Built-in fallback";
-  return `${source[0]!.toUpperCase()}${source.slice(1)} setting`;
+const SOURCE_LABELS = {
+  global: "scopedSettings.source.global",
+  project: "scopedSettings.source.project",
+  session: "scopedSettings.source.session",
+  unset: "scopedSettings.sourceBuiltIn",
+} satisfies Record<RuntimeSettingsSource, MessageKey>;
+
+function sourceLabel(source: RuntimeSettingsSource | undefined, t: ReturnType<typeof useLocale>["t"]): string {
+  return t(SOURCE_LABELS[source ?? "unset"]);
 }
 
 function effectiveModelName(
@@ -59,7 +65,7 @@ function effectiveModelName(
   models: ModelProfile[],
   t: ReturnType<typeof useLocale>["t"],
 ): string {
-  if (!modelId) return "Not configured";
+  if (!modelId) return t("common.notConfigured");
   const model = models.find((candidate) => candidate.id === modelId);
   if (!model) return modelId;
   return modelOptionLabel(model, models, t);
@@ -87,7 +93,8 @@ function normalizeSkillLibraryMounts(mounts: readonly EnabledSkillLibrary[] = []
 }
 
 function SettingsSource({ details, field }: { details: RuntimeSettingsDetails; field: RuntimeSettingsField }) {
-  return <small className="settings-source">Effective: {sourceLabel(details.sources[field])}</small>;
+  const { t } = useLocale();
+  return <small className="settings-source">{t("scopedSettings.effective", { source: sourceLabel(details.sources[field], t) })}</small>;
 }
 
 export function globalSettingsDraft(details: RuntimeSettingsDetails): RuntimeSettingsOverrides {
@@ -148,7 +155,7 @@ export function ScopedSettingsEditor({
   };
 
   const inheritedLabel = (field: RuntimeSettingsField, value: string) =>
-    `Inherit · ${value} (${sourceLabel(details.sources[field])})`;
+    t("scopedSettings.inheritLabel", { value, source: sourceLabel(details.sources[field], t) });
 
   function setScalar(field: "modelId", value: string): void {
     setDraft((current) => {
@@ -253,17 +260,17 @@ export function ScopedSettingsEditor({
       <label className="settings-field">
         <span>{t(FIELD_LABELS.modelId)}</span>
         <select disabled={disabled || saving} value={draft.modelId ?? ""} onChange={(event) => setScalar("modelId", event.target.value)}>
-          <option value="">{allowInheritance ? inheritedLabel("modelId", effectiveModelName(details.effective.modelId, models, t)) : "Not configured"}</option>
-          {models.map((model) => <option key={model.id} value={model.id}>{allowInheritance ? "Override · " : ""}{modelOptionLabel(model, models, t)}</option>)}
+          <option value="">{allowInheritance ? inheritedLabel("modelId", effectiveModelName(details.effective.modelId, models, t)) : t("common.notConfigured")}</option>
+          {models.map((model) => <option key={model.id} value={model.id}>{allowInheritance ? t("scopedSettings.overrideOption", { label: modelOptionLabel(model, models, t) }) : modelOptionLabel(model, models, t)}</option>)}
         </select>
         {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}
       </label>
 
       <fieldset className="settings-array" disabled={disabled || saving}>
         <legend>{t(FIELD_LABELS.enabledConnectorIds)}</legend>
-        {allowInheritance ? <select aria-label="Connector settings mode" value={connectorOverride ? "override" : "inherit"} onChange={(event) => setArrayMode("enabledConnectorIds", event.target.value === "override")}>
-          <option value="inherit">Inherit · {details.effective.enabledConnectorIds.length} enabled</option>
-          <option value="override">Override · {draft.enabledConnectorIds?.length ?? 0} selected</option>
+        {allowInheritance ? <select aria-label={t("scopedSettings.connectorModeAria")} value={connectorOverride ? "override" : "inherit"} onChange={(event) => setArrayMode("enabledConnectorIds", event.target.value === "override")}>
+          <option value="inherit">{t("scopedSettings.inheritCount", { count: details.effective.enabledConnectorIds.length })}</option>
+          <option value="override">{t("scopedSettings.overrideCount", { count: draft.enabledConnectorIds?.length ?? 0 })}</option>
         </select> : null}
         {connectorOverride || !allowInheritance ? <div className="settings-choices">
           {connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={draft.enabledConnectorIds?.includes(connector.id) ?? false} onChange={() => toggleArrayValue("enabledConnectorIds", connector.id)} /><span>{connector.displayName ?? connector.id}</span></label>)}

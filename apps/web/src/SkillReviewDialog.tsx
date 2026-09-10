@@ -12,6 +12,8 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent a
 
 import type { SkillReviewDraft, SkillReviewFile } from "@sciencediscovery/schema";
 
+import { useLocale, type MessageKey } from "./i18n/index.js";
+
 export interface EditableSkillFile {
   binary?: boolean;
   content: string;
@@ -188,6 +190,7 @@ export function SkillLineDiff({ after, before, leftLabel, rightLabel, status }: 
   rightLabel: string;
   status: SkillFileDiffStatus;
 }) {
+  const { t } = useLocale();
   const rows = useMemo(() => buildSkillLineDiff(before, after), [after, before]);
   const frameRef = useRef<HTMLDivElement>(null);
   const [resizing, setResizing] = useState(false);
@@ -232,20 +235,20 @@ export function SkillLineDiff({ after, before, leftLabel, rightLabel, status }: 
 
   return <div className={`skill-pr-diff${resizing ? " resizing" : ""}`}>
     <div className="skill-pr-toolbar">
-      <div className="skill-pr-toolbar-title"><span aria-hidden="true">⇄</span><strong>Side-by-side diff</strong><small>{changeSummary.changed} changed {changeSummary.changed === 1 ? "line" : "lines"}</small></div>
-      <div className="skill-pr-summary" aria-label={`${changeSummary.additions} additions and ${changeSummary.deletions} deletions`}>
+      <div className="skill-pr-toolbar-title"><span aria-hidden="true">⇄</span><strong>{t("skillReview.diffTitle")}</strong><small>{t(changeSummary.changed === 1 ? "skillReview.changedLineOne" : "skillReview.changedLines", { count: changeSummary.changed })}</small></div>
+      <div className="skill-pr-summary" aria-label={t("skillReview.changeSummaryAria", { additions: changeSummary.additions, deletions: changeSummary.deletions })}>
         <span className="removed">−{changeSummary.deletions}</span>
         <span className="added">+{changeSummary.additions}</span>
-        <button onClick={() => setSplitPercentage(50)} title="Reset the A and B columns to equal width" type="button">50 / 50</button>
+        <button onClick={() => setSplitPercentage(50)} title={t("skillReview.resetSplitTitle")} type="button">50 / 50</button>
       </div>
     </div>
     <div className="skill-pr-scroll">
       <div className="skill-pr-frame" ref={frameRef} style={frameStyle}>
         <div className="skill-pr-headings">
-          <div><span className="skill-pr-version-badge">A</span><span className="skill-pr-heading-copy"><strong title={leftLabel}>{leftLabel}</strong><small>Base · −{changeSummary.deletions}</small></span></div>
-          <div><span className="skill-pr-version-badge">B</span><span className="skill-pr-heading-copy"><strong title={rightLabel}>{rightLabel}</strong><small>Compare · +{changeSummary.additions}</small></span><span className={`skill-pr-file-status ${status}`}>{status}</span></div>
+          <div><span className="skill-pr-version-badge">A</span><span className="skill-pr-heading-copy"><strong title={leftLabel}>{leftLabel}</strong><small>{t("skillReview.baseHeading", { count: changeSummary.deletions })}</small></span></div>
+          <div><span className="skill-pr-version-badge">B</span><span className="skill-pr-heading-copy"><strong title={rightLabel}>{rightLabel}</strong><small>{t("skillReview.compareHeading", { count: changeSummary.additions })}</small></span><span className={`skill-pr-file-status ${status}`}>{skillFileDiffStatusLabel(status, t)}</span></div>
         </div>
-        <div aria-label={`${leftLabel} compared with ${rightLabel}`} className="skill-pr-rows" role="table">
+        <div aria-label={t("skillReview.rowsAria", { left: leftLabel, right: rightLabel })} className="skill-pr-rows" role="table">
           {rows.map((row, rowIndex) => {
             const changedPair = row.kind === "modified" && row.left && row.right;
             return <div className={`skill-pr-row ${row.kind}`} key={`${row.left?.lineNumber ?? ""}-${row.right?.lineNumber ?? ""}-${rowIndex}`} role="row">
@@ -255,7 +258,7 @@ export function SkillLineDiff({ after, before, leftLabel, rightLabel, status }: 
           })}
         </div>
         <button
-          aria-label="Resize version A and version B columns"
+          aria-label={t("skillReview.resizeAria")}
           aria-orientation="vertical"
           aria-valuemax={MAX_DIFF_SPLIT}
           aria-valuemin={MIN_DIFF_SPLIT}
@@ -268,7 +271,7 @@ export function SkillLineDiff({ after, before, leftLabel, rightLabel, status }: 
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerEnd}
           role="separator"
-          title="Drag to resize A and B. Double-click to reset."
+          title={t("skillReview.resizeTitle")}
           type="button"
         ><span aria-hidden="true">⋮</span></button>
       </div>
@@ -283,13 +286,31 @@ export function skillFileDiffStatus(base: SkillReviewFile | undefined, proposed:
   return base.content === proposed.content ? "unchanged" : "modified";
 }
 
-function proposalSourceLabel(draft: SkillReviewDraft): string {
+const FILE_STATUS_KEYS: Record<SkillFileDiffStatus, MessageKey> = {
+  added: "skillReview.fileStatus.added",
+  modified: "skillReview.fileStatus.modified",
+  removed: "skillReview.fileStatus.removed",
+  unchanged: "skillReview.fileStatus.unchanged",
+};
+
+export type SkillFileTranslate = (key: MessageKey, variables?: Record<string, string | number>) => string;
+
+export function skillFileDiffStatusLabel(status: SkillFileDiffStatus, t: SkillFileTranslate): string {
+  const key = FILE_STATUS_KEYS[status];
+  if (!key) return status;
+  const label = t(key);
+  // Before the catalogue knows the key, t() echoes the key itself — fall back
+  // to the raw status so unknown or untranslated values stay readable.
+  return label === key ? status : label;
+}
+
+function proposalSourceLabel(t: SkillFileTranslate, draft: SkillReviewDraft): string {
   switch (draft.provenance?.source) {
-    case "git": return "Git package";
-    case "local-import": return "Imported package";
-    case "manual": return "Manual proposal";
-    case "session-distill": return "Session distillation";
-    default: return "Agent proposal";
+    case "git": return t("skillReview.source.gitPackage");
+    case "local-import": return t("skillReview.source.importedPackage");
+    case "manual": return t("skillReview.source.manualProposal");
+    case "session-distill": return t("skillReview.source.sessionDistill");
+    default: return t("skillReview.source.agentProposal");
   }
 }
 
@@ -308,6 +329,7 @@ export function SkillReviewDialog({
   onConfirm: (files: EditableSkillFile[]) => void;
   onDiscard: () => void;
 }) {
+  const { t } = useLocale();
   const [files, setFiles] = useState<EditableSkillFile[]>(() => draft.files.map((file) => ({
     ...(file.binary ? { binary: true, encodedContent: file.encodedContent } : {}),
     content: file.content ?? "",
@@ -336,9 +358,9 @@ export function SkillReviewDialog({
   const hasComparison = draftHasComparison(draft);
   const activeStatus = skillFileDiffStatus(activeBase, activeFile);
   const changedFileCount = paths.filter((path) => skillFileDiffStatus(baseByPath.get(path), proposedByPath.get(path)) !== "unchanged").length;
-  const proposalLabel = proposalSourceLabel(draft);
-  const pendingLabel = !draft.provenance || draft.provenance.source === "agent" ? "Pending Agent draft" : `Pending ${proposalLabel}`;
-  const previousProposalLabel = !draft.provenance || draft.provenance.source === "agent" ? "Previous Agent proposal" : "Previous proposal";
+  const proposalLabel = proposalSourceLabel(t, draft);
+  const pendingLabel = !draft.provenance || draft.provenance.source === "agent" ? t("skillReview.pendingAgentDraft") : t("skillReview.pendingSource", { source: proposalLabel });
+  const previousProposalLabel = !draft.provenance || draft.provenance.source === "agent" ? t("skillReview.previousAgentProposal") : t("skillReview.previousProposal");
 
   function updateActive(content: string): void {
     setFiles((current) => current.map((file) => file.path === activePath ? { ...file, content } : file));
@@ -366,39 +388,39 @@ export function SkillReviewDialog({
   }
 
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <section aria-label={`Review Agent Skill draft ${draft.name}`} aria-modal="true" className="skill-review-dialog" role="dialog">
+    <section aria-label={t("skillReview.dialogAria", { name: draft.name })} aria-modal="true" className="skill-review-dialog" role="dialog">
       <header className="skill-review-header">
-        <div><div className="skill-review-heading-row"><span className="eyebrow">{pendingLabel}</span><span className="skill-review-status">{draft.comparisonSource === "previous-agent-draft" ? "Revised proposal" : draft.baseRevision === undefined ? "New Skill" : `Update from r${draft.baseRevision}`}</span></div><h2>{draft.name}</h2><p>Review the package before publishing it to a Skill Library.{draft.provenance?.git ? ` Source commit ${draft.provenance.git.commit.slice(0, 12)}.` : ""}</p></div>
-        <button aria-label="Close Skill draft review" className="icon-button" disabled={busy} onClick={onClose} type="button">×</button>
+        <div><div className="skill-review-heading-row"><span className="eyebrow">{pendingLabel}</span><span className="skill-review-status">{draft.comparisonSource === "previous-agent-draft" ? t("skillReview.revisedProposal") : draft.baseRevision === undefined ? t("skillReview.newSkill") : t("skillReview.updateFrom", { revision: draft.baseRevision })}</span></div><h2>{draft.name}</h2><p>{t("skillReview.reviewIntro")}{draft.provenance?.git ? ` ${t("skillReview.sourceCommit", { commit: draft.provenance.git.commit.slice(0, 12) })}` : ""}</p></div>
+        <button aria-label={t("skillReview.closeAria")} className="icon-button" disabled={busy} onClick={onClose} type="button">×</button>
       </header>
       <div className="skill-review-tabs" role="tablist">
-        <button aria-selected={mode === "edit"} className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")} role="tab" type="button"><strong>Edit files</strong><small>{files.length} file{files.length === 1 ? "" : "s"}</small></button>
-        <button aria-selected={mode === "diff"} className={mode === "diff" ? "active" : ""} onClick={() => setMode("diff")} role="tab" type="button"><strong>Review changes</strong><small>{changedFileCount} change{changedFileCount === 1 ? "" : "s"}</small></button>
+        <button aria-selected={mode === "edit"} className={mode === "edit" ? "active" : ""} onClick={() => setMode("edit")} role="tab" type="button"><strong>{t("skillReview.editFilesTab")}</strong><small>{t(files.length === 1 ? "skillReview.filesCountOne" : "skillReview.filesCount", { count: files.length })}</small></button>
+        <button aria-selected={mode === "diff"} className={mode === "diff" ? "active" : ""} onClick={() => setMode("diff")} role="tab" type="button"><strong>{t("skillReview.reviewChangesTab")}</strong><small>{t(changedFileCount === 1 ? "skillReview.changesCountOne" : "skillReview.changesCount", { count: changedFileCount })}</small></button>
       </div>
       <div className="skill-review-workspace">
-        <aside aria-label="Draft files" className="skill-review-files">
-          <div className="skill-review-files-heading"><strong>Package files</strong><span>{paths.length}</span></div>
+        <aside aria-label={t("skillReview.draftFilesAria")} className="skill-review-files">
+          <div className="skill-review-files-heading"><strong>{t("skillReview.packageFiles")}</strong><span>{paths.length}</span></div>
           {paths.map((path) => {
             const status = skillFileDiffStatus(baseByPath.get(path), proposedByPath.get(path));
-            return <button className={path === activePath ? "active" : ""} key={path} onClick={() => setActivePath(path)} type="button"><span>{path}</span><small className={status}>{status}</small></button>;
+            return <button className={path === activePath ? "active" : ""} key={path} onClick={() => setActivePath(path)} type="button"><span>{path}</span><small className={status}>{skillFileDiffStatusLabel(status, t)}</small></button>;
           })}
-          {mode === "edit" ? <div className="skill-review-add"><input aria-label="New Skill file path" onChange={(event) => setNewPath(event.target.value)} placeholder="references/guide.md" value={newPath} /><button disabled={!newPath.trim() || proposedByPath.has(newPath.trim())} onClick={addFile} type="button">Add file</button></div> : null}
+          {mode === "edit" ? <div className="skill-review-add"><input aria-label={t("skillReview.newFilePathAria")} onChange={(event) => setNewPath(event.target.value)} placeholder="references/guide.md" value={newPath} /><button disabled={!newPath.trim() || proposedByPath.has(newPath.trim())} onClick={addFile} type="button">{t("skillReview.addFile")}</button></div> : null}
         </aside>
         <main className="skill-review-content">
           {mode === "edit" ? activeFile ? <>
-            <div className="skill-review-path"><input aria-label="Skill file path" disabled={activePath === "SKILL.md" || busy} onChange={(event) => renameActive(event.target.value)} value={activePath} />{activePath !== "SKILL.md" ? <button className="danger-button" disabled={busy} onClick={removeActive} type="button">Remove</button> : null}</div>
-            {activeFile.binary ? <div className="skill-binary-editor-note"><strong>Binary file preserved</strong><p>This resource cannot be edited as text. You can rename or remove it, and confirmation will preserve its exact bytes.</p></div> : <textarea aria-label={`Edit ${activePath}`} disabled={busy} onChange={(event) => updateActive(event.target.value)} spellCheck={false} value={activeFile.content} />}
-          </> : <p>Select or add a file.</p> : activeBase?.binary || activeFile?.binary ? <div className="skill-binary-diff"><section><h3>{draft.comparisonSource === "previous-agent-draft" ? previousProposalLabel : `Installed · r${draft.baseRevision}`}</h3><p>{activeBase ? `Binary file · ${activeBase.size} bytes` : "File did not exist"}</p></section><section><h3>{proposalLabel}</h3><p>{activeFile ? activeFile.binary ? "Binary file (exact bytes preserved)" : `${activeFile.content.length} UTF-8 characters` : "File removed"}</p></section></div> : <SkillLineDiff
+            <div className="skill-review-path"><input aria-label={t("skillReview.filePathAria")} disabled={activePath === "SKILL.md" || busy} onChange={(event) => renameActive(event.target.value)} value={activePath} />{activePath !== "SKILL.md" ? <button className="danger-button" disabled={busy} onClick={removeActive} type="button">{t("skillReview.removeFile")}</button> : null}</div>
+            {activeFile.binary ? <div className="skill-binary-editor-note"><strong>{t("skillReview.binaryPreserved")}</strong><p>{t("skillReview.binaryPreservedHint")}</p></div> : <textarea aria-label={t("skillReview.editFileAria", { path: activePath })} disabled={busy} onChange={(event) => updateActive(event.target.value)} spellCheck={false} value={activeFile.content} />}
+          </> : <p>{t("skillReview.selectOrAddFile")}</p> : activeBase?.binary || activeFile?.binary ? <div className="skill-binary-diff"><section><h3>{draft.comparisonSource === "previous-agent-draft" ? previousProposalLabel : t("skillReview.installedRevision", { revision: draft.baseRevision ?? "" })}</h3><p>{activeBase ? t("skillReview.binaryFileBytes", { size: activeBase.size }) : t("skillReview.fileDidNotExist")}</p></section><section><h3>{proposalLabel}</h3><p>{activeFile ? activeFile.binary ? t("skillReview.binaryExactBytes") : t("skillReview.utf8Characters", { count: activeFile.content.length }) : t("skillReview.fileRemoved")}</p></section></div> : <SkillLineDiff
             after={activeFile?.content}
             before={activeBase?.content}
-            leftLabel={hasComparison ? draft.comparisonSource === "previous-agent-draft" ? previousProposalLabel : `Installed · r${draft.baseRevision}` : "Previous · none"}
+            leftLabel={hasComparison ? draft.comparisonSource === "previous-agent-draft" ? previousProposalLabel : t("skillReview.installedRevision", { revision: draft.baseRevision ?? "" }) : t("skillReview.previousNone")}
             rightLabel={proposalLabel}
             status={activeStatus}
           />}
         </main>
       </div>
       <div className="skill-review-error-slot">{error ? <p className="skill-manager-error" role="alert">{error}</p> : null}</div>
-      <footer className="skill-review-footer"><button className="skill-discard-button" disabled={busy} onClick={onDiscard} type="button">Discard draft</button><div><button className="secondary-button" disabled={busy} onClick={onClose} type="button">Review later</button><button className="primary-button" disabled={busy || !files.some((file) => file.path === "SKILL.md")} onClick={() => onConfirm(files)} type="button">{busy ? "Publishing…" : "Publish Skill"}</button></div></footer>
+      <footer className="skill-review-footer"><button className="skill-discard-button" disabled={busy} onClick={onDiscard} type="button">{t("skillReview.discardDraft")}</button><div><button className="secondary-button" disabled={busy} onClick={onClose} type="button">{t("skillReview.reviewLater")}</button><button className="primary-button" disabled={busy || !files.some((file) => file.path === "SKILL.md")} onClick={() => onConfirm(files)} type="button">{busy ? t("skillReview.publishing") : t("skillReview.publishSkill")}</button></div></footer>
     </section>
   </div>;
 }

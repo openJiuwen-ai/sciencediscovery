@@ -1215,10 +1215,11 @@ export function MemoryGraphExplorer({
       // The read layer caps results server-side; say so rather than silently
       // showing a partial answer when the server truncates its result set.
       setSearchNote(result.hits.length
-        ? `${onScreen} of ${result.hits.length}${result.truncated ? "+ (truncated)" : ""} match(es) in view`
-        : "No matches");
+        ? t(result.truncated ? "memory.search.matchesTruncated" : "memory.search.matches",
+          { shown: onScreen, total: result.hits.length })
+        : t("memory.search.noMatches"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Search failed");
+      onError(error instanceof Error ? error.message : t("memory.search.failed"));
     } finally {
       setSearching(false);
     }
@@ -1256,7 +1257,7 @@ export function MemoryGraphExplorer({
     setChainLoading(true);
     try {
       const result = await client.getMemoryChain(source.id, sessionId, version, button.kind);
-      if (!result.nodes.length) { onError("No chain was found for this node."); return; }
+      if (!result.nodes.length) { onError(t("chain.empty")); return; }
       setChain({
         graph: { edges: result.edges, nodes: result.nodes, total: result.total, truncated: result.truncated },
         sourceName: graphNodeName(source),
@@ -1276,7 +1277,7 @@ export function MemoryGraphExplorer({
       setActiveLabels(new Set());
       setActiveEdges(new Set());
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not load the chain");
+      onError(error instanceof Error ? error.message : t("chain.loadFailed"));
     } finally {
       setChainLoading(false);
     }
@@ -1532,28 +1533,28 @@ export function MemoryGraphExplorer({
     }
     if (event.target === event.currentTarget) onClose();
   }}>
-    <section aria-label="ScienceMemory explorer" aria-modal="true" className="memory-explorer-panel" role="dialog">
+    <section aria-label={t("memory.explorer.aria")} aria-modal="true" className="memory-explorer-panel" role="dialog">
       <header className="memory-explorer-header">
         <div>
-          <span className="eyebrow">Session knowledge</span>
+          <span className="eyebrow">{t("memory.explorer.eyebrow")}</span>
           <h2>ScienceMemory</h2>
         </div>
         <div className="memory-explorer-stats">
           <form className="memory-explorer-search" onSubmit={(event) => void runSearch(event)} role="search">
             <input
-              aria-label="Search the ScienceMemory"
+              aria-label={t("memory.explorer.searchAria")}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search nodes…"
+              placeholder={t("memory.explorer.searchPlaceholder")}
               value={query}
             />
-            <button disabled={searching} type="submit">{searching ? "…" : "Search"}</button>
-            {matchIds ? <button onClick={clearSearch} type="button">Clear</button> : null}
+            <button disabled={searching} type="submit">{searching ? "…" : t("app.search")}</button>
+            {matchIds ? <button onClick={clearSearch} type="button">{t("memory.search.clear")}</button> : null}
           </form>
           {searchNote ? <span className="memory-search-note">{searchNote}</span> : null}
-          <span>{graph.nodes.length} nodes</span>
-          <span>{graph.edges.length} edges</span>
-          {graph.truncated ? <span className="memory-truncated" title="The read layer caps results; this view is partial.">truncated</span> : null}
-          <button aria-label="Close ScienceMemory" className="icon-button" onClick={onClose} title="Close ScienceMemory" type="button"><CloseIcon size={20} /></button>
+          <span>{graph.nodes.length} {t("memory.stats.nodes")}</span>
+          <span>{graph.edges.length} {t("memory.stats.edges")}</span>
+          {graph.truncated ? <span className="memory-truncated" title={t("memory.truncated.title")}>{t("memory.truncated.badge")}</span> : null}
+          <button aria-label={t("memory.explorer.close")} className="icon-button" onClick={onClose} title={t("memory.explorer.close")} type="button"><CloseIcon size={20} /></button>
         </div>
       </header>
 
@@ -1601,7 +1602,7 @@ export function MemoryGraphExplorer({
               and were easy to miss entirely. */}
           <div className="memory-explorer-filters">
             <div className="memory-filter-block">
-              <span className="memory-filter-title">Nodes ({graph.nodes.length})</span>
+              <span className="memory-filter-title">{t("memory.filter.nodes", { count: graph.nodes.length })}</span>
               <div className="memory-filter-chips">
                 {/* Node-label chips render as pill/capsule tags: a single
                     rounded button whose border-radius is exactly half its
@@ -1625,7 +1626,7 @@ export function MemoryGraphExplorer({
               </div>
             </div>
             <div className="memory-filter-block">
-              <span className="memory-filter-title">Relationships ({graph.edges.length})</span>
+              <span className="memory-filter-title">{t("memory.filter.relationships", { count: graph.edges.length })}</span>
               <div className="memory-filter-chips">
                 {/* Relationship chips render as double-pointed hexagon tags:
                     a flat body flanked by left/right SVG point caps. The same
@@ -1646,7 +1647,7 @@ export function MemoryGraphExplorer({
                   style={{ ["--chip-bg" as string]: "#e2e3e5", color: "#1a1b1d" }}
                   type="button"
                 ><span className="rel-chip-cap" aria-hidden="true"><svg width="9" height="24" viewBox="0 0 9 24" preserveAspectRatio="none"><path d="M5.73024 1.03676C6.08165 0.397331 6.75338 0 7.48301 0H9V24H7.483C6.75338 24 6.08165 23.6027 5.73024 22.9632L0.315027 13.1094C-0.105009 12.4376 -0.105009 11.5624 0.315026 10.8906L5.73024 1.03676Z" /></svg></span><span className="rel-chip-body">{type}</span><span className="rel-chip-cap rel-chip-cap-right" aria-hidden="true"><svg width="9" height="24" viewBox="0 0 9 24" preserveAspectRatio="none"><path d="M5.73024 1.03676C6.08165 0.397331 6.75338 0 7.48301 0H9V24H7.483C6.75338 24 6.08165 23.6027 5.73024 22.9632L0.315027 13.1094C-0.105009 12.4376 -0.105009 11.5624 0.315026 10.8906L5.73024 1.03676Z" /></svg></span></button></span>)}
-                {filtered ? <button className="memory-chip reset" onClick={() => { setActiveLabels(new Set()); setActiveEdges(new Set()); }} type="button">Clear filters</button> : null}
+                {filtered ? <button className="memory-chip reset" onClick={() => { setActiveLabels(new Set()); setActiveEdges(new Set()); }} type="button">{t("memory.filter.clear")}</button> : null}
               </div>
             </div>
           </div>
@@ -1730,7 +1731,9 @@ export function MemoryGraphExplorer({
               </>
             ) : null}
             <p className="memory-explorer-hint">
-              {selected ? `Selected: ${displayNames.get(selected.id) ?? graphNodeName(selected)}` : "Click a node to inspect its product"} · drag to pan · scroll to zoom
+              {selected
+                ? t("memory.hint.selected", { name: displayNames.get(selected.id) ?? graphNodeName(selected) })
+                : t("memory.hint.inspect")} · {t("memory.hint.panZoom")}
             </p>
           </div>
 

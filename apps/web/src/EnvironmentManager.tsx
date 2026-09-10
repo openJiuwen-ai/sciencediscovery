@@ -29,6 +29,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { translateActive, useLocale } from "./i18n/index.js";
 
 export function EnvironmentSourceSettingsEditor({
   busy,
@@ -45,18 +46,19 @@ export function EnvironmentSourceSettingsEditor({
   saved: boolean;
   savedSettings: EnvironmentSourceSettings;
 }) {
+  const { t } = useLocale();
   const changed = draft.condaSource !== savedSettings.condaSource
     || draft.pipSource !== savedSettings.pipSource;
   return <>
     <div className="environment-create environment-source-settings">
       <div className="environment-source-intro">
-        <strong>Global package sources</strong>
-        <small>Used for managed installs when a request does not provide a one-time source override. These choices are system-wide, not Project-specific.</small>
+        <strong>{t("environment.sourcesTitle")}</strong>
+        <small>{t("environment.sourcesHelp")}</small>
       </div>
       <label className="environment-source-pip">
-        <small>pip source</small>
+        <small>{t("environment.pipSource")}</small>
         <select
-          aria-label="Global pip source"
+          aria-label={t("environment.pipSourceAria")}
           disabled={busy}
           value={draft.pipSource}
           onChange={(event) => onChange({ ...draft, pipSource: event.target.value as EnvironmentPipSourceId })}
@@ -65,9 +67,9 @@ export function EnvironmentSourceSettingsEditor({
         </select>
       </label>
       <label className="environment-source-conda">
-        <small>conda source</small>
+        <small>{t("environment.condaSource")}</small>
         <select
-          aria-label="Global conda source"
+          aria-label={t("environment.condaSourceAria")}
           disabled={busy}
           value={draft.condaSource}
           onChange={(event) => onChange({ ...draft, condaSource: event.target.value as EnvironmentCondaSourceId })}
@@ -75,61 +77,63 @@ export function EnvironmentSourceSettingsEditor({
           {ENVIRONMENT_CONDA_SOURCE_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
         </select>
       </label>
-      <button className="secondary-button environment-source-save" disabled={busy || !changed} onClick={onSave} type="button">Save package sources</button>
+      <button className="secondary-button environment-source-save" disabled={busy || !changed} onClick={onSave} type="button">{t("environment.saveSources")}</button>
     </div>
     <p className="config-note environment-source-summary">
       <span>pip: {environmentPackageSourcePreset(draft.pipSource).pipIndexUrl}</span>
       <span>conda: {environmentPackageSourcePreset(draft.condaSource).condaChannels.join(", ")}</span>
-      {saved ? <span>Saved.</span> : null}
+      {saved ? <span>{t("environment.saved")}</span> : null}
     </p>
   </>;
 }
 
-function setupStateLabel(state: ScientificEnvironmentSetup["state"]): string {
-  if (state === "ready") return "Ready";
-  if (state === "installing") return "Installing";
-  if (state === "failed") return "Failed";
-  if (state === "disabled") return "Disabled";
-  return "Not configured";
+function setupStateLabel(state: ScientificEnvironmentSetup["state"], t: ReturnType<typeof useLocale>["t"]): string {
+  if (state === "ready") return t("environment.state.ready");
+  if (state === "installing") return t("environment.state.installing");
+  if (state === "failed") return t("environment.state.failed");
+  if (state === "disabled") return t("environment.state.disabled");
+  return t("common.notConfigured");
 }
 
 export function EnvironmentSetupStatus({ setup }: { setup: ScientificEnvironmentSetup }) {
+  const { t } = useLocale();
   const cards = [
     {
       detail: setup.provisioner
         ? setup.provisionerVersion ? `micromamba ${setup.provisionerVersion}` : setup.provisioner
-        : "Standalone environment provisioner",
+        : t("environment.provisionerStandalone"),
       key: "micromamba" as const,
-      label: "micromamba bootstrap",
+      label: t("environment.micromambaLabel"),
     },
     {
       detail: setup.networkPolicy === "offline-cache"
-        ? "Python base and named environments · configured offline cache"
-        : `Python base and named environments · channels: ${setup.allowedChannels.join(", ") || "none"}`,
+        ? t("environment.condaDetailOffline")
+        : t("environment.condaDetailChannels", { channels: setup.allowedChannels.join(", ") || t("environment.channelsNone") }),
       key: "conda" as const,
-      label: "Conda environments",
+      label: t("environment.condaLabel"),
     },
   ];
   return <div className={`environment-setup-state environment-setup-components ${setup.state}`}>
     {cards.map((card) => {
       const status = setup.components[card.key];
       return <article className={`environment-setup-component ${status.state}`} key={card.key}>
-        <header><span><strong>{card.label}</strong><small>{card.detail}</small></span><em>{setupStateLabel(status.state)}</em></header>
-        <p>{status.message} · Phase: {status.phase}.</p>
-        {status.error ? <div className="environment-error"><strong>Reported error</strong><span>{status.error}</span>{status.action ? <small>{status.action}</small> : null}</div> : null}
+        <header><span><strong>{card.label}</strong><small>{card.detail}</small></span><em>{setupStateLabel(status.state, t)}</em></header>
+        <p>{status.message} · {t("environment.phase", { phase: status.phase })}</p>
+        {status.error ? <div className="environment-error"><strong>{t("environment.reportedError")}</strong><span>{status.error}</span>{status.action ? <small>{status.action}</small> : null}</div> : null}
       </article>;
     })}
   </div>;
 }
 
 export function environmentSetupActionLabel(setup: ScientificEnvironmentSetup, busy: boolean): string {
-  if (setup.state === "installing" || busy) return "Installing scientific environment components…";
-  if (setup.components.micromamba.state === "failed") return "Retry micromamba setup";
-  if (setup.components.conda.state === "failed") return "Retry Conda environment setup";
-  return "Install micromamba and Python base";
+  if (setup.state === "installing" || busy) return translateActive("environment.actionInstalling");
+  if (setup.components.micromamba.state === "failed") return translateActive("environment.actionRetryMicromamba");
+  if (setup.components.conda.state === "failed") return translateActive("environment.actionRetryConda");
+  return translateActive("environment.actionInstall");
 }
 
 export function EnvironmentManager({ client, onError, compact = false }: { client: ApiClient; onError: (message: string) => void; compact?: boolean }) {
+  const { t } = useLocale();
   const [setup, setSetup] = useState<ScientificEnvironmentSetup>();
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [revisions, setRevisions] = useState<EnvironmentRevision[]>([]);
@@ -186,7 +190,7 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
       await operation();
       await refresh();
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Scientific environment operation failed");
+      onError(reason instanceof Error ? reason.message : t("environment.operationFailed"));
     } finally {
       setBusy(false);
     }
@@ -223,23 +227,23 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
   }
 
   async function deleteEnvironment(environment: Environment): Promise<void> {
-    if (!window.confirm(`Delete named environment “${environment.name}”? This cannot be undone.`)) return;
+    if (!window.confirm(t("environment.confirmDelete", { name: environment.name }))) return;
     await run(async () => { await client.deleteEnvironment(environment.id); });
   }
 
-  if (loadError) return <div role="alert">{loadError}<button type="button" className="secondary-button" onClick={() => { setLoadError(""); void refresh().catch((reason: Error) => setLoadError(reason.message)); }}>Retry environments</button></div>;
-  if (!setup || !sourceSettings || !sourceDraft) return <p className="muted">Loading scientific environment settings…</p>;
+  if (loadError) return <div role="alert">{loadError}<button type="button" className="secondary-button" onClick={() => { setLoadError(""); void refresh().catch((reason: Error) => setLoadError(reason.message)); }}>{t("environment.retryLoad")}</button></div>;
+  if (!setup || !sourceSettings || !sourceDraft) return <p className="muted">{t("environment.loading")}</p>;
   const SourceContainer = compact ? "details" : "div";
 
   return <div className="environment-manager">
     {compact ? null : <div className="settings-detail-header">
-      <span className="eyebrow">Managed runtimes</span>
-      <h3>Scientific environments</h3>
-      <p>Use the shared read-only Python base or create named Python and R environments with immutable revisions.</p>
+      <span className="eyebrow">{t("environment.eyebrow")}</span>
+      <h3>{t("environment.title")}</h3>
+      <p>{t("environment.help")}</p>
     </div>}
 
     <SourceContainer>
-    {compact ? <summary>Global package sources</summary> : null}
+    {compact ? <summary>{t("environment.sourcesTitle")}</summary> : null}
     <EnvironmentSourceSettingsEditor
       busy={busy}
       draft={sourceDraft}
@@ -253,31 +257,31 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
     />
     </SourceContainer>
 
-    {compact && setup.state === "ready" ? <details><summary>Scientific environment setup · Ready</summary><EnvironmentSetupStatus setup={setup} /></details> : <EnvironmentSetupStatus setup={setup} />}
+    {compact && setup.state === "ready" ? <details><summary>{t("environment.setupSummary", { state: t("environment.state.ready") })}</summary><EnvironmentSetupStatus setup={setup} /></details> : <EnvironmentSetupStatus setup={setup} />}
 
     {setup.state !== "ready" ? <>
       <div className="environment-starter-plan">
-        <div><strong>Python base</strong><small>{setup.starterPackages.python.join(" · ")}</small></div>
+        <div><strong>{t("environment.pythonBase")}</strong><small>{setup.starterPackages.python.join(" · ")}</small></div>
       </div>
       <button className="primary-button" disabled={busy || setup.state === "disabled" || setup.state === "installing"} type="button" onClick={() => void run(async () => { setSetup(await client.setupScientificEnvironments()); })}>
         {environmentSetupActionLabel(setup, busy)}
       </button>
-      <p className="config-note">Startup begins this work in the background. It downloads the pinned standalone provisioner into the application data directory and creates only the Python base. Creating an R environment later installs the R base on demand. System Python, R, conda, and shell configuration are unchanged.</p>
+      <p className="config-note">{t("environment.startupNote")}</p>
     </> : <>
-      {!creating ? <button className="secondary-button" type="button" onClick={() => setCreating(true)}>Add environment</button> : <form className="environment-create" onSubmit={(event) => void createEnvironment(event)}>
-        <div><strong>Create named environment</strong><small>Choose initial tools; add Python, R or other packages to the same environment. Updates apply in place; revisions record history, not runnable copies.</small></div>
-        <select aria-label="Initial environment tools" disabled={busy} value={language} onChange={(event) => setLanguage(event.target.value as ScientificLanguage)}><option value="python">Start with Python</option><option value="r">Start with R</option></select>
-        <input aria-label="Environment name" disabled={busy} maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} placeholder="single-cell" />
-        <div className="environment-create-actions"><button className="secondary-button" disabled={busy} type="button" onClick={() => { setName(""); setCreating(false); }}>Cancel</button><button className="primary-button" disabled={busy || !name.trim()} type="submit">Create</button></div>
+      {!creating ? <button className="secondary-button" type="button" onClick={() => setCreating(true)}>{t("environment.add")}</button> : <form className="environment-create" onSubmit={(event) => void createEnvironment(event)}>
+        <div><strong>{t("environment.createTitle")}</strong><small>{t("environment.createHelp")}</small></div>
+        <select aria-label={t("environment.initialToolsAria")} disabled={busy} value={language} onChange={(event) => setLanguage(event.target.value as ScientificLanguage)}><option value="python">{t("environment.startPython")}</option><option value="r">{t("environment.startR")}</option></select>
+        <input aria-label={t("environment.nameAria")} disabled={busy} maxLength={80} required value={name} onChange={(event) => setName(event.target.value)} placeholder="single-cell" />
+        <div className="environment-create-actions"><button className="secondary-button" disabled={busy} type="button" onClick={() => { setName(""); setCreating(false); }}>{t("common.cancel")}</button><button className="primary-button" disabled={busy || !name.trim()} type="submit">{t("environment.create")}</button></div>
       </form>}
 
       <div className="environment-catalog">
         {environments.map((environment) => {
           const revision = revisionById.get(environment.currentRevisionId);
           return <article key={environment.id}>
-            <div className="environment-card-heading"><span><strong>{environment.name}</strong><small>{environment.kind === "starter" ? `${environment.language.toUpperCase()} base` : "Managed environment"} · latest · audit {environment.currentRevisionId.slice(0, 12)}</small><code>{environment.id}</code></span>{environment.kind === "task" ? <button className="danger-button" disabled={busy} onClick={() => void deleteEnvironment(environment)} type="button">Delete</button> : <span className="environment-readonly">Read-only</span>}</div>
-            <p>{revision?.packages.length ? revision.packages.join(" · ") : "Package snapshot unavailable"}</p>
-            {environment.kind === "task" ? <div className="environment-install"><select aria-label={`Package manager for ${environment.name}`} disabled={busy} value={managerDrafts[environment.id] ?? "conda"} onChange={(event) => setManagerDrafts((current) => ({ ...current, [environment.id]: event.target.value as EnvironmentPackageManager }))}><option value="conda">conda</option><option value="pip">pip</option><option value="cran">CRAN</option><option value="bioconductor">Bioconductor</option></select><input aria-label={`Packages for ${environment.name}`} disabled={busy} value={installDrafts[environment.id] ?? ""} onChange={(event) => setInstallDrafts((current) => ({ ...current, [environment.id]: event.target.value }))} placeholder="python r-base numpy" /><button className="secondary-button" disabled={busy || !(installDrafts[environment.id] ?? "").trim()} onClick={() => void installPackages(environment.id)} type="button">Install packages</button></div> : null}
+            <div className="environment-card-heading"><span><strong>{environment.name}</strong><small>{t("environment.cardMeta", { kind: environment.kind === "starter" ? t("environment.languageBase", { language: environment.language.toUpperCase() }) : t("environment.managed"), revision: environment.currentRevisionId.slice(0, 12) })}</small><code>{environment.id}</code></span>{environment.kind === "task" ? <button className="danger-button" disabled={busy} onClick={() => void deleteEnvironment(environment)} type="button">{t("common.delete")}</button> : <span className="environment-readonly">{t("environment.readonly")}</span>}</div>
+            <p>{revision?.packages.length ? revision.packages.join(" · ") : t("environment.snapshotUnavailable")}</p>
+            {environment.kind === "task" ? <div className="environment-install"><select aria-label={t("environment.packageManagerAria", { name: environment.name })} disabled={busy} value={managerDrafts[environment.id] ?? "conda"} onChange={(event) => setManagerDrafts((current) => ({ ...current, [environment.id]: event.target.value as EnvironmentPackageManager }))}><option value="conda">conda</option><option value="pip">pip</option><option value="cran">CRAN</option><option value="bioconductor">Bioconductor</option></select><input aria-label={t("environment.packagesAria", { name: environment.name })} disabled={busy} value={installDrafts[environment.id] ?? ""} onChange={(event) => setInstallDrafts((current) => ({ ...current, [environment.id]: event.target.value }))} placeholder="python r-base numpy" /><button className="secondary-button" disabled={busy || !(installDrafts[environment.id] ?? "").trim()} onClick={() => void installPackages(environment.id)} type="button">{t("environment.installPackages")}</button></div> : null}
           </article>;
         })}
       </div>

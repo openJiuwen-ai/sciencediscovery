@@ -106,6 +106,7 @@ export function parseStructureAtoms(content: string): StructureAtom[] {
 }
 
 function StructureViewer({ content }: { content: string }) {
+  const { t } = useLocale();
   const atoms = useMemo(() => parseStructureAtoms(content), [content]);
   const [rotateX, setRotateX] = useState(18);
   const [rotateY, setRotateY] = useState(32);
@@ -129,8 +130,8 @@ function StructureViewer({ content }: { content: string }) {
     return points.map((point) => ({ ...point, px: 240 + point.px / span * 205, py: 210 - point.py / span * 175 }))
       .toSorted((left, right) => left.pz - right.pz);
   }, [atoms, rotateX, rotateY]);
-  if (!atoms.length) return <p className="artifact-empty">No PDB atoms or structure JSON atoms could be parsed from this version.</p>;
-  return <div className="structure-viewer"><svg aria-label="Interactive 3D molecular structure" role="img" viewBox="0 0 480 420">{projected.map((atom, index) => <circle className={atom.layer} cx={atom.px} cy={atom.py} key={`${index}:${atom.element}`} r={atom.layer === "ligand" ? 4.4 : atom.layer === "pocket" ? 3.8 : 2.2}><title>{atom.layer} · {atom.element}</title></circle>)}</svg><div><label>Rotate X<input max="180" min="-180" onChange={(event) => setRotateX(Number(event.target.value))} type="range" value={rotateX} /></label><label>Rotate Y<input max="180" min="-180" onChange={(event) => setRotateY(Number(event.target.value))} type="range" value={rotateY} /></label><span><i className="protein" /> protein <i className="pocket" /> pocket <i className="ligand" /> ligand</span></div></div>;
+  if (!atoms.length) return <p className="artifact-empty">{t("artifact.structureEmpty")}</p>;
+  return <div className="structure-viewer"><svg aria-label={t("artifact.structureAria")} role="img" viewBox="0 0 480 420">{projected.map((atom, index) => <circle className={atom.layer} cx={atom.px} cy={atom.py} key={`${index}:${atom.element}`} r={atom.layer === "ligand" ? 4.4 : atom.layer === "pocket" ? 3.8 : 2.2}><title>{atom.layer} · {atom.element}</title></circle>)}</svg><div><label>{t("artifact.rotateX")}<input max="180" min="-180" onChange={(event) => setRotateX(Number(event.target.value))} type="range" value={rotateX} /></label><label>{t("artifact.rotateY")}<input max="180" min="-180" onChange={(event) => setRotateY(Number(event.target.value))} type="range" value={rotateY} /></label><span><i className="protein" /> {t("artifact.structureProtein")} <i className="pocket" /> {t("artifact.structurePocket")} <i className="ligand" /> {t("artifact.structureLigand")}</span></div></div>;
 }
 
 function latexPreview(source: string): string {
@@ -154,19 +155,21 @@ function ProcessEnvironmentValue({ value }: { value: string }) {
 }
 
 function ProcessEnvironment({ environment }: { environment: Record<string, string> | null }) {
-  if (!environment) return <p className="process-environment-unavailable">Process environment unavailable (not recorded for this run).</p>;
+  const { t } = useLocale();
+  if (!environment) return <p className="process-environment-unavailable">{t("artifact.envUnavailable")}</p>;
   const entries = Object.entries(environment)
     .toSorted(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   return <details className="process-environment">
-    <summary>Process environment ({entries.length} {entries.length === 1 ? "variable" : "variables"})</summary>
+    <summary>{t(entries.length === 1 ? "artifact.envCountOne" : "artifact.envCountMany", { count: entries.length })}</summary>
     {entries.length
       ? <dl>{entries.map(([key, value]) => <div className="process-environment-row" key={key}><dt><code>{key}</code></dt><dd><ProcessEnvironmentValue value={value} /></dd></div>)}</dl>
-      : <p>No environment variables recorded.</p>}
+      : <p>{t("artifact.envEmpty")}</p>}
   </details>;
 }
 
 export function ProvenanceView({ provenance, onNavigateArtifact, onNavigateCode }: { provenance?: ArtifactVersionProvenance; onNavigateArtifact?: (logicalName: string, version?: number) => void; onNavigateCode?: (runId: string) => void }) {
-  if (!provenance) return <p className="artifact-empty">Loading provenance…</p>;
+  const { t } = useLocale();
+  if (!provenance) return <p className="artifact-empty">{t("artifact.provenanceLoading")}</p>;
   function downloadCode(index: number): void {
     const item = provenance!.code[index];
     if (!item) return;
@@ -178,18 +181,18 @@ export function ProvenanceView({ provenance, onNavigateArtifact, onNavigateCode 
     URL.revokeObjectURL(url);
   }
   return <div className="artifact-provenance">
-    {provenance.sourceSessionDeleted ? <p className="artifact-empty compact">The source Session was deleted. Artifact content and version history are retained; Session execution details are unavailable.</p> : null}
-    {provenance.dependencies.length ? <div className="provenance-parents"><span className="provenance-parents-label">← derived from</span> {provenance.dependencies.map(({ artifact, version, kind }, i) => {
+    {provenance.sourceSessionDeleted ? <p className="artifact-empty compact">{t("artifact.sourceSessionDeleted")}</p> : null}
+    {provenance.dependencies.length ? <div className="provenance-parents"><span className="provenance-parents-label">{t("artifact.derivedFrom")}</span> {provenance.dependencies.map(({ artifact, version, kind }, i) => {
       // A source_file dependency is an uploaded file the run read (no version,
       // no Artifact node); show the bare name and navigate to its SourceFile
       // node (undefined version), not an Artifact version.
       const label = kind === "source_file" ? artifact.logicalName : `${artifact.logicalName} v${version.version}`;
       const navVersion = kind === "source_file" ? undefined : version.version;
       return <span key={version.id}>{i > 0 ? " · " : ""}{onNavigateArtifact ? <button className="parent-link" onClick={() => onNavigateArtifact(artifact.logicalName, navVersion)} type="button">{label}</button> : <span>{label}</span>}</span>;
-    })}</div> : <p className="artifact-empty compact">No parent files recorded.</p>}
-    {provenance.code.length ? <div className="provenance-section">{provenance.code.map((item, index) => <article key={item.runId}><header>{onNavigateCode ? <button className="parent-link code-link" onClick={() => onNavigateCode(item.runId)} title="Highlight this run's Code node in the graph" type="button"><strong>{item.tool} · {item.runId.slice(0, 8)}</strong></button> : <strong>{item.tool} · {item.runId.slice(0, 8)}</strong>}<button className="secondary-button compact-button" onClick={() => downloadCode(index)} type="button">Download script</button></header><pre>{item.code}</pre></article>)}</div> : null}
-    {provenance.executionLog.length ? <div className="provenance-section"><h3 className="provenance-section-title">Execution log</h3>{provenance.executionLog.map((log) => <article key={log.runId}><header><strong>{log.status} · exit {log.exitCode ?? "unavailable"}</strong></header><p className="provenance-working-directory"><strong>Working directory</strong> <code>{log.workingDirectory || "unavailable"}</code></p><pre>{log.stdout || "stdout: empty"}{log.stderr ? `\n\nstderr:\n${log.stderr}` : ""}</pre><ProcessEnvironment environment={log.processEnvironment} /></article>)}</div> : null}
-    {provenance.environments.length ? <div className="provenance-section"><h3 className="provenance-section-title">Managed package environment</h3>{provenance.environments.map((environment) => <article key={environment.id}><header><strong>{environment.language} {environment.languageVersion}</strong></header><p>{environment.provisioner} · {environment.platform}</p><small>{environment.packages.join(", ") || "No packages recorded"}</small></article>)}</div> : null}
+    })}</div> : <p className="artifact-empty compact">{t("artifact.noParentFiles")}</p>}
+    {provenance.code.length ? <div className="provenance-section">{provenance.code.map((item, index) => <article key={item.runId}><header>{onNavigateCode ? <button className="parent-link code-link" onClick={() => onNavigateCode(item.runId)} title={t("artifact.highlightCodeNode")} type="button"><strong>{item.tool} · {item.runId.slice(0, 8)}</strong></button> : <strong>{item.tool} · {item.runId.slice(0, 8)}</strong>}<button className="secondary-button compact-button" onClick={() => downloadCode(index)} type="button">{t("artifact.downloadScript")}</button></header><pre>{item.code}</pre></article>)}</div> : null}
+    {provenance.executionLog.length ? <div className="provenance-section"><h3 className="provenance-section-title">{t("artifact.executionLog")}</h3>{provenance.executionLog.map((log) => <article key={log.runId}><header><strong>{log.status} · {t("artifact.exitCode", { code: log.exitCode ?? t("artifact.unavailable") })}</strong></header><p className="provenance-working-directory"><strong>{t("artifact.workingDirectory")}</strong> <code>{log.workingDirectory || t("artifact.unavailable")}</code></p><pre>{log.stdout || t("artifact.stdoutEmpty")}{log.stderr ? `\n\nstderr:\n${log.stderr}` : ""}</pre><ProcessEnvironment environment={log.processEnvironment} /></article>)}</div> : null}
+    {provenance.environments.length ? <div className="provenance-section"><h3 className="provenance-section-title">{t("artifact.managedEnv")}</h3>{provenance.environments.map((environment) => <article key={environment.id}><header><strong>{environment.language} {environment.languageVersion}</strong></header><p>{environment.provisioner} · {environment.platform}</p><small>{environment.packages.join(", ") || t("artifact.noPackages")}</small></article>)}</div> : null}
   </div>;
 }
 
@@ -202,13 +205,14 @@ export function CsvArtifactPreview({
   ready: boolean;
   source: string;
 }) {
+  const { t } = useLocale();
   return <div className="csv-artifact-preview">
     <button className="csv-artifact-launch" disabled={!ready} onClick={onOpen} type="button">
-      <span>Interactive CSV</span>
-      <strong>Open CSV Visualization Workspace</strong>
-      <small>Automatically creates embedding, distribution, differential, marker, enrichment, and table views with configurable mappings, filters, linked selections, and exports.</small>
+      <span>{t("csv.interactiveCsv")}</span>
+      <strong>{t("csv.openWorkspace")}</strong>
+      <small>{t("csv.openWorkspaceHint")}</small>
     </button>
-    <details><summary>View raw CSV</summary><pre className="artifact-source-preview">{source.slice(0, 100_000) || "Loading CSV Artifact..."}</pre></details>
+    <details><summary>{t("csv.viewRaw")}</summary><pre className="artifact-source-preview">{source.slice(0, 100_000) || t("csv.loadingArtifact")}</pre></details>
   </div>;
 }
 
@@ -227,17 +231,18 @@ export function isCsvWorkspaceReady({
 }
 
 export function DatasetTable({ columns, rows, totalRows, truncated }: { columns: string[]; rows: string[][]; totalRows: number; truncated: boolean }) {
+  const { t } = useLocale();
   // An empty grid plus "0 rows" is not usable feedback: say why
   // there is nothing to show instead of rendering a headerless table.
   if (!columns.length && !rows.length) {
-    return <p className="artifact-empty">No table rows could be parsed from this file. Download it to inspect the raw content.</p>;
+    return <p className="artifact-empty">{t("artifact.tableEmpty")}</p>;
   }
   return <div className="dataset-table-wrapper">
     <table className="dataset-table">
       <thead><tr>{columns.map((col, i) => <th key={i}>{col}</th>)}</tr></thead>
       <tbody>{rows.map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{cell}</td>)}</tr>)}</tbody>
     </table>
-    <p className="dataset-table-meta">{totalRows} row{totalRows !== 1 ? "s" : ""}{truncated ? " (truncated)" : ""}</p>
+    <p className="dataset-table-meta">{t(totalRows === 1 ? "artifact.tableRowOne" : "artifact.tableRows", { count: totalRows })}{truncated ? t("artifact.tableTruncated") : ""}</p>
   </div>;
 }
 
@@ -246,12 +251,13 @@ export function DatasetTable({ columns, rows, totalRows, truncated }: { columns:
  * with an explicit reason when it does not. Never a table.
  */
 export function JsonSourcePreview({ parsed, source, truncated }: { parsed: boolean; source: string; truncated: boolean }) {
+  const { t } = useLocale();
   return <div className="json-source-preview">
     {parsed
       ? null
-      : <p className="artifact-empty compact">This file is not valid JSON; the raw text is shown below.</p>}
+      : <p className="artifact-empty compact">{t("artifact.invalidJsonNote")}</p>}
     <pre className="artifact-source-preview">{source}</pre>
-    {truncated ? <p className="dataset-table-meta">Preview truncated; download the artifact for the full content.</p> : null}
+    {truncated ? <p className="dataset-table-meta">{t("artifact.previewTruncated")}</p> : null}
   </div>;
 }
 
@@ -281,12 +287,13 @@ export function DatasetPreview({
   truncated: boolean;
   view: DatasetPreviewView;
 }) {
+  const { t } = useLocale();
   const table = <DatasetTable columns={columns} rows={rows} totalRows={totalRows} truncated={truncated} />;
   if (!rawJson) return table;
   return <div className="dataset-preview">
-    <nav aria-label="Dataset preview view" className="dataset-view-tabs">
-      <button aria-pressed={view === "table"} className={view === "table" ? "active" : ""} onClick={() => onViewChange("table")} type="button">Table</button>
-      <button aria-pressed={view === "raw"} className={view === "raw" ? "active" : ""} onClick={() => onViewChange("raw")} type="button">Raw JSON</button>
+    <nav aria-label={t("artifact.datasetViewAria")} className="dataset-view-tabs">
+      <button aria-pressed={view === "table"} className={view === "table" ? "active" : ""} onClick={() => onViewChange("table")} type="button">{t("artifact.viewTable")}</button>
+      <button aria-pressed={view === "raw"} className={view === "raw" ? "active" : ""} onClick={() => onViewChange("raw")} type="button">{t("artifact.viewRawJson")}</button>
     </nav>
     {view === "raw"
       ? <JsonSourcePreview parsed source={rawJson.source} truncated={rawJson.truncated} />
@@ -343,12 +350,12 @@ export function ScientificArtifactPanelHeader({
     return `v${item.version} · ${t("artifact.versionSource", { session: displayTitle })} · ${timestamp}`;
   };
   return <header>
-    <h3>Scientific artifacts</h3>
+    <h3>{t("artifact.sectionTitle")}</h3>
     <div>
-      <select aria-label="Artifact" onChange={(event) => onArtifactChange(event.target.value)} title={selectedArtifact?.logicalName ?? "Select an artifact"} value={artifactId ?? ""}>
+      <select aria-label={t("artifact.selectAria")} onChange={(event) => onArtifactChange(event.target.value)} title={selectedArtifact?.logicalName ?? t("artifact.selectPlaceholder")} value={artifactId ?? ""}>
         {artifacts.map((item) => <option key={item.id} value={item.id}>{item.logicalName} · {item.kind}</option>)}
       </select>
-      <select aria-label="Artifact version" onChange={(event) => onVersionChange(event.target.value)} title={selectedVersion ? versionLabel(selectedVersion, false) : "Select an artifact version"} value={versionId ?? ""}>
+      <select aria-label={t("artifact.versionAria")} onChange={(event) => onVersionChange(event.target.value)} title={selectedVersion ? versionLabel(selectedVersion, false) : t("artifact.versionPlaceholder")} value={versionId ?? ""}>
         {versions.toReversed().map((item) => <option key={item.id} title={versionLabel(item, false)} value={item.id}>{versionLabel(item)}</option>)}
       </select>
     </div>
@@ -773,12 +780,12 @@ export function ArtifactModal({
         (n.extra?.path === logicalName || n.extra?.artifact_id === artifact?.id) &&
         (currentVersion == null || n.extra?.version === currentVersion));
       if (!node) {
-        onError("This artifact is not yet in the ScienceMemory.");
+        onError(t("artifact.notInMemory"));
         return;
       }
       setChainExplorer({ nodeId: node.id, version: currentVersion, subgraph });
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not load ScienceMemory.");
+      onError(error instanceof Error ? error.message : t("evidence.loadMemoryFailed"));
     }
   }
 
@@ -799,14 +806,14 @@ export function ArtifactModal({
   const artifactContent: ReactNode = mode === "provenance"
     ? <ProvenanceView onNavigateArtifact={navigateArtifact} onNavigateCode={onNavigateCode} provenance={provenance} />
     : <div className="artifact-version-preview">
-        {artifact?.kind === "figure" && contentUrl ? <><div className="annotatable-figure"> <img alt={artifact.logicalName} onClick={choosePoint} src={contentUrl} />{point ? <i style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }} /> : null}</div><div className="annotation-editor"><input onChange={(event) => setNote(event.target.value)} placeholder="Describe the requested edit at the pinned point" value={note} /><button className="secondary-button compact-button" disabled={!point || !note.trim()} onClick={() => void saveAnnotation()} type="button">Attach to next message</button></div></> : null}
-        {artifact?.kind === "html" && contentUrl ? <><div className="dashboard-controls"><button aria-label="Zoom dashboard out" className="icon-button" onClick={() => setZoom((value) => Math.max(.5, value - .1))} title="Zoom dashboard out" type="button">−</button><span>{Math.round(zoom * 100)}%</span><button aria-label="Zoom dashboard in" className="icon-button" onClick={() => setZoom((value) => Math.min(2, value + .1))} title="Zoom dashboard in" type="button">＋</button></div><div className="dashboard-frame"><iframe sandbox="allow-scripts" src={contentUrl} style={{ height: `${420 / zoom}px`, transform: `scale(${zoom})`, transformOrigin: "top left", width: `${100 / zoom}%` }} title={artifact.logicalName} /></div></> : null}
-        {artifact?.kind === "markdown" ? <div className="manuscript-preview"><MarkdownRenderer content={source} onChipClick={onChipClick} references={version?.references} /><details><summary>Source</summary><pre>{source}</pre></details></div> : null}
-        {artifact?.kind === "latex" ? <div className="manuscript-preview"><MarkdownRenderer content={latexPreview(source)} onChipClick={onChipClick} references={version?.references} /><details><summary>LaTeX source</summary><pre>{source}</pre></details></div> : null}
+        {artifact?.kind === "figure" && contentUrl ? <><div className="annotatable-figure"> <img alt={artifact.logicalName} onClick={choosePoint} src={contentUrl} />{point ? <i style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }} /> : null}</div><div className="annotation-editor"><input onChange={(event) => setNote(event.target.value)} placeholder={t("artifact.annotationPlaceholder")} value={note} /><button className="secondary-button compact-button" disabled={!point || !note.trim()} onClick={() => void saveAnnotation()} type="button">{t("artifact.attachToMessage")}</button></div></> : null}
+        {artifact?.kind === "html" && contentUrl ? <><div className="dashboard-controls"><button aria-label={t("artifact.zoomOut")} className="icon-button" onClick={() => setZoom((value) => Math.max(.5, value - .1))} title={t("artifact.zoomOut")} type="button">−</button><span>{Math.round(zoom * 100)}%</span><button aria-label={t("artifact.zoomIn")} className="icon-button" onClick={() => setZoom((value) => Math.min(2, value + .1))} title={t("artifact.zoomIn")} type="button">＋</button></div><div className="dashboard-frame"><iframe sandbox="allow-scripts" src={contentUrl} style={{ height: `${420 / zoom}px`, transform: `scale(${zoom})`, transformOrigin: "top left", width: `${100 / zoom}%` }} title={artifact.logicalName} /></div></> : null}
+        {artifact?.kind === "markdown" ? <div className="manuscript-preview"><MarkdownRenderer content={source} onChipClick={onChipClick} references={version?.references} /><details><summary>{t("artifact.sourceFold")}</summary><pre>{source}</pre></details></div> : null}
+        {artifact?.kind === "latex" ? <div className="manuscript-preview"><MarkdownRenderer content={latexPreview(source)} onChipClick={onChipClick} references={version?.references} /><details><summary>{t("artifact.latexSourceFold")}</summary><pre>{source}</pre></details></div> : null}
         {structureFormat && source ? <div className="molecular-with-compare">
-          {comparableStructures.length ? <div className="cmp-picker"><label>Compare with
+          {comparableStructures.length ? <div className="cmp-picker"><label>{t("artifact.compareWith")}
             <select onChange={(event) => setCompareId(event.target.value || undefined)} value={compareId ?? ""}>
-              <option value="">- none -</option>
+              <option value="">{t("artifact.compareNone")}</option>
               {comparableStructures.map((item) => <option key={item.id} value={item.id}>{item.logicalName}</option>)}
             </select></label></div> : null}
           <button className="molstar-launch-card" onClick={() => setMolstarOpen(true)} type="button">
@@ -821,7 +828,7 @@ export function ArtifactModal({
               : [{ content: source, format: structureFormat, name: artifact?.logicalName }]}
           /></Suspense> : null}
         </div>
-          : molecularByName ? <p className="artifact-empty">Loading interactive structure…</p>
+          : molecularByName ? <p className="artifact-empty">{t("artifact.loadingStructure")}</p>
           : artifact?.kind === "structure" || isStructureJson(source) ? <StructureViewer content={source} /> : null}
         {artifact?.kind === "report" && contentUrl ? <iframe className="report-frame" src={contentUrl} title={artifact.logicalName} /> : null}
         {artifact?.kind === "dataset" && csvDetection && !(structureFormat && source) ? <CsvArtifactPreview
@@ -854,10 +861,10 @@ export function ArtifactModal({
         {artifact?.kind === "other" && !(structureFormat && source)
           ? (source && !source.slice(0, 4096).includes("\u0000")
             ? <pre className="artifact-source-preview">{source.slice(0, 100_000)}</pre>
-            : <pre className="artifact-source-preview">Binary artifact: use the download button to inspect it.</pre>)
+            : <pre className="artifact-source-preview">{t("artifact.binaryNote")}</pre>)
           : null}
       </div>;
-  const csvWorkspace: ReactNode = csvWindowOpen && artifact && version && csvWorkspaceReady ? <Suspense fallback={<div className="csv-artifact-loading" role="status"><span>Loading CSV visualization...</span></div>}>
+  const csvWorkspace: ReactNode = csvWindowOpen && artifact && version && csvWorkspaceReady ? <Suspense fallback={<div className="csv-artifact-loading" role="status"><span>{t("artifact.loadingCsvWorkspace")}</span></div>}>
     <CsvArtifactWindow
       content={source}
       fileName={artifact.logicalName}
@@ -868,17 +875,17 @@ export function ArtifactModal({
   </Suspense> : null;
 
   if (embedded) {
-    return <section aria-label="Versioned scientific artifacts" className="scientific-artifacts artifact-embedded-panel">
+    return <section aria-label={t("artifact.versionedAria")} className="scientific-artifacts artifact-embedded-panel">
       <header className="artifact-modal-header">
         <div><span className="eyebrow">{artifact?.kind ?? "artifact"}</span><h2>{artifact?.logicalName ?? logicalName}</h2><ArtifactVersionSource sessions={sourceSessions} version={version} /></div>
         <div className="artifact-modal-controls">
-          {version && version.version > 1 ? <span className="version-hint">v{version.version} of {versions.length}</span> : null}
+          {version && version.version > 1 ? <span className="version-hint">{t("artifact.versionOf", { total: versions.length, version: version.version })}</span> : null}
           <ArtifactDownloadButton busy={downloadBusy} disabled={!version} label={t("artifact.downloadCurrent")} onDownload={() => void downloadCurrentVersion()} />
         </div>
       </header>
       <nav className="artifact-mode-tabs">
-        <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">Preview</button>
-        <button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">Provenance</button>
+        <button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">{t("artifact.tabPreview")}</button>
+        <button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">{t("artifact.tabProvenance")}</button>
       </nav>
       <div className="artifact-modal-body">
         {artifactContent}
@@ -888,12 +895,12 @@ export function ArtifactModal({
   }
 
   return <div className="artifact-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section aria-label={`Artifact: ${logicalName}`} aria-modal="true" className="artifact-modal-panel" role="dialog">
+    <section aria-label={t("artifact.modalAria", { name: logicalName })} aria-modal="true" className="artifact-modal-panel" role="dialog">
       <header className="artifact-modal-header">
         <div><span className="eyebrow">{artifact?.kind ?? "artifact"}</span><h2>{artifact?.logicalName ?? logicalName}</h2><ArtifactVersionSource sessions={sourceSessions} version={version} /></div>
         <div className="artifact-modal-controls">
-          <label className="version-picker"><span>version</span>
-            <select aria-label="Artifact version" onChange={(event) => setVersionId(event.target.value)} title={version ? versionLabel(version, false) : "Select an artifact version"} value={versionId}>{versions.toReversed().map((item) => <option key={item.id} title={versionLabel(item, false)} value={item.id}>{versionLabel(item)}</option>)}</select>
+          <label className="version-picker"><span>{t("artifact.versionPickerLabel")}</span>
+            <select aria-label={t("artifact.versionAria")} onChange={(event) => setVersionId(event.target.value)} title={version ? versionLabel(version, false) : t("artifact.versionPlaceholder")} value={versionId}>{versions.toReversed().map((item) => <option key={item.id} title={versionLabel(item, false)} value={item.id}>{versionLabel(item)}</option>)}</select>
           </label>
           <ArtifactDownloadButton busy={downloadBusy} disabled={!version} label={t("artifact.downloadCurrent")} onDownload={() => void downloadCurrentVersion()} />
           {/* The version on screen becomes the starting point, by its stored
@@ -911,10 +918,10 @@ export function ArtifactModal({
           >
             {t("artifact.evolve")}
           </button> : null}
-          <button aria-label="Close artifact viewer" className="icon-button" onClick={onClose} title="Close artifact viewer" type="button">✕</button>
+          <button aria-label={t("artifact.closeViewer")} className="icon-button" onClick={onClose} title={t("artifact.closeViewer")} type="button">✕</button>
         </div>
       </header>
-      <nav className="artifact-mode-tabs"><button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">Preview</button><button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">Provenance</button>{!embedded && memoryGraphEnabled ? <button className="view-chain-btn" onClick={() => void viewChain()} type="button">{t("chain.viewInMemoryX", { x: t("chain.product") })}</button> : null}{version && version.version > 1 && mode === "preview" ? <span className="version-hint">v{version.version} of {versions.length}</span> : null}</nav>
+      <nav className="artifact-mode-tabs"><button className={mode === "preview" ? "active" : ""} onClick={() => setMode("preview")} type="button">{t("artifact.tabPreview")}</button><button className={mode === "provenance" ? "active" : ""} onClick={() => setMode("provenance")} type="button">{t("artifact.tabProvenance")}</button>{!embedded && memoryGraphEnabled ? <button className="view-chain-btn" onClick={() => void viewChain()} type="button">{t("chain.viewInMemoryX", { x: t("chain.product") })}</button> : null}{version && version.version > 1 && mode === "preview" ? <span className="version-hint">{t("artifact.versionOf", { total: versions.length, version: version.version })}</span> : null}</nav>
       <div className="artifact-modal-body">{artifactContent}</div>
       {csvWorkspace}
     </section>

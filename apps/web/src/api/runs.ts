@@ -30,6 +30,7 @@ import type {
   PromptManifest,
 } from "@sciencediscovery/schema";
 
+import { translateActive } from "../i18n/index.js";
 import { SessionsApiClient } from "./sessions.js";
 
 export interface AgentActivity {
@@ -113,7 +114,7 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || `Usage export failed (${response.status})`);
+      throw new Error(error.error || translateActive("error.usageExportFailed", { status: response.status }));
     }
     return await response.blob();
   }
@@ -171,9 +172,9 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || `Event stream failed (${response.status})`);
+      throw new Error(error.error || translateActive("error.eventStreamFailed", { status: response.status }));
     }
-    if (!response.body) throw new Error("Event stream has no body");
+    if (!response.body) throw new Error(translateActive("error.eventStreamNoBody"));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -231,9 +232,9 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || `Run failed (${response.status})`);
+      throw new Error(error.error || translateActive("error.runFailedStatus", { status: response.status }));
     }
-    if (!response.body) throw new Error("Streaming response has no body");
+    if (!response.body) throw new Error(translateActive("error.streamNoBody"));
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

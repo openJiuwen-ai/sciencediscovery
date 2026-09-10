@@ -17,6 +17,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { EnvironmentRevision, MemoryGraphEdgeType, MemoryGraphNode, MemorySubgraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { translateActive } from "./i18n/index.js";
 import { useLocale } from "./i18n/LocaleProvider.js";
 import { graphNodeName } from "./MemoryGraphCanvas.js";
 import { MarkdownRenderer } from "./Markdown.js";
@@ -464,10 +465,10 @@ function CodeDetail({ node, client, sessionId, subgraph }: {
           const match = artifacts.find((candidate) => wanted.includes(candidate.id))
             ?? artifacts.find((candidate) => wanted.some((value) =>
               candidate.logicalName === value || candidate.logicalName.endsWith(`/${value}`)));
-          if (!match) { if (active) setNote("The produced artifact is no longer in the workspace."); return; }
+          if (!match) { if (active) setNote(translateActive("memory.code.artifactGone")); return; }
           const versions = await client.listArtifactVersions(sessionId, match.id);
           const versionId = versions.at(-1)?.id;
-          if (!versionId) { if (active) setNote("The produced artifact is no longer in the workspace."); return; }
+          if (!versionId) { if (active) setNote(translateActive("memory.code.artifactGone")); return; }
           const provenance = await client.getArtifactProvenance(sessionId, versionId);
           if (!active) return;
           const codeEntry = provenance.code.find((item) => item.runId === runId) ?? provenance.code[0];
@@ -484,7 +485,7 @@ function CodeDetail({ node, client, sessionId, subgraph }: {
           // recovered from the provenance environments block, same as
           // code/stdout/stderr.
           if (provenance.environments?.length) setEnv(provenance.environments);
-          if (!codeEntry && !logEntry) setNote("No script or log was recorded for this run.");
+          if (!codeEntry && !logEntry) setNote(translateActive("memory.code.noScriptOrLog"));
           return;
         }
         // Path B — no produced artifact; recover straight from the ExecutionRun
@@ -493,7 +494,7 @@ function CodeDetail({ node, client, sessionId, subgraph }: {
         const runs = await client.listExecutionRuns(sessionId);
         if (!active) return;
         const run = runs.find((candidate) => candidate.id === runId);
-        if (!run) { if (active) setNote("No script or log was recorded for this run."); return; }
+        if (!run) { if (active) setNote(translateActive("memory.code.noScriptOrLog")); return; }
         const results = await Promise.allSettled([
           run.code?.hash ? client.readCas(run.code.hash) : Promise.resolve(""),
           run.stdout?.hash ? client.readCas(run.stdout.hash) : Promise.resolve(""),
@@ -523,9 +524,9 @@ function CodeDetail({ node, client, sessionId, subgraph }: {
             // not a reason to drop the already-recovered code/logs.
           }
         }
-        if (!codeText && !stdoutText && !stderrText) setNote("No script or log was recorded for this run.");
+        if (!codeText && !stdoutText && !stderrText) setNote(translateActive("memory.code.noScriptOrLog"));
       } catch (error) {
-        if (active) setNote(error instanceof Error ? error.message : "Could not load this run's script or logs.");
+        if (active) setNote(error instanceof Error ? error.message : translateActive("memory.code.loadFailed"));
       }
     })();
     return () => { active = false; };
@@ -571,8 +572,9 @@ function CodeDetail({ node, client, sessionId, subgraph }: {
 // --- Fallback (unknown label, or a typed component fell through) -----------
 
 function RawNodeProperties({ extra }: { extra: Record<string, unknown> }) {
+  const { t } = useLocale();
   const nonEmpty = Object.entries(extra).filter(([, v]) => v !== null && v !== undefined && v !== "");
-  if (!nonEmpty.length) return <p className="artifact-empty compact">No properties recorded for this node.</p>;
+  if (!nonEmpty.length) return <p className="artifact-empty compact">{t("memory.node.noProperties")}</p>;
   return <dl className="memory-graph-detail-props">
     {nonEmpty.map(([key, value]) => <div className="memory-graph-detail-prop" key={key}>
       <dt>{key}</dt>
