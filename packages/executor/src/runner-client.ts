@@ -25,6 +25,7 @@ import type {
   InstallEnvironmentRequest,
   KernelSession,
   CreateNpuJobRequest,
+  NpuInventory,
   NpuJob,
   NpuJobLogs,
   NpuJobResult,
@@ -96,6 +97,19 @@ export class RunnerClient {
 
   async resources(): Promise<RunnerResources> {
     return await this.request("/resources", { signal: AbortSignal.timeout(3_000) });
+  }
+
+  /**
+   * This machine's Ascend cards and whether each one opens inside a sandbox.
+   *
+   * `refresh` re-probes instead of answering from the Runner's own cache. It
+   * costs one throwaway sandbox per card, so it is for the moment a decision
+   * is made about the cards — saving a selection — not for status polling.
+   */
+  async npuDevices(options: { refresh?: boolean } = {}): Promise<NpuInventory> {
+    return await this.request(`/npu/devices${options.refresh ? "?refresh=1" : ""}`, {
+      signal: AbortSignal.timeout(options.refresh ? 60_000 : 5_000),
+    });
   }
 
   async listRemoteWorkspaceFiles(workspaceKey: string, paths?: string[]): Promise<RemoteWorkspaceFile[]> {
