@@ -19,6 +19,8 @@
  */
 
 import {
+  briefUncertaintyFrom,
+  buildAntiHallucinationBrief,
   buildResidentSummary,
   conceptExplore,
   deepDive,
@@ -27,8 +29,12 @@ import {
   expandAnchor,
   findGaps,
   grepDocuments,
+  noveltyCheck,
   searchBlocks,
   validateEntities,
+  verifyCitation,
+  type BriefKbUncertainty,
+  type CitationVerifyResult,
   type DeepDiveResult,
   type DocGrepResult,
   type EntityUnifiedSearchResult,
@@ -36,7 +42,9 @@ import {
   type ExploreResult,
   type GapAnalysis,
   type KbExpandResult,
+  type KbSearchDocumentInput,
   type KbSearchResult,
+  type NoveltyCheckResult,
   type ResidentSummary,
   type ValidateEntitiesResult,
 } from "@sciencediscovery/knowledge-engine";
@@ -73,6 +81,15 @@ export interface KnowledgeEngineToolPort {
   /** W8: regex over document fulltexts, line-grained (doc_grep). Invalid
    *  patterns come back as a structured error, not a throw. */
   docGrep(kbId: string, pattern: string, opts: { maxMatches?: number }): Promise<DocGrepResult>;
+  /** W9: offline novelty check for a candidate claim (novelty_check) —
+   *  entity/relation/passage probes against THIS KB only. */
+  noveltyCheck(kbId: string, claim: string): Promise<NoveltyCheckResult>;
+  /** W9: three-state quote verification across the KB's documents
+   *  (verify_citation) — verbatim / fuzzy / not-found. */
+  verifyCitation(kbId: string, quote: string): Promise<CitationVerifyResult>;
+  /** W9: uncertain signals (conflicts, single-source entities) for the
+   *  three-tier anti-hallucination context injection. */
+  kbRiskSignals(kbId: string): Promise<BriefKbUncertainty>;
   /** Resident summary for context injection; null when the KB has no graph. */
   residentSummary(kbId: string): Promise<ResidentSummary | null>;
 }
@@ -189,6 +206,62 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
         .filter((document) => Boolean(document.fulltext))
         .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
       return grepDocuments({ kbId, pattern, documents, maxMatches: opts.maxMatches });
+    },
+
+    async noveltyCheck(kbId, claim) {
+      requireKb(kbId);
+      const entities = store.listEntities(kbId, { limit: 10_000 });
+      const nameById = new Map(entities.map((entity) => [entity.id, entity.name]));
+      const relations = store.listEdges(kbId, { limit: 50_000 }).map((edge) => ({
+        sourceName: nameById.get(edge.srcId) ?? edge.srcId.slice(0, 8),
+        targetName: nameById.get(edge.dstId) ?? edge.dstId.slice(0, 8),
+        type: edge.type,
+        supportCount: edge.supportCount,
+        quote: edge.evidenceQuote,
+      }));
+      // Passage probe bound: recall is keyword-based, so a bounded scan of
+      // ready docs is representative and stays milliseconds-fast.
+      const documents = store
+        .listDocuments(kbId, { status: "ready", limit: 50 })
+        .filter((document) => Boolean(document.fulltext))
+        .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
+      return noveltyCheck({
+        kbId,
+        claim,
+        entities: entities.map((entity) => ({
+          name: entity.name,
+          type: entity.type,
+          supportCount: entity.supportCount,
+          aliases: entity.aliases,
+        })),
+        relations,
+        documents,
+      });
+    },
+
+    async verifyCitation(kbId, quote) {
+      requireKb(kbId);
+      const documents: KbSearchDocumentInput[] = store
+        .listDocuments(kbId, { status: "ready", limit: 50 })
+        .filter((document) => Boolean(document.fulltext))
+        .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
+      return verifyCitation({ kbId, quote, documents });
+    },
+
+    async kbRiskSignals(kbId) {
+      requireKb(kbId);
+      const kb = store.getKnowledgeBase(kbId)!;
+      const entities = store.listEntities(kbId, { limit: 10_000 });
+      const nameById = new Map(entities.map((entity) => [entity.id, entity.name]));
+      return briefUncertaintyFrom({ id: kbId, name: kb.name }, {
+        entities: entities.map((entity) => ({ name: entity.name, supportCount: entity.supportCount })),
+        edges: store.listEdges(kbId, { limit: 50_000 }).map((edge) => ({
+          type: edge.type,
+          sourceName: nameById.get(edge.srcId) ?? edge.srcId.slice(0, 8),
+          targetName: nameById.get(edge.dstId) ?? edge.dstId.slice(0, 8),
+          quote: edge.evidenceQuote,
+        })),
+      });
     },
 
     async residentSummary(kbId) {

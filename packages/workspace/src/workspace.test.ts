@@ -1718,6 +1718,14 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
       calls.push(`doc_grep:${kbId}:${pattern}`);
       return { matches: [], scannedDocs: 0, truncated: false };
     },
+    noveltyCheck: async (kbId: string, claim: string) => {
+      calls.push(`novelty_check:${kbId}:${claim}`);
+      return { verdict: "no-collision", entityHits: [], relationHits: [], passageHits: [], note: "" };
+    },
+    verifyCitation: async (kbId: string, quote: string) => {
+      calls.push(`verify_citation:${kbId}:${quote}`);
+      return { state: "verbatim", verifiedIn: [], scannedDocs: 0 };
+    },
   };
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
@@ -1735,6 +1743,9 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
     "kb_search",
     "kb_expand",
     "doc_grep",
+    "novelty_check",
+    "verify_citation",
+    "evidence_ledger",
   ]) {
     assert.ok(names.includes(expected), `${expected} should be registered`);
   }
@@ -1765,13 +1776,22 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
   assert.deepEqual(calls.at(-1), "doc_grep:kb1:IC50");
   assert.equal((grepResult.details as { truncated: boolean }).truncated, false);
 
+  // Anti-hallucination tools forward and surface the payload.
+  const novelty = tools.find((tool) => tool.name === "novelty_check")!;
+  await novelty.execute("ke-call", { kbId: "kb1", claim: "first ever report" });
+  assert.deepEqual(calls.at(-1), "novelty_check:kb1:first ever report");
+  const cite = tools.find((tool) => tool.name === "verify_citation")!;
+  const citeResult = await cite.execute("ke-call", { kbId: "kb1", quote: "a real quote from a paper" });
+  assert.deepEqual(calls.at(-1), "verify_citation:kb1:a real quote from a paper");
+  assert.equal((citeResult.details as { state: string }).state, "verbatim");
+
   // Without the port, none of the tools exist.
   const bare = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
   });
   const bareNames = new Set(bare.map((tool) => tool.name));
-  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases", "kb_search", "kb_expand", "doc_grep"]) {
+  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases", "kb_search", "kb_expand", "doc_grep", "novelty_check", "verify_citation", "evidence_ledger"]) {
     assert.equal(bareNames.has(absent), false, `${absent} must not register without the port`);
   }
 });

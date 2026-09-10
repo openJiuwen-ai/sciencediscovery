@@ -205,7 +205,7 @@ export type KbExpandResult =
       readonly before: { anchorId: string; type: DocumentBlockType; text: string } | null;
       readonly after: { anchorId: string; type: DocumentBlockType; text: string } | null;
     }
-  | { readonly found: false; readonly reason: "anchor-not-found" };
+  | { readonly found: false; readonly reason: "anchor-not-found" | "document-not-found" | "document-not-parsed" };
 
 /** W8 `kb_expand` — read an anchor's block plus its neighbours. The pure
  *  companion to kb_search: an agent that found a hit reads the surrounding

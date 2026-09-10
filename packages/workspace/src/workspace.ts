@@ -27,6 +27,7 @@ import {
   skillRootAliases,
 } from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
+import { createEvidenceLedgerPort } from "./ke-evidence-ledger.js";
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
@@ -324,6 +325,8 @@ export interface WorkspaceToolOptions {
     kbSearch: (kbId: string, query: string, opts: { topK?: number; docLimit?: number }) => Promise<unknown>;
     kbExpand: (kbId: string, anchorId: string) => Promise<unknown>;
     docGrep: (kbId: string, pattern: string, opts: { maxMatches?: number }) => Promise<unknown>;
+    noveltyCheck: (kbId: string, claim: string) => Promise<unknown>;
+    verifyCitation: (kbId: string, quote: string) => Promise<unknown>;
   };
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
    * `declare_evidence` LLM tool). Returns a structured error code instead of
@@ -1302,6 +1305,69 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           knowledgeEngine.docGrep(params.kbId, params.pattern, {
             ...(params.maxMatches === undefined ? {} : { maxMatches: params.maxMatches }),
           }),
+      ),
+      keTool(
+        "novelty_check",
+        "Check a claim's novelty against the knowledge base",
+        "Anti-hallucination check for novelty claims ('first to show…', 'novel mechanism…'): three deterministic probes (entity / relation / passage) against ONE knowledge base. collision = the KB already covers this subject — reframe as building on it; partial = weak overlap; no-collision = nothing in THIS KB overlaps. LIMITATION: internal to the knowledge base — 'no-collision' says nothing about the wider literature (external novelty search is out of scope for this build); absence of evidence is not evidence of absence.",
+        Type.Object({
+          kbId: kbIdField,
+          claim: Type.String({ minLength: 1, maxLength: 1000, description: "The candidate novelty claim, verbatim" }),
+        }),
+        (params) => knowledgeEngine.noveltyCheck(params.kbId, params.claim),
+      ),
+      keTool(
+        "verify_citation",
+        "Verify a quote against the papers",
+        "Three-state verification of a quote you intend to attribute to a paper: verbatim (normalized substring in at least one scanned document — safe to quote), fuzzy (≥85% word overlap — a paraphrase, not the paper's wording), not-found (do not present it as a paper's words). Returns which documents verified it. Use BEFORE quoting any sentence in a final answer.",
+        Type.Object({
+          kbId: kbIdField,
+          quote: Type.String({ minLength: 10, maxLength: 2000, description: "The quote to verify" }),
+        }),
+        (params) => knowledgeEngine.verifyCitation(params.kbId, params.quote),
+      ),
+      keTool(
+        "evidence_ledger",
+        "Record and audit answer claims",
+        "A session-local audit trail for the claims you will assert: record each claim with its backing anchor/doc/quote (action=add), list them (query), re-check recorded quotes against a KB (verify — three-state verdicts), and detect internal contradictions (detect-conflicts: same claim from different sources, or negation flips). Recording a claim without a backing anchor or quote marks it as unsupported in the audit.",
+        Type.Object({
+          action: Type.Union([Type.Literal("add"), Type.Literal("query"), Type.Literal("verify"), Type.Literal("detect-conflicts")]),
+          claim: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: "add: the claim to record; query: substring filter" })),
+          anchorId: Type.Optional(Type.String({ minLength: 1 })),
+          docId: Type.Optional(Type.String({ minLength: 1 })),
+          quote: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+          kbId: Type.Optional(kbIdField),
+        }),
+        async (params) => {
+          const ledger = createEvidenceLedgerPort();
+          if (params.action === "add") {
+            if (!params.claim) throw new Error("evidence_ledger add requires a claim");
+            return ledger.add({
+              workspaceRoot,
+              claim: params.claim,
+              ...(params.anchorId === undefined ? {} : { anchorId: params.anchorId }),
+              ...(params.docId === undefined ? {} : { docId: params.docId }),
+              ...(params.quote === undefined ? {} : { quote: params.quote }),
+              ...(params.kbId === undefined ? {} : { kbId: params.kbId }),
+            });
+          }
+          if (params.action === "query") {
+            return ledger.query({
+              workspaceRoot,
+              ...(params.claim === undefined ? {} : { claim: params.claim }),
+            });
+          }
+          if (params.action === "verify") {
+            if (!params.kbId) throw new Error("evidence_ledger verify requires kbId");
+            return ledger.verify({
+              workspaceRoot,
+              kbId: params.kbId,
+              verifyCitation: async (kbId, quote) =>
+                knowledgeEngine.verifyCitation(kbId, quote) as Promise<{ state: string }>,
+            });
+          }
+          return ledger.conflicts({ workspaceRoot });
+        },
       ),
       keTool(
         "gap_candidates",

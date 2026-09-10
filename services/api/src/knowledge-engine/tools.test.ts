@@ -289,3 +289,82 @@ test("tools: docGrep regex-scans ready documents with structured errors", async 
     (error: unknown) => error instanceof KeKbNotFoundError,
   );
 });
+
+test("tools: noveltyCheck probes the store graph and documents", async (context) => {
+  const root = tempRoot("ke-tools-novelty");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  seedGraph(store, kb.id);
+
+  // Both endpoints named + the relation quote shares the claim's terms.
+  const collision = await tools.noveltyCheck(kb.id, "mAb114 binds GP and thereby neutralizes the virus");
+  assert.equal(collision.verdict, "collision");
+  assert.ok(collision.relationHits.some((hit) => hit.sourceName === "mAb114" && hit.targetName === "GP"));
+  assert.match(collision.note, /already covers|reframe/i);
+
+  const none = await tools.noveltyCheck(kb.id, "zebra quantum entanglement cures everything");
+  assert.equal(none.verdict, "no-collision");
+  assert.match(none.note, /wider literature|out of scope/i);
+
+  await assert.rejects(
+    () => tools.noveltyCheck("nonexistent", "x", ),
+    (error: unknown) => error instanceof KeKbNotFoundError,
+  );
+});
+
+test("tools: verifyCitation checks quotes against ready documents", async (context) => {
+  const root = tempRoot("ke-tools-verifycite");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const doc = store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p1",
+    title: "mAb114 neutralizes Ebola",
+    status: "ready",
+    fulltext: "mAb114 binds the Ebola glycoprotein and neutralizes the virus.",
+  });
+
+  const verbatim = await tools.verifyCitation(kb.id, "neutralizes the virus");
+  assert.equal(verbatim.state, "verbatim");
+  assert.equal(verbatim.verifiedIn[0]!.docId, doc.id);
+
+  const paraphrase = await tools.verifyCitation(kb.id, "mAb114 binds the Ebola glycoprotein and neutralizes the viruses");
+  assert.equal(paraphrase.state, "fuzzy");
+
+  const missing = await tools.verifyCitation(kb.id, "zebra quantum entanglement cures everything");
+  assert.equal(missing.state, "none");
+  assert.match(missing.note ?? "", /do not present/i);
+
+  await assert.rejects(
+    () => tools.verifyCitation("nonexistent", "x"),
+    (error: unknown) => error instanceof KeKbNotFoundError,
+  );
+});
+
+test("tools: kbRiskSignals surfaces conflicts and single-source entities", async (context) => {
+  const root = tempRoot("ke-tools-risk");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const seeded = seedGraph(store, kb.id);
+  store.upsertEdge({ kbId: kb.id, srcId: seeded.mab, dstId: seeded.ebola, type: "contradicts", evidenceQuote: "no neutralization observed", evidenceDocId: null });
+
+  const signals = await tools.kbRiskSignals(kb.id);
+  assert.equal(signals.kbName, "Ebola");
+  assert.equal(signals.conflicts.length, 1);
+  assert.equal(signals.conflicts[0]!.type, "contradicts");
+  assert.ok(signals.singleSource.length >= 1, "seed entities are single-source until more documents land");
+
+  await assert.rejects(
+    () => tools.kbRiskSignals("nonexistent"),
+    (error: unknown) => error instanceof KeKbNotFoundError,
+  );
+});

@@ -23,6 +23,7 @@ import {
   ContextSectionContributor,
   type ContextContributorFactory,
 } from "@sciencediscovery/context";
+import { buildAntiHallucinationBrief } from "@sciencediscovery/knowledge-engine";
 import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
 
 import type { KnowledgeEngineToolPort } from "./tools.js";
@@ -33,6 +34,7 @@ const MAX_KBS_PER_TURN = 3;
 const TOTAL_CAP_CHARS = 7_200;
 
 export const KE_RESIDENT_SUMMARY_CONTRIBUTOR_ID = "knowledge-engine.resident-summary";
+export const KE_ANTI_HALLUCINATION_SECTION_ID = "knowledge-engine.anti-hallucination";
 
 /** KB names are user-supplied — never let one break the XML-ish markup. */
 function escapeAttr(value: string): string {
@@ -71,21 +73,39 @@ export function createKeResidentSummaryFactory<TMessage extends RuntimeMessage>(
           }
           if (parts.length === 0) return {};
 
-          return {
-            systemSections: [
-              {
-                content: [
-                  "<knowledge_engine>",
-                  "The following knowledge bases are available. Query them with concept_explore / deep_dive / entity_unified_search (entity lookup with verbatim evidence), validate_entities (check names before citing), gap_candidates (structural research gaps).",
-                  ...parts,
-                  "</knowledge_engine>",
-                ].join("\n"),
-                id: KE_RESIDENT_SUMMARY_CONTRIBUTOR_ID,
+          // W9 three-tier injection: the uncertain signals (open conflicts,
+          // single-source entities) of the same tracked KBs, plus the
+          // non-negotiable rules. Awareness-only like the digest above —
+          // a store hiccup must degrade to skipping the section.
+          const sections = [
+            {
+              content: [
+                "<knowledge_engine>",
+                "The following knowledge bases are available. Query them with concept_explore / deep_dive / entity_unified_search (entity lookup with verbatim evidence), validate_entities (check names before citing), kb_search (passage search) + kb_expand (read the anchor's context), doc_grep (regex), gap_candidates (structural research gaps), novelty_check / verify_citation (anti-hallucination checks).",
+                ...parts,
+                "</knowledge_engine>",
+              ].join("\n"),
+              id: KE_RESIDENT_SUMMARY_CONTRIBUTOR_ID,
+              protected: false,
+              slot: "working_context" as const,
+            },
+          ];
+          try {
+            const brief = buildAntiHallucinationBrief(
+              await Promise.all(withGraph.map((kb) => tools.kbRiskSignals(kb.id))),
+            );
+            if (brief) {
+              sections.push({
+                content: brief,
+                id: KE_ANTI_HALLUCINATION_SECTION_ID,
                 protected: false,
-                slot: "working_context",
-              },
-            ],
-          };
+                slot: "working_context" as const,
+              });
+            }
+          } catch {
+            // The digest alone is still valid context.
+          }
+          return { systemSections: sections };
         },
       });
     },

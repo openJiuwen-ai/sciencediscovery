@@ -18,7 +18,7 @@ import test from "node:test";
 
 import type { ContextContributor } from "@sciencediscovery/context";
 
-import { createKeResidentSummaryFactory, KE_RESIDENT_SUMMARY_CONTRIBUTOR_ID } from "./contributor.js";
+import { createKeResidentSummaryFactory, KE_ANTI_HALLUCINATION_SECTION_ID, KE_RESIDENT_SUMMARY_CONTRIBUTOR_ID } from "./contributor.js";
 import { KnowledgeEngineStore } from "./store.js";
 import { createKnowledgeEngineTools } from "./tools.js";
 
@@ -51,6 +51,8 @@ test("resident-summary contributor: empty fleet → no section; graphed KB → w
   const mab = store.upsertEntity({ kbId: kb.id, name: "mAb114", type: "antibody" });
   const gp = store.upsertEntity({ kbId: kb.id, name: "GP", type: "protein" });
   store.upsertEdge({ kbId: kb.id, srcId: mab.id, dstId: gp.id, type: "binds" });
+  // An open conflict → the anti-hallucination tier-2 has real content.
+  store.upsertEdge({ kbId: kb.id, srcId: mab.id, dstId: gp.id, type: "contradicts", evidenceQuote: "no binding observed" });
 
   const created = factory.create({ contextId: "s1", scope: "main" });
   assert.equal(Array.isArray(created), false);
@@ -70,5 +72,15 @@ test("resident-summary contributor: empty fleet → no section; graphed KB → w
   assert.match(section.content, /<knowledge_engine>/);
   assert.match(section.content, /knowledge_base id=/);
   assert.match(section.content, /mAb114/);
-  assert.match(section.content, /concept_explore/); // tool signposting
+  assert.match(section.content, /kb_search/); // tool signposting
+
+  // W9 three-tier injection rides along as its own section.
+  const brief = contribution.systemSections?.find((candidate) => candidate.id === KE_ANTI_HALLUCINATION_SECTION_ID);
+  assert.ok(brief, "anti-hallucination section should be present for a graphed KB");
+  assert.match(brief.content, /<anti_hallucination>/);
+  assert.match(brief.content, /VERIFIED/);
+  assert.match(brief.content, /conflict: mAb114 contradicts GP/);
+  assert.match(brief.content, /single-source entities/);
+  assert.match(brief.content, /FORBIDDEN/);
+  assert.ok(brief.content.length <= 2_000);
 });

@@ -152,8 +152,92 @@ export async function keAgentStub(state: KeAgentStubState): Promise<KeAgentStub>
 }
 
 // ---------------------------------------------------------------------------
-// J-KE5 stub: the kb_search → kb_expand chain. Unlike the turn-scripted stub
-// above, this one READS the request body — the runtime sends the full message
+// J-KE6 stub: the anti-hallucination chain. Also parses tool results from the
+// request history — the final answer is DERIVED from what novelty_check and
+// verify_citation actually returned (verdict + citation state), so the
+// journey asserts a real dependency, not a canned string.
+export interface KeAntiHullucinationStubState {
+  getKbId(): string | undefined;
+  getNoveltyClaim(): string;
+  getQuote(): string;
+}
+
+export async function keAntiHallucinationAgentStub(state: KeAntiHullucinationStubState): Promise<KePipelineStub> {
+  const model = "ke-journey-antihalluc-model";
+  const apiToken = "ke-journey-antihalluc-token";
+  let server: Server | undefined;
+  let turn = 0;
+  await new Promise<void>((ready) => {
+    server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (part: Buffer) => {
+        body += part.toString("utf8");
+      });
+      request.on("end", () => {
+        turn += 1;
+        const chunk = (delta: Record<string, unknown>, finishReason: string | null) =>
+          `data: ${JSON.stringify({
+            choices: [{ delta, finishReason, index: 0 }],
+            created: 1,
+            id: "chatcmpl-ke-antihalluc",
+            model,
+            object: "chat.completion.chunk",
+          })}\n\n`;
+        const toolCall = (name: string, args: Record<string, unknown>, id: string) => {
+          response.write(chunk({
+            role: "assistant",
+            tool_calls: [{
+              function: { arguments: JSON.stringify(args), name },
+              id,
+              index: 0,
+              type: "function",
+            }],
+          }, null));
+          response.write(chunk({}, "tool_calls"));
+        };
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        const kbId = state.getKbId() ?? "";
+        if (turn === 1) {
+          toolCall("list_knowledge_bases", {}, `call-ke-ah-${turn}`);
+        } else if (turn === 2) {
+          toolCall("novelty_check", { kbId, claim: state.getNoveltyClaim() }, `call-ke-ah-${turn}`);
+        } else if (turn === 3) {
+          toolCall("verify_citation", { kbId, quote: state.getQuote() }, `call-ke-ah-${turn}`);
+        } else {
+          const verdict = body.match(/"verdict"\s*:\s*"([^"]+)"/)?.[1];
+          const citeState = body.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
+          if (!verdict || !citeState) {
+            response.write(chunk({ content: "反幻觉检查结果未能解析——按规则不给出结论。", role: "assistant" }, null));
+          } else {
+            const flagged = verdict === "collision"
+              ? "novelty_check 报告 collision（库内已有支撑记录），不能声称首次发现。"
+              : `novelty_check 报告 ${verdict}（仅指库内，不代表文献全局）。`;
+            response.write(chunk({
+              content: `${flagged}引文核验：${citeState}。`,
+              role: "assistant",
+            }, null));
+          }
+          response.write(chunk({}, "stop"));
+        }
+        response.end("data: [DONE]\n\n");
+      });
+    });
+    server.listen(0, "127.0.0.1", () => ready());
+  });
+  const address = server!.address();
+  if (typeof address !== "object" || address === null) {
+    throw new Error("ke antihalluc stub failed to bind");
+  }
+  return {
+    apiToken,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    model,
+    stop: () => new Promise<void>((stopped) => server!.close(() => stopped())),
+  };
+}
+// ---------------------------------------------------------------------------
+// J-KE5 stub: the kb_search → kb_expand chain. Like the anti-hallucination
+// stub it READS the request body — the runtime sends the full message
 // history (tool results included), so turn 3 can lift the real anchorId the
 // kb_search call produced and expand it, and the final answer can cite it.
 export interface KeSearchAgentStubState {
