@@ -82,6 +82,8 @@ export interface ModelClient<TMessage extends RuntimeMessage, TModelInput, TUsag
 export interface ToolDispatchResult<TMessage extends RuntimeMessage> {
   /** Domain/UI-facing tool result payload. */
   content: string;
+  /** Full structured tool result payload, when the concrete tool provides one. */
+  details?: unknown;
   isError: boolean;
   /** Canonical message appended to the model history. */
   message: TMessage;
@@ -153,7 +155,7 @@ export type RunEvent<TUsage> =
   | { type: "turn_start"; turn: number }
   | { delta: string; kind: "text" | "thinking"; type: "model_delta" }
   | { call: RuntimeToolCall; type: "tool_execution_start" }
-  | { call: RuntimeToolCall; content: string; isError: boolean; type: "tool_execution_end" }
+  | { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; type: "tool_execution_end" }
   | { type: "model_usage"; usage: TUsage }
   | { attempt: 1; reason: "model-input-overflow"; turn: number; type: "context_recovery" }
   | { type: "completed"; truncated?: boolean; usage?: TUsage };
@@ -338,7 +340,11 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           onResult: (call, result) => {
             this.state.history.push(result.message);
             this.emit({
-              type: "tool_execution_end", call, content: result.content, isError: result.isError,
+              type: "tool_execution_end",
+              call,
+              content: result.content,
+              ...(result.details !== undefined ? { details: result.details } : {}),
+              isError: result.isError,
             });
             onProgress();
           },

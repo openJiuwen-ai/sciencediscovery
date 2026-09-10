@@ -13,7 +13,7 @@ export interface AgentToolResult {
    */
   bounded?: boolean;
   content: Array<{ text: string; type: "text" }>;
-  details: unknown;
+  details?: unknown;
 }
 
 export interface AgentTool<S extends TSchema = TSchema> {

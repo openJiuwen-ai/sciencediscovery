@@ -124,12 +124,38 @@ export function hiddenDeferredNames(state: DeferredToolState | undefined): Set<s
   return new Set([...state.catalog.names].filter((name) => !state.promoted.has(name)));
 }
 
+export interface ToolSearchRunResult {
+  content: string;
+  details: {
+    catalogHash: string;
+    matchedToolNames: string[];
+    ok: true;
+    promotedToolNames: string[];
+    query: string;
+  };
+}
+
 /** Run tool_search: promote matches and return the model-facing result text. */
-export function runToolSearch(state: DeferredToolState, query: string): string {
+export function runToolSearchDetailed(state: DeferredToolState, query: string): ToolSearchRunResult {
   const matched = state.catalog.search(query);
-  if (!matched.length) return `No tools found matching: ${query}`;
+  const promotedToolNames = matched.map((tool) => tool.name);
   for (const tool of matched) state.promoted.add(tool.name);
-  return JSON.stringify(matched.map(openAiFunctionSchema), null, 2);
+  return {
+    content: matched.length
+      ? JSON.stringify(matched.map(openAiFunctionSchema), null, 2)
+      : `No tools found matching: ${query}`,
+    details: {
+      catalogHash: state.catalog.hash,
+      matchedToolNames: promotedToolNames,
+      ok: true,
+      promotedToolNames,
+      query,
+    },
+  };
+}
+
+export function runToolSearch(state: DeferredToolState, query: string): string {
+  return runToolSearchDetailed(state, query).content;
 }
 
 export function blockedDeferredToolResult(name: string): string {

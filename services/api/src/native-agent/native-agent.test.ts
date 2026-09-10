@@ -134,6 +134,7 @@ test("loop streams a tool round trip and returns wire-format final messages", as
     assert(start && start.type === "tool_execution_start" && start.toolName === "list_files");
     const end = events.find((event) => event.type === "tool_execution_end");
     assert(end && end.type === "tool_execution_end" && !end.isError);
+    assert.equal((end.result.details as { files?: Array<{ path: string }> }).files?.[0]?.path, "readme.md");
     const usageEvents = events.filter((event) => event.type === "usage");
     assert.equal(usageEvents.length, 1);
     const modelUsageEvents = events.filter((event) => event.type === "model_usage");
@@ -149,6 +150,28 @@ test("loop streams a tool round trip and returns wire-format final messages", as
   }
 });
 
+test("native tool end events omit details when the runtime result has none", () => {
+  const events: AgentEvent[] = [];
+  const agent = createNativeAgent(workspace() as NativeAgentOptions);
+  agent.subscribe((event) => events.push(event));
+  (agent as unknown as {
+    emitRuntimeEvent(event: {
+      call: { args: Record<string, unknown>; id: string; name: string };
+      content: string;
+      isError: boolean;
+      type: "tool_execution_end";
+    }): void;
+  }).emitRuntimeEvent({
+    call: { args: {}, id: "call-no-details", name: "probe" },
+    content: "ok",
+    isError: false,
+    type: "tool_execution_end",
+  });
+
+  const end = events.find((event) => event.type === "tool_execution_end");
+  assert.ok(end && end.type === "tool_execution_end");
+  assert.equal("details" in end.result, false);
+});
 
 test("main and child native Agents receive Runner IDs, descriptions and explicit sync tools", async (context) => {
   for (const child of [false, true]) {

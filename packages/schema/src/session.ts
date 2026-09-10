@@ -294,6 +294,8 @@ export interface WorkbenchSearchResponse {
 export interface ToolTrace {
   /** Structured tool arguments as issued by the model. */
   args?: Record<string, unknown>;
+  /** Full structured tool result details, when the tool provides them. */
+  details?: unknown;
   id: string;
   /** Serialized tool arguments; carried by tool.started and kept by the timeline. */
   input?: string;
