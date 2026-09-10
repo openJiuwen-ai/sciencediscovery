@@ -317,11 +317,11 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   };
   const openProjectSettings = async () => {
     await page.goto(`/projects/${encodeURIComponent(fixture.project.id)}/settings`);
-    return page.getByRole("dialog", { name: "project settings" });
+    return page.getByRole("dialog", { name: "项目设置" });
   };
   const openSessionSettings = async () => {
     await page.goto(`/projects/${encodeURIComponent(fixture.project.id)}/sessions/${encodeURIComponent(fixture.session.id)}/settings`);
-    return page.getByRole("dialog", { name: "session settings" });
+    return page.getByRole("dialog", { name: "会话设置" });
   };
 
   try {
@@ -334,19 +334,19 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const dialog = await openRemoteSettings();
         await expect(dialog.getByRole("heading", { name: "Runners" })).toBeVisible();
         await expect(dialog.getByText("GPU analysis", { exact: true })).toBeVisible();
-        await expect(dialog.getByRole("button", { name: "Add SSH machine" })).toBeVisible();
-        await expect(dialog.getByRole("button", { name: "Add self-deployed runner" })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "添加 SSH 机器" })).toBeVisible();
+        await expect(dialog.getByRole("button", { name: "添加自部署 Runner" })).toBeVisible();
         await expect(dialog.getByText("Runner ID：local", { exact: true })).toBeVisible();
         await expect(dialog.getByText(`Runner ID：${hostId}`, { exact: true })).toBeVisible();
         await expect(dialog.getByText("Python and R analysis on the lab GPU", { exact: true })).toBeVisible();
         // No blank form competes with the list, and no scoped controls live here.
-        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveCount(0);
+        await expect(dialog.getByLabel("SSH 别名或 IP/主机名")).toHaveCount(0);
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
         await expect(dialog.getByRole("checkbox", { name: /institution-linux/ })).toHaveCount(0);
         await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
-        await expect(dialog.getByRole("combobox", { name: "Allowed remote runners" })).toHaveCount(0);
-        await expect(dialog.getByText(/one-shot job card remains a separate feature/)).toHaveCount(0);
-        await expect(dialog.getByText(/All Shell\/Python\/R commands execute through sandboxed Runners/)).toBeVisible();
+        await expect(dialog.getByRole("combobox", { name: "允许的远程 Runner" })).toHaveCount(0);
+        await expect(dialog.getByText(/一次性作业卡/)).toHaveCount(0);
+        await expect(dialog.getByText(/所有 Shell\/Python\/R 命令均通过/)).toBeVisible();
       },
     );
 
@@ -356,7 +356,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const actions = dialog.locator(".remote-host-card .remote-host-actions").first();
-        const names = ["Connect runner", "Refresh probe", "Delete"];
+        const names = ["连接 Runner", "刷新探测", "删除"];
         const boxes = [];
         for (const name of names) {
           const button = actions.getByRole("button", { name });
@@ -373,13 +373,13 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const header = card.locator(".remote-host-card-header");
         await expect(header).toContainText("GPU analysis");
         await expect(header).toContainText("192.0.2.40:2222");
-        await expect(header).toContainText("user researcher");
+        await expect(header).toContainText("用户 researcher");
         const identityBox = await header.locator(".remote-host-card-main").boundingBox();
         const headerBox = await header.boundingBox();
         const detailsBox = await card.locator(".remote-host-card-details").boundingBox();
         expect(connect.x).toBeGreaterThan(identityBox!.x + identityBox!.width);
         expect(detailsBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
-        await expect(card.getByLabel("Runner resources")).toContainText("connect Runner to measure");
+        await expect(card.getByLabel("Runner 资源")).toContainText("连接 Runner 后进行测量");
         await card.scrollIntoViewIfNeeded();
       },
     );
@@ -390,18 +390,18 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         await page.setViewportSize({ width: 1440, height: 1200 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "Add SSH machine" }).click();
-        const form = dialog.getByRole("form", { name: "Add SSH machine" });
-        await expect(form.getByRole("group", { name: "1. Connection" })).toBeVisible();
-        await expect(form.getByRole("group", { name: "2. Login" }).getByLabel("Username", { exact: true })).toBeVisible();
-        await expect(form.getByLabel("Password (optional)")).toBeVisible();
-        await expect(form.getByText(/SSH requires a username/)).toBeVisible();
-        await expect(form.getByLabel("Runner executable")).toBeHidden();
-        await form.getByLabel("Username", { exact: true }).fill("draft-user");
-        await form.getByRole("button", { name: "Cancel", exact: true }).click();
+        await dialog.getByRole("button", { name: "添加 SSH 机器" }).click();
+        const form = dialog.getByRole("form", { name: "添加 SSH 机器" });
+        await expect(form.getByRole("group", { name: "1. 连接" })).toBeVisible();
+        await expect(form.getByRole("group", { name: "2. 登录" }).getByLabel("用户名", { exact: true })).toBeVisible();
+        await expect(form.getByLabel("密码（可选）")).toBeVisible();
+        await expect(form.getByText(/SSH 需要用户名/)).toBeVisible();
+        await expect(form.getByLabel("Runner 可执行文件")).toBeHidden();
+        await form.getByLabel("用户名", { exact: true }).fill("draft-user");
+        await form.getByRole("button", { name: "取消", exact: true }).click();
         await expect(form).toHaveCount(0);
-        await dialog.getByRole("button", { name: "Add SSH machine" }).click();
-        await expect(form.getByLabel("Username", { exact: true })).toHaveValue("");
+        await dialog.getByRole("button", { name: "添加 SSH 机器" }).click();
+        await expect(form.getByLabel("用户名", { exact: true })).toHaveValue("");
         await form.scrollIntoViewIfNeeded();
       },
     );
@@ -411,12 +411,12 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "640px 窗口内字段单列、用户名说明完整换行，没有横向溢出；高级 Runner 参数可展开编辑。",
       async () => {
         await page.setViewportSize({ width: 640, height: 1200 });
-        const form = page.getByRole("form", { name: "Add SSH machine" });
-        await form.getByText("Advanced Runner settings", { exact: true }).click();
-        await expect(form.getByLabel("Runner executable")).toBeVisible();
-        await form.getByText("Advanced Runner settings", { exact: true }).click();
+        const form = page.getByRole("form", { name: "添加 SSH 机器" });
+        await form.getByText("Runner 高级设置", { exact: true }).click();
+        await expect(form.getByLabel("Runner 可执行文件")).toBeVisible();
+        await form.getByText("Runner 高级设置", { exact: true }).click();
         expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-        await form.getByRole("group", { name: "2. Login" }).scrollIntoViewIfNeeded();
+        await form.getByRole("group", { name: "2. 登录" }).scrollIntoViewIfNeeded();
       },
     );
 
@@ -426,14 +426,14 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         await page.setViewportSize({ width: 1440, height: 1200 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toBeVisible();
-        await expect(dialog.getByLabel("Port (optional)")).toBeVisible();
-        await expect(dialog.getByLabel("Password (optional)")).toBeVisible();
-        await dialog.getByRole("button", { name: "SSH key (optional)" }).click();
-        await expect(dialog.getByLabel("Private key file (optional)")).toBeVisible();
-        await expect(dialog.getByRole("textbox", { name: /private key/i })).toHaveCount(1);
+        await expect(dialog.getByLabel("SSH 别名或 IP/主机名")).toBeVisible();
+        await expect(dialog.getByLabel("端口（可选）")).toBeVisible();
+        await expect(dialog.getByLabel("密码（可选）")).toBeVisible();
+        await dialog.getByRole("button", { name: "SSH 密钥（可选）" }).click();
+        await expect(dialog.getByLabel("私钥文件（可选）")).toBeVisible();
+        await expect(dialog.getByRole("textbox", { name: /私钥文件/ })).toHaveCount(1);
         await expect(dialog.locator("textarea")).toHaveCount(0);
-        await expect(dialog.getByText(/Paste an SSH private key/)).toHaveCount(0);
+        await expect(dialog.getByText(/粘贴 SSH 私钥/)).toHaveCount(0);
       },
     );
 
@@ -442,13 +442,13 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "点击 Browse 打开独立模态选择框，目录不再挤进设置表单；不会弹出浏览器上传窗口。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "Browse", exact: true }).click();
-        const picker = page.getByRole("dialog", { name: "Select a key on the application machine" });
+        await dialog.getByRole("button", { name: "浏览", exact: true }).click();
+        const picker = page.getByRole("dialog", { name: "在应用所在机器上选择密钥" });
         await expect(picker).toBeVisible();
         expect(await picker.evaluate((element) => element.matches(":modal"))).toBe(true);
-        await expect(picker).toContainText("machine running ScienceDiscovery");
-        await picker.getByRole("button", { name: "science keys Folder" }).click();
-        await expect(picker.getByRole("button", { name: "id_ed25519 Select file" })).toBeVisible();
+        await expect(picker).toContainText("运行 ScienceDiscovery 的机器");
+        await picker.getByRole("button", { name: "science keys 文件夹" }).click();
+        await expect(picker.getByRole("button", { name: "id_ed25519 选择文件" })).toBeVisible();
         await expect(dialog.locator('input[type="file"]')).toHaveCount(0);
         await picker.scrollIntoViewIfNeeded();
       },
@@ -459,10 +459,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "文件列表、目录位置及返回/取消操作在窄对话框内完整显示，不产生横向溢出。",
       async () => {
         await page.setViewportSize({ width: 640, height: 960 });
-        const picker = page.getByRole("region", { name: "Files on application machine" });
+        const picker = page.getByRole("region", { name: "应用所在机器上的文件" });
         await picker.scrollIntoViewIfNeeded();
         expect(await picker.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-        await expect(picker.getByRole("button", { name: "id_ed25519 Select file" })).toBeVisible();
+        await expect(picker.getByRole("button", { name: "id_ed25519 选择文件" })).toBeVisible();
       },
     );
 
@@ -472,19 +472,19 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         await page.setViewportSize({ width: 1440, height: 900 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "id_ed25519 Select file" }).click();
-        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue("/fixture-keys/science keys/id_ed25519");
-        await expect(dialog.getByRole("region", { name: "Files on application machine" })).toHaveCount(0);
-        await dialog.getByRole("button", { name: "Browse", exact: true }).click();
-        await dialog.getByRole("button", { name: "Cancel selection" }).click();
-        await dialog.getByRole("button", { name: "Browse", exact: true }).click();
-        await page.getByRole("dialog", { name: "Select a key on the application machine" }).press("Escape");
-        await expect(page.getByRole("dialog", { name: "Select a key on the application machine" })).toHaveCount(0);
+        await dialog.getByRole("button", { name: "id_ed25519 选择文件" }).click();
+        await expect(dialog.getByLabel("私钥文件（可选）")).toHaveValue("/fixture-keys/science keys/id_ed25519");
+        await expect(dialog.getByRole("region", { name: "应用所在机器上的文件" })).toHaveCount(0);
+        await dialog.getByRole("button", { name: "浏览", exact: true }).click();
+        await dialog.getByRole("button", { name: "取消选择" }).click();
+        await dialog.getByRole("button", { name: "浏览", exact: true }).click();
+        await page.getByRole("dialog", { name: "在应用所在机器上选择密钥" }).press("Escape");
+        await expect(page.getByRole("dialog", { name: "在应用所在机器上选择密钥" })).toHaveCount(0);
         await expect(dialog).toBeVisible();
-        await expect(dialog.getByRole("button", { name: "Browse", exact: true })).toBeFocused();
-        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue("/fixture-keys/science keys/id_ed25519");
-        await expect(dialog.getByLabel("Private key file (optional)")).toBeEditable();
-        await dialog.getByLabel("Private key file (optional)").scrollIntoViewIfNeeded();
+        await expect(dialog.getByRole("button", { name: "浏览", exact: true })).toBeFocused();
+        await expect(dialog.getByLabel("私钥文件（可选）")).toHaveValue("/fixture-keys/science keys/id_ed25519");
+        await expect(dialog.getByLabel("私钥文件（可选）")).toBeEditable();
+        await dialog.getByLabel("私钥文件（可选）").scrollIntoViewIfNeeded();
       },
     );
 
@@ -493,10 +493,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "点 Import from ssh_config 后出现已有 Host 列表，可先看别名、目标地址、端口和用户，再选择要导入的一台。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "Import from ssh_config" }).click();
+        await dialog.getByRole("button", { name: "从 ssh_config 导入" }).click();
         const list = dialog.locator(".remote-host-import-list");
         await expect(list.getByRole("button", { name: /institution-linux/ })).toBeVisible();
-        await expect(list.getByRole("button", { name: /gpu-lab/ })).toContainText("gpu.institution.edu · port 2200 · scientist");
+        await expect(list.getByRole("button", { name: /gpu-lab/ })).toContainText("gpu.institution.edu · 端口 2200 · scientist");
       },
     );
 
@@ -506,15 +506,15 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         await dialog.locator(".remote-host-import-list").getByRole("button", { name: /gpu-lab/ }).click();
-        await expect(dialog.getByText(/Imported gpu-lab from ssh_config/)).toBeVisible();
-        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveValue("gpu.institution.edu");
-        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue("~/.ssh/id_ed25519");
-        await dialog.getByLabel("SSH alias or IP/hostname").fill("gpu-lab-custom");
-        await dialog.getByLabel("Port (optional)").fill("2299");
-        await dialog.getByLabel("Username").fill("operator");
-        await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveValue("gpu-lab-custom");
-        await expect(dialog.getByLabel("Port (optional)")).toHaveValue("2299");
-        await expect(dialog.getByLabel("Username")).toHaveValue("operator");
+        await expect(dialog.getByText(/已从 ssh_config 导入 gpu-lab/)).toBeVisible();
+        await expect(dialog.getByLabel("SSH 别名或 IP/主机名")).toHaveValue("gpu.institution.edu");
+        await expect(dialog.getByLabel("私钥文件（可选）")).toHaveValue("~/.ssh/id_ed25519");
+        await dialog.getByLabel("SSH 别名或 IP/主机名").fill("gpu-lab-custom");
+        await dialog.getByLabel("端口（可选）").fill("2299");
+        await dialog.getByLabel("用户名").fill("operator");
+        await expect(dialog.getByLabel("SSH 别名或 IP/主机名")).toHaveValue("gpu-lab-custom");
+        await expect(dialog.getByLabel("端口（可选）")).toHaveValue("2299");
+        await expect(dialog.getByLabel("用户名")).toHaveValue("operator");
       },
     );
 
@@ -523,14 +523,14 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "点 Generate a key pair 后，密钥路径自动填入；页面只展示一行可复制公钥，并明确提示把它加入远端 authorized_keys。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "Generate a key pair" }).click();
-        await expect(dialog.getByLabel("Private key file (optional)")).toHaveValue(generatedKeyPath);
+        await dialog.getByRole("button", { name: "生成密钥对" }).click();
+        await expect(dialog.getByLabel("私钥文件（可选）")).toHaveValue(generatedKeyPath);
         const generated = dialog.locator(".remote-host-pubkey");
-        await expect(generated).toContainText("Public key generated");
+        await expect(generated).toContainText("已生成公钥");
         await expect(generated).toContainText("authorized_keys");
         await expect(generated.locator("code").last()).toHaveText(generatedPublicKey);
-        await generated.getByRole("button", { name: "Copy public key" }).click();
-        await expect(generated.getByRole("button", { name: "Copied" })).toBeVisible();
+        await generated.getByRole("button", { name: "复制公钥" }).click();
+        await expect(generated.getByRole("button", { name: "已复制" })).toBeVisible();
         await expect(dialog.locator("textarea")).toHaveCount(0);
       },
     );
@@ -540,17 +540,17 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "提交时只发送密钥路径而不发送私钥文本；未信任指纹在设置内确认后重试成功，机器卡片继续提供公钥复制入口。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByLabel("Runner name", { exact: true }).fill("CPU sandbox");
-        await dialog.getByLabel("Description", { exact: true }).fill("CPU preprocessing");
-        await dialog.getByLabel("SSH alias or IP/hostname").fill("192.168.100.236");
-        await dialog.getByLabel("Username").fill("researcher");
-        await dialog.getByLabel("Password (optional)").fill("s3cret");
-        await dialog.getByRole("button", { name: "Probe and add" }).click();
-        await expect(dialog.getByRole("alert")).toContainText("Unknown host key");
+        await dialog.getByLabel("Runner 名称", { exact: true }).fill("CPU sandbox");
+        await dialog.getByLabel("描述", { exact: true }).fill("CPU preprocessing");
+        await dialog.getByLabel("SSH 别名或 IP/主机名").fill("192.168.100.236");
+        await dialog.getByLabel("用户名").fill("researcher");
+        await dialog.getByLabel("密码（可选）").fill("s3cret");
+        await dialog.getByRole("button", { name: "探测并添加" }).click();
+        await expect(dialog.getByRole("alert")).toContainText("未知主机密钥");
         await expect(dialog.getByRole("alert")).toContainText("ssh-ed25519 · SHA256:e2e-fingerprint");
         await expect(dialog.getByText(/known_hosts/)).toHaveCount(0);
         await expect(page.locator(".permission-card")).toHaveCount(0);
-        await dialog.getByRole("button", { name: "Trust and continue" }).click();
+        await dialog.getByRole("button", { name: "信任并继续" }).click();
         const card = dialog.locator(".remote-host-card", { hasText: "192.168.100.236" });
         await expect(card).toBeVisible();
         expect(lastSshRegisterBody?.username).toBe("researcher");
@@ -558,10 +558,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         expect(lastSshRegisterBody?.privateKeyPath).toBe(generatedKeyPath);
         expect("privateKey" in (lastSshRegisterBody as unknown as Record<string, unknown>)).toBe(false);
         expect(lastSshRegisterBody?.trustHostKey).toEqual({ algorithm: "ssh-ed25519", fingerprint: "SHA256:e2e-fingerprint" });
-        await expect(card.getByRole("button", { name: "Copy public key" })).toBeHidden();
-        await card.locator("summary").filter({ hasText: "Public key" }).click();
-        await expect(card.getByRole("button", { name: "Copy public key" })).toBeVisible();
-        await expect(dialog.getByLabel("Password (optional)")).toHaveCount(0);
+        await expect(card.getByRole("button", { name: "复制公钥" })).toBeHidden();
+        await card.locator("summary").filter({ hasText: "公钥" }).click();
+        await expect(card.getByRole("button", { name: "复制公钥" })).toBeVisible();
+        await expect(dialog.getByLabel("密码（可选）")).toHaveCount(0);
       },
     );
 
@@ -571,34 +571,34 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const card = dialog.locator(".remote-host-card", { hasText: "192.168.100.236" });
-        await card.getByRole("button", { name: "Credentials" }).click();
-        await expect(card.getByLabel("Username")).toHaveValue("researcher");
-        await expect(card.getByLabel("Password", { exact: true })).toHaveValue("");
-        await expect(card.getByLabel("Password", { exact: true })).toHaveAttribute("placeholder", /keep the stored one/);
+        await card.getByRole("button", { name: "凭据" }).click();
+        await expect(card.getByLabel("用户名")).toHaveValue("researcher");
+        await expect(card.getByLabel("密码", { exact: true })).toHaveValue("");
+        await expect(card.getByLabel("密码", { exact: true })).toHaveAttribute("placeholder", /保留已保存的密码/);
         await dialog.locator(".system-config-footer").getByRole("button", { name: "保存", exact: true }).click();
-        const blockedSaveAlert = dialog.getByRole("alert").filter({ hasText: "Save credentials" });
+        const blockedSaveAlert = dialog.getByRole("alert").filter({ hasText: "保存凭据" });
         await expect(blockedSaveAlert).toBeVisible();
-        await expect(card.getByRole("button", { name: "Save credentials" })).toBeVisible();
+        await expect(card.getByRole("button", { name: "保存凭据" })).toBeVisible();
         await blockedSaveAlert.getByRole("button").click();
-        await card.getByLabel("Username").fill("operator");
-        await card.getByLabel("Password", { exact: true }).fill("new-secret");
-        await card.getByRole("button", { name: "Browse", exact: true }).click();
-        await card.getByRole("button", { name: "science keys Folder" }).click();
-        await card.getByRole("button", { name: "id_ed25519 Select file" }).click();
-        await expect(card.getByLabel("Private key file", { exact: true })).toHaveValue("/fixture-keys/science keys/id_ed25519");
+        await card.getByLabel("用户名").fill("operator");
+        await card.getByLabel("密码", { exact: true }).fill("new-secret");
+        await card.getByRole("button", { name: "浏览", exact: true }).click();
+        await card.getByRole("button", { name: "science keys 文件夹" }).click();
+        await card.getByRole("button", { name: "id_ed25519 选择文件" }).click();
+        await expect(card.getByLabel("私钥文件", { exact: true })).toHaveValue("/fixture-keys/science keys/id_ed25519");
         await expect(card.locator("textarea")).toHaveCount(0);
-        await card.getByRole("button", { name: "Save credentials" }).click();
+        await card.getByRole("button", { name: "保存凭据" }).click();
         await expect.poll(() => savedCredentials.username).toBe("operator");
         expect(savedCredentials.password).toBe("new-secret");
         expect(savedCredentials.privateKeyPath).toBe("/fixture-keys/science keys/id_ed25519");
         expect("privateKey" in savedCredentials).toBe(false);
-        await expect(card.getByLabel("Username")).toHaveCount(0);
+        await expect(card.getByLabel("用户名")).toHaveCount(0);
         await expect(card.getByRole("alert")).toHaveText(authenticationError);
         await expect(card.getByRole("alert")).toBeVisible();
         await expect(card.getByRole("alert")).toHaveCSS("white-space", "pre-wrap");
         await expect(card.getByRole("alert")).toHaveCSS("text-overflow", "clip");
-        await expect(card.locator(".remote-host-identity")).toContainText("user operator");
-        await expect(card).toContainText("password stored · key stored");
+        await expect(card.locator(".remote-host-identity")).toContainText("用户 operator");
+        await expect(card).toContainText("已存密码 · 已存密钥");
         await expect(card).not.toContainText("cannot deploy: no runner and no Node.js 22+ found");
         await card.scrollIntoViewIfNeeded();
       },
@@ -629,19 +629,19 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         // Dismiss the acknowledged error from the preceding SSH scenario.
         const priorError = dialog.getByRole("alert").filter({ hasText: "SSH authentication failed" }).filter({ has: page.getByRole("button") });
         if (await priorError.count()) await priorError.getByRole("button").click();
-        await dialog.getByRole("button", { name: "Add self-deployed runner" }).click();
-        await dialog.getByLabel("Name", { exact: true }).fill("lab-workstation");
-        await dialog.getByLabel("Description", { exact: true }).fill("Self-deployed CPU sandbox");
-        await dialog.getByLabel("IP address or hostname").fill("192.168.1.20");
-        await dialog.getByLabel(/^Port$/).fill("4311");
+        await dialog.getByRole("button", { name: "添加自部署 Runner" }).click();
+        await dialog.getByLabel("名称", { exact: true }).fill("lab-workstation");
+        await dialog.getByLabel("描述", { exact: true }).fill("Self-deployed CPU sandbox");
+        await dialog.getByLabel("IP 地址或主机名").fill("192.168.1.20");
+        await dialog.getByLabel(/^端口$/).fill("4311");
         await dialog.getByLabel("Token", { exact: true }).fill("e2e-mock-token");
-        await dialog.getByRole("button", { name: "Connect and add" }).click();
+        await dialog.getByRole("button", { name: "连接并添加" }).click();
         await expect(dialog.getByText("Runner ID：e2e-direct-runner", { exact: true })).toBeVisible();
         await expect(dialog.getByText("Self-deployed CPU sandbox", { exact: true })).toBeVisible();
-        await expect(dialog.getByText("Self-deployed · direct", { exact: true })).toBeVisible();
+        await expect(dialog.getByText("自部署 · 直连", { exact: true })).toBeVisible();
         const directCard = dialog.locator(".remote-host-card", { hasText: "e2e-direct-runner" });
         await expect(directCard.locator(".remote-host-identity")).toContainText("192.168.1.20:4311");
-        await expect(directCard.locator(".remote-host-identity")).toContainText("Token authentication");
+        await expect(directCard.locator(".remote-host-identity")).toContainText("Token 认证");
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
         await dialog.locator(".remote-host-card", { hasText: "e2e-direct-runner" }).scrollIntoViewIfNeeded();
       },
@@ -653,7 +653,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         await page.getByRole("dialog", { name: "系统设置" }).locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         const dialog = await openProjectSettings();
-        await expect(dialog.getByText("Remote compute", { exact: true })).toBeVisible();
+        await expect(dialog.getByText("远程计算", { exact: true })).toBeVisible();
         const allowedHost = dialog.getByRole("checkbox", { name: /institution-linux/ });
         await allowedHost.click();
         await expect.poll(() => project.remoteRunnerHostIds).toEqual([hostId]);
@@ -676,9 +676,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "Session 设置里覆盖允许名单",
       "Session 可独立选择 Project 未选的机器，或清空/恢复默认；全部设置之后才是保存按钮。",
       async () => {
-        await page.getByRole("dialog", { name: "project settings" }).getByRole("button", { name: "Close scoped settings" }).click();
+        await page.getByRole("dialog", { name: "项目设置" }).getByRole("button", { name: "关闭作用域设置" }).click();
         const dialog = await openSessionSettings();
-        const mode = dialog.getByRole("combobox", { name: "Allowed remote runners" });
+        const mode = dialog.getByRole("combobox", { name: "允许的远程 Runner" });
         await expect(mode).toHaveValue("inherit");
         await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
         await mode.selectOption("override");
@@ -711,17 +711,17 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "Session 只保留选机，工作区管理移到全局设置",
       "Session 设置不再展示工作区删除控件；全局设置按 Runner 展示 Project/Session 工作区及只读同步记录。",
       async () => {
-        const dialog = page.getByRole("dialog", { name: "session settings" });
-        await dialog.getByRole("combobox", { name: "Allowed remote runners" }).selectOption("inherit");
-        await expect(dialog.getByRole("button", { name: "Delete remote workspace" })).toHaveCount(0);
-        await dialog.getByRole("button", { name: "Close scoped settings" }).click();
+        const dialog = page.getByRole("dialog", { name: "会话设置" });
+        await dialog.getByRole("combobox", { name: "允许的远程 Runner" }).selectOption("inherit");
+        await expect(dialog.getByRole("button", { name: "删除远程工作区" })).toHaveCount(0);
+        await dialog.getByRole("button", { name: "关闭作用域设置" }).click();
         const settings = await openRemoteSettings();
         await settings.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
-        await settings.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
-        await settings.getByRole("button", { name: "Workspaces", exact: true }).click();
-        await expect(settings.getByText("Remote workspaces", { exact: true })).toBeVisible();
-        await settings.getByText("Transfer history · 1").click();
-        await expect(settings.getByText(/pull · completed · 1 files · results\/report\.md/)).toBeVisible();
+        await settings.getByRole("combobox", { name: "管理 Runner" }).selectOption(hostId);
+        await settings.getByRole("button", { name: "工作区", exact: true }).click();
+        await expect(settings.getByText("远程工作区", { exact: true })).toBeVisible();
+        await settings.getByText("传输历史 · 1").click();
+        await expect(settings.getByText(/主 Agent · pull · completed · 1 个文件 · results\/report\.md/)).toBeVisible();
         await expect(settings.getByRole("button", { name: /Push|Pull/ })).toHaveCount(0);
       },
     );
@@ -732,8 +732,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         await page.getByRole("dialog", { name: "系统设置" }).locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         const badge = page.locator(".session-runner-target");
-        await expect(badge).toHaveText("Remote available");
-        await expect(badge).toHaveAttribute("title", /Local runner stays available/);
+        await expect(badge).toHaveText("可用远程");
+        await expect(badge).toHaveAttribute("title", /本地 Runner 始终可用/);
         await expect(page.locator('[title="Fixed Session execution target"]')).toHaveCount(0);
         const clipped = await badge.evaluate((element) => element.scrollWidth > element.clientWidth + 1);
         expect(clipped).toBe(false);
@@ -745,26 +745,26 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "状态变为 connected，详情顶部显示更新时间，紧凑容量条展示磁盘已用 40/100 GiB（40%）、内存已用 48/128 GiB（37.5%），版本和 CPU 读数不重复。",
       async () => {
         const dialog = await openRemoteSettings();
-        await dialog.getByRole("button", { name: "Connect runner" }).first().click();
-        await expect(dialog.getByText("connected", { exact: true })).toBeVisible();
+        await dialog.getByRole("button", { name: "连接 Runner" }).first().click();
+        await expect(dialog.getByText("已连接", { exact: true })).toBeVisible();
         await expect(dialog.getByText(
-          /Version 0\.0\.0-remote · local 0\.0\.0-local/,
+          /版本 0\.0\.0-remote · 本地 0\.0\.0-local/,
         )).toBeVisible();
-        const resources = dialog.getByLabel("Runner resources").first();
+        const resources = dialog.getByLabel("Runner 资源").first();
         await expect(resources).toContainText("40.0 GiB / 100.0 GiB");
         await expect(resources).toContainText("/data/sciencediscovery/remote-workspaces");
         await expect(resources).toContainText("48.0 GiB / 128.0 GiB");
-        await expect(resources.getByRole("meter", { name: "Disk used" })).toHaveAttribute("aria-valuenow", "40");
-        await expect(resources.getByRole("meter", { name: "Memory used" })).toHaveAttribute("aria-valuenow", "37.5");
-        await expect(dialog.getByText("SSH tunnel", { exact: true }).first()).toBeVisible();
+        await expect(resources.getByRole("meter", { name: "磁盘已用" })).toHaveAttribute("aria-valuenow", "40");
+        await expect(resources.getByRole("meter", { name: "内存已用" })).toHaveAttribute("aria-valuenow", "37.5");
+        await expect(dialog.getByText("SSH 隧道", { exact: true }).first()).toBeVisible();
         const card = resources.locator("xpath=ancestor::article");
-        await expect(card.locator(".remote-host-disclosure > summary")).toContainText("Updated");
-        await expect(card.getByText("Version differs", { exact: true })).toBeVisible();
+        await expect(card.locator(".remote-host-disclosure > summary")).toContainText("更新于");
+        await expect(card.getByText("版本不一致", { exact: true })).toBeVisible();
         await expect(card).not.toContainText("Filesystem free space");
         await expect(card).not.toContainText("reclaimable caches");
         await expect(card).not.toContainText("Load is a queue average");
         await expect(card).not.toContainText("SEA runner deployed automatically");
-        await expect(card.getByLabel("Runner connection")).not.toContainText("GiB");
+        await expect(card.getByLabel("Runner 连接")).not.toContainText("GiB");
         await resources.scrollIntoViewIfNeeded();
       },
     );
@@ -776,7 +776,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await page.setViewportSize({ width: 900, height: 1000 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const actions = dialog.locator(".remote-host-card .remote-host-actions").first();
-        const boxes = await Promise.all(["Disconnect", "Refresh probe", "Credentials", "Delete"].map(async (name) => {
+        const boxes = await Promise.all(["断开连接", "刷新探测", "凭据", "删除"].map(async (name) => {
           const button = actions.getByRole("button", { name });
           await expect(button).toBeVisible();
           return button.boundingBox();
@@ -791,9 +791,15 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const card = dialog.locator(".remote-host-list .remote-host-card").first();
         const identityBox = await card.locator(".remote-host-card-main").boundingBox();
         const detailsBox = await card.locator(".remote-host-card-details").boundingBox();
-        expect(first!.y).toBeGreaterThanOrEqual(identityBox!.y + identityBox!.height);
+        // The card header is a flex-wrap row: at this viewport the identity block
+        // and the action group can share one row, and when the card narrows further
+        // the actions wrap below the identity. Either placement must keep the two
+        // card zones from overlapping, and the details must come after both.
+        const actionsBeside = first!.x >= identityBox!.x + identityBox!.width - 1;
+        const actionsBelow = first!.y >= identityBox!.y + identityBox!.height - 1;
+        expect(actionsBeside || actionsBelow).toBe(true);
         expect(detailsBox!.y).toBeGreaterThanOrEqual(first!.y + first!.height);
-        await expect(dialog.getByLabel("Runner resources").first()).toContainText("40.0 GiB / 100.0 GiB");
+        await expect(dialog.getByLabel("Runner 资源").first()).toContainText("40.0 GiB / 100.0 GiB");
         await card.scrollIntoViewIfNeeded();
       },
     );
@@ -803,10 +809,10 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         const card = page.locator(".remote-host-list .remote-host-card").first();
         await card.locator(".remote-host-disclosure > summary").click();
-        await expect(card.getByLabel("Runner resources")).toBeHidden();
-        await expect(card.getByLabel("Runner connection")).toBeHidden();
-        await expect(card.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible();
-        await expect(card.locator(".remote-host-disclosure > summary")).toContainText("Updated");
+        await expect(card.getByLabel("Runner 资源")).toBeHidden();
+        await expect(card.getByLabel("Runner 连接")).toBeHidden();
+        await expect(card.getByRole("button", { name: "断开连接", exact: true })).toBeVisible();
+        await expect(card.locator(".remote-host-disclosure > summary")).toContainText("更新于");
       },
     );
     await journey.step(
@@ -816,8 +822,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         const card = page.locator(".remote-host-list .remote-host-card").first();
         await card.locator(".remote-host-disclosure > summary").focus();
         await page.keyboard.press("Enter");
-        await expect(card.getByRole("meter", { name: "Disk used" })).toBeVisible();
-        await expect(card.getByRole("meter", { name: "Memory used" })).toBeVisible();
+        await expect(card.getByRole("meter", { name: "磁盘已用" })).toBeVisible();
+        await expect(card.getByRole("meter", { name: "内存已用" })).toBeVisible();
         for (const row of await card.locator(".remote-resource-meter-label").all()) {
           const label = await row.locator("span").boundingBox();
           const value = await row.locator("strong").boundingBox();
@@ -838,34 +844,34 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
     });
     await journey.step("按 Runner 管理 Python 和 R 环境", "科学环境页明确所选 Runner，能看到远端 Python base 并在同一个 Runner 创建 R 环境。", async () => {
-      await page.getByRole("dialog", { name: "project settings" }).getByRole("button", { name: "Close scoped settings" }).click();
+      await page.getByRole("dialog", { name: "项目设置" }).getByRole("button", { name: "关闭作用域设置" }).click();
       await page.setViewportSize({ width: 1440, height: 1000 });
       const dialog = await openRemoteSettings();
       await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
-      await dialog.getByRole("combobox", { name: "Manage Runner" }).selectOption(hostId);
+      await dialog.getByRole("combobox", { name: "管理 Runner" }).selectOption(hostId);
       await expect(dialog.getByText("Remote Python base", { exact: true })).toBeVisible();
-      await expect(dialog.getByRole("textbox", { name: "Environment name" })).toHaveCount(0);
-      await dialog.getByRole("button", { name: "Add environment" }).click();
-      await dialog.getByRole("combobox", { name: "Initial environment tools" }).selectOption("r");
-      await dialog.getByRole("textbox", { name: "Environment name" }).fill("Remote R analysis");
-      await dialog.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(dialog.getByRole("textbox", { name: "环境名称" })).toHaveCount(0);
+      await dialog.getByRole("button", { name: "新增环境" }).click();
+      await dialog.getByRole("combobox", { name: "环境初始工具" }).selectOption("r");
+      await dialog.getByRole("textbox", { name: "环境名称" }).fill("Remote R analysis");
+      await dialog.getByRole("button", { name: "创建", exact: true }).click();
       await expect(dialog.getByText("Remote R analysis", { exact: true })).toBeVisible();
-      await expect(dialog.getByRole("textbox", { name: "Environment name" })).toHaveCount(0);
-      await expect(dialog.getByRole("combobox", { name: "Package manager for Remote R analysis" }).locator("option")).toHaveText(["conda", "pip", "CRAN", "Bioconductor"]);
+      await expect(dialog.getByRole("textbox", { name: "环境名称" })).toHaveCount(0);
+      await expect(dialog.getByRole("combobox", { name: "Remote R analysis 的包管理器" }).locator("option")).toHaveText(["conda", "pip", "CRAN", "Bioconductor"]);
     });
     await journey.step("窄窗口集中清理远端工作区", "工作区按 Project/Session 展示；取消删除不发请求，确认后显示清理结果，记录保留。", async () => {
       await page.setViewportSize({ width: 640, height: 960 });
       const dialog = page.getByRole("dialog", { name: "系统设置" });
-      await dialog.getByRole("button", { name: "Workspaces", exact: true }).click();
-      const remove = dialog.getByRole("button", { name: "Delete remote workspace" });
+      await dialog.getByRole("button", { name: "工作区", exact: true }).click();
+      const remove = dialog.getByRole("button", { name: "删除远程工作区" });
       page.once("dialog", (prompt) => prompt.dismiss());
       await remove.click();
       expect(deletedWorkspace).toBe(false);
       page.once("dialog", (prompt) => prompt.accept());
       await remove.click();
-      await expect(dialog.getByText("Workspace deleted. Future execution can recreate this location.")).toBeVisible();
+      await expect(dialog.getByText("工作区已删除。后续执行会重新创建该位置。")).toBeVisible();
       expect(deletedWorkspace).toBe(true);
-      await dialog.getByText("Transfer history · 1").click();
+      await dialog.getByText("传输历史 · 1").click();
       expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
     });
   } finally {
