@@ -105,6 +105,14 @@ export interface ScientificExecutionRequest {
   maxOutputBytes?: number;
   /** Per-run workspace total quota; 0 disables the quota. */
   maxWorkspaceBytes?: number;
+  /**
+   * Host indices of the NPU cards this execution may use, as ticked by an
+   * operator against the Runner's probe. The Runner re-validates them against
+   * a current inventory before launching: on a shared machine a card can be
+   * claimed by someone else between the tick and the run, and failing then
+   * with a named card beats failing deep inside the framework.
+   */
+  npuDevices?: number[];
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
@@ -207,6 +215,14 @@ export interface ShellExecutionRequest {
   maxOutputBytes?: number;
   /** Per-run workspace total quota; 0 disables the quota. */
   maxWorkspaceBytes?: number;
+  /**
+   * Host indices of the NPU cards this execution may use, as ticked by an
+   * operator against the Runner's probe. The Runner re-validates them against
+   * a current inventory before launching: on a shared machine a card can be
+   * claimed by someone else between the tick and the run, and failing then
+   * with a named card beats failing deep inside the framework.
+   */
+  npuDevices?: number[];
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;

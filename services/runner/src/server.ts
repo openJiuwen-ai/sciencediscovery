@@ -453,6 +453,9 @@ export function createRunnerServer(
     bwrapPath: config.bwrapPath,
     ...await sandboxLaunchProfile(config.bwrapPath),
   }));
+  // Executions share the cached inventory so an NPU run re-validates its
+  // cards without re-probing the whole machine.
+  const executorConfig: RunnerConfig = { ...config, npuInventory: readNpuInventory };
   const executionQueues = new KeyedTaskQueue();
   const managedExecutions = new ExecutionManager(config.dataDir);
   const workspaceVersions = new VersionStore(config.dataDir);
@@ -963,9 +966,9 @@ export function createRunnerServer(
         const accepted = managedExecutions.start(execution, (signal, log) => execution.environmentId
           ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
               if (signal.aborted) throw new Error("Execution cancelled before environment admission");
-              return executeShell(config, execution, signal, undefined, gateways, runtime, log);
+              return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log);
             }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-          : executeShell(config, execution, signal, undefined, gateways, undefined, log));
+          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log));
         sendJson(response, 202, accepted);
         return;
       }
@@ -997,9 +1000,9 @@ export function createRunnerServer(
           () => execution.environmentId
             ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
                 if (signal.aborted) throw new Error("Runner execution aborted before start");
-                return executeShell(config, execution, signal, undefined, gateways, runtime);
+                return executeShell(executorConfig, execution, signal, undefined, gateways, runtime);
               }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
-            : executeShell(config, execution, signal, undefined, gateways),
+            : executeShell(executorConfig, execution, signal, undefined, gateways),
         )));
         return;
       }
@@ -1028,7 +1031,7 @@ export function createRunnerServer(
           execution.language ?? "python",
           execution.kernelMode ?? "ephemeral",
           signal,
-          () => executePython(config, execution, signal, environmentStore, undefined, gateways),
+          () => executePython(executorConfig, execution, signal, environmentStore, undefined, gateways),
         )));
         return;
       }

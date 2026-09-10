@@ -37,6 +37,7 @@ import {
   type SandboxKind,
   type ScientificLanguage,
   type ShellExecutionRequest,
+  type NpuInventory,
   type ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
@@ -49,7 +50,7 @@ import {
   resolveEgressBridge,
 } from "./egress-bridge.js";
 import type { EgressGatewayRegistry } from "./egress-gateway.js";
-import type { SandboxNpu } from "./npu-devices.js";
+import { resolveExecutionNpu, type SandboxNpu } from "./npu-devices.js";
 import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
@@ -105,6 +106,12 @@ export interface SandboxRuntimeConfig {
 }
 
 export interface ExecutorConfig extends SandboxRuntimeConfig {
+  /**
+   * Reads this machine's NPU cards, cached by the caller. Absent on hosts
+   * without Ascend tooling and in tests, where an execution that asks for no
+   * card never consults it.
+   */
+  npuInventory?: () => Promise<NpuInventory>;
   /** Packaged Python interpreter used when no managed environment is selected. */
   pythonPath?: string;
   /** Wall-clock limit for a single execution. */
@@ -997,7 +1004,10 @@ export async function executePython(
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const sandbox = executorSandboxKind(config);
   const hostPython = !runtime && language === "python" ? await nativePythonPath(config, sandbox) : undefined;
+  const npu = await resolveExecutionNpu(config, request.npuDevices,
+    async () => await sandboxLaunchProfile(config.bwrapPath));
   const launch = await prepareSandboxLaunch(config, {
+    npu,
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
     egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox, request.sandboxEgressProxy),
     environmentBinds: runtime
@@ -1126,7 +1136,10 @@ export async function executeShell(
     if (!(await stat(directory)).isDirectory()) throw new Error("cwd must be a directory");
     chdir = sandbox === "seatbelt" ? directory : `${workspaceBinds.chdir}/${relativePath}`;
   }
+  const npu = await resolveExecutionNpu(config, request.npuDevices,
+    async () => await sandboxLaunchProfile(config.bwrapPath));
   const launch = await prepareSandboxLaunch(config, {
+    npu,
     chdir,
     egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox, request.sandboxEgressProxy),
     environmentBinds: runtime ? environmentPrefixBindArguments(runtime.prefixPath) : localPythonPackageBindArguments(localPythonPackages),
