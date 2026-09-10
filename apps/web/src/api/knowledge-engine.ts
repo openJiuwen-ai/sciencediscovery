@@ -148,6 +148,50 @@ export interface KeEntityDetail {
   }>;
 }
 
+/** W7 three-level document read. `level` defaults to L0 server-side. */
+export type KeDocumentLevel = "L0" | "L1" | "L2";
+
+export interface KeDocumentL0 {
+  summary: string;
+  tags: string[];
+  source: "abstract" | "body" | "title";
+}
+
+export interface KeDocumentBlock {
+  anchorId: string;
+  type: "heading" | "paragraph" | "formula" | "table" | "list" | "figure" | "reference" | "code";
+  text: string;
+  section: string | null;
+  lineStart: number;
+  preview: string;
+}
+
+export interface KeDocumentRead {
+  docId: string;
+  kbId: string;
+  title: string;
+  level: KeDocumentLevel;
+  status: string;
+  abstract?: string | null;
+  fulltext?: string;
+  l0?: KeDocumentL0;
+  year?: number | null;
+  venue?: string | null;
+  blockCount?: number;
+  blocks?: KeDocumentBlock[];
+}
+
+export interface KeDocumentAnchorContext {
+  docId: string;
+  kbId: string;
+  title: string;
+  anchor: KeDocumentBlock;
+  context: {
+    before: KeDocumentBlock | null;
+    after: KeDocumentBlock | null;
+  };
+}
+
 /** `/api/knowledge-engine` — knowledge base graph, seeding and job status. */
 export class KnowledgeEngineApiClient extends EvolveApiClient {
 
@@ -175,6 +219,20 @@ export class KnowledgeEngineApiClient extends EvolveApiClient {
 
   listKeDocuments(kbId: string): Promise<{ documents: KeDocument[] }> {
     return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents`);
+  }
+
+  /** Three-level read: L0 deterministic abstract, L1 anchored blocks, L2 fulltext. */
+  getKeDocument(kbId: string, docId: string, level: KeDocumentLevel): Promise<KeDocumentRead> {
+    return this.request(
+      `/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}?level=${level}`,
+    );
+  }
+
+  /** Resolve a `{docId}:{type}:{index}` anchor to its block + neighbors. */
+  getKeDocumentAnchor(kbId: string, docId: string, anchorId: string): Promise<KeDocumentAnchorContext> {
+    return this.request(
+      `/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/anchors/${encodeURIComponent(anchorId)}`,
+    );
   }
 
   listKeJobs(kbId: string): Promise<{ jobs: KeJob[] }> {

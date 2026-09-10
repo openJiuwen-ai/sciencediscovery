@@ -33,6 +33,14 @@
 3. **锚点→证据卡反查**：`GET /entities/:id` 的 evidence 目前只有 quote 文本；可加 `anchorId` 提示（quote 在 fulltext 中定位到块）打通"证据→原文"链。简单做法：前端拿 quote 对 L1 块做子串匹配，无需后端改动。
 4. review 重点：`parseDocumentBlocks` 的行式状态机边界（未闭合 fence、label-caption 后无表格行）；`requireKbDocument` 的跨 KB 语义。
 
+## 前端进度更新（2026-09-10 10:5x，第二笔提交）
+
+- **`apps/web/src/knowledge-engine/KeDocumentReader.tsx`（新组件，零 W6 文件触碰）**：三级阅读器全功能——L0 摘要+标签+来源诚实标注 / L1 带锚点块+目录跳转 / L2 全文；层级偏好 localStorage（`keDocDefaultLevel`）；**highlightQuote prop → 自动切 L1 + quote 归一化子串定位块 + scrollIntoView 高亮**（NotebookLM 模式内核）；未逐字命中显示琥珀色诚实提示（`ke-doc-highlight-miss`）。testid：`ke-doc-reader/-title/-level-L0|L1|L2/-summary/-tag/-outline/-blocks/-block(data-anchor,data-type)/-highlight/-highlight-miss/-fulltext/-close`。
+- **client API**：`getKeDocument(kbId,docId,level)` + `getKeDocumentAnchor(kbId,docId,anchorId)` + 全套类型（api/knowledge-engine.ts）。
+- **组件文案暂为组件内双语字典**（STRINGS 常量，键名即未来 `ke.doc.*` 键）——messages.ts 在 W6 未提交清单里，动它会污染你的工作区 diff；W6 落地后迁 i18n。
+- **J-KE4 journey**（test/journey-ke-document-reader.spec.ts）已写好并以 `test.fixme` 挂起（E2E-META 校验 0 错误），接线后把 fixme 改回 test 即可。**接线契约（两处，都在 KnowledgeEnginePage.tsx）**：① 文档行加 `data-testid="ke-document-<docId>"` 按钮 → setDocReader({docId}) 渲染 `<KeDocumentReader client kbId docId highlightQuote onClose>`；② 证据卡每条 quote 加 `ke-evidence-source` 按钮 → setDocReader({docId, highlightQuote: quote})。
+- apps/web tsc --noEmit 全绿（含你的 W6 未提交改动——它们类型干净）。
+
 ## 下一步（ZCode 计划，可被用户改派）
 
-W7 前端阅读视图 → W8 kb_search（ke_documents_fts 已有，补 chunk 化+锚点命中）→ W9 运行时反幻觉。路线图全文见差距分析 §4。
+W6 提交后：KnowledgeEnginePage 接线（上文契约）+ ke.doc.* i18n 迁移 + J-KE4 启用与校准 → W8 kb_search（ke_documents_fts 已有，补 chunk 化+锚点命中）→ W9 运行时反幻觉。路线图全文见差距分析 §4。
