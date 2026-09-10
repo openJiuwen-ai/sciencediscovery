@@ -86,61 +86,61 @@ export interface KeAgentStub extends KePipelineStub {
 }
 
 export async function keAgentStub(state: KeAgentStubState): Promise<KeAgentStub> {
-  const model = “ke-journey-agent-model”;
-  const apiToken = “ke-journey-agent-token”;
+  const model = "ke-journey-agent-model";
+  const apiToken = "ke-journey-agent-token";
   let server: Server | undefined;
   let turn = 0;
   await new Promise<void>((ready) => {
     server = createServer((request, response) => {
-      request.on(“data”, () => undefined);
-      request.on(“end”, () => {
+      request.on("data", () => undefined);
+      request.on("end", () => {
         turn += 1;
         const chunk = (delta: Record<string, unknown>, finishReason: string | null) =>
           `data: ${JSON.stringify({
             choices: [{ delta, finishReason, index: 0 }],
             created: 1,
-            id: “chatcmpl-ke-agent”,
+            id: "chatcmpl-ke-agent",
             model,
-            object: “chat.completion.chunk”,
+            object: "chat.completion.chunk",
           })}\n\n`;
-        response.writeHead(200, { “cache-control”: “no-cache”, “content-type”: “text/event-stream” });
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
         if (turn === 1) {
           response.write(chunk({
-            role: “assistant”,
+            role: "assistant",
             tool_calls: [{
-              function: { arguments: “{}”, name: “list_knowledge_bases” },
+              function: { arguments: "{}", name: "list_knowledge_bases" },
               id: `call-ke-agent-${turn}`,
               index: 0,
-              type: “function”,
+              type: "function",
             }],
           }, null));
-          response.write(chunk({}, “tool_calls”));
+          response.write(chunk({}, "tool_calls"));
         } else if (turn === 2) {
-          const kbId = state.getKbId() ?? “”;
+          const kbId = state.getKbId() ?? "";
           response.write(chunk({
-            role: “assistant”,
+            role: "assistant",
             tool_calls: [{
-              function: { arguments: JSON.stringify({ kbId, hops: 1, limit: 20 }), name: “concept_explore” },
+              function: { arguments: JSON.stringify({ kbId, hops: 1, limit: 20 }), name: "concept_explore" },
               id: `call-ke-agent-${turn}`,
               index: 0,
-              type: “function”,
+              type: "function",
             }],
           }, null));
-          response.write(chunk({}, “tool_calls”));
+          response.write(chunk({}, "tool_calls"));
         } else {
-          const entity = state.getEntityName() ?? “mAb114”;
-          const quote = state.getEvidenceQuote() ?? “”;
-          response.write(chunk({ content: `根据知识图谱，${entity} 与 Ebola virus glycoprotein 存在 binds 关系。原文证据：“${quote}”。`, role: “assistant” }, null));
-          response.write(chunk({}, “stop”));
+          const entity = state.getEntityName() ?? "mAb114";
+          const quote = state.getEvidenceQuote() ?? "";
+          response.write(chunk({ content: `根据知识图谱，${entity} 与 Ebola virus glycoprotein 存在 binds 关系。原文证据："${quote}"。`, role: "assistant" }, null));
+          response.write(chunk({}, "stop"));
         }
-        response.end(“data: [DONE]\n\n”);
+        response.end("data: [DONE]\n\n");
       });
     });
-    server.listen(0, “127.0.0.1”, () => ready());
+    server.listen(0, "127.0.0.1", () => ready());
   });
   const address = server!.address();
-  if (typeof address !== “object” || address === null) {
-    throw new Error(“ke agent stub failed to bind”);
+  if (typeof address !== "object" || address === null) {
+    throw new Error("ke agent stub failed to bind");
   }
   return {
     apiToken,
@@ -246,67 +246,67 @@ export interface KeSearchAgentStubState {
 }
 
 export async function keSearchAgentStub(state: KeSearchAgentStubState): Promise<KePipelineStub> {
-  const model = “ke-journey-search-model”;
-  const apiToken = “ke-journey-search-token”;
+  const model = "ke-journey-search-model";
+  const apiToken = "ke-journey-search-token";
   let server: Server | undefined;
   let turn = 0;
   await new Promise<void>((ready) => {
     server = createServer((request, response) => {
-      let body = “”;
-      request.on(“data”, (part: Buffer) => {
-        body += part.toString(“utf8”);
+      let body = "";
+      request.on("data", (part: Buffer) => {
+        body += part.toString("utf8");
       });
-      request.on(“end”, () => {
+      request.on("end", () => {
         turn += 1;
         const chunk = (delta: Record<string, unknown>, finishReason: string | null) =>
           `data: ${JSON.stringify({
             choices: [{ delta, finishReason, index: 0 }],
             created: 1,
-            id: “chatcmpl-ke-search”,
+            id: "chatcmpl-ke-search",
             model,
-            object: “chat.completion.chunk”,
+            object: "chat.completion.chunk",
           })}\n\n`;
         const toolCall = (name: string, args: Record<string, unknown>, id: string) => {
           response.write(chunk({
-            role: “assistant”,
+            role: "assistant",
             tool_calls: [{
               function: { arguments: JSON.stringify(args), name },
               id,
               index: 0,
-              type: “function”,
+              type: "function",
             }],
           }, null));
-          response.write(chunk({}, “tool_calls”));
+          response.write(chunk({}, "tool_calls"));
         };
-        response.writeHead(200, { “cache-control”: “no-cache”, “content-type”: “text/event-stream” });
-        const kbId = state.getKbId() ?? “”;
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        const kbId = state.getKbId() ?? "";
         if (turn === 1) {
-          toolCall(“list_knowledge_bases”, {}, `call-ke-search-${turn}`);
+          toolCall("list_knowledge_bases", {}, `call-ke-search-${turn}`);
         } else if (turn === 2) {
-          toolCall(“kb_search”, { kbId, query: state.getSearchQuery() }, `call-ke-search-${turn}`);
+          toolCall("kb_search", { kbId, query: state.getSearchQuery() }, `call-ke-search-${turn}`);
         } else {
           // The kb_search result is in the history this turn — lift the first
           // anchorId out of it verbatim (no fabricated anchors).
-          const anchor = body.match(/”anchorId”\s*:\s*”([^”]+)”/)?.[1];
+          const anchor = body.match(/"anchorId"\s*:\s*"([^"]+)"/)?.[1];
           if (turn === 3 && anchor) {
-            toolCall(“kb_expand”, { kbId, anchorId: anchor }, `call-ke-search-${turn}`);
+            toolCall("kb_expand", { kbId, anchorId: anchor }, `call-ke-search-${turn}`);
           } else {
-            const cited = anchor ?? “（未命中）”;
+            const cited = anchor ?? "（未命中）";
             response.write(chunk({
               content: `库内文献检索：关于 ${state.getSearchQuery()}，kb_search 命中段落并已展开原文（锚点 ${cited}），证据段落包含目标术语。`,
-              role: “assistant”,
+              role: "assistant",
             }, null));
-            response.write(chunk({}, “stop”));
+            response.write(chunk({}, "stop"));
           }
         }
-        response.end(“data: [DONE]\n\n”);
+        response.end("data: [DONE]\n\n");
       });
     });
-    server.listen(0, “127.0.0.1”, () => ready());
+    server.listen(0, "127.0.0.1", () => ready());
   });
   const address = server!.address();
-  if (typeof address !== “object” || address === null) {
-    throw new Error(“ke search stub failed to bind”);
+  if (typeof address !== "object" || address === null) {
+    throw new Error("ke search stub failed to bind");
   }
   return {
     apiToken,
