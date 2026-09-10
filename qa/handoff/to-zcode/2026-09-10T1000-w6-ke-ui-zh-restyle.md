@@ -35,3 +35,19 @@ knowledge-engine-page / ke-transient-issue / ke-kb-* / ke-create-kb / ke-seed / 
 
 - 后台任务列表 8→30 行（对齐 DA）；播种篇数选项 5/10/15/20/25（服务端上限 25）。
 - 评审 3C/2M/7m 全修（选择器失效×3、任务等待文本失效、位置持久化丢屏外节点、死键、token 硬编码色、括号本地化等）。
+
+## 追加修复（E2E 复跑发现）
+
+- **轮询链陈旧读修复（KnowledgeEnginePage）**：`refreshKbData` 现在返回 `{failed, jobs}`（本轮取到的任务列表），loop 用返回值判定是否有 pending/running，不再同步读 `jobsRef`——`await` 后 React 尚未刷新渲染，`jobsRef.current` 会拿到旧的空列表导致链提前停（表现：播种后面板冻结、文档列表不更新）。
+- **KB 切换即时清空（KnowledgeEnginePage）**：切换 KB 时立即清空 graph/documents/jobs/growStatus/roots/detail 五个状态片——此前旧 KB 的数据会残留到下一次刷新，既误导用户也让 journey 的文档 ✓ 等待吃到旧库的假阳性。
+- **J-KE1 步骤 1 断言放宽**：图谱区断言改为 `ke-graph-empty | ke-graph-canvas | ke-roots` 三选一——数据目录有遗留 KB 时首开会自动选中带社区的库，显示社区总览属合法状态。
+- **画布确定性测试钩子**：`window.__keGraphCy`（DA `__subjectGraph*` 先例），J-KE2 的节点点击改为 `page.evaluate` 里 `cy.nodes().first().emit("tap")`，盲点画布中心不可靠。
+- **jobs 排空预算 60s→180s**（三个 journey 统一）：10 篇串行摄取+抽取在共享机器上超过 60s。
+- **journey 必须在 WSL 里跑**：旅程注册的抽取 stub 监听 127.0.0.1:<动态端口>，Windows 侧跑 Playwright 时 WSL 栈够不到它（NAT 模式 localhost 不互通），ke_extract 全部 ECONNREFUSED→dead。WSL 侧跑（~/sciencediscovery/test + .e2e 依赖 + chromium-1228 已就绪）则闭环。
+- **隔离栈数据目录需每次重置**：遗留 KB 会污染首开状态（自动选中带实体的旧库）；本次用 `mv data6 data6.bak` 重置后两轮 journey 全绿（J-KE1 1.3m / J-KE2 1.6m）。
+
+## 验收状态
+
+- apps/web tsc ✅ / architecture:check ✅（228 文件）
+- J-KE1 + J-KE2 在隔离 fixture 栈（4390）全绿，零 console error；journey 报告含逐步截图（中文界面）。
+- 视觉抽查截图：roots 社区气泡、下钻、详情面板、图例、增长面板均为中文。
