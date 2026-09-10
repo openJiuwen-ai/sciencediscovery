@@ -453,9 +453,15 @@ export function createRunnerServer(
     bwrapPath: config.bwrapPath,
     ...await sandboxLaunchProfile(config.bwrapPath),
   }));
-  // Executions share the cached inventory so an NPU run re-validates its
-  // cards without re-probing the whole machine.
-  const executorConfig: RunnerConfig = { ...config, npuInventory: readNpuInventory };
+  // An execution does not share that cache: it re-probes the cards it named,
+  // and only those, so a card claimed by another tenant since the last status
+  // poll fails the execution by name instead of failing inside the framework.
+  const probeRequestedNpuDevices = async (requested: readonly number[]) => await collectNpuInventory({
+    bwrapPath: config.bwrapPath,
+    only: requested,
+    ...await sandboxLaunchProfile(config.bwrapPath),
+  });
+  const executorConfig: RunnerConfig = { ...config, npuDeviceProbe: probeRequestedNpuDevices };
   const executionQueues = new KeyedTaskQueue();
   const managedExecutions = new ExecutionManager(config.dataDir);
   const workspaceVersions = new VersionStore(config.dataDir);

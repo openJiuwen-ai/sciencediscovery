@@ -107,11 +107,12 @@ export interface SandboxRuntimeConfig {
 
 export interface ExecutorConfig extends SandboxRuntimeConfig {
   /**
-   * Reads this machine's NPU cards, cached by the caller. Absent on hosts
-   * without Ascend tooling and in tests, where an execution that asks for no
-   * card never consults it.
+   * Reads the current state of exactly the cards an execution asked for. The
+   * caller supplies it so the check is a fresh probe rather than the cached
+   * inventory the status surface reads. Absent on hosts without Ascend tooling
+   * and in tests, where an execution that asks for no card never calls it.
    */
-  npuInventory?: () => Promise<NpuInventory>;
+  npuDeviceProbe?: (requested: readonly number[]) => Promise<NpuInventory>;
   /** Packaged Python interpreter used when no managed environment is selected. */
   pythonPath?: string;
   /** Wall-clock limit for a single execution. */

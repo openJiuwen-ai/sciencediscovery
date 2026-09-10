@@ -345,10 +345,16 @@ export function npuProbeFailureReason(error: unknown, hostIndex: number): string
  * List the machine's cards and probe each one. Cards are probed concurrently:
  * each probe is an independent short-lived sandbox, and a machine with eight
  * cards would otherwise spend most of a minute on a status refresh.
+ *
+ * `only` narrows both the listing and the probing to the given host indices,
+ * which is what an execution needs: it must know about the cards it asked for
+ * right now, and re-probing the seven it did not ask for would cost seconds
+ * and could disturb cards another Session is using.
  */
 export async function collectNpuInventory(options: {
   bwrapPath: string;
   disableUserns: boolean;
+  only?: readonly number[];
   procMode: SandboxProcMode;
   tools?: NpuHostTools;
 }): Promise<NpuInventory> {
@@ -374,8 +380,21 @@ export async function collectNpuInventory(options: {
     const message = error instanceof Error ? error.message : String(error);
     return { capturedAt, devices: [], error: `Could not read NPU status: ${message}`, supported: true };
   }
-  const managementDevices = await availableNpuManagementDevices();
   const devices = parseNpuSmiInfo(listing);
+  await probeListedDevices(
+    options.only ? devices.filter((device) => options.only!.includes(device.hostIndex)) : devices,
+    context,
+  );
+  return {
+    capturedAt,
+    devices: options.only ? devices.filter((device) => options.only!.includes(device.hostIndex)) : devices,
+    supported: true,
+  };
+}
+
+/** Probe each listed card in its own throwaway sandbox, concurrently. */
+async function probeListedDevices(devices: NpuDeviceStatus[], context: NpuProbeContext): Promise<void> {
+  const managementDevices = await availableNpuManagementDevices();
   await Promise.all(devices.map(async (device) => {
     if (!SUPPORTED_CHIP_PATTERN.test(device.chipName)) {
       device.sandboxUsable = false;
@@ -386,7 +405,6 @@ export async function collectNpuInventory(options: {
     device.sandboxUsable = probe.usable;
     if (probe.reason) device.sandboxUnusableReason = probe.reason;
   }));
-  return { capturedAt, devices, supported: true };
 }
 
 /**
@@ -449,25 +467,31 @@ export class NpuDevicesUnavailableError extends Error {
 }
 
 /**
- * Validate an execution's requested cards against the machine's current
- * inventory and build the launch plumbing. Re-checking here rather than
- * trusting the tick alone matters on a shared host: a card that was usable
- * when the operator selected it can be claimed by someone else minutes later,
- * and running anyway would fail deep inside the framework.
+ * Validate an execution's requested cards and build the launch plumbing.
+ *
+ * The check is a fresh probe of exactly those cards, never the cached
+ * inventory the status surface reads. On a shared host a card is claimed and
+ * released by other tenants continuously, so a cached verdict up to a minute
+ * old can wave through a card that is already gone — and the execution then
+ * fails inside the framework with no card named, which is the outcome this
+ * whole feature exists to prevent. An execution that asked for no card returns
+ * before any of this, so ordinary runs never probe the machine.
  */
 export async function resolveExecutionNpu(
   options: {
     bwrapPath: string;
-    npuInventory?: () => Promise<NpuInventory>;
+    /** Test seam and injection point: read the state of exactly these cards. */
+    npuDeviceProbe?: (requested: readonly number[]) => Promise<NpuInventory>;
   },
   requested: NpuDeviceSelection | undefined,
   probeProfile?: () => Promise<{ disableUserns: boolean; procMode: SandboxProcMode }>,
 ): Promise<SandboxNpu | undefined> {
   if (!requested || requested.length === 0) return undefined;
-  const inventory = options.npuInventory
-    ? await options.npuInventory()
+  const inventory = options.npuDeviceProbe
+    ? await options.npuDeviceProbe(requested)
     : await collectNpuInventory({
       bwrapPath: options.bwrapPath,
+      only: requested,
       ...(probeProfile ? await probeProfile() : { disableUserns: false, procMode: "new" as SandboxProcMode }),
     });
   const resolved = resolveNpuSelection(requested, inventory);
