@@ -103,6 +103,9 @@ export interface IdeaTreeContext {
 }
 
 export interface IdeaTreeNode {
+  /** Present for autonomous research; absent on legacy trees. */
+  kind?: "direction" | "candidate";
+  stages?: Record<string, { text: string; score?: number }>;
   subagentIds?: string[];
   activeExecutionId: string | null;
   artifactRefs: string[];

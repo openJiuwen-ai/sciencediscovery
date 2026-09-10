@@ -245,8 +245,8 @@ export function IdeaTreeCanvas({
         {graph.edges.map((edge) => {
           const source = position(edge.source);
           const target = position(edge.target);
-          const sourceVisible = !visibleStatuses || visibleStatuses.has(nodeById.get(edge.source)?.status ?? "pending");
-          const targetVisible = !visibleStatuses || visibleStatuses.has(nodeById.get(edge.target)?.status ?? "pending");
+          const sourceVisible = nodeById.get(edge.source)?.kind === "direction" || !visibleStatuses || visibleStatuses.has(nodeById.get(edge.source)?.status ?? "pending");
+          const targetVisible = nodeById.get(edge.target)?.kind === "direction" || !visibleStatuses || visibleStatuses.has(nodeById.get(edge.target)?.status ?? "pending");
           if (!sourceVisible || !targetVisible) return null;
           const path = orientation === "left-right"
             ? (() => {
@@ -269,7 +269,7 @@ export function IdeaTreeCanvas({
           />;
         })}
         {graph.nodes.map((node) => {
-          if (visibleStatuses && !visibleStatuses.has(node.status)) return null;
+          if (node.kind !== "direction" && visibleStatuses && !visibleStatuses.has(node.status)) return null;
           const { x, y } = position(node.id);
           const matches = !normalizedQuery || `${node.id} ${node.hypothesis} ${node.insight ?? ""}`.toLowerCase().includes(normalizedQuery);
           return <g
@@ -294,7 +294,7 @@ export function IdeaTreeCanvas({
               x={NODE_WIDTH - 91}
               y="10"
             />
-            <text className="idea-tree-node-status" fill={IDEA_TREE_STATUS_COLORS[node.status]} textAnchor="middle" x={NODE_WIDTH - 52} y="24">{node.status.replace("_", " ")}</text>
+            <text className="idea-tree-node-status" fill={IDEA_TREE_STATUS_COLORS[node.status]} textAnchor="middle" x={NODE_WIDTH - 52} y="24">{node.kind === "direction" ? "方向" : node.status.replace("_", " ")}</text>
             <foreignObject height="40" width={NODE_WIDTH - 40} x="20" y="38">
               <div className="idea-tree-node-title" title={node.hypothesis}>{node.hypothesis}</div>
             </foreignObject>

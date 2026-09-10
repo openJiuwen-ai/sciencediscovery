@@ -127,3 +127,15 @@ test("Idea Tree canvas covers every runtime node status", () => {
     ["done", "failed", "needs_retry", "pending", "running"],
   );
 });
+
+test("autonomous research presents stage results without legacy execution fields", () => {
+  const researchGraph: IdeaTreeGraph = {...graph, nodes: graph.nodes.map(n => n.id === "ROOT" ? {
+    ...n, kind: "direction", stages: {aggregate: {text: "Prefer recoverable materials; verify leaching."}},
+  } : n)};
+  const html = renderToStaticMarkup(createElement(IdeaTreeExplorer, {
+    autonomous: true, graph: researchGraph, onClose() {}, onSelectTree() {}, treeIds: [graph.treeId],
+  }));
+  assert.match(html, /综合评估/);
+  assert.match(html, /Prefer recoverable materials/);
+  assert.doesNotMatch(html, /Result handle|Active execution|revision 4/);
+});

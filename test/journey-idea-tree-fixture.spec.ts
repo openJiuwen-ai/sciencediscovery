@@ -74,7 +74,10 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await page.reload();
       await expect(panel).toContainText("第 3 / 3 轮");
       await panel.getByRole("button", {name: "查看树与结果"}).click();
-      await expect(page.getByRole("dialog", {name: "Idea Tree explorer"})).toContainText("Shared insight: improve recovery");
+      const explorer = page.getByRole("dialog", {name: "Idea Tree explorer"});
+      await expect(explorer).toContainText("Shared insight: improve recovery");
+      await expect(explorer).not.toContainText("Result handle");
+      await expect(explorer).not.toContainText("revision 0");
     });
     await journey.step("结束另一次研究", "确认结束保留已有状态，不能再继续", async () => {
       await page.reload();
