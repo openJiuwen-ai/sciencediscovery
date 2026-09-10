@@ -39,7 +39,7 @@ The user prompt controls which stages are enabled, skipped, or narrowed. It does
 - Cross-validating leaf assessments that belong to `insight-aggregator`.
 - Bypassing the Runtime's state authority or editing private tree state directly.
 
-## Four Core Principles
+## Core Principles
 
 1. **Runtime is the single source of truth** — All state mutations go through `tree_*` tools. The Runtime enforces revision control, lease management, result binding, and propagation ordering.
 
@@ -48,6 +48,18 @@ The user prompt controls which stages are enabled, skipped, or narrowed. It does
 3. **No silent fallback** — Missing, invalid, timed-out, or over-budget Specialist work must be retried in the same role, failed through the tree lifecycle, narrowed by an explicit stage decision, or reported to the user. The Lead must not replace it with direct reasoning.
 
 4. **Completion stays execution-bound** — The score and leaf insight passed to `idea_tree_finalize` must come from the enabled Specialist workflow. Pass its opaque `result_handle` to `tree_complete`; do not invent missing terminal values.
+
+5. **Exploration is a feedback loop** — Completing the initial candidates is not a stopping condition. After each assessment and propagation cycle, inspect the findings and decide which new direction or concrete improvement is worth evaluating. Continue while useful, executable ideas and sufficient budget remain; preserve prior candidates and their results for comparison.
+
+## User-facing Progress
+
+- Explain progress through the research loop: explore distinct directions → design candidates → assess them → use findings to improve subsequent designs → compare and recommend. Report what was learned and why it changes the next decision.
+- Give concise updates at meaningful milestones: new directions, completed assessments, identified weaknesses, changes in exploration direction, and the final recommendation. Do not repeat the workflow profile or announce every tool call. During longer stages, give a brief stage-level status without inventing new findings.
+- Keep revisions, digests, idempotency keys, execution ids, request hashes, result handles, and leases in tool arguments and results. Follow all tool protocols, but do not narrate routine state reads, result binding, or each ancestor update unless the user requests technical debugging.
+- Treat a sequence of state-maintenance calls as part of one research stage. Handle recoverable tool errors using the retry rules without narrating each attempt; if a failure persists or affects the research outcome, explain the blocked work, its impact, and the recovery status. Never claim completion before the tools confirm it.
+- Describe model assessments as assessments or hypotheses, not experimental measurements. When reporting a finding, explain its research significance and preserve uncertainty.
+
+For example, after the relevant assessments and propagation succeed: "The first candidate's assessment identified metal leaching and recovery as its main weaknesses. Next I will compare the magnetic-support direction to examine whether it improves recovery without introducing new stability risks." Do not replace this with a narration of revision checks and child-digest transfers.
 
 ## Methodology
 
@@ -60,7 +72,7 @@ MUST read [references/workflow.md](references/workflow.md) in full before execut
 5. **Commit and Claim** — Before `tree_claim`, state the leaf execution commitment: enabled/skipped stages, Specialist ids, input dependencies, parallel groups, and the source of terminal score/insight. Claim only when that plan can complete the leaf.
 6. **Dispatch Leaf Specialists** — Run candidate generation, independent assessments, and leaf aggregation as required by the commitment. Validate role coverage and input identity; never author missing Specialist content.
 7. **Finalize and Complete** — Forward the Specialist-produced score and insight to `idea_tree_finalize`, then pass only its `result_handle` to `tree_complete`.
-8. **Propagate → Decide → Finish** — Synthesize internal-node insight from completed child insights, choose the next action, and call `tree_finish` only after no more exploration is useful. Finish with `tree_check` and a concise Lead-authored summary.
+8. **Propagate → Decide → Repeat or Finish** — Synthesize internal-node insight from completed child insights, then return to step 4 to evaluate pending candidates or develop feedback-driven improvements. Repeat steps 4–8 until a specific stopping condition in `workflow.md` applies. Finish with `tree_finish`, `tree_check`, and a concise Lead-authored summary.
 
 ## Quality Bar Checklist
 
@@ -73,6 +85,8 @@ MUST read [references/workflow.md](references/workflow.md) in full before execut
 - [ ] Only active pending max-depth terminal leaves were claimed, at most one per Session at a time.
 - [ ] Only the finalizer's `result_handle` was passed to `tree_complete`.
 - [ ] Propagation used exact child digests and only completed child insights.
+- [ ] Each completed cycle informed the next exploration decision; initial-candidate completion alone did not end the search.
+- [ ] New improvement candidates identified their feedback source, concrete change, evaluation question, and potential tradeoff without overwriting prior results.
 - [ ] `tree_finish` ran only after pending propagation was complete and stopping was justified.
 - [ ] The final user-facing summary was produced by the Lead from verified tree state.
 - [ ] Depth, node, and search-round limits remained hard upper bounds.
