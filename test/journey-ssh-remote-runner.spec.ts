@@ -336,8 +336,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByText("GPU analysis", { exact: true })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "Add SSH machine" })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "Add self-deployed runner" })).toBeVisible();
-        await expect(dialog.getByText("Runner ID: local", { exact: true })).toBeVisible();
-        await expect(dialog.getByText(`Runner ID: ${hostId}`, { exact: true })).toBeVisible();
+        await expect(dialog.getByText("Runner ID：local", { exact: true })).toBeVisible();
+        await expect(dialog.getByText(`Runner ID：${hostId}`, { exact: true })).toBeVisible();
         await expect(dialog.getByText("Python and R analysis on the lab GPU", { exact: true })).toBeVisible();
         // No blank form competes with the list, and no scoped controls live here.
         await expect(dialog.getByLabel("SSH alias or IP/hostname")).toHaveCount(0);
@@ -636,7 +636,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await dialog.getByLabel(/^Port$/).fill("4311");
         await dialog.getByLabel("Token", { exact: true }).fill("e2e-mock-token");
         await dialog.getByRole("button", { name: "Connect and add" }).click();
-        await expect(dialog.getByText("Runner ID: e2e-direct-runner", { exact: true })).toBeVisible();
+        await expect(dialog.getByText("Runner ID：e2e-direct-runner", { exact: true })).toBeVisible();
         await expect(dialog.getByText("Self-deployed CPU sandbox", { exact: true })).toBeVisible();
         await expect(dialog.getByText("Self-deployed · direct", { exact: true })).toBeVisible();
         const directCard = dialog.locator(".remote-host-card", { hasText: "e2e-direct-runner" });
