@@ -16,6 +16,8 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import type {
   PermissionDecision,
+  NpuInventory,
+  NpuRunnerSelectionsResponse,
   Project,
   SshConfigHostImport,
   RemoteHostTarget,
@@ -23,7 +25,7 @@ import type {
   Session,
   UpdateSessionRequest,
 } from "@sciencediscovery/schema";
-import { selectableNpuDevices } from "@sciencediscovery/schema";
+import { LOCAL_RUNNER_ID, selectableNpuDevices } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
@@ -95,31 +97,36 @@ function npuMemory(usedMb: number | undefined, totalMb: number | undefined): str
 }
 
 /**
- * The machine's NPU cards and which of them may be handed to sandboxes.
+ * A Runner's NPU cards and which of them may be handed to its sandboxes.
  *
- * Every card is listed, including the ones that cannot be used: hiding them
- * would leave an operator wondering where card 0 went. An unusable card is
- * shown with its checkbox disabled and the driver's own reason on the row, so
- * the failure is understood while ticking rather than during an execution.
+ * Runner-agnostic on purpose: the local machine can carry the NPUs just as a
+ * registered one can, and an operator must be able to tick either without the
+ * two behaving differently. Every card is listed, including the ones that
+ * cannot be used — hiding them would leave someone wondering where NPU 0 went.
+ * An unusable card is shown with its checkbox disabled and the driver's own
+ * reason on the row, so the refusal is understood while ticking rather than
+ * during an execution.
  */
-export function NpuDeviceSelector({ client, host, onError, onHostChange }: {
+export function NpuDeviceSelector({ client, inventory, onError, onSelected, runnerId, selected }: {
   client: ApiClient;
-  host: RemoteHostTarget;
+  inventory: NpuInventory | null | undefined;
   onError: (message: string) => void;
-  onHostChange: (host: RemoteHostTarget) => void;
+  onSelected: (devices: number[]) => void;
+  runnerId: string;
+  selected: readonly number[];
 }): ReactNode {
   const [saving, setSaving] = useState(false);
-  const inventory = host.runnerStatus?.resources?.npu;
   if (!inventory) return null;
-  const selected = new Set(host.npuDevices ?? []);
+  const ticked = new Set(selected);
   const usableCount = selectableNpuDevices(inventory).length;
 
   const toggle = async (hostIndex: number, checked: boolean): Promise<void> => {
-    const next = new Set(selected);
+    const next = new Set(ticked);
     if (checked) next.add(hostIndex); else next.delete(hostIndex);
+    const devices = [...next].sort((left, right) => left - right);
     setSaving(true);
     try {
-      onHostChange(await client.setRemoteHostNpuDevices(host.id, [...next].sort((a, b) => a - b)));
+      onSelected((await client.setRunnerNpuDevices(runnerId, devices)).devices);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -142,7 +149,7 @@ export function NpuDeviceSelector({ client, host, onError, onHostChange }: {
             <label>
               <input
                 type="checkbox"
-                checked={selected.has(device.hostIndex)}
+                checked={ticked.has(device.hostIndex)}
                 disabled={!device.sandboxUsable || saving}
                 onChange={(event) => { void toggle(device.hostIndex, event.target.checked); }}
               />
@@ -221,6 +228,14 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
 }) {
   const { t } = useLocale();
   const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
+  // Which cards each Runner may hand to its sandboxes, plus this machine's own
+  // cards. Kept beside the machines rather than on them: the local Runner has
+  // no machine record, and one state keeps both paths identical.
+  const [npu, setNpu] = useState<NpuRunnerSelectionsResponse>();
+  const npuSelections = npu?.selections ?? {};
+  const selectNpu = (runnerId: string, devices: number[]): void => {
+    setNpu((current) => current && { ...current, selections: { ...current.selections, [runnerId]: devices } });
+  };
   const [adding, setAdding] = useState<"direct" | "ssh">();
   const [alias, setAlias] = useState("");
   const [runnerName, setRunnerName] = useState("");
@@ -254,6 +269,18 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   }
 
   useEffect(() => { void refresh().catch((error: Error) => onError(error.message)); }, [client]);
+  // Read once for all Runners rather than per machine record, and separately
+  // from the catalog so a machine list still renders if this call fails.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async (): Promise<void> => {
+      const loaded = await client.listRunnerNpuDevices();
+      if (!cancelled) setNpu(loaded);
+    };
+    void load().catch((error: unknown) => { onError(error instanceof Error ? error.message : String(error)); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client]);
   useEffect(() => () => onCredentialEditStateChange?.(false), [onCredentialEditStateChange]);
 
   function clearCredentialDraft(): void {
@@ -605,7 +632,19 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
 
   return <div className="remote-host-manager">
     <div className="settings-detail-header"><span className="eyebrow">{t("remote.eyebrow")}</span><h3>{t("remote.runnersTitle")}</h3><p>{t("remote.runnersHelp")}</p></div>
-    <article className="remote-host-card ready"><div className="remote-host-card-main"><strong>{t("remote.localRunner")}</strong><small>{t("remote.runnerId", { id: "local" })}</small><small>{t("remote.localRunnerHelp")}</small></div></article>
+    <article className="remote-host-card ready">
+      <div className="remote-host-card-main"><strong>{t("remote.localRunner")}</strong><small>{t("remote.runnerId", { id: "local" })}</small><small>{t("remote.localRunnerHelp")}</small></div>
+      {/* This machine can carry the NPUs too, so its cards are ticked here
+          rather than requiring an operator to register it as a remote one. */}
+      <NpuDeviceSelector
+        client={client}
+        inventory={npu?.local}
+        onError={onError}
+        onSelected={(devices) => selectNpu(LOCAL_RUNNER_ID, devices)}
+        runnerId={LOCAL_RUNNER_ID}
+        selected={npuSelections[LOCAL_RUNNER_ID] ?? []}
+      />
+    </article>
     {hosts.length ? <div className="remote-host-list">{hosts.map((host) => {
       const connected = host.runnerStatus?.state === "ready";
       const state = connected ? "ready" : host.runnerStatus?.state ?? host.status;
@@ -658,9 +697,11 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           <RunnerResourceSummary host={host} />
           <NpuDeviceSelector
             client={client}
-            host={host}
+            inventory={host.runnerStatus?.resources?.npu}
             onError={onError}
-            onHostChange={(updated) => { setHosts((current) => (current ?? []).map((entry) => entry.id === updated.id ? { ...entry, ...updated } : entry)); }}
+            onSelected={(devices) => selectNpu(host.id, devices)}
+            runnerId={host.id}
+            selected={npuSelections[host.id] ?? []}
           />
         </div>
         </details>
