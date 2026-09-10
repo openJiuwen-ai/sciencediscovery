@@ -1,38 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { IdeaResearchView, IdeaTreeSettingsDetails } from "@sciencediscovery/schema";
+import type { IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
 import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
-import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
 
 const phases: Record<string, string> = {ideate: "构思方向与改进", design: "设计候选", activity: "活性评估", stability: "稳定性评估", sustainability: "可持续性评估", aggregate: "聚合评估", propagate: "汇总研究发现", complete: "已完成"};
 const statuses: Record<string, string> = {running: "运行中", pausing: "正在暂停", paused: "已暂停", interrupted: "已中断", completed: "已完成", ended: "已结束"};
 
 export function IdeaResearchPanel({client, sessionId, onError}: {client: ApiClient; sessionId: string; onError: (message: string) => void}) {
   const element = useRef<HTMLElement>(null);
-  const [settings, setSettings] = useState<IdeaTreeSettingsDetails>();
-  const [draft, setDraft] = useState<IdeaTreeSettingsDraft>();
-  const [showSettings, setShowSettings] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [items, setItems] = useState<IdeaResearchView[]>([]);
   const [selected, setSelected] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState<string>();
   const [error, setError] = useState<string>();
-  useEffect(() => {
-    let active = true;
-    void client.getIdeaTreeSettings().then(value => {if (active) setSettings(value);}).catch(e => {if (active) setError(String(e));});
-    return () => {active = false;};
-  }, [client]);
-  async function saveSettings() {
-    if (!settings) return;
-    setSaving(true);
-    try {
-      setSettings(await client.updateIdeaTreeSettings(ideaTreeSettingsRequest(draft ?? createIdeaTreeSettingsDraft(settings))));
-      setDraft(undefined);
-      setShowSettings(false);
-    } catch (e) {onError(e instanceof Error ? e.message : String(e));}
-    finally {setSaving(false);}
-  }
   const load = useCallback(async () => {
     try { const result = await client.listIdeaResearch(sessionId); setItems(result.items); setError(undefined); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -58,12 +38,11 @@ export function IdeaResearchPanel({client, sessionId, onError}: {client: ApiClie
     finally {setBusy(false);}
   }
   const view = items.find(i => i.research.id === selected) ?? items[0];
-  const r = view?.research;
+  if (!view) return null;
+  const r = view.research;
   return <section ref={element} className="idea-research-panel" aria-label="Idea Tree 研究控制">
-    <header className="idea-research-actions"><strong>Idea Tree</strong><button className="secondary-button" type="button" onClick={() => setShowSettings(!showSettings)}>树配置</button></header>
-    {showSettings && settings && <IdeaTreeSettingsEditor draft={draft ?? createIdeaTreeSettingsDraft(settings)} settings={settings} onChange={setDraft} saving={saving} onSave={() => void saveSettings()} />}
-    {(showSettings || view) && error && <p role="alert">{error} <button type="button" onClick={() => void load()}>重试</button></p>}
-    {view && r && <IdeaTreeExplorer autonomous embedded graph={view.graph} treeIds={items.map(i => i.research.id)} onClose={() => {}} onSelectTree={setSelected}
+    {error && <p role="alert">{error} <button type="button" onClick={() => void load()}>重试</button></p>}
+    <IdeaTreeExplorer autonomous embedded graph={view.graph} treeIds={items.map(i => i.research.id)} onClose={() => {}} onSelectTree={setSelected}
       controls={<div className="idea-research-progress">
         <p>{statuses[r.status]} · 第 {r.round} / {r.settings.maxRounds} 轮 · 本轮完成 {r.batchCompleted} / {r.batch.length || r.batchCompleted}</p>
         <p>{phases[r.phase] ?? r.phase} · 已评估 {view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length} 个候选 · tokens {r.usageKnown ? r.tokens : `${r.tokens}（部分用量未知）`}</p>
@@ -74,6 +53,6 @@ export function IdeaResearchPanel({client, sessionId, onError}: {client: ApiClie
           {!["completed", "ended"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmEnd(r.id)}>结束研究</button>}
         </div>
         {confirmEnd === r.id && <div role="alert">结束后不能继续，已有结果会保留。<div className="idea-research-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => void command("end", r.id)}>确认结束</button><button className="secondary-button" type="button" onClick={() => setConfirmEnd(undefined)}>取消</button></div></div>}
-      </div>} />}
+      </div>} />
   </section>;
 }
