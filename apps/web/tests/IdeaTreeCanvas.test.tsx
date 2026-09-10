@@ -139,3 +139,14 @@ test("autonomous research presents stage results without legacy execution fields
   assert.match(html, /Prefer recoverable materials/);
   assert.doesNotMatch(html, /Result handle|Active execution|revision 4/);
 });
+
+
+test("embedded research keeps controls and node findings in the tree without a dialog", () => {
+  const html = renderToStaticMarkup(createElement(IdeaTreeExplorer, {
+    autonomous: true, embedded: true, graph, controls: createElement("button", {}, "暂停"),
+    onClose() {}, onSelectTree() {}, treeIds: [graph.treeId],
+  }));
+  assert.match(html, /暂停/);
+  assert.match(html, /role="region"/);
+  assert.doesNotMatch(html, /role="dialog"|aria-modal="true"|idea-tree-explorer-backdrop|Close Idea Tree/);
+});

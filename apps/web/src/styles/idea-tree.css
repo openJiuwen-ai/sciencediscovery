@@ -79,3 +79,20 @@
   .idea-tree-explorer-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, .75fr) minmax(0, 1.5fr); }
   .idea-tree-explorer-detail { border-right: 0; border-bottom: 1px solid var(--border); }
 }
+
+/* Autonomous research lives in the workspace tree surface, without an overlay. */
+.idea-research-panel { min-width: 0; }
+.idea-tree-inline .idea-tree-explorer-panel { width: 100%; height: auto; border-radius: 10px; box-shadow: none; }
+.idea-tree-inline .idea-tree-explorer-header { align-items: flex-start; flex-wrap: wrap; gap: 8px; padding: 12px; }
+.idea-tree-inline .idea-tree-explorer-header p { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.idea-tree-inline .idea-tree-explorer-controls { flex-wrap: wrap; gap: 8px; }
+.idea-tree-inline .idea-tree-explorer-controls select { max-width: 180px; }
+.idea-tree-inline .idea-tree-explorer-body { display: flex; flex-direction: column-reverse; }
+.idea-tree-inline .idea-tree-explorer-graph { flex: none; height: 380px; }
+.idea-tree-inline .idea-tree-explorer-detail { max-height: 420px; border-right: 0; border-top: 1px solid var(--border); }
+.idea-tree-inline .idea-tree-toolbar { flex-wrap: wrap; }
+.idea-tree-inline .idea-tree-search { min-width: 0; }
+.idea-tree-inline .idea-tree-canvas-hint { display: none; }
+.idea-research-progress { border-bottom: 1px solid var(--border); padding: 10px 12px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.idea-research-progress p { margin: 0 0 6px; }
+.idea-research-actions { display: flex; flex-wrap: wrap; gap: 8px; }

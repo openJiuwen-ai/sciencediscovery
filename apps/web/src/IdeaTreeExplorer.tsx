@@ -3,7 +3,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { IdeaTreeGraph, IdeaTreeNode } from "@sciencediscovery/schema";
 
@@ -69,6 +69,8 @@ function IdeaTreeNodeDetail({ node, autonomous, onOpenArtifact, onOpenSubagent }
 export function IdeaTreeExplorer({
   graph,
   autonomous = false,
+  embedded = false,
+  controls,
   onOpenArtifact,
   onOpenSubagent,
   loading,
@@ -78,6 +80,8 @@ export function IdeaTreeExplorer({
 }: {
   graph: IdeaTreeGraph;
   autonomous?: boolean;
+  embedded?: boolean;
+  controls?: ReactNode;
   onOpenArtifact?: (id: string) => void;
   onOpenSubagent?: (id: string) => void;
   loading?: boolean;
@@ -94,10 +98,11 @@ export function IdeaTreeExplorer({
   }, [graph.treeId]);
 
   useEffect(() => {
+    if (embedded) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [embedded, onClose]);
 
   const selected = useMemo(
     () => graph.nodes.find((node) => node.id === selectedId),
@@ -118,8 +123,8 @@ export function IdeaTreeExplorer({
     });
   };
 
-  return <div className="idea-tree-explorer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section aria-label="Idea Tree explorer" aria-modal="true" className="idea-tree-explorer-panel" role="dialog">
+  return <div className={embedded ? "idea-tree-inline" : "idea-tree-explorer-backdrop"} onMouseDown={(event) => { if (!embedded && event.target === event.currentTarget) onClose(); }}>
+    <section aria-label="Idea Tree explorer" aria-modal={embedded ? undefined : true} className="idea-tree-explorer-panel" role={embedded ? "region" : "dialog"}>
       <header className="idea-tree-explorer-header">
         <div>
           <span className="eyebrow">Agent search</span>
@@ -135,9 +140,10 @@ export function IdeaTreeExplorer({
           </label> : null}
           <span>{graph.nodes.length} nodes</span>
           {!autonomous && <span>revision {graph.revision}</span>}
-          <button aria-label="Close Idea Tree" className="icon-button" onClick={onClose} type="button"><CloseIcon size={20} /></button>
+          {!embedded && <button aria-label="Close Idea Tree" className="icon-button" onClick={onClose} type="button"><CloseIcon size={20} /></button>}
         </div>
       </header>
+      {controls}
       <div className="idea-tree-explorer-body">
         <aside className="idea-tree-explorer-detail"><IdeaTreeNodeDetail autonomous={autonomous} node={selected} onOpenArtifact={onOpenArtifact} onOpenSubagent={onOpenSubagent} /></aside>
         <main className="idea-tree-explorer-graph">

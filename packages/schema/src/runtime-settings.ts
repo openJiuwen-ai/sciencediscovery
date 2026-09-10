@@ -267,6 +267,10 @@ export interface IdeaTreeAssessorConfig {
  * 生效时机：保存后对后续 Run 立即生效，进行中的 Run 不受影响。
  */
 export interface IdeaTreeSettings {
+  maxRounds?: number;
+  candidatesPerRound?: number;
+  maxTokens?: number | null;
+  maxTokensPerCall?: number;
   /** 建树默认参数 */
   maxDepth: number;
   maxNodes: number;
@@ -290,6 +294,10 @@ export interface IdeaTreeSettings {
 }
 
 export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
+  maxRounds: 3,
+  candidatesPerRound: 3,
+  maxTokens: null,
+  maxTokensPerCall: 4000,
   maxDepth: 5,
   maxNodes: 100,
   maxSearchRounds: 10,
@@ -301,6 +309,10 @@ export const DEFAULT_IDEA_TREE_SETTINGS: IdeaTreeSettings = {
 
 /** Idea Tree 设置返回给前端的视图 */
 export interface IdeaTreeSettingsDetails {
+  maxRounds?: number;
+  candidatesPerRound?: number;
+  maxTokens?: number | null;
+  maxTokensPerCall?: number;
   maxDepth: number;
   maxNodes: number;
   maxSearchRounds: number;
@@ -315,6 +327,10 @@ export interface IdeaTreeSettingsDetails {
 
 /** Idea Tree 设置写入 payload。每个字段可选，独立更新。空值（空字符串/undefined）即使用默认。 */
 export interface UpdateIdeaTreeSettingsRequest {
+  maxRounds?: number;
+  candidatesPerRound?: number;
+  maxTokens?: number | null;
+  maxTokensPerCall?: number;
   maxDepth?: number;
   maxNodes?: number;
   maxSearchRounds?: number;
