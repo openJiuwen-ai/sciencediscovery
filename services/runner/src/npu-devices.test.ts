@@ -51,6 +51,11 @@ const NPU_SMI_910B3 = `+--------------------------------------------------------
 | 5     910B3               | OK            | 100.8       44                0    / 0             |
 | 0                         | 0000:02:00.0  | 12          0    / 0          60156/ 65536         |
 +===========================+===============+====================================================+
++---------------------------+---------------+----------------------------------------------------+
+| NPU     Chip              | Process id    | Process name             | Process memory(MB)      |
++===========================+===============+====================================================+
+| 5       0                 | 2290156       | VLLMEngineCore           | 56630                   |
++===========================+===============+====================================================+
 `;
 
 const CONTEXT: NpuProbeContext = {
@@ -90,6 +95,14 @@ describe("npu-smi parsing", () => {
   test("skips rows it cannot parse instead of losing the whole table", () => {
     const devices = parseNpuSmiInfo(`${NPU_SMI_910B3}| garbage row without metrics |\n| not-a-number  x | y | z |\n`);
     assert.deepEqual(devices.map((device) => device.hostIndex), [0, 5]);
+  });
+
+  test("stops at the process table instead of listing processes as cards", () => {
+    // npu-smi prints running processes in a second table whose rows start with
+    // the same "<npu> <chip>" shape; parsing them would invent phantom cards.
+    const devices = parseNpuSmiInfo(NPU_SMI_910B3);
+    assert.deepEqual(devices.map((device) => device.hostIndex), [0, 5]);
+    assert.ok(devices.every((device) => /[A-Za-z]/u.test(device.chipName)));
   });
 
   test("returns nothing for output that holds no device rows", () => {
