@@ -137,6 +137,7 @@ import {
   BUILT_IN_SKILL_LIBRARY_ID,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   UNTITLED_SESSION_TITLE,
+  resolveNpuSelection,
 } from "@sciencediscovery/schema";
 
 import { SessionStoreHttpError } from "../store.js";
@@ -1167,6 +1168,26 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // just stored above. Returning the old error would make a successful
         // save look ineffective until the user manually refreshed the host.
         sendJson(response, 200, await probeRegisteredSshHost(host.id, host.runnerCommand));
+        return;
+      }
+      const remoteHostNpuMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/npu-devices$/);
+      if (remoteHostNpuMatch && request.method === "PUT") {
+        const host = store.getRemoteHost(remoteHostNpuMatch[1]!);
+        if (!host) return sendError(response, 404, "Remote host not found");
+        const body = await readJson<{ devices?: unknown }>(request);
+        const devices = body.devices;
+        if (!Array.isArray(devices) || devices.some((entry) => typeof entry !== "number")) {
+          return sendError(response, 400, "Select NPU cards by their host index");
+        }
+        // The Runner is the only place that knows whether a card opens inside a
+        // sandbox, so refuse anything its probe did not clear rather than
+        // storing a tick that would fail at execution time.
+        const inventory = host.runnerStatus?.resources?.npu;
+        const resolved = resolveNpuSelection(devices as number[], inventory);
+        if (resolved.rejected.length > 0) {
+          return sendError(response, 409, resolved.rejected.map((entry) => entry.reason).join(" "));
+        }
+        sendJson(response, 200, await store.setRemoteHostNpuDevices(host.id, resolved.accepted));
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/remote-hosts/key-files") {

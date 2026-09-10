@@ -201,6 +201,19 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/probe`, { method: "POST" });
   }
 
+  /**
+   * Choose which NPU cards this machine may hand to sandboxes. The API refuses
+   * cards the Runner's sandbox probe could not open, so a rejected selection
+   * comes back as an error naming the card rather than being stored and
+   * failing later at execution time.
+   */
+  setRemoteHostNpuDevices(hostId: string, devices: number[]): Promise<RemoteHostTarget> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/npu-devices`, {
+      body: JSON.stringify({ devices }),
+      method: "PUT",
+    });
+  }
+
   deleteRemoteHost(hostId: string): Promise<{ deleted: string }> {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}`, { method: "DELETE" });
   }

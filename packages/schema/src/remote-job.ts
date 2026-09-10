@@ -133,6 +133,12 @@ export interface RemoteHostTarget {
    * just presented with `trusted: false` when it is not accepted yet.
    */
   hostKey?: RemoteHostKeyState;
+  /**
+   * Host indices of the NPU cards an operator ticked for sandbox use on this
+   * machine. Only cards the Runner's probe could open inside a sandbox are
+   * accepted, so this is a set of cards known to work, not a wish list.
+   */
+  npuDevices?: number[];
   /** Login user for `ssh` machines. */
   username?: string;
   /** Pre-installed executable or absolute executable path; never a shell expression. */

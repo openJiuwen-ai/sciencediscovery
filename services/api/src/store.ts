@@ -3606,6 +3606,27 @@ export class SessionStore {
   }
 
   /**
+   * Record which NPU cards this machine may hand to sandboxes. The caller has
+   * already checked them against the Runner's probe; storing the host indices
+   * rather than a count keeps the mapping stable when cards come and go.
+   */
+  async setRemoteHostNpuDevices(hostId: string, devices: readonly number[]): Promise<RemoteHostTarget> {
+    const host = this.catalog.remoteHosts.find((entry) => entry.id === hostId);
+    if (!host) throw new Error("Runner not found");
+    const selected = [...new Set(devices)]
+      .filter((index) => Number.isSafeInteger(index) && index >= 0 && index < 1024)
+      .sort((left, right) => left - right);
+    if (selected.length !== new Set(devices).size) {
+      throw new Error("An NPU card must be identified by its non-negative host index");
+    }
+    if (selected.length === 0) delete host.npuDevices;
+    else host.npuDevices = selected;
+    host.updatedAt = new Date().toISOString();
+    await this.saveCatalog();
+    return this.describeRemoteHostSecrets(structuredClone(host));
+  }
+
+  /**
    * A stored secret of a remote machine: the runner token of a self-deployed
    * runner, or the password, private key or passphrase used to log into an SSH
    * machine. They stay encrypted beside the model credentials and are never

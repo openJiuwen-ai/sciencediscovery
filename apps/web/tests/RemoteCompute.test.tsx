@@ -23,7 +23,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
 import { hostKeyFromError } from "../src/api/settings.js";
-import { RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
+import { NpuDeviceSelector, RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
 import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
@@ -398,4 +398,105 @@ test("historical SLURM jobs have no active refresh action", () => {
   const html = renderPanel(job, { [activityCardId("remote-job", job.id)]: true });
 
   assert.doesNotMatch(html, /Refresh SLURM status/);
+});
+
+/** A machine with one usable card and one the sandbox probe refused. */
+function npuHost(overrides: Partial<RemoteHostTarget> = {}): RemoteHostTarget {
+  return buildHost({
+    npuDevices: [4],
+    runnerStatus: { hostId: "host-1", state: "ready", resources: {
+      capturedAt: timestamp, cpuCores: 4, loadAverage1m: 0.25,
+      memoryTotalBytes: 4 * 1024 ** 3, memoryFreeBytes: 2 * 1024 ** 3, uptimeSeconds: 7200,
+      npu: {
+        capturedAt: timestamp,
+        supported: true,
+        devices: [
+          { chipName: "910B3", health: "OK", hostIndex: 0, hbmUsedMb: 3445, hbmTotalMb: 65_536,
+            aiCorePercent: 0, temperatureCelsius: 45, sandboxUsable: false,
+            sandboxUnusableReason: "NPU 0 cannot be opened inside the sandbox: dcmi model initialized failed, because the device is used. ret is -8020" },
+          { chipName: "910B3", health: "OK", hostIndex: 4, hbmUsedMb: 3418, hbmTotalMb: 65_536,
+            aiCorePercent: 12, temperatureCelsius: 49, sandboxUsable: true },
+        ],
+      },
+      workspaceDisk: { path: "/data/remote-workspaces", availableBytes: 20 * 1024 ** 3, totalBytes: 30 * 1024 ** 3 },
+    } },
+    ...overrides,
+  });
+}
+
+const npuClient = (calls: number[][] = []): ApiClient => ({
+  setRemoteHostNpuDevices: async (_hostId: string, devices: number[]) => {
+    calls.push(devices);
+    return npuHost({ npuDevices: devices });
+  },
+} as unknown as ApiClient);
+
+test("NPU cards list every card with its status and usage, including unusable ones", () => {
+  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
+    client: npuClient(), host: npuHost(), onError: () => {}, onHostChange: () => {},
+  }));
+  // Both cards are listed: hiding the unusable one would leave the operator
+  // wondering where NPU 0 went.
+  assert.match(markup, /NPU 0 · 910B3/);
+  assert.match(markup, /NPU 4 · 910B3/);
+  assert.match(markup, /3\.4 \/ 64\.0 GiB/);
+  assert.match(markup, /12% AI core/);
+  assert.match(markup, /49 °C/);
+  assert.match(markup, /2 on this machine · 1 usable in the sandbox/);
+});
+
+test("a card the sandbox probe refused cannot be ticked and says why on the row", () => {
+  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
+    client: npuClient(), host: npuHost(), onError: () => {}, onHostChange: () => {},
+  }));
+  const unusableRow = /<li class="unusable">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
+  assert.match(unusableRow, /disabled=""/);
+  assert.match(unusableRow, /because the device is used/);
+  // The usable card stays tickable and reflects the stored selection.
+  const usableRow = /<li class="">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
+  assert.doesNotMatch(usableRow, /disabled/);
+  assert.match(usableRow, /checked=""/);
+});
+
+test("the checkbox and its card name stay on one reading line", () => {
+  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
+    client: npuClient(), host: npuHost(), onError: () => {}, onHostChange: () => {},
+  }));
+  // One label wraps both, so the control can never wrap away from its name.
+  assert.match(markup, /<label><input type="checkbox"[^>]*\/><span class="remote-npu-name">NPU 0/);
+});
+
+test("ticking a card stores the selection sorted by host index", async () => {
+  const calls: number[][] = [];
+  let host = npuHost({ npuDevices: [] });
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: npuClient(calls), host, onError: () => {}, onHostChange: (updated) => { host = updated; },
+    }));
+  });
+  const boxes = renderer!.root.findAllByType("input");
+  await act(async () => { boxes[1]!.props.onChange({ target: { checked: true } }); });
+  assert.deepEqual(calls, [[4]]);
+  assert.deepEqual(host.npuDevices, [4]);
+});
+
+test("a machine whose cards are all unusable says so instead of offering an empty tick list", () => {
+  const host = npuHost();
+  host.runnerStatus!.resources!.npu!.devices[1]!.sandboxUsable = false;
+  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
+    client: npuClient(), host, onError: () => {}, onHostChange: () => {},
+  }));
+  assert.match(markup, /No card on this machine can currently be opened inside a sandbox/);
+});
+
+test("a machine without Ascend cards shows no NPU section at all", () => {
+  const host = buildHost({ runnerStatus: { hostId: "host-1", state: "ready", resources: {
+    capturedAt: timestamp, cpuCores: 4, loadAverage1m: 0.25,
+    memoryTotalBytes: 4 * 1024 ** 3, memoryFreeBytes: 2 * 1024 ** 3, uptimeSeconds: 7200,
+    workspaceDisk: null,
+  } } });
+  assert.equal(renderToStaticMarkup(createElement(NpuDeviceSelector, {
+    client: npuClient(), host, onError: () => {}, onHostChange: () => {},
+  })), "");
 });
