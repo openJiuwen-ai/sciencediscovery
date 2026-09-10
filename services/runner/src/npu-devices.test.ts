@@ -396,6 +396,19 @@ describe("sandbox launch with NPU cards", () => {
     assert.ok(!withoutNpu.includes("ASCEND_TOOLKIT_HOME"));
   });
 
+  test("puts the Ascend host tools on PATH so npu-smi runs as a command", async () => {
+    // `npu-smi` is a host binary in /usr/local/bin. The sandbox already binds
+    // /usr, but the ordinary PATH stops at /usr/bin, so without this the tool
+    // is present and still reported as "command not found".
+    assert.equal((await npuLaunch([4])).env.PATH, "/usr/local/bin:/usr/bin");
+  });
+
+  test("leaves PATH exactly as it was when no card was selected", async () => {
+    // The extra entry is a change to every command the sandbox resolves, so it
+    // is spent only on launches that actually carry a card.
+    assert.equal((await npuLaunch([])).env.PATH, "/usr/bin");
+  });
+
   test("keeps the sandbox's isolation while the cards are bound", async () => {
     const args = (await npuLaunch([4])).args;
     for (const option of ["--unshare-all", "--unshare-user", "--die-with-parent", "--new-session"]) {
