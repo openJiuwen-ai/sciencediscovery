@@ -34,6 +34,7 @@ export async function ideaResearchModel() {
   const address = server.address() as { port: number };
   return {
     apiToken: "local-stub", baseUrl: `http://127.0.0.1:${address.port}/v1`, model: "idea-research-stub", requests,
+    holdDesign() { hold = true; release = undefined; },
     resume() { hold = false; release?.(); },
     async stop() { hold = false; release?.(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };

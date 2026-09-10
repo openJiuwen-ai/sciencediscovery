@@ -78,23 +78,18 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
     });
     await journey.step("结束另一次研究", "确认结束保留已有状态，不能再继续", async () => {
       await page.reload();
-      // Hold a second model's design so termination is checked before the workflow completes.
-      const second = await ideaResearchModel();
-      try {
-        // Reuse the session model endpoint with a controlled second stub.
-        const response = await page.request.put(`${apiBaseUrl()}/api/models/${fixture!.model!.id}`, {headers: authorizationHeader(), data: {baseUrl: second.baseUrl}});
-        expect(response.ok()).toBe(true);
-        await panel.getByRole("button", {name: "新建研究"}).click();
-        await panel.getByLabel("研究目标与约束").fill("Termination check");
-        await panel.getByRole("button", {name: "启动研究", exact: true}).click();
-        await expect.poll(() => second.requests.length).toBeGreaterThanOrEqual(2);
-        await panel.getByRole("button", {name: "结束研究", exact: true}).click();
-        await expect(panel).toContainText("结束后不能继续");
-        await panel.getByRole("button", {name: "确认结束"}).click();
-        second.resume();
-        await expect.poll(async () => (await read())[0].research.status).toBe("ended");
-        await expect(panel).toContainText("已结束");
-      } finally { await second.stop(); }
+      const previous = stub.requests.length;
+      stub.holdDesign();
+      await panel.getByRole("button", {name: "新建研究"}).click();
+      await panel.getByLabel("研究目标与约束").fill("Termination check");
+      await panel.getByRole("button", {name: "启动研究", exact: true}).click();
+      await expect.poll(() => stub.requests.length).toBeGreaterThanOrEqual(previous + 2);
+      await panel.getByRole("button", {name: "结束研究", exact: true}).click();
+      await expect(panel).toContainText("结束后不能继续");
+      await panel.getByRole("button", {name: "确认结束"}).click();
+      stub.resume();
+      await expect.poll(async () => (await read())[0].research.status).toBe("ended");
+      await expect(panel).toContainText("已结束");
     });
   } finally {
     if (fixture) await cleanupJourney(page, fixture);

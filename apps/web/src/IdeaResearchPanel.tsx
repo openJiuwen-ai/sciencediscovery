@@ -54,7 +54,7 @@ export function IdeaResearchPanel({client, sessionId, onError}: {client: ApiClie
   const view = items.find(i => i.research.id === selected);
   return <section ref={element} className="idea-tree-detail" aria-label="Idea Tree 研究控制">
     <header><strong>Idea Tree</strong> <button type="button" onClick={() => setForm(!form)}>新建研究</button></header>
-    {error && <p role="alert">{error} <button type="button" onClick={() => void load()}>重试</button></p>}
+    {error && (form || items.length > 0) && <p role="alert">{error} <button type="button" onClick={() => void load()}>重试</button></p>}
     {form && <div className="idea-tree-fields">
       <label className="idea-tree-field">研究目标与约束<textarea aria-label="研究目标与约束" value={objective} onChange={e => setObjective(e.target.value)} maxLength={16000} /></label>
       <label className="idea-tree-field">给定材料（可留空；引擎不会检索外部资料）<textarea aria-label="给定材料" value={materials} onChange={e => setMaterials(e.target.value)} maxLength={32000} /></label>
