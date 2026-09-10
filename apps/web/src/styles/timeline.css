@@ -216,7 +216,8 @@
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
 /* The card list is a full-width list, not a side column: squeezed into half
    the details grid its readings wrap away from the card name. */
-.remote-npu { grid-column: 1 / -1; display: grid; gap: 7px; min-width: 0; }
+/* Also used inside the Local Runner card, which is a plain block. */
+.remote-npu { grid-column: 1 / -1; margin-top: 8px; display: grid; gap: 7px; min-width: 0; }
 .remote-npu-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; }
 .remote-npu-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .remote-npu-list > li { display: grid; gap: 2px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); min-width: 0; }

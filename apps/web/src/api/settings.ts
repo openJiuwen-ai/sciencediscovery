@@ -19,6 +19,7 @@ import type {
   CreateProxyServerRequest,
   CreateEnvironmentRequest,
   CreateSpecialistRequest,
+  NpuRunnerSelectionsResponse,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
@@ -201,14 +202,19 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/probe`, { method: "POST" });
   }
 
+  /** Every Runner's NPU selection, plus the local machine's own cards. */
+  listRunnerNpuDevices(): Promise<NpuRunnerSelectionsResponse> {
+    return this.request("/api/runners/npu");
+  }
+
   /**
-   * Choose which NPU cards this machine may hand to sandboxes. The API refuses
-   * cards the Runner's sandbox probe could not open, so a rejected selection
-   * comes back as an error naming the card rather than being stored and
-   * failing later at execution time.
+   * Choose which NPU cards one Runner may hand to its sandboxes; `local` is the
+   * machine ScienceDiscovery runs on. The API refuses cards the Runner's
+   * sandbox probe could not open, so a rejected selection comes back as an
+   * error naming the card rather than being stored and failing at execution.
    */
-  setRemoteHostNpuDevices(hostId: string, devices: number[]): Promise<RemoteHostTarget> {
-    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/npu-devices`, {
+  setRunnerNpuDevices(runnerId: string, devices: number[]): Promise<{ devices: number[]; runnerId: string }> {
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/npu-devices`, {
       body: JSON.stringify({ devices }),
       method: "PUT",
     });

@@ -122,6 +122,9 @@ function buildHost(overrides: Partial<RemoteHostTarget> = {}): RemoteHostTarget 
   };
 }
 
+/** A machine with no Ascend cards, which is what most of these tests are about. */
+const noNpu = async () => ({ local: null, selections: {} });
+
 async function renderHost(
   host: RemoteHostTarget,
   onCredentialEditStateChange?: (editing: boolean) => void,
@@ -129,7 +132,7 @@ async function renderHost(
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(createElement(RemoteHostManager, {
-      client: { listRemoteHosts: async () => [host] } as ApiClient,
+      client: { listRemoteHosts: async () => [host], listRunnerNpuDevices: noNpu } as ApiClient,
       onCredentialEditStateChange,
       onError: () => undefined,
     }));
@@ -269,6 +272,7 @@ test("generated-key registration resumes trust by host id without resubmitting t
   let renderer: ReactTestRenderer;
   const client = {
     listRemoteHosts: async () => [],
+    listRunnerNpuDevices: noNpu,
     generateRemoteHostKey: async () => ({ privateKeyPath: "generated-once.key", publicKey: "ssh-ed25519 public-fixture" }),
     registerRemoteHost: async (body: RegisterRemoteHostRequest) => {
       registered.push(body);
@@ -303,6 +307,7 @@ test("connect runner presents a changed host key and resumes from the settings t
   let renderer: ReactTestRenderer;
   const client = {
     listRemoteHosts: async () => [host],
+    listRunnerNpuDevices: noNpu,
     connectRemoteRunner: async () => {
       if (++connects === 1) throw new ApiRequestError("Host key changed", 409, "SSH_HOST_KEY_CHANGED", {
         hostId: host.id, hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:new" },
@@ -400,41 +405,33 @@ test("historical SLURM jobs have no active refresh action", () => {
   assert.doesNotMatch(html, /Refresh SLURM status/);
 });
 
-/** A machine with one usable card and one the sandbox probe refused. */
-function npuHost(overrides: Partial<RemoteHostTarget> = {}): RemoteHostTarget {
-  return buildHost({
-    npuDevices: [4],
-    runnerStatus: { hostId: "host-1", state: "ready", resources: {
-      capturedAt: timestamp, cpuCores: 4, loadAverage1m: 0.25,
-      memoryTotalBytes: 4 * 1024 ** 3, memoryFreeBytes: 2 * 1024 ** 3, uptimeSeconds: 7200,
-      npu: {
-        capturedAt: timestamp,
-        supported: true,
-        devices: [
-          { chipName: "910B3", health: "OK", hostIndex: 0, hbmUsedMb: 3445, hbmTotalMb: 65_536,
-            aiCorePercent: 0, temperatureCelsius: 45, sandboxUsable: false,
-            sandboxUnusableReason: "NPU 0 cannot be opened inside the sandbox: dcmi model initialized failed, because the device is used. ret is -8020" },
-          { chipName: "910B3", health: "OK", hostIndex: 4, hbmUsedMb: 3418, hbmTotalMb: 65_536,
-            aiCorePercent: 12, temperatureCelsius: 49, sandboxUsable: true },
-        ],
-      },
-      workspaceDisk: { path: "/data/remote-workspaces", availableBytes: 20 * 1024 ** 3, totalBytes: 30 * 1024 ** 3 },
-    } },
-    ...overrides,
-  });
-}
+/** One usable card and one the sandbox probe refused, as the 910B host reports. */
+const NPU_INVENTORY = {
+  capturedAt: timestamp,
+  supported: true,
+  devices: [
+    { chipName: "910B3", health: "OK", hostIndex: 0, hbmUsedMb: 3445, hbmTotalMb: 65_536,
+      aiCorePercent: 0, temperatureCelsius: 45, sandboxUsable: false,
+      sandboxUnusableReason: "NPU 0 cannot be opened inside the sandbox: dcmi model initialized failed, because the device is used. ret is -8020" },
+    { chipName: "910B3", health: "OK", hostIndex: 4, hbmUsedMb: 3418, hbmTotalMb: 65_536,
+      aiCorePercent: 12, temperatureCelsius: 49, sandboxUsable: true },
+  ],
+};
 
-const npuClient = (calls: number[][] = []): ApiClient => ({
-  setRemoteHostNpuDevices: async (_hostId: string, devices: number[]) => {
-    calls.push(devices);
-    return npuHost({ npuDevices: devices });
+const npuClient = (calls: Array<{ devices: number[]; runnerId: string }> = []): ApiClient => ({
+  setRunnerNpuDevices: async (runnerId: string, devices: number[]) => {
+    calls.push({ devices, runnerId });
+    return { devices, runnerId };
   },
 } as unknown as ApiClient);
 
+const renderNpu = (overrides: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(NpuDeviceSelector, {
+  client: npuClient(), inventory: NPU_INVENTORY, onError: () => {}, onSelected: () => {},
+  runnerId: "host-1", selected: [4], ...overrides,
+} as never));
+
 test("NPU cards list every card with its status and usage, including unusable ones", () => {
-  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
-    client: npuClient(), host: npuHost(), onError: () => {}, onHostChange: () => {},
-  }));
+  const markup = renderNpu();
   // Both cards are listed: hiding the unusable one would leave the operator
   // wondering where NPU 0 went.
   assert.match(markup, /NPU 0 · 910B3/);
@@ -446,57 +443,76 @@ test("NPU cards list every card with its status and usage, including unusable on
 });
 
 test("a card the sandbox probe refused cannot be ticked and says why on the row", () => {
-  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
-    client: npuClient(), host: npuHost(), onError: () => {}, onHostChange: () => {},
-  }));
+  const markup = renderNpu();
   const unusableRow = /<li class="unusable">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
   assert.match(unusableRow, /disabled=""/);
   assert.match(unusableRow, /because the device is used/);
-  // The usable card stays tickable and reflects the stored selection.
   const usableRow = /<li class="">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
   assert.doesNotMatch(usableRow, /disabled/);
   assert.match(usableRow, /checked=""/);
 });
 
 test("the checkbox and its card name stay on one reading line", () => {
-  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
-    client: npuClient(), host: npuHost(), onError: () => {}, onHostChange: () => {},
-  }));
   // One label wraps both, so the control can never wrap away from its name.
-  assert.match(markup, /<label><input type="checkbox"[^>]*\/><span class="remote-npu-name">NPU 0/);
+  assert.match(renderNpu(), /<label><input type="checkbox"[^>]*\/><span class="remote-npu-name">NPU 0/);
 });
 
-test("ticking a card stores the selection sorted by host index", async () => {
-  const calls: number[][] = [];
-  let host = npuHost({ npuDevices: [] });
+test("ticking a card saves the selection against the Runner it belongs to", async () => {
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  let saved: number[] = [];
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(createElement(NpuDeviceSelector, {
-      client: npuClient(calls), host, onError: () => {}, onHostChange: (updated) => { host = updated; },
-    }));
+      client: npuClient(calls), inventory: NPU_INVENTORY, onError: () => {},
+      onSelected: (devices: number[]) => { saved = devices; }, runnerId: "host-1", selected: [],
+    } as never));
   });
   const boxes = renderer!.root.findAllByType("input");
   await act(async () => { boxes[1]!.props.onChange({ target: { checked: true } }); });
-  assert.deepEqual(calls, [[4]]);
-  assert.deepEqual(host.npuDevices, [4]);
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "host-1" }]);
+  assert.deepEqual(saved, [4]);
+});
+
+test("the same control saves against the local Runner when that is the machine", async () => {
+  // Local and remote must behave identically; only the Runner id differs.
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: npuClient(calls), inventory: NPU_INVENTORY, onError: () => {},
+      onSelected: () => {}, runnerId: "local", selected: [],
+    } as never));
+  });
+  await act(async () => { renderer!.root.findAllByType("input")[1]!.props.onChange({ target: { checked: true } }); });
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "local" }]);
 });
 
 test("a machine whose cards are all unusable says so instead of offering an empty tick list", () => {
-  const host = npuHost();
-  host.runnerStatus!.resources!.npu!.devices[1]!.sandboxUsable = false;
-  const markup = renderToStaticMarkup(createElement(NpuDeviceSelector, {
-    client: npuClient(), host, onError: () => {}, onHostChange: () => {},
-  }));
-  assert.match(markup, /No card on this machine can currently be opened inside a sandbox/);
+  const inventory = { ...NPU_INVENTORY, devices: NPU_INVENTORY.devices.map((device) => ({ ...device, sandboxUsable: false })) };
+  assert.match(renderNpu({ inventory }), /No card on this machine can currently be opened inside a sandbox/);
 });
 
 test("a machine without Ascend cards shows no NPU section at all", () => {
-  const host = buildHost({ runnerStatus: { hostId: "host-1", state: "ready", resources: {
-    capturedAt: timestamp, cpuCores: 4, loadAverage1m: 0.25,
-    memoryTotalBytes: 4 * 1024 ** 3, memoryFreeBytes: 2 * 1024 ** 3, uptimeSeconds: 7200,
-    workspaceDisk: null,
-  } } });
-  assert.equal(renderToStaticMarkup(createElement(NpuDeviceSelector, {
-    client: npuClient(), host, onError: () => {}, onHostChange: () => {},
-  })), "");
+  assert.equal(renderNpu({ inventory: null }), "");
+});
+
+test("the Local Runner card offers this machine's own cards and saves them under `local`", async () => {
+  // The 910B can be the machine the product runs on, so ticking its cards must
+  // not require registering this machine as a remote one first.
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  const client = {
+    listRemoteHosts: async () => [],
+    listRunnerNpuDevices: async () => ({ local: NPU_INVENTORY, selections: { local: [] } }),
+    setRunnerNpuDevices: async (runnerId: string, devices: number[]) => { calls.push({ devices, runnerId }); return { devices, runnerId }; },
+  } as unknown as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, onError: () => {} })); });
+  const localCard = renderer!.root.findAllByProps({ className: "remote-host-card ready" })[0]!;
+  assert.ok(localCard.findAllByProps({ className: "remote-npu-name" }).some((node) => node.children.join("").includes("NPU 4 · 910B3")));
+  const boxes = localCard.findAllByType("input");
+  await act(async () => { boxes[1]!.props.onChange({ target: { checked: true } }); });
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "local" }]);
+  // The tick sticks after the save round-trip, so the operator sees what is stored.
+  assert.equal(localCard.findAllByType("input")[1]!.props.checked, true);
+  await act(async () => renderer!.unmount());
 });
