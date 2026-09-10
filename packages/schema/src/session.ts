@@ -387,6 +387,7 @@ export type RunStreamEvent =
    *  conversation. The card renders in the transcript where it was asked
    *  for, so the search sits next to the sentence that motivated it. */
   | { run: EvolveRun; type: "evolve_run.created" }
+  | { researchId: string; type: "idea_research.created" }
   | { request: PermissionRequest; type: "permission.required" }
   | { request: PermissionRequest; type: "permission.resolved" }
   | { review: ArtifactReviewRun; type: "artifact_review.completed" }

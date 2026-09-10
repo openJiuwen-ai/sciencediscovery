@@ -13,7 +13,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.store = ResearchStore(Path(self.temp.name))
-        self.state = dict(id='research-test', projectId='p', sessionId='s', objective='No cobalt. Compare catalyst directions.', materials='Supplied material', modelId='m', settings=Settings(candidatesPerRound=1).model_dump(),
+        self.state = dict(id='research-test', projectId='p', sessionId='s', objective='No cobalt. Compare catalyst directions.', materials='Supplied material', modelId='m', settings=Settings(candidatesPerRound=1, maxDepth=2).model_dump(),
                           status='paused', phase='ideate', round=0, batch=[], batchCompleted=0, tokens=0, usageKnown=True,
                           reason=None, currentNodeId=None, createdAt=now(), updatedAt=now(), nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
         self.calls = []
@@ -91,18 +91,31 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state['status'], 'interrupted')
         self.assertIn('did not report', self.state['reason'])
 
-    async def test_depth_is_upper_bound_and_completed_parent_expandable(self):
+    async def test_only_execution_depth_leaves_run_and_improvements_are_siblings(self):
         self.state['settings']['maxDepth'] = 4
         async def model(role, payload):
-            if role == 'ideate' and payload['round'] > 1:
-                prior = [n for n in self.state['nodes'] if n['kind'] == 'candidate'][-1]
-                return json.dumps(dict(candidates=[dict(parentId=prior['id'], hypothesis=f'Improvement {payload["round"]}')], reason='Refine')), 100
+            if role == 'ideate':
+                return json.dumps(dict(candidates=[dict(direction='Fe catalysts', refinements=['Iron oxides', 'Recyclable support'], hypothesis=f'Improvement {payload["round"]}')], reason='Refine from prior feedback')), 100
             return await self.model(role, payload)
         await IdeaTreeEngine(self.state, self.store, {}, model).run()
         self.assertEqual(self.state['status'], 'completed')
         candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
-        self.assertEqual([n['depth'] for n in candidates], [2, 3, 4])
-        self.assertEqual(candidates[0]['stages']['aggregate']['text'], 'aggregate output')
+        self.assertEqual([n['depth'] for n in candidates], [4, 4, 4])
+        self.assertEqual(len({n['parentId'] for n in candidates}), 1)
+        self.assertTrue(all(not n['childrenIds'] for n in candidates))
+        directions = [n for n in self.state['nodes'] if n['kind'] == 'direction']
+        self.assertTrue(all(n['score'] is None and not n['stages'] for n in directions))
+        self.assertTrue(all(n['insight'] for n in directions))
+
+    async def test_shallow_candidate_and_scored_parent_are_rejected(self):
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        shallow = node('1', 'ROOT', 'Shallow', 'candidate', 1)
+        self.state['nodes'].append(shallow)
+        with self.assertRaisesRegex(ValueError, 'Only candidate leaves'):
+            await engine.evaluate(shallow)
+        with self.assertRaisesRegex(ValueError, 'Parent must be a direction'):
+            engine.proposal_path(dict(parentId='1', hypothesis='Child'))
+        self.assertEqual(self.calls, [])
 
     async def test_invalid_response_corrected_once_without_partial_tree(self):
         async def invalid(role, payload):
@@ -191,6 +204,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
                 await release.wait()
             return await self.model(role, payload)
         engine = IdeaTreeEngine(self.state, self.store, {}, model)
+        self.state['settings']['maxDepth'] = 1
         candidate = node('1', 'ROOT', 'Candidate', 'candidate', 1)
         self.state['nodes'].append(candidate)
         self.state['nodes'][0]['childrenIds'].append('1')

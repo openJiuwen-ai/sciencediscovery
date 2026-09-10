@@ -355,6 +355,11 @@ export function createPlatformServices(
         releaseWait?.();
       }
     },
+    createIdeaResearch: async (input) => {
+      const view = await ideaResearch.command(turn.sessionId, "create", input);
+      await turn.emit({type: "idea_research.created", researchId: view.research.id});
+      return {researchId: view.research.id, status: view.research.status, message: "Python engine started. Follow progress in the Idea Tree card."};
+    },
     getIdeaResearch: (researchId?: string) => ideaResearch.summary(turn.sessionId, researchId),
     getEvolveRun: async (runId?: string) => {
       // The id is optional and prefix-tolerant, because the caller is a model

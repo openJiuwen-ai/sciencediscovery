@@ -79,14 +79,16 @@ test("standard queued runs freeze standard mode without creating Idea Tree state
   assert.deepEqual(calls, [], "ordinary queueing does not contact the tree service");
 });
 
-test("Idea Tree commands cannot start a legacy Agent run", async (context) => {
+test("both Idea Tree commands queue Lead preparation without legacy tree execution", async (context) => {
   const { dataDir, persistence, calls, session, skillCatalog, skillLibraryCatalog, store } = await fixture();
   context.after(() => rm(dataDir, { force: true, recursive: true }));
-  for (const content of ["/idea-tree", "/idea-tree-team research", "/idea-tree research"]) {
-    await assert.rejects(createQueuedRun(store, skillCatalog, skillLibraryCatalog,
-      createIdeaTreeAuthorityRegistry(), session.id, { content }, persistence), /research panel/);
+  for (const content of ["/idea-tree-team research", "/idea-tree research"]) {
+    const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog,
+      createIdeaTreeAuthorityRegistry(), session.id, { content }, persistence);
+    assert.equal(run.prompt, content);
+    assert.equal(run.settingsSnapshot.ideaTreeEnabled, false);
+    assert.ok(run.settingsSnapshot.enabledSkillIds.includes("idea-tree-team"));
   }
-  assert.deepEqual(await store.listSessionRuns(session.id), []);
   assert.deepEqual(calls, []);
 });
 

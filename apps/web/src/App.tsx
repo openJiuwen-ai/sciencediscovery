@@ -3269,6 +3269,9 @@ export function App() {
       || streamEvent.type === "subagent.usage") {
       setSubagents((current) => reduceSubagentSnapshots(current, streamEvent));
     }
+    if (streamEvent.type === "idea_research.created") {
+      window.dispatchEvent(new CustomEvent("idea-research-updated", {detail: {sessionId}}));
+    }
     if (streamEvent.type === "evolve_run.created") {
       // Into the same list the workspace card reads, so a search the agent
       // started mid-conversation is reachable the same way as any other. It is
@@ -3370,20 +3373,6 @@ export function App() {
   async function submitMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (!activeSessionId || !session || !message.trim() || session.archivedAt) return;
-    const ideaCommand = message.trim().match(/^\/idea-tree(?:-team)?(?:\s+|$)/u);
-    if (ideaCommand) {
-      try {
-        const submittedSessionId = activeSessionId;
-        await client.ideaResearchCommand(submittedSessionId, {operation: "create", content: message.trim()});
-        const refreshed = await client.getSession(submittedSessionId);
-        setSession(current => current?.id === submittedSessionId ? refreshed : current);
-        window.dispatchEvent(new CustomEvent("idea-research-updated", {detail: {sessionId: activeSessionId}}));
-        setMessage("");
-      } catch (reason) {
-        reportError(reason instanceof Error ? reason.message : "Could not start Idea Tree");
-      }
-      return;
-    }
     if (message.trim() === "/web-usage") {
       try {
         const usage = await client.getWebUsage();

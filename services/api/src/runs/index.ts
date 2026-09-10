@@ -2596,9 +2596,6 @@ export async function createQueuedRun(
   if (session.archivedAt) throw new ApiStatusError(409, "Session is archived and read-only");
   const submittedPrompt = body.content?.trim();
   const slashRefresh = submittedPrompt?.startsWith("/web-refresh ");
-  if (/^\/idea-tree(?:-team)?(?:\s+|$)/u.test(submittedPrompt ?? "")) {
-    throw new ApiStatusError(409, "Start Idea Tree from the research panel or POST /api/sessions/:sessionId/idea-tree/research; it no longer runs as an Agent message");
-  }
   const prompt = slashRefresh ? submittedPrompt!.slice("/web-refresh ".length).trim() : submittedPrompt;
   if (!prompt) throw new ApiStatusError(400, "Message content is required");
   let references: ComposerReference[];
@@ -2631,6 +2628,9 @@ export async function createQueuedRun(
     skillLibraryRefs = mergeSkillLibraryRefs(configuredRefs, declaredRefs);
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "Skill library references are invalid");
+  }
+  if (/^\/idea-tree(?:-team)?(?:\s+|$)/u.test(prompt)) {
+    settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "idea-tree-team"])];
   }
   if (skillAuthoringCommandPrompt(prompt)) {
     settingsSnapshot.enabledSkillIds = [...new Set([...settingsSnapshot.enabledSkillIds, "skill-creator"])];

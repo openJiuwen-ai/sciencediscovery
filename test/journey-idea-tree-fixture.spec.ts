@@ -12,7 +12,7 @@ import { ideaResearchModel } from "./helpers/idea-research-model.ts";
  *   2. Pause during design and verify no assessments start from the late response.
  *   3. Continue manually and inspect three rounds, independent assessments and persisted ROOT insight after reload.
  *   4. End another research using the confirmation control.
- * Environment: Isolated API/web and evolve Python processes; no runner or Neo4j needed for this workflow.
+ * Environment: Isolated API/web, Runner and evolve Python processes; no Neo4j.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible HTTP stub; Python calls it through the actual API proxy.
  * WebSearch: none
@@ -33,7 +33,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
     expect(response.ok()).toBe(true);
     return (await response.json()).items;
   };
-  journey.scenario({goal: "从给定材料自主探索多个方向，暂停后手动继续，并完成多轮改进", preconditions: ["隔离 API 与 Python evolve 服务", "本地模拟模型，实际后端与文件持久化，无 Subagent、Runner 或 Neo4j"]});
+  journey.scenario({goal: "从给定材料自主探索多个方向，暂停后手动继续，并完成多轮改进", preconditions: ["隔离 API 与 Python evolve 服务", "本地模拟模型，实际主 Agent 工具交接、Python 后端与文件持久化，无 Subagent 或 Neo4j"]});
   try {
     await journey.step("在系统设置配置研究", "保存三轮预算和设计提示词，再从会话启动，不创建输入弹窗或聊天计划", async () => {
       fixture = await createProjectAndSession(page, {model: {...stub, name: `Idea engine ${Date.now()}`}, projectName: `Idea engine ${Date.now()}`, sessionTitle: "自主催化剂探索"});
@@ -49,7 +49,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await settings.getByRole("button", {name: /Save|保存/}).click();
       await expect.poll(async () => (await (await page.request.get(`${apiBaseUrl()}/api/settings/idea-tree`, {headers: authorizationHeader()})).json()).candidatesPerRound).toBe(1);
       await dialog.getByRole("button", {name: /close|关闭/}).first().click();
-      await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Compare low-cost Fe and Mn catalysts; no cobalt. User supplied: near-neutral water, recovery and leaching matter.");
+      await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Skip literature retrieval for this demo. Compare low-cost Fe and Mn catalysts; no cobalt. User supplied: near-neutral water, recovery and leaching matter.");
       await page.getByRole("button", {name: /^(Run analysis|运行分析)$/}).click();
       await expect(panel.getByRole("button", {name: "树配置", exact: true})).toHaveCount(0);
       await expect(panel.locator(".idea-tree-settings")).toHaveCount(0);
@@ -93,7 +93,14 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       for (const r of assessments) expect(r.payload.assessments).toBeUndefined();
       expect(stub.requests.find(r => r.payload.round === 2)?.payload.nodes.some((n: any) => n.insight)).toBe(true);
       const runs = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs`, {headers: authorizationHeader()});
-      expect(await runs.json()).toEqual([]);
+      const leadRuns = await runs.json();
+      expect(leadRuns).toHaveLength(1);
+      const eventsResponse = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/runs/${leadRuns[0].id}/events`, {headers: authorizationHeader()});
+      const events = await eventsResponse.json();
+      expect(events.some((e: any) => e.event.type === "idea_research.created")).toBe(true);
+      expect(events.some((e: any) => e.event.type === "subagent.updated")).toBe(false);
+      expect(graph.nodes.filter((n: any) => n.kind === "candidate").every((n: any) => n.depth === 4 && n.childrenIds.length === 0)).toBe(true);
+      expect(graph.nodes.filter((n: any) => n.kind === "direction").every((n: any) => n.score === null && Object.keys(n.stages).length === 0)).toBe(true);
       await page.reload();
       await expect(card).toContainText("第 3 / 3 轮");
       await card.getByRole("button", {name: /查看研究进度/}).click();
@@ -106,7 +113,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await page.reload();
       const previous = stub.requests.length;
       stub.holdDesign();
-      await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Termination check");
+      await page.locator("form.composer").getByRole("textbox").fill("/idea-tree-team Skip retrieval. Termination check");
       await page.getByRole("button", {name: /^(Run analysis|运行分析)$/}).click();
       await expect.poll(() => stub.requests.length).toBeGreaterThanOrEqual(previous + 2);
       await card.getByRole("button", {name: /查看研究进度/}).click();

@@ -44,6 +44,10 @@ def validate_result(role: str, value: Any) -> dict:
             if not isinstance(item, dict):
                 raise ValueError("Invalid candidate")
             text(item.get("hypothesis"), "hypothesis", 4000)
+            if not isinstance(item.get('refinements', []), list):
+                raise ValueError('refinements must be an array')
+            for refinement in item.get('refinements', []):
+                text(refinement, 'refinement', 1000)
             if not item.get("parentId"):
                 text(item.get("direction"), "direction", 1000)
         text(value.get("reason"), "reason", 4000)
@@ -167,7 +171,7 @@ class IdeaTreeEngine:
 
     async def _ask(self, role: str, payload: dict) -> dict:
         self.check_stop()
-        shape = '{"candidates":[{"parentId":"existing id or omit", "direction":"new direction", "hypothesis":"..."}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in prompts.CRITERIA else '{"text":"..."}')
+        shape = '{"candidates":[{"parentId":"existing id or omit", "direction":"new direction", "refinements":[], "hypothesis":"..."}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in prompts.CRITERIA else '{"text":"..."}')
         system = self.role_prompt(role) + '\nReturn JSON only, matching: ' + shape
         for attempt in range(2):
             self.check_stop()
@@ -196,7 +200,11 @@ class IdeaTreeEngine:
                 async with self.usage_lock:
                     self.reserved -= estimate
             try:
-                return validate_result(role, json.loads(raw))
+                result = validate_result(role, json.loads(raw))
+                if role == 'ideate':
+                    for proposal in result['candidates']:
+                        self.proposal_path(proposal)
+                return result
             except (ValueError, TypeError) as error:
                 if attempt:
                     raise ValueError(f'{role}: invalid model result after one correction: {error}') from error
@@ -226,6 +234,8 @@ class IdeaTreeEngine:
         return candidate['stages'][role]
 
     async def evaluate(self, candidate):
+        if candidate['kind'] != 'candidate' or candidate['childrenIds'] or candidate['depth'] != self.state['settings']['maxDepth']:
+            raise ValueError('Only candidate leaves at maxDepth can be evaluated; refine the direction first')
         candidate['status'] = 'running'
         candidate['attemptCount'] = candidate.get('attemptCount', 0) + 1
         self.save()
@@ -290,6 +300,17 @@ class IdeaTreeEngine:
         parent['childrenIds'].append(identifier)
         return n
 
+    def proposal_path(self, proposal):
+        depth = self.state['settings']['maxDepth']
+        parent_id = proposal.get('parentId')
+        parent = self.find(parent_id) if parent_id else self.find('ROOT')
+        if parent['kind'] != 'direction' or parent['depth'] >= depth:
+            raise ValueError('Parent must be a direction above the execution depth; improve a candidate by adding a sibling')
+        path = ([] if parent_id or depth == 1 else [proposal['direction']]) + proposal.get('refinements', [])
+        if parent['depth'] + len(path) + 1 != depth:
+            raise ValueError(f'Provide {depth - parent["depth"] - 1} internal direction labels before the hypothesis (direction plus refinements)')
+        return parent, path
+
     async def run(self):
         s = self.state
         s.update(status='running', reason=None)
@@ -315,20 +336,21 @@ class IdeaTreeEngine:
                     for proposal in ideas['candidates'][:count]:
                         if proposal['hypothesis'].strip().casefold() in existing:
                             continue
-                        parent_id = proposal.get('parentId')
-                        parent = next((n for n in s['nodes'] if n['id'] == parent_id), None)
-                        if not parent:
-                            if parent_id:
-                                raise ValueError('Proposed parent does not exist')
-                            direction = proposal['direction']
-                            parent = next((n for n in s['nodes'] if n['kind'] == 'direction' and n['hypothesis'] == direction), None)
-                            required = 1 if parent or s['settings']['maxDepth'] == 1 else 2
-                            if len(s['nodes']) + required > s['settings']['maxNodes']:
+                        parent, path = self.proposal_path(proposal)
+                        # Reuse existing direction paths; reserve space for the entire
+                        # remaining path and leaf before adding any of its nodes.
+                        remaining_path = []
+                        for index, label in enumerate(path):
+                            child = next((self.find(i) for i in parent['childrenIds'] if self.find(i)['kind'] == 'direction' and self.find(i)['hypothesis'] == label), None)
+                            if child is None:
+                                remaining_path = path[index:]
                                 break
-                            parent = self.find('ROOT') if s['settings']['maxDepth'] == 1 else (parent or self.add(self.find('ROOT'), direction, 'direction'))
-                        if parent and parent['depth'] >= s['settings']['maxDepth']:
-                            parent = self.find(parent['parentId']) if parent['parentId'] else parent
-                        candidate = self.add(parent, proposal['hypothesis'], 'candidate') if parent else None
+                            parent = child
+                        if len(s['nodes']) + len(remaining_path) + 1 > s['settings']['maxNodes']:
+                            continue
+                        for label in remaining_path:
+                            parent = self.add(parent, label, 'direction')
+                        candidate = self.add(parent, proposal['hypothesis'], 'candidate')
                         if candidate:
                             batch.append(candidate['id'])
                             existing.add(candidate['hypothesis'].strip().casefold())
