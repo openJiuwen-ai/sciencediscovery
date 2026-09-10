@@ -445,29 +445,40 @@ describe("sandbox launch with NPU cards", () => {
 });
 
 describe("validating a selection at launch time", () => {
-  const inventory = (devices: NpuDeviceStatus[]) => async () => ({
-    capturedAt: "2026-09-10T00:00:00.000Z",
-    devices,
-    supported: true,
-  });
+  const probed: number[][] = [];
+  const inventory = (devices: NpuDeviceStatus[]) => async (requested: readonly number[]) => {
+    probed.push([...requested]);
+    return { capturedAt: "2026-09-10T00:00:00.000Z", devices, supported: true };
+  };
   const usable = (hostIndex: number): NpuDeviceStatus => ({
     chipName: "910B3", health: "OK", hostIndex, sandboxUsable: true,
   });
 
-  test("skips the inventory entirely for an execution that wants no card", async () => {
+  test("probes nothing at all for an execution that wants no card", async () => {
     let consulted = false;
     const npu = await resolveExecutionNpu({
       bwrapPath: "/usr/bin/bwrap",
-      npuInventory: async () => { consulted = true; throw new Error("must not be consulted"); },
+      npuDeviceProbe: async () => { consulted = true; throw new Error("must not be consulted"); },
     }, undefined);
     assert.equal(npu, undefined);
     assert.equal(consulted, false);
   });
 
+  test("probes exactly the cards the execution asked for, and no others", async () => {
+    // Re-probing the whole machine would cost seconds per execution and would
+    // reach into cards another Session is using.
+    probed.length = 0;
+    await resolveExecutionNpu({
+      bwrapPath: "/usr/bin/bwrap",
+      npuDeviceProbe: inventory([usable(4), usable(6)]),
+    }, [6, 4]);
+    assert.deepEqual(probed, [[6, 4]]);
+  });
+
   test("builds the device plumbing for cards that are still usable", async () => {
     const npu = await resolveExecutionNpu({
       bwrapPath: "/usr/bin/bwrap",
-      npuInventory: inventory([usable(4), usable(6)]),
+      npuDeviceProbe: inventory([usable(4), usable(6)]),
     }, [6, 4]);
     assert.deepEqual(npu?.mapping, [
       { hostIndex: 4, sandboxIndex: 0 },
@@ -481,7 +492,7 @@ describe("validating a selection at launch time", () => {
     await assert.rejects(
       resolveExecutionNpu({
         bwrapPath: "/usr/bin/bwrap",
-        npuInventory: inventory([
+        npuDeviceProbe: inventory([
           { chipName: "910B3", health: "OK", hostIndex: 4, sandboxUsable: false,
             sandboxUnusableReason: "NPU 4 cannot be opened inside the sandbox: device is used" },
         ]),
@@ -497,7 +508,7 @@ describe("validating a selection at launch time", () => {
   test("refuses the whole execution rather than quietly running on fewer cards", async () => {
     await assert.rejects(resolveExecutionNpu({
       bwrapPath: "/usr/bin/bwrap",
-      npuInventory: inventory([usable(4)]),
+      npuDeviceProbe: inventory([usable(4)]),
     }, [4, 5]), /NPU 5/u);
   });
 });
@@ -506,7 +517,7 @@ describe("an execution request drives the sandbox's cards", () => {
   // These run the real product entry points on this machine. It has no Ascend
   // cards, which is exactly what makes the negative case meaningful and lets
   // the positive case be observed through the bind bwrap refuses to make.
-  const fixture = async (context: TestContext, npu?: () => Promise<NpuInventory>) => {
+  const fixture = async (context: TestContext, npu?: (requested: readonly number[]) => Promise<NpuInventory>) => {
     const dataDir = resolve(process.cwd(), ".tmp", `npu-request-${process.pid}-${Date.now()}-${Math.random()}`);
     const workspaceRoot = resolve(dataDir, "projects", "project", "sessions", "session", "workspace");
     await mkdir(workspaceRoot, { recursive: true });
@@ -517,7 +528,7 @@ describe("an execution request drives the sandbox's cards", () => {
       execTimeoutMs: 60_000,
       maxOutputBytes: 1_000_000,
       maxWorkspaceBytes: 0,
-      npuInventory: npu,
+      npuDeviceProbe: npu,
     };
     return { config, request: {
       agentId: "main",
@@ -537,6 +548,10 @@ describe("an execution request drives the sandbox's cards", () => {
   };
   const inventory = (devices: NpuDeviceStatus[]) => async (): Promise<NpuInventory> => ({
     capturedAt: "2026-09-10T00:00:00.000Z", devices, supported: true,
+  });
+  const occupied = (hostIndex: number): NpuDeviceStatus => ({
+    chipName: "910B3", health: "OK", hostIndex, sandboxUsable: false,
+    sandboxUnusableReason: `NPU ${hostIndex} cannot be opened inside the sandbox: dcmi model initialized failed, because the device is used. ret is -8020`,
   });
 
   test("a request without ticked cards leaves the sandbox with no NPU device at all", async (context) => {
@@ -580,5 +595,38 @@ describe("an execution request drives the sandbox's cards", () => {
       executePython(config, { ...request, code: "print('unreached')", npuDevices: [4] }),
       /NPU 4 cannot be opened inside the sandbox: device is used/u,
     );
+  });
+
+  test("a card the cached status still calls usable does not get waved through", async (context) => {
+    // The status surface caches its inventory for a minute; on a shared host a
+    // card can be claimed inside that minute. The execution asks again.
+    const cached: NpuInventory = {
+      capturedAt: new Date().toISOString(), supported: true,
+      devices: [{ chipName: "910B3", health: "OK", hostIndex: 4, sandboxUsable: true }],
+    };
+    const asked: number[][] = [];
+    const { config, request } = await fixture(context, async (requested) => {
+      asked.push([...requested]);
+      return { capturedAt: new Date().toISOString(), devices: [occupied(4)], supported: true };
+    });
+    await assert.rejects(
+      executePython(config, { ...request, code: "print('unreached')", npuDevices: [4] }),
+      /NPU 4 cannot be opened inside the sandbox: dcmi model initialized failed/u,
+    );
+    assert.deepEqual(asked, [[4]], "the execution probes the card it asked for");
+    assert.equal(cached.devices[0]?.sandboxUsable, true, "the cached verdict is what it contradicts");
+  });
+
+  test("an execution without cards never reaches the probe", async (context) => {
+    // Re-probing the machine for every ordinary run would put seconds of
+    // bubblewrap launches in front of code that wants no NPU at all.
+    let probes = 0;
+    const { config, request } = await fixture(context, async () => {
+      probes += 1;
+      return { capturedAt: new Date().toISOString(), devices: [], supported: true };
+    });
+    const result = await executePython(config, { ...request, code: "print('no npu')" });
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(probes, 0);
   });
 });
