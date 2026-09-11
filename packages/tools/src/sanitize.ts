@@ -105,6 +105,11 @@ export function isRemoteContentTool(toolName: string): boolean {
  * context: remote content (attacker-influenceable by the page author) plus
  * `task` (subagent returns — model-generated but influenced by whatever
  * untrusted content the subagent read).
+ *
+ * This is the LEGACY name-based list. New untrusted sources should declare
+ * `untrustedCategory` on the AgentTool instead (see resolveUntrustedCategory)
+ * so dynamic-name tools (MCP connectors) and whole tool families (knowledge
+ * engine) are covered without name enumeration.
  */
 export const UNTRUSTED_FENCED_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...REMOTE_CONTENT_TOOL_NAMES,
@@ -115,8 +120,28 @@ export const UNTRUSTED_FENCED_TOOL_NAMES: ReadonlySet<string> = new Set([
 // opener from swallowing everything up to the next "]" anywhere later.
 const FENCE_SHAPED_PATTERN = /\[\s*(?:BEGIN|END)\s+UNTRUSTED\b[^\]]{0,80}\]?/gi;
 
+/** Fence category for MCP connector tools (auto-marked via the `mcp` field). */
+export const MCP_UNTRUSTED_CATEGORY = "remote";
+
 /**
- * Wrap an untrusted tool result in a run-scoped nonce fence:
+ * Resolve the untrusted-fence category for a registered tool. Priority:
+ * explicit `untrustedCategory` on the tool > legacy name list > `mcp`
+ * auto-mark (connector results are remote content by definition). Undefined
+ * means the result enters the model context unfenced.
+ */
+export function resolveUntrustedCategory(tool: {
+  mcp?: unknown;
+  name: string;
+  untrustedCategory?: string;
+}): string | undefined {
+  if (tool.untrustedCategory) return tool.untrustedCategory;
+  if (UNTRUSTED_FENCED_TOOL_NAMES.has(tool.name)) return tool.name === "task" ? "subagent" : "remote";
+  if (tool.mcp) return MCP_UNTRUSTED_CATEGORY;
+  return undefined;
+}
+
+/**
+ * Wrap content in a run-scoped nonce fence under an explicit category:
  * `[BEGIN UNTRUSTED <category> #<nonce>]…[END UNTRUSTED #<nonce>]`.
  *
  * The per-run nonce makes the closing marker unforgeable by the fenced
@@ -125,9 +150,16 @@ const FENCE_SHAPED_PATTERN = /\[\s*(?:BEGIN|END)\s+UNTRUSTED\b[^\]]{0,80}\]?/gi;
  * fence-shaped text INSIDE the content is neutralized to an inert look-alike
  * so a fake boundary never appears inside a real one.
  */
-export function fenceUntrustedResult(toolName: string, content: string, nonce: string): string {
-  if (!UNTRUSTED_FENCED_TOOL_NAMES.has(toolName)) return content;
-  const category = toolName === "task" ? "subagent" : "remote";
+export function fenceUntrustedContent(content: string, category: string, nonce: string): string {
   const safe = content.replaceAll(FENCE_SHAPED_PATTERN, "[UNTRUSTED fence marker neutralized]");
   return `[BEGIN UNTRUSTED ${category} #${nonce}]\n${safe}\n[END UNTRUSTED #${nonce}]`;
+}
+
+/**
+ * Legacy name-based fencing entry point. Prefer resolveUntrustedCategory +
+ * fenceUntrustedContent at call sites that have the AgentTool at hand.
+ */
+export function fenceUntrustedResult(toolName: string, content: string, nonce: string): string {
+  const category = resolveUntrustedCategory({ name: toolName });
+  return category ? fenceUntrustedContent(content, category, nonce) : content;
 }

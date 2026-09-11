@@ -573,6 +573,8 @@ test("artifact download and PDF extraction are separate tools", async () => {
   assert.ok(download);
   assert.ok(extract);
   assert.match(download.description, /does not extract/i);
+  // Extracted PDF text is attacker-influenceable document content — fenced.
+  assert.equal(extract.untrustedCategory, "document");
   await download.execute("download-call", { candidateId: "candidate", mcpInvocationId: "invocation" });
   assert.deepEqual(calls, ["download"]);
   await extract.execute("extract-call", { artifactJobId: "job" });
@@ -1748,6 +1750,17 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
     "evidence_ledger",
   ]) {
     assert.ok(names.includes(expected), `${expected} should be registered`);
+  }
+
+  // Corpus-passage tools are nonce-fenced as untrusted ingested-corpus data
+  // (the evidence ledger echoes recorded verbatim quotes — corpus too);
+  // the anti-hallucination trust anchors and config listings stay unfenced.
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  for (const corpusTool of ["concept_explore", "deep_dive", "entity_unified_search", "gap_candidates", "kb_search", "kb_expand", "doc_grep", "evidence_ledger"]) {
+    assert.equal(byName.get(corpusTool)!.untrustedCategory, "knowledge-base", `${corpusTool} must be fenced as corpus data`);
+  }
+  for (const anchor of ["list_knowledge_bases", "validate_entities", "novelty_check", "verify_citation"]) {
+    assert.equal(byName.get(anchor)!.untrustedCategory, undefined, `${anchor} is a trust anchor and stays unfenced`);
   }
 
   // The port is invoked with the tool parameters.

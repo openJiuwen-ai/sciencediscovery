@@ -71,6 +71,33 @@ test("durable state hydrates structured calls and survives removal of source his
   });
 });
 
+test("hydration fence-strip tolerates hyphenated categories (pattern-level insurance)", () => {
+  // No production channel currently hydrates a knowledge-base-fenced record
+  // (hydrate observes task/artifact/plan/memory/review tools only) — this
+  // pins the [a-z-]+ category tolerance of OUTER_FENCE_PATTERN directly.
+  const raw = "{\"hits\":[{\"snippet\":\"paper text\"}]}";
+  const history: RuntimeMessage[] = [
+    {
+      role: "assistant",
+      tool_calls: [{
+        id: "task-1",
+        type: "function",
+        function: { name: "task", arguments: JSON.stringify({ description: "screen papers" }) },
+      }],
+    },
+    {
+      role: "tool",
+      tool_call_id: "task-1",
+      name: "task",
+      content: `[BEGIN UNTRUSTED knowledge-base #a1b2c3d4e5f6]\n${raw}\n[END UNTRUSTED #a1b2c3d4e5f6]`,
+    },
+  ];
+  const store = new DurableContextStore({ history });
+  const delegations = store.snapshot().delegations;
+  assert.equal(delegations.length, 1);
+  assert.deepEqual(delegations[0]!.result, JSON.parse(raw), "the hyphenated-category fence must strip to the raw payload");
+});
+
 test("domain contributors expose bounded structured runtime observations as data", async () => {
   const store = new DurableContextStore();
   store.observe(call("declare_artifact", { path: "report.md" }), {

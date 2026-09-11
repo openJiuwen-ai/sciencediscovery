@@ -22,6 +22,14 @@ export interface AgentTool<S extends TSchema = TSchema> {
   name: string;
   parameters: S;
   routing?: { keywords: string[]; mode: "off" | "prefer"; priority: number };
+  /**
+   * Untrusted-content category for result fencing (see sanitize.ts). Set when
+   * this tool's result is attacker-influenceable DATA (fetched pages, ingested
+   * corpus text, connector payloads) rather than framework-generated text. An
+   * explicit value wins over the legacy name list and the `mcp` auto-mark;
+   * omitted means unfenced unless one of those applies.
+   */
+  untrustedCategory?: string;
   execute(toolCallId: string, params: Static<S>, signal?: AbortSignal): Promise<AgentToolResult>;
   /** Only an exact true permits overlap; omitted or throwing classifiers are exclusive. */
   isConcurrencySafe?(params: Static<S>): boolean;

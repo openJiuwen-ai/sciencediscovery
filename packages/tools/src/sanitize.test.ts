@@ -18,7 +18,7 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { BLOCKED_TAG_NAMES, fenceUntrustedResult, isRemoteContentTool, neutralizeUntrustedTags } from "./sanitize.js";
+import { BLOCKED_TAG_NAMES, fenceUntrustedContent, fenceUntrustedResult, isRemoteContentTool, neutralizeUntrustedTags, resolveUntrustedCategory } from "./sanitize.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // packages/tools/dist → repository root
@@ -148,4 +148,24 @@ test("fence neutralization is bounded — a stray opener cannot swallow distant 
   assert.ok(!fenced.includes("[BEGIN UNTRUSTED opener"));
   const swallowed = fenceUntrustedResult("web_fetch", "a [BEGIN UNTRUSTED b] c", "zz");
   assert.ok(swallowed.includes("[UNTRUSTED fence marker neutralized]"));
+});
+
+test("resolveUntrustedCategory: explicit field > legacy names > mcp auto-mark > none", () => {
+  // Explicit untrustedCategory always wins (even over a legacy-listed name).
+  assert.equal(resolveUntrustedCategory({ name: "kb_search", untrustedCategory: "knowledge-base" }), "knowledge-base");
+  assert.equal(resolveUntrustedCategory({ name: "web_fetch", untrustedCategory: "custom" }), "custom");
+  // Legacy name list keeps its categories.
+  assert.equal(resolveUntrustedCategory({ name: "task" }), "subagent");
+  assert.equal(resolveUntrustedCategory({ name: "web_search" }), "remote");
+  // MCP connector tools (dynamic names) are auto-marked as remote content.
+  assert.equal(resolveUntrustedCategory({ name: "pubchem_lookup", mcp: { sourceId: "s", toolId: "t" } }), "remote");
+  // Ordinary local tools resolve to no fence.
+  assert.equal(resolveUntrustedCategory({ name: "run_shell" }), undefined);
+});
+
+test("fenceUntrustedContent fences under an explicit category, hyphenated included", () => {
+  assert.equal(
+    fenceUntrustedContent("{\"hits\":[]}", "knowledge-base", "ff00aa"),
+    "[BEGIN UNTRUSTED knowledge-base #ff00aa]\n{\"hits\":[]}\n[END UNTRUSTED #ff00aa]",
+  );
 });

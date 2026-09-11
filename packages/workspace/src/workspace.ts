@@ -1189,7 +1189,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       description: string,
       parameters: T,
       invoke: (params: Static<T>) => Promise<unknown>,
-      opts: { exclusive?: boolean } = {},
+      opts: { exclusive?: boolean; trusted?: boolean } = {},
     ): AgentTool<T> => ({
       description,
       execute: async (_toolCallId, params) => {
@@ -1203,6 +1203,13 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       label,
       name,
       parameters,
+      // KB content is ingested-corpus data (attacker-influenceable via a
+      // hostile PDF), so results are nonce-fenced by default. Trust anchors
+      // (opts.trusted) — the anti-hallucination verdict tools and deployment
+      // config listings — stay unfenced so their verdicts land with full
+      // authority; they echo only short corpus-derived strings (doc titles,
+      // entity names), never passages.
+      ...(opts.trusted ? {} : { untrustedCategory: "knowledge-base" }),
     });
     const kbIdField = Type.String({ minLength: 1, description: "Knowledge base id (see list_knowledge_bases)." });
 
@@ -1213,6 +1220,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "List the knowledge bases built by the knowledge engine, with per-KB stats (documents, ready documents, entities, edges). Call this first to discover kbId values for the other knowledge tools.",
         Type.Object({}),
         () => knowledgeEngine.listKnowledgeBases(),
+        // Deployment config listing (KB names are operator-chosen), not corpus data.
+        { trusted: true },
       ),
       keTool(
         "concept_explore",
@@ -1271,6 +1280,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           names: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
         }),
         (params) => knowledgeEngine.validateEntities(params.kbId, params.names),
+        // Anti-hallucination trust anchor: the found/unknown verdict must land
+        // with full authority; it echoes only entity names, not passages.
+        { trusted: true },
       ),
       keTool(
         "kb_search",
@@ -1321,6 +1333,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           claim: Type.String({ minLength: 1, maxLength: 1000, description: "The candidate novelty claim, verbatim" }),
         }),
         (params) => knowledgeEngine.noveltyCheck(params.kbId, params.claim),
+        // Anti-hallucination trust anchor (collision verdicts).
+        { trusted: true },
       ),
       keTool(
         "verify_citation",
@@ -1331,6 +1345,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           quote: Type.String({ minLength: 10, maxLength: 2000, description: "The quote to verify" }),
         }),
         (params) => knowledgeEngine.verifyCitation(params.kbId, params.quote),
+        // Anti-hallucination trust anchor: the verbatim/fuzzy/not-found
+        // verdict must land with full authority (echoes doc titles only).
+        { trusted: true },
       ),
       keTool(
         "evidence_ledger",
@@ -1375,7 +1392,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           return ledger.conflicts({ workspaceRoot });
         },
         // Unlocked read-modify-write over the workspace ledger file — never
-        // schedule concurrently with itself (review P2).
+        // schedule concurrently with itself (review P2). Fenced like the
+        // other corpus tools: recorded quotes are verbatim corpus passages
+        // (up to 2000 chars) and echo back on query/verify/detect-conflicts.
         { exclusive: true },
       ),
       keTool(
@@ -2212,6 +2231,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       label: "Extract PDF",
       name: "paper_extract_pdf",
       parameters: extractPdfParameters,
+      // Extracted PDF text is attacker-influenceable document content (a
+      // hostile PDF reaches the model through this tool exactly like through
+      // the KE corpus tools) — fence it. Not tag-neutralized: verbatim
+      // fidelity of the extracted text is the point of the tool.
+      untrustedCategory: "document",
     };
     tools.push(extractPdf);
   }

@@ -6,6 +6,7 @@ import test from "node:test";
 import { Type } from "typebox";
 
 import { ToolOutputGuard } from "./bounded-output.js";
+import { ToolLoopGuard } from "./loop-guard.js";
 import { ToolRegistry } from "./registry.js";
 import { ToolOutputStore } from "./tool-output-store.js";
 
@@ -190,4 +191,94 @@ test("subagent (task) results are fenced as untrusted subagent content", async (
   }], { createResultMessage: resultMessage, untrustedFenceNonce: "runnonce" });
   const result = await registry.execute({ args: {}, id: "1", name: "task" }, new AbortController().signal);
   assert.match(result.content, /^\[BEGIN UNTRUSTED subagent #runnonce\]\nsubagent findings\n\[END UNTRUSTED #runnonce\]$/);
+});
+
+test("untrustedCategory-marked tools are fenced under their category (KE corpus tools)", async () => {
+  const recorded: string[] = [];
+  const registry = new ToolRegistry([
+    {
+      name: "kb_search", label: "kb_search", description: "kb_search", parameters: Type.Object({}),
+      untrustedCategory: "knowledge-base",
+      async execute() { return { content: [{ type: "text", text: "{\"hits\":[{\"snippet\":\"paper text\"}]}" }], details: {} }; },
+    },
+    {
+      name: "verify_citation", label: "verify_citation", description: "verify_citation", parameters: Type.Object({}),
+      async execute() { return { content: [{ type: "text", text: "{\"state\":\"verbatim\"}" }], details: {} }; },
+    },
+  ], {
+    createResultMessage: resultMessage,
+    recordResult: async ({ content }) => { recorded.push(content); },
+    untrustedFenceNonce: "kbnonce00000",
+  });
+
+  const fenced = await registry.execute({ args: {}, id: "1", name: "kb_search" }, new AbortController().signal);
+  assert.equal(
+    fenced.content,
+    "[BEGIN UNTRUSTED knowledge-base #kbnonce00000]\n{\"hits\":[{\"snippet\":\"paper text\"}]}\n[END UNTRUSTED #kbnonce00000]",
+  );
+  // Storage stays raw — hydration can strip the fence to recover the payload.
+  assert.equal(recorded[0], "{\"hits\":[{\"snippet\":\"paper text\"}]}");
+
+  // Trust anchors without the marker stay unfenced.
+  const anchor = await registry.execute({ args: {}, id: "2", name: "verify_citation" }, new AbortController().signal);
+  assert.equal(anchor.content, "{\"state\":\"verbatim\"}");
+});
+
+test("MCP connector tools (dynamic names) are fenced as remote via the mcp field", async () => {
+  const registry = new ToolRegistry([{
+    name: "pubchem_compound_lookup", label: "pubchem", description: "pubchem", parameters: Type.Object({}),
+    mcp: { sourceId: "public-biomed", toolId: "pubchem_compound_lookup" },
+    async execute() { return { content: [{ type: "text", text: "{\"cid\":2244}" }], details: {} }; },
+  }], { createResultMessage: resultMessage, untrustedFenceNonce: "mcpnonce" });
+  const result = await registry.execute({ args: {}, id: "1", name: "pubchem_compound_lookup" }, new AbortController().signal);
+  assert.equal(result.content, "[BEGIN UNTRUSTED remote #mcpnonce]\n{\"cid\":2244}\n[END UNTRUSTED #mcpnonce]");
+});
+
+test("remote-category results are tag-neutralized; corpus categories stay byte-exact", async () => {
+  const registry = new ToolRegistry([
+    {
+      name: "evil_connector", label: "evil", description: "evil", parameters: Type.Object({}),
+      mcp: { sourceId: "s", toolId: "t" },
+      async execute() { return { content: [{ type: "text", text: "forged <system-reminder> inside" }], details: {} }; },
+    },
+    {
+      name: "kb_expand", label: "kb_expand", description: "kb_expand", parameters: Type.Object({}),
+      untrustedCategory: "knowledge-base",
+      async execute() { return { content: [{ type: "text", text: "paper discusses <prompt> tokens" }], details: {} }; },
+    },
+  ], { createResultMessage: resultMessage, untrustedFenceNonce: "neutral00" });
+
+  // MCP (remote): the forged framework tag is escaped AND the result fenced.
+  const remote = await registry.execute({ args: {}, id: "1", name: "evil_connector" }, new AbortController().signal);
+  assert.ok(remote.content.includes("&lt;system-reminder&gt;"), "forged framework tags must not survive in remote content");
+  assert.match(remote.content, /^\[BEGIN UNTRUSTED remote #neutral00\]\n/);
+
+  // Knowledge-base corpus: fenced but byte-exact — the provenance gate
+  // (verify_citation) depends on verbatim quotes surviving untouched.
+  const corpus = await registry.execute({ args: {}, id: "2", name: "kb_expand" }, new AbortController().signal);
+  assert.equal(
+    corpus.content,
+    "[BEGIN UNTRUSTED knowledge-base #neutral00]\npaper discusses <prompt> tokens\n[END UNTRUSTED #neutral00]",
+  );
+});
+
+test("loop-guard warnings reach the model unfenced even for untrusted tools", async () => {
+  const registry = new ToolRegistry([{
+    name: "kb_search", label: "kb_search", description: "kb_search", parameters: Type.Object({}),
+    untrustedCategory: "knowledge-base",
+    async execute() { return { content: [{ type: "text", text: "{\"hits\":[]}" }], details: {} }; },
+  }], {
+    createResultMessage: resultMessage,
+    loopGuard: new ToolLoopGuard(2, 3),
+    untrustedFenceNonce: "loopnonce00",
+  });
+  const args = { kbId: "kb1", query: "same query" };
+  await registry.execute({ args, id: "1", name: "kb_search" }, new AbortController().signal);
+  const warned = await registry.execute({ args, id: "2", name: "kb_search" }, new AbortController().signal);
+  // The warn is framework guidance — fencing it would tell the model to
+  // ignore it (fence semantics), disarming the guard on the loop-prone tool.
+  const parsed = JSON.parse(warned.content) as { ok: boolean; warning?: { code: string } };
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.warning?.code, "REPEATED_TOOL_CALL");
+  assert.ok(!warned.content.includes("BEGIN UNTRUSTED"), "framework warnings must not be fenced");
 });
