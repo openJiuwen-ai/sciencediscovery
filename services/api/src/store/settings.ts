@@ -53,6 +53,12 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
     "clinvar",
     "chembl",
     "geo",
+    "pubchem",
+    "afdb",
+    "interpro",
+    "optimade",
+    "string",
+    "biogrid",
   ]);
 }
 

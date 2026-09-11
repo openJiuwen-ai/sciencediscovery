@@ -22,6 +22,7 @@ downloads remain in the Node governance broker.
 from __future__ import annotations
 
 import html
+import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -920,6 +921,438 @@ async def geo_prepare_dataset_download(accession: str, format: str = "series-mat
         "sourceRecordId": normalized,
         "sourceUrl": url,
     }], warnings=["Large GEO files are downloaded asynchronously after explicit permission."])
+
+
+# PubChem / AlphaFold DB / InterPro / OPTIMADE / STRING / BioGRID
+# (Z6 connector expansion, ported from the DeepAnalyze data-connector pack;
+# provider-behaviour notes below encode measured API deviations.)
+
+
+PUBCHEM_PROPERTIES = ",".join([
+    "MolecularFormula", "MolecularWeight", "CanonicalSMILES", "IsomericSMILES",
+    "IUPACName", "XLogP", "TPSA", "HBondDonorCount", "HBondAcceptorCount",
+])
+
+
+def _pubchem_property_records(payload: dict[str, Any], *, tool: str) -> list[dict[str, Any]]:
+    properties = payload.get("PropertyTable", {}).get("Properties", [])
+    records = []
+    for item in properties[:25]:
+        cid = str(item.get("CID") or "")
+        if not cid:
+            continue
+        records.append(_record(
+            "pubchem", cid, str(item.get("IUPACName") or f"PubChem CID {cid}"),
+            format_external_url("data_sources.pubchem.compound_page_template", cid=cid),
+            item, scope="structured-record",
+        ))
+    return records
+
+
+@SERVER.tool()
+async def pubchem_search(query: str, limit: int = 5) -> dict[str, Any]:
+    """Search PubChem compound names and return matching CIDs."""
+    if not query.strip():
+        raise ValueError("query is required")
+    # The name→cids endpoint returns few hits (compound names are near-unique);
+    # cap locally instead of passing undocumented upstream parameters.
+    data = await _get_json(
+        format_external_url("data_sources.pubchem.name_cids_template", name=quote(query.strip(), safe="")),
+    )
+    cids = [str(cid) for cid in data.get("IdentifierList", {}).get("CID", [])][: max(1, min(limit, 25))]
+    return _result(
+        "pubchem", "search",
+        [
+            _record(
+                "pubchem", cid, f"PubChem CID {cid}",
+                format_external_url("data_sources.pubchem.compound_page_template", cid=cid),
+                {"cid": int(cid)}, scope="structured-record",
+            )
+            for cid in cids
+        ],
+        warnings=[
+            "PubChem aggregates depositor records: the same compound can carry conflicting depositor values; the CID is the stable identity.",
+            "Search matches compound names only — resolve SMILES/InChI inputs with pubchem_resolve instead.",
+        ],
+    )
+
+
+@SERVER.tool()
+async def pubchem_lookup(cid: str) -> dict[str, Any]:
+    """Look up one PubChem compound property record by CID."""
+    normalized = cid.strip()
+    if not re.fullmatch(r"\d{1,9}", normalized):
+        raise ValueError("cid must be a numeric PubChem CID")
+    payload = await _get_json(format_external_url(
+        "data_sources.pubchem.cid_properties_template", cid=normalized, properties=PUBCHEM_PROPERTIES,
+    ))
+    records = _pubchem_property_records(payload, tool="lookup")
+    if not records:
+        raise RuntimeError(f"HTTP 404 Not Found from pubchem.ncbi.nlm.nih.gov (CID {normalized})")
+    return _result("pubchem", "lookup", records)
+
+
+@SERVER.tool()
+async def pubchem_resolve(value: str, by: str = "name") -> dict[str, Any]:
+    """Resolve a compound name, SMILES, or InChI into a PubChem property record."""
+    if by not in {"name", "smiles", "inchi"}:
+        raise ValueError("by must be name, smiles, or inchi")
+    if not value.strip():
+        raise ValueError("value is required")
+    # SMILES/InChI carry slashes, parentheses, and colons — encode everything.
+    payload = await _get_json(format_external_url(
+        "data_sources.pubchem.resolve_properties_template",
+        namespace=by, value=quote(value.strip(), safe=""), properties=PUBCHEM_PROPERTIES,
+    ))
+    records = _pubchem_property_records(payload, tool="resolve")
+    if not records:
+        raise RuntimeError(f"HTTP 404 Not Found from pubchem.ncbi.nlm.nih.gov (no compound for the given {by})")
+    return _result(
+        "pubchem", "resolve", records[:1],
+        warnings=["Resolution returns the best-matching deposit; ambiguous identifiers may need pubchem_search."],
+    )
+
+
+@SERVER.tool()
+async def afdb_lookup(uniprot_acc: str) -> dict[str, Any]:
+    """Look up AlphaFold predicted structures for a UniProt accession."""
+    accession = uniprot_acc.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{6,10}", accession):
+        raise ValueError("uniprot_acc must be a UniProt accession such as P12345")
+    predictions_raw = await _get_json(format_external_url(
+        "data_sources.afdb.prediction_template", accession=accession,
+    ))
+    predictions = []
+    for item in predictions_raw if isinstance(predictions_raw, list) else []:
+        # AFDB fragment records have no sequenceLength field — derive it from
+        # the covered interval instead of reporting it as absent.
+        start, end = item.get("uniprotStart"), item.get("uniprotEnd")
+        predictions.append({
+            "entryId": item.get("entryId"),
+            "uniprotAccession": item.get("uniprotAccession"),
+            "gene": item.get("gene"),
+            "organism": item.get("organismScientificName"),
+            "sequenceLength": end - start + 1 if isinstance(start, int) and isinstance(end, int) else None,
+            "meanPlddt": item.get("confidenceScore"),
+            "fractionVeryHighConfidence": item.get("fractionPlddtVeryHigh"),
+            "cifUrl": item.get("cifUrl"),
+            "pdbUrl": item.get("pdbUrl"),
+            "paeUrl": item.get("paeDocUrl"),
+            "modelVersion": item.get("latestVersion"),
+        })
+    if not predictions:
+        raise RuntimeError(f"HTTP 404 Not Found from alphafold.ebi.ac.uk (no prediction for {accession})")
+    gene = next((str(p["gene"]) for p in predictions if p.get("gene")), accession)
+    return _result(
+        "afdb", "lookup",
+        [
+            _record(
+                "afdb", accession, f"AlphaFold prediction for {gene}",
+                format_external_url("data_sources.afdb.entry_page_template", accession=accession),
+                {"predictions": predictions}, scope="structured-record",
+                warnings=[
+                    "Predicted structures are not experimentally determined: mean pLDDT >70 is trustworthy, <50 is usually a disordered region.",
+                    "For experimental structures prefer the PDB source.",
+                ],
+            )
+        ],
+    )
+
+
+@SERVER.tool()
+async def interpro_lookup_entry(accession: str) -> dict[str, Any]:
+    """Look up one InterPro protein family or domain entry (IPR or legacy Pfam accession)."""
+    normalized = accession.strip().upper()
+    if not re.fullmatch(r"(IPR|PF)\d{4,8}", normalized):
+        raise ValueError("accession must be an InterPro entry such as IPR000719 or a Pfam signature such as PF00069")
+    # Pfam was folded into InterPro in 2022 (pfam.xfam.org is retired) — Pfam
+    # signatures are served from the same API under the pfam database.
+    database = "pfam" if normalized.startswith("PF") else "interpro"
+    data = await _get_json(format_external_url(
+        "data_sources.interpro.entry_api_template", database=database, accession=normalized,
+    ), params={"format": "json"})
+    metadata = data.get("metadata", {})
+    description = metadata.get("description") or []
+    first_text = description[0].get("text") if description and isinstance(description[0], dict) else None
+    title = str(metadata.get("name") or normalized)
+    return _result(
+        "interpro", "lookup_entry",
+        [
+            _record(
+                "interpro", normalized, title,
+                format_external_url(
+                    "data_sources.interpro.entry_page_template", database=database, accession=normalized,
+                ),
+                {
+                    "accession": metadata.get("accession"),
+                    "name": metadata.get("name") if isinstance(metadata.get("name"), str) else None,
+                    "type": metadata.get("type"),
+                    "sourceDatabase": metadata.get("source_database"),
+                    # Entry descriptions arrive as embedded HTML — strip tags
+                    # before the text enters model context.
+                    "description": re.sub(r"<[^>]+>", "", str(first_text))[:1_000] if first_text else None,
+                },
+                scope="curated-record",
+            )
+        ],
+    )
+
+
+@SERVER.tool()
+async def interpro_protein_entries(uniprot_acc: str, limit: int = 5) -> dict[str, Any]:
+    """List the InterPro annotations of one UniProt accession."""
+    accession = uniprot_acc.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{6,10}", accession):
+        raise ValueError("uniprot_acc must be a UniProt accession such as P12345")
+    # page_size=50 is the upstream fetch window; records are capped locally.
+    data = await _get_json(format_external_url(
+        "data_sources.interpro.protein_entry_api_template", accession=accession,
+    ), params={"format": "json", "page_size": 50})
+    records = []
+    for entry in (data.get("results") or [])[: max(1, min(limit, 25))]:
+        metadata = entry.get("metadata", {})
+        identifier = str(metadata.get("accession") or "")
+        if not identifier:
+            continue
+        name = metadata.get("name") if isinstance(metadata.get("name"), str) else None
+        records.append(_record(
+            "interpro", identifier, str(name or identifier),
+            format_external_url(
+                "data_sources.interpro.entry_page_template", database="interpro", accession=identifier,
+            ),
+            {
+                "accession": metadata.get("accession"),
+                "name": name,
+                "type": metadata.get("type"),
+                "sourceDatabase": metadata.get("source_database"),
+            },
+            scope="curated-record",
+        ))
+    return _result(
+        "interpro", "protein_entries", records,
+        data={"uniprotAccession": accession, "count": data.get("count")},
+    )
+
+
+OPTIMADE_PROVIDERS: dict[str, dict[str, str]] = {
+    "oqmd": {
+        "label": "OQMD",
+        "api": "data_sources.optimade.oqmd_structures_template",
+        "page": "data_sources.optimade.oqmd_materials_page",
+    },
+    "aflow": {
+        "label": "AFLOW",
+        "api": "data_sources.optimade.aflow_structures_template",
+        "page": "data_sources.optimade.aflow_home_page",
+    },
+    "cod": {
+        "label": "COD",
+        "api": "data_sources.optimade.cod_structures_template",
+        "page": "data_sources.optimade.cod_entry_page_template",
+    },
+    "mp": {
+        "label": "Materials Project",
+        "api": "data_sources.optimade.mp_structures_template",
+        "page": "data_sources.optimade.mp_entry_page_template",
+    },
+}
+
+
+def _optimade_filter(filter_: str | None, formula: str | None, elements: str | None) -> str:
+    """Compose an OPTIMADE filter from a raw filter, reduced formula, or element list."""
+    raw = (filter_ or "").strip()
+    if raw:
+        return raw
+    if formula and formula.strip():
+        return f'chemical_formula_reduced="{formula.strip()}"'
+    if elements and elements.strip():
+        quoted = ",".join(f'"{element.strip()}"' for element in elements.split(",") if element.strip())
+        return f"elements HAS ALL {quoted}"
+    raise ValueError("provide one of filter, formula, or elements")
+
+
+@SERVER.tool()
+async def optimade_query_structures(
+    filter: str | None = None, formula: str | None = None, elements: str | None = None,
+    provider: str = "oqmd", limit: int = 10,
+) -> dict[str, Any]:
+    """Query crystal structures across OPTIMADE providers (OQMD, AFLOW, COD, Materials Project)."""
+    if provider not in OPTIMADE_PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r} — available: " + ", ".join(sorted(OPTIMADE_PROVIDERS)))
+    composed = _optimade_filter(filter, formula, elements)
+    definition = OPTIMADE_PROVIDERS[provider]
+    capped = max(1, min(limit, 25))
+    data = await _get_json(external_url(definition["api"]), params={
+        "filter": composed,
+        "page_limit": capped,
+        "response_fields": "chemical_formula_reduced,elements,nelements,nsites,structure_features",
+        "response_format": "json",
+    })
+    # Some providers ignore page_limit (measured on OQMD) — truncate here.
+    structures = []
+    for item in (data.get("data") or [])[:capped]:
+        attributes = item.get("attributes") or {}
+        identifier = str(item.get("id") or "")
+        if not identifier:
+            continue
+        formula_value = attributes.get("chemical_formula_reduced")
+        if provider == "cod":
+            page_url = format_external_url(definition["page"], identifier=quote(identifier, safe=""))
+        elif provider == "mp":
+            page_url = format_external_url(definition["page"], identifier=quote(identifier, safe=""))
+        else:
+            # OQMD and AFLOW expose no stable per-entry public page — cite the
+            # provider's materials browser and keep the entry id in the record.
+            page_url = external_url(definition["page"])
+        structures.append(_record(
+            "optimade", f"{provider}:{identifier}",
+            f"{definition['label']} {identifier}: {formula_value or 'structure'}",
+            page_url,
+            {
+                "provider": definition["label"],
+                "entryId": identifier,
+                "formula": formula_value,
+                "elements": attributes.get("elements") or [],
+                "nelements": attributes.get("nelements"),
+                "nsites": attributes.get("nsites"),
+            },
+            scope="structured-record",
+        ))
+    meta = data.get("meta") or {}
+    return _result(
+        "optimade", "query_structures", structures,
+        data={"provider": definition["label"], "returned": len(structures), "available": meta.get("data_available")},
+        warnings=[
+            "Providers do not uniformly honor page limits — results are truncated locally.",
+            "Prefer COD for experimental crystal structures and OQMD/Materials Project for DFT-computed ones; proprietary databases (CSD/ICSD) are out of scope.",
+        ],
+    )
+
+
+def _string_confidence(score: float) -> str:
+    if score >= 0.7:
+        return "high"
+    if score >= 0.4:
+        return "medium"
+    return "low"
+
+
+@SERVER.tool()
+async def string_network(proteins: str, species: int = 9606, limit: int = 10) -> dict[str, Any]:
+    """Retrieve protein-interaction network edges for a set of protein identifiers."""
+    identifiers = proteins.strip()
+    if not identifiers:
+        raise ValueError("proteins is required")
+    edges = await _get_json(external_url("data_sources.string.network_api"), params={
+        "identifiers": identifiers,
+        "species": species,
+        "limit": max(1, min(limit, 25)),
+    })
+    records = []
+    for edge in edges if isinstance(edges, list) else []:
+        protein_a, protein_b = edge.get("preferredName_A"), edge.get("preferredName_B")
+        if not protein_a or not protein_b:
+            continue
+        score = edge.get("score")
+        records.append(_record(
+            "string", f"{protein_a}__{protein_b}", f"{protein_a} – {protein_b} interaction",
+            format_external_url(
+                "data_sources.string.network_page_template",
+                taxon=species, identifiers=quote(identifiers, safe=",").replace(",", "%0d"),
+            ),
+            {
+                "proteinA": protein_a,
+                "proteinB": protein_b,
+                # STRING reports scores in [0, 1]; the convention elsewhere is 0-1000.
+                "combinedScore": round(score * 1_000) if isinstance(score, (int, float)) else None,
+                "confidence": _string_confidence(score) if isinstance(score, (int, float)) else None,
+                "ncbiTaxonId": edge.get("ncbiTaxonId"),
+            },
+            scope="structured-record",
+        ))
+    return _result(
+        "string", "network", records[: max(1, min(limit, 25))],
+        warnings=[
+            "Combined scores integrate experimental and predicted evidence (0-1000; >=700 is high confidence).",
+            "Predicted interactions need experimental review before being treated as established.",
+        ],
+    )
+
+
+@SERVER.tool()
+async def string_resolve(name: str, species: int = 9606) -> dict[str, Any]:
+    """Resolve a protein name to its STRING identifier."""
+    identifier = name.strip()
+    if not identifier:
+        raise ValueError("name is required")
+    matches = await _get_json(external_url("data_sources.string.resolve_api"), params={
+        "identifiers": identifier,
+        "species": species,
+        "limit": 5,
+    })
+    records = []
+    for match in matches if isinstance(matches, list) else []:
+        string_id, preferred = match.get("stringId"), match.get("preferredName")
+        if not string_id or not preferred:
+            continue
+        records.append(_record(
+            "string", str(string_id), str(preferred),
+            format_external_url(
+                "data_sources.string.network_page_template",
+                taxon=species, identifiers=quote(str(preferred), safe=""),
+            ),
+            {
+                "stringId": string_id,
+                "name": preferred,
+                "annotation": str(match.get("annotation") or "")[:200] or None,
+            },
+            scope="structured-record",
+        ))
+    return _result("string", "resolve", records)
+
+
+@SERVER.tool()
+async def biogrid_interactions(gene: str, taxon_id: int = 9606, limit: int = 20) -> dict[str, Any]:
+    """Look up manually curated experimental interactions for a gene."""
+    name = gene.strip()
+    if not name:
+        raise ValueError("gene is required")
+    access_key = os.environ.get("BIOGRID_API_KEY", "").strip()
+    if not access_key:
+        raise RuntimeError(
+            "BioGRID requires the BIOGRID_API_KEY environment variable (unauthorized)"
+        )
+    payload = await _get_json(external_url("data_sources.biogrid.interactions_api"), params={
+        "searchNames": "true",
+        "geneList": name,
+        "taxonId": taxon_id,
+        "max": max(1, min(limit, 25)),
+        "format": "json",
+        "accesskey": access_key,
+    })
+    records = []
+    # The response is a map keyed by an internal interaction hash, not a list.
+    for entry in list(payload.values()) if isinstance(payload, dict) else []:
+        gene_a, gene_b = entry.get("OFFICIAL_SYMBOL_A"), entry.get("OFFICIAL_SYMBOL_B")
+        if not gene_a or not gene_b:
+            continue
+        system = entry.get("EXPERIMENTAL_SYSTEM")
+        records.append(_record(
+            "biogrid", f"{gene_a}__{gene_b}", f"{gene_a} – {gene_b} ({system or 'interaction'})",
+            external_url("data_sources.biogrid.home_page"),
+            {
+                "geneA": gene_a,
+                "geneB": gene_b,
+                "experimentalSystem": system,
+                "throughput": entry.get("THROUGHPUT"),
+                "pubmedId": entry.get("PUBMED_ID"),
+            },
+            scope="curated-record",
+        ))
+    return _result(
+        "biogrid", "interactions", records[: max(1, min(limit, 25))],
+        warnings=["All BioGRID edges are manually curated experimental interactions; preserve the PubMed evidence identifiers."],
+    )
 
 
 def main() -> None:

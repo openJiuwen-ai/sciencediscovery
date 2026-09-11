@@ -102,6 +102,41 @@
     },
     "crossref": {
       "works_api": "https://api.crossref.org/works"
+    },
+    "pubchem": {
+      "api_base": "https://pubchem.ncbi.nlm.nih.gov/rest/pug",
+      "name_cids_template": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{name}/cids/JSON",
+      "cid_properties_template": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/{properties}/JSON",
+      "resolve_properties_template": "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/{namespace}/{value}/property/{properties}/JSON",
+      "compound_page_template": "https://pubchem.ncbi.nlm.nih.gov/compound/{cid}"
+    },
+    "afdb": {
+      "prediction_template": "https://alphafold.ebi.ac.uk/api/prediction/{accession}",
+      "entry_page_template": "https://alphafold.ebi.ac.uk/entry/{accession}"
+    },
+    "interpro": {
+      "entry_api_template": "https://www.ebi.ac.uk/interpro/api/entry/{database}/{accession}",
+      "protein_entry_api_template": "https://www.ebi.ac.uk/interpro/api/entry/interpro/protein/uniprot/{accession}",
+      "entry_page_template": "https://www.ebi.ac.uk/interpro/entry/{database}/{accession}"
+    },
+    "optimade": {
+      "oqmd_structures_template": "https://oqmd.org/optimade/v1/structures",
+      "aflow_structures_template": "https://aflow.org/API/optimade/v1/structures",
+      "cod_structures_template": "https://www.crystallography.net/cod/optimade/v1/structures",
+      "mp_structures_template": "https://optimade.materialsproject.org/v1/structures",
+      "cod_entry_page_template": "https://www.crystallography.net/cod/{identifier}.html",
+      "mp_entry_page_template": "https://materialsproject.org/materials/{identifier}",
+      "oqmd_materials_page": "https://oqmd.org/materials",
+      "aflow_home_page": "https://aflow.org"
+    },
+    "string": {
+      "network_api": "https://string-db.org/api/json/network",
+      "resolve_api": "https://string-db.org/api/json/get_string_ids",
+      "network_page_template": "https://string-db.org/network/{taxon}/{identifiers}"
+    },
+    "biogrid": {
+      "interactions_api": "https://webservice.thebiogrid.org/interactions",
+      "home_page": "https://thebiogrid.org"
     }
   },
   "web": {
@@ -128,7 +163,13 @@
     "ensembl": "https://www.ensembl.org/info/about/legal/disclaimer.html",
     "reactome": "https://reactome.org/license",
     "chembl": "https://www.ebi.ac.uk/about/terms-of-use",
-    "uniprot": "https://www.uniprot.org/help/license"
+    "uniprot": "https://www.uniprot.org/help/license",
+    "pubchem": "https://pubchem.ncbi.nlm.nih.gov/docs/programmatic-access",
+    "afdb": "https://alphafold.ebi.ac.uk/license",
+    "interpro": "https://www.ebi.ac.uk/about/terms-of-use",
+    "optimade": "https://www.optimade.org/providers/",
+    "string": "https://string-db.org/cgi/about",
+    "biogrid": "https://wiki.thebiogrid.org/doku.php/termsandconditions"
   },
   "connector_hosts": {
     "arxiv": [
@@ -183,6 +224,29 @@
     "uniprot": [
       "rest.uniprot.org",
       "www.uniprot.org"
+    ],
+    "pubchem": [
+      "pubchem.ncbi.nlm.nih.gov"
+    ],
+    "afdb": [
+      "alphafold.ebi.ac.uk"
+    ],
+    "interpro": [
+      "www.ebi.ac.uk"
+    ],
+    "optimade": [
+      "oqmd.org",
+      "aflow.org",
+      "www.crystallography.net",
+      "optimade.materialsproject.org",
+      "materialsproject.org"
+    ],
+    "string": [
+      "string-db.org"
+    ],
+    "biogrid": [
+      "webservice.thebiogrid.org",
+      "thebiogrid.org"
     ]
   }
 }

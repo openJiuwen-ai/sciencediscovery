@@ -433,6 +433,222 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
       },
     },
   },
+  // Z6 biodata expansion (PubChem / AlphaFold DB / InterPro / OPTIMADE /
+  // STRING / BioGRID). Every tool below is kind "lookup" on purpose: the
+  // broker mirrors only kind "search" tools into the Memory Graph as Paper
+  // nodes, and none of these sources return literature — mirroring a compound
+  // or an interaction edge as a Paper would pollute the graph.
+  {
+    attribution: "Data provided by PubChem (NCBI/NLM).",
+    caveats: [
+      "PubChem aggregates depositor records: the same compound can carry conflicting depositor values; the CID is the stable identity.",
+      "Property records report depositor-declared values; preserve units and the exact property names.",
+    ],
+    description: "Compound records, identifiers, and molecular properties from PubChem.",
+    displayName: "PubChem",
+    hosts: [...externalUrlList("connector_hosts.pubchem")],
+    id: "pubchem",
+    kinds: ["chemistry"],
+    license: "Public domain (U.S. Government work)",
+    publisher: "U.S. National Library of Medicine",
+    termsUrl: externalUrl("terms.pubchem"),
+    tools: {
+      lookup: {
+        description: "Look up one PubChem compound property record by CID.",
+        inputSchema: objectSchema({ cid: accession("^\\d{1,9}$") }, ["cid"]),
+        keywords: ["PubChem CID", "compound properties", "molecular weight", "SMILES lookup"],
+        kind: "lookup",
+        resultType: "structured-data",
+      },
+      resolve: {
+        description: "Resolve a compound name, SMILES, or InChI into a PubChem property record.",
+        inputSchema: objectSchema(
+          { by: { default: "name", enum: ["name", "smiles", "inchi"], type: "string" }, value: text(2_000) },
+          ["value"],
+        ),
+        keywords: ["resolve SMILES", "resolve InChI", "compound from name"],
+        kind: "lookup",
+        resultType: "structured-data",
+      },
+      search: {
+        description: "Search PubChem compound names and return matching CIDs.",
+        inputSchema: objectSchema({ limit, query: text() }, ["query"]),
+        keywords: ["PubChem", "compound", "CID", "chemical search"],
+        kind: "lookup",
+        priority: 85,
+        resultType: "structured-data",
+      },
+    },
+  },
+  {
+    attribution: "Predictions from AlphaFold DB (EMBL-EBI & Google DeepMind).",
+    caveats: [
+      "Predicted structures are not experimentally determined: mean pLDDT >70 is trustworthy, <50 is usually a disordered region.",
+      "For experimental structures prefer the PDB source.",
+    ],
+    description: "AlphaFold protein structure predictions from AlphaFold DB.",
+    displayName: "AlphaFold DB",
+    hosts: [...externalUrlList("connector_hosts.afdb")],
+    id: "afdb",
+    kinds: ["structure", "protein"],
+    license: "CC-BY-4.0",
+    publisher: "EMBL-EBI / Google DeepMind",
+    termsUrl: externalUrl("terms.afdb"),
+    tools: {
+      lookup: {
+        description: "Look up AlphaFold predicted structures for a UniProt accession.",
+        inputSchema: objectSchema({ uniprot_acc: accession("^[A-Za-z0-9]{6,10}$") }, ["uniprot_acc"]),
+        keywords: ["AlphaFold", "predicted structure", "pLDDT", "protein model"],
+        kind: "lookup",
+        priority: 90,
+        resultType: "structured-data",
+      },
+    },
+  },
+  {
+    attribution: "Data provided by InterPro (EMBL-EBI).",
+    caveats: [
+      "Pfam was folded into InterPro in 2022 (pfam.xfam.org is retired); Pfam signatures are served under the pfam database.",
+      "Preserve the entry accession, type, and source database of every annotation.",
+    ],
+    description: "Protein family, domain, and signature annotations from InterPro.",
+    displayName: "InterPro",
+    hosts: [...externalUrlList("connector_hosts.interpro")],
+    id: "interpro",
+    kinds: ["protein"],
+    license: "CC0 1.0",
+    publisher: "EMBL-EBI",
+    // Shares the www.ebi.ac.uk rate bucket with the other EBI sources.
+    termsUrl: externalUrl("terms.interpro"),
+    tools: {
+      lookup_entry: {
+        description: "Look up one InterPro protein family or domain entry (IPR or legacy Pfam accession).",
+        inputSchema: objectSchema({ accession: accession("^(IPR|PF)\\d{4,8}$") }, ["accession"]),
+        keywords: ["InterPro", "protein family", "domain", "Pfam signature"],
+        kind: "lookup",
+        priority: 85,
+        resultType: "structured-data",
+      },
+      protein_entries: {
+        description: "List the InterPro annotations of one UniProt accession.",
+        inputSchema: objectSchema({ limit, uniprot_acc: accession("^[A-Za-z0-9]{6,10}$") }, ["uniprot_acc"]),
+        keywords: ["InterPro annotations", "protein domains for accession"],
+        kind: "lookup",
+        resultType: "structured-data",
+      },
+    },
+  },
+  {
+    attribution: "Data provided via OPTIMADE providers (OQMD, AFLOW, COD, Materials Project).",
+    caveats: [
+      "Providers do not uniformly honor page limits — results are truncated locally.",
+      "Prefer COD for experimental crystal structures and OQMD/Materials Project for DFT-computed ones; proprietary databases (CSD/ICSD) are out of scope.",
+    ],
+    description: "Unified crystal-structure queries across OPTIMADE materials databases.",
+    displayName: "OPTIMADE",
+    hosts: [...externalUrlList("connector_hosts.optimade")],
+    id: "optimade",
+    kinds: ["dataset"],
+    license: "CC-BY-4.0 / public domain (per provider; COD is public domain)",
+    publisher: "OPTIMADE consortium (OQMD, AFLOW, COD, Materials Project)",
+    rateLimit: { minIntervalMs: 500 },
+    termsUrl: externalUrl("terms.optimade"),
+    tools: {
+      query_structures: {
+        description: "Query crystal structures across OPTIMADE providers by filter, reduced formula, or element list.",
+        inputSchema: objectSchema(
+          {
+            elements: text(200),
+            filter: text(1_000),
+            formula: text(100),
+            limit,
+            provider: { default: "oqmd", enum: ["oqmd", "aflow", "cod", "mp"], type: "string" },
+          },
+          [],
+        ),
+        keywords: ["OPTIMADE", "crystal structure", "materials database", "OQMD", "AFLOW", "COD", "Materials Project"],
+        kind: "lookup",
+        priority: 80,
+        resultType: "structured-data",
+      },
+    },
+  },
+  {
+    attribution: "Data provided by the STRING database.",
+    caveats: [
+      "Combined scores integrate experimental and predicted evidence (0-1000; >=700 is high confidence).",
+      "Predicted interactions need experimental review before being treated as established.",
+    ],
+    description: "Protein-protein interaction networks and identifier resolution from STRING.",
+    displayName: "STRING",
+    hosts: [...externalUrlList("connector_hosts.string")],
+    id: "string",
+    kinds: ["protein"],
+    license: "CC-BY-4.0",
+    publisher: "STRING Consortium (EMBL, SIB, CPR)",
+    rateLimit: { minIntervalMs: 1_000 },
+    termsUrl: externalUrl("terms.string"),
+    tools: {
+      network: {
+        description: "Retrieve protein-interaction network edges for a set of protein identifiers.",
+        inputSchema: objectSchema(
+          {
+            limit,
+            proteins: text(1_000),
+            species: { default: 9606, maximum: 2_147_483_647, minimum: 1, type: "integer" },
+          },
+          ["proteins"],
+        ),
+        keywords: ["STRING", "protein interaction", "PPI", "interaction network", "combined score"],
+        kind: "lookup",
+        priority: 88,
+        resultType: "structured-data",
+      },
+      resolve: {
+        description: "Resolve a protein name to its STRING identifier.",
+        inputSchema: objectSchema(
+          { name: text(200), species: { default: 9606, maximum: 2_147_483_647, minimum: 1, type: "integer" } },
+          ["name"],
+        ),
+        keywords: ["STRING identifier", "protein name resolution"],
+        kind: "lookup",
+        resultType: "structured-data",
+      },
+    },
+  },
+  {
+    attribution: "Data provided by BioGRID.",
+    caveats: [
+      "All BioGRID edges are manually curated experimental interactions; preserve the PubMed evidence identifiers.",
+      "Requires the BIOGRID_API_KEY environment variable on the gateway; without it the tool reports unauthorized.",
+    ],
+    description: "Manually curated experimental protein and genetic interactions from BioGRID.",
+    displayName: "BioGRID",
+    hosts: [...externalUrlList("connector_hosts.biogrid")],
+    id: "biogrid",
+    kinds: ["protein"],
+    license: "BioGRID academic-use terms (registration required)",
+    publisher: "BioGRID (Princeton / Lunenfeld-Tanenbaum)",
+    rateLimit: { minIntervalMs: 500 },
+    termsUrl: externalUrl("terms.biogrid"),
+    tools: {
+      interactions: {
+        description: "Look up curated experimental interactions for a gene.",
+        inputSchema: objectSchema(
+          {
+            gene: text(100),
+            limit,
+            taxon_id: { default: 9606, maximum: 2_147_483_647, minimum: 1, type: "integer" },
+          },
+          ["gene"],
+        ),
+        keywords: ["BioGRID", "experimental interaction", "curated PPI", "genetic interaction"],
+        kind: "lookup",
+        priority: 85,
+        resultType: "structured-data",
+      },
+    },
+  },
 ];
 
 function extractPayload(raw: McpRawResult): unknown {

@@ -36,12 +36,19 @@ from sciencediscovery_gateway.public_biomed_mcp import (
     _preprint_prepare_pdf,
     _preprint_search,
     _pubmed_search,
+    afdb_lookup,
+    biogrid_interactions,
     chembl_search_molecules,
     clinvar_search_variants,
     ensembl_lookup_gene,
     geo_search_studies,
+    interpro_lookup_entry,
+    optimade_query_structures,
     pdb_lookup_structure,
+    pubchem_resolve,
+    pubchem_search,
     reactome_lookup_pathway,
+    string_network,
 )
 
 
@@ -243,7 +250,9 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_registers_the_complete_manifest_tool_set(self) -> None:
         actual = {tool.name for tool in await SERVER.list_tools()}
         self.assertEqual(actual, {
+            "afdb_lookup",
             "arxiv_prepare_paper_download", "arxiv_search",
+            "biogrid_interactions",
             "biorxiv_lookup_doi", "biorxiv_prepare_paper_download", "biorxiv_search_preprints",
             "chembl_search_activities", "chembl_search_molecules", "chembl_search_targets",
             "chembl_similarity_search",
@@ -252,10 +261,14 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             "ensembl_variant_consequence",
             "europe-pmc_prepare_paper_download", "europe-pmc_search",
             "geo_list_files", "geo_lookup_accession", "geo_prepare_dataset_download", "geo_search_studies",
+            "interpro_lookup_entry", "interpro_protein_entries",
             "medrxiv_lookup_doi", "medrxiv_prepare_paper_download", "medrxiv_search_preprints",
+            "optimade_query_structures",
             "pdb_lookup_structure", "pdb_prepare_structure_download", "pdb_search_structures",
+            "pubchem_lookup", "pubchem_resolve", "pubchem_search",
             "pubmed_prepare_paper_download", "pubmed_search",
             "reactome_enrichment", "reactome_lookup_pathway", "reactome_search_pathways",
+            "string_network", "string_resolve",
         })
 
     async def test_database_results_use_manifest_source_identity(self) -> None:
@@ -386,6 +399,152 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
     def test_raise_for_status_passes_successful_responses(self) -> None:
         request = httpx.Request("GET", "https://export.arxiv.org/api/query")
         _raise_for_status(httpx.Response(200, request=request))
+
+
+class Z6BiodataConnectorTests(unittest.IsolatedAsyncioTestCase):
+    """Provider-behaviour regressions for the PubChem/AFDB/InterPro/OPTIMADE/
+    STRING/BioGRID expansion (ported from the DeepAnalyzet connector pack)."""
+
+    async def test_pubchem_search_and_resolve_preserve_identity_and_encode_values(self) -> None:
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value={"IdentifierList": {"CID": [2244, 2157]}}),
+        ) as get_json:
+            search = await pubchem_search("aspirin", 5)
+        self.assertEqual(search["sourceId"], "pubchem")
+        self.assertEqual(search["toolId"], "search")
+        self.assertEqual([record["identifier"] for record in search["records"]], ["2244", "2157"])
+        self.assertTrue(search["records"][0]["url"].startswith("https://pubchem.ncbi.nlm.nih.gov/compound/"))
+
+        smiles = "CC(=O)Oc1ccccc1C(=O)O"
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value={"PropertyTable": {"Properties": [
+                {"CID": 2244, "IUPACName": "2-acetyloxybenzoic acid", "MolecularFormula": "C9H8O4"},
+            ]}}),
+        ) as get_json:
+            resolve = await pubchem_resolve(smiles, "smiles")
+        # SMILES slashes/parentheses must be fully percent-encoded in the path.
+        requested_url = get_json.call_args[0][0]
+        self.assertIn("compound/smiles/CC%28%3DO%29", requested_url)
+        self.assertEqual(resolve["records"][0]["identifier"], "2244")
+        self.assertEqual(resolve["records"][0]["title"], "2-acetyloxybenzoic acid")
+
+    async def test_afdb_lookup_derives_fragment_sequence_length_and_warns_about_plddt(self) -> None:
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=[{
+                "entryId": "AF-P12345-F1", "uniprotAccession": "P12345", "gene": "EXAMPLE",
+                "organismScientificName": "Homo sapiens",
+                "uniprotStart": 10, "uniprotEnd": 60,  # fragment: no sequenceLength upstream
+                "confidenceScore": 88.4, "fractionPlddtVeryHigh": 0.71,
+                "cifUrl": "https://alphafold.ebi.ac.uk/files/AF-P12345-F1-model_v4.cif",
+                "latestVersion": 4,
+            }]),
+        ):
+            result = await afdb_lookup("p12345")
+        record = result["records"][0]
+        self.assertEqual(record["source"], "afdb")
+        self.assertEqual(record["identifier"], "P12345")
+        prediction = record["structuredData"]["predictions"][0]
+        self.assertEqual(prediction["sequenceLength"], 51)  # 60 - 10 + 1
+        self.assertTrue(any("pLDDT" in warning for warning in record["warnings"]))
+
+    async def test_interpro_lookup_entry_routes_pfam_accessions_to_the_pfam_database(self) -> None:
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value={"metadata": {
+                "accession": "PF00069", "name": "Protein kinase domain", "type": "Domain",
+                "source_database": "pfam",
+                "description": [{"text": "Catalytic <b>domain</b> of protein kinases."}],
+            }}),
+        ) as get_json:
+            result = await interpro_lookup_entry("pf00069")
+        requested_url = get_json.call_args[0][0]
+        self.assertIn("/entry/pfam/PF00069", requested_url)
+        record = result["records"][0]
+        self.assertEqual(record["identifier"], "PF00069")
+        self.assertIn("/entry/pfam/PF00069", record["url"])
+        # Embedded HTML in entry descriptions is stripped before model context.
+        self.assertEqual(record["structuredData"]["description"], "Catalytic domain of protein kinases.")
+
+    async def test_optimade_composes_element_filters_and_truncates_ignoring_providers(self) -> None:
+        # OQMD was measured to ignore page_limit — return more rows than asked.
+        oversize = {"data": [
+            {"id": str(index), "attributes": {"chemical_formula_reduced": "LiFePO4", "elements": ["Li", "Fe", "P", "O"], "nsites": 28}}
+            for index in range(40)
+        ], "meta": {"data_available": 512}}
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=oversize),
+        ) as get_json:
+            result = await optimade_query_structures(elements="Li,Fe,P,O", provider="oqmd", limit=10)
+        params = get_json.call_args[1]["params"]
+        self.assertEqual(params["filter"], 'elements HAS ALL "Li","Fe","P","O"')
+        self.assertEqual(params["page_limit"], 10)
+        self.assertEqual(len(result["records"]), 10)  # truncated locally
+        self.assertEqual(result["data"]["provider"], "OQMD")
+        self.assertEqual(result["data"]["available"], 512)
+        with self.assertRaises(ValueError):
+            await optimade_query_structures(provider="csd")
+
+    async def test_optimade_cod_entries_cite_the_entry_page(self) -> None:
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value={"data": [
+                {"id": "2018730", "attributes": {"chemical_formula_reduced": "SiO2", "elements": ["Si", "O"]}},
+            ], "meta": {}}),
+        ):
+            result = await optimade_query_structures(formula="SiO2", provider="cod", limit=5)
+        record = result["records"][0]
+        self.assertEqual(record["identifier"], "cod:2018730")
+        self.assertEqual(record["url"], "https://www.crystallography.net/cod/2018730.html")
+
+    async def test_string_network_scales_scores_and_buckets_confidence(self) -> None:
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value=[
+                {"preferredName_A": "TP53", "preferredName_B": "MDM2", "score": 0.999, "ncbiTaxonId": 9606},
+                {"preferredName_A": "TP53", "preferredName_B": "BBC3", "score": 0.42, "ncbiTaxonId": 9606},
+            ]),
+        ):
+            result = await string_network("TP53,MDM2", 9606, 10)
+        self.assertEqual(result["records"][0]["identifier"], "TP53__MDM2")
+        self.assertEqual(result["records"][0]["structuredData"]["combinedScore"], 999)
+        self.assertEqual(result["records"][0]["structuredData"]["confidence"], "high")
+        self.assertEqual(result["records"][1]["structuredData"]["combinedScore"], 420)
+        self.assertEqual(result["records"][1]["structuredData"]["confidence"], "medium")
+        self.assertTrue(result["records"][0]["url"].startswith("https://string-db.org/network/9606/"))
+
+    async def test_biogrid_requires_a_key_and_maps_interactions_from_the_dict_payload(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BIOGRID_API_KEY", None)
+            with self.assertRaises(RuntimeError) as caught:
+                await biogrid_interactions("TP53")
+            # The gateway error classifier maps "unauthorized" to UNAUTHORIZED.
+            self.assertIn("unauthorized", str(caught.exception))
+
+        payload = {
+            "123": {
+                "OFFICIAL_SYMBOL_A": "TP53", "OFFICIAL_SYMBOL_B": "MDM2",
+                "EXPERIMENTAL_SYSTEM": "two hybrid", "PUBMED_ID": "9150133", "THROUGHPUT": "Low Throughput",
+            },
+        }
+        with (
+            patch.dict(os.environ, {"BIOGRID_API_KEY": "test-key"}),
+            patch(
+                "sciencediscovery_gateway.public_biomed_mcp._get_json",
+                new=AsyncMock(return_value=payload),
+            ) as get_json,
+        ):
+            result = await biogrid_interactions("TP53", 9606, 20)
+        params = get_json.call_args[1]["params"]
+        self.assertEqual(params["accesskey"], "test-key")
+        self.assertEqual(params["searchNames"], "true")
+        record = result["records"][0]
+        self.assertEqual(record["identifier"], "TP53__MDM2")
+        self.assertEqual(record["structuredData"]["pubmedId"], "9150133")
+        self.assertEqual(record["url"], "https://thebiogrid.org")
 
 
 if __name__ == "__main__":
