@@ -40,6 +40,14 @@ test("resource cards distinguish available workspace disk, low space, and unavai
   assert.doesNotMatch(render(), /Low workspace disk/);
   assert.match(render(), /aria-label="Disk used"[^>]*aria-valuenow="33.3"/);
   assert.match(render(), /aria-label="Memory used"[^>]*aria-valuenow="50"/);
+  // Hundreds of GiB free on a multi-TiB disk is not low: the warning is an
+  // absolute estimate (Runner + two base conda envs), not a percentage.
+  host.runnerStatus!.resources!.workspaceDisk = { path: "/data/remote-workspaces", availableBytes: 599 * 1024 ** 3, totalBytes: 6003 * 1024 ** 3 };
+  assert.doesNotMatch(render(), /Low workspace disk/);
+  host.runnerStatus!.resources!.workspaceDisk = { path: "/data/remote-workspaces", availableBytes: 3 * 1024 ** 3, totalBytes: 6003 * 1024 ** 3 };
+  const low = render();
+  assert.match(low, /Low workspace disk space: 3\.0 GiB free, about 5\.0 GiB needed/);
+  host.runnerStatus!.resources!.workspaceDisk = { path: "/data/remote-workspaces", availableBytes: 20 * 1024 ** 3, totalBytes: 30 * 1024 ** 3 };
   host.runnerStatus!.resources!.workspaceDisk!.availableBytes = 30 * 1024 ** 3;
   host.runnerStatus!.resources!.memoryFreeBytes = 4 * 1024 ** 3;
   assert.match(render(), /aria-label="Disk used"[^>]*aria-valuenow="0"/);

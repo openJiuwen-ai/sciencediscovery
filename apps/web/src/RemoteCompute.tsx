@@ -50,6 +50,18 @@ function resourceBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 }
 
+/**
+ * What this machine must still fit before installs start failing: the Runner
+ * itself (the SEA binary is ~120 MiB, plus the micromamba provisioner and its
+ * package cache) and two base conda environments (the Python starter carries
+ * numpy/pandas/scipy/matplotlib, roughly 2 GiB on disk each). Deliberately an
+ * absolute estimate, not a percentage: on a multi-TiB disk a "10% left" rule
+ * cries wolf with hundreds of GiB still free.
+ */
+const RUNNER_ESSENTIALS_BYTES = 1 * 1024 ** 3;
+const BASE_CONDA_ENV_BYTES = 2 * 1024 ** 3;
+export const REMOTE_DISK_REQUIRED_BYTES = RUNNER_ESSENTIALS_BYTES + 2 * BASE_CONDA_ENV_BYTES;
+
 function ResourceMeter({ label, value, total, tone }: { label: string; value: number; total: number; tone: string }): ReactNode {
   const { t } = useLocale();
   // Missing/invalid telemetry is not zero capacity. Keep the reading explicit.
@@ -72,13 +84,13 @@ export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): Rea
       : host.runnerStatus.resourcesError ?? t("remote.diskNoMetrics")}</small>
   </div>;
   const disk = resources.workspaceDisk;
-  const lowDisk = disk && (disk.availableBytes < 1024 ** 3 || disk.availableBytes < disk.totalBytes * 0.1);
+  const lowDisk = disk && disk.availableBytes < REMOTE_DISK_REQUIRED_BYTES;
   return <div className="remote-host-resources" aria-label={t("remote.resourcesAria")}>
     <div className="remote-resource-tile">
     {disk ? <ResourceMeter label={t("remote.diskUsed")} value={disk.totalBytes - disk.availableBytes} total={disk.totalBytes} tone={lowDisk ? "warning" : "success"} /> : <small>{t("remote.meterUnknown", { label: t("remote.diskUsed") })}</small>}
     {disk ? <small className="remote-host-resource-path">{disk.path}</small> : <small>{resources.workspaceDiskError}</small>}
-    {lowDisk
-      ? <div role="alert">{t("remote.lowDisk")}</div> : null}
+    {lowDisk && disk
+      ? <div role="alert">{t("remote.lowDisk", { available: resourceBytes(disk.availableBytes), required: resourceBytes(REMOTE_DISK_REQUIRED_BYTES) })}</div> : null}
     </div>
     <div className="remote-resource-tile">
       <ResourceMeter label={t("remote.memoryUsed")} value={resources.memoryTotalBytes - resources.memoryFreeBytes} total={resources.memoryTotalBytes} tone="info" />
