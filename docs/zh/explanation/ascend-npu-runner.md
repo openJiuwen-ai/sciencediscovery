@@ -10,9 +10,11 @@
 Container ID verify failed (session ct_id=0; device ct_id=...)
 ```
 
-这说明问题不只是 `/dev/davinci*` 的 Unix 权限。Ascend 运行时还会校验驱动侧 container identity，单纯 `--dev-bind` 设备文件不能保证 bwrap 内进程可用 NPU。
+那次测量是在宿主整个 `/dev` 都可见的情况下做的，这个报错是驱动在那种情况下的正常反应，而不是设备直通的限制：进入 mount namespace 后驱动按调用者 `/dev` 里可见的卡枚举，且是 all-or-nothing，只要有一张卡被别的租户占着，整次调用就对所有卡失败。
 
-因此当前设计不继续把 NPU 设备直接绑进 bwrap，而是保留普通工具的沙箱隔离，并为需要 Ascend 初始化的长作业提供 Runner 管理的宿主 Broker。
+因此选中的芯片最终还是交进了沙箱——新建 `/dev`、只放选中的芯片、从 0 重新编号——这台机器上沙箱内的 `npu-smi info` 与 MindSpore 都能跑。launch 怎么拼、芯片是否可用怎么判定，见[沙箱执行](sandbox-execution.md) §3.2。
+
+下面的 Broker 是另一条按需开启的路径，保留给不属于普通 Agent 执行的白名单宿主作业。
 
 ## 1.1 沙箱内的 NPU 与状态读取
 
@@ -45,7 +47,8 @@ Broker 之外，Runner 现在也能把选中的 Ascend 芯片交给 bubblewrap �
 |---|---|
 | 如何启用 / 关闭 Broker，以及 `.env` 参数含义 | [配置参考](../reference/configuration.md#环境变量本地模式) |
 | Agent 能看到什么 NPU 工具、参数怎么填 | [内置工具清单](../reference/builtin-tools.md#其他条件工具) |
-| 为什么 NPU 是沙箱外例外，以及有哪些安全校验 | [沙箱执行](sandbox-execution.md#31-ascend-npu-broker可选宿主执行) |
+| 选中的芯片如何进沙箱、可用性如何判定 | [沙箱执行](sandbox-execution.md#32-沙箱内的-ascend-npu) |
+| Broker 为什么是沙箱外的例外，以及有哪些安全校验 | [沙箱执行](sandbox-execution.md#33-ascend-npu-broker可选的宿主执行) |
 | Broker 在整体进程模型里的位置 | [整体运行时架构](architecture.md#25-职责切分核心原则) |
 | 默认 workload 白名单 | `services/runner/workloads/npu-workloads.default.json` |
 

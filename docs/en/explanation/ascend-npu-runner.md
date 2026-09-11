@@ -10,9 +10,11 @@ On the verified Ascend 910B3 host, MindSpore can use the NPU directly on the hos
 Container ID verify failed (session ct_id=0; device ct_id=...)
 ```
 
-This is not just Unix permission on `/dev/davinci*`. The Ascend runtime also checks driver/container identity, so `--dev-bind` device passthrough into bwrap is not enough to guarantee NPU access.
+That measurement was taken with the host's whole `/dev` visible, and it is what the driver does in that situation rather than a limit on device passthrough: inside a mount namespace the driver enumerates the cards visible under the caller's `/dev`, all-or-nothing, so a single card claimed by another tenant fails the call for every card.
 
-The current design therefore does not keep pushing NPU devices into bwrap. Normal tools keep their sandbox isolation, and long jobs that need Ascend initialization run through a Runner-managed host Broker.
+Chips selected by an operator are therefore handed to the sandbox after all — a fresh `/dev` carrying only those chips, renumbered from 0 — and `npu-smi info` and MindSpore both run inside it on this host. See [Sandbox execution](sandbox-execution.md) §3.2 for how that launch is built and how a chip is judged usable.
+
+The Broker below is a separate, opt-in path that remains for allowlisted host workloads which are not ordinary Agent executions.
 
 ## 2. Design boundary
 
@@ -32,7 +34,8 @@ The current design therefore does not keep pushing NPU devices into bwrap. Norma
 |---|---|
 | Enable/disable Broker and `.env` variables | [Configuration reference](../reference/configuration.md#environment-variables-local-mode) |
 | Model-visible NPU tool and parameters | [Built-in tools](../reference/builtin-tools.md#other-conditional-tools) |
-| Why NPU is a sandbox exception and how it is constrained | [Sandbox execution](sandbox-execution.md#32-ascend-npu-broker-optional-host-execution) |
+| How selected chips reach the sandbox and how usability is judged | [Sandbox execution](sandbox-execution.md#32-ascend-npu-inside-the-sandbox) |
+| Why the Broker is a sandbox exception and how it is constrained | [Sandbox execution](sandbox-execution.md#33-ascend-npu-broker-optional-host-execution) |
 | Broker placement in the runtime model | [Runtime architecture](architecture.md#25-responsibility-split) |
 | Default workload allowlist | `services/runner/workloads/npu-workloads.default.json` |
 

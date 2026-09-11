@@ -75,11 +75,25 @@ Properties:
 - Changing the policy rotates the Permission Epoch; new executions use the new policy snapshot.
 - Scientific environment install networking (conda channels, pip index, offline cache) is independent of this policy.
 
-### 3.2 Ascend NPU Broker (optional host execution)
+### 3.2 Ascend NPU inside the sandbox
 
-Ascend NPU access is not modeled as ordinary device passthrough into bwrap. On the verified 910B3 deployment, host MindSpore can use the NPU, but the same probe inside the bwrap namespace fails with `Container ID verify failed (session ct_id=0; device ct_id=...)`. That points to Ascend runtime/container identity checks, not only Unix permissions on `/dev/davinci*`.
+Selected Ascend chips are handed to the sandbox. An earlier revision of this document said they could not be, because a probe inside the bwrap namespace failed with `Container ID verify failed (session ct_id=0; device ct_id=...)`. That was measured while the host's whole `/dev` was visible, and it is what the driver does in that situation rather than a limit on device passthrough: inside a mount namespace the driver enumerates the cards it can see under the caller's `/dev`, all-or-nothing, so one card claimed by another tenant fails the call for every card. Exposing only the selected chips removes the condition, and `npu-smi info` and MindSpore both run inside the sandbox on a 910B3.
 
-Runner therefore keeps the normal sandbox boundary and exposes an opt-in Host NPU Broker:
+What the launch does:
+
+- Keeps bubblewrap's fresh `--dev /dev` and adds one `--dev-bind` per selected chip, plus the management nodes the host actually has (`davinci_manager`, `devmm_svm`, `hisi_hdc`). A chip nobody selected is not present in the sandbox at all.
+- Renumbers the selection from 0 in ascending device order, so rank 0..n-1 is `/dev/davinci0..n-1` whatever the host numbering is.
+- Restates the CANN environment that `--clearenv` would otherwise wipe, including `/usr/local/Ascend/driver/lib64/common` on `LD_LIBRARY_PATH` (it holds the `libc_sec.so` that `libascend_hal.so` links), and binds `/etc/ascend_install.info` read-only when present.
+- Prefixes `/usr/local/bin` to `PATH` only for a launch that carries chips, so `npu-smi` resolves as a command there and a non-NPU sandbox keeps the PATH it always had.
+- Changes nothing else: `--unshare-all --unshare-user --cap-drop ALL`, the seccomp filter and the network policy are the same as any other execution.
+
+What may be selected is decided per chip by a real probe, not by the host listing: a throwaway sandbox shaped like a real launch binds that one chip and runs `npu-smi info` in it. The host reports cards as healthy that a sandbox cannot open, so only a chip whose probe succeeded can be ticked, and every execution re-probes the chips it names before launching — a chip claimed by another tenant in the meantime fails the execution by name instead of failing deep inside a framework. Scope is the Ascend 910 series; other chips are listed and refused with the chip name in the reason.
+
+Machine state is read through the driver's own DCMI interface (via the host Python, no compiled addon), falling back to `npu-smi info -m` plus `npu-smi info` when that is unavailable. Device identity is the chip logic id — the `N` in `/dev/davinciN` — never the card number, because a card can carry more than one compute die.
+
+### 3.3 Ascend NPU Broker (optional host execution)
+
+Separately from the above, Runner still exposes an opt-in Host NPU Broker for allowlisted host workloads that are not ordinary Agent executions:
 
 - Ordinary Shell commands (including Python/R launched by Shell) and the legacy ephemeral language endpoints run inside Bubblewrap; NPU support does not loosen namespaces, seccomp, or network policy.
 - The API exposes `run_npu_job` only when `SCIENCE_AGENT_NPU_BROKER=1`.

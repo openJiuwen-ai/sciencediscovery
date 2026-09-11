@@ -107,6 +107,26 @@ Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己�
 - 策略变更会轮换 Permission Epoch；新执行使用新的策略快照。
 - 科学环境 install 的网络（conda 频道 / pip index / 离线缓存）与本策略互不影响。
 
+### 3.2 沙箱内的 Ascend NPU
+
+选中的昇腾芯片会被交进沙箱。这份文档早先写的是做不到——因为在 bwrap namespace 里探测会报 `Container ID verify failed (session ct_id=0; device ct_id=...)`。那次测量是在宿主整个 `/dev` 都可见的情况下做的，这个报错是驱动在那种情况下的正常反应，而不是设备直通的限制：进入 mount namespace 后，驱动按调用者 `/dev` 里可见的卡枚举，且是 all-or-nothing，只要有一张卡被别的租户占着，整次调用就对所有卡失败。只暴露选中的芯片就不再满足这个条件，910B3 上沙箱内的 `npu-smi info` 与 MindSpore 都能正常跑。
+
+launch 具体做的事：
+
+- 保留 bubblewrap 新建的 `--dev /dev`，再对每颗选中的芯片加一条 `--dev-bind`，外加宿主实际存在的管理节点（`davinci_manager`、`devmm_svm`、`hisi_hdc`）。没被选中的芯片在沙箱里根本不存在。
+- 选中的芯片按设备号升序从 0 重新编号，因此不论宿主怎么编号，rank 0..n-1 就是 `/dev/davinci0..n-1`。
+- 重述 `--clearenv` 会清掉的 CANN 环境，其中 `LD_LIBRARY_PATH` 必须包含 `/usr/local/Ascend/driver/lib64/common`（`libascend_hal.so` 依赖的 `libc_sec.so` 只在这里）；宿主有 `/etc/ascend_install.info` 时以只读绑入。
+- 只有携带芯片的 launch 才把 `/usr/local/bin` 前置到 `PATH`，让 `npu-smi` 能作为命令直接执行；不带芯片的沙箱 PATH 一个字节不变。
+- 其余一律不变：`--unshare-all --unshare-user --cap-drop ALL`、seccomp 过滤器与网络策略与任何其他执行相同。
+
+**哪些芯片可选由逐芯片的真实探针决定，不看宿主清单**：用一个与真实执行同形态的一次性沙箱只绑那一颗芯片，在里面跑 `npu-smi info`。宿主会把沙箱根本打不开的卡报成健康，所以只有探针通过的芯片才能勾选；而且每次执行前会对它点名的芯片重探一遍——期间被别的租户占走的芯片会让执行以卡号明确失败，而不是在框架深处报一个不指名的错。支持范围是昇腾 910 系列，其他芯片会列出但拒绝，理由里写明芯片名。
+
+机器状态优先通过驱动自带的 DCMI 接口读取（用宿主 Python，不编译任何东西），不可用时回退到 `npu-smi info -m` 加 `npu-smi info`。设备身份一律用 chip logic id（即 `/dev/davinciN` 的 N），不用卡号，因为一张卡可能带不止一颗计算 die。
+
+### 3.3 Ascend NPU Broker（可选的宿主执行）
+
+与上面那条路径相互独立，Runner 仍然提供按需开启的宿主 NPU Broker，用于不属于普通 Agent 执行的白名单宿主作业：`SCIENCE_AGENT_NPU_BROKER=1` 时才暴露 `run_npu_job`，只接受白名单里的 `workloadId` 并以 `shell: false` 启动固定 entrypoint，作业子进程在宿主 namespace 中运行。设计背景见 [Ascend NPU 宿主 Broker](ascend-npu-runner.md)。
+
 ## 4. 执行模型与配额
 
 - **同一 Workspace 单写**：同一物理 Workspace 的写入跨进程串行，不同 Workspace 可并行。执行进程退出并完成 CAS 快照/ref 提交后才释放租约；状态和日志查询不取写锁。
