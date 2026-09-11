@@ -46,6 +46,7 @@ import {
   DEFAULT_RESOLVER_THRESHOLDS,
   HAYSTACK_CAP,
   jatsToMarkdown,
+  texToMarkdown,
   type EntityResolutionMode,
   type ExtractionSchema,
   type JudgeSide,
@@ -65,6 +66,7 @@ import type { KeDocumentRow, KeJobRow, KnowledgeEngineStore } from "./store.js";
 import { normalizeEntityName } from "./store.js";
 import type { SourceChain } from "./connectors/source-chain.js";
 import { downloadPaperPdf } from "./connectors/source-chain.js";
+import { downloadArxivEprint } from "./connectors/eprint.js";
 import type { ScholarlyTransport } from "./connectors/transport.js";
 import {
   NotFoundError,
@@ -290,6 +292,38 @@ export class KeOrchestrator {
       } catch (error) {
         if (error instanceof RateLimitError) throw error; // 429 carries Retry-After — never degrade it to a warn
         this.warn("ke_ingest_jats_failed", { docId: doc.id, error: errorMessage(error) });
+      }
+    }
+
+    // Path 1.5 (LaTeX-first, Z5): arXiv e-print source when the ref carries
+    // an arXiv id — formulas and \cite anchors survive verbatim (the W10
+    // chain's best input), no python worker round-trip. Fail-soft per mirror;
+    // unusable/absent sources fall through to the PDF path.
+    if (ref?.arxivId && this.deps.transport) {
+      try {
+        const tex = await downloadArxivEprint(ref.arxivId, this.deps.transport);
+        if (tex) {
+          const markdown = texToMarkdown(tex);
+          if (markdown.length >= MIN_EXTRACTABLE_TEXT) {
+            this.deps.store.upsertDocument({
+              kbId: doc.kbId,
+              dedupKey: doc.dedupKey,
+              fulltext: markdown,
+              status: "ready",
+              sourceMeta: {
+                ...doc.sourceMeta,
+                ingested_at: new Date().toISOString(),
+                ingest_channel: "arxiv-latex",
+              },
+            });
+            this.enqueueExtraction(doc.kbId, doc.id);
+            return;
+          }
+          this.warn("ke_ingest_latex_too_short", { docId: doc.id, chars: markdown.length });
+        }
+      } catch (error) {
+        if (error instanceof RateLimitError) throw error; // 429 carries Retry-After
+        this.warn("ke_ingest_latex_failed", { docId: doc.id, error: errorMessage(error) });
       }
     }
 

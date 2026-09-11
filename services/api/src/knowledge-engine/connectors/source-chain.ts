@@ -30,6 +30,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 import { arxivPdfMirrors, createArxivConnector } from "./arxiv.js";
+import { createCoreConnector } from "./core.js";
 import { createEuropePmcConnector, type EuropePmcConnector } from "./europepmc.js";
 import { createOpenAlexConnector, type OpenAlexConfig } from "./openalex.js";
 import { createPubMedConnector } from "./pubmed.js";
@@ -45,6 +46,8 @@ export interface SourceChainConfig {
   readonly transport: ScholarlyTransport;
   readonly openalex?: OpenAlexConfig;
   readonly unpaywall?: UnpaywallConfig;
+  /** CORE API key (env SCIENCE_AGENT_CORE_API_KEY); absent → connector skips. */
+  readonly coreApiKey?: string;
 }
 
 export interface SourceChain {
@@ -55,12 +58,13 @@ export interface SourceChain {
 
 /**
  * Build the default source chain in priority order. Self-gating connectors
- * (unpaywall without an email) return null when unconfigured, so the chain
- * is static.
+ * (unpaywall without an email, core without a key) return empty when
+ * unconfigured, so the chain is static.
  */
 export function buildSourceChain(config: SourceChainConfig, onWarn?: (message: string) => void): SourceChain {
   const connectors: PaperConnector[] = [
     createArxivConnector(config.transport),
+    createCoreConnector(config.transport, config.coreApiKey),
     createUnpaywallConnector(config.transport, config.unpaywall ?? {}),
     createEuropePmcConnector(config.transport),
     createOpenAlexConnector(config.transport, config.openalex ?? {}),
@@ -69,7 +73,7 @@ export function buildSourceChain(config: SourceChainConfig, onWarn?: (message: s
   ];
   return {
     connectors,
-    europepmc: connectors[2] as EuropePmcConnector,
+    europepmc: connectors[3] as EuropePmcConnector,
     search: (query, limit) => searchAcrossChain(connectors, query, limit, onWarn),
   };
 }

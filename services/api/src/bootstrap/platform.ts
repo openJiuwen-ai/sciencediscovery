@@ -385,6 +385,7 @@ export function createPlatformServices(
       mailto: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null,
     },
     unpaywall: { email: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null },
+    coreApiKey: process.env.SCIENCE_AGENT_CORE_API_KEY?.trim() || undefined,
   });
   const keEmbeddingBaseUrl = process.env.SCIENCE_AGENT_KE_EMBEDDING_BASE_URL?.trim();
   const keEmbeddingApiKey = process.env.SCIENCE_AGENT_KE_EMBEDDING_API_KEY?.trim();

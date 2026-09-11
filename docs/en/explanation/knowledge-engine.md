@@ -28,7 +28,7 @@
 ## 3. Ingestion pipeline
 
 1. **Seed** (`POST /kbs/:id/seed`): source-chain search → documents upserted → per-doc ingest jobs.
-2. **Ingest**: Europe PMC JATS XML when available (structured, parse-free) → else PDF via the download chain → paper worker (pdfplumber) → markdown. Idempotent via `ingested_at`.
+2. **Ingest**: Europe PMC JATS XML when available (structured, parse-free) → else arXiv LaTeX source (e-print tarball → combined TeX → markdown; formulas and cite anchors survive verbatim — the W10 chain's best input) → else PDF via the download chain → paper worker (pdfplumber) → markdown. CORE (core.ac.uk) joins the source chain when SCIENCE_AGENT_CORE_API_KEY is set (self-gating otherwise). Idempotent via `ingested_at`.
 3. **Extract**: single-pass LLM entity/relation extraction (biomedical schema), then the **provenance gate** — every relation's evidence quote must verify against the fulltext (normalized substring or ≥85% word overlap) or it is dropped. Entities upsert by normalized name; embeddings backfill best-effort.
 
 ## 4. Entity resolution (W4)
