@@ -247,7 +247,7 @@ test("renders System settings groups beside the selected details", () => {
   assert.match(html, />Environments</);
   assert.match(html, />Skills</);
   assert.match(html, />Specialists</);
-  assert.match(html, />Remote compute</);
+  assert.match(html, />Runners</);
   assert.match(html, /aria-current="page" class="active"[^>]*>.*Model registry/);
   assert.match(html, /class="settings-group-detail"><p>Selected details<\/p>/);
 });

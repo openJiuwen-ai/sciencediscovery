@@ -213,6 +213,7 @@ function useRemoteHosts(client: ApiClient, onError: (message: string) => void): 
 type Translate = ReturnType<typeof useLocale>["t"];
 
 function hostKindLabel(host: RemoteHostTarget, t: Translate): string {
+  if (host.id === "local") return t("runnerCatalog.stackConnection");
   return host.id === "local" ? t("remote.localRunner") : host.connectionKind === "direct" ? t("remote.kindSelfDeployed") : "SSH";
 }
 

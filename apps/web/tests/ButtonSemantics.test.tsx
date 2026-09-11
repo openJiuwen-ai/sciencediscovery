@@ -41,8 +41,8 @@ test("mixed action rows assign semantic button classes", () => {
 
   const remoteCompute = source("RemoteCompute.tsx");
   assert.match(remoteCompute, /<button className="primary-button"[^>]*>\{t\("remote\.probeAndAdd"\)\}</);
-  assert.match(remoteCompute, /<button className="secondary-button".*?\{t\("remote\.refreshProbe"\)\}/);
-  assert.match(remoteCompute, /className="remote-host-actions">.*?\{t\("remote\.refreshProbe"\)\}.*?\{t\("common\.delete"\)\}/s);
+  assert.match(remoteCompute, /<button className="secondary-button".*?\{t\("runnerCatalog\.refreshResources"\)\}/);
+  assert.match(remoteCompute, /className="remote-host-actions">.*?\{t\("runnerCatalog\.refreshResources"\)\}.*?\{t\("common\.delete"\)\}/s);
   assert.match(remoteCompute, /window\.confirm\(t\("remote\.confirmDelete", \{ alias: host\.alias \}\)\)/);
 
   const proxySettings = source("ProxySettingsEditor.tsx");

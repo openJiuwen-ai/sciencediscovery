@@ -102,8 +102,8 @@ test("the machine catalog shows the list first and keeps add forms behind button
   }));
 
   assert.match(html, /No remote machines registered yet/);
-  assert.match(html, /class="secondary-button"[^>]*>Add SSH machine</);
-  assert.match(html, /class="secondary-button"[^>]*>Add self-deployed runner</);
+  assert.match(html, /class="secondary-button"[^>]*>Add Runner</);
+  assert.doesNotMatch(html, /<form/);
   // No blank form competes with the list until the user asks for one.
   assert.doesNotMatch(html, /Probe and add/);
   assert.doesNotMatch(html, /Connect and add/);
@@ -132,7 +132,7 @@ async function renderHost(
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(createElement(RemoteHostManager, {
-      client: { listRemoteHosts: async () => [host], listRunnerNpuDevices: noNpu } as ApiClient,
+      client: { listRunners: async () => [host], listRunnerNpuDevices: noNpu } as ApiClient,
       onCredentialEditStateChange,
       onError: () => undefined,
     }));
@@ -147,7 +147,7 @@ test("SSH add form groups connection login and runner details without hiding use
     assert.ok(button);
     await act(async () => button.props.onClick());
   };
-  await click("Add SSH machine");
+  await click("Add Runner");
   const form = renderer.root.findByType("form");
   assert.deepEqual(form.findAllByType("legend").map((node) => node.children.join("")), ["1. Connection", "2. Login", "3. Runner details"]);
   const user = form.findByProps({ "aria-describedby": "ssh-add-username-help" });
@@ -160,7 +160,7 @@ test("SSH add form groups connection login and runner details without hiding use
   assert.equal(form.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "scientist");
   await click("Cancel");
   assert.equal(renderer.root.findAllByType("form").length, 0);
-  await click("Add SSH machine");
+  await click("Add Runner");
   assert.equal(renderer.root.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "");
   await act(async () => renderer.unmount());
 });
@@ -173,7 +173,7 @@ test("machine identity and actions lead the card, with metadata and public key b
   const header = renderer.root.findByProps({ className: "remote-host-card-header" });
   assert.equal(header.findByProps({ className: "remote-host-identity" }).findAllByType("span")[0]!.children.join(""), "192.0.2.40:2222");
   assert.equal(header.findByProps({ className: "remote-host-identity" }).findAllByType("span")[1]!.children.join(""), "user scientist");
-  assert.equal(header.findByProps({ className: "remote-host-actions" }).findAllByType("button").length, 4);
+  assert.equal(header.findByProps({ className: "remote-host-actions" }).findAllByType("button").length, 5);
   assert.equal(header.findAllByType("details").length, 0);
   assert.equal(renderer.root.findAllByProps({ className: "remote-host-description" }).length, 0);
   const details = renderer.root.findByProps({ className: "remote-host-card-details" });
@@ -271,7 +271,7 @@ test("generated-key registration resumes trust by host id without resubmitting t
   const key = { algorithm: "ssh-ed25519", fingerprint: "SHA256:test" };
   let renderer: ReactTestRenderer;
   const client = {
-    listRemoteHosts: async () => [],
+    listRunners: async () => [],
     listRunnerNpuDevices: noNpu,
     generateRemoteHostKey: async () => ({ privateKeyPath: "generated-once.key", publicKey: "ssh-ed25519 public-fixture" }),
     registerRemoteHost: async (body: RegisterRemoteHostRequest) => {
@@ -286,7 +286,7 @@ test("generated-key registration resumes trust by host id without resubmitting t
     assert.ok(button, label);
     await act(async () => button.props.onClick());
   };
-  await click("Add SSH machine");
+  await click("Add Runner");
   await click("SSH key (optional)");
   await click("Generate a key pair");
   assert.match(JSON.stringify(renderer!.toJSON()), /public-fixture/);
@@ -306,9 +306,9 @@ test("connect runner presents a changed host key and resumes from the settings t
   const host = buildHost();
   let renderer: ReactTestRenderer;
   const client = {
-    listRemoteHosts: async () => [host],
+    listRunners: async () => [host],
     listRunnerNpuDevices: noNpu,
-    connectRemoteRunner: async () => {
+    connectRunner: async () => {
       if (++connects === 1) throw new ApiRequestError("Host key changed", 409, "SSH_HOST_KEY_CHANGED", {
         hostId: host.id, hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:new" },
       });
@@ -528,7 +528,7 @@ test("the Local Runner card offers this machine's own cards and saves them under
   // not require registering this machine as a remote one first.
   const calls: Array<{ devices: number[]; runnerId: string }> = [];
   const client = {
-    listRemoteHosts: async () => [],
+    listRunners: async () => [buildHost({ id: "local", alias: "local", connectionKind: "direct", runnerStatus: { hostId: "local", state: "ready" } })],
     listRunnerNpuDevices: async () => ({ local: NPU_INVENTORY, selections: { local: [] } }),
     setRunnerNpuDevices: async (runnerId: string, devices: number[]) => { calls.push({ devices, runnerId }); return { devices, runnerId }; },
   } as unknown as ApiClient;

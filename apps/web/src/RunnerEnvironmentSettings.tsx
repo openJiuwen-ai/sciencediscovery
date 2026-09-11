@@ -29,7 +29,7 @@ export function RunnerEnvironmentSettings({ client, onError, initialRunnerId = "
       <button type="button" className={tab === "environments" ? "primary-button" : "secondary-button"} onClick={() => setTab("environments")}>{t("runnerWorkspaces.environmentsTab")}</button>
       <button type="button" className={tab === "workspaces" ? "primary-button" : "secondary-button"} onClick={() => setTab("workspaces")}>{t("runnerWorkspaces.workspacesTab")}</button>
     </div>
-    {host?.runnerStatus?.state !== "ready" ? <p role="status">{t("runnerWorkspaces.connectFirst")}</p> : null}
+    {host && host.runnerStatus?.state !== "ready" ? <p role="status">{t("runnerWorkspaces.connectFirst")}</p> : null}
     {tab === "environments" ? <EnvironmentManager key={runnerId} client={scopedClient} compact onError={onError} />
       : <RunnerWorkspaces key={runnerId} client={client} runnerId={runnerId} runnerName={host?.runnerName ?? host?.alias ?? runnerId} />}
   </div>;

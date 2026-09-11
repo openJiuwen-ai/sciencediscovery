@@ -14,20 +14,22 @@ test("global manager identifies the Runner and separates workspaces from Python/
   assert.match(html, /Manage Runner/);
   assert.match(html, /Python \/ R environments/);
   assert.match(html, /Workspaces/);
-  assert.match(html, /Local Runner/);
+  assert.doesNotMatch(html, /<option[^>]*>Local Runner/, "Runner options come from the catalog, never hardcoded health");
 });
 
-test("Runner scoped client routes environments only, keeping sources global and local unchanged", async (context) => {
-  const paths: string[] = [];
-  context.mock.method(globalThis, "fetch", async (path: string) => { paths.push(path); return new Response("[]", { status: 200 }); });
-  const client = new ApiClient("");
-  assert.equal(client.forEnvironmentRunner("local"), client);
-  const remote = client.forEnvironmentRunner("runner/b");
-  await remote.listEnvironments();
-  await remote.getEnvironmentSetup();
-  await remote.listEnvironmentRevisions();
-  await remote.getEnvironmentSourceSettings();
-  await client.listEnvironments();
-  await client.deleteRunnerWorkspace("runner/b", "session/a");
-  assert.deepEqual(paths, ["/api/remote-hosts/runner%2Fb/environments", "/api/remote-hosts/runner%2Fb/environment-setup", "/api/remote-hosts/runner%2Fb/environment-revisions", "/api/environment-source-settings", "/api/environments", "/api/remote-hosts/runner%2Fb/workspaces/session%2Fa"]);
-});
+for (const id of ["local", "runner/b"]) {
+  test(`${id} client uses the same environment/workspace routes and global sources`, async (context) => {
+    const paths: string[] = [];
+    context.mock.method(globalThis, "fetch", async (path: string) => { paths.push(path); return new Response("[]", { status: 200 }); });
+    const client = new ApiClient("");
+    const selected = client.forEnvironmentRunner(id);
+    await selected.listEnvironments();
+    await selected.getEnvironmentSetup();
+    await selected.listEnvironmentRevisions();
+    await selected.getEnvironmentSourceSettings();
+    await client.listRunnerWorkspaces(id);
+    await client.listRunnerWorkspaceFiles(id, "session/a");
+    const base = `/api/runners/${encodeURIComponent(id)}`;
+    assert.deepEqual(paths, [`${base}/environments`, `${base}/environment-setup`, `${base}/environment-revisions`, "/api/environment-source-settings", `${base}/workspaces`, `${base}/workspaces/session%2Fa/files`]);
+  });
+}
