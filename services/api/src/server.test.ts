@@ -2924,9 +2924,13 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.equal(initial.response.status, 200);
   assert.deepEqual(initial.body.map((item) => item.id), [
     "antibody-protenix-pipeline",
+    "audit-hypothesis-tournament",
+    "audit-systematic-review",
+    "audit-tree-search",
     "citation-reviewer",
     "code-engineer",
     "computation-reviewer",
+    "evidence-discipline",
     "evidence-extractor",
     "evidence-notes",
     "evolve-design",

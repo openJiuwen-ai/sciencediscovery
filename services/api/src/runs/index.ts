@@ -14,6 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
+import { auditCompanionIds } from "./audit-companions.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -590,6 +591,13 @@ async function executeAgentRun(
       ...manualSkills,
       ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
     ];
+    // Pre-finish audit companions (see audit-companions.ts): declaring skills
+    // get their `audit-<id>` checklist auto-selected so the finish-gate
+    // directive can point at versioned audit content.
+    const auditCompanions = auditCompanionIds(activeSkills, skillCatalog);
+    if (auditCompanions.length) {
+      activeSkills = [...activeSkills, ...skillCatalog.resolve(auditCompanions)];
+    }
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }

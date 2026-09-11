@@ -79,14 +79,18 @@ export interface FinishGateLifecycleOptions<M extends RuntimeMessage, I, U> {
   createMessage?: (text: string) => M;
 }
 
-export function buildFinishGateDirective(skillIds: readonly string[]): string {
+export function buildFinishGateDirective(skillIds: readonly string[], auditCompanionIds: readonly string[] = []): string {
+  const auditLine = auditCompanionIds.length
+    ? ` Skill-specific audit checklist${auditCompanionIds.length > 1 ? "s" : ""} selected for this run: read ${auditCompanionIds.map((id) => `\`${id}\``).join(", ")} with the read_skill tool and apply every applicable check as part of this audit.`
+    : "";
   return (
     `${DIRECTIVE_PREFIX}${skillIds.length > 1 ? "s" : ""} ${skillIds.join(", ")}. ` +
     "Before concluding, audit your answer against the full trajectory above: " +
     "(1) every factual claim must trace to a tool result or a cited artifact — name the source for each; " +
     "(2) open questions you did not resolve must be stated explicitly, not silently dropped; " +
-    "(3) budget or capability limits you hit must be disclosed. " +
-    "If the audit reveals gaps, fix them first. " +
+    "(3) budget or capability limits you hit must be disclosed." +
+    auditLine +
+    " If the audit reveals gaps, fix them first. " +
     `Then call the ${FINISH_GATE_REVIEW_TOOL} tool with a one-line reason summarizing this audit. ` +
     "Only after that call should you give your final answer."
   );
@@ -127,10 +131,17 @@ export class FinishGateLifecycle<M extends RuntimeMessage, I, U> implements Turn
     );
     if (alreadyReviewed) return Promise.resolve(undefined);
     this.fired = true;
+    // Name the audit companions (`audit-<id>`) only when they are actually
+    // selected for this run (auto-selected at run start when present in the
+    // catalog); otherwise the generic checklist above carries the audit.
+    const selectedIds = new Set(this.options.skills.map((skill) => skill.id));
+    const auditCompanions = auditSkillIds
+      .map((id) => `audit-${id}`)
+      .filter((id) => selectedIds.has(id));
     const createMessage = this.options.createMessage ?? ((text: string) => ({ content: text, role: "user" }) as unknown as M);
     return Promise.resolve({
       action: "continue",
-      message: createMessage(buildFinishGateDirective(auditSkillIds)),
+      message: createMessage(buildFinishGateDirective(auditSkillIds, auditCompanions)),
     });
   }
 }

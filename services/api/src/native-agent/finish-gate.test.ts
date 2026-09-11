@@ -116,3 +116,24 @@ test("directive names every declaring skill", () => {
   assert.match(text, /tree-search, hypothesis-tournament/);
   assert.match(text, /full trajectory/);
 });
+
+test("directive points at selected audit companions via read_skill; absent companions stay generic", () => {
+  const withCompanion = buildFinishGateDirective(["tree-search"], ["audit-tree-search"]);
+  assert.match(withCompanion, /read_skill/);
+  assert.match(withCompanion, /`audit-tree-search`/);
+  const without = buildFinishGateDirective(["tree-search"]);
+  assert.ok(!without.includes("read_skill"), "no audit pointer without a selected companion");
+});
+
+test("gate names the audit companion only when it is selected for the run", async () => {
+  const withCompanion = gate({ skills: [
+    { id: "hypothesis-tournament", preFinishAudit: true },
+    { id: "audit-hypothesis-tournament" },
+  ] });
+  const decisionWith = await withCompanion.beforeFinish(finishInput([]));
+  assert.match(String((decisionWith as { message?: { content?: unknown } })?.message?.content), /audit-hypothesis-tournament/);
+
+  const withoutCompanion = gate({ skills: [{ id: "hypothesis-tournament", preFinishAudit: true }] });
+  const decisionWithout = await withoutCompanion.beforeFinish(finishInput([]));
+  assert.ok(!String((decisionWithout as { message?: { content?: unknown } })?.message?.content).includes("audit-hypothesis-tournament"));
+});
