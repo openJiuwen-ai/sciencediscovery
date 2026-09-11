@@ -57,6 +57,7 @@ export function buildExtractionPrompt(documentText: string, options: ExtractionP
 关系抽取规则：
 1. 提取实体间的关系（最多 ${maxRelations} 条）。每条关系包含 source（源实体名）、target（目标实体名）、type（关系类型，从以下选择：${options.schema.edgeTypes.join("/")}）、evidence_quote（证明该关系的原文句子，必须是文档中逐字出现的完整句子，不得改写）。
 2. 只提取文档中明确陈述的关系，不得推测。
+3. 文档中以 "### Page N vision-model annotation" 开头的块是视觉模型对图片页的生成式描述（二级证据，非逐字原文）：其中明确陈述的图上定量信息（标注数值、panel 内容）可以提取，但同一事实在正文/图注原文中有逐字句子时必须优先引用原文；仅存在于注释块中的事实，其 evidence_quote 允许取自注释块本身。
 
 只返回 JSON 对象，格式：{"entities": [...], "relations": [...]}，不要输出其他内容。${coreSection}
 

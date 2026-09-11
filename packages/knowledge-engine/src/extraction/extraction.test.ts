@@ -188,6 +188,16 @@ void test("buildExtractionPrompt caps document text", () => {
   assert.ok(prompt.length < PROMPT_TEXT_CAP + 4000);
 });
 
+void test("buildExtractionPrompt teaches the vision-annotation secondary-evidence rule", () => {
+  const prompt = buildExtractionPrompt("DOC TEXT", { schema: DEFAULT_SCHEMA });
+  // Claude's PDF vision pass injects "### Page N vision-model annotation"
+  // blocks into the fulltext; the extractor must know they are model
+  // generated descriptions (secondary evidence) and prefer verbatim text.
+  assert.match(prompt, /vision-model annotation/);
+  assert.match(prompt, /二级证据/);
+  assert.match(prompt, /优先引用原文/);
+});
+
 void test("verifyEvidence accepts verbatim quotes after whitespace normalization", () => {
   const haystack = "The  glycoprotein   mediates viral entry.\nNext sentence here.";
   assert.ok(verifyEvidence("The glycoprotein mediates viral entry.", haystack));
