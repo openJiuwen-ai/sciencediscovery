@@ -200,6 +200,87 @@ test("tools: kbSearch returns anchor-level passage hits from FTS recall", async 
   );
 });
 
+test("tools: kbSearch fuses the semantic arm when an embedding client is configured", async (context) => {
+  const root = tempRoot("ke-tools-hybrid");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  // Fake embedding client: the query vector points at the climate paper's
+  // chunk (which the keyword arm cannot reach — its terms don't match).
+  const climate = new Float32Array([1, 0, 0]);
+  const query = new Float32Array([0.9, 0.1, 0]);
+  const calls: string[] = [];
+  const embedding = {
+    embedOne: async (text: string) => {
+      calls.push(text);
+      return query;
+    },
+    embed: async (texts: readonly string[]) => texts.map(() => query),
+  } as unknown as import("./embedding.js").EmbeddingClient;
+  const tools = createKnowledgeEngineTools(store, { embedding });
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const antibodyDoc = store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p1",
+    title: "mAb114 neutralizes Ebola",
+    status: "ready",
+    fulltext: "mAb114 binds the Ebola glycoprotein and neutralizes the virus.",
+  });
+  const climateDoc = store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p2",
+    title: "Unrelated climate paper",
+    status: "ready",
+    fulltext: "Sea surface temperature rose by two degrees.",
+  });
+  store.replaceDocChunks(kb.id, climateDoc.id, [
+    { anchorId: `${climateDoc.id}:paragraph:0`, blockType: "paragraph", section: null, text: "Sea surface temperature rose by two degrees." },
+  ]);
+  store.updateDocChunkEmbeddings(climateDoc.id, new Map([
+    [`${climateDoc.id}:paragraph:0`, new Uint8Array(climate.buffer.slice(0))],
+  ]));
+
+  const result = await tools.kbSearch(kb.id, "glycoprotein neutralizes", {});
+  assert.deepEqual(result.sources, ["fts", "vector"]);
+  assert.equal(calls.length, 1); // one query embedding
+  // The keyword hit (antibody doc) and the semantic-only hit (climate doc,
+  // loaded on demand for its block metadata) both surface.
+  const docIds = result.hits.map((hit) => hit.docId);
+  assert.ok(docIds.includes(antibodyDoc.id));
+  assert.ok(docIds.includes(climateDoc.id));
+  const semanticOnly = result.hits.find((hit) => hit.docId === climateDoc.id)!;
+  assert.deepEqual(semanticOnly.matchedTerms, []);
+  assert.equal(semanticOnly.docTitle, "Unrelated climate paper");
+});
+
+test("tools: kbSearch degrades to keyword-only when the embedding call fails", async (context) => {
+  const root = tempRoot("ke-tools-hybrid-degrade");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const embedding = {
+    embedOne: async () => {
+      throw new Error("embedding provider down");
+    },
+    embed: async () => {
+      throw new Error("embedding provider down");
+    },
+  } as unknown as import("./embedding.js").EmbeddingClient;
+  const tools = createKnowledgeEngineTools(store, { embedding });
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "doi:10.1/p1",
+    title: "mAb114 neutralizes Ebola",
+    status: "ready",
+    fulltext: "mAb114 binds the Ebola glycoprotein and neutralizes the virus.",
+  });
+
+  const result = await tools.kbSearch(kb.id, "glycoprotein", {});
+  assert.deepEqual(result.sources, undefined); // legacy keyword-only shape
+  assert.equal(result.hits.length, 1);
+});
+
 test("tools: kbExpand resolves anchors with structured miss reasons", async (context) => {
   const root = tempRoot("ke-tools-kbexpand");
   context.after(() => rm(root, { force: true, recursive: true }));

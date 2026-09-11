@@ -13,18 +13,18 @@
 
 /**
  * W8 `kb_search` — document-level FTS recall + block-level locate.
+ * Z8 hybrid upgrade — vector (semantic) arm fused with the keyword arm via
+ * Reciprocal Rank Fusion.
  *
  * The agent-facing search tool: FTS5 (caller-provided) recalls documents;
  * this module re-derives the W7 anchored blocks on demand and ranks them
  * against the query terms, so every hit carries an `anchorId` into the
- * three-level reader. Deliberately keyword-only and deterministic — the
- * hybrid vector rerank is a later, optional layer (failure philosophy:
- * probabilistic layers must never be the only path to a result).
- *
- * A persisted chunk table (DA's retrieval_chunks) is deferred: re-parsing
- * ≤10 recalled documents' blocks is milliseconds at today's KB sizes. When
- * KBs grow past that, the same block ranking moves to a chunk index without
- * changing this tool's contract.
+ * three-level reader. The keyword path stays deterministic and is never
+ * removed — the vector arm is an optional layer (failure philosophy:
+ * probabilistic layers must never be the only path to a result). With the
+ * embedding client configured and chunk vectors stored (ke_doc_chunks),
+ * {@link hybridSearchBlocks} fuses both arms: per-source over-fetch, RRF
+ * merge, single-source failure degrades to the surviving arm.
  */
 
 import { documentAnchor, parseDocumentBlocks, resolveDocumentAnchor, type DocumentBlock, type DocumentBlockType } from "./levels.js";
@@ -55,6 +55,8 @@ export interface KbSearchResult {
   readonly truncated: boolean;
   /** Present when the query produced nothing searchable. */
   readonly note?: string;
+  /** Z8: which retrieval arms contributed (["fts"], ["vector"], or both). */
+  readonly sources?: readonly ("fts" | "vector")[];
 }
 
 /** Small English stoplist — CJK content passes through as whole runs. */
@@ -122,7 +124,7 @@ export function searchBlocks(input: {
   maxPerDoc?: number;
 }): KbSearchResult {
   const topK = Math.max(1, Math.min(input.topK ?? 8, 20));
-  const maxPerDoc = Math.max(1, input.maxPerDoc ?? 2);
+  const maxPerDoc = Math.max(1, Math.min(input.maxPerDoc ?? 2, 10));
   const terms = extractQueryTerms(input.query);
 
   if (terms.length === 0) {
@@ -132,31 +134,7 @@ export function searchBlocks(input: {
     return { kbId: input.kbId, query: input.query, hits: [], truncated: false, note: "no documents matched the keyword recall" };
   }
 
-  const scored: Array<{ hit: KbSearchHit; docOrder: number; blockOrder: number }> = [];
-  input.documents.forEach((document, docOrder) => {
-    const blocks = parseDocumentBlocks(document.fulltext);
-    blocks.forEach((block, blockOrder) => {
-      if (block.type === "reference") return;
-      const { score, matched } = scoreText(block.text, terms);
-      if (score <= 0) return;
-      scored.push({
-        docOrder,
-        blockOrder,
-        hit: {
-          docId: document.docId,
-          docTitle: document.title,
-          anchorId: documentAnchor(document.docId, block),
-          blockType: block.type,
-          section: block.section,
-          lineStart: block.lineStart,
-          snippet: snippetAround(block.text, matched),
-          matchedTerms: matched,
-          score: Number(score.toFixed(2)),
-        },
-      });
-    });
-  });
-
+  const scored = scoreAllBlocks(input.documents, terms);
   scored.sort((left, right) =>
     right.hit.score - left.hit.score || left.docOrder - right.docOrder || left.blockOrder - right.blockOrder,
   );
@@ -179,6 +157,186 @@ export function searchBlocks(input: {
   }
 
   return { kbId: input.kbId, query: input.query, hits, truncated, ...(hits.length === 0 ? { note: "terms matched no passage blocks" } : {}) };
+}
+
+// ------------------------------------------------------------- Z8 hybrid RRF
+
+/** One semantic-arm candidate: a cosine-ranked chunk (pre-scored by the
+ *  caller — the pure layer never touches embedding math). */
+export interface VectorChunkCandidate {
+  readonly docId: string;
+  readonly anchorId: string;
+  readonly score: number;
+}
+
+/** Standard RRF smoothing constant — 60 keeps single-arm ranks dominant
+ *  enough that rank 1 beats rank 2 of the other arm, while an anchor found
+ *  by BOTH arms always outranks a single-arm find (OpenDDE skill_forge
+ *  pattern: per-source over-fetch k×2, fuse, degrade on source failure). */
+export const RRF_K = 60;
+const HYBRID_OVERFETCH = 2;
+
+interface ScoredBlock {
+  readonly hit: KbSearchHit;
+  readonly docOrder: number;
+  readonly blockOrder: number;
+}
+
+/** All term-scored blocks of the document set, uncapped and deterministically
+ *  ordered — the shared FTS arm for both the keyword-only and hybrid paths. */
+function scoreAllBlocks(documents: readonly KbSearchDocumentInput[], terms: readonly string[]): ScoredBlock[] {
+  const scored: ScoredBlock[] = [];
+  documents.forEach((document, docOrder) => {
+    const blocks = parseDocumentBlocks(document.fulltext);
+    blocks.forEach((block, blockOrder) => {
+      if (block.type === "reference") return;
+      const { score, matched } = scoreText(block.text, terms);
+      if (score <= 0) return;
+      scored.push({
+        docOrder,
+        blockOrder,
+        hit: {
+          docId: document.docId,
+          docTitle: document.title,
+          anchorId: documentAnchor(document.docId, block),
+          blockType: block.type,
+          section: block.section,
+          lineStart: block.lineStart,
+          snippet: snippetAround(block.text, matched),
+          matchedTerms: matched,
+          score: Number(score.toFixed(2)),
+        },
+      });
+    });
+  });
+  return scored;
+}
+
+/**
+ * Fuse the keyword arm (block term scoring over the caller-recalled
+ * documents) with the semantic arm (caller-ranked chunk candidates) via
+ * Reciprocal Rank Fusion. `documents` must include every document a vector
+ * candidate points at — the caller loads those in addition to the FTS
+ * recall. A missing/empty vector arm degrades to keyword-only with an
+ * honest note; empty FTS still lets the vector arm answer (semantic search
+ * needs no term tokens).
+ */
+export function hybridSearchBlocks(input: {
+  kbId: string;
+  query: string;
+  documents: readonly KbSearchDocumentInput[];
+  vectorCandidates?: readonly VectorChunkCandidate[];
+  topK?: number;
+  maxPerDoc?: number;
+}): KbSearchResult {
+  const topK = Math.max(1, Math.min(input.topK ?? 8, 20));
+  const maxPerDoc = Math.max(1, Math.min(input.maxPerDoc ?? 2, 10));
+  const terms = extractQueryTerms(input.query);
+  const vector = (input.vectorCandidates ?? []).slice(0, topK * HYBRID_OVERFETCH);
+
+  const ftsRanked = terms.length === 0 ? [] : scoreAllBlocks(input.documents, terms);
+  const sources: Array<"fts" | "vector"> = [];
+  if (ftsRanked.length > 0) sources.push("fts");
+  if (vector.length > 0) sources.push("vector");
+
+  if (sources.length === 0) {
+    return {
+      kbId: input.kbId,
+      query: input.query,
+      hits: [],
+      truncated: false,
+      note: terms.length === 0
+        ? "query has no searchable terms and no vector source is available"
+        : "terms matched no passage blocks and no vector source is available",
+    };
+  }
+
+  // Block metadata lookup for vector-only anchors (FTS hits already carry it).
+  const blocksByDoc = new Map<string, DocumentBlock[]>();
+  const docById = new Map(input.documents.map((document) => [document.docId, document]));
+  const blockFor = (docId: string, anchorId: string): { block: DocumentBlock; docTitle: string | null } | null => {
+    let blocks = blocksByDoc.get(docId);
+    if (!blocks) {
+      const document = docById.get(docId);
+      if (!document) return null;
+      blocks = parseDocumentBlocks(document.fulltext);
+      blocksByDoc.set(docId, blocks);
+    }
+    const block = blocks.find((candidate) => documentAnchor(docId, candidate) === anchorId);
+    return block ? { block, docTitle: docById.get(docId)?.title ?? null } : null;
+  };
+
+  interface Fused {
+    rrf: number;
+    fts?: ScoredBlock;
+    vectorScore?: number;
+  }
+  const fused = new Map<string, Fused>();
+  const bump = (anchorId: string, contribution: number, attach: (current: Fused) => Partial<Fused>): void => {
+    const current = fused.get(anchorId) ?? { rrf: 0 };
+    fused.set(anchorId, { ...current, rrf: current.rrf + contribution, ...attach(current) });
+  };
+  ftsRanked.forEach((entry, rank) => {
+    bump(entry.hit.anchorId, 1 / (RRF_K + rank + 1), () => ({ fts: entry }));
+  });
+  vector.forEach((candidate, rank) => {
+    bump(candidate.anchorId, 1 / (RRF_K + rank + 1), () => ({ vectorScore: candidate.score }));
+  });
+
+  const hits: KbSearchHit[] = [];
+  const perDoc = new Map<string, number>();
+  let truncated = false;
+  const ranked = [...fused.entries()].sort((left, right) => {
+    const delta = right[1].rrf - left[1].rrf;
+    if (delta !== 0) return delta;
+    const leftOrder = left[1].fts ? left[1].fts.docOrder * 100_000 + left[1].fts.blockOrder : Number.MAX_SAFE_INTEGER;
+    const rightOrder = right[1].fts ? right[1].fts.docOrder * 100_000 + right[1].fts.blockOrder : Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || left[0].localeCompare(right[0]);
+  });
+  for (const [anchorId, entry] of ranked) {
+    const docId = docIdFromAnchor(anchorId) ?? entry.fts?.hit.docId ?? "";
+    if (!docId) continue;
+    const used = perDoc.get(docId) ?? 0;
+    if (used >= maxPerDoc) {
+      truncated = true;
+      continue;
+    }
+    if (hits.length >= topK) {
+      truncated = true;
+      break;
+    }
+    if (entry.fts) {
+      hits.push({ ...entry.fts.hit, score: Number(entry.rrf.toFixed(6)) });
+    } else {
+      const located = blockFor(docId, anchorId);
+      if (!located) continue; // vector candidate whose document was not loaded
+      hits.push({
+        docId,
+        docTitle: located.docTitle,
+        anchorId,
+        blockType: located.block.type,
+        section: located.block.section,
+        lineStart: located.block.lineStart,
+        snippet: snippetAround(located.block.text, terms),
+        matchedTerms: [],
+        score: Number(entry.rrf.toFixed(6)),
+      });
+    }
+    perDoc.set(docId, used + 1);
+  }
+
+  const note = input.vectorCandidates === undefined && sources.length === 1 && sources[0] === "fts"
+    ? "vector source unavailable (no embedding client or no embedded chunks) — keyword-only"
+    : undefined;
+  return {
+    kbId: input.kbId,
+    query: input.query,
+    hits,
+    truncated,
+    sources,
+    ...(note ? { note } : {}),
+    ...(hits.length === 0 ? { note: note ?? "no passage blocks matched either retrieval arm" } : {}),
+  };
 }
 
 // ------------------------------------------------------------------ kb_expand

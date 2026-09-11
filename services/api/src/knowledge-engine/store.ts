@@ -455,6 +455,32 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX ke_proposal_rejects_kb ON ke_proposal_rejects (kb_id, created_at);
     `,
   },
+  {
+    version: 6,
+    name: "ke_doc_chunks",
+    sql: `
+      -- Z8 hybrid retrieval: persisted document chunks (one row per W7
+      -- anchored block, reference blocks excluded). embedding is nullable —
+      -- written fail-soft at extraction time and backfilled opportunistically;
+      -- a KB without vectors simply stays keyword-only (kb_search degrades).
+      -- Pre-v6 KBs rebuild their chunks on the next extraction pass; the
+      -- chunk writer is idempotent per document (delete + insert).
+      CREATE TABLE ke_doc_chunks (
+        id TEXT PRIMARY KEY,
+        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        doc_id TEXT NOT NULL REFERENCES ke_documents(id) ON DELETE CASCADE,
+        anchor_id TEXT NOT NULL,
+        block_type TEXT NOT NULL,
+        section TEXT,
+        chunk_text TEXT NOT NULL,
+        embedding BLOB,
+        created_at TEXT NOT NULL,
+        UNIQUE (doc_id, anchor_id)
+      );
+      CREATE INDEX ke_doc_chunks_kb ON ke_doc_chunks (kb_id);
+      CREATE INDEX ke_doc_chunks_pending ON ke_doc_chunks (kb_id) WHERE embedding IS NULL;
+    `,
+  },
 ];
 
 /** Deterministic name normalization shared by entity upsert and lookup. */
@@ -2311,6 +2337,77 @@ export class KnowledgeEngineStore {
       attempts: Number(row["attempts"]),
       createdAt: String(row["created_at"]),
     }));
+  }
+
+  // ------------------------------------------------------ doc chunks (Z8)
+
+  /** Replace one document's chunk rows (idempotent rewrite; embedding left
+   *  null for the caller to backfill). */
+  replaceDocChunks(
+    kbId: string,
+    docId: string,
+    chunks: ReadonlyArray<{ anchorId: string; blockType: string; section: string | null; text: string }>,
+  ): number {
+    if (chunks.length === 0) return 0;
+    const insert = this.database.prepare(
+      `INSERT INTO ke_doc_chunks (id, kb_id, doc_id, anchor_id, block_type, section, chunk_text, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const timestamp = now();
+    this.inTransaction(() => {
+      this.database.prepare("DELETE FROM ke_doc_chunks WHERE doc_id = ?").run(docId);
+      for (const chunk of chunks) {
+        insert.run(randomUUID(), kbId, docId, chunk.anchorId, chunk.blockType, chunk.section, chunk.text, timestamp);
+      }
+    });
+    return chunks.length;
+  }
+
+  /** Attach embeddings to a document's chunks by anchor (absent anchors are
+   *  skipped — a partial embed never fails the batch). */
+  updateDocChunkEmbeddings(
+    docId: string,
+    vectorsByAnchor: ReadonlyMap<string, Uint8Array>,
+  ): number {
+    const statement = this.database.prepare("UPDATE ke_doc_chunks SET embedding = ? WHERE doc_id = ? AND anchor_id = ?");
+    let updated = 0;
+    this.inTransaction(() => {
+      for (const [anchorId, blob] of vectorsByAnchor) {
+        const result = statement.run(blob, docId, anchorId);
+        updated += Number(result.changes);
+      }
+    });
+    return updated;
+  }
+
+  /** Embedded chunks for the vector retrieval arm (bounded scan). */
+  listDocChunksWithEmbedding(
+    kbId: string,
+    limit = 2_000,
+  ): Array<{ docId: string; anchorId: string; text: string; embedding: Uint8Array }> {
+    const rows = this.database
+      .prepare(
+        `SELECT doc_id, anchor_id, chunk_text, embedding FROM ke_doc_chunks
+         WHERE kb_id = ? AND embedding IS NOT NULL
+         ORDER BY created_at, anchor_id LIMIT ?`,
+      )
+      .all(kbId, Math.max(1, Math.min(limit, 10_000))) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      docId: String(row["doc_id"]),
+      anchorId: String(row["anchor_id"]),
+      text: String(row["chunk_text"]),
+      embedding: row["embedding"] as Uint8Array,
+    }));
+  }
+
+  countDocChunks(kbId: string): { total: number; embedded: number } {
+    const row = this.database
+      .prepare(
+        `SELECT count(*) AS total, sum(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) AS embedded
+         FROM ke_doc_chunks WHERE kb_id = ?`,
+      )
+      .get(kbId) as { total: number; embedded: number | null };
+    return { total: Number(row.total), embedded: Number(row.embedded ?? 0) };
   }
 
   /** Similar documents by shared-entity count (ke_entity_docs overlap) —

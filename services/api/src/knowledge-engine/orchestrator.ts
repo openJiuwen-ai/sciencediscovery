@@ -32,6 +32,7 @@ import {
   buildExtractionPrompt,
   buildIntentPrompt,
   buildJudgePrompt,
+  documentAnchor,
   embeddingToBlob,
   extractAbbrevPairs,
   extractCitationContexts,
@@ -40,6 +41,7 @@ import {
   MAX_INTENT_PER_DOC,
   parseIntentResponse,
   parseJudgeVerdict,
+  parseDocumentBlocks,
   parseReferenceEntries,
   resolveCitedDocuments,
   validateExtractionProposal,
@@ -787,6 +789,14 @@ export class KeOrchestrator {
       this.warn("ke_citation_derive_failed", { docId, error: errorMessage(error) });
     }
 
+    // Z8 doc chunks for hybrid retrieval (fail-soft: without chunk vectors
+    // kb_search simply stays keyword-only — never a job failure).
+    try {
+      await this.deriveDocChunks(doc, fulltext);
+    } catch (error) {
+      this.warn("ke_doc_chunks_failed", { docId, error: errorMessage(error) });
+    }
+
     this.warn("ke_extract_done", { docId, entities: writtenIds.length, edges: edgesWritten, dropped });
     return {
       docId,
@@ -796,6 +806,45 @@ export class KeOrchestrator {
       rejectedProposals,
       attempts: attemptsUsed,
     };
+  }
+
+  /**
+   * Z8: persist one chunk row per anchored block (reference blocks excluded)
+   * and embed them in a single batch when the embedding client is present.
+   * Idempotent per document (delete + insert). An embedding outage leaves
+   * the vectors null — kb_search degrades to keyword-only until a later
+   * extraction backfills them.
+   */
+  private async deriveDocChunks(doc: KeDocumentRow, fulltext: string): Promise<void> {
+    const blocks = parseDocumentBlocks(fulltext).filter((block) => block.type !== "reference");
+    if (blocks.length === 0) return;
+    const written = this.deps.store.replaceDocChunks(
+      doc.kbId,
+      doc.id,
+      blocks.map((block) => ({
+        anchorId: documentAnchor(doc.id, block),
+        blockType: block.type,
+        section: block.section,
+        text: block.text,
+      })),
+    );
+    if (!this.deps.embedding || written === 0) return;
+    try {
+      // Embedding models truncate long contexts themselves; slicing keeps
+      // the request payload bounded regardless of model limits.
+      const texts = blocks.map((block) => block.text.slice(0, 2_000));
+      const vectors = await this.deps.embedding.embed(texts);
+      const byAnchor = new Map<string, Uint8Array>();
+      blocks.forEach((block, index) => {
+        const vector = vectors[index];
+        if (vector && vector.length > 0) {
+          byAnchor.set(documentAnchor(doc.id, block), embeddingToBlob(vector));
+        }
+      });
+      this.deps.store.updateDocChunkEmbeddings(doc.id, byAnchor);
+    } catch (error) {
+      this.warn("ke_doc_chunk_embed_failed", { docId: doc.id, error: errorMessage(error) });
+    }
   }
 
   /**

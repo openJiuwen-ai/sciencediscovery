@@ -49,8 +49,47 @@ test("open applies migrations idempotently and persists data", async (context) =
     version: number;
     name: string;
   }>;
-  assert.deepEqual(migrations.map((row) => row.version), [1, 2, 3, 4, 5]);
+  assert.deepEqual(migrations.map((row) => row.version), [1, 2, 3, 4, 5, 6]);
   sidecar.close();
+});
+
+test("doc chunks round-trip with embeddings and rewrite idempotently", async (context) => {
+  const root = tempRoot("ke-store-chunks");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const kb = store.createKnowledgeBase({ name: "kb" });
+  const doc = store.upsertDocument({ kbId: kb.id, dedupKey: "doi:10.1/x", title: "Paper A", fulltext: "# T\n\nBody." });
+
+  const written = store.replaceDocChunks(kb.id, doc.id, [
+    { anchorId: `${doc.id}:paragraph:0`, blockType: "paragraph", section: "Methods", text: "The assay used mAb114." },
+    { anchorId: `${doc.id}:heading:0`, blockType: "heading", section: null, text: "Methods" },
+  ]);
+  assert.equal(written, 2);
+  assert.deepEqual(store.countDocChunks(kb.id), { total: 2, embedded: 0 });
+  assert.deepEqual(store.listDocChunksWithEmbedding(kb.id), []);
+
+  const vector = new Float32Array([0.5, 0.25, -1]);
+  const updated = store.updateDocChunkEmbeddings(doc.id, new Map([
+    [`${doc.id}:paragraph:0`, new Uint8Array(vector.buffer.slice(0))],
+    [`${doc.id}:heading:0`, new Uint8Array(new Float32Array([1, 0, 0]).buffer.slice(0))],
+    // Absent anchor — skipped, never a failure.
+    [`${doc.id}:paragraph:99`, new Uint8Array(4)],
+  ]));
+  assert.equal(updated, 2);
+  assert.deepEqual(store.countDocChunks(kb.id), { total: 2, embedded: 2 });
+  const embedded = store.listDocChunksWithEmbedding(kb.id);
+  assert.equal(embedded.length, 2);
+  // Ordering is (created_at, anchor_id) — same timestamp, so heading sorts first.
+  const paragraph = embedded.find((chunk) => chunk.anchorId.endsWith(":paragraph:0"));
+  assert.equal(paragraph?.text, "The assay used mAb114.");
+  assert.ok(paragraph?.embedding instanceof Uint8Array);
+
+  // Rewrite replaces the document's chunks wholesale (idempotent derivation).
+  store.replaceDocChunks(kb.id, doc.id, [
+    { anchorId: `${doc.id}:paragraph:0`, blockType: "paragraph", section: null, text: "Rewritten." },
+  ]);
+  assert.deepEqual(store.countDocChunks(kb.id), { total: 1, embedded: 0 });
 });
 
 test("proposal rejects are recorded (capped) and queryable per KB/doc", async (context) => {

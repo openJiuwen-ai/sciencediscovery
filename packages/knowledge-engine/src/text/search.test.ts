@@ -14,7 +14,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { docIdFromAnchor, expandAnchor, extractQueryTerms, grepDocuments, searchBlocks, type KbSearchDocumentInput } from "./search.js";
+import {
+  docIdFromAnchor,
+  expandAnchor,
+  extractQueryTerms,
+  grepDocuments,
+  hybridSearchBlocks,
+  searchBlocks,
+  type KbSearchDocumentInput,
+} from "./search.js";
 
 const DOC_A: KbSearchDocumentInput = {
   docId: "doc-a",
@@ -154,4 +162,79 @@ test("grepDocuments returns structured errors, never throws", () => {
   assert.deepEqual(none.matches, []);
   assert.equal(none.error, undefined);
   assert.equal(none.truncated, false);
+});
+
+// ------------------------------------------------------------------ Z8 hybrid
+
+test("hybridSearchBlocks: an anchor found by both arms outranks single-arm finds", () => {
+  const result = hybridSearchBlocks({
+    kbId: "kb1",
+    query: "mAb114 neutralization assay",
+    documents: [DOC_A, DOC_B],
+    // Vector arm ranks doc-b's paragraph first, doc-a's second — inverted
+    // versus the keyword arm, which has doc-a on top.
+    vectorCandidates: [
+      { docId: "doc-b", anchorId: "doc-b:paragraph:0", score: 0.92 },
+      { docId: "doc-a", anchorId: "doc-a:paragraph:0", score: 0.71 },
+    ],
+  });
+  assert.deepEqual(result.sources, ["fts", "vector"]);
+  // Both arms agree on doc-a:paragraph:0 → RRF sum wins over either rank-1.
+  assert.match(result.hits[0]!.anchorId, /^doc-a:paragraph:0$/);
+  assert.ok(result.hits[0]!.matchedTerms.includes("mab114"));
+  assert.ok(result.hits.some((hit) => hit.anchorId === "doc-b:paragraph:0"));
+});
+
+test("hybridSearchBlocks: a vector-only anchor still resolves full block metadata", () => {
+  const result = hybridSearchBlocks({
+    kbId: "kb1",
+    query: "mAb114",
+    documents: [DOC_A],
+    vectorCandidates: [{ docId: "doc-b", anchorId: "doc-b:paragraph:0", score: 0.9 }],
+    // doc-b is NOT loaded — the candidate must be skipped, not crashed.
+  });
+  assert.equal(result.hits.every((hit) => hit.docId !== "doc-b"), true);
+
+  const loaded = hybridSearchBlocks({
+    kbId: "kb1",
+    query: "mAb114",
+    documents: [DOC_A, DOC_B],
+    vectorCandidates: [{ docId: "doc-b", anchorId: "doc-b:paragraph:0", score: 0.9 }],
+  });
+  const vectorOnly = loaded.hits.find((hit) => hit.anchorId === "doc-b:paragraph:0");
+  assert.ok(vectorOnly);
+  assert.equal(vectorOnly.docTitle, "Structural basis");
+  assert.equal(vectorOnly.blockType, "paragraph");
+  assert.deepEqual(vectorOnly.matchedTerms, []);
+});
+
+test("hybridSearchBlocks: missing vector arm degrades to keyword-only with a note", () => {
+  const degraded = hybridSearchBlocks({
+    kbId: "kb1",
+    query: "mAb114 assay",
+    documents: [DOC_A],
+    vectorCandidates: undefined,
+  });
+  assert.deepEqual(degraded.sources, ["fts"]);
+  assert.match(degraded.note ?? "", /keyword-only/);
+  // An explicitly EMPTY vector list is the same honest keyword-only state.
+  const empty = hybridSearchBlocks({
+    kbId: "kb1",
+    query: "mAb114 assay",
+    documents: [DOC_A],
+    vectorCandidates: [],
+  });
+  assert.deepEqual(empty.sources, ["fts"]);
+});
+
+test("hybridSearchBlocks: the vector arm answers when the query has no keyword terms", () => {
+  const result = hybridSearchBlocks({
+    kbId: "kb1",
+    query: "the of to",
+    documents: [DOC_A],
+    vectorCandidates: [{ docId: "doc-a", anchorId: "doc-a:paragraph:0", score: 0.8 }],
+  });
+  assert.deepEqual(result.sources, ["vector"]);
+  assert.equal(result.hits.length, 1);
+  assert.match(result.hits[0]!.anchorId, /^doc-a:paragraph:0$/);
 });

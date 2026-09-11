@@ -201,11 +201,18 @@ test("extraction writes embeddings when the client is configured", async (contex
   await orchestrator.seedKb(kb.id, "ebola", 10);
   await drain(runner);
 
-  assert.equal(embeddingCalls.length, 1);
+  // Two batches: entity names (pre-batch) then Z8 chunk texts.
+  assert.equal(embeddingCalls.length, 2);
   assert.equal(embeddingCalls[0]?.length, 3);
   const withEmbedding = store.listEntities(kb.id, { withEmbedding: true });
   assert.equal(withEmbedding.length, 3);
   assert.ok(withEmbedding[0]!.embedding instanceof Uint8Array);
+  // Z8: the document's anchored blocks became embedded chunks.
+  const chunks = store.countDocChunks(kb.id);
+  assert.ok(chunks.total > 0);
+  assert.equal(chunks.embedded, chunks.total);
+  const stored = store.listDocChunksWithEmbedding(kb.id);
+  assert.ok(stored.every((chunk) => chunk.anchorId.includes(":") && chunk.text.length > 0));
 });
 
 test("re-seeding the same query is idempotent (watermarks)", async (context) => {

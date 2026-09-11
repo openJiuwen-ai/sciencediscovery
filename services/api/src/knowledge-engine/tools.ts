@@ -23,12 +23,15 @@ import {
   buildAntiHallucinationBrief,
   buildResidentSummary,
   conceptExplore,
+  cosineScan,
   deepDive,
   docIdFromAnchor,
+  embeddingFromBlob,
   entityUnifiedSearch,
   expandAnchor,
   findGaps,
   grepDocuments,
+  hybridSearchBlocks,
   noveltyCheck,
   searchBlocks,
   validateEntities,
@@ -47,8 +50,10 @@ import {
   type NoveltyCheckResult,
   type ResidentSummary,
   type ValidateEntitiesResult,
+  type VectorChunkCandidate,
 } from "@sciencediscovery/knowledge-engine";
 
+import type { EmbeddingClient } from "./embedding.js";
 import type { KnowledgeEngineStore } from "./store.js";
 
 export interface KeToolKbInfo {
@@ -73,7 +78,9 @@ export interface KnowledgeEngineToolPort {
     kbId: string,
     opts: { topN?: number; signals?: Array<"holes" | "conflicts" | "transfers"> },
   ): Promise<GapAnalysis>;
-  /** W8: keyword document search with block-level anchor hits (kb_search). */
+  /** W8/Z8: document search with block-level anchor hits (kb_search) —
+   *  keyword (FTS) fused with the semantic arm (stored chunk vectors, RRF)
+   *  when an embedding client is configured; keyword-only otherwise. */
   kbSearch(kbId: string, query: string, opts: { topK?: number; docLimit?: number }): Promise<KbSearchResult>;
   /** W8: read an anchor's block plus neighbours (kb_expand) — structured
    *  not-found reasons instead of exceptions for missing docs/anchors. */
@@ -103,7 +110,10 @@ export class KeKbNotFoundError extends Error {
   }
 }
 
-export function createKnowledgeEngineTools(store: KnowledgeEngineStore): KnowledgeEngineToolPort {
+export function createKnowledgeEngineTools(
+  store: KnowledgeEngineStore,
+  options: { embedding?: EmbeddingClient } = {},
+): KnowledgeEngineToolPort {
   // Read bounds: 10k entities / 500 edges-per-entity / 50k edges total are
   // far above any realistic KB today; they are guardrails against accidental
   // unbounded reads, not pagination contracts (no truncation is surfaced).
@@ -193,12 +203,53 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
       // three-level reader. docLimit stays small — block parsing is
       // milliseconds per document at this scale.
       const docLimit = Math.max(1, Math.min(opts.docLimit ?? 6, 10));
+      const toInput = (document: NonNullable<ReturnType<KnowledgeEngineStore["getDocument"]>>): KbSearchDocumentInput => ({
+        docId: document.id,
+        title: document.title,
+        fulltext: document.fulltext!,
+      });
       const documents = store
         .searchDocumentIds(kbId, query, docLimit)
         .map((docId) => store.getDocument(docId))
         .filter((document): document is NonNullable<typeof document> => Boolean(document?.fulltext))
-        .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
-      return searchBlocks({ kbId, query, documents, topK: opts.topK });
+        .map(toInput);
+
+      // Z8 semantic arm: cosine over stored chunk vectors, over-fetched and
+      // fused with the keyword arm via RRF in the pure layer. Any failure
+      // (no client, no embedded chunks, embed outage) degrades to
+      // keyword-only — the deterministic path is never removed.
+      let vectorCandidates: readonly VectorChunkCandidate[] | undefined;
+      if (options.embedding) {
+        try {
+          const queryVector = await options.embedding.embedOne(query);
+          const chunks = store.listDocChunksWithEmbedding(kbId);
+          if (chunks.length > 0) {
+            const ranked = cosineScan(
+              queryVector,
+              chunks.map((chunk) => ({ item: chunk, embedding: embeddingFromBlob(chunk.embedding) })),
+            );
+            vectorCandidates = ranked
+              .map((match) => ({ docId: match.item.docId, anchorId: match.item.anchorId, score: match.score }));
+            // Load the vector arm's documents too — the fuser needs their
+            // blocks for anchor metadata.
+            const known = new Set(documents.map((document) => document.docId));
+            for (const candidate of vectorCandidates) {
+              if (known.has(candidate.docId)) continue;
+              const document = store.getDocument(candidate.docId);
+              if (document?.fulltext && document.kbId === kbId) {
+                documents.push(toInput(document));
+                known.add(candidate.docId);
+              }
+            }
+          }
+        } catch {
+          vectorCandidates = undefined; // degrade to keyword-only
+        }
+      }
+      if (vectorCandidates === undefined) {
+        return searchBlocks({ kbId, query, documents, topK: opts.topK });
+      }
+      return hybridSearchBlocks({ kbId, query, documents, vectorCandidates, topK: opts.topK });
     },
 
     async kbExpand(kbId, anchorId) {

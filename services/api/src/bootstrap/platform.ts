@@ -432,8 +432,11 @@ export function createPlatformServices(
   keOrchestrator.registerJobs(keJobRunner);
   // Consumption tools (concept_explore / deep_dive / unified search /
   // validate / gaps) — a plain port object; the agent runtime registers the
-  // LLM tools when this is present.
-  const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore);
+  // LLM tools when this is present. The embedding client enables kb_search's
+  // semantic arm (RRF-fused with FTS; absent → keyword-only).
+  const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore, {
+    ...(keEmbedding ? { embedding: keEmbedding } : {}),
+  });
   // Community roots for the progressive graph drill-down (fingerprint-cached,
   // stale-while-revalidate, LLM-named when a pipeline model is configured).
   const keGraphRoots = createGraphRootsService({
