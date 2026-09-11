@@ -14,9 +14,12 @@ from pydantic import BaseModel, Field, model_validator
 from ...auth import require_internal_token
 from .research import IdeaTreeEngine, ResearchStore, node, now
 from .prompts import DEFAULTS, CRITERIA
+from .templates import INTENSITIES, TEMPLATES, apply_intensity, snapshot
 
 
 class Settings(BaseModel):
+    templateId: str = 'scientific-hypothesis-general/v1'
+    explorationIntensity: str = 'standard'
     maxRounds: int = Field(default=3, ge=1, le=100)
     candidatesPerRound: int = Field(default=3, ge=1, le=20)
     maxSearchRounds: int = Field(default=10, ge=1, le=10000)
@@ -37,6 +40,8 @@ class Settings(BaseModel):
 
     @model_validator(mode='after')
     def weights(self):
+        if self.templateId not in TEMPLATES or self.explorationIntensity not in INTENSITIES:
+            raise ValueError('Unknown research template or exploration intensity')
         weights = [c.get('weight', w) for c, w in zip([self.assessorActivity, self.assessorStability, self.assessorSustainability], [.35, .35, .30])]
         if any(isinstance(w, bool) or not isinstance(w, (float, int)) or not 0 <= w <= 1 for w in weights) or abs(sum(weights) - 1) > 1e-6:
             raise ValueError('Assessment weights must sum to 1')
@@ -141,7 +146,7 @@ async def command(c: Command):
             if any(e.state['sessionId'] == c.sessionId for e, _ in _running.values()):
                 raise HTTPException(409, 'This session already has running research')
             s = dict(id=c.researchId or 'research-' + uuid.uuid4().hex, projectId=c.projectId, sessionId=c.sessionId,
-                     objective=c.objective, materials=c.materials, settings=c.settings.model_dump(), modelId=c.modelId,
+                     objective=c.objective, materials=c.materials, settings=apply_intensity(c.settings.model_dump(), c.settings.explorationIntensity), template=snapshot(c.settings.templateId), modelId=c.modelId,
                      status='paused', phase='ideate', round=0, batch=[], batchCompleted=0, tokens=0, usageKnown=True,
                      reason=None, currentNodeId=None, createdAt=now(), updatedAt=now(), nodes=[node('ROOT', None, c.objective, 'direction', 0)])
             if store().path(c.projectId, c.sessionId, s['id']).exists():

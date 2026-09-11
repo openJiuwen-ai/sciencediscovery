@@ -14,6 +14,7 @@ from typing import Any
 
 from . import prompts
 from .research_tree import ResearchTree
+from .templates import snapshot
 
 
 def now() -> str:
@@ -34,7 +35,7 @@ def text(value: Any, name: str, limit: int = 24000) -> str:
     return value.strip()
 
 
-def validate_result(role: str, value: Any) -> dict:
+def validate_result(role: str, value: Any, assessor_roles: set[str]) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
     if role == "ideate":
@@ -53,6 +54,9 @@ def validate_result(role: str, value: Any) -> dict:
                     raise ValueError(f'{key} must be an array of ids')
             if item.get('targetedWeakness') is not None:
                 text(item['targetedWeakness'], 'targetedWeakness', 2000)
+            for key in ('expectedImprovement', 'newRisk', 'rationale'):
+                if item.get(key) is not None:
+                    text(item[key], key, 2000)
             if item.get('explorationType') not in (None, 'exploit', 'explore'):
                 raise ValueError('explorationType must be exploit or explore')
             if not item.get("parentId"):
@@ -60,10 +64,17 @@ def validate_result(role: str, value: Any) -> dict:
         text(value.get("reason"), "reason", 4000)
     else:
         text(value.get("text"), "text")
-        if role in prompts.CRITERIA:
+        if role in assessor_roles:
             score = value.get("score")
             if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or not 1 <= score <= 10:
                 raise ValueError("Assessment score must be finite and between 1 and 10")
+        if role == 'aggregate':
+            for key in ('strengths', 'failureModes', 'uncertainties', 'evidenceGaps', 'recommendedNextMoves', 'constraintFlags'):
+                if not isinstance(value.get(key), list) or not all(isinstance(item, str) and item.strip() for item in value[key]):
+                    raise ValueError(f'{key} must be an array of non-empty strings')
+            confidence = value.get('confidence')
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError('confidence must be between 0 and 1')
     return value
 
 
@@ -135,12 +146,17 @@ class IdeaTreeEngine:
 
     def role_prompt(self, role):
         config = self.state['settings']
+        template = self.state.setdefault('template', snapshot('scientific-hypothesis-general/v1'))
         fields = {'design': 'designSystemPrompt', 'aggregate': 'aggregatorSystemPrompt', 'propagate': 'propagateInsightSystemPrompt'}
         if role == 'ideate':
             return prompts.IDEATE
-        if role in prompts.CRITERIA:
-            return config.get('assessor' + role.title(), {}).get('systemPrompt') or prompts.ASSESS
-        return config.get(fields[role]) or prompts.DEFAULTS[role]
+        assessor = next((item for item in template['assessors'] if item['id'] == role), None)
+        if assessor:
+            return assessor.get('systemPrompt') or prompts.ASSESS
+        return config.get(fields[role]) or template[role]
+
+    def assessors(self):
+        return self.state.setdefault('template', snapshot('scientific-hypothesis-general/v1'))['assessors']
 
     def transport(self, system, payload, ceiling):
         body = json.dumps(dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling, temperature=0.5)).encode()
@@ -179,7 +195,7 @@ class IdeaTreeEngine:
 
     async def _ask(self, role: str, payload: dict) -> dict:
         self.check_stop()
-        shape = '{"candidates":[{"parentId":"selected id", "direction":"new direction when needed", "refinements":[], "hypothesis":"...", "basedOnCandidateIds":[], "addressesInsightIds":[], "targetedWeakness":"...", "explorationType":"exploit or explore"}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in prompts.CRITERIA else '{"text":"..."}')
+        shape = '{"candidates":[{"parentId":"selected id", "direction":"new direction when needed", "refinements":[], "hypothesis":"...", "basedOnCandidateIds":[], "addressesInsightIds":[], "targetedWeakness":"...", "expectedImprovement":"...", "newRisk":"...", "rationale":"...", "explorationType":"exploit or explore"}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in {item['id'] for item in self.assessors()} else ('{"text":"...","strengths":[],"failureModes":[],"uncertainties":[],"evidenceGaps":[],"recommendedNextMoves":[],"constraintFlags":[],"confidence":0.0}' if role == 'aggregate' else '{"text":"..."}'))
         system = self.role_prompt(role) + '\nReturn JSON only, matching: ' + shape
         for attempt in range(2):
             self.check_stop()
@@ -208,7 +224,7 @@ class IdeaTreeEngine:
                 async with self.usage_lock:
                     self.reserved -= estimate
             try:
-                result = validate_result(role, json.loads(raw))
+                result = validate_result(role, json.loads(raw), {item['id'] for item in self.assessors()})
                 if role == 'ideate':
                     for proposal in result['candidates']:
                         self.proposal_path(proposal)
@@ -236,7 +252,7 @@ class IdeaTreeEngine:
         return descendants
 
     def select_directions(self):
-        """Choose the next expandable branches from evidence, uncertainty and coverage."""
+        """Choose branches from evidence, unresolved lessons, and exploration budget."""
         settings = self.state['settings']
         scored = [n['score'] for n in self.state['nodes'] if n['kind'] == 'candidate' and n['score'] is not None]
         high = max(scored, default=10)
@@ -248,22 +264,34 @@ class IdeaTreeEngine:
                 continue
             if current['kind'] == 'candidate' and current['status'] != 'done':
                 continue
-            if current['kind'] not in ('direction', 'candidate'):
+            if current['kind'] not in ('direction', 'candidate') and current['id'] != 'ROOT':
                 continue
             descendants = self.descendant_candidates(current)
             visits = len(descendants)
+            records = [record for candidate in descendants for record in candidate.get('insightRecords', [])]
+            unresolved = sum(len(record.get('uncertainties', [])) + len(record.get('evidenceGaps', [])) for record in records)
+            hard_constraints = sum(len(record.get('constraintFlags', [])) for record in records)
             if visits >= settings.get('pruneMinAssessments', 3) and descendants:
                 best = max(n['score'] for n in descendants) if direction == 'maximize' else min(n['score'] for n in descendants)
                 global_best = high if direction == 'maximize' else low
-                if (global_best - best if direction == 'maximize' else best - global_best) >= settings.get('pruneScoreGap', 2.5):
-                    current.update(searchStatus='pruned', pruneReason='Repeated assessments remain below the current evidence frontier')
+                behind_frontier = (global_best - best if direction == 'maximize' else best - global_best) >= settings.get('pruneScoreGap', 2.5)
+                if behind_frontier and (hard_constraints >= visits or unresolved == 0):
+                    current.update(searchStatus='pruned', pruneReason='Repeated assessments are below the evidence frontier without a remaining validation question')
                     continue
             evidence = .5 if not descendants or high == low else ((max(n['score'] for n in descendants) - low) / (high - low) if direction == 'maximize' else (high - min(n['score'] for n in descendants)) / (high - low))
             uncertainty = 1 / math.sqrt(visits + 1)
             coverage = 1 / (len(current['childrenIds']) + 1)
-            current['priority'] = round(evidence + .35 * uncertainty + .15 * coverage, 4)
+            learning_need = min(1, unresolved / max(1, 2 * visits))
+            current['priority'] = round(evidence + .25 * uncertainty + .15 * coverage + .2 * learning_need, 4)
             choices.append(current)
-        selected = sorted(choices, key=lambda item: (-item['priority'], item['id']))[:settings.get('maxActiveDirections', 3)]
+        root = next((item for item in choices if item['id'] == 'ROOT'), None)
+        ranked = sorted((item for item in choices if item['id'] != 'ROOT'), key=lambda item: (-item['priority'], item['id']))
+        limit = settings.get('maxActiveDirections', 3)
+        exploration_slots = min(settings.get('explorationSlots', 0), limit)
+        should_explore = root and (not ranked or (exploration_slots and self.state['round'] % max(1, limit) < exploration_slots))
+        selected = ranked[:limit - int(bool(should_explore))]
+        if should_explore:
+            selected.append(root)
         return selected
 
     def overview(self, selected):
@@ -298,26 +326,26 @@ class IdeaTreeEngine:
         self.save()
         base = {**self.context(), 'hypothesis': candidate['hypothesis'], 'ancestorInsights': self.ancestors(candidate)}
         design = await self.stage(candidate, 'design', base)
-        async def assess(role):
-            cfg = self.state['settings'].get('assessor' + role.title(), {})
-            return await self.stage(candidate, role, {**base, 'candidate': design, 'perspective': role, 'criteria': cfg.get('scoringCriteria') or prompts.CRITERIA[role]})
+        async def assess(spec):
+            role = spec['id']
+            return await self.stage(candidate, role, {**base, 'candidate': design, 'perspective': role, 'criteria': spec['criteria']})
         # With a token cap, sequential requests avoid falsely exhausting the budget on reservations.
         if self.state['settings'].get('maxTokens'):
-            assessments = [await assess(role) for role in prompts.CRITERIA]
+            assessments = [await assess(spec) for spec in self.assessors()]
         else:
-            results = await asyncio.gather(*(assess(role) for role in prompts.CRITERIA), return_exceptions=True)
+            results = await asyncio.gather(*(assess(spec) for spec in self.assessors()), return_exceptions=True)
             for result in results:
                 if isinstance(result, BaseException):
                     raise result
             assessments = results
-        weights = [self.state['settings'].get('assessor' + role.title(), {}).get('weight', default) for role, default in zip(prompts.CRITERIA, [0.35, 0.35, 0.30])]
+        weights = [spec['weight'] for spec in self.assessors()]
         score = sum(a['score'] * w for a, w in zip(assessments, weights))
-        aggregate = await self.stage(candidate, 'aggregate', {**base, 'candidate': design, 'assessments': dict(zip(prompts.CRITERIA, assessments)), 'weightedScore': score})
+        aggregate = await self.stage(candidate, 'aggregate', {**base, 'candidate': design, 'assessments': dict(zip((spec['id'] for spec in self.assessors()), assessments)), 'weightedScore': score})
         candidate.update(status='done', score=round(score, 4), insight=aggregate['text'], updatedAt=now())
         candidate.setdefault('insightRecords', []).append(dict(
             id=f"insight-{candidate['id']}-{len(candidate.get('insightRecords', [])) + 1}",
-            sourceCandidateId=candidate['id'], score=candidate['score'], scoreBreakdown={role: assessment['score'] for role, assessment in zip(prompts.CRITERIA, assessments)},
-            summary=aggregate['text'], createdAt=now(),
+            sourceCandidateId=candidate['id'], score=candidate['score'], scoreBreakdown={spec['id']: assessment['score'] for spec, assessment in zip(self.assessors(), assessments)},
+            summary=aggregate['text'], strengths=aggregate['strengths'], failureModes=aggregate['failureModes'], uncertainties=aggregate['uncertainties'], evidenceGaps=aggregate['evidenceGaps'], recommendedNextMoves=aggregate['recommendedNextMoves'], constraintFlags=aggregate['constraintFlags'], confidence=aggregate['confidence'], createdAt=now(),
         ))
         self.save()
         await self.propagate(candidate)
@@ -371,10 +399,45 @@ class IdeaTreeEngine:
             raise ValueError('Parent is not an active expandable branch')
         if parent['kind'] == 'candidate' and parent['status'] != 'done':
             raise ValueError('A candidate can branch only after evaluation')
+        if parent['kind'] == 'candidate' and not proposal.get('direction'):
+            raise ValueError('A completed candidate needs a direction for a deeper branch')
+        if parent['id'] == 'ROOT' and depth > 1 and not proposal.get('direction'):
+            raise ValueError('ROOT proposals need a research direction')
         path = ([] if (parent_id and parent['kind'] == 'direction') or (parent['id'] == 'ROOT' and depth == 1) else [proposal['direction']]) + proposal.get('refinements', [])
         if parent['depth'] + len(path) + 1 > depth:
             raise ValueError('Proposal exceeds maxDepth')
         return parent, path
+
+    def is_descendant_of(self, node_id, ancestor_id):
+        current = self.find(node_id)
+        while current['parentId']:
+            if current['parentId'] == ancestor_id:
+                return True
+            current = self.find(current['parentId'])
+        return False
+
+    def validate_proposal(self, proposal, selected_ids):
+        parent_id = proposal.get('parentId') or 'ROOT'
+        if parent_id not in selected_ids:
+            raise ValueError('Proposed parent was not selected for expansion')
+        parent, _ = self.proposal_path(proposal)
+        candidates = {n['id']: n for n in self.state['nodes'] if n['kind'] == 'candidate'}
+        insights = {record['id']: record for n in self.state['nodes'] for record in n.get('insightRecords', [])}
+        source_ids = proposal.get('basedOnCandidateIds', [])
+        insight_ids = proposal.get('addressesInsightIds', [])
+        if not set(source_ids).issubset(candidates) or not set(insight_ids).issubset(insights):
+            raise ValueError('Proposal references an unknown candidate or insight')
+        if proposal.get('explorationType', 'explore') == 'exploit':
+            for key in ('targetedWeakness', 'expectedImprovement', 'newRisk'):
+                text(proposal.get(key), key, 2000)
+            if not source_ids or not insight_ids:
+                raise ValueError('Exploit proposals must name their evidence and targeted insight')
+            if parent['kind'] == 'candidate' and parent['id'] not in source_ids:
+                raise ValueError('A deeper exploit must cite its parent candidate')
+            if parent['kind'] == 'direction' and not any(self.is_descendant_of(source, parent['id']) for source in source_ids):
+                raise ValueError('An exploit under a direction must cite a candidate in that direction')
+        elif proposal.get('explorationType') == 'explore':
+            text(proposal.get('rationale'), 'rationale', 2000)
 
     async def run(self):
         s = self.state
@@ -396,22 +459,13 @@ class IdeaTreeEngine:
                     self.save()
                     count = min(s['settings']['candidatesPerRound'], remaining)
                     s['phase'] = 'ideate'
-                    ideas = await self.ask('ideate', {**self.context(), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']})
+                    ideas = await self.ask('ideate', {**self.context(), 'template': dict(id=s['template']['id'], label=s['template']['label'], assessors=[item['label'] for item in s['template']['assessors']]), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']})
                     # Reject the whole proposal before changing the tree.
                     known_ids = {n['id'] for n in s['nodes']}
                     if any(p.get('parentId') and p['parentId'] not in known_ids for p in ideas['candidates'][:count]):
                         raise ValueError('Proposed parent does not exist')
-                    if any((p.get('parentId') or 'ROOT') not in s['selectedDirectionIds'] for p in ideas['candidates'][:count]):
-                        raise ValueError('Proposed parent was not selected for expansion')
-                    candidate_ids = {n['id'] for n in s['nodes'] if n['kind'] == 'candidate'}
-                    insight_ids = {record['id'] for n in s['nodes'] for record in n.get('insightRecords', [])}
                     for proposal in ideas['candidates'][:count]:
-                        if proposal.get('explorationType', 'explore') == 'exploit' and (not proposal.get('basedOnCandidateIds') or not proposal.get('addressesInsightIds')):
-                            raise ValueError('Exploit proposals must name their evidence and targeted insight')
-                        if not set(proposal.get('basedOnCandidateIds', [])).issubset(candidate_ids):
-                            raise ValueError('Proposal references an unknown candidate')
-                        if not set(proposal.get('addressesInsightIds', [])).issubset(insight_ids):
-                            raise ValueError('Proposal references an unknown insight')
+                        self.validate_proposal(proposal, s['selectedDirectionIds'])
                     batch = []
                     existing = {n['hypothesis'].strip().casefold() for n in s['nodes']}
                     for proposal in ideas['candidates'][:count]:

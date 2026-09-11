@@ -512,6 +512,8 @@ export function normalizeIdeaTreeSettings(
   input: UpdateIdeaTreeSettingsRequest,
   current: IdeaTreeSettings,
 ): IdeaTreeSettings {
+  const templateId = input.templateId ?? current.templateId;
+  const explorationIntensity = input.explorationIntensity ?? current.explorationIntensity;
   const maxRounds = boundedInteger(input.maxRounds, "maxRounds", 1, 100, current.maxRounds ?? 3);
   const candidatesPerRound = boundedInteger(input.candidatesPerRound, "candidatesPerRound", 1, 20, current.candidatesPerRound ?? 3);
   const maxTokensPerCall = boundedInteger(input.maxTokensPerCall, "maxTokensPerCall", 256, 32768, current.maxTokensPerCall ?? 32768);
@@ -559,6 +561,8 @@ export function normalizeIdeaTreeSettings(
     }
   }
   return {
+    templateId,
+    explorationIntensity,
     maxRounds, candidatesPerRound, maxTokens, maxTokensPerCall,
     maxDepth,
     maxNodes,
@@ -582,6 +586,12 @@ export function resolveIdeaTreeSettings(value: unknown): IdeaTreeSettings {
   if (value === undefined || value === null) return structuredClone(DEFAULT_IDEA_TREE_SETTINGS);
   if (!isRecord(value)) throw new Error("Idea Tree settings must be an object");
   const current: IdeaTreeSettings = {
+    templateId: value.templateId === "water-treatment-materials/v1"
+      ? value.templateId
+      : DEFAULT_IDEA_TREE_SETTINGS.templateId,
+    explorationIntensity: value.explorationIntensity === "quick" || value.explorationIntensity === "deep"
+      ? value.explorationIntensity
+      : DEFAULT_IDEA_TREE_SETTINGS.explorationIntensity,
     maxRounds: typeof value.maxRounds === "number" ? value.maxRounds : 3,
     candidatesPerRound: typeof value.candidatesPerRound === "number" ? value.candidatesPerRound : 3,
     maxTokens: typeof value.maxTokens === "number" ? value.maxTokens : null,

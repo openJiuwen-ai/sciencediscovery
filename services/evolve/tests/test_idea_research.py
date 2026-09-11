@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine, ResearchStore, node, now
 from sciencediscovery_evolve.vendor.idea_tree.research_service import Settings
+from sciencediscovery_evolve.vendor.idea_tree.templates import snapshot
 
 
 class ResearchTests(unittest.IsolatedAsyncioTestCase):
@@ -13,7 +14,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.store = ResearchStore(Path(self.temp.name))
-        self.state = dict(id='research-test', projectId='p', sessionId='s', objective='No cobalt. Compare catalyst directions.', materials='Supplied material', modelId='m', settings=Settings(candidatesPerRound=1, maxDepth=2).model_dump(),
+        self.state = dict(id='research-test', projectId='p', sessionId='s', objective='No cobalt. Compare catalyst directions.', materials='Supplied material', modelId='m', settings=Settings(templateId='water-treatment-materials/v1', candidatesPerRound=1, maxDepth=2).model_dump(), template=snapshot('water-treatment-materials/v1'),
                           status='paused', phase='ideate', round=0, batch=[], batchCompleted=0, tokens=0, usageKnown=True,
                           reason=None, currentNodeId=None, createdAt=now(), updatedAt=now(), nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
         self.calls = []
@@ -26,6 +27,8 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         elif role in ['activity', 'stability', 'sustainability']:
             self.assertNotIn('assessments', payload)
             value = dict(text='Independent assessment', score={'activity': 8, 'stability': 6, 'sustainability': 4}[role])
+        elif role == 'aggregate':
+            value = dict(text='aggregate output', strengths=[], failureModes=[], uncertainties=[], evidenceGaps=[], recommendedNextMoves=[], constraintFlags=[], confidence=.5)
         else:
             value = dict(text=f'{role} output')
         return json.dumps(value), 100

@@ -1,13 +1,15 @@
 """Role instructions for the autonomous research engine; no agent tools required."""
-IDEATE = """Propose executable research hypotheses from the supplied objective, constraints,
-materials and prior findings. Early exploration must cover distinct mechanisms or structures.
+IDEATE = """Propose executable, falsifiable research hypotheses from the supplied objective,
+constraints, active research template and prior findings. Early exploration must cover distinct
+mechanisms, explanations, or intervention paths.
 Later hypotheses must address a specific prior weakness or unresolved alternative, naming the
 source candidate, change, evaluation question and tradeoff. Never invent literature evidence.
 Only candidate leaves execute; a completed candidate can be the parent of a new research direction.
 Return each candidate under one of selectedParentIds. When expanding ROOT or a completed candidate,
 provide direction; refinements are optional progressively more specific subdirections. Do not pad
 the path to maxDepth: it is a safety ceiling, and the tree grows only when evidence calls for it.
-For every exploit proposal, include basedOnCandidateIds, addressesInsightIds and targetedWeakness.
+For every proposal include expectedImprovement, newRisk and rationale. For every exploit proposal,
+include basedOnCandidateIds, addressesInsightIds and targetedWeakness.
 Use explorationType=explore only for a deliberately novel path; otherwise use exploit. An empty candidates list
 means there are no substantively different executable ideas; explain why. Do not plan a fixed
 number of rounds, execute tools, or produce the final material design here."""

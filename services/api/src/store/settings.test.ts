@@ -87,12 +87,14 @@ test("unknown engines and non-boolean switches are rejected rather than coerced"
 
 
 test("Idea Tree research budgets survive storage and omitted fields retain their values", () => {
-  const updated = normalizeIdeaTreeSettings({maxRounds: 6, candidatesPerRound: 2, maxTokens: 120000, maxTokensPerCall: 6000}, DEFAULT_IDEA_TREE_SETTINGS);
+  const updated = normalizeIdeaTreeSettings({templateId: "water-treatment-materials/v1", explorationIntensity: "deep", maxRounds: 6, candidatesPerRound: 2, maxTokens: 120000, maxTokensPerCall: 6000}, DEFAULT_IDEA_TREE_SETTINGS);
   const restored = resolveIdeaTreeSettings(JSON.parse(JSON.stringify(updated)));
   assert.equal(restored.maxRounds, 6);
   assert.equal(restored.candidatesPerRound, 2);
   assert.equal(restored.maxTokens, 120000);
   assert.equal(restored.maxTokensPerCall, 6000);
+  assert.equal(restored.templateId, "water-treatment-materials/v1");
+  assert.equal(restored.explorationIntensity, "deep");
   assert.equal(normalizeIdeaTreeSettings({maxDepth: 3}, restored).maxRounds, 6);
   assert.equal(normalizeIdeaTreeSettings({maxTokens: null}, restored).maxTokens, null);
   for (const input of [{maxRounds: 0}, {candidatesPerRound: 21}, {maxTokens: -1}, {maxTokensPerCall: 255}]) {
