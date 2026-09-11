@@ -58,6 +58,10 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_KE_EMBEDDING_BASE_URL` | unset | Knowledge-engine embedding endpoint (OpenAI-compatible); unset disables embeddings (extraction/resolution degrade gracefully) |
 | `SCIENCE_AGENT_KE_EMBEDDING_API_KEY` | unset | Knowledge-engine embedding API key |
 | `SCIENCE_AGENT_KE_EMBEDDING_MODEL` | unset | Knowledge-engine embedding model id |
+| `SCIENCE_AGENT_KE_VISION_BASE_URL` | unset | Knowledge-engine vision endpoint for image-heavy PDF pages (opt-in; with `_API_KEY` enables the page-annotation pass) |
+| `SCIENCE_AGENT_KE_VISION_API_KEY` | unset | Knowledge-engine vision API key |
+| `SCIENCE_AGENT_KE_VISION_PROTOCOL` | `openai` | Vision protocol: `openai` (chat completions, needs `_MODEL`) or `minimax` (coding_plan/vlm) |
+| `SCIENCE_AGENT_KE_VISION_MODEL` | unset | Vision model id (openai protocol only) |
 | `SCIENCE_AGENT_KE_ENTITY_RESOLUTION` | `off` | Entity-resolution mode: `off` (byte-identical legacy writes), `shadow` (decide + audit only), `on` (merge). Precedence: this env var > ke_settings `entity_resolution_mode` > `off` — ke_settings applies only when the env var is unset |
 | `SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR` | unset | Replay recorded scholarly HTTP responses from this directory instead of the network (mocked E2E) |
 | `SCIENCE_AGENT_KE_OPENALEX_API_KEY` | unset | OpenAlex API key for the knowledge-engine source chain |

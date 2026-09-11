@@ -58,6 +58,10 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_KE_EMBEDDING_BASE_URL` | 未设置 | 知识引擎 embedding 端点（OpenAI 兼容）；未设置则禁用 embedding（抽取/消解优雅降级） |
 | `SCIENCE_AGENT_KE_EMBEDDING_API_KEY` | 未设置 | 知识引擎 embedding API key |
 | `SCIENCE_AGENT_KE_EMBEDDING_MODEL` | 未设置 | 知识引擎 embedding 模型 id |
+| `SCIENCE_AGENT_KE_VISION_BASE_URL` | 未设置 | 知识引擎视觉端点，用于重图片 PDF 页（opt-in；与 `_API_KEY` 一起设置即启用页面视觉注释） |
+| `SCIENCE_AGENT_KE_VISION_API_KEY` | 未设置 | 知识引擎视觉 API key |
+| `SCIENCE_AGENT_KE_VISION_PROTOCOL` | `openai` | 视觉协议：`openai`（chat completions，需配 `_MODEL`）或 `minimax`（coding_plan/vlm） |
+| `SCIENCE_AGENT_KE_VISION_MODEL` | 未设置 | 视觉模型 id（仅 openai 协议需要） |
 | `SCIENCE_AGENT_KE_ENTITY_RESOLUTION` | `off` | 实体消解模式：`off`（逐字节旧行为）/ `shadow`（只审计）/ `on`（合并）。优先级：本环境变量 > ke_settings `entity_resolution_mode` > `off`——env 未设置时 ke_settings 才生效 |
 | `SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR` | 未设置 | 从该目录回放录制的学术 HTTP 响应而不走网络（mocked E2E） |
 | `SCIENCE_AGENT_KE_OPENALEX_API_KEY` | 未设置 | 知识引擎源链的 OpenAlex API key |

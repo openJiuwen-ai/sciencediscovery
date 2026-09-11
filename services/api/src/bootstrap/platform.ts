@@ -52,6 +52,7 @@ import { createGraphRootsService } from "../knowledge-engine/graph-roots.js";
 import { KeJobRunner } from "../knowledge-engine/job-runner.js";
 import { KeOrchestrator } from "../knowledge-engine/orchestrator.js";
 import { extractPdfText } from "../knowledge-engine/pdf-text.js";
+import { describeImageWithVision, type VisionEndpoint } from "../knowledge-engine/pdf-vision.js";
 import { KnowledgeEngineStore } from "../knowledge-engine/store.js";
 import { createKnowledgeEngineTools } from "../knowledge-engine/tools.js";
 import { createScholarlyRateLimiter } from "../knowledge-engine/connectors/rate-limiter.js";
@@ -393,6 +394,29 @@ export function createPlatformServices(
   const keEmbedding = keEmbeddingBaseUrl && keEmbeddingApiKey && keEmbeddingModel
     ? new EmbeddingClient({ baseUrl: keEmbeddingBaseUrl, apiKey: keEmbeddingApiKey, model: keEmbeddingModel })
     : undefined;
+  // Optional vision pass for image-heavy PDFs (figure plates with no
+  // embedded text lose their captions entirely without it). Opt-in:
+  // SCIENCE_AGENT_KE_VISION_BASE_URL + _API_KEY; _PROTOCOL = "openai"
+  // (default, needs _MODEL) or "minimax" (coding_plan/vlm, no model needed).
+  const keVisionBaseUrl = process.env.SCIENCE_AGENT_KE_VISION_BASE_URL?.trim();
+  const keVisionApiKey = process.env.SCIENCE_AGENT_KE_VISION_API_KEY?.trim();
+  const keVisionProtocol = process.env.SCIENCE_AGENT_KE_VISION_PROTOCOL?.trim().toLowerCase();
+  const keVisionModel = process.env.SCIENCE_AGENT_KE_VISION_MODEL?.trim();
+  let keVisionEndpoint: VisionEndpoint | undefined;
+  if (keVisionBaseUrl && keVisionApiKey) {
+    // Validate at boot: a misconfigured vision endpoint must be loud HERE,
+    // not silently degrade every ingestion to per-page warnings.
+    if (keVisionProtocol === "minimax") {
+      keVisionEndpoint = { baseUrl: keVisionBaseUrl, apiToken: keVisionApiKey, protocol: "minimax" };
+    } else if (keVisionModel) {
+      keVisionEndpoint = { baseUrl: keVisionBaseUrl, apiToken: keVisionApiKey, model: keVisionModel };
+    } else {
+      apiLog.warn("knowledge_engine", {
+        message: "ke_vision_disabled_misconfigured",
+        detail: "SCIENCE_AGENT_KE_VISION_* set but protocol is not \"minimax\" and no _MODEL given — vision pass OFF",
+      });
+    }
+  }
   // Pipeline model endpoint (global default task model) shared by KE
   // extraction, resolution judging and community naming.
   const keResolveEndpoint = () => {
@@ -421,6 +445,12 @@ export function createPlatformServices(
         workDirRoot: resolve(config.dataDir, "knowledge-engine", "staging"),
         pdfBytes,
         docId,
+        ...(keVisionEndpoint
+          ? {
+              describeImage: (pngBytes: Uint8Array) => describeImageWithVision(keVisionEndpoint, pngBytes),
+              onWarn: (message: string, detail?: unknown) => apiLog.warn("knowledge_engine", { message, detail }),
+            }
+          : {}),
       }),
     // Fixture mode never touches DNS (see transport selection above).
     ...(keFixtureDir ? { assertUrl: async () => {} } : {}),
