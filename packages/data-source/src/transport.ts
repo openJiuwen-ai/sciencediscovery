@@ -23,6 +23,7 @@ import type { McpCatalog, McpInvokeRequest, McpInvokeResponse, ResolvedProxy } f
  */
 export interface McpTransportClient {
   catalog(signal?: AbortSignal): Promise<McpCatalog>;
+  close?(): Promise<void>;
   invoke(request: McpInvokeRequest, signal?: AbortSignal): Promise<McpInvokeResponse>;
   reload(proxies?: Record<string, ResolvedProxy>, signal?: AbortSignal): Promise<McpCatalog>;
 }

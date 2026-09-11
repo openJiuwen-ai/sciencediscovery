@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
-import { startApiServer } from "./http/index.js";
+import { closeApiServer, startApiServer } from "./http/index.js";
 import { apiLog } from "./logging.js";
 
 export * from "./http/index.js";
@@ -32,7 +32,33 @@ if (isMain) {
       origin,
     });
   });
-  startApiServer().catch((error: unknown) => {
+  startApiServer().then((server) => {
+    let shutdownStarted = false;
+    const onSigterm = () => {
+      if (shutdownStarted) return;
+      shutdownStarted = true;
+      apiLog.info("service_shutdown_started", { signal: "SIGTERM" });
+      const timeout = setTimeout(() => {
+        apiLog.error("service_shutdown_timed_out", { signal: "SIGTERM", timeoutMs: 15_000 });
+        process.exit(1);
+      }, 15_000);
+      void closeApiServer(server).then(() => {
+        clearTimeout(timeout);
+        apiLog.info("service_shutdown_completed", { signal: "SIGTERM" });
+        process.off("SIGTERM", onSigterm);
+        process.exit(0);
+      }).catch((error: unknown) => {
+        clearTimeout(timeout);
+        apiLog.error("service_shutdown_failed", {
+          errorMessage: shortErrorMessage(error),
+          signal: "SIGTERM",
+        });
+        process.off("SIGTERM", onSigterm);
+        process.exit(1);
+      });
+    };
+    process.on("SIGTERM", onSigterm);
+  }).catch((error: unknown) => {
     apiLog.error("service_start_failed", { errorMessage: shortErrorMessage(error) });
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;

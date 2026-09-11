@@ -22,6 +22,7 @@ import type {
   RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
 import { seedRemoteProvisioner } from "./remote-provisioner.js";
+import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { loadRunnerExecutable, type RunnerExecutable } from "./runner-executable.js";
 import { RunnerClient } from "./runner-client.js";
 import {
@@ -36,6 +37,33 @@ export interface RemoteCommandResult {
   exitCode: number;
   stderr: string;
   stdout: string;
+}
+
+/**
+ * Receives bounded diagnostics whose error text has already been redacted by
+ * the executor. Implementations may persist or forward these fields directly.
+ */
+export interface RemoteComputeLogger {
+  info(event: string, fields?: Record<string, unknown>): void;
+  warn(event: string, fields?: Record<string, unknown>): void;
+  error(event: string, fields?: Record<string, unknown>): void;
+}
+
+const noopLogger: RemoteComputeLogger = {
+  info() {},
+  warn() {},
+  error() {},
+};
+
+function errorMessage(error: unknown): string {
+  return shortErrorMessage(error, 1_000);
+}
+
+export interface RemoteComputeClientOptions {
+  logger?: RemoteComputeLogger;
+  /** Cache of pinned provisioners that can be uploaded to offline machines. */
+  provisionerCacheDir?: string;
+  transport?: RemoteTransport;
 }
 
 /**
@@ -170,6 +198,8 @@ export type RemoteSshAccessResolver = (hostId: string) => Promise<RemoteSshAcces
 
 export class RemoteComputeClient {
   readonly transport: RemoteTransport;
+  private readonly logger: RemoteComputeLogger;
+  private readonly provisionerCacheDir?: string;
   private readonly runnerConnections = new Map<string, {
     client: RunnerClient;
     status: RemoteRunnerStatus;
@@ -183,15 +213,11 @@ export class RemoteComputeClient {
     private readonly resolveAccess: RemoteSshAccessResolver = async () => {
       throw new Error("This machine has no stored SSH credentials");
     },
-    transport?: RemoteTransport,
-    /**
-     * Where the pinned micromamba is kept for machines that cannot download it
-     * themselves. Absent disables seeding, which is what tests want and what an
-     * installation gets if it never configures a data directory.
-     */
-    private readonly provisionerCacheDir?: string,
+    options: RemoteComputeClientOptions = {},
   ) {
-    this.transport = transport ?? new NativeSshTransport();
+    this.logger = options.logger ?? noopLogger;
+    this.provisionerCacheDir = options.provisionerCacheDir;
+    this.transport = options.transport ?? new NativeSshTransport();
   }
 
   /**
@@ -201,12 +227,35 @@ export class RemoteComputeClient {
    * with a challenge the settings page can act on.
    */
   async probe(access: RemoteSshAccess, runnerCommandValue = "sciencediscovery-runner"): Promise<RemoteHostCapabilities> {
+    const started = Date.now();
     const runnerCommand = validateRunnerCommand(runnerCommandValue);
-    const result = await this.transport.run(access, probeScript(runnerCommand), 20_000);
-    if (result.exitCode !== 0) {
-      throw new Error(`SSH probe failed (${result.exitCode}): ${result.stderr.trim() || "authentication or connection failed"}`);
+    this.logger.info("remote_host_probe_started", {
+      connectionKind: "ssh",
+      destination: access.destination,
+      port: access.port,
+    });
+    try {
+      const result = await this.transport.run(access, probeScript(runnerCommand), 20_000);
+      if (result.exitCode !== 0) {
+        throw new Error(`SSH probe failed (${result.exitCode}): ${result.stderr.trim() || "authentication or connection failed"}`);
+      }
+      const capabilities = parseProbe(result.stdout);
+      this.logger.info("remote_host_probe_succeeded", {
+        connectionKind: "ssh",
+        destination: access.destination,
+        durationMs: Date.now() - started,
+        platform: capabilities.platform,
+      });
+      return capabilities;
+    } catch (error) {
+      this.logger.error("remote_host_probe_failed", {
+        connectionKind: "ssh",
+        destination: access.destination,
+        durationMs: Date.now() - started,
+        errorMessage: errorMessage(error),
+      });
+      throw error;
     }
-    return parseProbe(result.stdout);
   }
 
   /** The key a machine currently presents, for the settings page to offer for trust. */
@@ -221,26 +270,50 @@ export class RemoteComputeClient {
    * token fails here rather than at the first execution.
    */
   async probeDirect(endpoint: RemoteHostEndpoint, token: string): Promise<RemoteHostCapabilities> {
-    const client = new RunnerClient(directBaseUrl(endpoint), token);
-    const health = await client.health();
-    await client.status().catch(() => {
-      throw new Error("The runner rejected this token");
+    const started = Date.now();
+    this.logger.info("remote_host_probe_started", {
+      connectionKind: "direct",
+      destination: endpoint.host,
+      port: endpoint.port,
+      protocol: endpoint.protocol,
     });
-    return {
-      conda: false,
-      containerRuntimes: [],
-      cpuCores: null,
-      cuda: null,
-      gpu: null,
-      memoryBytes: null,
-      modules: false,
-      nodeVersion: null,
-      platform: health.platform === "linux" ? "Linux" : health.platform,
-      probedAt: new Date().toISOString(),
-      runnerCommandAvailable: true,
-      scratchPaths: [],
-      slurm: false,
-    };
+    try {
+      const client = new RunnerClient(directBaseUrl(endpoint), token);
+      const health = await client.health();
+      await client.status().catch(() => {
+        throw new Error("The runner rejected this token");
+      });
+      const capabilities: RemoteHostCapabilities = {
+        conda: false,
+        containerRuntimes: [],
+        cpuCores: null,
+        cuda: null,
+        gpu: null,
+        memoryBytes: null,
+        modules: false,
+        nodeVersion: null,
+        platform: health.platform === "linux" ? "Linux" : health.platform,
+        probedAt: new Date().toISOString(),
+        runnerCommandAvailable: true,
+        scratchPaths: [],
+        slurm: false,
+      };
+      this.logger.info("remote_host_probe_succeeded", {
+        connectionKind: "direct",
+        destination: endpoint.host,
+        durationMs: Date.now() - started,
+        platform: capabilities.platform,
+      });
+      return capabilities;
+    } catch (error) {
+      this.logger.error("remote_host_probe_failed", {
+        connectionKind: "direct",
+        destination: endpoint.host,
+        durationMs: Date.now() - started,
+        errorMessage: errorMessage(error),
+      });
+      throw error;
+    }
   }
 
   runnerStatus(hostId: string): RemoteRunnerStatus {
@@ -369,12 +442,31 @@ export class RemoteComputeClient {
   async connectRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions = {}): Promise<RemoteRunnerStatus> {
     const { localVersion } = options;
     if (host.status !== "ready" || !host.capabilities) throw new Error("Remote host is not ready");
-    await this.disconnectRunner(host.id);
+    const started = Date.now();
+    await this.disconnectRunner(host.id, "reconnect");
     this.runnerStatuses.set(host.id, { hostId: host.id, ...(localVersion ? { localVersion } : {}), state: "connecting" });
+    this.logger.info("remote_runner_connection_started", {
+      connectionKind: host.connectionKind,
+      hostId: host.id,
+      ...(host.endpoint ? {
+        destination: host.endpoint.host,
+        port: host.endpoint.port,
+        protocol: host.endpoint.protocol,
+      } : {}),
+    });
     try {
-      return host.connectionKind === "direct"
+      const connected = host.connectionKind === "direct"
         ? await this.connectDirectRunner(host, options)
         : await this.connectSshRunner(host, options);
+      this.logger.info("remote_runner_connection_succeeded", {
+        connectionKind: host.connectionKind,
+        deployed: connected.deployed ?? false,
+        durationMs: Date.now() - started,
+        hostId: host.id,
+        remoteVersion: connected.remoteVersion,
+        versionMismatch: connected.versionMismatch ?? false,
+      });
+      return connected;
     } catch (error) {
       const failed: RemoteRunnerStatus = {
         error: error instanceof Error ? error.message : "Remote runner connection failed",
@@ -386,6 +478,12 @@ export class RemoteComputeClient {
         state: "error",
       };
       this.runnerStatuses.set(host.id, failed);
+      this.logger.error("remote_runner_connection_failed", {
+        connectionKind: host.connectionKind,
+        durationMs: Date.now() - started,
+        errorMessage: errorMessage(error),
+        hostId: host.id,
+      });
       return structuredClone(failed);
     }
   }
@@ -456,9 +554,27 @@ export class RemoteComputeClient {
     const bridge: Server = createServer((socket: Socket) => {
       connection.forwardToRemoteSocket(socketPath).then((stream) => {
         socket.pipe(stream).pipe(socket);
-        stream.once("error", () => socket.destroy());
-        socket.once("error", () => stream.destroy());
-      }).catch(() => socket.destroy());
+        stream.once("error", (error) => {
+          this.logger.warn("remote_runner_tunnel_stream_failed", {
+            errorMessage: errorMessage(error),
+            hostId: host.id,
+          });
+          socket.destroy();
+        });
+        socket.once("error", (error) => {
+          this.logger.warn("remote_runner_tunnel_socket_failed", {
+            errorMessage: errorMessage(error),
+            hostId: host.id,
+          });
+          stream.destroy();
+        });
+      }).catch((error) => {
+        this.logger.warn("remote_runner_tunnel_forward_failed", {
+          errorMessage: errorMessage(error),
+          hostId: host.id,
+        });
+        socket.destroy();
+      });
     });
     const stop = (): void => {
       if (stopped) return;
@@ -475,6 +591,10 @@ export class RemoteComputeClient {
       if (this.runnerConnections.get(host.id)?.stop !== stop) return;
       this.runnerConnections.delete(host.id);
       this.runnerStatuses.set(host.id, { ...record.status, error: message, state: "error" });
+      this.logger.error("remote_runner_connection_lost", {
+        errorMessage: errorMessage(message),
+        hostId: host.id,
+      });
       stop();
     };
     connection.onClose((error) => fail(error?.message || remoteFailure.trim() || "The SSH connection to this machine closed"));
@@ -524,20 +644,28 @@ export class RemoteComputeClient {
     }
   }
 
-  async disconnectRunner(hostId: string): Promise<RemoteRunnerStatus> {
+  async disconnectRunner(hostId: string, reason = "requested"): Promise<RemoteRunnerStatus> {
     const connection = this.runnerConnections.get(hostId);
+    const previous = this.runnerStatuses.get(hostId);
     if (connection) {
       this.runnerConnections.delete(hostId);
       connection.stop?.();
     }
     const status: RemoteRunnerStatus = { hostId, state: "disconnected" };
     this.runnerStatuses.set(hostId, status);
+    if (connection || (previous && previous.state !== "disconnected")) {
+      this.logger.info("remote_runner_connection_closed", { hostId, reason });
+    }
     return structuredClone(status);
   }
 
   close(): void {
-    for (const connection of this.runnerConnections.values()) connection.stop?.();
-    this.runnerConnections.clear();
+    for (const [hostId, connection] of this.runnerConnections) {
+      this.runnerConnections.delete(hostId);
+      connection.stop?.();
+      this.runnerStatuses.set(hostId, { hostId, state: "disconnected" });
+      this.logger.info("remote_runner_connection_closed", { hostId, reason: "api_shutdown" });
+    }
   }
 
 }

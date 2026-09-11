@@ -226,6 +226,9 @@ importers:
 
   packages/executor:
     dependencies:
+      '@sciencediscovery/operational-logging':
+        specifier: workspace:*
+        version: link:../operational-logging
       '@sciencediscovery/runner':
         specifier: workspace:*
         version: link:../../services/runner

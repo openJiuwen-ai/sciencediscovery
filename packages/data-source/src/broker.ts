@@ -196,6 +196,10 @@ export class McpGovernanceBroker {
     this.memoryGraphSink = options.memoryGraphSink ?? null;
   }
 
+  close(): void {
+    this.cache.close();
+  }
+
   private async appendFailure(options: {
     attempts?: McpInvocation["attempts"];
     cacheKey: string;

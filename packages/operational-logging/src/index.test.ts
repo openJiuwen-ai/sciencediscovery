@@ -74,6 +74,7 @@ test("redacts sensitive keys and credential-like text", (context) => {
   logger.error("tool_failed", {
     apiKey: "api-key-value",
     errorMessage: 'Authorization: Bearer header-secret JSON={"apiKey":"json-secret"}',
+    endpointError: "connect failed: https://url-user:url-password@example.test/path?token=query-secret&region=cn",
     nested: { password: "password-value", safe: "visible" },
     prompt: "full user prompt",
     token: "token-value",
@@ -84,7 +85,16 @@ test("redacts sensitive keys and credential-like text", (context) => {
   assert.match(contents, /visible/);
   assert.match(contents, /\[OMITTED\]/);
   assert.doesNotMatch(contents, /full user prompt/);
-  for (const secret of ["api-key-value", "header-secret", "json-secret", "password-value", "token-value"]) {
+  for (const secret of [
+    "api-key-value",
+    "header-secret",
+    "json-secret",
+    "password-value",
+    "query-secret",
+    "token-value",
+    "url-password",
+    "url-user",
+  ]) {
     assert.doesNotMatch(contents, new RegExp(secret));
   }
 });

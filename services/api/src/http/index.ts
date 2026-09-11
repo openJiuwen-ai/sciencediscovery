@@ -271,6 +271,38 @@ export * from "../runs/index.js";
 
 export type { ApiServerDependencies } from "../bootstrap/platform.js";
 
+interface ApiServerLifecycle {
+  close(): Promise<void>;
+}
+
+const HTTP_CONNECTION_DRAIN_TIMEOUT_MS = 1_000;
+const apiServerLifecycles = new WeakMap<Server, ApiServerLifecycle>();
+
+function closeHttpServer(server: Server): Promise<void> {
+  return new Promise<void>((resolveClose, rejectClose) => {
+    const drainTimeout = setTimeout(() => {
+      apiLog.warn("http_connection_drain_timed_out", {
+        timeoutMs: HTTP_CONNECTION_DRAIN_TIMEOUT_MS,
+      });
+      server.closeAllConnections();
+    }, HTTP_CONNECTION_DRAIN_TIMEOUT_MS);
+    server.close((error) => {
+      clearTimeout(drainTimeout);
+      if (error) rejectClose(error);
+      else resolveClose();
+    });
+  });
+}
+
+export function closeApiServer(server: Server): Promise<void> {
+  const lifecycle = apiServerLifecycles.get(server);
+  if (!lifecycle) {
+    if (!server.listening) return Promise.resolve();
+    return closeHttpServer(server);
+  }
+  return lifecycle.close();
+}
+
 function usageAnalyticsFilters(url: URL) {
   return {
     ...(url.searchParams.get("from") ? { from: url.searchParams.get("from")! } : {}),
@@ -297,6 +329,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     evolveRuntimeFactory,
     mcpBroker,
     mcpCatalog,
+    mcpGateway,
     mcpRegistry,
     memoryGraphClient,
     memoryGraphEnabled,
@@ -3067,7 +3100,38 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     }
   });
-  server.once("close", () => remoteCompute.close());
+  let hasListened = false;
+  let hasClosed = false;
+  let closePromise: Promise<void> | undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolveClose) => { resolveClosed = resolveClose; });
+  const cleanup = () => cleanupPromise ??= (async () => {
+    remoteCompute.close();
+    mcpBroker.close();
+    webBroker.close();
+    try {
+      await mcpGateway.close?.();
+    } catch (error) {
+      apiLog.warn("mcp_shutdown_failed", { errorMessage: shortErrorMessage(error) });
+    }
+  })();
+  server.once("listening", () => { hasListened = true; });
+  server.once("close", () => {
+    hasClosed = true;
+    resolveClosed();
+    void cleanup();
+  });
+  apiServerLifecycles.set(server, {
+    close: () => closePromise ??= (async () => {
+      if (server.listening) {
+        await closeHttpServer(server);
+      } else if (hasListened && !hasClosed) {
+        await closed;
+      }
+      await cleanup();
+    })(),
+  });
   const dispatcher = new NotificationDispatcher(store,
     (batch) => createNotificationRun(store, skillLibraryCatalog, batch),
     (sessionId) => scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker,

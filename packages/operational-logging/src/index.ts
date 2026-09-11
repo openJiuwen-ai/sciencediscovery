@@ -49,6 +49,8 @@ const SENSITIVE_KEY = /(?:authorization|api[-_]?key|token|password|secret)/i;
 const BULK_PAYLOAD_KEY = /^(?:args|arguments|body|content|input|messages?|output|prompt|request|response|stderr|stdout)$/i;
 const SENSITIVE_ASSIGNMENT = /\b(authorization|api[-_]?key|token|password|secret)\b["']?\s*[:=]\s*["']?(?:bearer\s+)?[^\s,;"'}]+/gi;
 const BEARER_VALUE = /\bbearer\s+[a-z0-9._~+\/-]+=*/gi;
+const URL_CREDENTIALS = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi;
+const SENSITIVE_QUERY_VALUE = /([?&](?:api[-_]?key|access[-_]?token|token|password|secret)=)[^&#\s]+/gi;
 
 function parseLevel(raw: string | undefined): LogLevel {
   const normalized = raw?.trim().toLowerCase();
@@ -64,6 +66,8 @@ function parsePositiveInteger(raw: string | undefined, fallback: number): number
 
 export function redactLogText(value: string): string {
   return value
+    .replace(URL_CREDENTIALS, "$1[REDACTED]@")
+    .replace(SENSITIVE_QUERY_VALUE, "$1[REDACTED]")
     .replace(SENSITIVE_ASSIGNMENT, "$1=[REDACTED]")
     .replace(BEARER_VALUE, "Bearer [REDACTED]");
 }

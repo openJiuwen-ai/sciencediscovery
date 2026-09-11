@@ -17,7 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -101,6 +101,7 @@ import { RefStore, VersionStore, withWorkspaceMutation, workspaceHeadName } from
 
 import {
   aggregateToolText,
+  closeApiServer,
   createApiServer as createProductionApiServer,
   createDeltaCoalescingSink,
   loadServerConfig,
@@ -432,6 +433,62 @@ async function startTestApi(
   return { origin };
 }
 
+test("closing the API server drains active connections before closing the MCP transport", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  let closeCalls = 0;
+  let closeCompleted = false;
+  const mcpTransport: McpTransportClient = {
+    catalog: async () => emptyMcpCatalog,
+    close: async () => {
+      closeCalls += 1;
+      await new Promise<void>((done) => setTimeout(done, 20));
+      closeCompleted = true;
+    },
+    invoke: async () => { throw new Error("MCP invocation is not expected"); },
+    reload: async () => emptyMcpCatalog,
+  };
+  const server = createApiServer(testConfig(root), { mcpTransport });
+  let forcedConnectionsClosed = false;
+  const closeAllConnections = server.closeAllConnections.bind(server);
+  server.closeAllConnections = () => {
+    forcedConnectionsClosed = true;
+    closeAllConnections();
+  };
+  context.after(async () => {
+    if (server.listening) await new Promise<void>((done) => server.close(() => done()));
+    await rm(root, { force: true, maxRetries: 10, recursive: true, retryDelay: 50 });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address() as AddressInfo;
+  const socket = connect(address.port, "127.0.0.1");
+  await new Promise<void>((connected, reject) => {
+    socket.once("connect", connected);
+    socket.once("error", reject);
+  });
+  socket.on("error", () => undefined);
+  const socketClosed = new Promise<void>((closed) => socket.once("close", () => closed()));
+  socket.write([
+    "POST /api/projects HTTP/1.1",
+    `Host: 127.0.0.1:${address.port}`,
+    "Authorization: Bearer test-token",
+    "Content-Type: application/json",
+    "Content-Length: 1024",
+    "",
+    "{",
+  ].join("\r\n"));
+  await new Promise<void>((ready) => setTimeout(ready, 20));
+
+  await closeApiServer(server);
+  await socketClosed;
+
+  assert.equal(forcedConnectionsClosed, true);
+  assert.equal(closeCalls, 1);
+  assert.equal(closeCompleted, true);
+  await closeApiServer(server);
+  assert.equal(closeCalls, 1);
+});
+
 async function startScientificTestApi(
   context: TestContext,
   dataDir: string,
@@ -636,7 +693,7 @@ test("updating SSH credentials immediately probes with the newly stored username
   const remoteCompute = new RemoteComputeClient(
     resolve(tempRoot, "ssh-config"),
     async () => { throw new Error("The HTTP layer passes explicit SSH access"); },
-    transport,
+    { transport },
   );
   const emptyMcpCatalog: McpCatalog = {
     loadedAt: new Date().toISOString(),

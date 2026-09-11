@@ -139,6 +139,11 @@ export class WebBroker {
     `);
   }
 
+  close(): void {
+    this.cache.close();
+    this.database.close();
+  }
+
   private save(invocation: WebInvocation): void {
     this.database.prepare(
       "INSERT INTO web_invocations (id, session_id, created_at, record_json) VALUES (?, ?, ?, ?)",

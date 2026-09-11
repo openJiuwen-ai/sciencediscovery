@@ -26,11 +26,33 @@ import {
   SshHostKeyUntrustedError,
   validateRunnerCommand,
   type RemoteCommandResult,
+  type RemoteComputeLogger,
   type RemoteSshAccess,
   type RemoteTransport,
   type SshCommandResult,
   type SshSession,
 } from "@sciencediscovery/executor";
+
+interface RecordedLog {
+  event: string;
+  fields: Record<string, unknown>;
+  level: "debug" | "info" | "warn" | "error";
+}
+
+function recordingLogger(): { events: RecordedLog[]; logger: RemoteComputeLogger } {
+  const events: RecordedLog[] = [];
+  const record = (level: RecordedLog["level"]) => (event: string, fields: Record<string, unknown> = {}) => {
+    events.push({ event, fields: structuredClone(fields), level });
+  };
+  return {
+    events,
+    logger: {
+      error: record("error"),
+      info: record("info"),
+      warn: record("warn"),
+    },
+  };
+}
 
 /**
  * Stands in for the SSH protocol. Probe, deployment and tunnel all go through
@@ -95,16 +117,23 @@ function fakeSession(): SshSession {
  */
 function tunnelledSession(runnerPort: number, forwarded: string[], started: string[]): SshSession {
   const sockets: Socket[] = [];
+  const closeListeners: Array<(error?: Error) => void> = [];
+  let closed = false;
   return {
     upload: async () => undefined,
-    close: () => { for (const socket of sockets) socket.destroy(); },
+    close: () => {
+      if (closed) return;
+      closed = true;
+      for (const socket of sockets) socket.destroy();
+      for (const listener of closeListeners) listener();
+    },
     forwardToRemoteSocket: async (socketPath: string) => {
       forwarded.push(socketPath);
       const socket = connect(runnerPort, "127.0.0.1");
       sockets.push(socket);
       return socket;
     },
-    onClose: () => undefined,
+    onClose: (listener) => { closeListeners.push(listener); },
     run: async (): Promise<SshCommandResult> => ({ exitCode: 0, stderr: "", stdout: "" }),
     start: async (script: string) => { started.push(script); },
   };
@@ -148,7 +177,11 @@ test("remote runner executable accepts only one safe executable token", () => {
 
 test("the capability probe is read-only and carries the machine's own credentials", async () => {
   const transport = new FakeTransport([PROBE_OUTPUT]);
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+  const recorded = recordingLogger();
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), {
+    logger: recorded.logger,
+    transport,
+  });
 
   const capabilities = await client.probe(access());
   assert.equal(capabilities.cpuCores, 32);
@@ -159,6 +192,28 @@ test("the capability probe is read-only and carries the machine's own credential
   assert.doesNotMatch(transport.calls[0]!.script, /\b(?:mkdir|rm|touch)\b|\bsbatch\s+--/);
   assert.equal(transport.calls[0]!.target.credentials.username, "scientist");
   assert.deepEqual(transport.calls[0]!.target.trustedHostKey, TRUSTED_KEY);
+  assert.ok(recorded.events.some((entry) => entry.event === "remote_host_probe_started"));
+  assert.ok(recorded.events.some((entry) => entry.event === "remote_host_probe_succeeded"));
+  assert.doesNotMatch(JSON.stringify(recorded.events), /hunter2/);
+});
+
+test("remote diagnostics redact credentials before reaching an injected logger", async () => {
+  const transport = new FakeTransport([{
+    exitCode: 1,
+    stderr: "Authorization: Bearer ssh-secret https://user:pass@example.test/private?token=query-secret password=hidden",
+    stdout: "",
+  }]);
+  const recorded = recordingLogger();
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), {
+    logger: recorded.logger,
+    transport,
+  });
+
+  await assert.rejects(() => client.probe(access()), /SSH probe failed/);
+
+  const serialized = JSON.stringify(recorded.events);
+  assert.doesNotMatch(serialized, /ssh-secret|user:pass|query-secret|hidden/);
+  assert.match(serialized, /\[REDACTED\]/);
 });
 
 const executable = async () => ({ path: "fixture-runner", id: "a".repeat(64), architecture: "x64" as const, size: 1 });
@@ -170,7 +225,7 @@ test("the probe, the deployment and the tunnel all use the same credentials and 
   ]);
   transport.session = fakeSession();
   const target = access({ port: 2222 });
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => target, transport);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => target, { transport });
   const host = readyRemoteHost();
 
   await client.probe(target);
@@ -203,7 +258,11 @@ test("a machine whose key is not trusted is refused with the fingerprint to trus
     open: async () => { throw untrusted; },
     run: async () => { throw untrusted; },
   };
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access({ trustedHostKey: undefined }), refusing);
+  const client = new RemoteComputeClient(
+    "/unused/ssh_config",
+    async () => access({ trustedHostKey: undefined }),
+    { transport: refusing },
+  );
 
   await assert.rejects(client.probe(access({ trustedHostKey: undefined })), (error: Error) => {
     assert.equal(error.name, "SshHostKeyUntrustedError");
@@ -232,7 +291,7 @@ test("a machine whose key changed says so, so it is not read as a first connecti
     open: async () => { throw changed; },
     run: async () => { throw changed; },
   };
-  const status = await new RemoteComputeClient("/unused/ssh_config", async () => access(), refusing)
+  const status = await new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport: refusing })
     .connectRunner(readyRemoteHost(), {});
 
   assert.equal(status.hostKeyChallenge?.changed, true);
@@ -297,7 +356,12 @@ function directRemoteHost(port: number): RemoteHostTarget {
 test("a self-deployed runner is reachable by address only with the token it was started with", async (context) => {
   const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1" });
   context.after(() => runner.close());
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]));
+  const recorded = recordingLogger();
+  const client = new RemoteComputeClient(
+    "/unused/ssh_config",
+    async () => access(),
+    { logger: recorded.logger, transport: new FakeTransport([]) },
+  );
 
   const refused = await client.connectRunner(directRemoteHost(runner.port), { token: "wrong-token" });
   assert.equal(refused.state, "error");
@@ -329,12 +393,21 @@ test("a self-deployed runner is reachable by address only with the token it was 
   const disconnected = await client.runnerStatusWithResources("host-direct");
   assert.equal(disconnected.state, "disconnected");
   assert.equal(disconnected.resources, undefined);
+  assert.ok(recorded.events.some((entry) => entry.event === "remote_runner_connection_failed"));
+  assert.ok(recorded.events.some((entry) => entry.event === "remote_runner_connection_succeeded"));
+  assert.ok(recorded.events.some((entry) => entry.event === "remote_runner_connection_closed"
+    && entry.fields.reason === "requested"));
+  assert.doesNotMatch(JSON.stringify(recorded.events), /correct-token|wrong-token/);
 });
 
 test("a self-deployed runner that is not on Linux is refused", async (context) => {
   const runner = await startFakeRunner({ platform: "darwin", token: "correct-token", version: "runner-v1" });
   context.after(() => runner.close());
-  const status = await new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]))
+  const status = await new RemoteComputeClient(
+    "/unused/ssh_config",
+    async () => access(),
+    { transport: new FakeTransport([]) },
+  )
     .connectRunner(directRemoteHost(runner.port), { token: "correct-token" });
 
   assert.equal(status.state, "error");
@@ -366,7 +439,7 @@ test("SEA deploys without remote Node, reuses complete binaries and never starts
       };
       session.upload = async () => { uploads++; if (mode === "interrupted") throw new Error("transfer interrupted"); };
       transport.session = session;
-      const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+      const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport });
       t.after(() => client.close());
       const status = await client.connectRunner(sshHostWithoutRunner(null), { executable });
       assert.equal(uploads, mode === "reuse" ? 0 : 1);
@@ -394,7 +467,7 @@ test("an SSH machine's runner is reached only through the tunnel, never over a p
   ]);
   transport.session = tunnelledSession(runner.port, forwarded, started);
   const target = access({ port: 2222 });
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => target, transport);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => target, { transport });
   context.after(() => client.close());
 
   const status = await client.connectRunner(readyRemoteHost(), { localVersion: "runner-v1" });
@@ -414,13 +487,39 @@ test("an SSH machine's runner is reached only through the tunnel, never over a p
   assert.doesNotMatch(started[0]!, /SCIENCE_AGENT_RUNNER_HOST/);
 });
 
+test("API shutdown closes an SSH runner without reporting a lost connection", async (context) => {
+  const runner = await startFakeRunner({ platform: "linux", token: "ignored", version: "runner-v1" });
+  context.after(() => runner.close());
+  const transport = new FakeTransport([
+    { exitCode: 0, stderr: "", stdout: "data_dir=/home/scientist/.local/share/sciencediscovery/remote-runner\n" },
+  ]);
+  transport.session = tunnelledSession(runner.port, [], []);
+  const recorded = recordingLogger();
+  const client = new RemoteComputeClient(
+    "/unused/ssh_config",
+    async () => access({ port: 2222 }),
+    { logger: recorded.logger, transport },
+  );
+  context.after(() => client.close());
+
+  const status = await client.connectRunner(readyRemoteHost(), { localVersion: "runner-v1" });
+  assert.equal(status.state, "ready", status.error ?? "the tunnelled runner did not become ready");
+
+  client.close();
+
+  assert.equal(client.runnerStatus("host-1").state, "disconnected");
+  assert.ok(recorded.events.some((entry) => entry.event === "remote_runner_connection_closed"
+    && entry.fields.reason === "api_shutdown"));
+  assert.equal(recorded.events.some((entry) => entry.event === "remote_runner_connection_lost"), false);
+});
+
 test("a self-deployed runner keeps using its own address and port", async (context) => {
   const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1" });
   context.after(() => runner.close());
   // No SSH session is available at all, so a connection can only succeed by
   // addressing the runner directly.
   const transport = new FakeTransport([]);
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport });
   context.after(() => client.close());
 
   const status = await client.connectRunner(directRemoteHost(runner.port), { token: "correct-token" });

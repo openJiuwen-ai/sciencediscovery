@@ -61,6 +61,23 @@ export interface ApiServerDependencies {
   remoteCompute?: RemoteComputeClient;
 }
 
+async function initializeComponent<T>(component: string, operation: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  apiLog.info("framework_component_initialization_started", { component });
+  try {
+    const result = await operation();
+    apiLog.info("framework_component_ready", { component, durationMs: Date.now() - started });
+    return result;
+  } catch (error) {
+    apiLog.error("framework_component_initialization_failed", {
+      component,
+      durationMs: Date.now() - started,
+      errorMessage: shortErrorMessage(error),
+    });
+    throw error;
+  }
+}
+
 /**
  * What a run's result artifact is called: `evolve/<run>/<entrypoint>`.
  *
@@ -129,16 +146,23 @@ export function createPlatformServices(
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createBuiltinMcpSourceRegistry();
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
-  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth);
+  const mcpGateway: McpTransportClient = dependencies.mcpTransport
+    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog);
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);
     for (const serverId of Object.keys(store.getMcpProxyPolicies())) serverIds.add(serverId);
     const map: Record<string, ResolvedProxy> = {};
     for (const serverId of serverIds) {
+      const policy = store.mcpProxyPolicy(serverId);
       try {
-        map[serverId] = store.resolveProxy(store.mcpProxyPolicy(serverId));
-      } catch {
+        map[serverId] = store.resolveProxy(policy);
+      } catch (error) {
+        apiLog.warn("mcp_proxy_resolution_failed", {
+          errorMessage: shortErrorMessage(error),
+          policy,
+          serverId,
+        });
         // Resolution errors are surfaced on invoke instead of blocking startup.
       }
     }
@@ -388,11 +412,13 @@ export function createPlatformServices(
     remoteCompute: dependencies.remoteCompute ?? new RemoteComputeClient(
       config.sshConfigPath,
       async (hostId) => store.remoteHostSshAccess(hostId),
-      undefined,
-      // Machines on an isolated network cannot fetch the environment
-      // provisioner themselves; this installation keeps one per architecture
-      // and hands it over when it deploys their Runner.
-      resolve(config.dataDir, "provisioners"),
+      {
+        logger: apiLog,
+        // Machines on an isolated network cannot fetch the environment
+        // provisioner themselves; this installation keeps one per architecture
+        // and hands it over when it deploys their Runner.
+        provisionerCacheDir: resolve(config.dataDir, "provisioners"),
+      },
     ),
     runnerClient,
     skillCatalog,
@@ -427,16 +453,16 @@ export async function initializePlatformServices(
     store,
     webBroker,
   } = services;
-  await skillCatalog.load();
+  await initializeComponent("skill_catalog", () => skillCatalog.load());
   store.setAvailableSkillIds(skillCatalog.ids());
-  await services.customMcpServers.load();
-  await store.load();
+  await initializeComponent("custom_mcp_servers", () => services.customMcpServers.load());
+  await initializeComponent("session_store", () => store.load());
   await mcpCatalog.refresh().catch((error) => {
     apiLog.warn("mcp_catalog_startup_failed", { errorMessage: shortErrorMessage(error) });
     console.warn("MCP catalog was unavailable during API startup:", error);
   });
-  await artifactManager.resumeInterrupted();
-  await recoverSessionRuns(store, memoryGraphClient);
+  await initializeComponent("artifact_recovery", () => artifactManager.resumeInterrupted());
+  await initializeComponent("run_recovery", () => recoverSessionRuns(store, memoryGraphClient));
   // A run left "running" by a previous process is never going to finish: the
   // sidecar's stream died with that connection. Settle them at boot so the UI
   // never shows a spinner for a run nobody is driving.
