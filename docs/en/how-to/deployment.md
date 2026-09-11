@@ -140,6 +140,12 @@ From the repository root, run:
 ./scripts/start-stack.sh --mode local --no-build   # start only after a previous build
 ```
 
+SSH auto-deployment uses a single-file Runner SEA with its own Node runtime, so the target machine does not need Node installed. A full local start on Linux, a Docker build, and a binary release all prepare both Linux x64 and arm64 Runners; developers who build only some packages can run `pnpm runner:binary` after building the Runner and the Executor. The files land in `services/runner/dist/sea/`, ship with the product, and are not committed to the source tree.
+
+On connect the product picks the file matching the remote `uname -m`, streams it over the authenticated SSH SFTP channel whose host fingerprint is already verified, publishes it after checking its SHA-256, and starts it directly; an identical build already on the machine is reused. The Runner's HTTP traffic still travels only through the SSH tunnel. The SEA contains Node and the Runner code, not a full Linux userland: the machine still needs the system libraries to run that Node ELF, Bubblewrap, and a usable sandbox, and scientific environments are prepared through the existing managed-environment mechanism. When a deployment or sandbox prerequisite is missing the product reports it instead of falling back to bare SSH execution.
+
+Each binary is named after its own SHA-256, so upgrading the control plane and reconnecting adds a file rather than overwriting one. Once the new binary has started and passed its health check, the control plane deletes the other SHA-256-named Runner binaries in that directory that no process is executing — each is about 120 MB, and a long run of iterations accumulates several GB. A binary a process is still executing is always kept, including one another control plane's connection is using, and files in that directory that do not carry such a name are left alone. The step is best effort: a failure is recorded in the connection log and does not affect the connection.
+
 In local mode the shared entry point reads the root `.env`, checks the dependencies from [Requirements](../../../README.md#requirements), installs and builds when needed, and starts ordinary host processes. It automatically selects Bubblewrap on Linux and Seatbelt on macOS, so `SCIENCE_AGENT_SANDBOX_PROVIDER` does not need to be set manually:
 
 | Service | Address | Purpose |

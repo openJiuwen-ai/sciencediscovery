@@ -86,6 +86,51 @@ export interface RemoteTransport {
   run(target: RemoteSshAccess, script: string, timeoutMs: number): Promise<RemoteCommandResult>;
 }
 
+/**
+ * Delete the superseded Runner binaries in the directory holding `binaryPath`,
+ * keeping that one and anything a process is still executing.
+ *
+ * Every deleted name is echoed as `pruned <name>`, so the caller learns what
+ * actually happened rather than what was attempted.
+ */
+export function pruneRunnerBinariesScript(binaryPath: string): string {
+  const separator = binaryPath.lastIndexOf("/");
+  return [
+    "set -eu",
+    `cd ${shellQuote(binaryPath.slice(0, separator))} || exit 0`,
+    // Every executable a live process is running. readlink fails on processes
+    // this user may not inspect, and under `set -e` that would abort the script
+    // before it reads a single name, so each failure is swallowed individually
+    // rather than by the assignment — a partial list must not become an empty
+    // one, which would read as "nothing is busy" and delete a live binary.
+    `busy=$(for process in /proc/[0-9]*; do readlink "$process/exe" 2>/dev/null || true; done)`,
+    // A dotfile is never a candidate: an interrupted `.upload-*` may still be
+    // an in-flight transfer from another connection, and no process holds it.
+    "for candidate in *; do",
+    // Only a deployed binary: exactly 64 hex characters. Anything else in this
+    // directory belongs to someone else and is left alone.
+    `  case "$candidate" in *[!0-9a-f]*) continue ;; esac`,
+    `  [ "\${#candidate}" -eq 64 ] || continue`,
+    `  [ "$candidate" = ${shellQuote(binaryPath.slice(separator + 1))} ] && continue`,
+    // A running binary Linux has already unlinked reads as "<path> (deleted)",
+    // which still contains the name, so the substring match covers it.
+    `  printf '%s\\n' "$busy" | grep -Fq "/$candidate" && continue`,
+    `  rm -f -- "$candidate" && printf 'pruned %s\\n' "$candidate"`,
+    "done",
+    // Housekeeping reports through stdout; one unremovable file is not a failure.
+    "exit 0",
+    "",
+  ].join("\n");
+}
+
+/** The names {@link pruneRunnerBinariesScript} reported as actually deleted. */
+export function parsePrunedBinaries(stdout: string): string[] {
+  return stdout.split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("pruned "))
+    .map((line) => line.slice("pruned ".length));
+}
+
 /** One reachability answer is good for this long; a page render is not a question. */
 const REACHABILITY_TTL_MS = 30_000;
 /** Long enough for a handshake on a slow link, short enough not to stall a list. */
@@ -432,6 +477,8 @@ export class RemoteComputeClient {
    * an already-deployed host transfers nothing.
    */
   private async prepareSshRunner(host: RemoteHostTarget, access: RemoteSshAccess, executable = loadRunnerExecutable): Promise<{
+    /** Unquoted path of the managed binary this connection runs; absent for a pre-installed one. */
+    binaryPath?: string;
     dataDir: string;
     deployed: boolean;
     startCommand: string;
@@ -463,6 +510,7 @@ export class RemoteComputeClient {
     const architecture = /^architecture=(.+)$/m.exec(result.stdout)?.[1]?.trim() ?? "";
     this.logConnect(host.id, `Remote data directory ready: ${dataDir} (${architecture || "unknown architecture"})`);
     let startCommand = shellQuote(runnerCommand);
+    let binaryPath: string | undefined;
     if (deploy) {
       const binary = await executable(architecture);
       const expectedArch = architecture === "x86_64" ? "x64" : architecture === "aarch64" ? "arm64" : undefined;
@@ -497,13 +545,48 @@ export class RemoteComputeClient {
         connection.close();
       }
       startCommand = shellQuote(destination);
+      binaryPath = destination;
     }
     await this.seedRemoteProvisioner(host.id, access, dataDir, architecture);
     return {
+      ...(binaryPath ? { binaryPath } : {}),
       dataDir,
       deployed: deploy,
       startCommand,
     };
+  }
+
+  /**
+   * Remove the Runner binaries this machine no longer needs.
+   *
+   * A deployed binary is named by its own SHA-256, so an upgrade is a new file
+   * rather than an overwrite — good for rollback, but nothing ever removed the
+   * old ones. A machine iterated on for two days was holding eight of them,
+   * 915 MB, in a directory nobody looks at.
+   *
+   * Two things are never deleted: the binary this connection just started, and
+   * any binary a process is still executing — another connection, from this
+   * control plane or from someone else's, may be serving through it. What is
+   * running is read from `/proc/<pid>/exe`, which needs no tooling installed on
+   * the machine, and only names that are a deployment (64 hex characters) are
+   * considered, so nothing else in that directory is ever touched.
+   *
+   * Best effort: a machine keeping old binaries is a disk-space problem, while
+   * a connection refused over housekeeping is an outage.
+   */
+  private async pruneRemoteRunnerBinaries(
+    access: RemoteSshAccess,
+    hostId: string,
+    binaryPath: string,
+  ): Promise<string[]> {
+    const result = await this.transport.run(access, pruneRunnerBinariesScript(binaryPath), 20_000).catch(() => undefined);
+    // Read stdout whatever the exit status: a name is only echoed after its
+    // file is gone, so the report is accurate even if a later step failed.
+    const pruned = parsePrunedBinaries(result?.stdout ?? "");
+    if (pruned.length > 0) {
+      this.logConnect(hostId, `Removed ${pruned.length} superseded Runner binar${pruned.length === 1 ? "y" : "ies"}.`);
+    }
+    return pruned;
   }
 
   /**
@@ -750,6 +833,9 @@ export class RemoteComputeClient {
         ...(localVersion ? { versionMismatch: localVersion !== health.runnerVersion } : {}),
       };
       this.runnerStatuses.set(host.id, record.status);
+      // Only now: the binary this connection runs has answered, so the ones it
+      // superseded are safe to remove.
+      if (prepared.binaryPath) await this.pruneRemoteRunnerBinaries(access, host.id, prepared.binaryPath);
       return structuredClone(record.status);
     } catch (error) {
       this.runnerConnections.delete(host.id);
