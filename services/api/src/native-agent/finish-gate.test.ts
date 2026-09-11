@@ -117,6 +117,13 @@ test("directive names every declaring skill", () => {
   assert.match(text, /full trajectory/);
 });
 
+test("generic checklist carries the abstain and verify-before-verbatim discipline", () => {
+  const text = buildFinishGateDirective(["systematic-review"]);
+  assert.match(text, /verify_citation/);
+  assert.match(text, /did not contain the answer/);
+  assert.match(text, /what was searched/);
+});
+
 test("directive points at selected audit companions via read_skill; absent companions stay generic", () => {
   const withCompanion = buildFinishGateDirective(["tree-search"], ["audit-tree-search"]);
   assert.match(withCompanion, /read_skill/);

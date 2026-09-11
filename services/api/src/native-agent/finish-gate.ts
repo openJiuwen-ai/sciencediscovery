@@ -88,7 +88,9 @@ export function buildFinishGateDirective(skillIds: readonly string[], auditCompa
     "Before concluding, audit your answer against the full trajectory above: " +
     "(1) every factual claim must trace to a tool result or a cited artifact — name the source for each; " +
     "(2) open questions you did not resolve must be stated explicitly, not silently dropped; " +
-    "(3) budget or capability limits you hit must be disclosed." +
+    "(3) budget or capability limits you hit must be disclosed; " +
+    "(4) quotes presented as verbatim must have passed verification this run (verify_citation for knowledge-base content) — a failed or fuzzy check means paraphrase-and-label; " +
+    "(5) if the tools and knowledge bases did not contain the answer, the answer must say so explicitly (and what was searched) rather than fill the gap from general model knowledge." +
     auditLine +
     " If the audit reveals gaps, fix them first. " +
     `Then call the ${FINISH_GATE_REVIEW_TOOL} tool with a one-line reason summarizing this audit. ` +

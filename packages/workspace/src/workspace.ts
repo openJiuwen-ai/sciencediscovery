@@ -1226,7 +1226,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "concept_explore",
         "Explore concept neighborhood",
-        "Read the neighborhood of an entity in a knowledge base's entity graph. Returns the center entity plus neighbors, each with name/type/description/support count/trust level, the relation type to the center, direction, and hop (1 = direct, 2 = via the strongest 1-hop neighbors). Name resolution: exact (normalized) → alias → substring; ambiguity returns candidates instead of guessing. LIMITATION: covers only content already extracted into the graph; truncated=true means edges remain beyond the limit.",
+        "Read the neighborhood of an entity in a knowledge base's entity graph. Returns the center entity plus neighbors, each with name/type/description/support count/trust level, the relation type to the center, direction, and hop (1 = direct, 2 = via the strongest 1-hop neighbors). Name resolution: exact (normalized) → alias → substring; ambiguity returns candidates instead of guessing. LIMITATION: covers only content already extracted into the graph; truncated=true means edges remain beyond the limit. Not for: what the papers SAY (use kb_search); an entity's full evidence quotes (use deep_dive).",
         Type.Object({
           kbId: kbIdField,
           entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
@@ -1242,7 +1242,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "deep_dive",
         "Deep dive entity",
-        "Full detail for one entity in the knowledge graph: aliases, description, and its relation edges each with the VERBATIM evidence quote (evidenceQuote) and source document (evidenceDocId/evidenceDocName). Use it to ground claims about an entity in citable evidence. LIMITATION: covers only extracted content; truncated=true means more edges exist beyond maxEdges.",
+        "Full detail for one entity in the knowledge graph: aliases, description, and its relation edges each with the VERBATIM evidence quote (evidenceQuote) and source document (evidenceDocId/evidenceDocName). Use it to ground claims about an entity in citable evidence. LIMITATION: covers only extracted content; truncated=true means more edges exist beyond maxEdges. Not for: browsing a neighborhood (use concept_explore); passage-level retrieval beyond this entity's edges (use kb_search).",
         Type.Object({
           kbId: kbIdField,
           entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
@@ -1256,7 +1256,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "entity_unified_search",
         "Unified entity search",
-        "One call, concurrent independent sections over a knowledge base for one entity — graph (neighborhood), evidence (verbatim quotes per edge), documents (keyword-matched source documents), citations ([@rid] contexts whose sentence or resolved target mentions the entity, with intent labels). Sections are returned independently (no cross-source fusion); a failing section reports status=error without affecting the others. Ambiguous names surface merged candidates instead of guessing.",
+        "One call, concurrent independent sections over a knowledge base for one entity — graph (neighborhood), evidence (verbatim quotes per edge), documents (keyword-matched source documents), citations ([@rid] contexts whose sentence or resolved target mentions the entity, with intent labels). Sections are returned independently (no cross-source fusion); a failing section reports status=error without affecting the others. Ambiguous names surface merged candidates instead of guessing. Not for: a quick neighborhood lookup (use concept_explore — one section instead of four); exact-pattern text search across all documents (use doc_grep).",
         Type.Object({
           kbId: kbIdField,
           entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
@@ -1274,7 +1274,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "validate_entities",
         "Validate entity names",
-        "Anti-hallucination check: verify a list of entity names against the knowledge graph BEFORE citing them. Per name returns found (with the entity), ambiguous (with candidates), or unknown. Names that come back unknown are not in the graph — do not present them as established knowledge-base facts.",
+        "Anti-hallucination check: verify a list of entity names against the knowledge graph BEFORE citing them. Per name returns found (with the entity), ambiguous (with candidates), or unknown. Names that come back unknown are not in the graph — do not present them as established knowledge-base facts. Not for: verifying quotes (use verify_citation); novelty claims (use novelty_check); reading an entity's evidence (use deep_dive).",
         Type.Object({
           kbId: kbIdField,
           names: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
@@ -1287,7 +1287,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "kb_search",
         "Search knowledge-base documents",
-        "Hybrid retrieval over a knowledge base's documents, returning passage-level hits: each hit carries the document (docId/docTitle), an anchorId that resolves to the exact block in the three-level reader, the section, a snippet, matched terms, and a fused score. The keyword arm (FTS) always runs; when the deployment has an embedding provider and stored document vectors, a semantic arm joins via reciprocal-rank fusion (the result's sources field lists which arms contributed; a keyword-only note means the semantic arm was unavailable). Use it for questions about what the papers SAY (methods, numbers, setup) — the graph tools cover extracted entities and relations. Hits are spread across at most 2 per document; truncated=true means more matches exist. LIMITATION: paraphrase recall depends on the semantic arm being present; a miss is unknown, not evidence of absence.",
+        "Hybrid retrieval over a knowledge base's documents, returning passage-level hits: each hit carries the document (docId/docTitle), an anchorId that resolves to the exact block in the three-level reader, the section, a snippet, matched terms, and a fused score. The keyword arm (FTS) always runs; when the deployment has an embedding provider and stored document vectors, a semantic arm joins via reciprocal-rank fusion (the result's sources field lists which arms contributed; a keyword-only note means the semantic arm was unavailable). Use it for questions about what the papers SAY (methods, numbers, setup) — the graph tools cover extracted entities and relations. Hits are spread across at most 2 per document; truncated=true means more matches exist. LIMITATION: paraphrase recall depends on the semantic arm being present; a miss is unknown, not evidence of absence. Not for: exact string/pattern matching (use doc_grep); reading a hit's full block in context (use kb_expand with its anchorId); graph-structure questions (use concept_explore/gap_candidates).",
         Type.Object({
           kbId: kbIdField,
           query: Type.String({ minLength: 1, description: "Free-text keyword query" }),
@@ -1303,7 +1303,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "kb_expand",
         "Expand a document anchor",
-        "Read the full block behind an anchorId from kb_search (or an evidence card), plus its neighbouring before/after blocks — the passage in context instead of a snippet. Anchors have the form {docId}:{blockType}:{index}. Structured not-found reasons: document-not-found (wrong docId), document-not-parsed (no fulltext yet), anchor-not-found (block type/index does not exist in this document).",
+        "Read the full block behind an anchorId from kb_search (or an evidence card), plus its neighbouring before/after blocks — the passage in context instead of a snippet. Anchors have the form {docId}:{blockType}:{index}. Structured not-found reasons: document-not-found (wrong docId), document-not-parsed (no fulltext yet), anchor-not-found (block type/index does not exist in this document). Not for: discovery — search first with kb_search/doc_grep and copy the anchorId from a hit; never construct an anchorId yourself.",
         Type.Object({
           kbId: kbIdField,
           anchorId: Type.String({ minLength: 1, description: "Anchor id from kb_search hits or evidence cards" }),
@@ -1313,7 +1313,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "doc_grep",
         "Regex search document texts",
-        "Case-insensitive regular-expression search over a knowledge base's document fulltexts, line-grained like grep: each match reports the document, a 1-based line number, and the matched line. Use it when you need an exact pattern (a measurement like 'IC50', a gene variant spelling, a table token) rather than the keyword recall of kb_search. Invalid regex returns a structured error you can fix and retry. LIMITATION: matches are per line (multi-line patterns do not span lines); truncated=true means more matches exist beyond maxMatches.",
+        "Case-insensitive regular-expression search over a knowledge base's document fulltexts, line-grained like grep: each match reports the document, a 1-based line number, and the matched line. Use it when you need an exact pattern (a measurement like 'IC50', a gene variant spelling, a table token) rather than the keyword recall of kb_search. Invalid regex returns a structured error you can fix and retry. LIMITATION: matches are per line (multi-line patterns do not span lines); truncated=true means more matches exist beyond maxMatches. Not for: fuzzy or semantic questions (use kb_search); reading blocks in context (use kb_expand).",
         Type.Object({
           kbId: kbIdField,
           pattern: Type.String({ minLength: 1, maxLength: 200, description: "JavaScript regex source (case-insensitive)" }),
@@ -1327,7 +1327,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "novelty_check",
         "Check a claim's novelty against the knowledge base",
-        "Anti-hallucination check for novelty claims ('first to show…', 'novel mechanism…'): three deterministic probes (entity / relation / passage) against ONE knowledge base. collision = the KB already covers this subject — reframe as building on it; partial = weak overlap; no-collision = nothing in THIS KB overlaps. LIMITATION: internal to the knowledge base — 'no-collision' says nothing about the wider literature (external novelty search is out of scope for this build); absence of evidence is not evidence of absence.",
+        "Anti-hallucination check for novelty claims ('first to show…', 'novel mechanism…'): three deterministic probes (entity / relation / passage) against ONE knowledge base. collision = the KB already covers this subject — reframe as building on it; partial = weak overlap; no-collision = nothing in THIS KB overlaps. LIMITATION: internal to the knowledge base — 'no-collision' says nothing about the wider literature (external novelty search is out of scope for this build); absence of evidence is not evidence of absence. Not for: verifying a quote's wording (use verify_citation); checking entity existence (use validate_entities).",
         Type.Object({
           kbId: kbIdField,
           claim: Type.String({ minLength: 1, maxLength: 1000, description: "The candidate novelty claim, verbatim" }),
@@ -1339,7 +1339,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "verify_citation",
         "Verify a quote against the papers",
-        "Three-state verification of a quote you intend to attribute to a paper: verbatim (normalized substring in at least one scanned document — safe to quote), fuzzy (≥85% word overlap — a paraphrase, not the paper's wording), not-found (do not present it as a paper's words). Returns which documents verified it. Use BEFORE quoting any sentence in a final answer.",
+        "Three-state verification of a quote you intend to attribute to a paper: verbatim (normalized substring in at least one scanned document — safe to quote), fuzzy (≥85% word overlap — a paraphrase, not the paper's wording), not-found (do not present it as a paper's words). Returns which documents verified it. Use BEFORE quoting any sentence in a final answer. Not for: entity existence (use validate_entities); finding which paper says X (use kb_search first).",
         Type.Object({
           kbId: kbIdField,
           quote: Type.String({ minLength: 10, maxLength: 2000, description: "The quote to verify" }),
