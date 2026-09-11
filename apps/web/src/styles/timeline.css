@@ -218,6 +218,9 @@
    the details grid its readings wrap away from the card name. */
 /* Also used inside the Local Runner card, which is a plain block. */
 .remote-npu { grid-column: 1 / -1; margin-top: 8px; display: grid; gap: 7px; min-width: 0; }
+.remote-npu-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
+.remote-npu-actions { display: flex; align-items: center; gap: 8px; }
+.remote-npu-unsaved { color: var(--warning-text, #8a5a00); }
 .remote-npu-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; }
 .remote-npu-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 /* Every card row uses the same column tracks, so a reading sits at the same

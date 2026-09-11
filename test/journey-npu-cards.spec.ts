@@ -21,14 +21,14 @@ test.use({ locale: "zh-CN", actionTimeout: 15_000 });
 /**
  * E2E-META
  * Purpose: 每个 Runner（本机 local 与已登记远端）都在远程计算分组里列出 Ascend NPU 卡：
- *   可选卡带复选框、不可用卡禁用并说明原因；勾选通过 PUT 保存到该 Runner；选择在重开设置后保持；
+ *   可选卡带复选框、不可用卡禁用并说明原因；勾选先作为草稿、点保存才 PUT 到该 Runner；选择在重开设置后保持；
  *   桌面与 390px 窄屏都无横向溢出。本旅程用浏览器路由注入可用的假 910B 清单，
  *   因为当前环境没有 Ascend 驱动（真实接口返回所有卡 sandboxUsable:false）。
  * Steps:
  *   1. 打开系统设置 → 远程计算分组：本地 Runner 卡片内出现 NPU 卡区，头部计数为“本机 3 张 · 沙箱内可用 2 张”。
  *   2. 每个卡行展示 NPU 编号与芯片名、健康徽章、HBM 用量、AI Core 百分比与温度；复选框与名称在同一阅读行。
  *   3. 不可用卡（hostIndex 2）复选框禁用并附原因文本；可选卡（hostIndex 0/4）复选框可勾选。
- *   4. 勾选 hostIndex 4 保存到 runnerId=local；再勾选 hostIndex 0 请求体按升序为 [0,4]；取消勾选 hostIndex 4 后请求体为 [0]。
+ *   4. 勾选 hostIndex 4 与 0 期间不发 PUT；点保存后一次 PUT 到 runnerId=local，请求体升序为 [0,4]；取消勾选 4 再保存得 [0]。
  *   5. 远端 Runner 卡片展示独立的 NPU 清单（hostIndex 1/3/5），勾选保存到它自己的 runnerId，且不影响 local 的选择。
  *   6. 关闭并重新打开设置：local 的 NPU 0 与远端的 NPU 1 仍保持勾选。
  *   7. 390px 窄屏：NPU 区、卡行与不可用原因都不产生横向溢出，复选框与名称仍可见。
@@ -47,7 +47,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
   test.setTimeout(180_000);
   journey.scenario({
     goal: "一位运维要在远程计算分组里为每台 Runner 挑选可交给沙箱的 Ascend 卡：先确认卡片列表与不可用说明，"
-      + "再勾选保存到对应 Runner，重开设置后选择保持，并确认 390px 窄屏下仍整齐可用。",
+      + "再勾选并保存到对应 Runner，重开设置后选择保持，并确认 390px 窄屏下仍整齐可用。",
     preconditions: [
       "隔离栈已启动，浏览器已持有本实例的访问 token",
       "本环境没有 Ascend 驱动，因此 NPU 清单由浏览器路由注入可用的 910B 假数据",
@@ -205,22 +205,29 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
     );
 
     await journey.step(
-      "勾选/取消勾选把选择保存到 local Runner",
-      "勾选 NPU 4 发送 PUT 到 /api/runners/local/npu-devices（[4]）；再勾选 NPU 0 请求体按升序为 [0,4]；"
-      + "取消勾选 NPU 4 后请求体为 [0]，界面复选框状态与保存一致。",
+      "勾选是草稿，点保存才写入 local Runner",
+      "勾选 NPU 4 与 NPU 0 期间不发任何 PUT，界面提示有未保存的勾选；点“保存勾选”后只发一次 PUT，"
+      + "请求体按升序为 [0,4]；随后取消勾选 NPU 4 再保存，请求体为 [0]。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const npu = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" })
           .locator("section[aria-label='NPU 卡']");
         const npu4 = npu.locator("li", { hasText: "NPU 4" }).getByRole("checkbox");
-        await npu4.click();
-        await expect.poll(() => npuPuts.at(-1)).toEqual({ devices: [4], runnerId: "local" });
-        await expect(npu4).toBeChecked();
         const npu0 = npu.locator("li", { hasText: "NPU 0" }).getByRole("checkbox");
-        await npu0.click();
-        await expect.poll(() => npuPuts.at(-1)).toEqual({ devices: [0, 4], runnerId: "local" });
-        await expect(npu0).toBeChecked();
+        const before = npuPuts.length;
         await npu4.click();
+        await npu0.click();
+        await expect(npu4).toBeChecked();
+        await expect(npu0).toBeChecked();
+        await expect(npu).toContainText("有未保存的勾选");
+        expect(npuPuts.length).toBe(before);
+        await npu.getByRole("button", { name: "保存勾选" }).click();
+        await expect.poll(() => npuPuts.at(-1)).toEqual({ devices: [0, 4], runnerId: "local" });
+        expect(npuPuts.length).toBe(before + 1);
+        await expect(npu.getByRole("button", { name: "保存勾选" })).toHaveCount(0);
+
+        await npu4.click();
+        await npu.getByRole("button", { name: "保存勾选" }).click();
         await expect.poll(() => npuPuts.at(-1)).toEqual({ devices: [0], runnerId: "local" });
         await expect(npu4).not.toBeChecked();
         await expect(npu0).toBeChecked();
@@ -245,6 +252,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
           .locator("section[aria-label='NPU 卡']");
         await expect(localNpu.getByText("NPU 1", { exact: false })).toHaveCount(0);
         await npu.locator("li", { hasText: "NPU 1" }).getByRole("checkbox").click();
+        await npu.getByRole("button", { name: "保存勾选" }).click();
         await expect.poll(() => npuPuts.at(-1)).toEqual({ devices: [1], runnerId: "e2e-npu-host" });
         // local 仍保持 [0]，远端保存不覆盖它。
         expect(selections.local).toEqual([0]);

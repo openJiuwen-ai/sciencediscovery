@@ -173,18 +173,32 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
 }): ReactNode {
   const { t } = useLocale();
   const [saving, setSaving] = useState(false);
+  // Ticks are edited locally until the operator saves. Picking cards is a plan
+  // ("these four for the next run"), and saving each box on its own turned a
+  // four-card plan into four writes, each re-probing the machine and each able
+  // to fail on its own — with the first three already stored.
+  const [draft, setDraft] = useState<number[]>();
   if (!inventory) return null;
-  const ticked = new Set(selected);
+  const ticked = new Set(draft ?? selected);
   const usableCount = selectableNpuDevices(inventory).length;
+  const dirty = draft !== undefined && (draft.length !== selected.length
+    || draft.some((hostIndex, position) => hostIndex !== selected[position]));
 
-  const toggle = async (hostIndex: number, checked: boolean): Promise<void> => {
+  const toggle = (hostIndex: number, checked: boolean): void => {
     const next = new Set(ticked);
     if (checked) next.add(hostIndex); else next.delete(hostIndex);
-    const devices = [...next].sort((left, right) => left - right);
+    setDraft([...next].sort((left, right) => left - right));
+  };
+
+  const save = async (): Promise<void> => {
+    if (!draft) return;
     setSaving(true);
     try {
-      onSelected((await client.setRunnerNpuDevices(runnerId, devices)).devices);
+      onSelected((await client.setRunnerNpuDevices(runnerId, draft)).devices);
+      setDraft(undefined);
     } catch (error) {
+      // The draft survives a rejected save: the Runner refusing one card must
+      // not throw away the rest of what the operator picked.
       onError(error instanceof Error ? error.message : String(error));
     } finally {
       setSaving(false);
@@ -217,7 +231,7 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
                 type="checkbox"
                 checked={isTicked}
                 disabled={(!device.sandboxUsable && !isTicked) || saving}
-                onChange={(event) => { void toggle(device.hostIndex, event.target.checked); }}
+                onChange={(event) => toggle(device.hostIndex, event.target.checked)}
               />
               <span className="remote-npu-name">{t("remote.npuCard", { chip: device.chipName, index: device.hostIndex })}</span>
               {device.health ? <span className={`remote-detail-badge ${device.health === "OK" ? "neutral" : "warning"}`}>{device.health}</span> : null}
@@ -264,7 +278,18 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
     {usableCount === 0 && inventory.devices.length > 0
       ? <small role="alert">{t("remote.npuNoneUsable")}</small>
       : null}
-    <small>{t("remote.npuRenumbered")}</small>
+    <div className="remote-npu-footer">
+      <small>{t("remote.npuRenumbered")}</small>
+      {dirty ? <div className="remote-npu-actions">
+        <small className="remote-npu-unsaved">{t("remote.npuUnsaved")}</small>
+        <button className="secondary-button" disabled={saving} onClick={() => setDraft(undefined)} type="button">
+          {t("remote.npuDiscard")}
+        </button>
+        <button className="primary-button" disabled={saving} onClick={() => void save()} type="button">
+          {saving ? t("remote.npuSaving") : t("remote.npuSave")}
+        </button>
+      </div> : null}
+    </div>
   </section>;
 }
 

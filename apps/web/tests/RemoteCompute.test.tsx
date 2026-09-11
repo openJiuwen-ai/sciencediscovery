@@ -489,6 +489,12 @@ test("an idle connect log panel says it is waiting rather than showing nothing",
   assert.doesNotMatch(markup, /remote-connect-log-line/);
 });
 
+const clickButton = async (renderer: ReactTestRenderer, label: string) => {
+  const button = renderer.root.findAllByType("button").find((node) => node.children.join("") === label);
+  assert.ok(button, `no button labelled ${label}`);
+  await act(async () => button.props.onClick());
+};
+
 test("ticking a card saves the selection against the Runner it belongs to", async () => {
   const calls: Array<{ devices: number[]; runnerId: string }> = [];
   let saved: number[] = [];
@@ -501,8 +507,42 @@ test("ticking a card saves the selection against the Runner it belongs to", asyn
   });
   const boxes = renderer!.root.findAllByType("input");
   await act(async () => { boxes[1]!.props.onChange({ target: { checked: true } }); });
+  // Ticking is a draft: nothing is written until the operator says so, so a
+  // four-card plan costs one write instead of four.
+  assert.deepEqual(calls, []);
+  assert.equal(renderer!.root.findAllByType("input")[1]!.props.checked, true, "the tick shows immediately");
+  await clickButton(renderer!, "Save selection");
   assert.deepEqual(calls, [{ devices: [4], runnerId: "host-1" }]);
   assert.deepEqual(saved, [4]);
+  // Saved: the actions disappear until something changes again.
+  assert.equal(renderer!.root.findAllByType("button").length, 0);
+});
+
+test("a draft can be discarded and a rejected save keeps what was picked", async () => {
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  const errors: string[] = [];
+  let renderer: ReactTestRenderer | undefined;
+  const failing = {
+    setRunnerNpuDevices: async (runnerId: string, devices: number[]) => {
+      calls.push({ devices, runnerId });
+      throw new Error("NPU 4 cannot be opened inside the sandbox");
+    },
+  } as unknown as ApiClient;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: failing, inventory: NPU_INVENTORY, onError: (message: string) => errors.push(message),
+      onSelected: () => {}, runnerId: "host-1", selected: [],
+    } as never));
+  });
+  await act(async () => { renderer!.root.findAllByType("input")[1]!.props.onChange({ target: { checked: true } }); });
+  await clickButton(renderer!, "Save selection");
+  assert.deepEqual(errors, ["NPU 4 cannot be opened inside the sandbox"]);
+  // The Runner refusing one card must not throw away what was picked.
+  assert.equal(renderer!.root.findAllByType("input")[1]!.props.checked, true);
+  await clickButton(renderer!, "Discard");
+  assert.equal(renderer!.root.findAllByType("input")[1]!.props.checked, false);
+  assert.equal(renderer!.root.findAllByType("button").length, 0, "a discarded draft leaves nothing to save");
+  assert.equal(calls.length, 1);
 });
 
 test("the same control saves against the local Runner when that is the machine", async () => {
@@ -516,6 +556,7 @@ test("the same control saves against the local Runner when that is the machine",
     } as never));
   });
   await act(async () => { renderer!.root.findAllByType("input")[1]!.props.onChange({ target: { checked: true } }); });
+  await clickButton(renderer!, "Save selection");
   assert.deepEqual(calls, [{ devices: [4], runnerId: "local" }]);
 });
 
@@ -535,6 +576,7 @@ test("a card that became unusable while ticked can still be unticked", async () 
   assert.equal(unusable.props.checked, true);
   assert.equal(unusable.props.disabled, false, "a ticked card is always removable");
   await act(async () => { unusable.props.onChange({ target: { checked: false } }); });
+  await clickButton(renderer!, "Save selection");
   assert.deepEqual(calls, [{ devices: [4], runnerId: "host-1" }]);
   // It says why it is unusable and what unticking it achieves.
   assert.match(JSON.stringify(renderer!.toJSON()), /untick it to run without it/);
@@ -570,6 +612,7 @@ test("the Local Runner card offers this machine's own cards and saves them under
   assert.ok(localCard.findAllByProps({ className: "remote-npu-name" }).some((node) => node.children.join("").includes("NPU 4 · 910B3")));
   const boxes = localCard.findAllByType("input");
   await act(async () => { boxes[1]!.props.onChange({ target: { checked: true } }); });
+  await clickButton(renderer!, "Save selection");
   assert.deepEqual(calls, [{ devices: [4], runnerId: "local" }]);
   // The tick sticks after the save round-trip, so the operator sees what is stored.
   assert.equal(localCard.findAllByType("input")[1]!.props.checked, true);
