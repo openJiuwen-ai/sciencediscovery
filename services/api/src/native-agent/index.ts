@@ -567,6 +567,7 @@ class NativeAgent implements NativeAgentHandle {
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
       const finishGate = new FinishGateLifecycle<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         inner: this.versionRecorder,
+        quoteVerificationAvailable: this.toolRegistry.values().some((tool) => tool.name === "verify_citation" || tool.name === "evidence_ledger"),
         reviewCheckpointAvailable: this.toolRegistry.values().some((tool) => tool.name === FINISH_GATE_REVIEW_TOOL),
         skills: this.promptSkills,
       });

@@ -21,6 +21,7 @@ import {
   FINISH_GATE_REVIEW_TOOL,
   FinishGateLifecycle,
   buildFinishGateDirective,
+  extractQuotedSpans,
 } from "./finish-gate.js";
 
 type M = RuntimeMessage;
@@ -143,4 +144,136 @@ test("gate names the audit companion only when it is selected for the run", asyn
   const withoutCompanion = gate({ skills: [{ id: "hypothesis-tournament", preFinishAudit: true }] });
   const decisionWithout = await withoutCompanion.beforeFinish(finishInput([]));
   assert.ok(!String((decisionWithout as { message?: { content?: unknown } })?.message?.content).includes("audit-hypothesis-tournament"));
+});
+
+// --- Stage 2: groundedness enforcement (V2-C3) ------------------------------
+
+const QUOTE_A = "Helical parameters were locally searched based on previously reported values, resulting in a twist and rise";
+const QUOTE_B = "The nucleocapsid helix condenses upon incorporation into the progeny virion during assembly";
+
+function verifyCitationCall(quote: string) {
+  return {
+    role: "assistant",
+    tool_calls: [{ function: { arguments: JSON.stringify({ kbId: "kb1", quote }), name: "verify_citation" }, id: "v1" }],
+  };
+}
+
+test("extractQuotedSpans pulls paired-quote and blockquote spans, filters noise", () => {
+  const text = `Intro "not a quote" short.\nClaim: “${QUOTE_A}” end.\n> ${QUOTE_B}\nCode: "x=1" and ids "04d3a509-daf0-4bf2-91df-75d2a9059c14-aaaa" here.`;
+  const spans = extractQuotedSpans(text);
+  assert.deepEqual(spans, [QUOTE_A, QUOTE_B]);
+});
+
+test("stage 2 fires on unverified spans; verified spans via verify_citation args are covered", async () => {
+  const lifecycle = gate({ skills: [] });
+  const history = [
+    { role: "user", content: "go" },
+    verifyCitationCall(QUOTE_A),
+    { role: "tool", name: "verify_citation", tool_call_id: "v1", content: "{\"state\":\"verbatim\"}" },
+  ];
+  const draft = `Answer: “${QUOTE_A}” and also “${QUOTE_B}” done.`;
+  const decision = await lifecycle.beforeFinish({
+    history: [...history, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 3,
+  });
+  assert.equal(decision?.action, "continue");
+  const text = String((decision as { message?: { content?: unknown } })?.message?.content);
+  assert.ok(text.includes("Pre-finish grounding enforcement"));
+  assert.ok(!text.includes(QUOTE_A.slice(0, 40)), "the verified span must not be listed");
+  assert.ok(text.includes(QUOTE_B.slice(0, 40)), "the unverified span must be listed");
+  // Fires once: the next finish attempt passes through.
+  const second = await lifecycle.beforeFinish({
+    history: [...history, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 4,
+  });
+  assert.equal(second, undefined);
+});
+
+test("stage 2 covers spans recorded in evidence_ledger when a verify action ran", async () => {
+  const lifecycle = gate({ skills: [] });
+  const history = [
+    { role: "user", content: "go" },
+    { role: "assistant", tool_calls: [{ function: { arguments: JSON.stringify({ action: "add", claim: "condensation", quote: QUOTE_B }), name: "evidence_ledger" }, id: "l1" }] },
+    { role: "assistant", tool_calls: [{ function: { arguments: JSON.stringify({ action: "verify", kbId: "kb1" }), name: "evidence_ledger" }, id: "l2" }] },
+  ];
+  const draft = `Answer: “${QUOTE_B}” end.`;
+  const decision = await lifecycle.beforeFinish({
+    history: [...history, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.equal(decision, undefined, "ledger add + verify covers the span");
+});
+
+test("stage ordering: audit fires first, grounding second, then silence", async () => {
+  const lifecycle = gate({ skills: [{ id: "systematic-review", preFinishAudit: true }] });
+  const draft = `Answer: “${QUOTE_B}” end.`;
+  const finishInput = () => ({
+    history: [{ role: "user", content: "go" }, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 1,
+  });
+  const first = await lifecycle.beforeFinish(finishInput());
+  assert.match(String((first as { message?: { content?: unknown } })?.message?.content), /Pre-finish verification required by skill/);
+  // The review landed, but the draft still carries an unverified quote.
+  const second = await lifecycle.beforeFinish({
+    history: [
+      { role: "user", content: "go" },
+      { role: "assistant", content: draft },
+      { role: "tool", name: "review_checkpoint", tool_call_id: "r1", content: "{}" },
+    ],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.match(String((second as { message?: { content?: unknown } })?.message?.content), /Pre-finish grounding enforcement/);
+  const third = await lifecycle.beforeFinish(finishInput());
+  assert.equal(third, undefined);
+});
+
+test("stage 2 stays silent for quotes verified in a previous run of the same session", async () => {
+  const lifecycle = gate({ skills: [] });
+  const draft = `Answer: “${QUOTE_A}” end.`;
+  // The verify_citation call belongs to a previous run (before the last user message).
+  const decision = await lifecycle.beforeFinish({
+    history: [
+      verifyCitationCall(QUOTE_A),
+      { role: "user", content: "new task" },
+      { role: "assistant", content: draft },
+    ],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.ok(decision?.action === "continue", "a previous run's verdict does not cover this run's quotes");
+});
+
+test("stage 2 is NOT covered by a ledger add without a verify action", async () => {
+  const lifecycle = gate({ skills: [] });
+  const history = [
+    { role: "user", content: "go" },
+    { role: "assistant", tool_calls: [{ function: { arguments: JSON.stringify({ action: "add", claim: "condensation", quote: QUOTE_B }), name: "evidence_ledger" }, id: "l1" }] },
+  ];
+  const draft = `Answer: “${QUOTE_B}” end.`;
+  const decision = await lifecycle.beforeFinish({
+    history: [...history, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.ok(decision?.action === "continue", "recording a quote without verifying it must not count as coverage");
+});
+
+test("stage 2 stays silent when quote-verification tooling is unavailable", async () => {
+  const lifecycle = new FinishGateLifecycle<M, unknown, never>({
+    quoteVerificationAvailable: false,
+    reviewCheckpointAvailable: false,
+    skills: [],
+  });
+  const draft = `Answer: “${QUOTE_B}” end.`;
+  const decision = await lifecycle.beforeFinish({
+    history: [{ role: "user", content: "go" }, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.equal(decision, undefined, "no gate without a verification tool to point at");
 });
