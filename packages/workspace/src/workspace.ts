@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -28,6 +28,7 @@ import {
 } from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
 import { createEvidenceLedgerPort } from "./ke-evidence-ledger.js";
+import { polishReport } from "./report-polish.js";
 import { createResearchStatePort } from "./research-state.js";
 import { computeDivergence, rankFromVerdicts } from "./tournament-rank.js";
 import type {
@@ -1228,9 +1229,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const result = await invoke(effectiveParams);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
-      // Every KE tool is a pure concurrent-safe store read — except the
-      // evidence ledger, whose unlocked read-modify-write file cycle must
-      // never run concurrently with itself (opts.exclusive).
+      // Every KE tool is a pure concurrent-safe store read — except the two
+      // read-modify-write tools, whose unlocked file cycles must never run
+      // concurrently with themselves (opts.exclusive): evidence_ledger and
+      // polish_report.
       isConcurrencySafe: () => !opts.exclusive,
       label,
       name,
@@ -1450,6 +1452,44 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             ...(params.topN === undefined ? {} : { topN: params.topN }),
             ...(params.signals === undefined ? {} : { signals: params.signals }),
           }),
+      ),
+      keTool(
+        "polish_report",
+        "Polish a markdown report",
+        "Deterministic post-generation cleanup of a workspace markdown report: (1) strip LLM boilerplate prefixes, (2) verify each verbatim-intended fragment against the knowledge base and mark verified ones as [n] citations with an index (unverifiable fragments are left EXACTLY as written — never re-attributed by guessing), (3) normalize heading levels. The file is rewritten in place; returns the stats and citation index. Run it on the final markdown BEFORE declare_artifact. Not for: content writing (write the report first); verifying quotes interactively (use verify_citation).",
+        Type.Object({
+          path: Type.String({ minLength: 1, description: "Workspace-relative markdown file path" }),
+          kbId: kbIdParam,
+        }),
+        async (params) => {
+          const absolute = resolveWorkspaceFile(workspaceRoot, params.path);
+          if (!/\.(md|markdown)$/i.test(params.path)) {
+            throw new Error(`polish_report only accepts markdown files (.md/.markdown) — got: ${params.path}`);
+          }
+          const raw = await readFile(absolute, "utf8");
+          // Probe: verifyCitation's full-text normalized substring check (the
+          // verbatim arm only — never fuzzy). Doc-level attribution, never
+          // guessed; covers long and cross-line fragments (review P1/P2).
+          const probe = async (fragment: string) => {
+            const result = await knowledgeEngine.verifyCitation(params.kbId, fragment) as {
+              state: string;
+              verifiedIn?: Array<{ docId: string; docTitle?: string | null; state?: string }>;
+            };
+            const first = (result.verifiedIn ?? []).find((doc) => doc.state === "verbatim");
+            return first ? { docId: first.docId, ...(first.docTitle ? { docTitle: first.docTitle } : {}) } : undefined;
+          };
+          const polished = await polishReport(raw, probe);
+          if (polished.cleaned !== raw) await writeFile(absolute, polished.cleaned, "utf8");
+          return {
+            citations: polished.citations,
+            path: params.path,
+            rewritten: polished.cleaned !== raw,
+            stats: polished.stats,
+          };
+        },
+        // File read-modify-write with awaited probes in between — never
+        // schedule concurrently with itself (review P2).
+        { exclusive: true },
       ),
     );
   }

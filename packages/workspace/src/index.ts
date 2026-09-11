@@ -5,6 +5,7 @@ export * from "./artifact-read.js";
 export * from "./environment-tool-names.js";
 export * from "./file-page.js";
 export * from "./prompt.js";
+export * from "./report-polish.js";
 export * from "./research-state.js";
 export * from "./tournament-rank.js";
 export * from "./workspace.js";

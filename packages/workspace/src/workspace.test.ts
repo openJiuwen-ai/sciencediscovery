@@ -13,8 +13,9 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -1748,6 +1749,7 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
     "novelty_check",
     "verify_citation",
     "evidence_ledger",
+    "polish_report",
   ]) {
     assert.ok(names.includes(expected), `${expected} should be registered`);
   }
@@ -1756,7 +1758,7 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
   // (the evidence ledger echoes recorded verbatim quotes — corpus too);
   // the anti-hallucination trust anchors and config listings stay unfenced.
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  for (const corpusTool of ["concept_explore", "deep_dive", "entity_unified_search", "gap_candidates", "kb_search", "kb_expand", "doc_grep", "evidence_ledger"]) {
+  for (const corpusTool of ["concept_explore", "deep_dive", "entity_unified_search", "gap_candidates", "kb_search", "kb_expand", "doc_grep", "evidence_ledger", "polish_report"]) {
     assert.equal(byName.get(corpusTool)!.untrustedCategory, "knowledge-base", `${corpusTool} must be fenced as corpus data`);
   }
   for (const anchor of ["list_knowledge_bases", "validate_entities", "novelty_check", "verify_citation"]) {
@@ -1804,7 +1806,7 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
     executePython: async () => { throw new Error("not used"); },
   });
   const bareNames = new Set(bare.map((tool) => tool.name));
-  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases", "kb_search", "kb_expand", "doc_grep", "novelty_check", "verify_citation", "evidence_ledger"]) {
+  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases", "kb_search", "kb_expand", "doc_grep", "novelty_check", "verify_citation", "evidence_ledger", "polish_report"]) {
     assert.equal(bareNames.has(absent), false, `${absent} must not register without the port`);
   }
 });
@@ -1857,4 +1859,51 @@ test("knowledge-engine tools enforce a bound KB scope: default fill, optional sc
   const unscopedSearch = unscoped.find((tool) => tool.name === "kb_search")!;
   const unscopedRequired = (unscopedSearch.parameters as { required?: string[] }).required ?? [];
   assert.ok(unscopedRequired.includes("kbId"), "kbId must stay required without a scope");
+});
+
+test("polish_report verifies fragments via verifyCitation and rewrites the file in place", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "polish-report-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const quote = "The nucleocapsid helix condenses upon incorporation into the progeny virion";
+  await mkdir(join(root, "reports"), { recursive: true });
+  await writeFile(
+    join(root, "reports", "final.md"),
+    `Based on the documents, findings follow.\n# Report\n# Section\nClaim: “${quote}”.\nInvented: “a fabricated quote that exists nowhere in the corpus”.\n`,
+    "utf8",
+  );
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async () => ({}),
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async (kbId: string, text: string) => ({
+      scannedDocs: 3,
+      state: text === quote ? "verbatim" : "not-found",
+      verifiedIn: text === quote ? [{ docId: "doc-9", docTitle: "Cryo-ET paper", state: "verbatim" }] : [],
+    }),
+  };
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+  });
+  const polish = tools.find((tool) => tool.name === "polish_report")!;
+  // Non-markdown paths are rejected before any IO.
+  await assert.rejects(polish.execute("c", { kbId: "kb1", path: "reports/final.pdf" }), /markdown/);
+  const result = await polish.execute("c", { kbId: "kb1", path: "reports/final.md" });
+  const details = result.details as { citations: Array<{ docId: string; marker: number }>; rewritten: boolean; stats: { citationsMarked: number } };
+  assert.equal(details.rewritten, true);
+  assert.equal(details.stats.citationsMarked, 1);
+  assert.deepEqual(details.citations, [{ docId: "doc-9", docTitle: "Cryo-ET paper", marker: 1 }]);
+  const polishedText = await readFile(join(root, "reports", "final.md"), "utf8");
+  assert.ok(polishedText.includes(`${quote}” [1]`), "the verified quote is marked after the closing quote");
+  assert.ok(polishedText.includes("a fabricated quote that exists nowhere in the corpus”"), "the unverifiable quote is untouched");
+  assert.ok(!polishedText.includes("Based on the documents"), "boilerplate is stripped");
+  assert.ok(polishedText.includes("## Section"), "headings are normalized");
 });
