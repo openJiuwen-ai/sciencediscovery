@@ -23,6 +23,12 @@ import type { McpCatalog, McpInvokeRequest, McpInvokeResponse, ResolvedProxy } f
  */
 export interface McpTransportClient {
   catalog(signal?: AbortSignal): Promise<McpCatalog>;
+  /**
+   * Release whatever the client is holding open. An implementation that talks
+   * to stdio servers owns child processes, and those outlive their caller
+   * unless someone says when they are done; a stub that owns nothing may omit
+   * this.
+   */
   close?(): Promise<void>;
   invoke(request: McpInvokeRequest, signal?: AbortSignal): Promise<McpInvokeResponse>;
   reload(proxies?: Record<string, ResolvedProxy>, signal?: AbortSignal): Promise<McpCatalog>;

@@ -26,6 +26,7 @@ import type {
   SessionUsageSummary,
 } from "@sciencediscovery/schema";
 
+import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { createApiServer, type ServerConfig } from "./server.js";
 
 const authorization = { authorization: "Bearer test-token" };
@@ -142,7 +143,7 @@ test("USG-013 session and global usage APIs expose breakdown fields", async (con
   }, null, 2)}\n`, "utf8");
 
   const deps = await startStubDeps(context);
-  const api = createApiServer(testConfig(dataDir, deps.runnerOrigin));
+  const api = createApiServer(testConfig(dataDir, deps.runnerOrigin), { mcpTransport: offlineMcpTransport });
   await new Promise<void>((resolveListen) => api.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((done) => {
     api.close(() => done());

@@ -32,6 +32,7 @@ import {
 } from "./artifact-dashboard.js";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { SessionStore } from "./store.js";
+import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { createApiServer, type ServerConfig } from "./server.js";
 
 interface Fixture {
@@ -628,7 +629,7 @@ async function startHttpFixture<T>(
     memoryGraph: { url: "http://127.0.0.1:17674", internalToken: "test" },
     evolve: { url: "http://127.0.0.1:4313", internalToken: "test" },
   };
-  const server = createApiServer(config);
+  const server = createApiServer(config, { mcpTransport: offlineMcpTransport });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
   return {

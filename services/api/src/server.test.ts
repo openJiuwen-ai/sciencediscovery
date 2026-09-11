@@ -111,6 +111,7 @@ import {
   waitForPermissionDecision,
   type ServerConfig,
 } from "./server.js";
+import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { SessionStore } from "./store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
@@ -120,14 +121,8 @@ const execFileAsync = promisify(execFile);
 
 // General API fixtures do not own live Python MCP servers. MCP integration
 // cases pass their explicit transport; an unexpected invocation fails closed.
-const emptyMcpCatalog: McpCatalog = { loadedAt: "2026-01-01T00:00:00.000Z", revision: "api-fixture-empty", servers: [] };
-const noMcpTransport: McpTransportClient = {
-  catalog: async () => emptyMcpCatalog,
-  reload: async () => emptyMcpCatalog,
-  invoke: async () => { throw new Error("This API fixture must explicitly provide an MCP transport before invoking MCP"); },
-};
 function createApiServer(...[config, dependencies]: Parameters<typeof createProductionApiServer>) {
-  return createProductionApiServer(config, { mcpTransport: noMcpTransport, ...dependencies });
+  return createProductionApiServer(config, { mcpTransport: offlineMcpTransport, ...dependencies });
 }
 
 interface TestSseEvent {
@@ -6988,4 +6983,35 @@ test("provider model REST saves stated facts and shows them back on the listing"
   });
   assert.equal(rejected.response.status, 400);
   assert.match(rejected.body.error, /must state both an input and an output rate/);
+});
+
+// Startup connects every enabled MCP source, and a bundled one is a child
+// process. Before this was wired up, closing the listener left those children
+// running: `node --test` finished every case and then hung forever with
+// nothing left to serve, which reads as a broken test run rather than a leak.
+test("closing the server closes the MCP transport it connected at startup", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-mcp-close-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  // Startup work that was already in flight can still be writing here while
+  // the directory is being removed, which is a race in the cleanup, not a
+  // finding about the server.
+  context.after(() => rm(tempRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 50 }));
+  let closed = 0;
+  const mcpTransport: McpTransportClient = {
+    ...offlineMcpTransport,
+    close: async () => { closed += 1; },
+  };
+  const server = createProductionApiServer(testConfig(tempRoot), { mcpTransport });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+
+  assert.equal(closed, 0, "the transport must stay open while the server is serving");
+  await new Promise<void>((resolveClose) => {
+    server.close(() => resolveClose());
+    server.closeAllConnections();
+  });
+  // The listener's close callback and the teardown both run on `close`; give
+  // the asynchronous one a turn before reading the count.
+  await new Promise((settled) => setImmediate(settled));
+
+  assert.equal(closed, 1);
 });
