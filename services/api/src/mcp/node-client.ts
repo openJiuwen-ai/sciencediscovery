@@ -397,8 +397,14 @@ export class McpNodeClient {
     };
   }
 
-  /** Close every cached session (shutdown hook). */
+  /**
+   * Close every cached session, killing the stdio MCP subprocesses the
+   * platform warm-up spawned — their stdio pipes otherwise keep the process
+   * alive forever after a server shutdown. The HTTP server hooks this on
+   * "close"; sessions rebuild lazily if the client is reused afterwards.
+   */
   async close(): Promise<void> {
     await this.closeAll();
+    this.configSignature = undefined;
   }
 }

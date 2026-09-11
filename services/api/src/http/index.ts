@@ -291,12 +291,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     keOrchestrator,
     knowledgeEngineStore,
     knowledgeEngineTools,
+    keJobRunner,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
     mcpBroker,
     mcpCatalog,
+    mcpGateway,
     mcpRegistry,
     memoryGraphClient,
     memoryGraphEnabled,
@@ -2991,6 +2993,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     }
   });
   server.once("close", () => remoteCompute.close());
+  // Kill the stdio MCP subprocesses the platform warm-up spawned; their stdio
+  // pipes otherwise keep the process (and every test that boots this server)
+  // alive long after close.
+  server.once("close", () => { void mcpGateway.close?.().catch(() => undefined); });
+  // Stop the KE job runner's 1s poll chain — every booted server leaves one
+  // ref'd timer loop running forever otherwise.
+  server.once("close", () => keJobRunner.stop());
   patchEphemeralCallback(server);
   return server;
 }
