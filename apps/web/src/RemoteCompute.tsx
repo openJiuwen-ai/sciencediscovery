@@ -307,6 +307,14 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
 }
 
 /**
+ * A clock difference worth telling an operator about. It matches the Runner's
+ * own execution-signature window: below it nothing would have broken anyway,
+ * and above it the machine's own timestamps are visibly wrong even though the
+ * product compensates when it talks to it.
+ */
+const SIGNIFICANT_CLOCK_OFFSET_MS = 30_000;
+
+/**
  * Whether a Session can execute on this host. SSH hosts must be Linux and must
  * either carry the runner already or be able to receive the deployed one.
  */
@@ -812,6 +820,13 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       const address = host.connectionKind === "direct" ? host.endpoint?.host : host.hostName ?? host.alias;
       const port = host.connectionKind === "direct" ? host.endpoint?.port : host.port ?? 22;
       const destination = address?.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+      // Executions keep working because the product signs on the machine's own
+      // clock, but a machine nobody disciplines is worth saying out loud: its
+      // own logs and file times are off by this much.
+      const offsetMs = host.runnerStatus?.clockOffsetMs;
+      const clockOffsetSeconds = offsetMs === undefined || Math.abs(offsetMs) < SIGNIFICANT_CLOCK_OFFSET_MS
+        ? undefined
+        : Math.round(offsetMs / 1000);
       const storedCredentials = [
         host.hasPassword ? t("remote.passwordStored") : undefined,
         host.hasPrivateKey ? t("remote.keyStored") : undefined,
@@ -857,6 +872,10 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
               <span className="remote-detail-badge info">{host.id === "local" ? t("runnerCatalog.stackConnection") : host.connectionKind === "ssh" ? t("remote.sshTunnel") : t("remote.selfDeployedDirect")}</span>
               {host.capabilities?.platform ? <span className="remote-detail-badge neutral">{host.capabilities.platform}</span> : null}
               {host.runnerStatus?.versionMismatch ? <span className="remote-detail-badge warning">{t("remote.versionDiffers")}</span> : null}
+              {clockOffsetSeconds === undefined ? null
+                : <span className="remote-detail-badge warning" title={t("remote.clockOffsetHelp")}>
+                  {t("remote.clockOffset", { seconds: Math.abs(clockOffsetSeconds) })}
+                </span>}
             </div>
             {host.capabilities?.gpu ? <small>{t("remote.gpuLabel", { gpu: host.capabilities.gpu })}</small> : null}
             <small>{t("remote.runnerId", { id: host.id })}</small>

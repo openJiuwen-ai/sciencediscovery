@@ -407,7 +407,12 @@ export class RemoteComputeClient {
       if (this.runnerStatus(hostId).connectedAt !== status.connectedAt || this.runnerStatus(hostId).state !== "ready") {
         return this.runnerStatus(hostId);
       }
-      return { ...status, resources };
+      const client = this.runnerConnections.get(hostId)?.client;
+      return {
+        ...status,
+        ...(client?.clockOffsetMs ? { clockOffsetMs: client.clockOffsetMs } : {}),
+        resources,
+      };
     } catch {
       return { ...this.runnerStatus(hostId), resourcesError: "Metrics unavailable. Refresh or reconnect an up-to-date Runner." };
     }
@@ -611,6 +616,8 @@ export class RemoteComputeClient {
     });
     this.logConnect(host.id, "Token accepted; the runner is ready.");
     const status: RemoteRunnerStatus = {
+      // Learned from the machine's own answers during the health check above.
+      ...(client.clockOffsetMs ? { clockOffsetMs: client.clockOffsetMs } : {}),
       connectedAt: new Date().toISOString(),
       hostId: host.id,
       ...(options.localVersion ? { localVersion: options.localVersion } : {}),
@@ -733,6 +740,7 @@ export class RemoteComputeClient {
       if (remoteFailure.trim()) this.logConnect(host.id, `Runner output: ${remoteFailure.trim()}`);
       this.logConnect(host.id, `Runner is ready (version ${health.runnerVersion}).`);
       record.status = {
+        ...(record.client.clockOffsetMs ? { clockOffsetMs: record.client.clockOffsetMs } : {}),
         connectedAt: new Date().toISOString(),
         ...(prepared.deployed ? { deployed: true } : {}),
         hostId: host.id,

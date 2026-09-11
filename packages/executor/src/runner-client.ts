@@ -52,10 +52,82 @@ export type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { work
 
 /** HTTP adapter for the isolated execution service. */
 export class RunnerClient {
+  #clockOffsetMs = 0;
+
   constructor(
     private readonly baseUrl: string,
     private readonly token: string,
   ) {}
+
+  /**
+   * How far this Runner's clock is from ours, in milliseconds; positive means
+   * the Runner is ahead. Measured from the `Date` header of its own answers, so
+   * it costs nothing and keeps up with a machine whose clock free-runs.
+   *
+   * Internal networks routinely have machines that never reach an NTP server —
+   * one measured here was 108 s behind — and the Runner refuses any execution
+   * whose timestamp is more than 30 s from its own clock. Rather than widen
+   * that window for everybody, the offset is applied to the timestamp this
+   * client signs, so the Runner sees a time it agrees with.
+   *
+   * It is used for exactly that and nothing else: everything this product
+   * records keeps its own clock, because a timeline assembled from several
+   * machines' clocks is a timeline nobody can read.
+   */
+  get clockOffsetMs(): number {
+    return this.#clockOffsetMs;
+  }
+
+  /**
+   * Update the offset from one exchange. `sentAt`/`receivedAt` are this
+   * machine's clock around the request, so the midpoint cancels most of the
+   * round trip; `Date` is second-resolution, which is ample against a 30 s
+   * window.
+   */
+  observeClock(header: string | null, sentAt: number, receivedAt: number): void {
+    if (!header) return;
+    const remote = Date.parse(header);
+    if (!Number.isFinite(remote)) return;
+    this.#clockOffsetMs = Math.round(remote - (sentAt + receivedAt) / 2);
+  }
+
+  /** The time this Runner believes it is, which is what its signature check compares against. */
+  private signingTimestamp(): string {
+    return (Date.now() + this.#clockOffsetMs).toString();
+  }
+
+  /**
+   * A time the Runner reported, moved onto this machine's clock.
+   *
+   * The Runner measures its own work with its own clock, which on a machine
+   * nobody disciplines can be minutes out. Keeping those numbers would file an
+   * execution before the turn that asked for it; recomputing them locally would
+   * throw away the duration the Runner actually measured. Shifting by the same
+   * offset keeps the duration and puts it on the timeline everything else here
+   * is written against.
+   */
+  private localTime<T extends string | undefined>(time: T): T {
+    if (!time) return time;
+    const parsed = Date.parse(time);
+    if (!Number.isFinite(parsed)) return time;
+    return new Date(parsed - this.#clockOffsetMs).toISOString() as T;
+  }
+
+  /** A managed execution record and its nested result, on this machine's clock. */
+  private managedExecutionTimes(execution: ManagedExecution): ManagedExecution {
+    return {
+      ...this.localExecutionTimes(execution),
+      ...(execution.result ? { result: this.localExecutionTimes(execution.result) } : {}),
+    };
+  }
+
+  private localExecutionTimes<T extends { finishedAt?: string; startedAt?: string }>(result: T): T {
+    return {
+      ...result,
+      ...(result.finishedAt ? { finishedAt: this.localTime(result.finishedAt) } : {}),
+      ...(result.startedAt ? { startedAt: this.localTime(result.startedAt) } : {}),
+    };
+  }
 
   /**
    * Make this Runner hold the selected frozen packages and say where it mounted
@@ -86,7 +158,11 @@ export class RunnerClient {
   }
 
   async health(): Promise<RunnerHealth> {
+    // The health check is the first thing a connection does, so this is where
+    // the clock offset is first learned — before anything needs signing.
+    const sentAt = Date.now();
     const response = await fetch(`${this.baseUrl}/health`, { signal: AbortSignal.timeout(5_000) });
+    this.observeClock(response.headers.get("date"), sentAt, Date.now());
     if (!response.ok) throw new Error(`Runner health check failed (${response.status})`);
     return await response.json() as RunnerHealth;
   }
@@ -209,6 +285,7 @@ export class RunnerClient {
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const sentAt = Date.now();
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
       headers: {
@@ -217,6 +294,7 @@ export class RunnerClient {
         ...init.headers,
       },
     });
+    this.observeClock(response.headers.get("date"), sentAt, Date.now());
     if (!response.ok) {
       const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
       throw new Error(body.error || `Runner request failed (${response.status})`);
@@ -316,7 +394,7 @@ export class RunnerClient {
 
   async cancelNpuJob(jobId: string, sessionId: string): Promise<NpuJob> {
     const body = JSON.stringify({ sessionId });
-    const timestamp = Date.now().toString();
+    const timestamp = this.signingTimestamp();
     return await this.request(`/npu/jobs/${encodeURIComponent(jobId)}/cancel`, {
       body,
       headers: {
@@ -333,7 +411,7 @@ export class RunnerClient {
 
   async submitNpuJob(request: CreateNpuJobRequest): Promise<NpuJob> {
     const body = JSON.stringify(request);
-    const timestamp = Date.now().toString();
+    const timestamp = this.signingTimestamp();
     const response = await fetch(`${this.baseUrl}/npu/jobs`, {
       body,
       headers: {
@@ -353,7 +431,7 @@ export class RunnerClient {
 
   async execute(request: PythonExecutionRequest, signal?: AbortSignal): Promise<PythonExecutionResult> {
     const body = JSON.stringify(request);
-    const timestamp = Date.now().toString();
+    const timestamp = this.signingTimestamp();
     const response = await fetch(`${this.baseUrl}/execute`, {
       body,
       headers: {
@@ -369,12 +447,12 @@ export class RunnerClient {
       const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
       throw new Error(body.error || `Runner execution failed (${response.status})`);
     }
-    return await response.json() as PythonExecutionResult;
+    return this.localExecutionTimes(await response.json() as PythonExecutionResult);
   }
 
   async executeShell(request: ShellExecutionRequest, signal?: AbortSignal): Promise<ShellExecutionResult> {
     const body = JSON.stringify(request);
-    const timestamp = Date.now().toString();
+    const timestamp = this.signingTimestamp();
     const response = await fetch(`${this.baseUrl}/execute-shell`, {
       body,
       headers: {
@@ -390,23 +468,25 @@ export class RunnerClient {
       const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
       throw new Error(body.error || `Runner shell execution failed (${response.status})`);
     }
-    return await response.json() as ShellExecutionResult;
+    return this.localExecutionTimes(await response.json() as ShellExecutionResult);
   }
 
   async startShellExecution(request: ShellExecutionRequest, signal?: AbortSignal): Promise<ManagedExecution> {
     const body = JSON.stringify(request);
-    const timestamp = Date.now().toString();
-    return this.request("/shell-executions", {
+    const timestamp = this.signingTimestamp();
+    return this.managedExecutionTimes(await this.request<ManagedExecution>("/shell-executions", {
       method: "POST", body, signal,
       headers: {
         [EXECUTION_SIGNATURE_HEADER]: createExecutionSignature(this.token, timestamp, body),
         [EXECUTION_TIMESTAMP_HEADER]: timestamp,
       },
-    });
+    }));
   }
 
   async getShellExecution(id: string, owner: ExecutionOwner, signal?: AbortSignal): Promise<ManagedExecution> {
-    return this.request(`/shell-executions/${encodeURIComponent(id)}?${new URLSearchParams({ ...owner })}`, { signal });
+    return this.managedExecutionTimes(
+      await this.request<ManagedExecution>(`/shell-executions/${encodeURIComponent(id)}?${new URLSearchParams({ ...owner })}`, { signal }),
+    );
   }
 
   async shellExecutionLogs(id: string, owner: ExecutionOwner, cursor = 0, signal?: AbortSignal): Promise<ExecutionLogPage> {

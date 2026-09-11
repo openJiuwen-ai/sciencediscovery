@@ -290,6 +290,15 @@ export interface RunnerResources {
 }
 
 export interface RemoteRunnerStatus {
+  /**
+   * How far the machine's clock is from this installation's, in milliseconds;
+   * positive means the machine is ahead. Measured from the Runner's own answers
+   * and applied only to the timestamps this product signs for it — everything
+   * recorded here keeps this machine's clock, so a large offset never reorders
+   * a timeline. Surfaced so an operator can see a machine whose clock nobody
+   * disciplines.
+   */
+  clockOffsetMs?: number;
   resources?: RunnerResources;
   resourcesError?: string;
   connectedAt?: string;

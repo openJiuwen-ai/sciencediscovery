@@ -90,7 +90,11 @@ export class ShellExecutions {
           acknowledge();
           while (true) {
             assertOwner(observed);
-            execution.startedAt = observed.startedAt;
+            // When it started, on this machine's clock. The Runner reports its
+            // own `startedAt`, and a machine whose clock nobody disciplines can
+            // be minutes off — copying it here would file the start before the
+            // queue time and scramble every timeline built from these records.
+            if (observed.startedAt && !execution.startedAt) execution.startedAt = new Date().toISOString();
             // Runner termination is not API completion until provenance has committed.
             execution.state = observed.state === "queued" ? "queued" : "running";
             this.save(execution);

@@ -191,6 +191,21 @@ test("machine identity and actions lead the card, with metadata and public key b
   await act(async () => renderer.unmount());
 });
 
+test("a machine whose clock is far off says so, without pretending executions broke", async () => {
+  // The product signs on the machine's clock, so runs keep working; what the
+  // operator still needs to know is that the machine's own times are wrong.
+  const { output } = await renderHost(buildHost({
+    runnerStatus: { clockOffsetMs: -108_000, hostId: "host-1", remoteVersion: "runner-v1", state: "ready" },
+  }));
+  assert.match(output, /clock off by 108s/);
+
+  // A second or two is normal on any network and not worth a badge.
+  const fine = await renderHost(buildHost({
+    runnerStatus: { clockOffsetMs: -1_500, hostId: "host-1", remoteVersion: "runner-v1", state: "ready" },
+  }));
+  assert.doesNotMatch(fine.output, /clock off by/);
+});
+
 test("a machine with no Runner connected says whether the machine itself answers", async () => {
   // Without this the card says "disconnected" for a powered-off machine and for
   // a healthy one nobody has connected yet, which are different problems.

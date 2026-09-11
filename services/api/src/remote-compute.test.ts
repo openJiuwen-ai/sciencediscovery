@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
-import { connect, type Socket } from "node:net";
+import { connect, type AddressInfo, type Socket } from "node:net";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
@@ -379,6 +379,81 @@ function directRemoteHost(port: number): RemoteHostTarget {
     updatedAt: timestamp,
   };
 }
+
+test("a Runner whose clock is minutes off still gets signatures it accepts", async (context) => {
+  // Internal machines routinely never reach an NTP server; one measured here
+  // was 108 s behind. The Runner refuses any execution more than 30 s from its
+  // own clock, so the product signs on the machine's clock instead of widening
+  // that window for everyone.
+  const skewMs = -108_000;
+  const seen: Array<{ signedAt: number; receivedAt: number }> = [];
+  const runner = createServer((request, response) => {
+    const receivedAt = Date.now() + skewMs;
+    const timestamp = Number(request.headers["x-science-execution-timestamp"]);
+    if (Number.isFinite(timestamp)) seen.push({ receivedAt, signedAt: timestamp });
+    // Answer with the machine's own clock, which is how the offset is learned.
+    response.setHeader("date", new Date(receivedAt).toUTCString());
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(request.url === "/health"
+      ? { platform: "linux", runnerVersion: "runner-v1", sandbox: "bubblewrap" }
+      : { activeExecutions: [], capturedAt: new Date(receivedAt).toISOString(), kernels: [], npuJobs: [], status: "ok" }));
+  });
+  await new Promise<void>((listening) => runner.listen(0, "127.0.0.1", listening));
+  context.after(() => new Promise<void>((closed) => runner.close(() => closed())));
+  const port = (runner.address() as AddressInfo).port;
+
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]));
+  const status = await client.connectRunner(directRemoteHost(port), { token: "any-token" });
+  assert.equal(status.state, "ready");
+  // Measured, not configured: within a second of the real skew.
+  assert.ok(Math.abs((status.clockOffsetMs ?? 0) - skewMs) < 2_000, `offset was ${status.clockOffsetMs}`);
+  // Recorded times stay on this machine's clock; a timeline built from several
+  // machines' clocks is one nobody can read.
+  assert.ok(Math.abs(Date.parse(status.connectedAt ?? "") - Date.now()) < 5_000);
+
+  await client.runnerClient("host-direct").cancelNpuJob("job-1", "session-1").catch(() => undefined);
+  const signed = seen.at(-1);
+  assert.ok(signed, "the request carried a signed timestamp");
+  // What the Runner compares: its own clock against the timestamp it received.
+  assert.ok(Math.abs(signed.signedAt - signed.receivedAt) < 30_000,
+    `signed ${signed.signedAt} against a clock at ${signed.receivedAt}`);
+});
+
+test("times the Runner reported come back on this machine's clock, with its measured duration intact", async (context) => {
+  const skewMs = -108_000;
+  const runner = createServer((request, response) => {
+    const remoteNow = Date.now() + skewMs;
+    response.setHeader("date", new Date(remoteNow).toUTCString());
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.url === "/health") {
+      response.end(JSON.stringify({ platform: "linux", runnerVersion: "runner-v1", sandbox: "bubblewrap" }));
+      return;
+    }
+    if (request.url?.startsWith("/shell-executions")) {
+      // The Runner times its own work with its own clock: a 4s run, 108s ago
+      // as far as this machine is concerned.
+      response.end(JSON.stringify({
+        agentId: "main", finishedAt: new Date(remoteNow).toISOString(), id: "exec-1",
+        sessionId: "session-1", startedAt: new Date(remoteNow - 4_000).toISOString(), state: "completed",
+      }));
+      return;
+    }
+    response.end(JSON.stringify({ activeExecutions: [], capturedAt: new Date(remoteNow).toISOString(), kernels: [], npuJobs: [], status: "ok" }));
+  });
+  await new Promise<void>((listening) => runner.listen(0, "127.0.0.1", listening));
+  context.after(() => new Promise<void>((closed) => runner.close(() => closed())));
+
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]));
+  await client.connectRunner(directRemoteHost((runner.address() as AddressInfo).port), { token: "any-token" });
+  const execution = await client.runnerClient("host-direct").getShellExecution("exec-1", { agentId: "main", sessionId: "session-1" });
+
+  // Written against this machine's clock, so it cannot land before the turn
+  // that asked for it.
+  assert.ok(Math.abs(Date.parse(execution.finishedAt ?? "") - Date.now()) < 5_000,
+    `finishedAt was ${execution.finishedAt}`);
+  // And the Runner's own measurement of how long it took survives the shift.
+  assert.equal(Date.parse(execution.finishedAt ?? "") - Date.parse(execution.startedAt ?? ""), 4_000);
+});
 
 test("a machine with no Runner connected still reports whether it answers", async () => {
   // "Runner disconnected" is not a machine state. A powered-off host, a broken
