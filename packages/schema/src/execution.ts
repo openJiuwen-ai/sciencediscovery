@@ -24,6 +24,20 @@ export interface ExecutionLogPage {
 }
 
 /** Control-plane ownership; Runner refs remain namespaced, not local CAS refs. */
+export interface RunnerWorkspaceReference {
+  runnerId: string;
+  pool: "agent-state";
+  /** Address in the named Runner's store, not a dependency in the API's CAS. */
+  objectId: `sha256:${string}`;
+  size: number;
+  mediaType: string;
+}
+
+export type AgentShellExecutionResult = Omit<ShellExecutionResult, "workspaceSnapshot" | "workspaceVersion"> & {
+  workspaceSnapshot?: ShellExecutionResult["workspaceSnapshot"] | RunnerWorkspaceReference;
+  workspaceVersion?: ShellExecutionResult["workspaceVersion"] | RunnerWorkspaceReference;
+};
+
 export interface AgentShellExecution extends ExecutionOwner {
   id: string;
   runnerId: string;
@@ -36,6 +50,6 @@ export interface AgentShellExecution extends ExecutionOwner {
   accepted: boolean;
   provenance: "pending" | "committed" | "unconfirmed";
   runnerVersionId?: string;
-  result?: ShellExecutionResult;
+  result?: AgentShellExecutionResult;
   error?: string;
 }

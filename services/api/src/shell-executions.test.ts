@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
-import { VersionStore } from "@sciencediscovery/cas";
+import { RefStore, VersionStore } from "@sciencediscovery/cas";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import type { ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -62,7 +62,9 @@ test("accepted background work outlives waiting and publishes a notice only afte
   const result = await f.service.wait(job.id, owner, 1000);
   assert.equal(result.state, "completed"); assert.equal(result.provenance, "committed");
   assert.equal(result.result?.stdout, "done");
-  assert.deepEqual(result.result?.workspaceVersion, f.ref, "the rooted envelope receipt reaches provenance even without a result field");
+  assert.deepEqual(result.result?.workspaceVersion, {
+    runnerId: identity.runnerId, pool: f.ref.pool, objectId: f.ref.digest, size: f.ref.size, mediaType: f.ref.mediaType,
+  }, "the rooted envelope receipt is scoped to its Runner even without a result field");
   assert.equal(result.turnId, "original-turn");
   assert.equal(f.notices.unread(owner).length, 1);
   assert.ok(f.service.snapshot(owner.sessionId)[0]!.resultRef);
@@ -136,4 +138,58 @@ test("cancellation before process admission records a terminal outcome without f
   assert.equal(result.state, "cancelled"); assert.equal(result.provenance, "committed");
   assert.equal(result.result, undefined); assert.equal(result.runnerVersionId, undefined);
   assert.equal(f.notices.unread(owner).length, 1);
+});
+
+test("remote execution observations keep Runner receipts outside the API CAS closure, including saved results", async (context) => {
+  const f = await fixture(context);
+  const remote = new VersionStore(join(f.versions.dataDir, "remote"));
+  const workspace = await remote.putRecord("WorkspaceTree", { entries: [] });
+  const version = await remote.putRecord("WorkspaceExecution", { workspace, executionId: "remote-job" });
+  const runner = { startShellExecution: async (r: ShellExecutionRequest) => ({
+    ...owner, id: r.executionId, state: "completed", queuedAt: "now",
+    result: { ...f.result, workspaceSnapshot: workspace, workspaceVersion: version }, version,
+  }) } as unknown as RunnerClient;
+  let submissions = 0;
+  const job = await f.service.start(owner, identity, () => runner, async (id, dispatch) => {
+    submissions++;
+    const result = await dispatch(request(id));
+    assert.deepEqual(result.workspaceVersion, version, "provenance receives the original Runner receipt");
+    return result;
+  });
+  const completed = await f.service.wait(job.id, owner, 1000);
+  assert.equal(completed.state, "completed");
+  const restarted = new ShellExecutions(f.db, f.versions, f.notices);
+  const refs = await RefStore.open(f.versions);
+  context.after(() => refs.close());
+  for (const [index, result] of [completed, await restarted.get(job.id, owner)].entries()) {
+    // Tool observations/actions/events all discover embedded ObjectRefs in the same way.
+    const observation = await f.versions.putRecord("ToolObservation", { details: result });
+    await refs.commit(f.versions, `observations/${index}`, null, observation);
+    assert.equal(result.result?.stdout, "done");
+    assert.equal(result.runnerVersionId, version.digest);
+    assert.deepEqual(result.result?.workspaceVersion, {
+      runnerId: identity.runnerId, pool: version.pool, objectId: version.digest, size: version.size, mediaType: version.mediaType,
+    });
+  }
+  await assert.rejects(f.versions.readState(version), { code: "ENOENT" }, "remote objects were not silently copied");
+  const notice = f.notices.prepareDelivery(owner)!;
+  f.notices.acknowledge(notice);
+  await restarted.wait(job.id, owner, 0);
+  assert.equal(f.notices.prepareDelivery(owner), undefined);
+  assert.equal(submissions, 1, "status inspection and restart never dispatch a second command");
+});
+
+test("local execution results retain strong snapshot dependencies and reject missing local objects", async (context) => {
+  const f = await fixture(context);
+  const version = await f.versions.putRecord("WorkspaceExecution", {});
+  const runner = { startShellExecution: async (r: ShellExecutionRequest) => ({
+    ...owner, id: r.executionId, state: "completed", queuedAt: "now", result: f.result, version,
+  }) } as unknown as RunnerClient;
+  const job = await f.service.start(owner, { ...identity, runnerId: "local" }, () => runner, (id, dispatch) => dispatch(request(id)));
+  const result = await f.service.wait(job.id, owner, 1000);
+  assert.deepEqual(result.result?.workspaceVersion, version);
+  const observation = await f.versions.putRecord("ToolObservation", { details: result });
+  await f.versions.validateClosure(observation);
+  await rm(f.versions.objectPath(version));
+  await assert.rejects(f.versions.validateClosure(observation), { code: "ENOENT" });
 });

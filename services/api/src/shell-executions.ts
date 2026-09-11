@@ -52,7 +52,18 @@ export class ShellExecutions {
 
   async get(id: string, owner: ExecutionOwner): Promise<AgentShellExecution> {
     const { resultRef, ...execution } = this.record(id, owner);
-    return { ...execution, ...(resultRef ? { result: JSON.parse((await this.versions.readState(resultRef)).toString()) as ShellExecutionResult } : {}) };
+    if (!resultRef) return execution;
+    const result = JSON.parse((await this.versions.readState(resultRef)).toString()) as ShellExecutionResult;
+    if (execution.runnerId === "local") return { ...execution, result };
+    // Runner-owned objects are external evidence. Exposing them as local
+    // ObjectRefs makes Agent turn closure validation read absent API blobs.
+    // Convert on read so results persisted by older APIs are safe to inspect too.
+    const { workspaceSnapshot, workspaceVersion, ...output } = result;
+    const scoped = ({ digest, ...ref }: AgentStateRef) => ({ ...ref, runnerId: execution.runnerId, objectId: digest });
+    return { ...execution, result: { ...output,
+      ...(workspaceSnapshot ? { workspaceSnapshot: scoped(workspaceSnapshot) } : {}),
+      ...(workspaceVersion ? { workspaceVersion: scoped(workspaceVersion) } : {}),
+    } };
   }
 
   /** Return only after the Runner acknowledges acceptance (or an explicit unknown outcome). */
