@@ -750,6 +750,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.queryGraph ? { queryGraph: options.queryGraph } : {}),
     ...(options.knowledgeEngine ? { knowledgeEngine: options.knowledgeEngine } : {}),
     ...(options.knowledgeEngineScope ? { knowledgeEngineScope: options.knowledgeEngineScope } : {}),
+    ...(options.researchProjectRoot ? { researchProjectRoot: options.researchProjectRoot } : {}),
     ...(options.declareEvidence ? { declareEvidence: options.declareEvidence } : {}),
     ...(options.declareClaim ? { declareClaim: options.declareClaim } : {}),
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),

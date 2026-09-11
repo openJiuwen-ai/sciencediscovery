@@ -365,6 +365,12 @@ export interface WorkspaceToolOptions {
     signal?: AbortSignal,
     toolCallId?: string,
   ) => Promise<ReviewCheckpointResult>;
+  /**
+   * Project-ledger root for research_state (V2-C2): when set, the tool gains
+   * promote/hydrate/project-summary and auto-hydrates the project ledger on
+   * summary/get. The directory is created on first promote.
+   */
+  researchProjectRoot?: string;
   proposeSkillLibraryUpdate?: (
     input: ProposeSkillLibraryUpdateRequest,
     signal?: AbortSignal,
@@ -1453,14 +1459,38 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   // (research_state / tournament_rank) — see research-state.ts /
   // tournament-rank.ts headers for semantics and deliberate divergences.
   {
+    const researchProjectRoot = options.researchProjectRoot;
+    // Once-per-run auto-hydration latch (per tool instance = per run).
+    let autoHydrated = false;
     const researchStateTool: AgentTool<TSchema> = {
       description:
-        "A persistent per-session research world model (survives context compaction): pin the research goal (set-goal), keep a plan with status lifecycle (plan-add / plan-update pending|in_progress|done|dropped), track open questions (question-add / question-resolve answered|dropped), record ruled-out directions with reasons so dead branches stay dead (rule-out), and dedupe attempted actions (mark-tried records; check-tried is the read-only pre-flight — call it BEFORE re-running a search/retrieval action to avoid repeat work). get returns the full state; summary returns the compact anti-drift digest (goal, active plan items, top open questions, recent ruled-out, tried counts). Refs accept an exact id (p1/q1/r1…) or a unique case-insensitive text substring.",
+        "A persistent research world model (survives context compaction): pin the research goal (set-goal), keep a plan with status lifecycle (plan-add / plan-update pending|in_progress|done|dropped), track open questions (question-add / question-resolve answered|dropped — answered may carry an evidence pointer), record ruled-out directions with reasons so dead branches stay dead (rule-out), and dedupe attempted actions (mark-tried records; check-tried is the read-only pre-flight — call it BEFORE re-running a search/retrieval action to avoid repeat work). get returns the full state; summary returns the compact anti-drift digest. Refs accept an exact id (p1/q1/r1…) or a unique case-insensitive text substring — NOTE: ids are store-local and renumbered when entries cross stores (session ↔ project ledger), so reference cross-store entries by text, never by id." +
+        (researchProjectRoot
+          ? " Project ledger: durable findings cross sessions — promote merges goal/answered-questions/ruled-out/plan-history into the project's shared ledger, hydrate merges the ledger back into this session (fill-only, never overwrites), project-summary reads the ledger digest; summary/get auto-hydrate once per run, so a new session inherits the project's world model on its first read."
+          : ""),
       execute: async (_toolCallId, params) => {
         const input = params as Record<string, unknown>;
         const port = createResearchStatePort();
         const action = String(input.action ?? "");
         const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : undefined);
+        const projectRoot = options.researchProjectRoot;
+        const needsProject = () => {
+          if (!projectRoot) throw new Error(`action ${action} requires a project context (this run has none)`);
+          return projectRoot;
+        };
+        // Project-ledger auto-hydration on read paths: once per run (the
+        // merge is idempotent fill-only, so later reads would redo nothing),
+        // and fail-soft — a ledger hiccup must never break the anti-drift
+        // read path (review P2).
+        let hydrationNote: string | undefined;
+        if (projectRoot && !autoHydrated && (action === "summary" || action === "get")) {
+          autoHydrated = true;
+          try {
+            await port.hydrate({ projectRoot, workspaceRoot });
+          } catch (error) {
+            hydrationNote = `skipped: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
         let result: unknown;
         switch (action) {
           case "set-goal":
@@ -1489,6 +1519,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
               ref: text("ref") ?? "",
               status: text("status") as "answered" | "dropped",
               ...(text("answer") === undefined ? {} : { answer: text("answer") }),
+              ...(text("evidence") === undefined ? {} : { evidence: text("evidence") }),
             });
             break;
           case "rule-out":
@@ -1519,10 +1550,22 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           case "clear":
             result = await port.clear({ workspaceRoot });
             break;
+          case "promote":
+            result = await port.promote({ projectRoot: needsProject(), workspaceRoot });
+            break;
+          case "hydrate":
+            result = await port.hydrate({ projectRoot: needsProject(), workspaceRoot });
+            break;
+          case "project-summary":
+            result = await port.projectSummary({ projectRoot: needsProject() });
+            break;
           default:
             throw new Error(
-              `Unknown action: ${action}. Supported: set-goal, plan-add, plan-update, question-add, question-resolve, rule-out, mark-tried, check-tried, get, summary, clear`,
+              `Unknown action: ${action}. Supported: set-goal, plan-add, plan-update, question-add, question-resolve, rule-out, mark-tried, check-tried, get, summary, clear, promote, hydrate, project-summary`,
             );
+        }
+        if (hydrationNote && result && typeof result === "object") {
+          result = { ...(result as Record<string, unknown>), hydration: hydrationNote };
         }
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
@@ -1544,6 +1587,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           Type.Literal("get"),
           Type.Literal("summary"),
           Type.Literal("clear"),
+          Type.Literal("promote"),
+          Type.Literal("hydrate"),
+          Type.Literal("project-summary"),
         ]),
         goal: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "set-goal: the research objective" })),
         items: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), { description: "plan-add: plan step texts" })),
@@ -1563,6 +1609,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         note: Type.Optional(Type.String({ maxLength: 1000, description: "plan-update: optional note (e.g. prune reason)" })),
         text: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "question-add: question text; mark-tried/check-tried fallback for the action description" })),
         answer: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "question-resolve answered: answer summary" })),
+        evidence: Type.Optional(Type.String({ maxLength: 500, description: "question-resolve answered: optional pointer to where the answer/evidence lives (anchor, doc, artifact)" })),
         what: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "rule-out: the ruled-out direction" })),
         why: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: "rule-out: why it was ruled out" })),
         source: Type.Optional(Type.String({ maxLength: 1000, description: "rule-out: optional evidence pointer" })),

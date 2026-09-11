@@ -226,3 +226,123 @@ test("research state: clear removes the file", async (context) => {
   // Clearing again is fine.
   await port.clear({ workspaceRoot: root });
 });
+
+test("project ledger: promote merges durable findings; hydrate fills a fresh session", async (context) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "research-project-"));
+  const sessionA = await mkdtemp(join(tmpdir(), "research-session-a-"));
+  const sessionB = await mkdtemp(join(tmpdir(), "research-session-b-"));
+  context.after(() => Promise.all([projectRoot, sessionA, sessionB].map((root) => rm(root, { force: true, recursive: true }))).then(() => undefined));
+  const port = createResearchStatePort(() => new Date(2026, 1, 1));
+
+  // Session A builds a world model.
+  await port.setGoal({ workspaceRoot: sessionA, goal: "Map EBOV nucleocapsid assembly" });
+  await port.addPlanItems({ workspaceRoot: sessionA, items: ["Seed corpus", "Extract helical parameters"] });
+  await port.updatePlanItem({ workspaceRoot: sessionA, ref: "p1", status: "done", note: "5 papers" });
+  await port.addQuestion({ workspaceRoot: sessionA, text: "What is the in-cell twist?" });
+  await port.resolveQuestion({ workspaceRoot: sessionA, ref: "q1", status: "answered", answer: "-30.35 degrees", evidence: "cc2dd513:figure:1" });
+  await port.addRuledOut({ workspaceRoot: sessionA, what: "Treat VP24 as passive scaffold", why: "contradicted by two-phase model", source: "04d3a509" });
+  const promote = await port.promote({ projectRoot, workspaceRoot: sessionA });
+  assert.deepEqual(promote.promoted, { goal: true, planItems: 1, questions: 1, ruledOut: 1 }, "done plan item + answered question + ruled-out promoted; pending plan item stays local");
+
+  // Promoting again is a no-op (dedup by text).
+  const again = await port.promote({ projectRoot, workspaceRoot: sessionA });
+  assert.deepEqual(again.promoted, { goal: false, planItems: 0, questions: 0, ruledOut: 0 });
+
+  // A fresh session hydrates on first read: goal + question + ruled-out arrive.
+  const hydrate = await port.hydrate({ projectRoot, workspaceRoot: sessionB });
+  assert.equal(hydrate.had, true);
+  assert.deepEqual(hydrate.hydrated, { goal: true, planItems: 1, questions: 1, ruledOut: 1 });
+  const summaryB = await port.summary({ workspaceRoot: sessionB });
+  assert.equal(summaryB.goal, "Map EBOV nucleocapsid assembly");
+  assert.equal(summaryB.openQuestions.answered, 1);
+  assert.equal(summaryB.ruledOut.total, 1);
+  const full = await port.get({ workspaceRoot: sessionB });
+  const q = full.state.openQuestions.find((question) => question.text === "What is the in-cell twist?");
+  assert.equal(q?.evidence, "cc2dd513:figure:1", "the uncertainty-ledger evidence pointer survives the round trip");
+
+  // projectSummary exposes the ledger digest.
+  const ledgerView = await port.projectSummary({ projectRoot });
+  assert.equal(ledgerView.had, true);
+  assert.equal(ledgerView.goal, "Map EBOV nucleocapsid assembly");
+
+  // An empty project hydrates nothing and writes nothing.
+  const emptyProject = await mkdtemp(join(tmpdir(), "research-project-empty-"));
+  context.after(() => rm(emptyProject, { force: true, recursive: true }));
+  const sessionC = await mkdtemp(join(tmpdir(), "research-session-c-"));
+  context.after(() => rm(sessionC, { force: true, recursive: true }));
+  const none = await port.hydrate({ projectRoot: emptyProject, workspaceRoot: sessionC });
+  assert.equal(none.had, false);
+  const stateC = await port.get({ workspaceRoot: sessionC });
+  assert.equal(stateC.state.plan.length, 0, "no-op hydrate must not create state");
+});
+
+test("project ledger: hydrate never overwrites the session's own goal or entries", async (context) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "research-project2-"));
+  const sessionA = await mkdtemp(join(tmpdir(), "research-session-a2-"));
+  const sessionB = await mkdtemp(join(tmpdir(), "research-session-b2-"));
+  context.after(() => Promise.all([projectRoot, sessionA, sessionB].map((root) => rm(root, { force: true, recursive: true }))).then(() => undefined));
+  const port = createResearchStatePort(() => new Date(2026, 1, 2));
+
+  await port.setGoal({ workspaceRoot: sessionA, goal: "Project goal from A" });
+  await port.addRuledOut({ workspaceRoot: sessionA, what: "Direction X", why: "failed twice" });
+  await port.promote({ projectRoot, workspaceRoot: sessionA });
+
+  // Session B already has its own goal and the same ruled-out text recorded.
+  await port.setGoal({ workspaceRoot: sessionB, goal: "B's own goal" });
+  await port.addRuledOut({ workspaceRoot: sessionB, what: "Direction X", why: "B's independent reason" });
+  const hydrate = await port.hydrate({ projectRoot, workspaceRoot: sessionB });
+  assert.equal(hydrate.hydrated.goal, false, "the session's own goal is never overwritten");
+  assert.equal(hydrate.hydrated.ruledOut, 0, "same-what entries do not duplicate");
+  const summaryB = await port.summary({ workspaceRoot: sessionB });
+  assert.equal(summaryB.goal, "B's own goal");
+});
+
+test("project ledger: the newer goal wins, and dropped questions close ledger entries instead of resurrecting", async (context) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "research-project3-"));
+  const sessionA = await mkdtemp(join(tmpdir(), "research-session-a3-"));
+  const sessionB = await mkdtemp(join(tmpdir(), "research-session-b3-"));
+  context.after(() => Promise.all([projectRoot, sessionA, sessionB].map((root) => rm(root, { force: true, recursive: true }))).then(() => undefined));
+
+  // A sets goal v1 at an earlier time and promotes; B refines to v2 later.
+  const portA = createResearchStatePort(() => new Date(2026, 2, 1, 10));
+  await portA.setGoal({ workspaceRoot: sessionA, goal: "v1: broad survey" });
+  await portA.promote({ projectRoot, workspaceRoot: sessionA });
+  const portB = createResearchStatePort(() => new Date(2026, 2, 1, 12));
+  await portB.setGoal({ workspaceRoot: sessionB, goal: "v2: focus on helical params" });
+  await portB.promote({ projectRoot, workspaceRoot: sessionB });
+  // A (still holding v1, older goalSetAt) promotes again — must not roll back.
+  await portA.promote({ projectRoot, workspaceRoot: sessionA });
+  const ledgerView = await portA.projectSummary({ projectRoot });
+  assert.equal(ledgerView.goal, "v2: focus on helical params", "an older session must not roll the project goal back");
+
+  // Dropped questions close the ledger's open entry and never get pushed fresh.
+  await portA.addQuestion({ workspaceRoot: sessionA, text: "Is VP24 passive?" });
+  await portA.promote({ projectRoot, workspaceRoot: sessionA });
+  await portA.resolveQuestion({ workspaceRoot: sessionA, ref: "Is VP24 passive?", status: "dropped" });
+  const dropped = await portA.promote({ projectRoot, workspaceRoot: sessionA });
+  assert.equal(dropped.promoted.questions, 1, "the drop closes the open ledger entry");
+  await portA.addQuestion({ workspaceRoot: sessionA, text: "Noise question" });
+  await portA.resolveQuestion({ workspaceRoot: sessionA, ref: "Noise question", status: "dropped" });
+  const noise = await portA.promote({ projectRoot, workspaceRoot: sessionA });
+  assert.equal(noise.promoted.questions, 0, "a question dropped before ever being promoted is not pushed");
+  const full = await portA.projectSummary({ projectRoot });
+  assert.equal(full.openQuestions.open, 0);
+});
+
+test("project ledger: concurrent promotes serialize — no merge is lost", async (context) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "research-project4-"));
+  context.after(() => rm(projectRoot, { force: true, recursive: true }));
+  const port = createResearchStatePort(() => new Date(2026, 2, 2));
+  const sessions: string[] = [];
+  for (let i = 0; i < 5; i += 1) {
+    const session = await mkdtemp(join(tmpdir(), `research-session-c${i}-`));
+    context.after(() => rm(session, { force: true, recursive: true }));
+    sessions.push(session);
+    await port.addRuledOut({ workspaceRoot: session, what: `Direction ${i}`, why: `reason ${i}` });
+  }
+  // Five concurrent promotes from five sessions of the same project.
+  const results = await Promise.all(sessions.map((workspaceRoot) => port.promote({ projectRoot, workspaceRoot })));
+  assert.equal(results.filter((result) => result.promoted.ruledOut === 1).length, 5);
+  const view = await port.projectSummary({ projectRoot });
+  assert.equal(view.ruledOut.total, 5, "every concurrent merge landed exactly once");
+});

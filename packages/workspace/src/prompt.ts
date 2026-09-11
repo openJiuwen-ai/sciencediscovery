@@ -376,6 +376,8 @@ export interface WorkspaceAgentOptions {
   knowledgeEngine?: WorkspaceToolOptions["knowledgeEngine"];
   /** Bound knowledge-base scope for the KE tools (see WorkspaceToolOptions). */
   knowledgeEngineScope?: WorkspaceToolOptions["knowledgeEngineScope"];
+  /** Project-ledger root for research_state promote/hydrate (see WorkspaceToolOptions). */
+  researchProjectRoot?: WorkspaceToolOptions["researchProjectRoot"];
   /** Create an Evidence node + extracts edge, Paper → Evidence
    * (`declare_evidence` tool). */
   declareEvidence?: (input: DeclareEvidenceInput) => Promise<DeclareResult>;

@@ -1126,6 +1126,9 @@ async function executeAgentRun(
     },
     ...(knowledgeEngineTools ? { knowledgeEngine: knowledgeEngineTools } : {}),
     ...(kbToolScope ? { knowledgeEngineScope: kbToolScope } : {}),
+    // Project-ledger root for research_state promote/hydrate (V2-C2) — the
+    // cross-trajectory world model lives outside any session workspace.
+    researchProjectRoot: resolve(store.dataDir, "research-ledgers", session.projectId),
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -1479,6 +1482,10 @@ async function executeAgentRun(
             config: agentConfig,
             enabledConnectorIds: subagentConnectorIds,
             ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
+            // The project ledger spans subagent trajectories too (review P1):
+            // a perspective subagent's durable findings promote into the same
+            // project world model, and it hydrates from it on first read.
+            researchProjectRoot: agentOptions.researchProjectRoot,
             ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath, subagent.id),
             ...createWorkspaceExecutionBindings({
               agentId: `subagent:${subagent.id}`,
