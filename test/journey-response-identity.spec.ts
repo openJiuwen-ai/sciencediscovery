@@ -36,8 +36,12 @@ async function controlledModel() {
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     request.on("end", async () => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString()) as { tools?: unknown[] };
-        const step = body.tools?.length ? invocation++ : -1;
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as { tools?: unknown[]; messages?: { role: string; content?: unknown }[] };
+        const latestUser = [...(body.messages ?? [])].reverse().find((message) => message.role === "user"
+          && !(typeof message.content === "string" && message.content.startsWith("<runtime_context_data ")))?.content;
+        const notification = typeof latestUser === "string" && latestUser.startsWith("[Execution notifications]");
+        // Automatic execution notifications must not consume a user journey turn.
+        const step = notification ? -2 : body.tools?.length ? invocation++ : -1;
         response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
         const write = (delta: Record<string, unknown>, finishReason: string | null = null) => response.write(`data: ${JSON.stringify({
           id: `response-fixture-${step}`, object: "chat.completion.chunk", created: 1, model,
@@ -70,6 +74,9 @@ async function controlledModel() {
           tool("query_graph", { query: "response identity" }, "查询前的说明。");
         } else if (step === 5) {
           write({ role: "assistant", content: "查询后的结论。" });
+          write({}, "stop");
+        } else if (step === -2) {
+          write({ role: "assistant", content: "检查结果已同步。" });
           write({}, "stop");
         } else if (step === -1) {
           // Session naming is a separate product call, not a scripted turn.
@@ -129,7 +136,8 @@ test("调整审批后继续阅读完整响应，刷新和工具间隔保持一�
   const stub = await controlledModel();
   let fixture: JourneyFixture | undefined;
   let runId = "";
-  const timeline = () => page.locator(".run-timeline").last();
+  let timelineText = "先确认科研任务。";
+  const timeline = () => page.locator(".run-timeline").filter({ hasText: timelineText });
   const answers = () => timeline().locator(".assistant-continuation");
   try {
     fixture = await createProjectAndSession(page, { approvalMode: "ask_for_dangerous",
@@ -182,6 +190,7 @@ test("调整审批后继续阅读完整响应，刷新和工具间隔保持一�
     });
     await journey.step("两次工具之间收紧审批", "第二次命令需要审批，提示位于两个工具之间，等待工具时没有正文光标。", async () => {
       await page.locator(".approval-mode-toggle").click(); // allow first tool
+      timelineText = "第一项检查。";
       runId = (await sendUserMessage(page, fixture!.session.id, "依次运行两项本地检查。")).id;
       await expect.poll(async () => (await records(page, fixture!.session.id, runId))
         .some(({ event }) => event.type === "tool.completed")).toBe(true);
@@ -204,6 +213,7 @@ test("调整审批后继续阅读完整响应，刷新和工具间隔保持一�
       await expect(answers()).toHaveCount(3);
     });
     await journey.step("隐藏工具前后保留不同响应", "无需显示内部工具卡片，前后的说明仍是两条独立正文，重开后也不合并。", async () => {
+      timelineText = "查询前的说明。";
       runId = (await sendUserMessage(page, fixture!.session.id, "查询已有科研记录，然后给出结论。")).id;
       expect((await waitForRunTerminal(page, fixture!.session.id, runId)).status).toBe("completed");
       await openProjectSession(page, fixture!);
