@@ -19,6 +19,7 @@ import type {
   PermissionDecision,
   PermissionRequest,
   RunStreamEvent,
+  SkillReviewDraftSummary,
   Subagent,
   SubagentStep,
   SubagentUsage,
@@ -32,6 +33,7 @@ import { SubagentCards } from "../Orchestration.js";
 import { PermissionDecisionActions, permissionMatchingKey } from "../PermissionDecisionActions.js";
 import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
+import { SkillReviewRecords } from "../SkillReviewRecords.js";
 import { ToolIoSections } from "./ToolIoSections.js";
 import { useLocale } from "../i18n/index.js";
 import { formatRunFailure } from "../run-failure.js";
@@ -50,6 +52,7 @@ export type RunTimelineEntry =
   | {
       content: string;
       expanded: boolean;
+      userExpanded?: boolean;
       id: string;
       status: "completed" | "running";
       truncated?: boolean;
@@ -60,6 +63,7 @@ export type RunTimelineEntry =
       expanded: boolean;
       id: string;
       trace: ToolTrace;
+      userExpanded?: boolean;
       type: "tool";
     }
   | {
@@ -187,11 +191,6 @@ export function reduceSubagentSnapshots(subagents: Subagent[], event: RunStreamE
   return subagents.map((subagent, candidateIndex) => candidateIndex === index ? updated : subagent);
 }
 
-function subagentsOverlap(left: Subagent, right: Subagent): boolean {
-  return (!left.finishedAt || left.finishedAt >= right.createdAt)
-    && (!right.finishedAt || right.finishedAt >= left.createdAt);
-}
-
 function updateTimelineSubagent(
   entries: RunTimelineEntry[],
   subagentId: string,
@@ -221,7 +220,7 @@ function approvalModeLabelKey(mode: ApprovalMode): "timeline.approvalModeAlwaysA
 function finishThinking(entries: RunTimelineEntry[]): RunTimelineEntry[] {
   return entries
     .map((entry) => entry.type === "thinking" && entry.status === "running"
-      ? { ...entry, expanded: false, status: "completed" }
+      ? { ...entry, expanded: entry.userExpanded ?? false, status: "completed" }
       : entry)
     // Drop a thinking step that ended up with no reasoning text — it would
     // render as an empty "Thought process" card wedged between assistant
@@ -250,18 +249,6 @@ export function reduceRunTimeline(
     if (updated !== entries) return updated;
 
     const finished = finishThinking(entries);
-    const overlappingGroupIndex = finished.findLastIndex((entry) =>
-      entry.type === "subagents"
-      && entry.subagents.some((subagent) => subagentsOverlap(subagent, event.subagent)));
-    if (overlappingGroupIndex >= 0) {
-      return finished.map((entry, index) => index === overlappingGroupIndex && entry.type === "subagents"
-        ? {
-            ...entry,
-            subagents: [...entry.subagents, event.subagent]
-              .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
-          }
-        : entry);
-    }
     return [...finished, {
       id: `subagents-${subagentId}`,
       subagents: [event.subagent],
@@ -278,7 +265,7 @@ export function reduceRunTimeline(
     const last = finished.at(-1);
     if (last?.type === "thinking" && last.turn === event.turn) {
       return finished.map((entry, index) => index === finished.length - 1 && entry.type === "thinking"
-        ? { ...entry, expanded: true, status: "running" }
+        ? { ...entry, expanded: entry.userExpanded ?? true, status: "running" }
         : entry);
     }
     return [...finished, {
@@ -295,7 +282,7 @@ export function reduceRunTimeline(
     const last = entries.at(-1);
     if (last?.type === "thinking" && last.turn === event.turn) {
       return entries.map((entry, entryIndex) => entryIndex === entries.length - 1 && entry.type === "thinking"
-        ? { ...entry, content: entry.content + event.delta, expanded: true, status: "running" }
+        ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? true, status: "running" }
         : entry);
     }
     const finished = finishThinking(entries);
@@ -365,7 +352,7 @@ export function reduceRunTimeline(
     return entries.map((entry, entryIndex) => entryIndex === index && entry.type === "tool"
       ? {
           ...entry,
-          expanded: false,
+          expanded: entry.userExpanded ?? false,
           trace: {
             ...(entry.trace.args !== undefined ? { args: entry.trace.args } : {}),
             ...(entry.trace.input !== undefined
@@ -480,7 +467,7 @@ export function reduceRunTimeline(
       : event.reason;
     return finishThinking(entries).map((entry) => {
       if (entry.type === "tool" && entry.trace.status === "running") {
-        return { ...entry, expanded: false, trace: { ...entry.trace, status: "failed", summary } };
+        return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
       return cancelPendingPermission(entry);
     });
@@ -494,7 +481,7 @@ export function reduceRunTimeline(
     const summary = event.reason ?? event.run.error ?? `Run ${event.status}`;
     return finishThinking(entries).map((entry) => {
       if (entry.type === "tool" && entry.trace.status === "running" && event.status !== "completed") {
-        return { ...entry, expanded: false, trace: { ...entry.trace, status: "failed", summary } };
+        return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
       return cancelPendingPermission(entry);
     });
@@ -521,7 +508,7 @@ export function setTimelineEntryExpanded(
   expanded: boolean,
 ): RunTimelineEntry[] {
   return entries.map((entry) => entry.id === id && (entry.type === "thinking" || entry.type === "tool")
-    ? { ...entry, expanded }
+    ? { ...entry, expanded, userExpanded: expanded }
     : entry);
 }
 
@@ -560,6 +547,7 @@ export function RunTimeline({
   onLoadToolOutput,
   onOpenArtifacts,
   onOpenSkillReviews,
+  onListSkillDrafts,
   onPermissionDecision,
   onOpenSubagent,
   onToggle,
@@ -580,6 +568,7 @@ export function RunTimeline({
   onLoadToolOutput?: (trace: ToolTrace) => Promise<string | undefined>;
   onOpenArtifacts?: () => void;
   onOpenSkillReviews?: (skillId?: string) => void;
+  onListSkillDrafts?: () => Promise<SkillReviewDraftSummary[]>;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   onOpenSubagent?: (subagent: Subagent) => void;
   onToggle: (id: string, expanded: boolean) => void;
@@ -599,22 +588,22 @@ export function RunTimeline({
   useEffect(() => {
     if (!onLoadToolOutput) return;
     for (const entry of entries) {
-      if (entry.type !== "tool" || !entry.expanded || entry.trace.status === "running") continue;
+      if (entry.type !== "tool" || (!entry.expanded && entry.trace.name !== "create_skill") || entry.trace.status === "running") continue;
       const trace = entry.trace;
       if (!trace.outputStream || trace.output !== undefined) continue;
       if (toolOutputs[trace.id] !== undefined || loadingToolIds.current.has(trace.id)) continue;
       loadingToolIds.current.add(trace.id);
       void onLoadToolOutput(trace)
         .then((output) => setToolOutputs((current) => ({ ...current, [trace.id]: output ?? "" })))
+        .catch(() => { /* Keep the existing summary when loading the full result fails. */ })
         .finally(() => loadingToolIds.current.delete(trace.id));
     }
   }, [entries, onLoadToolOutput, toolOutputs]);
-  if (!entries.length) return null;
-  const reviewTrace = [...entries].reverse().find((entry) =>
+  if (!entries.length || (!footer && entries.every((entry) => entry.type === "permission" && entry.request.state !== "pending"))) return null;
+  const reviewTraces = entries.filter((entry): entry is Extract<RunTimelineEntry, { type: "tool" }> =>
     entry.type === "tool"
       && entry.trace.name === "create_skill"
       && entry.trace.status === "completed");
-  const createdSkillId = reviewTrace?.type === "tool" ? skillDraftNameFromTrace(reviewTrace.trace) : undefined;
   async function decidePermission(request: PermissionRequest, decision: PermissionDecision): Promise<void> {
     if (!onPermissionDecision) return;
     const matcher = permissionMatchingKey(request);
@@ -634,10 +623,14 @@ export function RunTimeline({
   }
   return (
     <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite">
+      <header className="message assistant run-identity">
+        <div className="avatar"><BrandIcon size={19} /></div>
+        <div><span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span></div>
+      </header>
       {entries.map((entry) => {
         if (entry.type === "history-truncated") {
           return (
-            <aside className="boundary-note" key={entry.id}>
+            <aside className="boundary-note process-notice" key={entry.id}>
               <span><WarningIcon size={15} /></span>
               <p>{entry.droppedEvents} run event(s) were removed by the retention policy; approval records are kept.</p>
             </aside>
@@ -646,7 +639,7 @@ export function RunTimeline({
 
         if (entry.type === "approval-mode") {
           return (
-            <aside className="boundary-note" key={entry.id}>
+            <aside className="boundary-note process-notice" key={entry.id}>
               <span><WarningIcon size={15} /></span>
               <p>{t("timeline.approvalModeChanged", {
                 from: t(approvalModeLabelKey(entry.previousApprovalMode)),
@@ -657,10 +650,9 @@ export function RunTimeline({
         }
 
         if (entry.type === "permission") {
+          if (entry.request.state !== "pending") return null;
           const pending = entry.request.state === "pending";
-          const status = pending ? t("permissions.required") : entry.request.state === "allowed"
-            ? t("timeline.permissionGranted")
-            : entry.request.state === "denied" ? t("timeline.permissionDenied") : t("timeline.permissionCancelled");
+          const status = t("permissions.required");
           return (
             <article className={`permission-card timeline-permission ${entry.request.state}`} key={entry.id}>
               <div>
@@ -696,7 +688,7 @@ export function RunTimeline({
           return (
             <SubagentCards
               className="timeline-subagents"
-              heading={entry.subagents.length > 1 ? "Subagents" : "Subagent"}
+              hideHeading
               key={entry.id}
               onOpenSubagent={onOpenSubagent ?? (() => undefined)}
               subagents={entry.subagents}
@@ -706,10 +698,8 @@ export function RunTimeline({
 
         if (entry.type === "assistant") {
           return (
-            <article className="message assistant streaming" key={entry.id}>
-              <div className="avatar"><BrandIcon size={19} /></div>
-              <div>
-                <span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span>
+            <article className="message assistant streaming assistant-continuation" key={entry.id}>
+              <div className="message-body">
                 <MarkdownRenderer
                   className="message-content"
                   content={entry.content}
@@ -730,7 +720,7 @@ export function RunTimeline({
           const label = entry.status === "running" ? t("timeline.thinking") : t("timeline.thoughtTurn", { turn: entry.turn });
           return (
             <details
-              className={`timeline-disclosure thinking ${entry.status}`}
+              className={`timeline-disclosure thinking ${entry.status}${entry.status !== "running" ? " process-record" : ""}`}
               key={entry.id}
               open={entry.expanded}
               onToggle={(event) => {
@@ -774,7 +764,7 @@ export function RunTimeline({
 
         return (
           <details
-            className={`timeline-disclosure tool ${entry.trace.status}`}
+            className={`timeline-disclosure tool ${entry.trace.status}${entry.trace.status !== "running" ? " process-record" : ""}`}
             key={entry.id}
             open={entry.expanded}
             onToggle={(event) => {
@@ -784,7 +774,8 @@ export function RunTimeline({
             <summary>
               <span className="timeline-chevron"><ChevronRightIcon size={16} /></span>
               <span className="timeline-icon">{statusIcon(entry.trace.status)}</span>
-              <span className="timeline-label"><strong>{entry.trace.name}</strong><small>{t("timeline.toolCall")}</small></span>
+              <span className="timeline-label"><strong>{entry.trace.status === "running" ? entry.trace.name : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: entry.trace.name })}</strong><small>{t("timeline.toolCall")}</small></span>
+              {(entry.trace.status === "running" || entry.expanded) && entries.some((candidate) => candidate.type === "permission" && candidate.request.state === "allowed" && candidate.request.toolCallId === entry.trace.id) ? <small className="tool-authorization">{t("record.authorized")}</small> : null}
               <span className={`timeline-status ${entry.trace.status}`}>{entry.trace.status}</span>
             </summary>
             <div className="timeline-content tool-content">
@@ -794,11 +785,8 @@ export function RunTimeline({
         );
       })}
       {footer}
-      {reviewTrace && onOpenSkillReviews ? <aside className="skill-review-timeline-cta">
-        <span className="skill-review-timeline-icon"><CheckIcon size={17} /></span>
-        <div><strong>{t("timeline.skillDraftReady")}</strong><small>{t("timeline.skillDraftReadyDescription")}</small></div>
-        <button onClick={() => onOpenSkillReviews(createdSkillId)} type="button">{t("timeline.reviewSkill")}</button>
-      </aside> : null}
+      {reviewTraces.length && onOpenSkillReviews ? <SkillReviewRecords listDrafts={onListSkillDrafts} onOpen={onOpenSkillReviews}
+        traces={reviewTraces.map(({ trace }) => ({ ...trace, output: trace.output ?? toolOutputs[trace.id] }))} /> : null}
     </section>
   );
 }

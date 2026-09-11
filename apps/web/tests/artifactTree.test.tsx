@@ -130,7 +130,7 @@ test("ArtifactTreeList renders compact folder and file rows with full-name contr
   ]);
   const markup = renderToStaticMarkup(createElement(ArtifactTreeList, { entries: tree, onOpen: () => undefined }));
 
-  assert.match(markup, /<details[^>]*open=""/);
+  assert.doesNotMatch(markup, /<details[^>]*open=""/);
   assert.match(markup, /Folder e/);
   assert.match(markup, /Folder e\/f/);
   assert.match(markup, /Open e\/f\/g\.md/);
@@ -280,8 +280,8 @@ test("workspace panel uses collapsible sections and header actions instead of a 
   const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
   assert.doesNotMatch(app, /className="artifact-tree-toolbar"/);
-  assert.match(app, /<details className="workspace-fold artifact-catalog-section" open>/);
-  assert.match(app, /<details className="workspace-fold physical-files" open>/);
+  assert.match(app, /<details className="workspace-fold artifact-catalog-section">/);
+  assert.match(app, /<details className="workspace-fold physical-files" open=\{showPhysicalFiles\}/);
   assert.match(app, /className="artifact-session-actions"/);
   assert.match(app, /aria-pressed=\{artifactSelectionMode\}/);
   assert.match(app, /aria-pressed=\{workspaceFileSelectionMode\}/);

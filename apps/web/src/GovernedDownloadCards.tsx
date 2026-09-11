@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ProcessRecord } from "./ProcessRecord.js";
 import { useState } from "react";
 
 import type { ArtifactJob, ArtifactPlan } from "@sciencediscovery/schema";
@@ -81,7 +82,8 @@ export function GovernedDownloadCards({
 
   const cardId = activityCardId("governed-downloads", groupId);
   const actionable = unplanned.length + awaitingApproval.length + jobs.filter((job) => job.state === "failed").length;
-  const expanded = expandedCards[cardId] ?? actionable > 0;
+  const pending = unplanned.length + awaitingApproval.length > 0 || jobs.some((job) => ACTIVE_STATES.has(job.state));
+  const expanded = expandedCards[cardId] ?? (pending && actionable > 0);
 
   async function runAction(id: string, action: () => Promise<void>): Promise<void> {
     setBusyIds((current) => new Set([...current, id]));
@@ -93,10 +95,10 @@ export function GovernedDownloadCards({
   }
 
   return <section aria-label={t("downloads.title")} className="governed-downloads-panel">
-    <article className="governed-downloads-card">
+    <article className={`governed-downloads-card${pending ? "" : " process-record"}${jobs.some((job) => job.state === "failed") ? " failed" : ""}`}>
       <button aria-expanded={expanded} className="governed-downloads-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span><strong>{t("downloads.title")}</strong><small>{downloadSummary(jobs, actionable)}</small></span>
+        <span><strong>{t("downloads.title")}{!pending ? ` · ${downloadSummary(jobs, actionable)}` : ""}</strong><small>{downloadSummary(jobs, actionable)}</small></span>
         <i>{unplanned.length + awaitingApproval.length + jobs.length}</i>
       </button>
       {expanded ? <div className="governed-downloads-body">
@@ -108,11 +110,11 @@ export function GovernedDownloadCards({
           <span><strong>{plan.candidates.find((item) => item.id === plan.selectedCandidateId)?.logicalName ?? plan.sourceRecordId}</strong><small>{plan.sourceId} → {plan.destination.path}</small></span>
           <em>{t("downloads.waitingApproval")}</em>
         </article>)}
-        {jobs.toReversed().map((job) => <article className={`governed-download-item ${job.state}`} key={job.id}>
+        {jobs.toReversed().map((job) => <ProcessRecord active={ACTIVE_STATES.has(job.state)} failed={job.state === "failed"} key={job.id} label={`${job.sourceId} · ${job.sourceRecordId} · ${t(JOB_STATE_KEYS[job.state])}`}><article className={`governed-download-item ${job.state}`}>
           <span><strong>{job.sourceId} · {job.sourceRecordId}</strong><small>{JOB_STATE_KEYS[job.state] ? t(JOB_STATE_KEYS[job.state]) : job.state.replaceAll("_", " ")} · {job.progress.percent ?? 0}% · {t("downloads.bytes", { count: job.progress.bytesDownloaded.toLocaleString() })}</small>{job.finalPath ? <small>{job.finalPath}</small> : null}{job.error ? <small className="governed-download-error" role="alert">{job.error.message}</small> : null}</span>
           {ACTIVE_STATES.has(job.state) ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "cancel"))} type="button">{t("common.cancel")}</button> : null}
           {job.state === "failed" ? <button className="secondary-button" disabled={busyIds.has(job.id)} onClick={() => void runAction(job.id, () => onAction(job, "retry"))} type="button">{busyIds.has(job.id) ? t("downloads.retrying") : t("downloads.retry")}</button> : null}
-        </article>)}
+        </article></ProcessRecord>)}
       </div> : null}
     </article>
   </section>;

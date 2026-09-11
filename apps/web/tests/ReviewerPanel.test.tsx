@@ -52,10 +52,10 @@ test("ReviewerPanel shows the built-in Quick review identity", () => {
   assert.match(html, /Version version- · Quick/);
   assert.match(html, /Quick review passed/);
   assert.match(html, /Artifact provenance checks passed/);
-  assert.match(html, /<details class="reviewer-specialist-card passed">/);
+  assert.match(html, /<details class="reviewer-specialist-card process-record passed">/);
   assert.match(html, /<summary class="reviewer-specialist-card-heading">/);
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
-  assert.doesNotMatch(html, /<details class="reviewer-specialist-card passed"[^>]*\sopen(?:=|\s|>)/);
+  assert.doesNotMatch(html, /<details class="reviewer-specialist-card process-record passed"[^>]*\sopen(?:=|\s|>)/);
   assert.doesNotMatch(html, /Citation verified/);
 });
 
@@ -75,7 +75,7 @@ test("ReviewerPanel shows missing citation identifiers", () => {
 
   assert.match(html, /Warnings found/);
   assert.match(html, /Citation identifier missing/);
-  assert.match(html, /reviewer-specialist-card warning/);
+  assert.match(html, /reviewer-specialist-card process-record warning/);
   assert.match(html, /class="warning"/);
 });
 
@@ -140,7 +140,7 @@ test("ReviewerPanel reserves red for critical findings", () => {
   }));
 
   assert.match(html, /Revision required/);
-  assert.match(html, /reviewer-specialist-card critical/);
+  assert.match(html, /reviewer-specialist-card process-record critical/);
   assert.match(html, /class="critical"/);
 });
 
@@ -200,7 +200,7 @@ test("ReviewerPanel collapses a completed multi-Artifact group by default", () =
     toolCallId: "review-call",
   }));
 
-  assert.match(html, /class="reviewer-specialist-panel"/);
+  assert.match(html, /class="reviewer-specialist-panel process-record"/);
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
   assert.match(html, /report\.md/);
   assert.match(html, /chart\.png/);

@@ -54,7 +54,7 @@ export function EvolveRunCard({ onOpenRun, runs }: EvolveRunCardProps) {
   const shown = expanded ? [...active, ...finished] : [...active, ...finished.slice(0, VISIBLE_FINISHED)];
   const hidden = expanded ? 0 : finished.length - Math.min(finished.length, VISIBLE_FINISHED);
 
-  return <section className="evolve-run-card">
+  return <section className={`evolve-run-card${active.length ? " running" : ""}`}>
     <header className="evolve-run-card-header">
       <h3>{t("evolve.card.title")}</h3>
       {active.length
@@ -64,7 +64,7 @@ export function EvolveRunCard({ onOpenRun, runs }: EvolveRunCardProps) {
     <ul className="evolve-run-list">
       {shown.map((run) => <li key={run.id}>
         <button
-          className="evolve-run-row"
+          className={`evolve-run-row${isEvolveRunActive(run.status) ? "" : " process-agent-record"}${run.status === "failed" ? " failed" : ""}`}
           onClick={() => onOpenRun(run.id)}
           title={run.goal.statement}
           type="button"

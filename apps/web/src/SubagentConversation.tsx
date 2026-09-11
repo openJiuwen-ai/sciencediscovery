@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ComposerReference, Subagent } from "@sciencediscovery/schema";
+import type { ComposerReference, SkillReviewDraftSummary, Subagent } from "@sciencediscovery/schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useLocale } from "./i18n/index.js";
@@ -91,6 +91,8 @@ export function SubagentConversation({
   onBack,
   onChipClick,
   onOpenArtifacts,
+  onOpenSkillReviews,
+  onListSkillDrafts,
   projectName,
   references,
   sessionTitle,
@@ -102,6 +104,8 @@ export function SubagentConversation({
   onBack: () => void;
   onChipClick?: (reference: ComposerReference) => void;
   onOpenArtifacts?: () => void;
+  onOpenSkillReviews?: (name?: string) => void;
+  onListSkillDrafts?: () => Promise<SkillReviewDraftSummary[]>;
   projectName: string;
   references?: ComposerReference[];
   sessionTitle: string;
@@ -180,6 +184,8 @@ export function SubagentConversation({
         modelName={subagent.model?.name ?? subagent.model?.model}
         onChipClick={onChipClick}
         onOpenArtifacts={onOpenArtifacts}
+        onOpenSkillReviews={onOpenSkillReviews}
+        onListSkillDrafts={onListSkillDrafts}
         onToggle={(id, expanded) => setExpansion((current) => ({
           entries: {
             ...(current.subagentId === subagent.id ? current.entries : {}),

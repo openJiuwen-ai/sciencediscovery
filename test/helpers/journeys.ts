@@ -68,12 +68,15 @@ export interface ToolProcess {
 }
 
 export interface ScriptedToolStep {
+  text?: string;
+  reasoning?: string;
   arguments: Record<string, unknown>;
   delayMs?: number;
   tool: string;
 }
 
 export interface ScriptedTextStep {
+  reasoning?: string;
   delayMs?: number;
   text: string;
 }
@@ -240,10 +243,14 @@ export function scriptedModel(
           step: stepIndex,
           turn,
         });
-        if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
         response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        if (step.reasoning) response.write(`data: ${JSON.stringify(completionChunk(id, model, {
+          role: "assistant", reasoning_content: step.reasoning,
+        }, null))}\n\n`);
+        if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
         if ("tool" in step) {
           response.write(`data: ${JSON.stringify(completionChunk(id, model, {
+            ...(step.text ? { content: step.text } : {}),
             role: "assistant",
             tool_calls: [{
               function: { arguments: JSON.stringify(step.arguments), name: step.tool },
@@ -304,7 +311,7 @@ export function scriptedModel(
 /** Register either a spec-owned local stub or an explicitly gated real model. */
 export function registerModel(
   page: Page,
-  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean },
+  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" },
 ): Promise<JourneyModel> {
   return apiJson(page, "/api/models", { data: { vision: false, ...input }, method: "POST" });
 }
@@ -342,7 +349,7 @@ export async function createProjectAndSession(
   page: Page,
   input: {
     approvalMode?: "always_allow" | "ask_for_dangerous";
-    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean };
+    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" };
     modelId?: string;
     projectName: string;
     sessionTitle: string;
@@ -546,6 +553,8 @@ export async function openEnvironmentPage(page: Page): Promise<Locator> {
 export async function openArtifactPanel(page: Page): Promise<Locator> {
   const showWorkspace = page.getByRole("button", { name: /^(Show workspace|显示工作区)$/ });
   if (await showWorkspace.isVisible().catch(() => false)) await showWorkspace.click();
+  const files = page.locator('aside.workspace-panel [data-folder="files"]');
+  if (await files.getAttribute("open") === null) await files.locator(":scope > summary").click();
   const catalog = page.locator("aside.workspace-panel details.artifact-catalog-section");
   await expect(catalog).toBeVisible();
   if (await catalog.getAttribute("open") === null) await catalog.locator(":scope > summary").click();
@@ -567,7 +576,7 @@ export async function artifactTree(page: Page): Promise<{
   sessionGroups: Locator;
 }> {
   const catalog = await openArtifactPanel(page);
-  const folders = catalog.locator("details.artifact-tree-folder");
+  const folders = catalog.locator("details.artifact-session-group, details.artifact-tree-directory");
   for (let index = 0; index < await folders.count(); index += 1) {
     const folder = folders.nth(index);
     if (await folder.getAttribute("open") === null) await folder.locator(":scope > summary").click();
@@ -587,14 +596,18 @@ export async function artifactTree(page: Page): Promise<{
       return menu.getByRole("option");
     },
     openPhysicalFiles: async () => {
-      const toggle = workspace.getByRole("button", { name: /^(View workspace files|查看工作区文件)$/ });
-      if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
       const tree = workspace.locator("details.physical-files");
+      if (await tree.getAttribute("open") === null) await tree.locator(":scope > summary").click();
+      const directories = tree.locator("details.artifact-tree-directory");
+      for (let index = 0; index < await directories.count(); index += 1) {
+        const directory = directories.nth(index);
+        if (await directory.getAttribute("open") === null) await directory.locator(":scope > summary").click();
+      }
       await expect(tree).toBeVisible();
       return tree;
     },
     physicalFiles,
-    sessionGroups: catalog.locator("section.artifact-session-group"),
+    sessionGroups: catalog.locator("details.artifact-session-group"),
   };
 }
 

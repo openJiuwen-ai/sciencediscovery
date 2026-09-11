@@ -24,7 +24,7 @@ test("Session activity reads logs and cancels explicitly, never starts Shell", a
     await click("View logs"); assert.match(JSON.stringify(view!.toJSON()), /still running/);
     await click("Cancel execution"); await click("Cancel reminder");
     assert.deepEqual(calls, ["logs", "executions", "timers"]);
-    assert.match(JSON.stringify(view!.toJSON()), /No transfers yet/);
+    assert.doesNotMatch(JSON.stringify(view!.toJSON()), /No transfers yet|Transfers/);
   } finally { await act(async () => view!.unmount()); }
 });
 

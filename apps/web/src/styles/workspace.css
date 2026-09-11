@@ -150,6 +150,11 @@
 .workspace-plan-section .workspace-fold-body { padding: 8px; }
 .workspace-plan-section .orchestration-panel { width: 100%; max-width: none; margin: 0; gap: 8px; }
 .workspace-plan-section .plan-card { padding: 9px; }
+.workspace-plan-section .plan-card-heading { gap: 8px; }
+.workspace-plan-section .plan-card-label { min-width: 0; gap: 3px; }
+.workspace-plan-section .plan-card-label strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.workspace-plan-section .plan-card-label small { line-height: 1.4; }
+.workspace-plan-section .plan-card-heading > i { white-space: nowrap; padding: 2px 5px; border-radius: 4px; line-height: 1.4; }
 
 .vision-picker { display: block; margin-top: 14px; }
 .vision-picker > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }

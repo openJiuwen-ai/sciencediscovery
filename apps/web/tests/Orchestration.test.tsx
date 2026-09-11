@@ -96,7 +96,7 @@ test("recorded plan collapses to a live Todo summary", () => {
 
   assert.match(html, /Plan · main/);
   assert.match(html, /0\/1 completed/);
-  assert.match(html, /active/);
+  assert.match(html, /<i>Pending<\/i>/);
   assert.match(html, /aria-expanded="false"/);
   assert.doesNotMatch(html, /recorded mode/);
   // Scope and step list stay folded away until the card is expanded.
@@ -132,6 +132,26 @@ test("panel renders independent plan snapshots for different agents", () => {
 
   assert.match(html, /Plan · main/);
   assert.match(html, /Plan · subagent:worker-1/);
+});
+
+test("plan badge follows completion and terminal state without repeating the summary", () => {
+  for (const [items, terminal, badge] of [
+    [[{ step: "Done", status: "completed" }], false, "Completed"],
+    [[{ step: "Done", status: "completed" }], true, "Completed"],
+    [[{ step: "Unfinished", status: "in_progress" }], true, "Finished"],
+    [[{ step: "Working", status: "in_progress" }], false, "In progress"],
+    [[], true, "cleared"],
+  ] as const) {
+    const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
+      expandedCards: {}, onToggleCard: noopToggle,
+      plans: [buildPlan({ items: [...items] })],
+      terminalRunIds: new Set(terminal ? ["run-1"] : []),
+    }));
+    assert.ok(html.includes(`<i>${badge}</i>`));
+    assert.equal((html.match(/\d\/\d completed/g) ?? []).length, 1);
+    assert.doesNotMatch(html, /process-record/);
+    if (terminal) assert.doesNotMatch(html, /1 in progress/);
+  }
 });
 
 test("expanded plan card shows the live scope and step states", () => {

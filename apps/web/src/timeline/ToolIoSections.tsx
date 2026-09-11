@@ -71,7 +71,7 @@ export function ToolIoSections({
       key={sectionId}
       label={label}
       onToggle={(open) => setCollapsedSections((current) => ({ ...current, [sectionId]: !open }))}
-      open={!collapsedSections[sectionId]}
+      open={collapsedSections[sectionId] === false}
     />
   );
 

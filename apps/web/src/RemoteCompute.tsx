@@ -928,10 +928,10 @@ export function RemoteJobsPanel({
     // A job waiting for approval is the only place to grant it, so it starts
     // expanded; an explicit toggle always wins, letting the user fold it away.
     const expanded = expandedCards[cardId] ?? job.state === "awaiting_approval";
-    return <article className={`remote-job-card ${job.state}`} key={job.id}>
+    return <article className={`remote-job-card ${job.state}${["completed", "failed", "denied"].includes(job.state) ? " process-record" : ""}`} key={job.id}>
       <button aria-expanded={expanded} className="remote-job-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span><strong>{job.card.mode.toLocaleUpperCase()} · {job.card.targetAlias}</strong><small>{t("remote.jobResources", { cpus: job.card.resources.cpus, memoryMb: job.card.resources.memoryMb, gpus: job.card.resources.gpus, walltime: job.card.resources.walltimeMinutes })}</small></span>
+        <span><strong>{job.card.mode.toLocaleUpperCase()} · {job.card.targetAlias} · {job.state.replaceAll("_", " ")}</strong><small>{t("remote.jobResources", { cpus: job.card.resources.cpus, memoryMb: job.card.resources.memoryMb, gpus: job.card.resources.gpus, walltime: job.card.resources.walltimeMinutes })}</small></span>
         <i>{job.state.replaceAll("_", " ")}</i>
       </button>
       {expanded ? <div className="remote-job-body">

@@ -27,6 +27,7 @@ import type { ApiClient } from "./api.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
 import { CheckIcon, ChevronRightIcon, SpinnerIcon } from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
+import { ProcessRecord } from "./ProcessRecord.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
 import type { RunPlanSnapshot } from "./session/run-activity.js";
 
@@ -36,11 +37,11 @@ type Translate = (key: MessageKey, variables?: Record<string, number | string>) 
 
 function visibleReviewerLevel(level: ReviewerSpecialistLevel): VisibleReviewerLevel { return level; }
 
-function planSummary(plan: RunPlanSnapshot, t: Translate): string {
+function planSummary(plan: RunPlanSnapshot, t: Translate, terminal = false): string {
   const completed = plan.items.filter((item) => item.status === "completed").length;
   const active = plan.items.filter((item) => item.status === "in_progress").length;
   const summary = t("plan.summary", { completed, total: plan.items.length });
-  return active ? `${summary} · ${t("plan.summaryActive", { active })}` : summary;
+  return active && !terminal ? `${summary} · ${t("plan.summaryActive", { active })}` : summary;
 }
 
 function PlanItemStatus({ status }: { status: RunPlanSnapshot["items"][number]["status"] }) {
@@ -55,18 +56,27 @@ export function PlanCard({
   expanded,
   onToggle,
   plan,
+  terminal = false,
 }: {
   expanded: boolean;
   onToggle: (expanded: boolean) => void;
   plan: RunPlanSnapshot;
+  terminal?: boolean;
 }) {
   const { t } = useLocale();
+  const completed = plan.items.length > 0 && plan.items.every((item) => item.status === "completed");
+  const status = !plan.items.length ? t("plan.badge.cleared")
+    : completed ? t("plan.status.completed")
+    : terminal ? t("record.finished")
+    : plan.items.some((item) => item.status === "in_progress") ? t("plan.status.inProgress")
+    : t("plan.status.pending");
+  const title = t("plan.title", { agent: plan.agentId });
   return (
     <article className="plan-card recorded">
       <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span><strong>{t("plan.title", { agent: plan.agentId })}</strong><small>{planSummary(plan, t)}</small></span>
-        <i>{plan.items.length ? t("plan.badge.active") : t("plan.badge.cleared")}</i>
+        <span className="plan-card-label"><strong title={title}>{title}</strong><small>{planSummary(plan, t, terminal)}</small></span>
+        <i>{status}</i>
       </button>
       {expanded ? <div className="plan-card-body">
         {plan.explanation ? <p>{plan.explanation}</p> : null}
@@ -83,8 +93,10 @@ export function OrchestrationPanel({
   expandedCards,
   onToggleCard,
   plans,
+  terminalRunIds = new Set<string>(),
 }: ActivityCardDisclosure & {
   plans: RunPlanSnapshot[];
+  terminalRunIds?: ReadonlySet<string>;
 }) {
   const { t } = useLocale();
   if (!plans.length) return null;
@@ -96,6 +108,7 @@ export function OrchestrationPanel({
         key={`${plan.runId}:${plan.agentId}`}
         onToggle={(expanded) => onToggleCard(cardId, expanded)}
         plan={plan}
+        terminal={terminalRunIds.has(plan.runId)}
       />;
     })}
   </section>;
@@ -145,11 +158,13 @@ export function subagentStatusLabel(t: Translate, status: string): string {
 
 export function SubagentCards({
   className,
+  hideHeading = false,
   heading,
   onOpenSubagent,
   subagents,
 }: {
   className?: string;
+  hideHeading?: boolean;
   heading?: string;
   onOpenSubagent: (subagent: Subagent) => void;
   subagents: Subagent[];
@@ -157,14 +172,18 @@ export function SubagentCards({
   const { t } = useLocale();
   if (!subagents.length) return null;
 
-  return <section className={`subagent-list${className ? ` ${className}` : ""}`} aria-label={t("subagent.sectionAria")}>
-    <div className="subagent-list-heading"><strong>{heading ?? t("subagent.headingPlural")}</strong><span>{t("subagent.listStats", { running: subagents.filter((subagent) => subagent.status === "running").length, total: subagents.length })}</span></div>
+  return <section className={`subagent-list process-subagents${className ? ` ${className}` : ""}`} aria-label={t("subagent.sectionAria")}>
+    {!hideHeading && subagents.some((item) => item.status === "running") ? <div className="subagent-list-heading"><strong>{heading ?? t("subagent.headingPlural")}</strong><span>{t("subagent.listStats", { running: subagents.filter((subagent) => subagent.status === "running").length, total: subagents.length })}</span></div> : null}
     {subagents.map((subagent) => {
       const summary = subagentSummary(subagent, t);
       const statusLabel = subagentStatusLabel(t, subagent.status);
-      return <article className={`subagent-card ${subagent.status}`} key={subagent.id}>
-        <button aria-label={t("subagent.openAria", { description: subagent.input.description })} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${statusLabel}\n${summary}`}><i /><span><strong>{subagent.input.description}</strong><small>{summary}</small></span><em>{statusLabel}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
-      </article>;
+      return <ProcessRecord active={subagent.status === "running"} className={`process-agent-record ${subagent.status}`}
+        failed={subagent.status === "failed" || subagent.status === "timed_out"}
+        key={subagent.id} label={`${subagent.input.description} · ${statusLabel}`}>
+        <article className={`subagent-card ${subagent.status}`}>
+        <button aria-label={t("subagent.openAria", { description: subagent.input.description })} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${statusLabel}\n${summary}`}><i /><span><strong>{subagent.input.description}{subagent.status !== "running" ? ` · ${statusLabel}` : ""}</strong><small>{summary}</small></span><em>{statusLabel}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
+        </article>
+      </ProcessRecord>;
     })}
   </section>;
 }

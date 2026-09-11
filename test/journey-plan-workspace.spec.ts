@@ -84,6 +84,10 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
       },
       tool: "update_plan",
     },
+    {
+      arguments: { plan: [{ status: "completed", step: "Inspect delegated evidence" }] },
+      tool: "update_plan",
+    },
     { text: "The delegated evidence check is complete." },
   ]);
   const fixture = await createProjectAndSession(page, {
@@ -115,6 +119,8 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
       await page.getByRole("button", { name: /^(Show workspace|显示工作区)$/ }).click();
     }
     await expect(workspace).toBeVisible();
+    const folder = workspace.locator('[data-folder="tasks"]');
+    if (await folder.getAttribute("open") === null) await folder.locator(":scope > summary").click();
   };
 
   try {
@@ -130,9 +136,10 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
           "Coordinate two independent evidence checks and track each Plan.",
         )).id;
         await expect(cards).toHaveCount(3, { timeout: 60_000 });
+        if (await tasks.getAttribute("open") === null) await tasks.locator(":scope > summary").click();
         await expect(cards.filter({ hasText: "Plan · main" })).toHaveCount(1);
         await expect(cards.filter({ hasText: "Plan · subagent:" })).toHaveCount(2);
-        await expect(tasks.locator("summary .fold-meta")).toHaveText("1/5");
+        await expect(tasks.locator("summary .fold-meta")).toHaveText("3");
 
         const mainCard = cards.filter({ hasText: "Plan · main" });
         await mainCard.getByRole("button").click();
@@ -149,7 +156,7 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
         await expect(cards).toHaveCount(2, { timeout: 30_000 });
         await expect(cards.filter({ hasText: "Plan · main" })).toHaveCount(0);
         await expect(cards.filter({ hasText: "Plan · subagent:" })).toHaveCount(2);
-        await expect(tasks.locator("summary .fold-meta")).toHaveText("0/2");
+        await expect(tasks.locator("summary .fold-meta")).toHaveText("2");
       },
     );
 
@@ -162,10 +169,34 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
         await page.reload();
         await ensureWorkspaceVisible();
         await expect(cards).toHaveCount(2);
+        if (await tasks.getAttribute("open") === null) await tasks.locator(":scope > summary").click();
+        await expect(cards).toHaveClass(["plan-card recorded", "plan-card recorded"]);
+        await expect(cards.locator(".plan-card-heading > i")).toHaveText(["Completed", "Completed"]);
+        await expect(cards.locator(".plan-card-label small")).toHaveText(["1/1 completed", "1/1 completed"]);
         await expect(cards.filter({ hasText: "Plan · main" })).toHaveCount(0);
         await expect(cards.filter({ hasText: "Plan · subagent:" })).toHaveCount(2);
       },
     );
+    await journey.step("Read long Plan names in a narrow Workspace", "Titles truncate with the full name on hover; status badges stay on one line and do not overlap.", async () => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await ensureWorkspaceVisible();
+      if (await tasks.getAttribute("open") === null) await tasks.locator(":scope > summary").click();
+      for (const card of await cards.all()) {
+        const layout = await card.evaluate((el) => {
+          const title = el.querySelector(".plan-card-label strong")!;
+          const badge = el.querySelector(".plan-card-heading > i")!;
+          return { titleRight: title.getBoundingClientRect().right, badgeLeft: badge.getBoundingClientRect().left,
+            titleOverflow: getComputedStyle(title).textOverflow, badgeWhiteSpace: getComputedStyle(badge).whiteSpace,
+            fullTitle: title.getAttribute("title"), text: title.textContent };
+        });
+        expect(layout.titleRight).toBeLessThan(layout.badgeLeft);
+        expect(layout.titleOverflow).toBe("ellipsis");
+        expect(layout.badgeWhiteSpace).toBe("nowrap");
+        expect(layout.fullTitle).toBe(layout.text);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await tasks.scrollIntoViewIfNeeded();
+    });
   } finally {
     await cleanupJourney(page, fixture).catch(() => undefined);
     await stub.stop();

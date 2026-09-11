@@ -16,7 +16,6 @@ import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useS
 
 import {
   readRenamedStorageItem,
-  SHOW_PHYSICAL_FILES_STORAGE_KEY,
   TOKEN_STORAGE_KEY,
   WORKSPACE_COLLAPSED_STORAGE_KEY,
   WORKSPACE_WIDTH_STORAGE_KEY,
@@ -53,8 +52,6 @@ import type {
   ModelUsageAnalyticsFilters,
   ModelUsageBucket,
   MemoryGraphNodeLabel,
-  PaperAcquisition,
-  PaperVisionRun,
   PermissionEpoch,
   PermissionGrant,
   PermissionDecision,
@@ -151,7 +148,6 @@ import {
   SendIcon,
   SessionIcon,
   SettingsIcon,
-  ShieldCheckIcon,
   SparkleIcon,
   StopIcon,
   StructureIcon,
@@ -183,7 +179,7 @@ import {
   type RunTimelineEntry,
 } from "./timeline/RunTimeline.js";
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
-import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
+import { duplicateModelProfileId } from "./modelLabels.js";
 import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
 import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
@@ -229,7 +225,7 @@ import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphS
 import { EvidenceModal } from "./EvidenceModal.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
-import { MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
+import { isMemoryGraphVisible, MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
 import { EvolveAlgorithmPicker } from "./evolve/EvolveAlgorithmPicker.js";
 import { EvolvePanel } from "./evolve/EvolvePanel.js";
 import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
@@ -295,7 +291,6 @@ import {
   sortSessionRuns,
 } from "./session/model.js";
 import {
-  activityCardId,
   collectLatestRunPlans,
   collectRunChangedPaths,
   groupRunActivity,
@@ -305,6 +300,7 @@ import {
   type RunPlanSnapshot,
   type RunActivityGroup,
 } from "./session/run-activity.js";
+import { ProcessRecord, WorkspaceFolder } from "./ProcessRecord.js";
 import { ConversationArtifactList } from "./session/ConversationArtifactList.js";
 import { anchorArtifactOutputs, groupArtifactOutputsByRun } from "./session/run-artifacts.js";
 import {
@@ -361,6 +357,17 @@ export function canSummarizeRunAsSkill(run: SessionRun | undefined): run is Sess
   return (run.status === "completed" || run.status === "failed" || run.status === "interrupted")
     && !run.prompt.includes(SKILL_EVOLUTION_PROMPT_MARKER)
     && !isSkillAuthoringRun;
+}
+
+export function latestSkillSourceRun(runs: readonly SessionRun[], sessionId: string): SessionRun | undefined {
+  return selectSessionReplayRun(runs.filter((run) => run.sessionId === sessionId && canSummarizeRunAsSkill(run)));
+}
+
+export function skillSummaryRun(runs: readonly SessionRun[], source: SessionRun): SessionRun | undefined {
+  // This exact field is emitted by buildSkillEvolutionPrompt, not by user prose.
+  return selectSessionReplayRun(runs.filter((run) => run.sessionId === source.sessionId
+    && run.prompt.startsWith(SKILL_EVOLUTION_PROMPT_MARKER)
+    && run.prompt.split("\n").includes(`- source_run_id: ${source.id}`)));
 }
 
 export function artifactTreeIconKind(
@@ -434,7 +441,7 @@ function CompactPathTreeList<TLeaf extends PathTreeLeaf>({
 }): ReactNode {
   const { t } = useLocale();
   return <div className={renderDirectoryControl ? "artifact-tree selection-mode" : "artifact-tree"}>
-    {entries.map((entry) => entry.kind === "directory" ? <details className="artifact-tree-directory" key={`directory:${entry.path}`} open>
+    {entries.map((entry) => entry.kind === "directory" ? <details className="artifact-tree-directory" key={`directory:${entry.path}`}>
       <summary aria-label={t("app.folderAria", { path: entry.path })} className={renderDirectoryControl ? "selection-mode" : undefined}>
         <ChevronRightIcon className="artifact-tree-chevron" size={14} />
         {renderDirectoryControl?.(entry)}
@@ -900,134 +907,7 @@ export function isArtifactPreviewFile(file: WorkspaceFile): boolean {
     || file.path.endsWith(".markdown");
 }
 
-/** The document a preview card renders: report-like names first, then any markdown. */
-function previewDocumentFile(files: WorkspaceFile[]): WorkspaceFile | undefined {
-  return previewMarkdownFile(files)
-    ?? files.find((file) => file.path.endsWith(".md") || file.path.endsWith(".markdown"));
-}
 
-function ArtifactPreview({
-  client,
-  expanded,
-  files,
-  onChipClick,
-  onToggle,
-  sessionId,
-}: {
-  client: ApiClient;
-  expanded: boolean;
-  files: WorkspaceFile[];
-  onChipClick?: (reference: ComposerReference) => void;
-  onToggle: (expanded: boolean) => void;
-  sessionId: string;
-}) {
-  const { t } = useLocale();
-  const [chartUrl, setChartUrl] = useState<string>();
-  const [table, setTable] = useState<string[][]>([]);
-  const [document, setDocument] = useState<string>();
-  const [loadFailed, setLoadFailed] = useState(false);
-  // Chip references resolved from the report artifact's latest version, so
-  // [alias] tokens in the preview render as clickable chips.
-  const [references, setReferences] = useState<ComposerReference[] | undefined>();
-
-  const chart = files.find((file) => file.path === "analysis_chart.svg");
-  const summary = files.find((file) => file.path === "analysis_summary.csv");
-  const markdownFile = previewDocumentFile(files);
-
-  // Contents load lazily once the card is expanded; collapsed cards only list
-  // the files they would preview, so a folded history costs no file reads.
-  useEffect(() => {
-    if (!expanded) return;
-    let active = true;
-    let objectUrl: string | undefined;
-    setLoadFailed(false);
-
-    void (async () => {
-      if (chart) {
-        objectUrl = URL.createObjectURL(await client.readFile(sessionId, chart.path));
-        if (active) setChartUrl(objectUrl);
-      } else setChartUrl(undefined);
-      if (summary) {
-        const text = await (await client.readFile(sessionId, summary.path)).text();
-        if (active) setTable(text.trim().split("\n").map((line) => line.split(",")));
-      } else setTable([]);
-      if (markdownFile) {
-        const text = await (await client.readFile(sessionId, markdownFile.path)).text();
-        if (active) setDocument(text);
-        // readFile gives the blob only; resolve the report's version references
-        // so chips render. Best-effort — a lookup miss leaves plain text.
-        try {
-          const artifacts = await client.listArtifacts(sessionId);
-          // See reportReferences effect: declaredPath is the stable file path;
-          // logicalName may be an LLM-chosen display name that won't match.
-          const artifact = artifacts.find((item) => item.originMeta?.declaredPath === markdownFile.path
-            || item.logicalName === markdownFile.path);
-          if (artifact) {
-            const versions = await client.listArtifactVersions(sessionId, artifact.id);
-            const latest = [...versions].sort((left, right) => right.version - left.version)[0];
-            if (active && latest?.references?.length) setReferences(latest.references);
-          }
-        } catch {
-          /* lookup is advisory; the document still renders without chips */
-        }
-      } else {
-        if (active) setDocument(undefined);
-        setReferences(undefined);
-      }
-    })().catch(() => {
-      if (active) setLoadFailed(true);
-    });
-
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [chart, client, expanded, markdownFile, sessionId, summary]);
-
-  if (!chart && !summary && !markdownFile) return null;
-  const previewedNames = [
-    chart?.path,
-    summary?.path,
-    ...files.filter((file) => file.path.endsWith(".md") || file.path.endsWith(".markdown")).map((file) => file.path),
-  ].filter(Boolean).join(" · ");
-  return (
-    <details
-      aria-label={t("app.analysisResults")}
-      className="result-preview"
-      open={expanded}
-      onToggle={(event) => {
-        if (event.currentTarget.open !== expanded) onToggle(event.currentTarget.open);
-      }}
-    >
-      <summary>
-        <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span className="result-preview-heading">
-          <span><span className="eyebrow">{t("app.generatedResult")}</span><strong>{markdownFile ? t("app.researchReport") : t("app.workspaceAnalysis")}</strong></span>
-          <small>{previewedNames}</small>
-          <small className="result-preview-attribution">{t("app.previewGrouping")}</small>
-        </span>
-        <span className="status-dot">{t("app.previewReady")}</span>
-      </summary>
-      {expanded ? <div className="result-preview-body">
-        {loadFailed ? <p className="muted">{t("app.previewLoadFailed")}</p> : null}
-        {chartUrl ? <img src={chartUrl} alt={t("app.previewChartAlt")} /> : null}
-        {table.length ? (
-          <div className="table-scroll">
-            <table>
-              <thead><tr>{table[0]?.map((cell) => <th key={cell}>{cell}</th>)}</tr></thead>
-              <tbody>
-                {table.slice(1).map((row, rowIndex) => (
-                  <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={`${rowIndex}-${cellIndex}`}>{cell}</td>)}</tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-        {document ? <MarkdownRenderer className="paper-preview" content={document} onChipClick={onChipClick} references={references} /> : null}
-      </div> : null}
-    </details>
-  );
-}
 
 function SkeletonRows({ className, count }: { className: string; count: number }) {
   return <div aria-hidden="true" className={className}>{Array.from({ length: count }, (_, index) => <span className="skeleton" key={index} />)}</div>;
@@ -1095,10 +975,7 @@ export function App() {
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
   const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
-  const [papers, setPapers] = useState<PaperAcquisition[]>([]);
-  const [paperVisionRuns, setPaperVisionRuns] = useState<PaperVisionRun[]>([]);
-  const [visionModelId, setVisionModelId] = useState<string>();
-  const [paperBusy, setPaperBusy] = useState(false);
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -1122,7 +999,7 @@ export function App() {
     sessionId: string;
   }>();
   const [workspaceCapabilities, setWorkspaceCapabilities] = useState<WorkspaceCapabilities>();
-  const [permissionEpoch, setPermissionEpoch] = useState<PermissionEpoch>();
+  const [, setPermissionEpoch] = useState<PermissionEpoch>();
   const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
   const [executionRuns, setExecutionRuns] = useState<ExecutionRun[]>([]);
@@ -1297,8 +1174,7 @@ export function App() {
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => initialView.workspaceOpen !== undefined
     ? !initialView.workspaceOpen
     : readRenamedStorageItem(localStorage, WORKSPACE_COLLAPSED_STORAGE_KEY) === "1");
-  const [showPhysicalFiles, setShowPhysicalFiles] = useState(() =>
-    readRenamedStorageItem(localStorage, SHOW_PHYSICAL_FILES_STORAGE_KEY) === "1");
+  const [showPhysicalFiles, setShowPhysicalFiles] = useState(false);
   const [artifactSelectionMode, setArtifactSelectionMode] = useState(false);
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<ReadonlySet<string>>(() => new Set());
   const [artifactArchiveBusy, setArtifactArchiveBusy] = useState(false);
@@ -1356,6 +1232,7 @@ export function App() {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  const listSkillDrafts = useCallback(() => client.listSkillReviewDrafts(), [client]);
 
   // Derived rather than stored: the panel must show the *current* record, so a
   // status that changed while it was open (a budget gate, a stop) is reflected
@@ -1424,7 +1301,14 @@ export function App() {
   const openMarkdownImageArtifacts = useCallback(() => {
     setWorkspaceView("session");
     setWorkspaceCollapsed(false);
-    window.requestAnimationFrame(() => workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    window.requestAnimationFrame(() => {
+      const panel = workspacePanel.current;
+      for (const selector of ['[data-folder="files"]', ".artifact-catalog-section"]) {
+        const section = panel?.querySelector<HTMLDetailsElement>(selector);
+        if (section) section.open = true;
+      }
+      panel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }, []);
   const { dismiss: dismissToast, push: pushToast, toasts } = useToasts();
   const reportSystemSettingsError = useCallback((message?: string) => {
@@ -1664,9 +1548,7 @@ export function App() {
     localStorage.setItem(WORKSPACE_WIDTH_STORAGE_KEY, String(workspaceWidth));
   }, [workspaceWidth]);
 
-  useEffect(() => {
-    localStorage.setItem(SHOW_PHYSICAL_FILES_STORAGE_KEY, showPhysicalFiles ? "1" : "0");
-  }, [showPhysicalFiles]);
+  useEffect(() => { setShowPhysicalFiles(false); }, [activeSessionId]);
 
   useEffect(() => {
     setArtifactSelectionMode(false);
@@ -1894,9 +1776,7 @@ export function App() {
         const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
         if (target) void openScopedSettings(target);
       }
-      setVisionModelId((current) => modelItems.some((item) => item.id === current && item.vision)
-        ? current
-        : modelItems.find((item) => item.vision)?.id);
+
     }).catch((reason: Error) => {
       // A cold start directly into System settings is an explicit settings
       // load operation, so its failure belongs to that dialog. Other startup
@@ -2018,13 +1898,12 @@ export function App() {
       setMcpInvocations([]);
       setClaims([]);
       setEvidenceLinks([]);
-      setPapers([]);
-      setPaperVisionRuns([]);
+
       setPendingAnnotations([]);
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, environmentItems, revisionItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -2040,8 +1919,7 @@ export function App() {
       client.listMcpInvocations(sessionId),
       client.listClaims(sessionId),
       client.listEvidenceLinks(sessionId),
-      client.listPapers(sessionId),
-      client.listPaperVisionRuns(sessionId),
+
       client.listEnvironments().catch(() => []),
       client.listEnvironmentRevisions().catch(() => []),
       client.listSubagents(sessionId),
@@ -2106,8 +1984,7 @@ export function App() {
     setMcpInvocations(invocations);
     setClaims(claimItems);
     setEvidenceLinks(linkItems);
-    setPapers(paperItems);
-    setPaperVisionRuns(visionItems);
+
     setReplayTimelines((current) => {
       const hydrated = hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun);
       for (const [runId, timeline] of Object.entries(hydrated)) {
@@ -3101,25 +2978,12 @@ export function App() {
     }
   }
 
-  async function uploadPaper(file: File): Promise<void> {
-    if (!activeSessionId || session?.archivedAt) return;
-    if (file.size > 50 * 1024 * 1024) throw new Error(translateActive("error.pdfTooLarge"));
-    setPaperBusy(true);
-    try {
-      const paper = await client.uploadPaper(activeSessionId, file);
-      setPapers((current) => [...current, paper]);
-      setFiles(await client.listFiles(activeSessionId));
-      setError(undefined);
-      pushToast("success", t("app.pdfUploaded"), file.name);
-    } finally {
-      setPaperBusy(false);
-    }
-  }
+
 
   async function openWorkspacePath(path: string, targetSessionId = activeSessionId): Promise<void> {
     if (!targetSessionId) return;
     const file = await client.readFile(targetSessionId, path);
-    if (path.toLowerCase().endsWith(".md")) {
+    if (/\.(md|markdown)$/i.test(path)) {
       setMarkdownDocument({ content: await file.text(), path });
       return;
     }
@@ -3128,32 +2992,7 @@ export function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
-  async function analyzePaperVision(paper: PaperAcquisition): Promise<void> {
-    if (session?.archivedAt) return;
-    if (!activeSessionId || !visionModelId) {
-      setError(t("error.visionModelRequired"));
-      return;
-    }
-    const model = models.find((item) => item.id === visionModelId);
-    if (!model?.hasApiToken) {
-      setError(t("error.modelTokenRequired", { model: model?.name ?? t("app.theVisionModel") }));
-      return;
-    }
-    setPaperBusy(true);
-    setError(undefined);
-    try {
-      const run = await client.analyzePaperVision(activeSessionId, paper.id, {
-        modelId: visionModelId,
-      });
-      setPaperVisionRuns((current) => [...current, run]);
-      setFiles(await client.listFiles(activeSessionId));
-      pushToast("success", t("app.visionAnalysisFinished"));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.visionAnalysisFailed"));
-    } finally {
-      setPaperBusy(false);
-    }
-  }
+
 
   function updateSessionStreamCount(sessionId: string, delta: 1 | -1): void {
     let count: number;
@@ -3881,10 +3720,7 @@ export function App() {
     // The handler must observe the Provider draft state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerDraftDirty, showConfig]);
-  const visionModels = models.filter((item) => item.vision);
-  const latestExecution = executionRuns.at(-1);
-  const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);
-  const latestEnvironment = environments.find((environment) => environment.id === latestEnvironmentRevision?.environmentId);
+
   const sessionUsageBreakdown = sessionUsage
     ? usageInOutLabel(sessionUsage.totals)
     : "";
@@ -3948,7 +3784,7 @@ export function App() {
     downloadPlans,
     permissionRequests: permissionRequests.filter((request) => !timelinePermissionRequestIds.has(request.id)),
     plans: [],
-    previewFiles: files.filter(isArtifactPreviewFile),
+    previewFiles: [],
     remoteJobs,
     subagents,
   }, session?.id ? runChangedPaths[session.id] ?? {} : {}, mcpInvocations);
@@ -3978,6 +3814,24 @@ export function App() {
     displayedMessageIds,
     replayedRunIds,
   });
+  const visibleOutputs = [...artifactOutputAnchors.activeTimeline,
+    ...[...artifactOutputAnchors.byMessage.values()].flat(), ...[...artifactOutputAnchors.byReplayTimeline.values()].flat()];
+  const registeredPaths = new Set(visibleOutputs.filter((output) => output.version.sessionId === session?.id)
+    .map((output) => output.version.sourcePath).filter(Boolean));
+  const currentPreviewFiles = files.filter((file, index) => !registeredPaths.has(file.path)
+    && (file.previewKind || /\.(md|markdown|html|csv|json|ipynb|png|jpg|jpeg|svg|pdf)$/i.test(file.path))
+    && files.findIndex((other) => other.path === file.path) === index);
+  // Current bytes are shown once, never presented as an old Run's snapshot.
+  const latestOutputRun = selectSessionReplayRun(sessionRuns.filter((run) => isTerminalRunStatus(run.status)));
+  const outputMessageId = latestOutputRun?.assistantMessageId ?? latestOutputRun?.userMessageId;
+  const currentFileSlot = latestOutputRun?.id === activeTimelineRunId && runTimeline.length ? "active"
+    : latestOutputRun && replayedRunIds.has(latestOutputRun.id) ? `run:${latestOutputRun.id}`
+      : outputMessageId && displayedMessageIds.has(outputMessageId) ? `message:${outputMessageId}` : "tail";
+  function renderConversationOutputs(slot: string, outputs: readonly SessionArtifactOutput[] = []): ReactNode {
+    return <ConversationArtifactList outputs={outputs} onOpen={openArtifactVersion}
+      currentFiles={currentFileSlot === slot ? currentPreviewFiles : []}
+      onOpenCurrentFile={(file) => void openWorkspacePath(file.path).catch((reason: Error) => setError(reason.message))} />;
+  }
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
   const artifactGroups = groupArtifactsBySession({
@@ -4095,8 +3949,13 @@ export function App() {
   function renderSkillEvolutionCard(sourceRun: SessionRun | undefined): ReactNode {
     if (!session || !canSummarizeRunAsSkill(sourceRun)) return null;
     const missingLibrary = !skillLibraries.some((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
-    const busy = skillEvolutionSourceRunIds.has(sourceRun.id);
-    return <section aria-label={t("app.skillEvolutionAria")} className="skill-evolution-card">
+    const summaryRun = skillSummaryRun(sessionRuns, sourceRun);
+    const finished = summaryRun && isTerminalRunStatus(summaryRun.status);
+    const busy = skillEvolutionSourceRunIds.has(sourceRun.id) || Boolean(summaryRun && !finished);
+    if ((missingLibrary || sessionArchived || !session.modelId) && !busy && !summaryRun) return null;
+    return <ProcessRecord key={sourceRun.id} active={!finished || busy} failed={Boolean(finished && summaryRun.status !== "completed")}
+      label={t("record.skillFinished", { status: summaryRun ? summaryRun.status === "completed" ? t("subagent.status.completed") : summaryRun.status === "failed" ? t("subagent.status.failed") : summaryRun.status : "" })}>
+      <section aria-label={t("app.skillEvolutionAria")} className="skill-evolution-card" data-source-run-id={sourceRun.id}>
       <header><span><SparkleIcon size={16} /></span><div><strong>{t("app.summarizeAsSkill")}</strong><small>{t("app.skillLibraryDefault", { id: SELF_EVOLUTION_LIBRARY_ID })}</small></div></header>
       <button
         className="secondary-button"
@@ -4105,12 +3964,12 @@ export function App() {
         title={missingLibrary ? t("app.skillEvolutionNeedLibrary") : t("app.skillEvolutionQueueTooltip")}
         type="button"
       >{busy ? t("app.skillEvolutionQueuing") : t("app.createProposal")}</button>
-    </section>;
+      {finished && summaryRun.error ? <p role="alert">{summaryRun.error}</p> : null}
+    </section></ProcessRecord>;
   }
 
   function renderRunActivityGroup(group: RunActivityGroup, timelineSubagentIds: ReadonlySet<string> = new Set()) {
     if (!session) return null;
-    const artifactCardId = activityCardId("artifacts", group.runId ?? "unattributed");
     const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
@@ -4127,7 +3986,7 @@ export function App() {
           onToggleCard={toggleActivityCard}
           plans={group.downloadPlans}
         />
-        <ArtifactPreview client={client} expanded={Boolean(activityCardExpansion[artifactCardId])} files={group.previewFiles} onChipClick={handleChipClick} onToggle={(expanded) => toggleActivityCard(artifactCardId, expanded)} sessionId={session.id} />
+
       </div>
     );
   }
@@ -4298,7 +4157,7 @@ export function App() {
         <div className="sidebar-quick-actions" aria-label={t("app.workbenchNavigation")}>
           <button type="button" onClick={() => void openGlobalSearch()}><span><SearchIcon size={16} /></span><span>{t("app.search")}</span><kbd>Ctrl K</kbd></button>
           <button type="button" className={workspaceView === "usage" ? "active" : undefined} onClick={() => void openUsageView()}><span><SparkleIcon size={16} /></span><span>{t("app.usage")}</span></button>
-          <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
+          <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); openMarkdownImageArtifacts(); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
         </div>
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>
           <span><SettingsIcon size={17} /></span><span>{t("app.systemConfiguration")}</span><span className="mode-chip">{models.length}</span>
@@ -4321,6 +4180,8 @@ export function App() {
         ) : openSubagent && session && openSubagent.sessionId === session.id ? (
           <SubagentConversation
             key={openSubagent.id}
+            onListSkillDrafts={listSkillDrafts}
+            onOpenSkillReviews={openGeneratedSkillDraftExplorer}
             loadWorkspaceImage={loadMarkdownImage}
             onBack={() => setOpenSubagentId(undefined)}
             onChipClick={handleChipClick}
@@ -4452,7 +4313,7 @@ export function App() {
                         ? <WakeNotice notice={block.message.runtimeNotice} />
                         : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
-                      <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.byMessage.get(block.message.id) ?? []} />
+                      {renderConversationOutputs(`message:${block.message.id}`, artifactOutputAnchors.byMessage.get(block.message.id))}
                     </Fragment>
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
@@ -4463,7 +4324,7 @@ export function App() {
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
                             renderRunActivityGroup(group, replayTimelineSubagentIds.get(block.runId)))}
-                          <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.byReplayTimeline.get(block.runId) ?? []} />
+                          {renderConversationOutputs(`run:${block.runId}`, artifactOutputAnchors.byReplayTimeline.get(block.runId))}
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
@@ -4472,6 +4333,7 @@ export function App() {
                         onLoadToolOutput={(trace) => loadToolOutput(session.id, block.runId, trace)}
                         onOpenArtifacts={openMarkdownImageArtifacts}
                         onOpenSkillReviews={openGeneratedSkillDraftExplorer}
+                        onListSkillDrafts={listSkillDrafts}
                         onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)}
                         references={reportReferences}
                         onToggle={(id, expanded) => setReplayTimelines((current) => {
@@ -4489,7 +4351,7 @@ export function App() {
                         reviewerLevel={session.reviewerSpecialistLevel}
                         workspaceSessionId={session.id}
                       />
-                      {renderSkillEvolutionCard(sessionRuns.find((run) => run.id === block.runId))}
+
                     </Fragment>
                   ))}
                   <RunTimeline
@@ -4498,7 +4360,7 @@ export function App() {
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
-                      <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.activeTimeline} />
+                      {renderConversationOutputs("active", artifactOutputAnchors.activeTimeline)}
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
@@ -4507,6 +4369,7 @@ export function App() {
                     onLoadToolOutput={(trace) => loadToolOutput(session.id, runTimelines[session.id]?.runId, trace)}
                     onOpenArtifacts={openMarkdownImageArtifacts}
                     onOpenSkillReviews={openGeneratedSkillDraftExplorer}
+                    onListSkillDrafts={listSkillDrafts}
                     onPermissionDecision={decidePermission}
                     onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)}
                     references={reportReferences}
@@ -4529,6 +4392,8 @@ export function App() {
                     reviewerLevel={session.reviewerSpecialistLevel}
                     workspaceSessionId={session.id}
                   />
+                  {renderConversationOutputs("tail")}
+                  {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
                   {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 </div>
@@ -4627,30 +4492,12 @@ export function App() {
             <div className="section-heading">
               <div><h2>{t("app.workspace")}</h2></div>
               <div className="workspace-heading-actions">
-                <button
-                  aria-pressed={showPhysicalFiles}
-                  className={showPhysicalFiles ? "developer-files-toggle active" : "developer-files-toggle"}
-                  onClick={() => {
-                    if (showPhysicalFiles) exitWorkspaceFileSelection();
-                    setShowPhysicalFiles((current) => !current);
-                  }}
-                  title={t("app.physicalFilesHelp")}
-                  type="button"
-                >{t("app.physicalFiles")}</button>
+
                 <span className="file-count">{artifacts.length}</span>
                 <button aria-label={t("app.hideWorkspace")} className="icon-button workspace-collapse-button" onClick={() => setWorkspaceCollapsed(true)} title={t("app.hideWorkspace")} type="button"><PanelRightIcon size={15} /></button>
               </div>
             </div>
-            {workspacePlans.length ? <details className="workspace-fold workspace-plan-section" open>
-              <summary>
-                <ChevronRightIcon className="fold-chevron" size={15} />
-                <strong>{t("app.tasks")}</strong>
-                <span className="fold-meta">{workspacePlans.reduce((count, plan) => count + plan.items.filter((item) => item.status === "completed").length, 0)}/{workspacePlans.reduce((count, plan) => count + plan.items.length, 0)}</span>
-              </summary>
-              <div className="workspace-fold-body">
-                <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={workspacePlans} />
-              </div>
-            </details> : null}
+<WorkspaceFolder key={`files:${activeSessionId}`} name="files" label={t("record.files")}>
             {activeSessionId && !sessionArchived ? (
               <label className={dragActive ? "drop-zone active" : "drop-zone"} onDragEnter={() => setDragActive(true)} onDragLeave={() => setDragActive(false)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                 event.preventDefault();
@@ -4669,7 +4516,7 @@ export function App() {
               </label>
             ) : <p className="muted">{sessionArchived ? t("app.archivedWorkspace") : t("app.createSessionWorkspace")}</p>}
 
-            <details className="workspace-fold artifact-catalog-section" open>
+            {artifacts.length > 0 ? <details className="workspace-fold artifact-catalog-section">
               <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.artifacts")}</strong><span className="fold-meta">{artifacts.length}</span></summary>
               <div className="artifact-catalog">
                 {!projectsLoaded ? <SkeletonRows className="file-skeleton" count={3} /> : <ArtifactLifecycleProvider
@@ -4677,8 +4524,8 @@ export function App() {
                   onError={setError}
                   resetKey={activeProjectId ?? ""}
                 >{artifactGroups.map((group) => (
-                  <section className="artifact-session-group" key={group.id}>
-                    <header>
+                  <details className="artifact-session-group" key={group.id}>
+                    <summary>
                       <span className="artifact-session-heading"><strong>{group.label}</strong><span>{group.items.length}</span></span>
                       <span className="artifact-session-actions">
                         <button
@@ -4686,7 +4533,9 @@ export function App() {
                           aria-pressed={artifactSelectionMode}
                           className="artifact-header-action"
                           disabled={!artifacts.length}
-                          onClick={() => {
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
                             if (artifactSelectionMode) exitArtifactSelection();
                             else {
                               setArtifactSelectionMode(true);
@@ -4700,14 +4549,14 @@ export function App() {
                           aria-label={t("app.downloadSelectedArtifacts")}
                           className="artifact-header-action"
                           disabled={!artifactSelectionMode || !selectedArtifactIds.size || artifactArchiveBusy}
-                          onClick={() => void downloadSelectedArtifacts()}
+                          onClick={(event) => { event.preventDefault(); event.stopPropagation(); void downloadSelectedArtifacts(); }}
                           title={artifactSelectionMode
                             ? `${t("app.downloadSelectedArtifacts")} · ${t("app.selectedArtifacts", { count: selectedArtifactIds.size })}`
                             : t("app.downloadSelectedArtifacts")}
                           type="button"
                         ><DownloadIcon size={14} /></button>
                       </span>
-                    </header>
+                    </summary>
                     <div className="file-list">
                       <ArtifactTreeList
                         entries={buildArtifactTree(group.items)}
@@ -4717,19 +4566,18 @@ export function App() {
                         selectedArtifactIds={artifactSelectionMode ? selectedArtifactIds : undefined}
                       />
                     </div>
-                  </section>
+                  </details>
                 ))}</ArtifactLifecycleProvider>}
                 {activeProjectId && artifacts.length === 0 ? <p className="muted centered">{t("app.noArtifacts")}</p> : null}
               </div>
-            </details>
+            </details> : null}
 
-            {showPhysicalFiles ? <details className="workspace-fold physical-files" open>
+            {files.length > 0 ? <details className="workspace-fold physical-files" open={showPhysicalFiles} onToggle={(event) => { if (event.currentTarget.open !== showPhysicalFiles) setShowPhysicalFiles(event.currentTarget.open); }}>
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
                 <strong>{t("app.physicalFiles")}</strong>
-                <span className="fold-meta">{files.length}</span>
-                <span className="workspace-fold-actions">
-                  <button
+                <span className="workspace-file-heading-meta">
+                  {showPhysicalFiles ? <button
                     aria-label={workspaceFileSelectionMode ? t("app.cancelWorkspaceFileSelection") : t("app.selectWorkspaceFiles")}
                     aria-pressed={workspaceFileSelectionMode}
                     className="artifact-header-action"
@@ -4745,7 +4593,8 @@ export function App() {
                     }}
                     title={workspaceFileSelectionMode ? t("app.cancelWorkspaceFileSelection") : t("app.selectWorkspaceFiles")}
                     type="button"
-                  >{workspaceFileSelectionMode ? <CloseIcon size={14} /> : <CheckIcon size={14} />}</button>
+                  >{workspaceFileSelectionMode ? <CloseIcon size={14} /> : <CheckIcon size={14} />}</button> : null}
+                  <span className="fold-meta">{files.length}</span>
                 </span>
               </summary>
               <div className="workspace-fold-body file-list">
@@ -4760,12 +4609,22 @@ export function App() {
                 {activeSessionId && files.length === 0 ? <p className="muted centered">{t("app.noFiles")}</p> : null}
               </div>
             </details> : null}
+            </WorkspaceFolder>
+            <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")}>
+            {workspacePlans.length ? <details className="workspace-fold workspace-plan-section">
+              <summary>
+                <ChevronRightIcon className="fold-chevron" size={15} />
+                <strong>{t("app.tasks")}</strong>
+                <span className="fold-meta">{workspacePlans.length}</span>
+              </summary>
+              <div className="workspace-fold-body">
+                <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={workspacePlans} terminalRunIds={new Set(sessionRuns.filter((run) => isTerminalRunStatus(run.status)).map((run) => run.id))} />
+              </div>
+            </details> : null}
 
-            {session ? <MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => setMemoryExplorerOpen(true)} /> : null}
+            {session && evolveRuns.length ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>Evolve</strong><span className="fold-meta">{evolveRuns.length}</span></summary><EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /></details> : null}
 
-            {session ? <EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /> : null}
-
-            {session ? <ReviewerControlCard
+            {session && reviewerSpecialistSettings?.enabled ? <details className="workspace-fold"><summary>{t("specialist.reviewerName")}</summary><ReviewerControlCard
               busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning || reviewerAuditRunning}
               configBusy={reviewerSessionSettingsBusy}
               disabled={sessionArchived}
@@ -4783,69 +4642,14 @@ export function App() {
               onStop={() => void stopReviewerSpecialist()}
               settings={reviewerSpecialistSettings}
               stopping={stoppingReviewerSessionIds.has(session.id)}
-            /> : null}
-
-            {session ? (
-              <details className="workspace-fold" aria-label={t("app.paperSectionAria")}>
-                <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.paperReader")}</strong><span className="fold-meta">{t("app.paperParsedCount", { count: papers.length })}</span></summary>
-                <div className="workspace-fold-body">
-                  <label className="pdf-upload">
-                    <input type="file" accept="application/pdf,.pdf" disabled={paperBusy || sessionArchived} onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) void uploadPaper(file).catch((reason: Error) => setError(reason.message));
-                      event.target.value = "";
-                    }} />
-                    <span><UploadIcon size={14} /> {t("app.uploadFullPdf")}</span><small>{t("app.pdfLimits")}</small>
-                  </label>
-                  {visionModels.length ? (
-                    <label className="vision-picker"><span>{t("app.visionModelLabel")}</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels, t)}</option>)}</select></label>
-                  ) : <p className="paper-note">{t("app.visionModelHelp")}</p>}
-                  <div className="paper-library">
-                    {papers.map((paper) => {
-                      const analysisBase = paper.manifestPath.replace(/manifest\.json$/, "");
-                      const table = paper.extraction.tables[0];
-                      const image = paper.extraction.images[0];
-                      const visionRun = paperVisionRuns.filter((run) => run.paperId === paper.id).at(-1);
-                      return (
-                        <article key={paper.id}>
-                          <div><strong>{paper.title}</strong><small>{t("app.paperStats", { figures: paper.extraction.images.length, pages: paper.extraction.pageCount, tables: paper.extraction.tables.length })}</small></div>
-                          <div className="paper-actions">
-                            <button type="button" onClick={() => void openWorkspacePath(paper.pdfPath).catch((reason: Error) => setError(reason.message))}>PDF</button>
-                            <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${paper.extraction.textPath}`).catch((reason: Error) => setError(reason.message))}>{t("app.paperFullText")}</button>
-                            {table ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${table.csvPath}`).catch((reason: Error) => setError(reason.message))}>{t("app.paperTable")}</button> : null}
-                            {image ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${image.path}`).catch((reason: Error) => setError(reason.message))}>{t("app.paperFigure")}</button> : null}
-                            {visionModels.length ? <button type="button" disabled={paperBusy || sessionArchived} onClick={() => void analyzePaperVision(paper)}>{t("app.paperVision")}</button> : null}
-                            {visionRun ? <button type="button" onClick={() => void openWorkspacePath(visionRun.resultPath).catch((reason: Error) => setError(reason.message))}>{t("app.paperVisionResult")}</button> : null}
-                          </div>
-                          {paper.extraction.warnings.map((warning) => <p key={warning}>{warning}</p>)}
-                        </article>
-                      );
-                    })}
-                    {!papers.length ? <p className="paper-note">{t("app.paperEmptyNote")}</p> : null}
-                  </div>
-                </div>
-              </details>
-            ) : null}
-
+            /></details> : null}
             {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} sessionId={activeSessionId} /> : null}
-            <details className="workspace-fold" aria-label={t("app.provenanceAria")}>
-              <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.provenanceAria")}</strong></summary>
-              <div className="workspace-fold-body">
-                <div className="trust-metrics">
-                  <div><strong>{executionRuns.length}</strong><span>{t("app.trustExecutionRuns")}</span></div>
-                  <div><strong>{latestExecution?.language ?? "—"}</strong><span>{t("app.trustLanguage")}</span></div>
-                  <div><strong>{t("app.trustFreshProcess")}</strong><span>{t("app.trustShellExecution")}</span></div>
-                  <div><strong>{latestEnvironment?.name ?? "—"}</strong><span>{t("app.trustEnvironment")}</span></div>
-                  <div><strong>{latestExecution?.environmentRevisionId?.slice(0, 12) ?? "—"}</strong><span>{t("app.trustEnvironmentRevision")}</span></div>
-                  <div><strong>{derivations.length}</strong><span>{t("app.trustDerivations")}</span></div>
-                  <div><strong>{promptManifests.length}</strong><span>{t("app.trustPromptManifests")}</span></div>
-                  <div><strong>{mcpInvocations.length}</strong><span>{t("app.trustMcpInvocations")}</span></div>
-                  <div><strong>{claims.length}</strong><span>{t("app.trustClaims")}</span></div>
-                  <div><strong>{evidenceLinks.length}</strong><span>{t("app.trustEvidenceLinks")}</span></div>
-                </div>
-              </div>
-            </details>
-            <div className="boundary-note"><span><ShieldCheckIcon size={15} /></span><p title={t("app.isolatedExecutionTitle")}><strong>{t("app.isolatedExecution")}</strong> · {t("app.epoch", { id: permissionEpoch?.id.slice(0, 8) ?? t("app.epochLoading") })}</p></div>
+            </WorkspaceFolder>
+            {session && memoryGraphSettings?.enabled !== false && isMemoryGraphVisible(memorySubgraph, memoryHealth) ? <WorkspaceFolder key={`memory:${activeSessionId}`} name="memory" label={t("record.memory")}>
+              <details className="workspace-fold"><summary>{t("settings.memoryGraph.title")}</summary><MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => setMemoryExplorerOpen(true)} /></details>
+            </WorkspaceFolder> : null}
+
+
           </aside>}
           {workspaceCollapsed ? (
             <button aria-label={t("app.showWorkspace")} className="workspace-expander" onClick={() => setWorkspaceCollapsed(false)} title={t("app.showWorkspace")} type="button">

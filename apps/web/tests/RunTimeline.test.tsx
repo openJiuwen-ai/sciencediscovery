@@ -68,7 +68,7 @@ test("keeps reasoning, tools, and answers in start order", () => {
   assert.equal(entries[3]?.type === "assistant" && entries[3].content, "The result is three rows.");
 });
 
-test("anchors overlapping SubAgents as one parallel timeline group and updates each lane independently", () => {
+test("anchors overlapping SubAgents independently and updates each in place", () => {
   const laneA = timelineSubagent("lane-a", "2026-01-01T00:00:01.000Z");
   const laneB = timelineSubagent("lane-b", "2026-01-01T00:00:02.000Z");
   const entries = apply([
@@ -108,15 +108,18 @@ test("anchors overlapping SubAgents as one parallel timeline group and updates e
     { delta: "Both checks are complete.", type: "assistant.delta" },
   ]);
 
-  assert.deepEqual(entries.map((entry) => entry.type), ["thinking", "subagents", "assistant"]);
+  assert.deepEqual(entries.map((entry) => entry.type), ["thinking", "subagents", "subagents", "assistant"]);
   const group = entries[1];
   assert.equal(group?.type, "subagents");
   if (group?.type !== "subagents") return;
-  assert.deepEqual(group.subagents.map((subagent) => subagent.id), [laneA.id, laneB.id]);
+  assert.deepEqual(group.subagents.map((subagent) => subagent.id), [laneA.id]);
+  const second = entries[2];
+  assert.equal(second?.type, "subagents");
+  if (second?.type !== "subagents") return;
   assert.equal(group.subagents[0]?.steps[0]?.content, "A final result");
-  assert.equal(group.subagents[1]?.steps[0]?.content, "B result", "lane A updates do not overwrite lane B");
+  assert.equal(second.subagents[0]?.steps[0]?.content, "B result", "lane A updates do not overwrite lane B");
   assert.equal(group.subagents[0]?.status, "completed");
-  assert.equal(group.subagents[1]?.usage?.totalTokens, 50);
+  assert.equal(second.subagents[0]?.usage?.totalTokens, 50);
 
   const html = renderToStaticMarkup(createElement(RunTimeline, {
     entries,
@@ -124,8 +127,8 @@ test("anchors overlapping SubAgents as one parallel timeline group and updates e
     onOpenSubagent: () => undefined,
     onToggle: () => undefined,
   }));
-  assert.match(html, /Subagents/);
-  assert.match(html, /class="subagent-list timeline-subagents"/);
+  assert.doesNotMatch(html, /<strong>Subagents<\/strong>/);
+  assert.match(html, /class="subagent-list process-subagents timeline-subagents"/);
   assert.doesNotMatch(html, /timeline-subagents parallel/);
   assert.doesNotMatch(html, /A final result/);
   assert.match(html, /B result/);
@@ -198,11 +201,11 @@ test("renders completed activity as collapsible disclosures", () => {
   }));
 
   // Two top-level disclosures (thinking + tool card), both closed after
-  // completion, plus the tool card's I/O section disclosures which default open.
-  assert.match(html, /<details class="timeline-disclosure thinking completed">/);
-  assert.match(html, /<details class="timeline-disclosure tool completed">/);
+  // completion, plus the tool card's I/O section disclosures which default closed.
+  assert.match(html, /<details class="timeline-disclosure thinking completed process-record">/);
+  assert.match(html, /<details class="timeline-disclosure tool completed process-record">/);
   assert.equal((html.match(/<details/g) ?? []).length, 3);
-  assert.match(html, /<details class="tool-io-section" open="">/);
+  assert.match(html, /<details class="tool-io-section">/);
   assert.match(html, /Thought process · turn 1/);
   assert.match(html, /run_python/);
   assert.match(html, /<strong>Answer:<\/strong> 42/);
@@ -228,7 +231,7 @@ test("tool cards render labeled I/O sections, each with its own copy control", (
     onToggle: () => undefined,
   }));
 
-  const sections = html.match(/<details class="tool-io-section" open="">/g) ?? [];
+  const sections = html.match(/<details class="tool-io-section">/g) ?? [];
   assert.equal(sections.length, 4);
   for (const label of ["Input", "stdout", "stderr", "Created files"]) {
     assert.match(html, new RegExp(`<span class="tool-io-label">${label}</span>`));
@@ -389,8 +392,8 @@ test("replay snapshots replace text and permission decisions stay in timeline or
     onPermissionDecision: async () => undefined,
     onToggle: () => undefined,
   }));
-  assert.match(html, /Permission granted/);
-  assert.match(html, /Run Python in the Session workspace/);
+  assert.doesNotMatch(html, /Permission granted/);
+  assert.doesNotMatch(html, /Run Python in the Session workspace/);
   assert.doesNotMatch(html, /Allow once/);
   assert.match(html, /Persisted answer/);
 });
@@ -583,7 +586,7 @@ test("tool cards replay their input and full result", () => {
   assert.match(html, /The result was truncated by the retention policy/);
 });
 
-test("a run that ends while an approval is pending replays a cancelled card", () => {
+test("a run that ends cancels pending approval in data and removes its card", () => {
   const pending = {
     action: "code" as const,
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -611,7 +614,7 @@ test("a run that ends while an approval is pending replays a cancelled card", ()
     onPermissionDecision: async () => undefined,
     onToggle: () => undefined,
   }));
-  assert.match(html, /Permission cancelled/);
+  assert.doesNotMatch(html, /Permission cancelled/);
   assert.doesNotMatch(html, /Permission required/);
   assert.doesNotMatch(html, /Allow once/);
 });
@@ -639,8 +642,8 @@ test("a decided approval keeps its terminal state and decision time through a te
     isRunning: false,
     onToggle: () => undefined,
   }));
-  assert.match(html, /Permission denied/);
-  assert.match(html, /Decided/);
+  assert.doesNotMatch(html, /Permission denied/);
+  assert.doesNotMatch(html, /Decided/);
 });
 
 test("tool completion without repeated input keeps the started arguments", () => {
@@ -675,24 +678,22 @@ test("permission cards expose their full request in an expandable details block"
     request: {
       action: "code",
       createdAt: "2026-01-01T00:00:00.000Z",
-      decidedAt: "2026-01-01T00:00:05.000Z",
-      decision: "allowed",
       executionId: "run-1",
       id: "permission-1",
       resource: "workspace-code",
       sessionId: "session-1",
-      state: "allowed",
+      state: "pending",
       toolCallId: "call-9",
       summary: "Run Python in the Session workspace",
     },
-    type: "permission.resolved",
+    type: "permission.required",
   }]);
   const html = renderToStaticMarkup(createElement(RunTimeline, {
     entries,
-    isRunning: false,
+    isRunning: true,
     onToggle: () => undefined,
   }));
-  assert.match(html, /Permission granted/);
+  assert.match(html, /Permission required/);
   assert.match(html, /Details/);
   assert.match(html, /Action/);
   assert.match(html, /workspace-code/);

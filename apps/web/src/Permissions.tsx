@@ -71,8 +71,8 @@ export function PermissionCards({
         </button>
         {expanded ? <div className="permission-card-body">
           <code>{request.resource}</code>
-          <PermissionDecisionActions busy={decidingIds.includes(request.id) || decidingMatchers.includes(permissionMatchingKey(request))} onDecision={(decision) => void decide(request, decision)} />
         </div> : null}
+        <PermissionDecisionActions busy={decidingIds.includes(request.id) || decidingMatchers.includes(permissionMatchingKey(request))} onDecision={(decision) => void decide(request, decision)} />
       </article>;
     })}
   </section>;

@@ -107,9 +107,8 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
 
   assert.match(app, /<span title=\{project\.name\}>\{label\}<\/span>/);
   assert.match(app, /<span title=\{item\.archivedAt \? `\$\{item\.title\} · \$\{t\("sidebar\.archived"\)\}` : item\.title\}>/);
-  // Only the optional vision model picker still uses the long option label;
-  // the composer mounts the ModelPicker popover instead of an inline select.
-  assert.equal(app.match(/modelOptionLabel\(item, (?:models|visionModels), t\)/g)?.length, 1);
+  // The removed Paper reader no longer mounts a second model picker.
+  assert.doesNotMatch(app, /modelOptionLabel\(/);
   assert.match(app, /<ModelPicker/);
   // The advanced standalone model editor is gone; migrated profiles live
   // under their custom provider instead.

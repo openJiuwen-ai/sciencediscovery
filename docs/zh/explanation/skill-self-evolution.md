@@ -183,13 +183,16 @@ Run 完成
 
 M1.6 已实现的具体工作项：
 
-- 在 completed / failed / interrupted Run 的 timeline 下展示“Summarize as Skill”入口。
+- 仅在最新合格的 completed / failed / interrupted 源 Run 下展示“Summarize as Skill”入口。尚未发起总结时，如果没有可写 Skill Library、Session 已归档或未配置模型，入口整体隐藏；已有总结任务与结果不因此消失。
 - 点击后 queue 一个普通 Agent run，使用固定 M1.6 prompt 驱动 proposer / skill-builder subagent。
 - 默认推荐目标库为 `project-skills`；后端会把所有可写 Skill Library 提供给自演进 run，LLM 可以选择更匹配的库。
+- 推荐库名不代表库已经存在，前端不会自动创建该库；可在系统设置的 Skill 库管理中创建。
 - 固定 prompt 强制优先使用 `upsert_skill` 结构化输入，避免手写 `SKILL.md`。
 - 固定 prompt 要求 proposal 带上原始 `session` / `run` source refs。
 - 自演进 run 不允许再次作为自演进源，避免递归总结。
 - 发布仍在 Skill Manager pending proposal 区域完成。
+- 未操作、请求提交中及对应总结 Run 未结束时保留带框入口；对应总结 Run 到达真实终态后变为可展开的灰色结果记录。点击或请求已受理不等于总结完成。重试提交期间仍保留运行中展示。
+- `create_skill` 草稿以精确 draftId 跟踪：仅打开或关闭审核页不算已审核；待审列表确认该草稿消失后显示“已处理”，不宣称已批准；查询失败不改变为完成态。此草稿路径与库更新 proposal 的发布动作仍是不同流程。
 
 仍需补强：
 

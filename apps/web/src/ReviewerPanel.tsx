@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { ArtifactReviewRun } from "@sciencediscovery/schema";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { useLocale, type MessageKey } from "./i18n/index.js";
 
@@ -94,7 +94,7 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
   const { t } = useLocale();
   const presentation = resultLabel(review, t);
   return (
-    <details className={`reviewer-specialist-card ${presentation.tone}`}>
+    <details className={`reviewer-specialist-card process-record ${presentation.tone}`}>
       <summary className="reviewer-specialist-card-heading">
         <span aria-hidden="true" className="reviewer-specialist-card-chevron">›</span>
         <span className="reviewer-specialist-card-title">
@@ -151,7 +151,7 @@ function CheckpointOnlyReview({
     ? t(artifactCount === 1 ? "reviewer.reviewingCountOne" : "reviewer.reviewingCount", { count: artifactCount })
     : t("reviewer.reviewingArtifacts");
   return (
-    <details className={`reviewer-specialist-card ${failed ? "failed" : completed ? "skipped" : "running"}`}>
+    <details className={`reviewer-specialist-card ${status !== "running" ? "process-record " : ""}${failed ? "failed" : completed ? "skipped" : "running"}`}>
       <summary className="reviewer-specialist-card-heading">
         <span aria-hidden="true" className="reviewer-specialist-card-chevron">›</span>
         <span className="reviewer-specialist-card-title">
@@ -161,6 +161,7 @@ function CheckpointOnlyReview({
         <i>{status === "running" ? <><span className="reviewer-live-dot" />{t("reviewer.statusRunning")}</> : failed ? t("reviewer.result.failed") : t("reviewer.result.noChecks")}</i>
       </summary>
       <div className="reviewer-specialist-card-body">
+        {progress && error && failed ? <p role="alert">{error}</p> : null}
         {progress ? <ReviewProgress progress={progress} /> : <p>{failed
           ? error ?? t("reviewer.couldNotComplete")
           : completed
@@ -212,6 +213,7 @@ function batchSummary(
       ? t(artifactCount === 1 ? "reviewer.reviewingCountOne" : "reviewer.reviewingCount", { count: artifactCount })
       : t("reviewer.reviewingCount", { count: "…" });
   }
+  if (status === "failed") return t("reviewer.statusFailed");
   if (!reviews.length) return t("reviewer.builtInSpecialist");
   const passed = reviews.filter((review) => review.status !== "failed" && review.decision === "ACCEPT_AND_PROCEED" && !review.findings.length).length;
   const warning = reviews.filter((review) => review.status !== "failed" && review.findings.some((finding) => finding.severity === "warning")).length;
@@ -244,10 +246,9 @@ export function ReviewerPanel({
   const scopedReviews = reviews.filter((review) => review.toolCallId === toolCallId);
   const summary = batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
   const [expanded, setExpanded] = useState(checkpointStatus === "running");
-  useEffect(() => {
-    if (checkpointStatus === "running") setExpanded(true);
-    else setExpanded(false);
-  }, [checkpointStatus, toolCallId]);
+  const userExpanded = useRef<boolean | undefined>(undefined);
+  useEffect(() => { userExpanded.current = undefined; setExpanded(checkpointStatus === "running"); }, [toolCallId]);
+  useEffect(() => { setExpanded(userExpanded.current ?? checkpointStatus === "running"); }, [checkpointStatus]);
   if (!scopedReviews.length && !checkpointStatus) return null;
   // Automatic work is non-intrusive. A stale/deleted Artifact from an older
   // task must never leave a red failure card in the research conversation.
@@ -260,14 +261,14 @@ export function ReviewerPanel({
     <details
       aria-label={t("reviewer.panelAria")}
       aria-live="polite"
-      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : ""}`}
-      onToggle={(event) => setExpanded(event.currentTarget.open)}
+      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : " process-record"}${checkpointStatus === "failed" || scopedReviews.some((review) => review.status === "failed") ? " failed" : ""}`}
+      onToggle={(event) => { if (event.currentTarget.open !== expanded) { userExpanded.current = event.currentTarget.open; setExpanded(event.currentTarget.open); } }}
       open={expanded}
     >
       <summary className="reviewer-specialist-panel-heading">
         <ReviewerSpecialistAvatar />
         <span>
-          <strong>{t("specialist.reviewerName")}</strong>
+          <strong>{t("specialist.reviewerName")}{checkpointStatus !== "running" ? ` · ${summary}` : ""}</strong>
           <small>{summary}</small>
         </span>
         {checkpointStatus === "running" ? <span className="reviewer-panel-live-status"><span className="reviewer-rainbow-dot" />{t("reviewer.reviewing")}</span> : null}

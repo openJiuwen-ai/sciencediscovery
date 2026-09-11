@@ -22,6 +22,8 @@ import { mergePermissionRequestSnapshot } from "../src/permission-state.js";
 import {
   buildConversationBlocks,
   canSummarizeRunAsSkill,
+  latestSkillSourceRun,
+  skillSummaryRun,
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
   hydrateTerminalRunTimelines,
@@ -179,6 +181,16 @@ function sessionRun(id: string, queueOrder: number, status: SessionRun["status"]
     status,
   };
 }
+
+test("Skill summaries use the latest eligible source and an exact linked Run", () => {
+  const first = sessionRun("first", 1, "completed");
+  const latest = sessionRun("latest", 2, "completed");
+  const linked = { ...sessionRun("summary", 3, "running"), prompt: "[Skill self-evolution M1.6]\n- source_run_id: latest" };
+  const wrong = { ...linked, id: "wrong", prompt: "[Skill self-evolution M1.6]\n- source_run_id: latest-extra" };
+  assert.equal(latestSkillSourceRun([first, linked, latest], "session-a")?.id, latest.id);
+  assert.equal(skillSummaryRun([wrong, linked], latest)?.id, linked.id);
+  assert.equal(skillSummaryRun([{ ...linked, sessionId: "other" }], latest), undefined);
+});
 
 test("Skill authoring runs do not offer the redundant self-evolution action", () => {
   const ordinary = sessionRun("ordinary", 1, "completed");

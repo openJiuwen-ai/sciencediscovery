@@ -42,6 +42,11 @@ interface MemoryGraphViewProps {
   onOpenExplorer: () => void;
 }
 
+/** Keep container visibility consistent with the feature's own empty/disabled rules. */
+export function isMemoryGraphVisible(subgraph: MemorySubgraph | null, health: string): boolean {
+  return health !== "disabled" && subgraph !== null && subgraph.reason !== "memory_graph_disabled";
+}
+
 /**
  * A node that ended by cancellation (status === "cancelled", PR1's
  * failure_reason="aborted"). Counted separately from completed so the
@@ -111,9 +116,7 @@ export function MemoryGraphView({ subgraph, health, onOpenExplorer }: MemoryGrap
   const { t } = useLocale();
 
   // A default-off feature should leave no footprint in the UI.
-  if (health === "disabled") return null;
-  if (!subgraph) return null;
-  if (subgraph.reason === "memory_graph_disabled") return null;
+  if (!subgraph || !isMemoryGraphVisible(subgraph, health)) return null;
 
   if (subgraph.reason === "memory_graph_unreachable" && !subgraph.nodes.length) {
     return <section className="memory-graph-view memory-graph-empty">
@@ -157,4 +160,3 @@ export function MemoryGraphView({ subgraph, health, onOpenExplorer }: MemoryGrap
     </p>
   </section>;
 }
-
