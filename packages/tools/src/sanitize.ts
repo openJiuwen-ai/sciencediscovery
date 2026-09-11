@@ -95,3 +95,39 @@ export function neutralizeUntrustedTags(text: string): string {
 export function isRemoteContentTool(toolName: string): boolean {
   return REMOTE_CONTENT_TOOL_NAMES.has(toolName);
 }
+
+// ---------------------------------------------------------------------------
+// Untrusted-result fencing (nonce-boundary markers, OpenDDE-style)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tools whose results are fenced as untrusted before entering the model
+ * context: remote content (attacker-influenceable by the page author) plus
+ * `task` (subagent returns — model-generated but influenced by whatever
+ * untrusted content the subagent read).
+ */
+export const UNTRUSTED_FENCED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...REMOTE_CONTENT_TOOL_NAMES,
+  "task",
+]);
+
+// Bounded: a real fence marker is ~45 chars; the {0,80} bound stops a stray
+// opener from swallowing everything up to the next "]" anywhere later.
+const FENCE_SHAPED_PATTERN = /\[\s*(?:BEGIN|END)\s+UNTRUSTED\b[^\]]{0,80}\]?/gi;
+
+/**
+ * Wrap an untrusted tool result in a run-scoped nonce fence:
+ * `[BEGIN UNTRUSTED <category> #<nonce>]…[END UNTRUSTED #<nonce>]`.
+ *
+ * The per-run nonce makes the closing marker unforgeable by the fenced
+ * content: an injection written before the run cannot know it, so it cannot
+ * close the fence early and pose as trusted framework text after it. Any
+ * fence-shaped text INSIDE the content is neutralized to an inert look-alike
+ * so a fake boundary never appears inside a real one.
+ */
+export function fenceUntrustedResult(toolName: string, content: string, nonce: string): string {
+  if (!UNTRUSTED_FENCED_TOOL_NAMES.has(toolName)) return content;
+  const category = toolName === "task" ? "subagent" : "remote";
+  const safe = content.replaceAll(FENCE_SHAPED_PATTERN, "[UNTRUSTED fence marker neutralized]");
+  return `[BEGIN UNTRUSTED ${category} #${nonce}]\n${safe}\n[END UNTRUSTED #${nonce}]`;
+}

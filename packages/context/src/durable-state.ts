@@ -108,6 +108,20 @@ function historicalResultIsError(content: string): boolean {
   ));
 }
 
+/**
+ * History replay sees the model-visible (fenced) form of untrusted tool
+ * results (web/subagent — see packages/tools sanitize.ts). Strip one
+ * well-formed outer fence so hydration recovers the original JSON payload
+ * instead of the marked-up text. Fence-shaped text INSIDE the payload was
+ * already neutralized at fence time and stays neutralized.
+ */
+const OUTER_FENCE_PATTERN = /^\[BEGIN UNTRUSTED [a-z]+ #[0-9a-f]+\]\n([\s\S]*)\n\[END UNTRUSTED #[0-9a-f]+\]$/;
+
+function stripOuterFence(content: string): string {
+  const match = OUTER_FENCE_PATTERN.exec(content);
+  return match?.[1] ?? content;
+}
+
 function renderRecord(record: DurableToolRecord): Record<string, unknown> {
   return {
     args: record.args,
@@ -220,9 +234,10 @@ export class DurableContextStore {
       const callId = messageString(message, "tool_call_id");
       const call = callId ? pending.get(callId) : undefined;
       if (!call) continue;
+      const content = stripOuterFence(messageString(message, "content") ?? "");
       this.observe(call, {
-        content: messageString(message, "content") ?? "",
-        isError: historicalResultIsError(messageString(message, "content") ?? ""),
+        content,
+        isError: historicalResultIsError(content),
       }, ++sequence);
       pending.delete(call.id);
     }

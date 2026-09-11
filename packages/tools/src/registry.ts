@@ -25,7 +25,7 @@ import {
   type DeferredToolState,
 } from "./deferred-tools.js";
 import { ToolLoopGuard } from "./loop-guard.js";
-import { isRemoteContentTool, neutralizeUntrustedTags } from "./sanitize.js";
+import { fenceUntrustedResult, isRemoteContentTool, neutralizeUntrustedTags } from "./sanitize.js";
 import type { AgentTool } from "./types.js";
 
 export interface ToolSpec {
@@ -54,6 +54,11 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   outputGuard?: ToolOutputGuard;
   /** Durable raw observation hook; awaited before bounding, never silently dropped. */
   recordResult?(input: { call: RuntimeToolCall; content: string; isError: boolean; sequence: number }): Promise<void>;
+  /**
+   * Run-scoped nonce for untrusted-result fencing (see sanitize.ts). Defaults
+   * to a random per-registry (per-run) value; injectable for tests.
+   */
+  untrustedFenceNonce?: string;
 }
 
 /**
@@ -66,6 +71,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
   private readonly orderedTools: readonly AgentTool[];
   private readonly deferredState: DeferredToolState | undefined;
   private readonly loopGuard: ToolLoopGuard;
+  private readonly untrustedFenceNonce: string;
   private nextExecutionSequence = 0;
 
   constructor(tools: Iterable<AgentTool>, private readonly options: ToolRegistryOptions<TMessage>) {
@@ -79,6 +85,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     this.tools = registry;
     this.deferredState = buildDeferredToolState(ordered);
     this.loopGuard = options.loopGuard ?? new ToolLoopGuard();
+    this.untrustedFenceNonce = options.untrustedFenceNonce ?? randomUUID().replaceAll("-", "").slice(0, 12);
   }
 
   promoteForRequest(text: string): string[] {
@@ -165,7 +172,15 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       outputRecord = guarded.record;
     }
     try { this.options.onResult?.({ call, content, isError, sequence }); } catch { /* observer isolation */ }
-    return { content, isError, message: this.options.createResultMessage(call, content, outputRecord) };
+    // Fence last: storage (recordResult), bounding (outputGuard) and observers
+    // (onResult) all see the raw content; only the model-visible text (history
+    // message + returned content) carries the unforgeable boundary markers.
+    // (The run-layer audit ToolAction records the fenced form — the nonce is
+    // embedded in the markers, so the model-visible text stays reconstructable.)
+    // Error results are framework-generated (args errors, availability, loop
+    // guard) — fencing them would mark framework text as untrusted, so skip.
+    const fenced = isError ? content : fenceUntrustedResult(call.name, content, this.untrustedFenceNonce);
+    return { content: fenced, isError, message: this.options.createResultMessage(call, fenced, outputRecord) };
   }
 
   private availableTools(): readonly AgentTool[] {
