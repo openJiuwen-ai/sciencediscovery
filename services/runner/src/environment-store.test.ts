@@ -20,8 +20,11 @@ import { test } from "node:test";
 
 import {
   EnvironmentStore,
+  describeFetchFailure,
   installManagedMicromamba,
+  managedMicromambaBaseUrl,
   managedMicromambaRelease,
+  ManagedProvisionerError,
   type ProvisionerExecutor,
 } from "./environment-store.js";
 
@@ -559,7 +562,8 @@ test("micromamba bootstrap failure remains distinct and can be retried", async (
   await assert.rejects(store.setupManagedEnvironments(), /provisioner is unavailable/);
   assert.equal(store.setup.components.micromamba.state, "failed");
   assert.match(store.setup.components.micromamba.error ?? "", /provisioner is unavailable/);
-  assert.match(store.setup.components.micromamba.action ?? "", /configured micromamba executable path/);
+  assert.match(store.setup.components.micromamba.action ?? "", /Verify that .*micromamba.* is executable by the Runner user/u);
+  assert.match(store.setup.components.micromamba.action ?? "", new RegExp(provisionerPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   assert.equal(store.setup.components.conda.state, "not-configured");
 
   await writeFile(provisionerPath, "#!/bin/sh\nexit 0\n");
@@ -597,7 +601,81 @@ test("managed provisioner installation rejects bytes that do not match the pinne
   const destination = resolve(root, "managed", "micromamba");
   await assert.rejects(
     installManagedMicromamba(destination, async () => new Response("not micromamba", { status: 200 }), "x64", "linux"),
-    /SHA-256 verification/,
+    /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u,
+  );
+});
+
+test("a provisioner install says which step failed and why", async (context) => {
+  const { root } = await fixture(context);
+  const destination = resolve(root, "diagnosable", "micromamba");
+
+  // An isolated machine: the release host does not resolve. Node reports every
+  // transport failure as "fetch failed" and hides the reason in `cause`, which
+  // is what made an unreachable host indistinguishable from a broken proxy.
+  const unreachable = Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("getaddrinfo ENOTFOUND example.invalid"), { code: "ENOTFOUND" }),
+  });
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => { throw unreachable; }, "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "download");
+      assert.match(error.message, /Could not download the micromamba provisioner from https:\/\/[^ ]+micromamba-linux-64/u);
+      assert.match(error.message, /ENOTFOUND/u);
+      assert.equal(error.cause, unreachable, "the original error stays reachable for logs");
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => new Response("nope", { status: 502 }), "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "download");
+      assert.match(error.message, /HTTP 502/u);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => new Response("not micromamba", { status: 200 }), "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "verify", "a mirror serving the wrong bytes is not a network problem");
+      assert.match(error.message, /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u);
+      return true;
+    },
+  );
+});
+
+test("a fetch failure is described by its cause, not by the word it always prints", () => {
+  assert.match(describeFetchFailure(Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), { code: "ECONNREFUSED" }),
+  })), /ECONNREFUSED/u);
+  // A timeout is the one case where the chain has no code worth printing.
+  assert.match(describeFetchFailure(Object.assign(new Error("aborted"), { name: "AbortError" })), /timed out after 120s/u);
+  // Self-referencing causes must not spin.
+  const looping = new Error("looping") as Error & { cause?: unknown };
+  looping.cause = looping;
+  assert.equal(describeFetchFailure(looping), "looping");
+  assert.equal(describeFetchFailure(new TypeError("fetch failed")), "the connection failed");
+});
+
+test("an installation behind a mirror can move the release host without losing the checksum", async (context) => {
+  const { root } = await fixture(context);
+  assert.equal(
+    managedMicromambaRelease("x64", "linux", { SCIENCE_AGENT_MICROMAMBA_BASE_URL: "https://mirror.internal/micromamba/2.8.1-0/" }).url,
+    "https://mirror.internal/micromamba/2.8.1-0/micromamba-linux-64",
+  );
+  assert.equal(managedMicromambaBaseUrl({}), "https://github.com/mamba-org/micromamba-releases/releases/download/2.8.1-0");
+  assert.equal(managedMicromambaBaseUrl({ SCIENCE_AGENT_MICROMAMBA_BASE_URL: "  " }), managedMicromambaBaseUrl({}));
+  // The mirror decides where the bytes come from, never what they may be.
+  const pinned = managedMicromambaRelease("x64", "linux");
+  await assert.rejects(
+    installManagedMicromamba(resolve(root, "mirrored", "micromamba"),
+      async () => new Response("mirror served something else", { status: 200 }), "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "verify");
+      assert.match(error.message, new RegExp(pinned.sha256, "u"));
+      return true;
+    },
   );
 });
 
@@ -641,7 +719,7 @@ test("managed provisioner selects pinned Linux and macOS releases", async (conte
       "arm64",
       "linux",
     ),
-    /SHA-256 verification/,
+    /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u,
   );
   assert.deepEqual(requestedUrls, [arm64.url]);
 });
