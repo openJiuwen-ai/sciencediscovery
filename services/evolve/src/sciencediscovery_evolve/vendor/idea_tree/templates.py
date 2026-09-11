@@ -34,9 +34,9 @@ WATER_TREATMENT = {
 TEMPLATES = {template['id']: template for template in (GENERAL, WATER_TREATMENT)}
 
 INTENSITIES = {
-    'quick': {'maxRounds': 2, 'candidatesPerRound': 2, 'maxSearchRounds': 4, 'maxActiveDirections': 2, 'explorationSlots': 1},
-    'standard': {'maxRounds': 3, 'candidatesPerRound': 3, 'maxSearchRounds': 10, 'maxActiveDirections': 3, 'explorationSlots': 1},
-    'deep': {'maxRounds': 6, 'candidatesPerRound': 4, 'maxSearchRounds': 24, 'maxActiveDirections': 5, 'explorationSlots': 2},
+    'quick': {'maxRounds': 2, 'candidatesPerRound': 2, 'maxSearchRounds': 4, 'maxActiveDirections': 2, 'explorationSlots': 1, 'candidateConcurrency': 2},
+    'standard': {'maxRounds': 3, 'candidatesPerRound': 3, 'maxSearchRounds': 10, 'maxActiveDirections': 3, 'explorationSlots': 1, 'candidateConcurrency': 3},
+    'deep': {'maxRounds': 6, 'candidatesPerRound': 4, 'maxSearchRounds': 24, 'maxActiveDirections': 5, 'explorationSlots': 2, 'candidateConcurrency': 4},
 }
 
 

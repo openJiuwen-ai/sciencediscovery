@@ -225,9 +225,6 @@ class IdeaTreeEngine:
                     self.reserved -= estimate
             try:
                 result = validate_result(role, json.loads(raw), {item['id'] for item in self.assessors()})
-                if role == 'ideate':
-                    for proposal in result['candidates']:
-                        self.proposal_path(proposal)
                 return result
             except (ValueError, TypeError) as error:
                 if attempt:
@@ -318,7 +315,7 @@ class IdeaTreeEngine:
             self.save()
         return candidate['stages'][role]
 
-    async def evaluate(self, candidate):
+    async def evaluate(self, candidate, propagate_insight=True):
         if candidate['kind'] != 'candidate' or candidate['childrenIds']:
             raise ValueError('Only candidate leaves can be evaluated')
         candidate['status'] = 'running'
@@ -348,7 +345,8 @@ class IdeaTreeEngine:
             summary=aggregate['text'], strengths=aggregate['strengths'], failureModes=aggregate['failureModes'], uncertainties=aggregate['uncertainties'], evidenceGaps=aggregate['evidenceGaps'], recommendedNextMoves=aggregate['recommendedNextMoves'], constraintFlags=aggregate['constraintFlags'], confidence=aggregate['confidence'], createdAt=now(),
         ))
         self.save()
-        await self.propagate(candidate)
+        if propagate_insight:
+            await self.propagate(candidate)
 
     def ancestors(self, candidate):
         tree = ResearchTree(self.state['nodes'])
@@ -497,14 +495,29 @@ class IdeaTreeEngine:
                     s['batchCompleted'] = 0
                     s['round'] += 1
                     self.save()
+                async def evaluate_candidate(identifier):
+                    candidate = self.find(identifier)
+                    if candidate.get('cycleComplete') or candidate['status'] == 'done':
+                        return None
+                    async with semaphore:
+                        await self.evaluate(candidate, propagate_insight=False)
+                    return candidate
+
+                # Designs and assessments share no mutable candidate state, so run the
+                # expensive model calls concurrently. Insight propagation remains below
+                # in deterministic batch order because sibling summaries update shared
+                # ancestors and form the selector's durable learning record.
+                semaphore = asyncio.Semaphore(max(1, s['settings'].get('candidateConcurrency', 1)))
+                results = await asyncio.gather(*(evaluate_candidate(identifier) for identifier in s['batch']), return_exceptions=True)
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
                 for identifier in s['batch']:
                     candidate = self.find(identifier)
                     if candidate.get('cycleComplete'):
                         continue
                     if candidate['status'] == 'done':
                         await self.propagate(candidate)
-                    else:
-                        await self.evaluate(candidate)
                     candidate['cycleComplete'] = True
                     s['batchCompleted'] += 1
                     self.save()

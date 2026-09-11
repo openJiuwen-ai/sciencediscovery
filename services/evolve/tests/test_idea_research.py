@@ -14,7 +14,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.store = ResearchStore(Path(self.temp.name))
-        self.state = dict(id='research-test', projectId='p', sessionId='s', objective='No cobalt. Compare catalyst directions.', materials='Supplied material', modelId='m', settings=Settings(templateId='water-treatment-materials/v1', candidatesPerRound=1, maxDepth=2).model_dump(), template=snapshot('water-treatment-materials/v1'),
+        self.state = dict(id='research-test', projectId='p', sessionId='s', objective='No cobalt. Compare catalyst directions.', materials='Supplied material', modelId='m', settings=Settings(templateId='water-treatment-materials/v1', candidatesPerRound=1, maxDepth=6).model_dump(), template=snapshot('water-treatment-materials/v1'),
                           status='paused', phase='ideate', round=0, batch=[], batchCompleted=0, tokens=0, usageKnown=True,
                           reason=None, currentNodeId=None, createdAt=now(), updatedAt=now(), nodes=[node('ROOT', None, 'Goal', 'direction', 0)])
         self.calls = []
@@ -41,8 +41,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
         self.assertEqual(len(candidates), 3)
         self.assertTrue(all(n['score'] == 6.1 and n['cycleComplete'] for n in candidates))
-        self.assertEqual(candidates[0]['parentId'], candidates[2]['parentId'])
-        self.assertNotEqual(candidates[0]['parentId'], candidates[1]['parentId'])
+        self.assertTrue(any(candidate['childrenIds'] for candidate in candidates))
         self.assertEqual(self.store.read('p', 's', 'research-test')['status'], 'completed')
 
     async def test_interrupted_assessment_reuses_design_and_successful_assessments(self):
@@ -95,7 +94,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('did not report', self.state['reason'])
 
     async def test_candidates_execute_before_max_depth_and_can_branch(self):
-        self.state['settings']['maxDepth'] = 4
+        self.state['settings']['maxDepth'] = 6
         async def model(role, payload):
             if role == 'ideate':
                 return json.dumps(dict(candidates=[dict(parentId=payload['selectedParentIds'][0], direction='Fe catalysts', refinements=[], hypothesis=f'Improvement {payload["round"]}')], reason='Refine from prior feedback')), 100
@@ -103,9 +102,9 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         await IdeaTreeEngine(self.state, self.store, {}, model).run()
         self.assertEqual(self.state['status'], 'completed')
         candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
-        self.assertTrue(all(n['depth'] <= 4 for n in candidates))
-        self.assertTrue(any(n['depth'] < 4 for n in candidates))
-        self.assertTrue(all(not n['childrenIds'] for n in candidates))
+        self.assertTrue(all(n['depth'] <= 6 for n in candidates))
+        self.assertTrue(any(n['depth'] < 6 for n in candidates))
+        self.assertTrue(any(n['childrenIds'] for n in candidates))
         directions = [n for n in self.state['nodes'] if n['kind'] == 'direction']
         self.assertTrue(all(n['score'] is None and not n['stages'] for n in directions))
         self.assertTrue(all(n['insight'] for n in directions))
@@ -122,6 +121,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(shallow['insightRecords'])
 
     def test_completed_candidate_can_create_a_deeper_direction(self):
+        self.state['settings']['maxDepth'] = 3
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
         parent = node('1', 'ROOT', 'Initial hypothesis', 'candidate', 1)
         parent.update(status='done', score=5)
@@ -174,13 +174,13 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             return await self.model(role, payload)
         await IdeaTreeEngine(self.state, self.store, {}, model).run()
         self.assertEqual(self.state['status'], 'interrupted')
-        self.assertEqual(sum(r == 'propagate' for r, _ in self.calls), 1)
+        self.assertEqual(sum(r == 'propagate' for r, _ in self.calls), 0)
         fail = False
         resumed = self.store.read('p', 's', 'research-test')
         await IdeaTreeEngine(resumed, self.store, {}, model).run()
         self.assertEqual(resumed['status'], 'completed')
         self.assertEqual(sum(r == 'design' for r, _ in self.calls), 1)
-        self.assertEqual(sum(r == 'propagate' for r, _ in self.calls), 2)
+        self.assertEqual(sum(r == 'propagate' for r, _ in self.calls), 1)
 
     async def test_total_candidate_limit_and_depth_one(self):
         self.state['settings'].update(maxDepth=1, maxNodes=2, maxSearchRounds=1)
@@ -252,6 +252,32 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await task
         self.assertTrue(all(a['status'] == 'completed' and a['finishedAt'] for a in self.state['activities']))
+
+    async def test_batch_candidates_run_concurrently_before_ordered_insight_propagation(self):
+        self.state['settings'].update(maxRounds=1, candidatesPerRound=2, maxDepth=1, candidateConcurrency=2)
+        designs_started, release = asyncio.Event(), asyncio.Event()
+        active_designs = 0
+        async def model(role, payload):
+            nonlocal active_designs
+            if role == 'ideate':
+                return json.dumps(dict(candidates=[
+                    dict(parentId='ROOT', hypothesis='Candidate A'),
+                    dict(parentId='ROOT', hypothesis='Candidate B'),
+                ], reason='Compare independent paths')), 100
+            if role == 'design':
+                active_designs += 1
+                if active_designs == 2:
+                    designs_started.set()
+                await release.wait()
+            return await self.model(role, payload)
+        task = asyncio.create_task(IdeaTreeEngine(self.state, self.store, {}, model).run())
+        await asyncio.wait_for(designs_started.wait(), timeout=2)
+        self.assertEqual(len([role for role, _ in self.calls if role == 'propagate']), 0)
+        release.set()
+        await task
+        candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
+        self.assertEqual([n['hypothesis'] for n in candidates], ['Candidate A', 'Candidate B'])
+        self.assertTrue(all(n['cycleComplete'] and n['propagatedTo'] for n in candidates))
 
     async def test_failed_stage_is_visible_and_persisted(self):
         async def broken(role, payload):
