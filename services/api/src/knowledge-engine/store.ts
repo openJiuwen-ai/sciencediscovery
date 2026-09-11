@@ -1882,6 +1882,32 @@ export class KnowledgeEngineStore {
     };
   }
 
+  /** C3③ cycle reflection facts: per-discovery-source outcome counts plus
+   *  total encounters (cite_hits sums include dedup re-finds). */
+  frontierCycleBreakdown(cycleId: string): Array<{
+    source: string; items: number; done: number; failed: number; skipped: number; encounters: number;
+  }> {
+    const rows = this.database
+      .prepare(
+        `SELECT source,
+                count(*) AS items,
+                sum(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
+                sum(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                sum(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped,
+                sum(cite_hits) AS encounters
+         FROM ke_frontier WHERE cycle_id = ? GROUP BY source ORDER BY source`,
+      )
+      .all(cycleId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      source: String(row["source"]),
+      items: Number(row["items"]),
+      done: Number(row["done"] ?? 0),
+      failed: Number(row["failed"] ?? 0),
+      skipped: Number(row["skipped"] ?? 0),
+      encounters: Number(row["encounters"] ?? 0),
+    }));
+  }
+
   /**
    * Next candidate to process: shallowest depth, fewest attempts, highest
    * relevance — the deterministic crawl order. Deferred ids (rate-limited

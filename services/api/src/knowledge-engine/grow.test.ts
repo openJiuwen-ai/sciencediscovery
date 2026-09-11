@@ -193,6 +193,7 @@ test("grow cycle: seed → crawl → expand → finalize, engine state persisted
     converged?: boolean;
     signals?: { citationCoverage?: { met: boolean }; frontierExhaustion?: { met: boolean } };
     updatedAt?: string;
+    directives?: string[];
   };
   assert.equal(engineState.cycleId, handle.cycleId);
   assert.equal(engineState.converged, true); // coverage + exhaustion met, recall dimension n/a
@@ -200,8 +201,62 @@ test("grow cycle: seed → crawl → expand → finalize, engine state persisted
   assert.equal(engineState.signals?.frontierExhaustion?.met, true);
   assert.ok(engineState.updatedAt);
 
+  // C3③: the converged cycle's reflection is persisted for the next cycle —
+  // engine state carries the directive texts, the per-KB setting the full
+  // structured form. This cycle had low duplication (5/10), so it must NOT
+  // have narrowed the queries; convergence yields the hold directive.
+  assert.ok(engineState.directives?.some((text) => text.includes("prefer depth")));
+  const persisted = JSON.parse(store.getSetting(`grow_directives:${kb.id}`) ?? "null") as {
+    cycleId?: string;
+    directives?: Array<{ kind: string; text: string }>;
+  } | null;
+  assert.equal(persisted?.cycleId, handle.cycleId);
+  assert.ok(persisted?.directives?.some((directive) => directive.kind === "converged-hold"));
+
   // 2 seeds + 5 candidates, all ready.
   assert.equal(store.listDocuments(kb.id).length, 7);
+});
+
+test("C3③: a persisted narrow-queries directive caps the next cycle's patch queries", async (context) => {
+  const root = tempRoot("ke-grow-directives");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const stubs: GrowStubs = { download: async () => {}, citations: {}, searchCalls: [], downloadCalls: [] };
+  const { store, orchestrator, runner } = createHarness(root, stubs);
+  context.after(() => store.close());
+
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  addSeedDoc(store, kb.id, "seed1");
+  // Five isolated entities → three anchor patch queries without a cap.
+  for (const name of ["mAb114", "REGN3470", "KZ52", "13C6", "2G4"]) {
+    store.upsertEntity({ kbId: kb.id, name, type: "antibody" });
+  }
+  // The previous cycle's reflection: saturated corpus → keep 1 query.
+  store.setSetting(`grow_directives:${kb.id}`, JSON.stringify({
+    cycleId: "previous-cycle",
+    createdAt: new Date().toISOString(),
+    directives: [{
+      kind: "narrow-queries",
+      text: "Discovery is saturating — keep only the most specific patch queries.",
+      patchQueryCap: 1,
+    }],
+  }));
+
+  const handle = orchestrator.startGrow(kb.id, "ebola", { maxPapers: 50, maxDepth: 0, maxPerPaper: 5 });
+  await drain(runner);
+  assert.equal(store.listJobs({ type: KE_GROW_JOB, status: "succeeded" }).length, 1);
+
+  // Exactly one entity-anchored patch query was issued (the engine-query
+  // recall sampling calls are filtered out by the entity names).
+  const patchQueries = stubs.searchCalls.filter((query) =>
+    ["mAb114", "REGN3470", "KZ52", "13C6", "2G4"].some((name) => query.includes(name)));
+  assert.equal(patchQueries.length, 1);
+
+  // The new cycle's own reflection replaced the injected one.
+  const persisted = JSON.parse(store.getSetting(`grow_directives:${kb.id}`) ?? "null") as {
+    cycleId?: string;
+    directives?: unknown[];
+  } | null;
+  assert.equal(persisted?.cycleId, handle.cycleId);
 });
 
 test("startGrow reuses the active cycle instead of creating a second one", async (context) => {

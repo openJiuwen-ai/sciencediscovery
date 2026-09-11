@@ -26,6 +26,7 @@ export * from "./extraction/provenance-gate.js";
 export * from "./extraction/prompt.js";
 export * from "./growth/selection.js";
 export * from "./growth/convergence.js";
+export * from "./growth/directives.js";
 export * from "./growth/patch-queries.js";
 export * from "./growth/eval-metrics.js";
 export * from "./eval/citation.js";

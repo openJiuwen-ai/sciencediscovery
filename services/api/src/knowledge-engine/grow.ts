@@ -46,6 +46,7 @@ import {
   aaCouplingScore,
   assessConvergence,
   blendAaScores,
+  buildGrowDirectives,
   buildPatchQueries,
   buildRefInvertedIndex,
   mmrSelect,
@@ -53,6 +54,7 @@ import {
   rankCandidatePool,
   type ConvergenceDataAccess,
   type ConvergenceResult,
+  type GrowDirective,
   type RankedCandidate,
 } from "@sciencediscovery/knowledge-engine";
 
@@ -361,7 +363,7 @@ async function finalizeCycle(
         }
       : {}),
   });
-  const engineState = {
+  const engineState: Record<string, unknown> = {
     ...convergence,
     cycleId,
     query,
@@ -369,9 +371,59 @@ async function finalizeCycle(
     counts,
     updatedAt: new Date().toISOString(),
   };
+  // C3③ structured reflection: compress this cycle's deterministic facts
+  // into directives the NEXT cycle's seeding reads (zero LLM — template
+  // rules only, see growth/directives.ts). Persisted per KB so a crash
+  // between cycles cannot lose the reflection.
+  const directives = collectCycleDirectives(store, kbId, cycleId, counts, convergence.converged);
+  if (directives.length > 0) {
+    engineState["directives"] = directives.map((directive) => directive.text);
+    log(`reflection: ${directives.length} directive(s) recorded for the next cycle`);
+  }
   store.updateEngineState(kbId, engineState);
   log(`cycle done: ${counts.done} done / ${counts.failed} failed / ${counts.pending} pending; converged=${convergence.converged}`);
   return { cycleId, counts, converged: convergence.converged, signals: convergence.signals };
+}
+
+const GROW_DIRECTIVES_KEY = "grow_directives:";
+
+function directivesKey(kbId: string): string {
+  return `${GROW_DIRECTIVES_KEY}${kbId}`;
+}
+
+/** Gather per-cycle facts and derive the directives; persist for next cycle. */
+function collectCycleDirectives(
+  store: KnowledgeEngineStore,
+  kbId: string,
+  cycleId: string,
+  counts: { total: number; pending: number; done: number; failed: number; skipped: number },
+  converged: boolean,
+): GrowDirective[] {
+  const breakdown = store.frontierCycleBreakdown(cycleId);
+  const duplicates = Math.max(0, breakdown.reduce((sum, row) => sum + (row.encounters - row.items), 0));
+  const directives = buildGrowDirectives({ counts, sources: breakdown, duplicates, converged });
+  store.setSetting(
+    directivesKey(kbId),
+    JSON.stringify({ cycleId, createdAt: new Date().toISOString(), directives }),
+  );
+  return directives;
+}
+
+/** Read the previous cycle's persisted directives (empty on first cycle). */
+function readPriorDirectives(store: KnowledgeEngineStore, kbId: string): GrowDirective[] {
+  const raw = store.getSetting(directivesKey(kbId));
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as { directives?: unknown };
+    if (!Array.isArray(parsed.directives)) return [];
+    return parsed.directives.filter(
+      (item): item is GrowDirective =>
+        typeof item === "object" && item !== null && typeof (item as GrowDirective).kind === "string"
+          && typeof (item as GrowDirective).text === "string",
+    );
+  } catch {
+    return [];
+  }
 }
 
 /** Adapt the synchronous store to the async ConvergenceDataAccess port. */
@@ -494,10 +546,27 @@ async function seedFrontier(
   // --- Entity-driven patch queries (citation islands / newest uncited work)
   if (!phasesDone.has("entity_query")) {
     if (deps.searchPapers) {
-      const patchQueries = await buildPatchQueries(kbId, {
+      // C3③ injection: the PREVIOUS cycle's reflection shapes this cycle's
+      // seeding (seedFrontier runs before finalizeCycle overwrites the
+      // setting, so the read is always one cycle behind — by design).
+      const priorDirectives = readPriorDirectives(store, kbId);
+      if (priorDirectives.length > 0) {
+        log(`applying ${priorDirectives.length} growth directive(s) from the previous cycle`);
+      }
+      const patchQueryCap = priorDirectives.reduce<number | null>(
+        (cap, directive) => directive.patchQueryCap !== undefined
+          ? Math.min(cap ?? Number.POSITIVE_INFINITY, directive.patchQueryCap)
+          : cap,
+        null,
+      );
+      const allPatchQueries = await buildPatchQueries(kbId, {
         listEntitiesWithDegree: async (id) => store.listEntitiesWithDegree(id),
         topNeighborNames: async (id, entityIds, perEntity) => store.topNeighborNames(id, entityIds, perEntity),
       });
+      const patchQueries = patchQueryCap === null ? allPatchQueries : allPatchQueries.slice(0, patchQueryCap);
+      if (patchQueryCap !== null && allPatchQueries.length > patchQueries.length) {
+        log(`dedup-pressure directive: patch queries narrowed ${allPatchQueries.length} -> ${patchQueries.length}`);
+      }
       for (const patchQuery of patchQueries) {
         try {
           const results = await deps.searchPapers(patchQuery.query, PATCH_QUERY_LIMIT);
