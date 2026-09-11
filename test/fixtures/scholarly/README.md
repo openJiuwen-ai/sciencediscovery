@@ -31,6 +31,7 @@ passthrough 同时把响应写成本目录信封。一次真实种子运行即�
 | unpaywall | v2 命中与未命中两种 | 404 是正常业务态 |
 | pubmed | eutils esearch/efetch | — |
 | PDF 下载 | 下载链最终 URL | `encoding:"base64"` |
+| arXiv e-print（Z5 LaTeX 通路） | `https://arxiv.org/e-print/<id>`（主镜像 arxiv.org；运行时 transport 跟随 301→`/src/`，fixture 按原始 URL + 最终 200 体录制，`--base64`） | 双路径：**gzip tarball**（TeX 源，如 `1706.03762`）与 **PDF-source 降级**（提交源为单 PDF → `downloadArxivEprint` 返回 null 走 PDF 链，如 `1901.02624` 合成体）。注意：本目录原有 10 篇 arXiv PDF 的 id 实测多为 PDF-only 投稿，其 `/e-print/` 拿不到 TeX——录 LaTeX 面需另选有源投稿 |
 
 ## 与旅程的关系
 
