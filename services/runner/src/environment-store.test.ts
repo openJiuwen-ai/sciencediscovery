@@ -605,6 +605,37 @@ test("managed provisioner installation rejects bytes that do not match the pinne
   );
 });
 
+test("a managed provisioner that is not the pinned release is replaced, not refused forever", async (context) => {
+  // A half-finished transfer, a copy seeded for another architecture, or a
+  // version this build no longer pins all leave the wrong bytes at the managed
+  // path. Refusing to start until a human deletes the file left a machine that
+  // could recover itself stuck on "verification failed".
+  const { root } = await fixture(context);
+  const managedRoot = resolve(root, "managed-envs");
+  const managedPath = resolve(managedRoot, "bin", "micromamba");
+  await mkdir(resolve(managedRoot, "bin"), { recursive: true });
+  await writeFile(managedPath, "an interrupted transfer");
+  await chmod(managedPath, 0o700);
+
+  const installs: string[] = [];
+  const store = new EnvironmentStore({
+    allowedChannels: ["conda-forge"],
+    enabled: true,
+    root: managedRoot,
+    runnerVersion: "test-runner",
+  }, async () => "", async (destination) => {
+    installs.push(destination);
+    await writeFile(destination, "#!/bin/sh\nexit 0\n");
+    await chmod(destination, 0o700);
+  });
+  await store.initialize();
+  await store.setupManagedEnvironments().catch(() => undefined);
+
+  assert.deepEqual(installs, [managedPath], "the wrong file is replaced by a fresh install");
+  assert.equal(await readFile(managedPath, "utf8"), "#!/bin/sh\nexit 0\n");
+  assert.equal(store.setup.components.micromamba.state, "ready");
+});
+
 test("a provisioner install says which step failed and why", async (context) => {
   const { root } = await fixture(context);
   const destination = resolve(root, "diagnosable", "micromamba");

@@ -60,7 +60,7 @@ interface FakeRemote {
   uploads: Map<string, string>;
 }
 
-function fakeRemote(options: { existing?: string; sha256sum?: boolean } = {}): FakeRemote {
+function fakeRemote(options: { existing?: string; installFails?: boolean; sha256sum?: boolean } = {}): FakeRemote {
   const scripts: string[] = [];
   const uploads = new Map<string, string>();
   const run = async (_access: RemoteSshAccess, script: string) => {
@@ -68,6 +68,9 @@ function fakeRemote(options: { existing?: string; sha256sum?: boolean } = {}): F
     if (options.sha256sum === false) return { exitCode: 0, stderr: "", stdout: "nocheck\n" };
     if (script.includes("sha256sum") && script.includes("if [ -x")) {
       return { exitCode: 0, stderr: "", stdout: options.existing ? `${options.existing}\n` : "" };
+    }
+    if (options.installFails && script.includes("mv -f")) {
+      return { exitCode: 1, stderr: "provisioner checksum mismatch\n", stdout: "" };
     }
     return { exitCode: 0, stderr: "", stdout: "" };
   };
@@ -149,6 +152,26 @@ test("the verified release is staged, checked on the machine, then moved into pl
   assert.match(install, new RegExp(sha256, "u"));
   assert.match(install, new RegExp(`mv -f -- '${staged}' '${DESTINATION}'`.replace(/[.*+?^${}()|[\]\\/]/gu, "\\$&"), "u"));
   assert.ok(remote.scripts.some((script) => script.includes(`rm -f -- '${staged}'`)), "the staging file never lingers");
+});
+
+test("a transfer the machine cannot verify never becomes the executable it runs", async (context) => {
+  // The remote checks the checksum itself, so a truncated upload fails there.
+  // Reporting that as seeded would leave the Runner to execute whatever landed.
+  const cacheDir = await workspace(context);
+  const path = resolve(cacheDir, "micromamba-arm64");
+  await writeFile(path, "the verified provisioner");
+  const sha256 = createHash("sha256").update("the verified provisioner").digest("hex");
+  const remote = fakeRemote({ installFails: true });
+
+  const seeded = await seedRemoteProvisioner({
+    access: ACCESS, architecture: "aarch64", cacheDir, dataDir: DATA_DIR,
+    loadProvisioner: async () => ({ architecture: "arm64", path, sha256, version: "2.8.1-0" }),
+    transport: remote.transport,
+  });
+
+  assert.equal(seeded, false, "a machine that could not verify the transfer is not reported as seeded");
+  const [staged] = [...remote.uploads.keys()];
+  assert.ok(remote.scripts.some((script) => script.includes(`rm -f -- '${staged}'`)), "the staging file is still removed");
 });
 
 test("a machine that already holds the pinned provisioner is not touched", async (context) => {

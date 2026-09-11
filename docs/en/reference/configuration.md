@@ -49,6 +49,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_PERMISSION_WAIT_TIMEOUT_MS` | `0` | Initial permission-decision timeout (`0` is unlimited) |
 | `SCIENTIFIC_ENVS` | `1` | Expose managed Python/R and persistent kernels; runner can start before setup completes |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator provisioner override |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | Optional mirror directory URL serving the pinned micromamba release under the same file names; empty uses the upstream release host. The pinned SHA-256 is enforced wherever the file comes from |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache; source safety checks still apply |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated allowed channels; built-in TUNA/USTC presets are always recognized |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | Initial persistent-kernel idle timeout (`0` is unlimited) |
@@ -91,6 +92,7 @@ Compose reads the root `.env` and interpolates these keys into `docker-compose.y
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | Persistent-kernel idle timeout (minimum 1000 ms) |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated channel allowlist |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator micromamba path |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | Optional mirror directory URL for installations that cannot reach the upstream release host; the pinned SHA-256 still applies |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | Bubblewrap in the image |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | Enables usage-dashboard display currency conversion; disabled keeps each model's original estimate currency |

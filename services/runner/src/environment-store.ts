@@ -1047,14 +1047,25 @@ export class EnvironmentStore {
   }
 
   private async ensureManagedProvisioner(): Promise<void> {
+    const release = managedMicromambaRelease();
+    let installed: string | undefined;
     try {
       const bytes = await readFile(this.provisionerPath);
-      const release = managedMicromambaRelease();
       const hash = createHash("sha256").update(bytes).digest("hex");
-      if (hash !== release.sha256) throw new Error("Managed provisioner failed SHA-256 verification");
-      await access(this.provisionerPath, constants.X_OK);
+      // A file that is not the pinned release is replaced, not raised. It is a
+      // managed path the Runner owns: a half-finished transfer, a version this
+      // build no longer pins, or a copy seeded for another architecture all
+      // leave something here that only reinstalling can fix, and stopping with
+      // "verification failed" left the machine stuck on it forever.
+      if (hash !== release.sha256) installed = `replaced a file that was not the pinned ${release.version} release`;
+      else await access(this.provisionerPath, constants.X_OK);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") installed = "installed";
+      else if ((error as NodeJS.ErrnoException).code === "EACCES") installed = "replaced a file the Runner could not execute";
+      else throw error;
+    }
+    if (installed) {
+      await rm(this.provisionerPath, { force: true }).catch(() => undefined);
       await this.provisionerInstaller(this.provisionerPath);
     }
     await this.validateProvisioner();
