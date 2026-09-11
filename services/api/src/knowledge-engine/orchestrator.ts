@@ -45,6 +45,7 @@ import {
   parseReferenceEntries,
   resolveCitedDocuments,
   validateExtractionProposal,
+  type ValidatedProposal,
   resolveEntityCandidate,
   DEFAULT_RESOLVER_THRESHOLDS,
   HAYSTACK_CAP,
@@ -98,6 +99,19 @@ const MIN_EXTRACTABLE_TEXT = 200;
 /** C3①: total LLM rounds per extraction — one initial + bounded corrective
  *  retries feeding validator rejection reasons back to the model. */
 const MAX_EXTRACT_ATTEMPTS = 3;
+/** Correction feedback stand-in when attempt 1 produced an EMPTY (but
+ *  structurally valid) proposal — zero entities is retryable, not final. */
+const EMPTY_PROPOSAL_VALIDATION: ValidatedProposal = {
+  entities: [],
+  relations: [],
+  rejects: [{
+    section: "response",
+    index: 0,
+    reason: "the proposal contained no entities and no relations",
+    excerpt: "",
+  }],
+  parseError: null,
+};
 
 export interface KeOrchestratorDeps {
   readonly store: KnowledgeEngineStore;
@@ -515,30 +529,41 @@ export class KeOrchestrator {
     // C3① proposal-validation gate: the model output is always a PROPOSAL —
     // deterministic validation judges it, bounded corrective retries feed
     // the rejection reasons back, and only then is anything written.
-    // Final-state rejects are preserved as evidence below.
-    let validation!: ReturnType<typeof validateExtractionProposal>;
+    // The BEST attempt survives (most valid entities+relations), so a good
+    // partial extraction cannot be discarded by a worse retry. Final-state
+    // rejects are preserved as evidence below.
+    let best: ReturnType<typeof validateExtractionProposal> | null = null;
+    let bestScore = -1;
     let attemptsUsed = 0;
     for (let attempt = 1; attempt <= MAX_EXTRACT_ATTEMPTS; attempt += 1) {
       attemptsUsed = attempt;
       const feedback = attempt === 1
         ? ""
         : `\n\n---\nCORRECTION FEEDBACK (attempt ${attempt} of ${MAX_EXTRACT_ATTEMPTS}):\n` +
-          `${buildExtractionCorrectionPrompt(validation, this.deps.schema)}\n\nRe-emit the complete corrected JSON.`;
+          `${buildExtractionCorrectionPrompt(best ?? EMPTY_PROPOSAL_VALIDATION, this.deps.schema)}\n\nRe-emit the complete corrected JSON.`;
       const response = await callPipelineLlm(
         { endpoint, ...(this.deps.llmInvoke ? { invoke: this.deps.llmInvoke } : {}) },
         EXTRACTION_SYSTEM_PROMPT,
         `${prompt}${feedback}`,
         signal,
       );
-      validation = validateExtractionProposal(response, this.deps.schema);
-      if (validation.parseError === null && validation.rejects.length === 0) break;
+      const validation = validateExtractionProposal(response, this.deps.schema);
+      const score = validation.entities.length + validation.relations.length;
+      if (score > bestScore) {
+        best = validation;
+        bestScore = score;
+      }
+      const usable = validation.parseError === null && validation.rejects.length === 0 && score > 0;
+      if (usable) break;
       this.warn("ke_extract_proposal_rejected", {
         docId,
         attempt,
         rejects: validation.rejects.length,
         parseError: validation.parseError,
+        empty: score === 0,
       });
     }
+    const validation = best!;
     const { entities, relations } = validation;
     if (entities.length === 0) {
       throw new Error(`extraction model response contained no valid entities after ${attemptsUsed} attempts`);

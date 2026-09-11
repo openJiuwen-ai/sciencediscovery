@@ -65,7 +65,10 @@ void test("isBibliographicOrGeneric filters institutions and generic words", () 
 
 void test("validateExtractionProposal accepts a clean proposal with zero rejects", () => {
   const response = JSON.stringify({
-    entities: [{ name: "Ebola virus", type: "virus", definition: "Filoviridae" }],
+    entities: [
+      { name: "Ebola virus", type: "virus", definition: "Filoviridae" },
+      { name: "glycoprotein", type: "protein" },
+    ],
     relations: [{
       source: "Ebola virus", target: "glycoprotein", type: "encodes",
       evidence_quote: "Ebola virus encodes the glycoprotein GP.",
@@ -74,7 +77,7 @@ void test("validateExtractionProposal accepts a clean proposal with zero rejects
   const validated = validateExtractionProposal(response, BIOMEDICAL_SCHEMA);
   assert.equal(validated.parseError, null);
   assert.deepEqual(validated.rejects, []);
-  assert.equal(validated.entities.length, 1);
+  assert.equal(validated.entities.length, 2);
   assert.equal(validated.relations.length, 1);
 });
 
@@ -142,6 +145,30 @@ void test("buildExtractionCorrectionPrompt itemizes reasons and restates the con
   assert.match(prompt, /COMPLETE corrected JSON/);
   const parseFailed = validateExtractionProposal("garbage", DEFAULT_SCHEMA);
   assert.match(buildExtractionCorrectionPrompt(parseFailed, DEFAULT_SCHEMA), /could not be parsed \(unparseable-json\)/);
+});
+
+void test("validateExtractionProposal rejects dangling relation endpoints as evidence", () => {
+  const validated = validateExtractionProposal(
+    JSON.stringify({
+      entities: [
+        { name: "NP", type: "protein" },
+        // Policy-screened but EMITTED — relations may still reference it.
+        { name: "Stanford University", type: "other" },
+      ],
+      relations: [
+        { source: "NP", target: "VP35", type: "binds", evidence_quote: "NP binds VP35 during replication." },
+        { source: "NP", target: "Stanford University", type: "uses", evidence_quote: "NP was characterized at Stanford University." },
+      ],
+    }),
+    BIOMEDICAL_SCHEMA,
+  );
+  // VP35 was never emitted -> rejected with the offending name in the reason.
+  assert.equal(validated.relations.length, 1);
+  assert.equal(validated.rejects.length, 1);
+  assert.match(validated.rejects[0]!.reason, /relation\.target "VP35" does not match any emitted entity name/);
+  // The screened entity was still EMITTED, so referencing it is valid input
+  // (it silently drops later at the write stage, as before).
+  assert.equal(validated.relations[0]!.target, "Stanford University");
 });
 
 void test("buildExtractionPrompt embeds schema vocabularies and core entity list", () => {

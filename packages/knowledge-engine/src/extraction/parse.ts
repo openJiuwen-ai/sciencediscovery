@@ -236,6 +236,22 @@ export function validateExtractionProposal(
   if (!Array.isArray(obj["entities"])) {
     rejects.push({ section: "response", index: 0, reason: "entities must be an array", excerpt: rejectExcerpt(obj["entities"]) });
   }
+  // ALL emitted names (pre-policy-screen, aliases included): relation
+  // endpoints are judged against what the model EMITTED, not against what
+  // survived the bibliographic screen — otherwise screen-dropped entities
+  // would produce unfixable relation rejects.
+  const emittedNames = new Set<string>();
+  const normalizeRef = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, " ");
+  entityRows.forEach((entry) => {
+    if (typeof entry !== "object" || entry === null) return;
+    const record = entry as Record<string, unknown>;
+    if (typeof record["name"] === "string" && record["name"].trim()) emittedNames.add(normalizeRef(record["name"]));
+    if (Array.isArray(record["aliases"])) {
+      for (const alias of record["aliases"]) {
+        if (typeof alias === "string" && alias.trim()) emittedNames.add(normalizeRef(alias));
+      }
+    }
+  });
   entityRows.forEach((entry, index) => {
     if (typeof entry !== "object" || entry === null) {
       rejects.push({ section: "entities", index, reason: "entity must be an object", excerpt: rejectExcerpt(entry) });
@@ -291,6 +307,21 @@ export function validateExtractionProposal(
     if (!source || !target) {
       rejects.push({ section: "relations", index, reason: "relation.source and relation.target are required", excerpt: rejectExcerpt(entry) });
       return;
+    }
+    // Dangling endpoints are contract violations (the correction prompt says
+    // "exactly match emitted entity names") — without this check they vanish
+    // silently downstream (folded into the orchestrator's dropped counter),
+    // the exact "failures stay evidence" gap C3① closes.
+    for (const [field, value] of [["source", source], ["target", target]] as const) {
+      if (!emittedNames.has(normalizeRef(value))) {
+        rejects.push({
+          section: "relations",
+          index,
+          reason: `relation.${field} "${value.slice(0, 60)}" does not match any emitted entity name or alias`,
+          excerpt: rejectExcerpt(entry),
+        });
+        return;
+      }
     }
     if (typeof record["type"] !== "string" || !edgeTypes.has(record["type"])) {
       rejects.push({

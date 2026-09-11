@@ -288,6 +288,56 @@ test("C3①: an invalid proposal is corrected on a bounded retry, no rejects rec
   assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "succeeded" }).length, 1);
 });
 
+test("C3①: the best partial attempt survives when later retries degrade", async (context) => {
+  const root = tempRoot("ke-orch-best-attempt");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const transport = stubTransport([
+    { match: "/search?query=", status: 200, body: EPMC_SEARCH },
+    { match: "fullTextXML", status: 200, body: JATS },
+  ]);
+  const partialGood = JSON.stringify({
+    entities: [
+      { name: "Ebola virus", type: "virus" },
+      { name: "glycoprotein", type: "viral-envelope-molecule", aliases: ["GP"] },
+      { name: "mAb114", type: "antibody" },
+    ],
+    relations: [],
+  });
+  const responses = [partialGood, "not json at all", "still not json"];
+  let llmCalls = 0;
+  const orchestrator = new KeOrchestrator({
+    store,
+    chain: buildSourceChain({ transport }),
+    transport,
+    schema: BIOMEDICAL_SCHEMA,
+    resolveEndpoint: () => ({ baseUrl: "http://stub", model: "m" }),
+    llmInvoke: async () => {
+      llmCalls += 1;
+      return responses[Math.min(llmCalls - 1, responses.length - 1)]!;
+    },
+    assertUrl: async () => {},
+  });
+  const runner = new KeJobRunner(store);
+  orchestrator.registerJobs(runner);
+
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  await orchestrator.seedKb(kb.id, "ebola glycoprotein antibody", 10);
+  await drain(runner);
+
+  // All three rounds ran (attempt 1 had a reject, attempts 2-3 unparseable),
+  // but attempt 1's two valid entities survive — a worse retry cannot
+  // discard a better partial extraction.
+  assert.equal(llmCalls, 3);
+  assert.equal(store.listEntities(kb.id).length, 2);
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "succeeded" }).length, 1);
+  // The recorded evidence comes from the BEST attempt (its type violation).
+  const rejects = store.listProposalRejects(kb.id);
+  assert.equal(rejects.length, 1);
+  assert.match(rejects[0]?.reason ?? "", /entity\.type must be one of/);
+});
+
 test("C3①: persistent proposal violations are kept as evidence after 3 attempts", async (context) => {
   const root = tempRoot("ke-orch-rejects");
   context.after(() => rm(root, { force: true, recursive: true }));

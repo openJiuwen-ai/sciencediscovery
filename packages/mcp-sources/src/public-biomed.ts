@@ -463,7 +463,10 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
       resolve: {
         description: "Resolve a compound name, SMILES, or InChI into a PubChem property record.",
         inputSchema: objectSchema(
-          { by: { default: "name", enum: ["name", "smiles", "inchi"], type: "string" }, value: text(2_000) },
+          // Capped below PUG-REST's GET URL limit — percent-encoded long
+          // identifiers (macro-molecule SMILES/InChI) would 4xx at the
+          // provider; PUG requires POST for those (a documented later port).
+          { by: { default: "name", enum: ["name", "smiles", "inchi"], type: "string" }, value: text(1_000) },
           ["value"],
         ),
         keywords: ["resolve SMILES", "resolve InChI", "compound from name"],

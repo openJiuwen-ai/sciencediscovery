@@ -170,9 +170,11 @@ export interface VectorChunkCandidate {
 }
 
 /** Standard RRF smoothing constant — 60 keeps single-arm ranks dominant
- *  enough that rank 1 beats rank 2 of the other arm, while an anchor found
- *  by BOTH arms always outranks a single-arm find (OpenDDE skill_forge
- *  pattern: per-source over-fetch k×2, fuse, degrade on source failure). */
+ *  enough that rank 1 beats rank 2 of the other arm; an anchor found near
+ *  the top of BOTH arms outranks any single-arm find of similar rank (not
+ *  absolutely for very deep ranks — RRF is a rank heuristic, not a proof).
+ *  OpenDDE skill_forge pattern: per-source over-fetch ×2, fuse, degrade on
+ *  source failure. */
 export const RRF_K = 60;
 const HYBRID_OVERFETCH = 2;
 
@@ -234,7 +236,7 @@ export function hybridSearchBlocks(input: {
   const terms = extractQueryTerms(input.query);
   const vector = (input.vectorCandidates ?? []).slice(0, topK * HYBRID_OVERFETCH);
 
-  const ftsRanked = terms.length === 0 ? [] : scoreAllBlocks(input.documents, terms);
+  const ftsRanked = (terms.length === 0 ? [] : scoreAllBlocks(input.documents, terms)).slice(0, topK * HYBRID_OVERFETCH);
   const sources: Array<"fts" | "vector"> = [];
   if (ftsRanked.length > 0) sources.push("fts");
   if (vector.length > 0) sources.push("vector");
@@ -269,7 +271,6 @@ export function hybridSearchBlocks(input: {
   interface Fused {
     rrf: number;
     fts?: ScoredBlock;
-    vectorScore?: number;
   }
   const fused = new Map<string, Fused>();
   const bump = (anchorId: string, contribution: number, attach: (current: Fused) => Partial<Fused>): void => {
@@ -280,7 +281,7 @@ export function hybridSearchBlocks(input: {
     bump(entry.hit.anchorId, 1 / (RRF_K + rank + 1), () => ({ fts: entry }));
   });
   vector.forEach((candidate, rank) => {
-    bump(candidate.anchorId, 1 / (RRF_K + rank + 1), () => ({ vectorScore: candidate.score }));
+    bump(candidate.anchorId, 1 / (RRF_K + rank + 1), () => ({}));
   });
 
   const hits: KbSearchHit[] = [];
@@ -298,10 +299,11 @@ export function hybridSearchBlocks(input: {
     if (!docId) continue;
     const used = perDoc.get(docId) ?? 0;
     if (used >= maxPerDoc) {
-      truncated = true;
+      truncated = true; // matches exist beyond the per-document cap
       continue;
     }
     if (hits.length >= topK) {
+      // Only a real truncation when ranked entries remain unvisited.
       truncated = true;
       break;
     }
@@ -326,7 +328,7 @@ export function hybridSearchBlocks(input: {
   }
 
   const note = input.vectorCandidates === undefined && sources.length === 1 && sources[0] === "fts"
-    ? "vector source unavailable (no embedding client or no embedded chunks) — keyword-only"
+    ? "vector source unavailable (no embedding client, no embedded chunks, or embed failure) — keyword-only"
     : undefined;
   return {
     kbId: input.kbId,

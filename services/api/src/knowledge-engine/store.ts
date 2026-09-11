@@ -2341,8 +2341,9 @@ export class KnowledgeEngineStore {
 
   // ------------------------------------------------------ doc chunks (Z8)
 
-  /** Replace one document's chunk rows (idempotent rewrite; embedding left
-   *  null for the caller to backfill). */
+  /** Replace one document's chunk rows (idempotent rewrite). Embeddings of
+   *  anchors that survive the rewrite are PRESERVED: a re-extraction during
+   *  an embedding outage must not silently wipe the KB back to keyword-only. */
   replaceDocChunks(
     kbId: string,
     docId: string,
@@ -2353,11 +2354,21 @@ export class KnowledgeEngineStore {
       `INSERT INTO ke_doc_chunks (id, kb_id, doc_id, anchor_id, block_type, section, chunk_text, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const reapplyEmbedding = this.database.prepare(
+      "UPDATE ke_doc_chunks SET embedding = ? WHERE doc_id = ? AND anchor_id = ?",
+    );
     const timestamp = now();
     this.inTransaction(() => {
+      const existing = new Map<string, Uint8Array>();
+      const prior = this.database
+        .prepare("SELECT anchor_id, embedding FROM ke_doc_chunks WHERE doc_id = ? AND embedding IS NOT NULL")
+        .all(docId) as Array<Record<string, unknown>>;
+      for (const row of prior) existing.set(String(row["anchor_id"]), row["embedding"] as Uint8Array);
       this.database.prepare("DELETE FROM ke_doc_chunks WHERE doc_id = ?").run(docId);
       for (const chunk of chunks) {
         insert.run(randomUUID(), kbId, docId, chunk.anchorId, chunk.blockType, chunk.section, chunk.text, timestamp);
+        const embedding = existing.get(chunk.anchorId);
+        if (embedding) reapplyEmbedding.run(embedding, docId, chunk.anchorId);
       }
     });
     return chunks.length;

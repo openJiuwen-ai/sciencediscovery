@@ -436,6 +436,7 @@ export function createPlatformServices(
   // semantic arm (RRF-fused with FTS; absent → keyword-only).
   const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore, {
     ...(keEmbedding ? { embedding: keEmbedding } : {}),
+    onWarn: (message) => apiLog.warn("knowledge_engine", { message }),
   });
   // Community roots for the progressive graph drill-down (fingerprint-cached,
   // stale-while-revalidate, LLM-named when a pipeline model is configured).

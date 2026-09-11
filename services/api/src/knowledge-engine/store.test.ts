@@ -85,11 +85,14 @@ test("doc chunks round-trip with embeddings and rewrite idempotently", async (co
   assert.equal(paragraph?.text, "The assay used mAb114.");
   assert.ok(paragraph?.embedding instanceof Uint8Array);
 
-  // Rewrite replaces the document's chunks wholesale (idempotent derivation).
+  // Rewrite replaces the document's chunks wholesale (idempotent derivation),
+  // and embeddings of surviving anchors are PRESERVED — a re-extraction
+  // during an embedding outage must not wipe the KB back to keyword-only.
   store.replaceDocChunks(kb.id, doc.id, [
     { anchorId: `${doc.id}:paragraph:0`, blockType: "paragraph", section: null, text: "Rewritten." },
+    { anchorId: `${doc.id}:heading:1`, blockType: "heading", section: null, text: "New heading" },
   ]);
-  assert.deepEqual(store.countDocChunks(kb.id), { total: 1, embedded: 0 });
+  assert.deepEqual(store.countDocChunks(kb.id), { total: 2, embedded: 1 }); // paragraph:0 kept its vector
 });
 
 test("proposal rejects are recorded (capped) and queryable per KB/doc", async (context) => {

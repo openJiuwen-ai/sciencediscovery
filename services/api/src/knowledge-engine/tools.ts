@@ -112,7 +112,11 @@ export class KeKbNotFoundError extends Error {
 
 export function createKnowledgeEngineTools(
   store: KnowledgeEngineStore,
-  options: { embedding?: EmbeddingClient } = {},
+  options: {
+    embedding?: EmbeddingClient;
+    /** Degradation telemetry for the hybrid search arm (logged, never fatal). */
+    onWarn?: (message: string) => void;
+  } = {},
 ): KnowledgeEngineToolPort {
   // Read bounds: 10k entities / 500 edges-per-entity / 50k edges total are
   // far above any realistic KB today; they are guardrails against accidental
@@ -203,6 +207,7 @@ export function createKnowledgeEngineTools(
       // three-level reader. docLimit stays small — block parsing is
       // milliseconds per document at this scale.
       const docLimit = Math.max(1, Math.min(opts.docLimit ?? 6, 10));
+      const topK = Math.max(1, Math.min(opts.topK ?? 8, 20));
       const toInput = (document: NonNullable<ReturnType<KnowledgeEngineStore["getDocument"]>>): KbSearchDocumentInput => ({
         docId: document.id,
         title: document.title,
@@ -227,6 +232,10 @@ export function createKnowledgeEngineTools(
             const ranked = cosineScan(
               queryVector,
               chunks.map((chunk) => ({ item: chunk, embedding: embeddingFromBlob(chunk.embedding) })),
+              // Per-source over-fetch: only the top topK*2 candidates are
+              // fused — and only their documents get loaded below, or every
+              // embedded document in the KB would be read per search.
+              { topK: topK * 2 },
             );
             vectorCandidates = ranked
               .map((match) => ({ docId: match.item.docId, anchorId: match.item.anchorId, score: match.score }));
@@ -242,14 +251,17 @@ export function createKnowledgeEngineTools(
               }
             }
           }
-        } catch {
-          vectorCandidates = undefined; // degrade to keyword-only
+        } catch (error) {
+          options.onWarn?.(
+            `kb_search vector arm degraded to keyword-only: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          vectorCandidates = undefined;
         }
       }
       if (vectorCandidates === undefined) {
-        return searchBlocks({ kbId, query, documents, topK: opts.topK });
+        return searchBlocks({ kbId, query, documents, topK });
       }
-      return hybridSearchBlocks({ kbId, query, documents, vectorCandidates, topK: opts.topK });
+      return hybridSearchBlocks({ kbId, query, documents, vectorCandidates, topK });
     },
 
     async kbExpand(kbId, anchorId) {
