@@ -31,6 +31,7 @@ import {
   buildDeterministicL0,
   DEFAULT_INTENT_LABELS,
   documentAnchor,
+  monitorConvergence,
   parseDocumentBlocks,
   resolveDocumentAnchor,
   type DocumentBlock,
@@ -165,12 +166,21 @@ export function handleKeGetGrow(response: ServerResponse, store: KnowledgeEngine
   ][0];
   const stateCycleId = typeof engineState["cycleId"] === "string" ? (engineState["cycleId"] as string) : null;
   const cycleId = activeJob ? String(activeJob.payload["cycleId"]) : stateCycleId;
+  // Z7 living review: has a converged KB drifted back into growth? Pure
+  // computation over the sticky convergedAt latch + entity-creation rate —
+  // surfaced for the UI/agent; reopening remains an explicit user action.
+  const convergedAt = typeof engineState["convergedAt"] === "string" ? (engineState["convergedAt"] as string) : null;
+  const livingReview = monitorConvergence({
+    convergedAt,
+    newEntities: convergedAt ? store.countEntitiesCreatedSince(kbId, convergedAt) : 0,
+  });
   sendJson(response, 200, {
     engineState,
     activeCycle: activeJob
       ? { jobId: activeJob.id, cycleId: String(activeJob.payload["cycleId"]), status: activeJob.status }
       : null,
     frontier: cycleId ? store.frontierCounts(cycleId) : null,
+    livingReview,
   });
 }
 

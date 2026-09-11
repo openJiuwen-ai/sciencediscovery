@@ -567,9 +567,20 @@ export class KnowledgeEngineStore {
   }
 
   updateEngineState(kbId: string, engineState: unknown): void {
+    // Z7 sticky convergedAt latch: the FIRST convergence timestamp survives
+    // later converged cycles verbatim (DA convergence.ts:324-331); a
+    // diverging cycle (converged false) clears it, so a re-convergence
+    // after a reopen stamps a fresh first-convergence time.
+    const prior = this.getKnowledgeBase(kbId)?.engineState as Record<string, unknown> | undefined;
+    const next = (engineState ?? {}) as Record<string, unknown>;
+    if (next["converged"] === true) {
+      next["convergedAt"] = typeof prior?.["convergedAt"] === "string" ? prior["convergedAt"] : new Date().toISOString();
+    } else {
+      delete next["convergedAt"];
+    }
     this.database
       .prepare("UPDATE knowledge_bases SET engine_state = ? WHERE id = ?")
-      .run(JSON.stringify(engineState ?? {}), kbId);
+      .run(JSON.stringify(next), kbId);
   }
 
   // -------------------------------------------------------------- documents

@@ -32,7 +32,7 @@
  */
 
 const NOVELTY_WINDOW = 20;
-const NOVELTY_FLOOR = 0.5;
+const NOVELTY_FLOOR = 0.5; // exported below for the living-review monitor
 const COVERAGE_THRESHOLD = 0.8;
 const BOUNDARY_COVERAGE_THRESHOLD = 0.9;
 const BOUNDARY_MIN_OBSERVED = 30;
@@ -96,6 +96,53 @@ export interface ConvergenceSignals {
 export interface ConvergenceResult {
   converged: boolean;
   signals: ConvergenceSignals;
+}
+
+// ------------------------------------------------- living review (Z7, DA port)
+
+/** Same novelty floor that declares saturation in assessConvergence. */
+export { NOVELTY_FLOOR };
+/** Grace window after convergence before a reopen check is meaningful. */
+export const LIVING_REVIEW_MIN_DAYS = 14;
+
+export interface LivingReviewResult {
+  reopen: boolean;
+  reason: "not-converged" | "too-recent" | "novelty-recovery" | "stable";
+  newEntities: number;
+  daysSinceConverged: number;
+}
+
+/**
+ * Living-review monitor (DA convergence.ts monitorConvergence): has a
+ * converged KB drifted back into growth? Counts only new ENTITIES, not
+ * edges — new entities require new source material; edges between existing
+ * entities can be back-filled by re-extraction. Reopens when the novelty
+ * rate (new entities per day since convergence) exceeds the same floor
+ * that declared saturation; only after the grace window to avoid churn.
+ * Symmetric to assessConvergence: that asks "should we stop?", this asks
+ * "should we restart?".
+ */
+export function monitorConvergence(input: {
+  convergedAt: string | null | undefined;
+  newEntities: number;
+  now?: Date;
+}): LivingReviewResult {
+  if (!input.convergedAt) {
+    return { reopen: false, reason: "not-converged", newEntities: 0, daysSinceConverged: 0 };
+  }
+  const now = input.now ?? new Date();
+  const days = (now.getTime() - new Date(input.convergedAt).getTime()) / 86_400_000;
+  if (days < LIVING_REVIEW_MIN_DAYS) {
+    return { reopen: false, reason: "too-recent", newEntities: input.newEntities, daysSinceConverged: days };
+  }
+  const noveltyRate = days > 0 ? input.newEntities / days : input.newEntities;
+  const reopen = noveltyRate > NOVELTY_FLOOR;
+  return {
+    reopen,
+    reason: reopen ? "novelty-recovery" : "stable",
+    newEntities: input.newEntities,
+    daysSinceConverged: days,
+  };
 }
 
 /**
