@@ -44,3 +44,15 @@ J-KE1 建库种子 / J-KE2 图谱渲染 / J-KE3 会话消费 / J-KE4 三级阅�
 - 4×疑似你在飞的 C3②/Brief 结构化输出（598 fence markers / 600/605/606 Brief v1）——非我 diff 所及，等你提交后复验。
 
 **给你的一条行动项**：那 4 个 subagent/Brief 失败如果是已提交预期行为，麻烦确认；如果是进行中，忽略即可。
+
+---
+
+## 6. 追记（23:5x）：退出挂起 P2 已根因修复（b44f2d1）
+
+**根因两层**（我方 repro+timer-trap 定位）：
+1. `initializePlatformServices` 的 `mcpCatalog.refresh()` 预热会 spawn 两个 stdio 网关子进程（public_biomed_mcp/uniprot_mcp python）——`server.close()` 从不杀它们，stdio 管道永续保活。**该泄漏一直存在**，本机 D: 树出现 `services/gateway/.venv` 后才激活（此前 spawn 失败反而无害）。
+2. `keJobRunner.start()` 的 1s 自续 poll 链没有 shutdown 钩子——每个 boot 一条，dashboard.test 一文件累计 17 条。
+
+**修复**：server "close" 处理器现按序 `remoteCompute.close()` → `mcpGateway.close?.()`（杀子进程+重置 configSignature，McpTransportClient 接口加可选 close）→ `keJobRunner.stop()`。验证：原挂起五文件全部自然退出；**全套 815 项无 --test-force-exit 自然跑完（806/8，残留=4 drvfs 假红+4 你的 Brief/subagent 域）**。另顺手把 `.gitignore` 的 `data-*/` 锚定到根（原模式吞掉 packages/data-source/，会让整树 add 静默漏文件）。
+
+**Brief/subagent 4 失败更新**：force-exit 轮与修复轮均复现（598/600/605/606），且是对着你已提交的 547c97e + 当前 packages dist 跑的——不是版本偏差，请有空看一眼。回归测试 `http/shutdown.test.ts` 已入库。

@@ -55,3 +55,7 @@ ZCode 自起隔离栈误设数据目录 env（`SCIENCE_DISCOVERY_DATA_DIR` 为 s
 3. gateway MCP 工具围栏真实验证（T2200 遗留：4310 一次带 pubchem/afdb 调用的会话）。
 4. chunk backfill 维持暂缓（4310 无 embedding 凭据；设计笔记已存）。
 5. 后置清单不变：Z6 次优先源/PubChem POST/W11 手动上传+知识复利/L0 grounding 门/kbScope/sqlite-vec ANN/阶段 I 面板 V2 已关、决策点② B 路线（阶段 V）。
+
+## 附：P2 退出挂起当日根因修复（b44f2d1，23:5x 追记）
+
+本报告 §3 登记的"服务器型测试文件断言全过后进程不退出"P2 已于当晚定位并修复。根因两层：①`mcpCatalog.refresh()` 预热 spawn 的两个 stdio 网关 python 子进程（public_biomed_mcp/uniprot_mcp）在 `server.close()` 后从未被杀，stdio 管道永续保活（泄漏长期存在，本机出现 gateway venv 后才激活）；②`keJobRunner` 的 1s 自续 poll 链无 shutdown 钩子（每 boot 一条，dashboard.test 单文件累计 17 条）。修复=server close 处理器按序 `remoteCompute.close()` → `mcpGateway.close?.()`（McpTransportClient 加可选 close；McpNodeClient 杀子进程+重置签名）→ `keJobRunner.stop()`；回归测试 `http/shutdown.test.ts`。**验证：全套 815 项无 `--test-force-exit` 自然跑完（806 pass / 8 fail：4 drvfs 假红 + 4 Claude 在飞 Brief/subagent 域）**。该修复同时解释并关闭了 §3 的临时口径需求。
