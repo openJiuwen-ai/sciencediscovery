@@ -3954,7 +3954,7 @@ export function App() {
     const busy = skillEvolutionSourceRunIds.has(sourceRun.id) || Boolean(summaryRun && !finished);
     if ((missingLibrary || sessionArchived || !session.modelId) && !busy && !summaryRun) return null;
     return <ProcessRecord key={sourceRun.id} active={!finished || busy} failed={Boolean(finished && summaryRun.status !== "completed")}
-      label={t("record.skillFinished", { status: summaryRun ? summaryRun.status === "completed" ? t("subagent.status.completed") : summaryRun.status === "failed" ? t("subagent.status.failed") : summaryRun.status : "" })}>
+      label={summaryRun ? t("record.skillFinished", { status: summaryRun.status === "completed" ? t("subagent.status.completed") : summaryRun.status === "failed" ? t("subagent.status.failed") : summaryRun.status }) : t("app.summarizeAsSkill")}>
       <section aria-label={t("app.skillEvolutionAria")} className="skill-evolution-card" data-source-run-id={sourceRun.id}>
       <header><span><SparkleIcon size={16} /></span><div><strong>{t("app.summarizeAsSkill")}</strong><small>{t("app.skillLibraryDefault", { id: SELF_EVOLUTION_LIBRARY_ID })}</small></div></header>
       <button
@@ -4622,7 +4622,7 @@ export function App() {
               </div>
             </details> : null}
 
-            {session && evolveRuns.length ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>Evolve</strong><span className="fold-meta">{evolveRuns.length}</span></summary><EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /></details> : null}
+            {session && evolveRuns.length ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("evolve.card.title")}</strong><span className="fold-meta">{evolveRuns.length}</span></summary><EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /></details> : null}
 
             {session && reviewerSpecialistSettings?.enabled ? <details className="workspace-fold"><summary>{t("specialist.reviewerName")}</summary><ReviewerControlCard
               busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning || reviewerAuditRunning}

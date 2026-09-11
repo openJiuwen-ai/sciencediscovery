@@ -26,6 +26,7 @@ export function ProcessRecord({ active = false, children, failed = false, label,
   const [expanded, setExpanded] = useState(false);
   return <details className={active ? "process-live" : `process-record ${className}${failed ? " failed" : ""}`} open={active || expanded}
     onClickCapture={(event) => {
+      // Preserve a nested detail opened while active when this record becomes terminal.
       if (!active || !(event.target instanceof Element) || event.target.closest("button")) return;
       const detail = event.target.closest("summary")?.parentElement;
       if (detail instanceof HTMLDetailsElement && detail !== event.currentTarget) setExpanded(!detail.open);
@@ -40,7 +41,11 @@ export function ProcessRecord({ active = false, children, failed = false, label,
 }
 
 export function WorkspaceFolder({ children, label, name }: { children: ReactNode; label: string; name: string }) {
-  return <details className="workspace-folder" data-folder={name} open>
+  const [expanded, setExpanded] = useState(true);
+  return <details className="workspace-folder" data-folder={name} open={expanded}
+    onToggle={(event) => {
+      if (event.target === event.currentTarget) setExpanded(event.currentTarget.open);
+    }}>
     <summary><ChevronRightIcon className="record-chevron" size={14} /><strong>{label}</strong></summary>
     <div className="workspace-folder-body">{children}</div>
   </details>;

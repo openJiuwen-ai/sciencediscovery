@@ -23,7 +23,7 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedMo
  * Purpose: A researcher sees live cards become compact records without losing tool output, files or authorization behavior.
  * Steps:
  *   1. Open a local Project and check default-open workspace folders, closed secondary sections and absent disabled features.
- *   2. Send a request, observe live reasoning, grant permission and observe the running tool.
+ *   2. Collapse Files, send a request, verify streaming updates keep it closed, then grant permission and observe the running tool.
  *   3. Check completed records, copyable output and the unchanged declared Artifact card.
  *   4. Run a failing tool and verify its compact error record.
  *   5. Reload on a narrow viewport and inspect persisted records and workspace files.
@@ -90,8 +90,11 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       await expect(files.locator(".physical-files")).toHaveCount(0);
     });
     let runId = "";
-    await journey.step("思考中保留原卡片", "可以看到边框、底色和完整思考文本，没有提前变成灰色记录。",
+    await journey.step("思考中保留原卡片，文件分区保持收起", "流式更新后文件分区不会自动打开，思考仍有边框、底色和完整文本。",
       async () => {
+        const files = page.locator('[data-folder="files"]');
+        await files.locator(":scope > summary").click();
+        await expect(files).not.toHaveAttribute("open", "");
         const run = await sendUserMessage(page, fixture!.session.id, "生成本地 Markdown 报告并注册为产物。");
         runId = run.id;
         const thinking = page.locator(".timeline-disclosure.thinking.running");
@@ -102,11 +105,16 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(identity).toHaveCount(1);
         await expect(page.locator(".run-timeline .message-body")).toHaveCount(0);
         expect((await identity.boundingBox())!.y).toBeLessThan((await thinking.boundingBox())!.y);
+        await expect(files).not.toHaveAttribute("open", "");
       });
     await journey.step("批准后显示有框工具", "批准卡消失，工具仍在执行时保持边框并显示准确关联的已授权。",
       async () => {
         const permission = page.locator(".permission-card.pending").first();
         await expect(permission).toBeVisible();
+        const files = page.locator('[data-folder="files"]');
+        await expect(files).not.toHaveAttribute("open", "");
+        await files.locator(":scope > summary").click();
+        await expect(files).toHaveAttribute("open", "");
         await permission.getByRole("button", { name: "允许同类操作", exact: true }).click();
         await expect(page.locator(".permission-card")).toHaveCount(0);
         const tool = page.locator(".timeline-disclosure.tool.running").first();

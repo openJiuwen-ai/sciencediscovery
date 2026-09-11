@@ -45,6 +45,31 @@ test("only terminal processes use borderless disclosures; top-level folders defa
   assert.equal(folder.match(/<svg/g)?.length, 1);
 });
 
+test("workspace folders retain independent toggle state through rerenders and reset on a new session key", async () => {
+  const render = (session: string, revision: number) => createElement("div", {},
+    ...["files", "tasks", "memory"].map((name) => createElement(WorkspaceFolder, {
+      key: `${name}:${session}`, name, label: name, children: createElement("span", {}, revision),
+    })));
+  let view: ReturnType<typeof create>;
+  await act(async () => { view = create(render("first", 0)); });
+  const folders = () => view!.root.findAllByType("details");
+  try {
+    assert.deepEqual(folders().map((node) => node.props.open), [true, true, true]);
+    const closed = { open: false };
+    await act(async () => folders()[0]!.props.onToggle({ target: closed, currentTarget: closed }));
+    await act(async () => view!.update(render("first", 1)));
+    assert.deepEqual(folders().map((node) => node.props.open), [false, true, true]);
+    await act(async () => folders()[1]!.props.onToggle({ target: closed, currentTarget: { open: false } }));
+    assert.equal(folders()[1]!.props.open, true, "nested details must not toggle the folder state");
+    const opened = { open: true };
+    await act(async () => folders()[0]!.props.onToggle({ target: opened, currentTarget: opened }));
+    assert.equal(folders()[0]!.props.open, true);
+    await act(async () => folders()[0]!.props.onToggle({ target: closed, currentTarget: closed }));
+    await act(async () => view!.update(render("second", 2)));
+    assert.deepEqual(folders().map((node) => node.props.open), [true, true, true]);
+  } finally { await act(async () => view!.unmount()); }
+});
+
 test("assistant identity appears once per reply across interleaved tool calls", () => {
   const entries: RunTimelineEntry[] = [
     { type: "assistant", id: "intro", content: "Before tool" },

@@ -58,7 +58,7 @@ The React browser UI is served as static assets by the control API after build a
 
 ## 6. Right-hand Workspace
 
-Top-level folders start open; secondary details and file directories start closed and toggle independently. Inner controls retain their white panels rather than using the conversation's borderless terminal-row styling.
+Top-level folders start open; secondary details and file directories start closed and toggle independently. Local state preserves each top-level folder's toggle choice through streaming updates; nested toggles do not affect it. Switching Sessions resets folders to open rather than persisting the choice across Sessions. Inner controls retain their white panels rather than using the conversation's borderless terminal-row styling.
 
 | Folder | Contents and conditions |
 |---|---|
