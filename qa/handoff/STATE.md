@@ -3,11 +3,11 @@
 > 规则见 qa/handoff/CRUISE-PLAYBOOK.md。任何 agent 修改本文件必须同时把动作追加到 logs/。
 
 ```yaml
-stage: dev-round（W7-W9 开发轮收尾）
-wave: W7 接线 + W8 尾 + W9 反幻觉全部落地（3bbde0c..d5cd81a）
+stage: phase-IV（双轨并行开发，计划 2026-09-11T0030-phase4-plan.md）
+wave: Z 轨 Z3/Z4/Z5/Z7 落地（d834172..80609b4）+ C 轨 C1/C4a/C5（Claude，bacb3bd/0a45001/1f2ecfc）
 stage_gate_pending: false
 PAUSED: true    # 巡逻保持暂停（用户明示删除 cron，恢复须用户明示）
-dev_mode: zcode-developer    # ZCode 开发主力，Claude+K3 精细化补充；交接文档 to-claude/2026-09-11T0110-zcode-w7-w9-dev-round.md
+dev_mode: zcode-developer    # ZCode=KE 域纵深（Z 轨），Claude=agent 运行时侧（C 轨）；最新交接 to-claude/2026-09-11T0530-zcode-phase4-z3-z7.md
 cruise_automation: deleted
 qa_mode: dev-verify
 turn: zcode
