@@ -22,7 +22,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.calls.append((role, payload))
         if role == 'ideate':
             r = payload['round']
-            value = dict(candidates=[dict(direction=f'Direction {r}' if r < 3 else 'Direction 1', hypothesis=f'Candidate {r}: addresses prior leaching')], reason='A distinct improvement remains')
+            value = dict(candidates=[dict(parentId=payload['selectedParentIds'][0], direction=f'Direction {r}' if r < 3 else 'Direction 1', hypothesis=f'Candidate {r}: addresses prior leaching')], reason='A distinct improvement remains')
         elif role in ['activity', 'stability', 'sustainability']:
             self.assertNotIn('assessments', payload)
             value = dict(text='Independent assessment', score={'activity': 8, 'stability': 6, 'sustainability': 4}[role])
@@ -91,31 +91,58 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state['status'], 'interrupted')
         self.assertIn('did not report', self.state['reason'])
 
-    async def test_only_execution_depth_leaves_run_and_improvements_are_siblings(self):
+    async def test_candidates_execute_before_max_depth_and_can_branch(self):
         self.state['settings']['maxDepth'] = 4
         async def model(role, payload):
             if role == 'ideate':
-                return json.dumps(dict(candidates=[dict(direction='Fe catalysts', refinements=['Iron oxides', 'Recyclable support'], hypothesis=f'Improvement {payload["round"]}')], reason='Refine from prior feedback')), 100
+                return json.dumps(dict(candidates=[dict(parentId=payload['selectedParentIds'][0], direction='Fe catalysts', refinements=[], hypothesis=f'Improvement {payload["round"]}')], reason='Refine from prior feedback')), 100
             return await self.model(role, payload)
         await IdeaTreeEngine(self.state, self.store, {}, model).run()
         self.assertEqual(self.state['status'], 'completed')
         candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
-        self.assertEqual([n['depth'] for n in candidates], [4, 4, 4])
-        self.assertEqual(len({n['parentId'] for n in candidates}), 1)
+        self.assertTrue(all(n['depth'] <= 4 for n in candidates))
+        self.assertTrue(any(n['depth'] < 4 for n in candidates))
         self.assertTrue(all(not n['childrenIds'] for n in candidates))
         directions = [n for n in self.state['nodes'] if n['kind'] == 'direction']
         self.assertTrue(all(n['score'] is None and not n['stages'] for n in directions))
         self.assertTrue(all(n['insight'] for n in directions))
 
-    async def test_shallow_candidate_and_scored_parent_are_rejected(self):
+    async def test_shallow_candidate_runs_and_pending_parent_is_rejected(self):
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
         shallow = node('1', 'ROOT', 'Shallow', 'candidate', 1)
         self.state['nodes'].append(shallow)
-        with self.assertRaisesRegex(ValueError, 'Only candidate leaves'):
-            await engine.evaluate(shallow)
-        with self.assertRaisesRegex(ValueError, 'Parent must be a direction'):
-            engine.proposal_path(dict(parentId='1', hypothesis='Child'))
-        self.assertEqual(self.calls, [])
+        await engine.evaluate(shallow)
+        pending = node('2', 'ROOT', 'Pending', 'candidate', 1)
+        self.state['nodes'].append(pending)
+        with self.assertRaisesRegex(ValueError, 'only after evaluation'):
+            engine.proposal_path(dict(parentId='2', direction='Follow-up', hypothesis='Child'))
+        self.assertTrue(shallow['insightRecords'])
+
+    def test_completed_candidate_can_create_a_deeper_direction(self):
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        parent = node('1', 'ROOT', 'Initial hypothesis', 'candidate', 1)
+        parent.update(status='done', score=5)
+        self.state['nodes'][0]['childrenIds'].append('1')
+        self.state['nodes'].append(parent)
+        selected_parent, path = engine.proposal_path(dict(parentId='1', direction='Mechanism follow-up', refinements=[], hypothesis='Child hypothesis'))
+        self.assertEqual(selected_parent['id'], '1')
+        self.assertEqual(path, ['Mechanism follow-up'])
+
+    async def test_selector_prunes_weak_direction_and_proposals_record_lineage(self):
+        root = self.state['nodes'][0]
+        weak = node('1', 'ROOT', 'Weak direction', 'direction', 1)
+        strong = node('2', 'ROOT', 'Strong direction', 'direction', 1)
+        root['childrenIds'] = ['1', '2']
+        self.state['nodes'].extend([weak, strong])
+        for index, parent, score in [('3', weak, 2), ('4', weak, 3), ('5', weak, 2), ('6', strong, 9)]:
+            candidate = node(index, parent['id'], index, 'candidate', 2)
+            candidate.update(status='done', score=score)
+            parent['childrenIds'].append(index)
+            self.state['nodes'].append(candidate)
+        self.state['settings'].update(pruneMinAssessments=3, pruneScoreGap=2, maxActiveDirections=2)
+        selected = IdeaTreeEngine(self.state, self.store, {}, self.model).select_directions()
+        self.assertEqual(weak['searchStatus'], 'pruned')
+        self.assertIn(strong, selected)
 
     async def test_invalid_response_corrected_once_without_partial_tree(self):
         async def invalid(role, payload):

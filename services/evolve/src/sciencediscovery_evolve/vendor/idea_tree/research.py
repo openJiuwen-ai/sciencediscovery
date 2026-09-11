@@ -48,6 +48,13 @@ def validate_result(role: str, value: Any) -> dict:
                 raise ValueError('refinements must be an array')
             for refinement in item.get('refinements', []):
                 text(refinement, 'refinement', 1000)
+            for key in ('basedOnCandidateIds', 'addressesInsightIds'):
+                if key in item and (not isinstance(item[key], list) or not all(isinstance(identifier, str) for identifier in item[key])):
+                    raise ValueError(f'{key} must be an array of ids')
+            if item.get('targetedWeakness') is not None:
+                text(item['targetedWeakness'], 'targetedWeakness', 2000)
+            if item.get('explorationType') not in (None, 'exploit', 'explore'):
+                raise ValueError('explorationType must be exploit or explore')
             if not item.get("parentId"):
                 text(item.get("direction"), "direction", 1000)
         text(value.get("reason"), "reason", 4000)
@@ -107,7 +114,8 @@ class ResearchStore:
 
 def node(identifier: str, parent: str | None, hypothesis: str, kind: str, depth: int) -> dict:
     return dict(id=identifier, parentId=parent, hypothesis=hypothesis, kind=kind, depth=depth,
-                status='pending', score=None, insight=None, stages={}, childrenIds=[], createdAt=now(), updatedAt=now())
+                status='pending', score=None, insight=None, insightRecords=[], stages={}, childrenIds=[],
+                searchStatus='active', priority=0.0, createdAt=now(), updatedAt=now())
 
 
 class IdeaTreeEngine:
@@ -171,7 +179,7 @@ class IdeaTreeEngine:
 
     async def _ask(self, role: str, payload: dict) -> dict:
         self.check_stop()
-        shape = '{"candidates":[{"parentId":"existing id or omit", "direction":"new direction", "refinements":[], "hypothesis":"..."}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in prompts.CRITERIA else '{"text":"..."}')
+        shape = '{"candidates":[{"parentId":"selected id", "direction":"new direction when needed", "refinements":[], "hypothesis":"...", "basedOnCandidateIds":[], "addressesInsightIds":[], "targetedWeakness":"...", "explorationType":"exploit or explore"}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in prompts.CRITERIA else '{"text":"..."}')
         system = self.role_prompt(role) + '\nReturn JSON only, matching: ' + shape
         for attempt in range(2):
             self.check_stop()
@@ -214,13 +222,62 @@ class IdeaTreeEngine:
     def context(self):
         return dict(objective=self.state['objective'], materials=self.state['materials'])
 
-    def overview(self):
-        # Keep every direction, plus recent and best candidates. Full stage outputs stay on disk.
-        directions = [n for n in self.state['nodes'] if n['kind'] == 'direction']
-        candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
-        best = sorted((n for n in candidates if n['score'] is not None), key=lambda n: n['score'], reverse=self.state['settings']['scoreDirection'] == 'maximize')[:10]
-        selected = {n['id']: n for n in directions[:20] + candidates[-20:] + best}
-        return [dict(id=n['id'], parentId=n['parentId'], depth=n['depth'], kind=n['kind'], hypothesis=n['hypothesis'][:600], score=n['score'], status=n['status'], insight=(n['insight'] or '')[:1200]) for n in selected.values()]
+    def descendant_candidates(self, parent):
+        by_parent = {}
+        for current in self.state['nodes']:
+            by_parent.setdefault(current['parentId'], []).append(current)
+        descendants = []
+        pending = list(by_parent.get(parent['id'], []))
+        while pending:
+            current = pending.pop()
+            if current['kind'] == 'candidate' and current['score'] is not None:
+                descendants.append(current)
+            pending.extend(by_parent.get(current['id'], []))
+        return descendants
+
+    def select_directions(self):
+        """Choose the next expandable branches from evidence, uncertainty and coverage."""
+        settings = self.state['settings']
+        scored = [n['score'] for n in self.state['nodes'] if n['kind'] == 'candidate' and n['score'] is not None]
+        high = max(scored, default=10)
+        low = min(scored, default=1)
+        direction = settings['scoreDirection']
+        choices = []
+        for current in self.state['nodes']:
+            if current.get('searchStatus', 'active') != 'active' or current['depth'] >= settings['maxDepth']:
+                continue
+            if current['kind'] == 'candidate' and current['status'] != 'done':
+                continue
+            if current['kind'] not in ('direction', 'candidate'):
+                continue
+            descendants = self.descendant_candidates(current)
+            visits = len(descendants)
+            if visits >= settings.get('pruneMinAssessments', 3) and descendants:
+                best = max(n['score'] for n in descendants) if direction == 'maximize' else min(n['score'] for n in descendants)
+                global_best = high if direction == 'maximize' else low
+                if (global_best - best if direction == 'maximize' else best - global_best) >= settings.get('pruneScoreGap', 2.5):
+                    current.update(searchStatus='pruned', pruneReason='Repeated assessments remain below the current evidence frontier')
+                    continue
+            evidence = .5 if not descendants or high == low else ((max(n['score'] for n in descendants) - low) / (high - low) if direction == 'maximize' else (high - min(n['score'] for n in descendants)) / (high - low))
+            uncertainty = 1 / math.sqrt(visits + 1)
+            coverage = 1 / (len(current['childrenIds']) + 1)
+            current['priority'] = round(evidence + .35 * uncertainty + .15 * coverage, 4)
+            choices.append(current)
+        selected = sorted(choices, key=lambda item: (-item['priority'], item['id']))[:settings.get('maxActiveDirections', 3)]
+        return selected
+
+    def overview(self, selected):
+        """Give ideation the chosen branches, their lineage, and representative evidence."""
+        included = {n['id']: n for n in selected}
+        for current in selected:
+            for ancestor in self.ancestors(current):
+                included[ancestor['id']] = self.find(ancestor['id'])
+            for candidate in self.descendant_candidates(current):
+                included[candidate['id']] = candidate
+        candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate' and n['score'] is not None]
+        best = sorted(candidates, key=lambda n: n['score'], reverse=self.state['settings']['scoreDirection'] == 'maximize')[:10]
+        included.update({n['id']: n for n in best})
+        return [dict(id=n['id'], parentId=n['parentId'], depth=n['depth'], kind=n['kind'], hypothesis=n['hypothesis'][:600], score=n['score'], status=n['status'], searchStatus=n.get('searchStatus', 'active'), priority=n.get('priority', 0), insight=(n['insight'] or '')[:1200], insightRecords=n.get('insightRecords', [])[-3:]) for n in included.values()]
 
     async def stage(self, candidate, role, payload):
         if role not in candidate['stages']:
@@ -234,8 +291,8 @@ class IdeaTreeEngine:
         return candidate['stages'][role]
 
     async def evaluate(self, candidate):
-        if candidate['kind'] != 'candidate' or candidate['childrenIds'] or candidate['depth'] != self.state['settings']['maxDepth']:
-            raise ValueError('Only candidate leaves at maxDepth can be evaluated; refine the direction first')
+        if candidate['kind'] != 'candidate' or candidate['childrenIds']:
+            raise ValueError('Only candidate leaves can be evaluated')
         candidate['status'] = 'running'
         candidate['attemptCount'] = candidate.get('attemptCount', 0) + 1
         self.save()
@@ -257,6 +314,11 @@ class IdeaTreeEngine:
         score = sum(a['score'] * w for a, w in zip(assessments, weights))
         aggregate = await self.stage(candidate, 'aggregate', {**base, 'candidate': design, 'assessments': dict(zip(prompts.CRITERIA, assessments)), 'weightedScore': score})
         candidate.update(status='done', score=round(score, 4), insight=aggregate['text'], updatedAt=now())
+        candidate.setdefault('insightRecords', []).append(dict(
+            id=f"insight-{candidate['id']}-{len(candidate.get('insightRecords', [])) + 1}",
+            sourceCandidateId=candidate['id'], score=candidate['score'], scoreBreakdown={role: assessment['score'] for role, assessment in zip(prompts.CRITERIA, assessments)},
+            summary=aggregate['text'], createdAt=now(),
+        ))
         self.save()
         await self.propagate(candidate)
 
@@ -286,6 +348,7 @@ class IdeaTreeEngine:
             self.save()
             summary = await self.ask('propagate', {**self.context(), 'parent': parent['hypothesis'], 'isRoot': identifier == 'ROOT', 'priorSummary': (parent['insight'] or '')[:4000], 'ownAssessment': parent['stages'].get('aggregate'), 'children': [dict(hypothesis=n['hypothesis'][:600], score=n['score'], insight=n['insight'][:1200]) for n in relevant.values() if n['insight']]})
             parent['insight'] = summary['text']
+            parent.setdefault('insightRecords', []).append(dict(id=f"insight-{parent['id']}-{len(parent.get('insightRecords', [])) + 1}", sourceCandidateId=candidate['id'], summary=summary['text'], createdAt=now()))
             changed = parent
             completed.append(identifier)
             self.save()
@@ -304,11 +367,13 @@ class IdeaTreeEngine:
         depth = self.state['settings']['maxDepth']
         parent_id = proposal.get('parentId')
         parent = self.find(parent_id) if parent_id else self.find('ROOT')
-        if parent['kind'] != 'direction' or parent['depth'] >= depth:
-            raise ValueError('Parent must be a direction above the execution depth; improve a candidate by adding a sibling')
-        path = ([] if parent_id or depth == 1 else [proposal['direction']]) + proposal.get('refinements', [])
-        if parent['depth'] + len(path) + 1 != depth:
-            raise ValueError(f'Provide {depth - parent["depth"] - 1} internal direction labels before the hypothesis (direction plus refinements)')
+        if parent.get('searchStatus', 'active') != 'active' or parent['depth'] >= depth:
+            raise ValueError('Parent is not an active expandable branch')
+        if parent['kind'] == 'candidate' and parent['status'] != 'done':
+            raise ValueError('A candidate can branch only after evaluation')
+        path = ([] if (parent_id and parent['kind'] == 'direction') or (parent['id'] == 'ROOT' and depth == 1) else [proposal['direction']]) + proposal.get('refinements', [])
+        if parent['depth'] + len(path) + 1 > depth:
+            raise ValueError('Proposal exceeds maxDepth')
         return parent, path
 
     async def run(self):
@@ -323,14 +388,30 @@ class IdeaTreeEngine:
                     if remaining <= 0 or len(s['nodes']) >= s['settings']['maxNodes']:
                         s['reason'] = 'Candidate or node limit reached'
                         break
-                    s.update(phase='ideate', currentNodeId=None)
+                    selected = self.select_directions()
+                    if not selected:
+                        s['reason'] = 'No active expandable direction remains'
+                        break
+                    s.update(phase='select_directions', currentNodeId=None, selectedDirectionIds=[n['id'] for n in selected])
                     self.save()
                     count = min(s['settings']['candidatesPerRound'], remaining)
-                    ideas = await self.ask('ideate', {**self.context(), 'nodes': self.overview(), 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']})
+                    s['phase'] = 'ideate'
+                    ideas = await self.ask('ideate', {**self.context(), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']})
                     # Reject the whole proposal before changing the tree.
                     known_ids = {n['id'] for n in s['nodes']}
                     if any(p.get('parentId') and p['parentId'] not in known_ids for p in ideas['candidates'][:count]):
                         raise ValueError('Proposed parent does not exist')
+                    if any((p.get('parentId') or 'ROOT') not in s['selectedDirectionIds'] for p in ideas['candidates'][:count]):
+                        raise ValueError('Proposed parent was not selected for expansion')
+                    candidate_ids = {n['id'] for n in s['nodes'] if n['kind'] == 'candidate'}
+                    insight_ids = {record['id'] for n in s['nodes'] for record in n.get('insightRecords', [])}
+                    for proposal in ideas['candidates'][:count]:
+                        if proposal.get('explorationType', 'explore') == 'exploit' and (not proposal.get('basedOnCandidateIds') or not proposal.get('addressesInsightIds')):
+                            raise ValueError('Exploit proposals must name their evidence and targeted insight')
+                        if not set(proposal.get('basedOnCandidateIds', [])).issubset(candidate_ids):
+                            raise ValueError('Proposal references an unknown candidate')
+                        if not set(proposal.get('addressesInsightIds', [])).issubset(insight_ids):
+                            raise ValueError('Proposal references an unknown insight')
                     batch = []
                     existing = {n['hypothesis'].strip().casefold() for n in s['nodes']}
                     for proposal in ideas['candidates'][:count]:
@@ -352,6 +433,7 @@ class IdeaTreeEngine:
                             parent = self.add(parent, label, 'direction')
                         candidate = self.add(parent, proposal['hypothesis'], 'candidate')
                         if candidate:
+                            candidate.update(derivedFromCandidateIds=proposal.get('basedOnCandidateIds', []), addressesInsightIds=proposal.get('addressesInsightIds', []), targetedWeakness=proposal.get('targetedWeakness'), explorationType=proposal.get('explorationType', 'explore'))
                             batch.append(candidate['id'])
                             existing.add(candidate['hypothesis'].strip().casefold())
                     if not batch:
@@ -391,5 +473,5 @@ class IdeaTreeEngine:
         s = self.state
         nodes = []
         for n in s['nodes']:
-            nodes.append({**n, 'searchStatus': 'active', 'priority': 0, 'attemptCount': n.get('attemptCount', 0), 'artifactRefs': [], 'activeExecutionId': None, 'lastExecutionId': None, 'completedResultHandle': None, 'pruneReason': None, 'result': json.dumps(n['stages'], ensure_ascii=False) if n['stages'] else None})
+            nodes.append({**n, 'searchStatus': n.get('searchStatus', 'active'), 'priority': n.get('priority', 0), 'attemptCount': n.get('attemptCount', 0), 'artifactRefs': [], 'activeExecutionId': None, 'lastExecutionId': None, 'completedResultHandle': None, 'pruneReason': n.get('pruneReason'), 'result': json.dumps(n['stages'], ensure_ascii=False) if n['stages'] else None})
         return dict(treeId=s['id'], objective=s['objective'], revision=0, updatedAt=s['updatedAt'], nodes=nodes, edges=[dict(source=n['parentId'], target=n['id'], type='child', ordinal=i) for i, n in enumerate(nodes) if n['parentId']])

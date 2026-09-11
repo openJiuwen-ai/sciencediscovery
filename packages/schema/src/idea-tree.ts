@@ -280,6 +280,9 @@ export interface IdeaResearchSettings {
   maxSearchRounds: number;
   maxNodes: number;
   maxDepth: number;
+  maxActiveDirections: number;
+  pruneMinAssessments: number;
+  pruneScoreGap: number;
   maxTokens?: number | null;
   maxTokensPerCall: number;
 }

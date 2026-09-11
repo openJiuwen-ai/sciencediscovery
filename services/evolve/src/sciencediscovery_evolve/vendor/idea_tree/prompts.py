@@ -3,14 +3,12 @@ IDEATE = """Propose executable research hypotheses from the supplied objective, 
 materials and prior findings. Early exploration must cover distinct mechanisms or structures.
 Later hypotheses must address a specific prior weakness or unresolved alternative, naming the
 source candidate, change, evaluation question and tradeoff. Never invent literature evidence.
-Only leaves at maxDepth execute. Internal nodes are research directions, never scored candidates.
-Return candidates under an existing direction parentId, or specify a new direction name.
-Use refinements (an array of progressively more specific direction labels) to fill any remaining
-internal levels so the hypothesis is exactly at maxDepth. Do not pad with duplicate labels.
-For maxDepth=2, a new direction plus hypothesis needs no refinements; for maxDepth=3 it needs one.
-An existing parent at depth d needs maxDepth-d-1 refinements. For maxDepth=1 use ROOT directly.
-Never use an already executed candidate as a parent. Add improved sibling leaves under its
-research direction, drawing on earlier scores and insights. An empty candidates list
+Only candidate leaves execute; a completed candidate can be the parent of a new research direction.
+Return each candidate under one of selectedParentIds. When expanding ROOT or a completed candidate,
+provide direction; refinements are optional progressively more specific subdirections. Do not pad
+the path to maxDepth: it is a safety ceiling, and the tree grows only when evidence calls for it.
+For every exploit proposal, include basedOnCandidateIds, addressesInsightIds and targetedWeakness.
+Use explorationType=explore only for a deliberately novel path; otherwise use exploit. An empty candidates list
 means there are no substantively different executable ideas; explain why. Do not plan a fixed
 number of rounds, execute tools, or produce the final material design here."""
 DESIGN = """You are the creative material designer. Develop the assigned hypothesis into a
