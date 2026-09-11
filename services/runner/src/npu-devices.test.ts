@@ -147,8 +147,8 @@ describe("reading the driver through DCMI", () => {
     context.after(() => rm(root, { force: true, recursive: true }));
     const fake = resolve(root, "python3");
     await writeFile(fake, `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify([
-      { aiCorePercent: 0, cardId: 0, chipId: 0, chipName: "910C", hbmPercent: 94, health: "OK", hostIndex: 0, temperatureCelsius: 47 },
-      { aiCorePercent: 41, cardId: 0, chipId: 1, chipName: "910C", hbmPercent: 10, health: "OK", hostIndex: 1, temperatureCelsius: 51 },
+      { aiCorePercent: 0, cardId: 0, chipId: 0, chipName: "910C", hbmPercent: 94, hbmTotalMb: 65_536, hbmUsedMb: 62_099, health: "OK", hostIndex: 0, powerDeciwatts: 1039, temperatureCelsius: 47 },
+      { aiCorePercent: 41, cardId: 0, chipId: 1, chipName: "910C", hbmPercent: 10, hbmTotalMb: 65_536, hbmUsedMb: 6_553, health: "OK", hostIndex: 1, powerDeciwatts: 1388, temperatureCelsius: 51 },
     ])}\nJSON\n`);
     await chmod(fake, 0o755);
 
@@ -159,6 +159,13 @@ describe("reading the driver through DCMI", () => {
     assert.deepEqual(devices?.map((device) => [device.cardId, device.chipId, device.hostIndex]), [[0, 0, 0], [0, 1, 1]]);
     assert.equal(devices?.[1]?.aiCorePercent, 41);
     assert.equal(devices?.[1]?.hbmPercent, 10);
+    // The driver answers power in tenths of a watt; the card reads 103.9 W.
+    assert.equal(devices?.[0]?.powerWatts, 103.9);
+    assert.equal(devices?.[1]?.powerWatts, 138.8);
+    // Absolute capacity too, so the memory reading stays "used / total" rather
+    // than falling back to a bare percentage.
+    assert.equal(devices?.[0]?.hbmTotalMb, 65_536);
+    assert.equal(devices?.[0]?.hbmUsedMb, 62_099);
     assert.ok(devices?.every((device) => device.sandboxUsable === false), "usability is still decided by the sandbox probe");
   });
 

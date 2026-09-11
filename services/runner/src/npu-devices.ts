@@ -497,6 +497,11 @@ class ChipInfo(ctypes.Structure):
                 ("chip_ver", ctypes.c_ubyte * NAME_LEN), ("aicore_cnt", ctypes.c_uint),
                 ("npu_name", ctypes.c_ubyte * NAME_LEN)]
 
+class HbmInfo(ctypes.Structure):
+    _fields_ = [("memory_size", ctypes.c_ulonglong), ("freq", ctypes.c_uint),
+                ("memory_usage", ctypes.c_ulonglong), ("temp", ctypes.c_int),
+                ("bandwith_util_rate", ctypes.c_uint)]
+
 def text(buffer):
     return bytes(buffer).split(b"\\x00")[0].decode("utf8", "replace")
 
@@ -531,6 +536,14 @@ def main():
             temperature = ctypes.c_int(0)
             if lib.dcmi_get_device_temperature(card, chip, ctypes.byref(temperature)) == 0:
                 entry["temperatureCelsius"] = temperature.value
+            power = ctypes.c_int(0)
+            if lib.dcmi_get_device_power_info(card, chip, ctypes.byref(power)) == 0:
+                # The driver answers in tenths of a watt.
+                entry["powerDeciwatts"] = power.value
+            hbm = HbmInfo()
+            if lib.dcmi_get_device_hbm_info(card, chip, ctypes.byref(hbm)) == 0:
+                entry["hbmTotalMb"] = hbm.memory_size
+                entry["hbmUsedMb"] = hbm.memory_usage
             chips.append(entry)
     json.dump(chips, sys.stdout)
 
@@ -544,8 +557,12 @@ interface DcmiChip {
   chipId: number;
   chipName?: string;
   hbmPercent?: number;
+  hbmTotalMb?: number;
+  hbmUsedMb?: number;
   health?: string;
   hostIndex: number;
+  /** Tenths of a watt, which is the unit the driver answers in. */
+  powerDeciwatts?: number;
   temperatureCelsius?: number;
 }
 
@@ -586,6 +603,9 @@ export async function readDcmiDevices(
     sandboxUsable: false,
     ...(chip.aiCorePercent === undefined ? {} : { aiCorePercent: chip.aiCorePercent }),
     ...(chip.hbmPercent === undefined ? {} : { hbmPercent: chip.hbmPercent }),
+    ...(chip.hbmTotalMb === undefined ? {} : { hbmTotalMb: chip.hbmTotalMb }),
+    ...(chip.hbmUsedMb === undefined ? {} : { hbmUsedMb: chip.hbmUsedMb }),
+    ...(chip.powerDeciwatts === undefined ? {} : { powerWatts: chip.powerDeciwatts / 10 }),
     ...(chip.temperatureCelsius === undefined ? {} : { temperatureCelsius: chip.temperatureCelsius }),
   }));
 }
