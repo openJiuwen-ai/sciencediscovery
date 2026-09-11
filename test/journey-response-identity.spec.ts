@@ -143,7 +143,7 @@ test("调整审批后继续阅读完整响应，刷新和工具间隔保持一�
       await expect(timeline().locator(".boundary-note")).toHaveCount(1);
       await expect(timeline().locator(".thinking.running")).toHaveCount(1);
       stub.thinking.release();
-      await expect(answers()).toContainText("3. **");
+      await expect(answers().locator("li").nth(2)).toHaveText("**");
       await expect(timeline().locator(".thinking")).toHaveCount(1);
       await expect(timeline().locator(".thinking")).toContainText("先确认科研任务。再整理可执行步骤。");
     });
@@ -153,7 +153,7 @@ test("调整审批后继续阅读完整响应，刷新和工具间隔保持一�
       await expect(answers()).toHaveCount(1);
       await expect(answers().locator(".cursor")).toHaveCount(1);
       await page.reload();
-      await expect(answers()).toContainText("3. **");
+      await expect(answers().locator("li").nth(2)).toHaveText("**");
       await expect(answers().locator(".cursor")).toHaveCount(1);
       await expect(timeline().locator(".boundary-note")).toHaveCount(2);
       stub.suffix.release();
