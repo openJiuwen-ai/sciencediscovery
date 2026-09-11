@@ -49,4 +49,5 @@ Node `fetch` 调用可用 `proxyDispatcher(resolved, targetUrl)` 获得按目标
 - `system` 当前只支持 GNOME 手工代理。headless Linux、PAC/auto 模式或无法读取 `gsettings` 时会明确报错，不会静默直连；服务器部署优先使用 `environment`。解析结果（含失败）会缓存约 60 秒，因此修复 `gsettings` 配置后最多需等待 60 秒才会生效。
 - 内建 MCP 当前是 stdio transport，代理通过子进程环境注入。未来 HTTP/SSE MCP transport 需要在对应客户端显式接入 dispatcher/client proxy。
 - MCP stdio 的 environment 代理读取 Gateway 进程环境，而非 Node 控制面的 environment 投影；标准 `.env` 部署下两者一致，但 Node 与 Gateway 环境变量不同的非标准部署下，UI 显示与 MCP 出站可能不一致。
+- Runner 引导托管科学环境时下载 micromamba，**不经过**这里的代理策略：它发生在 Runner 进程内、Session 与模型策略之外，控制面的 registry 对它不可见。无法直连发布站点的机器有三条受支持的路径：由控制面在部署 Runner 时把固定版本的 micromamba 一并送过去（SSH 部署默认如此）、用 `SCIENCE_AGENT_MICROMAMBA_BASE_URL` 指向可达镜像、或用 `SCIENCE_AGENT_PROVISIONER_PATH` 指向机器上已有的可执行文件。三条路径都仍按固定版本校验 SHA-256。
 - 本功能不提供代理健康检查、自动切换、流量审计看板，也不提供 Project/Session 级 registry 覆盖。

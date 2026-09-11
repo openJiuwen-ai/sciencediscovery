@@ -34,6 +34,8 @@ Project/Session 运行设置的最终保存按钮位于全部设置区块之后�
 
 ## 运行环境与工作区管理
 
+远程 Runner 首次部署时，控制面除了上传 Runner 自身的二进制，还会把固定版本的 micromamba 按 SHA-256 校验后放到该机器的 `<数据目录>/scientific-envs/bin/micromamba`。这是为隔离网络上的算力机器准备的：它们通常没有到发布站点的出口，而部署它们的控制面有。机器上已有同一固定版本时只读一次校验和，不传输；控制面自己也拿不到发布件时不阻断连接，Runner 会在自己的环境初始化状态里说明缺什么、以及可以用镜像（`SCIENCE_AGENT_MICROMAMBA_BASE_URL`）还是本机路径（`SCIENCE_AGENT_PROVISIONER_PATH`）解决。
+
 系统设置 → 科学环境，先选择 Runner，再进入 Python/R 环境或 Workspaces。远端操作经主程序 API 转发到对应 Runner，SSH 仍只走隧道，自行部署仍走已配置端点；未连接不会回退到本地。包源偏好保持全局，远端环境及 revision 不合并到本地同名目录。
 
 远端 workspace 按 Project/Session 展示本程序已知的位置及历史同步记录，包括已归档 Session 和取消选机后的历史使用。位置可能为空或尚未创建；这不是扫描远程机器全部磁盘目录。删除会清理所示 Session 在该 Runner 上的目录（含子 Agent 子目录），不清理本地文件、产物或历史记录；需确认，活跃运行期间拒绝。文件传输仍由模型显式发起。

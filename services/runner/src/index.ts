@@ -25,8 +25,14 @@ export {
 export {
   EnvironmentStore,
   SCIENTIFIC_STARTER_PACKAGES,
+  installManagedMicromamba,
+  managedMicromambaBaseUrl,
+  managedMicromambaRelease,
+  managedProvisionerPath,
+  ManagedProvisionerError,
   type EnvironmentRuntime,
   type EnvironmentStoreConfig,
+  type ManagedProvisionerFailure,
   type ProvisionerExecutor,
 } from "./environment-store.js";
 export { KernelManager, type KernelManagerConfig } from "./kernel-manager.js";
