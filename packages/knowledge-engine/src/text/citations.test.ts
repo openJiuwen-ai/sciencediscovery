@@ -83,6 +83,12 @@ test("parseReferenceEntries reads the jats bibliography shape", () => {
   assert.equal(entries.length, 3);
   assert.equal(entries[0]!.rid, "b1");
   assert.ok(entries[0]!.text.startsWith("Corti D"));
+  // Scoping: bullets BEFORE the References heading (a markdown link list in
+  // arbitrary ingested text) are excluded when the heading exists.
+  const withEarlyBullet = "## Intro\n\n- [link](https://example.com) not a citation\n\n## References\n\n- [b1] Corti D 2016.";
+  assert.equal(parseReferenceEntries(withEarlyBullet).length, 1);
+  // Without a References heading, every bullet is accepted (jats fallback).
+  assert.equal(parseReferenceEntries("- [x] A 2020.\n- [y] B 2021.").length, 2);
 });
 
 test("parseReferenceKey extracts surname and year from reference text", () => {

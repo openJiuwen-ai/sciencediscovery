@@ -56,6 +56,24 @@ test("citations: replace/list/filter/stats round-trip", async (context) => {
   const linked = all.find((row) => row.sentence === "Uses the method [@b1].")!;
   assert.equal(linked.srcTitle, "Citing paper");
   assert.equal(linked.dstTitle, "Bob 2019 paper");
+  assert.equal(linked.section, "Intro");
+
+  // Duplicate (dstKey, sentence) pairs collapse instead of tripping the
+  // UNIQUE constraint (same rid twice in one sentence, repeated multi-key).
+  const dupRoot = tempRoot("ke-citations-dup");
+  const dupStore = KnowledgeEngineStore.open(dupRoot);
+  try {
+    const dupKb = dupStore.createKnowledgeBase({ name: "Dup" });
+    const dupDoc = dupStore.upsertDocument({ kbId: dupKb.id, dedupKey: "d", title: "D", status: "ready", fulltext: "x" });
+    dupStore.replaceCitations(dupKb.id, dupDoc.id, [
+      { kbId: dupKb.id, srcDocId: dupDoc.id, dstDocId: null, dstKey: "b1", sentence: "Twice [@b1] here [@b1].", section: null, intent: null, confidence: null },
+      { kbId: dupKb.id, srcDocId: dupDoc.id, dstDocId: null, dstKey: "b1", sentence: "Twice [@b1] here [@b1].", section: null, intent: null, confidence: null },
+    ]);
+    assert.equal(dupStore.listCitations(dupKb.id).length, 1);
+  } finally {
+    dupStore.close();
+    await rm(dupRoot, { force: true, recursive: true });
+  }
 
   const byIntent = store.listCitations(kb.id, { intent: "uses" });
   assert.equal(byIntent.length, 1);

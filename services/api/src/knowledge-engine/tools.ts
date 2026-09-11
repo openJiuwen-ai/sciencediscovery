@@ -147,7 +147,10 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
         searchDocuments: async (id, query, topK) => store.searchDocuments(id, query, topK),
         searchCitations: async (id, name, limit) => {
           // Entity-mention match over citation sentences and resolved
-          // destination titles — the W10 chain's agent surface.
+          // destination titles — the W10 chain's agent surface. The scan
+          // reads at most the 500 most recent citation rows of the KB;
+          // beyond that the section misses older sentences (bounded read,
+          // surfaced here because the 10-hit section cap is not the limit).
           const needle = name.toLowerCase();
           return store
             .listCitations(id, { limit: 500 })

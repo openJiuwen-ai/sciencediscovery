@@ -2010,17 +2010,27 @@ export class KnowledgeEngineStore {
 
   /** Replace a document's citation rows (idempotent re-extraction; the whole
    *  per-doc set derives deterministically from the fulltext, so delete-then-
-   *  insert is the correct re-derivation semantics). */
+   *  insert is the correct re-derivation semantics). Duplicate (dstKey,
+   *  sentence) pairs — the same rid cited twice in one sentence, or a
+   *  multi-key anchor repeating a key — collapse to one row (the UNIQUE
+   *  constraint would otherwise abort the whole insert). */
   replaceCitations(kbId: string, srcDocId: string, rows: readonly KeCitationInput[]): void {
     const insert = this.database.prepare(
       `INSERT INTO ke_citations (id, kb_id, src_doc_id, dst_doc_id, dst_key, sentence, section, intent, confidence, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const seen = new Set<string>();
+    const deduped = rows.filter((row) => {
+      const key = `${row.dstKey}\u0000${row.sentence}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     this.inTransaction(() => {
       this.database
         .prepare("DELETE FROM ke_citations WHERE kb_id = ? AND src_doc_id = ?")
         .run(kbId, srcDocId);
-      for (const row of rows) {
+      for (const row of deduped) {
         insert.run(
           randomUUID(), kbId, srcDocId, row.dstDocId, row.dstKey, row.sentence,
           row.section, row.intent, row.confidence, now(),
@@ -2057,7 +2067,7 @@ export class KnowledgeEngineStore {
          JOIN ke_documents src ON src.id = c.src_doc_id
          LEFT JOIN ke_documents dst ON dst.id = c.dst_doc_id
          WHERE ${clauses.join(" AND ")}
-         ORDER BY c.created_at, c.id LIMIT ?`,
+         ORDER BY c.created_at, c.dst_key, c.sentence, c.id LIMIT ?`,
       )
       .all(...params) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
@@ -2078,7 +2088,7 @@ export class KnowledgeEngineStore {
          JOIN ke_documents src ON src.id = c.src_doc_id
          LEFT JOIN ke_documents dst ON dst.id = c.dst_doc_id
          WHERE c.kb_id = ? AND c.src_doc_id IN (${placeholders})
-         ORDER BY c.created_at, c.id LIMIT ?`,
+         ORDER BY c.created_at, c.dst_key, c.sentence, c.id LIMIT ?`,
       )
       .all(kbId, ...docIds, Math.max(1, Math.min(limit, 200))) as Array<Record<string, unknown>>;
     return rows.map((row) => ({
@@ -2088,8 +2098,11 @@ export class KnowledgeEngineStore {
     }));
   }
 
-  /** Per-doc citation counts for badge aggregation: outgoing (this doc cites)
-   *  and incoming (KB docs citing this doc), plus resolved-intent totals. */
+  /** Per-doc citation counts for badge aggregation: outgoing (this doc
+   *  cites) / incoming (KB docs citing this doc), each with the linked
+   *  subset (rows whose dst resolved to a KB document). incomingResolved
+   *  always equals incoming — incoming rows only exist via a resolved link
+   *  — kept for shape symmetry with the outgoing pair. */
   citationStats(kbId: string): Map<string, { outgoing: number; outgoingResolved: number; incoming: number; incomingResolved: number }> {
     const stats = new Map<string, { outgoing: number; outgoingResolved: number; incoming: number; incomingResolved: number }>();
     const bump = (docId: string, kind: "outgoing" | "incoming", resolved: boolean) => {
@@ -2147,7 +2160,9 @@ export class KnowledgeEngineStore {
     }
     if (options.q && options.q.trim().length > 0) {
       clauses.push("(f.latex LIKE ? ESCAPE '\\' OR f.label LIKE ? ESCAPE '\\')");
-      const needle = `%${options.q.trim().replace(/[%_]/g, (char) => `\\${char}`)}%`;
+      // LaTeX queries are full of backslashes — escape the escape char too,
+      // or `q=\frac` silently degrades to a match on `frac`.
+      const needle = `%${options.q.trim().replace(/[%_\\]/g, (char) => `\\${char}`)}%`;
       params.push(needle, needle);
     }
     params.push(Math.max(1, Math.min(limit, 300)));
@@ -2157,7 +2172,7 @@ export class KnowledgeEngineStore {
          FROM ke_formulae f
          JOIN ke_documents d ON d.id = f.doc_id
          WHERE ${clauses.join(" AND ")}
-         ORDER BY f.created_at, f.id LIMIT ?`,
+         ORDER BY f.created_at, f.latex, f.id LIMIT ?`,
       )
       .all(...params) as Array<Record<string, unknown>>;
     return rows.map((row) => ({

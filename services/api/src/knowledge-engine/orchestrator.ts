@@ -28,12 +28,20 @@
 
 import {
   applyProvenanceGate,
+  applyIntentResults,
   buildExtractionPrompt,
+  buildIntentPrompt,
   buildJudgePrompt,
   embeddingToBlob,
   extractAbbrevPairs,
+  extractCitationContexts,
+  extractFormulas,
+  MAX_INTENT_PER_DOC,
   parseExtractionResponse,
+  parseIntentResponse,
   parseJudgeVerdict,
+  parseReferenceEntries,
+  resolveCitedDocuments,
   resolveEntityCandidate,
   DEFAULT_RESOLVER_THRESHOLDS,
   HAYSTACK_CAP,
@@ -693,8 +701,105 @@ export class KeOrchestrator {
       sourceMeta: { ...(current?.sourceMeta ?? doc.sourceMeta), extracted_at: new Date().toISOString() },
     });
 
+    // W10 citation chain + formula store (fail-soft: a citation failure never
+    // fails the extraction job — the graph is the primary product).
+    try {
+      await this.deriveCitationsAndFormulae(doc, fulltext, endpoint, signal);
+    } catch (error) {
+      this.warn("ke_citation_derive_failed", { docId, error: errorMessage(error) });
+    }
+
     this.warn("ke_extract_done", { docId, entities: writtenIds.length, edges: edgesWritten, dropped });
     return { docId, entities: writtenIds.length, edges: edgesWritten, droppedUnverifiable: dropped };
+  }
+
+  /**
+   * Derive the W10 citation chain and formula rows from the stored fulltext:
+   * extract [@rid] contexts → resolve rids against KB documents via the
+   * reference list (surname+year, unambiguous only) → classify intents with
+   * the pipeline LLM (batched, fail-soft per batch) → replace the per-doc
+   * rows. Formulas are pure extraction (display math). Deterministic except
+   * for the intent labels.
+   */
+  private async deriveCitationsAndFormulae(
+    doc: KeDocumentRow,
+    fulltext: string,
+    endpoint: ModelEndpoint,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const contexts = extractCitationContexts(fulltext);
+    if (contexts.length > 0) {
+      const references = parseReferenceEntries(fulltext);
+      const resolvable = this.deps.store
+        .listDocumentsLean(doc.kbId, { status: "ready" })
+        .map((row) => ({ docId: row.id, authors: row.authors, year: row.year }));
+      const resolved = resolveCitedDocuments(contexts, references, resolvable);
+
+      // Intent classification: one sentence per unique (dstKey, sentence).
+      const unique = new Map<string, string>();
+      for (const context of contexts) {
+        if (!unique.has(context.sentence)) unique.set(context.sentence, context.sentence);
+      }
+      const sentences = [...unique.keys()].slice(0, MAX_INTENT_PER_DOC);
+      const intents = new Map<string, { intent: string | null; confidence: number | null }>();
+      if (sentences.length > 0) {
+        const results: Array<{ intent: string | null; confidence: number | null }> =
+          sentences.map(() => ({ intent: null, confidence: null }));
+        const BATCH = 20;
+        for (let start = 0; start < sentences.length; start += BATCH) {
+          const batch = sentences.slice(start, start + BATCH);
+          try {
+            const response = await callPipelineLlm(
+              { endpoint, ...(this.deps.llmInvoke ? { invoke: this.deps.llmInvoke } : {}) },
+              "You are a precise citation-intent classifier.",
+              buildIntentPrompt(batch),
+              signal,
+            );
+            applyIntentResults(results, start, batch.length, parseIntentResponse(response));
+          } catch {
+            // Fail-soft per batch — rows persist with intent=null.
+          }
+        }
+        sentences.forEach((sentence, index) => intents.set(sentence, results[index]!));
+      }
+
+      this.deps.store.replaceCitations(
+        doc.kbId,
+        doc.id,
+        contexts.map((context) => {
+          const intent = intents.get(context.sentence) ?? { intent: null, confidence: null };
+          return {
+            kbId: doc.kbId,
+            srcDocId: doc.id,
+            dstDocId: resolved.get(context.dstKey) ?? null,
+            dstKey: context.dstKey,
+            sentence: context.sentence,
+            section: context.section,
+            intent: intent.intent,
+            confidence: intent.confidence,
+          };
+        }),
+      );
+      this.warn("ke_citations_derived", { docId: doc.id, contexts: contexts.length, resolved: resolved.size });
+    }
+
+    const formulas = extractFormulas(fulltext);
+    if (formulas.length > 0) {
+      this.deps.store.replaceFormulae(
+        doc.kbId,
+        doc.id,
+        formulas.map((formula) => ({
+          kbId: doc.kbId,
+          docId: doc.id,
+          latex: formula.latex,
+          displayLatex: formula.displayLatex,
+          context: formula.context,
+          label: formula.label,
+          section: null,
+        })),
+      );
+      this.warn("ke_formulae_derived", { docId: doc.id, formulae: formulas.length });
+    }
   }
 
   private warn(message: string, detail?: unknown): void {

@@ -23,7 +23,11 @@
  *   citation text — resolution parses (first-author surname, year) from the
  *   REFERENCE TEXT, which is strictly more signal than DA had.
  * - Intent classification prompt/parse are pure here; the LLM call lives in
- *   the composition layer (services/api) — same split as extraction.
+ *   the composition layer (services/api) — same split as extraction. The
+ *   intent label vocabulary is hardcoded to the DA defaults: DA allowed a
+ *   plugin schema to override it (loadIntentLabels); SD has no plugin
+ *   schema surface, so the labels are a code constant (the route whitelist
+ *   and the UI badge mapping derive from the same source).
  */
 
 // ------------------------------------------------------------- extraction
@@ -135,15 +139,25 @@ export interface ReferenceEntry {
 }
 
 /** Parse the document's own reference list (`- [rid] text` lines, the jats.ts
- *  bibliography shape) into entries. */
+ *  bibliography shape). When a References/Bibliography heading exists, only
+ *  bullets AFTER it count (arbitrary ingested markdown may carry `- [label]`
+ *  bullets elsewhere); without the heading every bullet is accepted (the
+ *  jats compiler always emits one). */
 export function parseReferenceEntries(markdown: string): ReferenceEntry[] {
-  const out: ReferenceEntry[] = [];
-  for (const line of markdown.split("\n")) {
-    const match = line.trim().match(/^-\s*\[([^\]]+)\]\s*(.+)$/);
-    if (!match) continue;
-    out.push({ rid: match[1]!.trim(), text: match[2]!.trim() });
-  }
-  return out;
+  const parse = (lines: readonly string[]): ReferenceEntry[] => {
+    const out: ReferenceEntry[] = [];
+    for (const line of lines) {
+      const match = line.trim().match(/^-\s*\[([^\]]+)\]\s*(.+)$/);
+      if (!match) continue;
+      out.push({ rid: match[1]!.trim(), text: match[2]!.trim() });
+    }
+    return out;
+  };
+  const lines = markdown.split("\n");
+  const referencesAt = lines.findIndex((line) =>
+    /^#{1,4}\s+(references|bibliography|literature cited)\s*$/i.test(line.trim()));
+  if (referencesAt === -1) return parse(lines);
+  return parse(lines.slice(referencesAt + 1));
 }
 
 export interface ResolvedKey {
