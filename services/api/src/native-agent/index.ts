@@ -44,6 +44,8 @@ import {
   resolveContextBudget,
   resolveContextAssemblyMode,
   registerContextContributorFactories,
+  SearchIndexContributor,
+  SearchResultIndex,
   type AgentScope,
   type ContextAssemblyMode,
   type ContextContributorFactory,
@@ -214,6 +216,12 @@ class NativeAgent implements NativeAgentHandle {
   private readonly policy: ModelClientPolicy;
   private readonly waitController = new ExternalWaitController();
   private readonly durableContext: DurableContextStore;
+  /**
+   * Run-scoped retrieval memory (V2-C5): fed from onResult, injected as a
+   * working-context section — survives compaction because it lives here,
+   * not in the history.
+   */
+  private readonly searchIndex = new SearchResultIndex();
   private history: WireMessage[];
   private controller: AbortController | undefined;
   private externalWaitCount = 0;
@@ -264,6 +272,7 @@ class NativeAgent implements NativeAgentHandle {
       }),
       onResult: ({ call, content, isError, sequence }) => {
         this.durableContext.observe(call, { content, isError }, sequence);
+        this.searchIndex.observe(call, content, isError);
         if (call.name !== "read_skill" || isError || typeof call.args.skillId !== "string") return;
         const skill = options.skills?.find((item) => item.id === call.args.skillId);
         if (skill) this.durableContext.registerSkill({
@@ -661,6 +670,7 @@ class NativeAgent implements NativeAgentHandle {
     for (const contributor of createDurableDomainContributors<WireMessage>(this.durableContext, [scope])) {
       registry.register(contributor);
     }
+    registry.register(new SearchIndexContributor(this.searchIndex, [scope]));
     registerContextContributorFactories(
       registry,
       [
