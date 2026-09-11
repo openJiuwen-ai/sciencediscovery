@@ -747,7 +747,7 @@
 .runner-management-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 .runner-management-tabs > button { flex: 1; }
 .runner-environment-settings .remote-workspace-host header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
-.runner-environment-settings .remote-workspace-host header > div { display: grid; gap: 4px; min-width: 0; }
+.runner-environment-settings .remote-workspace-host header > div:not(.remote-host-actions) { display: grid; gap: 4px; min-width: 0; }
 .runner-environment-settings .remote-workspace-host code,
 .runner-environment-settings .remote-workspace-host small { overflow-wrap: anywhere; }
 .runner-environment-settings .remote-workspace-panel > .editor-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
@@ -877,3 +877,8 @@
 .memory-graph-connection { display: grid; gap: 12px; }
 .memory-graph-connection label { display: grid; gap: 6px; }
 .provider-row-source { color: var(--text-faint); font-size: 10px; }
+
+.runner-workspace-files { display: grid; gap: 6px; padding-left: 20px; }
+.runner-workspace-files li { display: flex; align-items: baseline; gap: 12px; }
+.runner-workspace-files code { min-width: 0; overflow-wrap: anywhere; }
+.runner-workspace-files small { flex-shrink: 0; white-space: nowrap; }

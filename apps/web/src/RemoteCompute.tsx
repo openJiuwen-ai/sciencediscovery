@@ -715,7 +715,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
     })}</div> : <p className="remote-host-empty">{t("remote.empty")}</p>}
     <div className="remote-host-add-row">
       <button aria-expanded={Boolean(adding)} className="secondary-button" onClick={() => setAdding(adding ? undefined : "ssh")} type="button">{t("runnerCatalog.addRunner")}</button>
-      {adding ? <label><span>{t("runnerCatalog.connectionMethod")}</span><select value={adding} onChange={(event) => setAdding(event.target.value as "ssh" | "direct")}><option value="ssh">{t("remote.addSshMachine")}</option><option value="direct">{t("remote.addDirectRunner")}</option></select></label> : null}
+      {adding ? <label><span>{t("runnerCatalog.connectionMethod")}</span><select aria-label={t("runnerCatalog.connectionMethod")} value={adding} onChange={(event) => setAdding(event.target.value as "ssh" | "direct")}><option value="ssh">{t("remote.addSshMachine")}</option><option value="direct">{t("remote.addDirectRunner")}</option></select></label> : null}
     </div>
     {adding === "ssh" ? <form className="remote-host-form remote-host-ssh-form" aria-label={t("remote.addSshMachine")} onSubmit={(event) => { event.preventDefault(); void submitSshForm(); }}>
       <div className="remote-host-form-heading"><strong>{t("remote.addSshMachine")}</strong><p className="remote-host-form-help">{t("remote.addSshHelp")}</p></div>

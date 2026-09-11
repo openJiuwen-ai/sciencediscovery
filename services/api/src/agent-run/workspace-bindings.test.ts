@@ -383,6 +383,7 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
     workloadId: "antibody.protenix.v1",
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
   };
+  let localAllowed = true;
   const bindings = createWorkspaceExecutionBindings({
     agentId: "main",
     executionId: "run-1",
@@ -410,7 +411,7 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
     } as unknown as RunnerClient,
     sessionId: "session-1",
     store: {
-      assertSessionWritable() {}, assertSessionAllowsRunner() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() { if (!localAllowed) throw new Error("Runner local is not allowed"); },
       // No network in this epoch, so the binding resolves no outbound route.
       // No cards ticked on this Runner, so no NPU reaches the request.
       npuDeviceSelection: () => [],
@@ -437,6 +438,9 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
   await assert.rejects(bindings.npuBroker!.submit({ environmentId: "epoch-revision", workloadId: "antibody.protenix.v1", inputs: {} }), /missing or not ready/);
 
   await assert.rejects(bindings.npuBroker!.get("foreign-job"), /NPU job not found in this Session/);
+  localAllowed = false;
+  await assert.rejects(bindings.npuBroker!.submit({ workloadId: "antibody.protenix.v1", inputs: {} }), /Runner local is not allowed/);
+  assert.equal(submitted.length, 2, "deselected local Runner cannot receive a broker submission");
 });
 
 /**
