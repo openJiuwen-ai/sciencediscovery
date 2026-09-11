@@ -46,7 +46,7 @@ const RUNNER_HEALTH: RunnerHealth = {
   platform: "linux",
   runnerVersion: "test",
   sandbox: "bubblewrap",
-  sandboxNetwork: { available: true, modes: ["none", "domain-allowlist"] },
+  sandboxNetwork: { available: true, modes: ["none", "domain-allowlist", "open"] },
   scientificEnvs: { available: false, enabled: false, languages: [], provisioner: "test", startersReady: false },
   seccompBaseline: "multiarch-v1-profile-aware",
   status: "ok",

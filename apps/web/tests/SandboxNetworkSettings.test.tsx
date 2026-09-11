@@ -54,6 +54,7 @@ test("renders the sandbox network access modes and allowed domains", () => {
   assert.doesNotMatch(html, /run_python|run_r\b/);
   assert.match(html, /No network/);
   assert.match(html, /Domain allowlist/);
+  assert.match(html, /Open network/);
   assert.match(html, /Allowed domains/);
   assert.match(html, /api\.example\.org/);
   assert.match(html, /Allow private and loopback addresses/);
@@ -142,4 +143,14 @@ test("the settings group labels describe sandbox network access without proxy wo
     assert.match(description, /run_shell/);
     assert.doesNotMatch(description, /run_python|run_r\b/);
   }
+});
+
+test("open mode warns, keeps the private-address switch active and disables the domain list", () => {
+  const html = render({ allowPrivateNetwork: false, allowedDomains: ["stale.example.org"], mode: "open" });
+  // The warning tells the admin what an open gateway actually permits.
+  assert.match(html, /Open network lets sandbox code reach any host/);
+  // Only the domains textarea is disabled: the private-address toggle stays
+  // active in open mode, where the switch still means something.
+  assert.equal((html.match(/disabled/g) ?? []).length, 1);
+  assert.match(html, /<textarea aria-label="Allowed domains" disabled=""/);
 });

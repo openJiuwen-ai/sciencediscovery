@@ -37,7 +37,8 @@ import {
 } from "./egress-proxy.js";
 
 /**
- * Egress gateway: the single outbound exit of a `domain-allowlist` sandbox.
+ * Egress gateway: the single outbound exit of a sandbox with network access
+ * (`domain-allowlist` or `open`).
  *
  * It runs in the runner process, as the runner's own user, and listens on a
  * Unix domain socket that is bind-mounted into the sandbox. The sandbox has no
@@ -48,7 +49,8 @@ import {
  * The gateway speaks the HTTP proxy protocol (CONNECT plus absolute-form
  * requests) because that is what ordinary HTTP client libraries can address.
  * It filters on the requested host name; it does not terminate TLS, so a
- * broadly scoped allowed domain remains a broadly scoped grant.
+ * broadly scoped allowed domain remains a broadly scoped grant. `open` skips
+ * the allowlist check but keeps the private-address filter and the audit log.
  */
 
 /**
@@ -78,14 +80,15 @@ export const EGRESS_SOCKET_RELATIVE_BYTES =
   EGRESS_SOCKET_DIRECTORY.length + EGRESS_SOCKET_NAME_LENGTH + 2;
 
 /**
- * The socket path does not fit in `sun_path`. `domain-allowlist` fails closed
- * with an actionable message instead of running against a truncated path.
+ * The socket path does not fit in `sun_path`. A network-enabled sandbox fails
+ * closed with an actionable message instead of running against a truncated
+ * path.
  */
 export class EgressSocketPathTooLongError extends Error {
   constructor(readonly socketPath: string, readonly limit: number) {
     const bytes = Buffer.byteLength(socketPath);
     super(
-      `Sandbox network access (domain-allowlist) is unavailable: the egress socket path is ${bytes} bytes, `
+      `Sandbox network access (domain-allowlist and open) is unavailable: the egress socket path is ${bytes} bytes, `
       + `over this platform's ${limit}-byte Unix socket path limit — ${socketPath}. `
       + "The socket has to stay inside the runner data directory, so shorten that directory by at least "
       + `${bytes - limit} byte(s) (SCIENCE_DISCOVERY_DATA_DIR); it must leave `
@@ -247,10 +250,17 @@ export class EgressGateway {
     return this.tcpPort;
   }
 
-  /** Decide one target: allowlist first, then the resolved address class. */
+  /** Decide one target. `domain-allowlist` checks the allowlist first, then the
+   * resolved address class; `open` skips the allowlist but keeps the
+   * private-address filter, so an open sandbox still cannot probe this
+   * deployment's own network.
+   */
   async decide(host: string, port: number): Promise<EgressGatewayDecision> {
-    if (this.access.mode !== "domain-allowlist") {
+    if (this.access.mode === "none") {
       return { allowed: false, reason: "sandbox network access is disabled for this execution" };
+    }
+    if (this.access.mode === "open") {
+      return this.decideOpen(host);
     }
     if (isIpLiteral(host)) {
       return { allowed: false, reason: `${host} is an IP address; sandbox network access allows domain names only` };
@@ -258,6 +268,25 @@ export class EgressGateway {
     if (!allowedDomainMatches(this.access.allowedDomains, host, port)) {
       return { allowed: false, reason: `${host}:${port} is not in the sandbox network allowed domains` };
     }
+    return this.decideResolved(host);
+  }
+
+  /** `open` decision: any host passes, except the private-address filter. */
+  private async decideOpen(host: string): Promise<EgressGatewayDecision> {
+    if (isIpLiteral(host)) {
+      // An IP literal needs no resolution; the address class is the only check.
+      const bracketed = host.startsWith("[") ? host.slice(1, host.indexOf("]")) : host;
+      const family = bracketed.includes(":") ? 6 : 4;
+      if (!this.access.allowPrivateNetwork && isPrivateAddress(bracketed, family)) {
+        return { allowed: false, reason: `${host} is a private address; enable private network access to allow it` };
+      }
+      return { address: bracketed, allowed: true };
+    }
+    return this.decideResolved(host);
+  }
+
+  /** Resolve a domain name and apply the private-address filter. */
+  private async decideResolved(host: string): Promise<EgressGatewayDecision> {
     let addresses;
     try {
       addresses = await this.resolveAddresses(host);
@@ -504,8 +533,8 @@ export class EgressGatewayRegistry {
    * instead of waiting for the revision — and the gateway — to be replaced.
    */
   async acquire(access: SandboxNetworkAccess, proxy?: ResolvedProxy): Promise<EgressGateway> {
-    if (access.mode !== "domain-allowlist") {
-      throw new Error("Only domain-allowlist policies need an egress gateway");
+    if (access.mode === "none") {
+      throw new Error("Only domain-allowlist or open policies need an egress gateway");
     }
     let gateway = this.gateways.get(access.revision);
     if (!gateway) {
@@ -529,8 +558,8 @@ export class EgressGatewayRegistry {
 
   /** Start (or reuse) a runner-owned loopback proxy for macOS Seatbelt. */
   async acquireTcp(access: SandboxNetworkAccess, proxy?: ResolvedProxy): Promise<EgressGateway> {
-    if (access.mode !== "domain-allowlist") {
-      throw new Error("Only domain-allowlist policies need an egress gateway");
+    if (access.mode === "none") {
+      throw new Error("Only domain-allowlist or open policies need an egress gateway");
     }
     let gateway = this.tcpGateways.get(access.revision);
     if (!gateway) {

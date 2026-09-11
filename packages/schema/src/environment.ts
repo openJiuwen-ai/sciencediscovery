@@ -446,9 +446,10 @@ export interface ScientificEnvsCapability {
 }
 
 /**
- * Runner-side readiness of sandbox network access. `domain-allowlist` needs an
- * egress bridge interpreter on the host; when it is missing the runner reports
- * why here and fails such executions instead of running them unfiltered.
+ * Runner-side readiness of sandbox network access. `domain-allowlist` and
+ * `open` need an egress bridge interpreter on the host; when it is missing the
+ * runner reports why here and fails such executions instead of running them
+ * unfiltered.
  */
 export interface SandboxNetworkCapability {
   available: boolean;
@@ -477,7 +478,7 @@ export interface RunnerHealth {
   maxWorkspaceBytes: number;
   /**
    * Default sandbox network mode: an execution only leaves this mode when its
-   * Permission Epoch carries a `domain-allowlist` policy snapshot.
+   * Permission Epoch carries a `domain-allowlist` or `open` policy snapshot.
    */
   networkPolicy: "none";
   /** Linux Bubblewrap sets no-new-privileges; Seatbelt reports false. */
@@ -487,7 +488,7 @@ export interface RunnerHealth {
   platform: string;
   runnerVersion: string;
   sandbox: SandboxKind;
-  /** Whether this runner can serve `domain-allowlist` executions at all. */
+  /** Whether this runner can serve network-enabled (`domain-allowlist` / `open`) executions at all. */
   sandboxNetwork: SandboxNetworkCapability;
   scientificEnvs: ScientificEnvsCapability;
   /** Linux syscall filter; not applicable to macOS Seatbelt. */

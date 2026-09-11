@@ -723,6 +723,7 @@
 .timeout-grid legend { padding: 0 5px; color: var(--text-heading); font-size: 13px; font-weight: 750; }
 .timeout-grid fieldset > p { min-height: 34px; margin: 0 0 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .timeout-grid fieldset > small { display: block; margin-top: 9px; color: var(--text-faint); font-size: 10px; }
+.timeout-grid fieldset > small[role="alert"].open-warning { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--warning-accent); background: var(--warning-soft); color: var(--warning); font-size: 11px; line-height: 1.45; border-radius: 4px; }
 .timeout-value { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; color: var(--text-secondary); font-size: 12px; }
 .timeout-value input { min-width: 0; min-height: 38px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 7px 9px; }
 .timeout-value input:disabled { background: var(--surface-hover); color: var(--text-faint); }

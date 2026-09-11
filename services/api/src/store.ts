@@ -1842,13 +1842,15 @@ export class SessionStore {
    * from the current settings — the epoch is what was granted.
    *
    * Returns `undefined` for a sandbox with no network, so an unrelated proxy
-   * misconfiguration cannot fail an execution that never dials out. The result
-   * is resolved per execution and never written into the epoch: a custom proxy
-   * URL is stored encrypted and must not reach the persisted catalog.
+   * misconfiguration cannot fail an execution that never dials out. Both
+   * `domain-allowlist` and `open` route through the gateway, so both carry an
+   * outbound route. The result is resolved per execution and never written into
+   * the epoch: a custom proxy URL is stored encrypted and must not reach the
+   * persisted catalog.
    */
   resolveSandboxEgressProxy(epoch: PermissionEpoch): ResolvedProxy | undefined {
     const access = epochSandboxNetworkAccess(epoch);
-    if (access.mode !== "domain-allowlist") return undefined;
+    if (access.mode === "none") return undefined;
     return this.resolveProxy(access.egressProxyPolicy);
   }
 

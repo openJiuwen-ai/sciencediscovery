@@ -1061,19 +1061,19 @@ export function createRunnerServer(
 }
 
 /**
- * `domain-allowlist` needs a host interpreter for the in-sandbox egress
- * bridge. Report it so the API can tell an admin why the mode is unavailable
- * instead of letting every execution fail with the same error.
+ * `domain-allowlist` and `open` need a host interpreter for the in-sandbox
+ * egress bridge. Report it so the API can tell an admin why the mode is
+ * unavailable instead of letting every execution fail with the same error.
  *
  * Every agent run reads runner health before it starts, so this only consults
  * the process-wide interpreter probe: no subprocess per request, and no data
  * directory writes. Staging the bridge script stays on the launch path.
  */
 async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt"): Promise<SandboxNetworkCapability> {
-  if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist"] };
+  if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist", "open"] };
   try {
     await resolveEgressInterpreter();
-    return { available: true, modes: ["none", "domain-allowlist"] };
+    return { available: true, modes: ["none", "domain-allowlist", "open"] };
   } catch (error) {
     return {
       available: false,
@@ -1231,7 +1231,7 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const sandboxNetwork = await sandboxNetworkCapability(sandbox);
   console.log(
     `Sandbox: ${sandbox} (${RUNNER_VERSION}); sandbox network access: default none`
-    + `${sandboxNetwork.available ? ", domain-allowlist available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
+    + `${sandboxNetwork.available ? ", domain-allowlist and open available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
     + "; no CPU/memory quotas; "
     + `workspace quota: ${workspaceLabel}; output budget: ${outputLabel}; `
     + `execution timeout: ${config.execTimeoutMs === 0 ? "unlimited" : `${config.execTimeoutMs / 1000}s`}`,

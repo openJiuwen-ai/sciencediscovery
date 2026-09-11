@@ -51,7 +51,7 @@ export function normalizeSandboxNetworkSettings(value: unknown): SandboxNetworkS
   if (unknown) throw new Error(`Unknown sandbox network setting: ${unknown}`);
   const mode = value.mode ?? DEFAULT_SANDBOX_NETWORK_SETTINGS.mode;
   if (!isSandboxNetworkMode(mode)) {
-    throw new Error("Sandbox network mode must be none or domain-allowlist");
+    throw new Error("Sandbox network mode must be none, domain-allowlist or open");
   }
   const rawDomains = value.allowedDomains ?? [];
   if (!Array.isArray(rawDomains) || rawDomains.some((entry) => typeof entry !== "string")) {
@@ -64,6 +64,9 @@ export function normalizeSandboxNetworkSettings(value: unknown): SandboxNetworkS
   const allowedDomains = normalizeAllowedDomains(rawDomains as string[]);
   if (mode === "domain-allowlist" && allowedDomains.length === 0) {
     throw new Error("Sandbox network mode domain-allowlist requires at least one allowed domain");
+  }
+  if (mode === "open" && allowedDomains.length > 0) {
+    throw new Error("Sandbox network mode open does not use allowed domains; remove them or use domain-allowlist");
   }
   // Catalogs written before this field existed behave as the shared default.
   const egressProxyPolicy = normalizeProxyPolicy(

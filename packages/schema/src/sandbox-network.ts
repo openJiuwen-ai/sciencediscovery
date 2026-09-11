@@ -28,13 +28,17 @@
 
 import { PROXY_POLICY_INHERIT, type ProxyPolicy } from "./proxy.js";
 
-export const SANDBOX_NETWORK_MODES = ["none", "domain-allowlist"] as const;
+export const SANDBOX_NETWORK_MODES = ["none", "domain-allowlist", "open"] as const;
 
 /**
  * `none` keeps the sandbox without any network interface (the default).
  * `domain-allowlist` keeps the sandbox network namespace unshared as well and
  * routes outbound traffic through the runner's egress gateway, which allows
  * only the configured domains.
+ * `open` routes outbound traffic through the same egress gateway but allows
+ * any host: no domain filtering. Private-address filtering still applies
+ * unless `allowPrivateNetwork` is on, and the gateway logs every connection,
+ * so an open deployment keeps its audit trail.
  */
 export type SandboxNetworkMode = typeof SANDBOX_NETWORK_MODES[number];
 

@@ -18,6 +18,7 @@ import {
   parseAllowedDomain,
   type ProxySettingsDetails,
   type RuntimeStatus,
+  type SandboxNetworkMode,
   type SandboxNetworkSettings,
   type SystemQuotaSettings,
   type SystemTimeoutSettings,
@@ -328,6 +329,18 @@ export function SandboxNetworkSettingsEditor({
   }
 
   const allowlist = settings.mode === "domain-allowlist";
+  const isOpen = settings.mode === "open";
+  function setMode(mode: SandboxNetworkMode): void {
+    const next: SandboxNetworkSettings = { ...settings, mode };
+    if (mode !== "domain-allowlist") {
+      next.allowedDomains = [];
+      // The draft textarea still shows the pre-switch text while disabled;
+      // clear it so it cannot read as the policy that will be saved.
+      setDraft("");
+      setDomainError(undefined);
+    }
+    onChange(next);
+  }
   return <section className="timeout-settings">
     <div className="settings-detail-header">
       <span className="eyebrow">{t("runtime.sandbox.eyebrow")}</span>
@@ -344,16 +357,24 @@ export function SandboxNetworkSettingsEditor({
           <span>{t("runtime.sandbox.modeLabel")}</span>
           <select
             aria-label={t("runtime.sandbox.modeAria")}
-            onChange={(event) => onChange({
-              ...settings,
-              mode: event.target.value === "domain-allowlist" ? "domain-allowlist" : "none",
-            })}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === "open") setMode("open");
+              else if (value === "domain-allowlist") setMode("domain-allowlist");
+              else setMode("none");
+            }}
             value={settings.mode}
           >
             <option value="none">{t("runtime.sandbox.modeNone")}</option>
             <option value="domain-allowlist">{t("runtime.sandbox.modeAllowlist")}</option>
+            <option value="open">{t("runtime.sandbox.modeOpen")}</option>
           </select>
         </label>
+        {isOpen ? (
+          <small className="open-warning" role="alert">
+            {t("runtime.sandbox.openWarning")}
+          </small>
+        ) : null}
       </fieldset>
       <fieldset>
         <legend>{t("runtime.sandbox.domainsLegend")}</legend>
@@ -379,7 +400,7 @@ export function SandboxNetworkSettingsEditor({
         <label className="timeout-unlimited">
           <input
             checked={settings.allowPrivateNetwork}
-            disabled={!allowlist}
+            disabled={settings.mode === "none"}
             onChange={(event) => onChange({ ...settings, allowPrivateNetwork: event.target.checked })}
             type="checkbox"
           />
@@ -393,7 +414,7 @@ export function SandboxNetworkSettingsEditor({
         </p>
         {proxySettings
           ? <ProxyPolicySelect
-            disabled={!allowlist}
+            disabled={settings.mode === "none"}
             label={t("runtime.sandbox.routeLabel")}
             onChange={(egressProxyPolicy) => onChange({ ...settings, egressProxyPolicy })}
             settings={proxySettings}

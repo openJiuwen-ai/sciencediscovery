@@ -204,7 +204,7 @@ test("macOS runner starts healthy and reports the real sandbox capabilities", as
     assert.equal(health.sandbox, "seatbelt");
     assert.equal(health.noNewPrivileges, false);
     assert.equal(health.seccompBaseline, null);
-    assert.deepEqual((health.sandboxNetwork as { modes: string[] }).modes, ["none", "domain-allowlist"]);
+    assert.deepEqual((health.sandboxNetwork as { modes: string[] }).modes, ["none", "domain-allowlist", "open"]);
   } finally {
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
   }
