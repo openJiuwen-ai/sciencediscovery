@@ -63,6 +63,9 @@
 .run-timeline > .idea-tree-phase > span { background: var(--accent-softer); color: var(--accent); }
 .run-timeline > .idea-tree-phase.running > span { animation: spin 1s linear infinite; }
 .run-timeline > .idea-tree-phase p, .run-timeline > .idea-tree-phase strong { color: var(--accent-ink); }
+.idea-research-timeline-card { width: calc(100% - var(--timeline-gutter)); margin: 0 0 11px var(--timeline-gutter); border: 1px solid var(--accent-border-soft); border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink); padding: 12px 14px; font-size: 13px; }
+.idea-research-timeline-card p { margin: 0 0 5px; }
+.idea-research-timeline-card ol { margin: 8px 0 0; padding-left: 19px; color: var(--text-secondary); }
 .timeline-permission.allowed { border-color: var(--success-border); background: var(--success-soft); }
 .timeline-permission.denied, .timeline-permission.cancelled { border-color: var(--danger-border); background: var(--danger-soft); }
 .timeline-permission > div > small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; }

@@ -4382,6 +4382,8 @@ export function App() {
                       <RunTimeline
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
+                        ideaResearchClient={client}
+                        ideaResearchSessionId={session.id}
                         footer={<>
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
@@ -4419,6 +4421,8 @@ export function App() {
                   <RunTimeline
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
+                    ideaResearchClient={client}
+                    ideaResearchSessionId={session.id}
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}

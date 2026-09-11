@@ -206,6 +206,17 @@ test("Idea Tree phases are ordered, deduplicated, rendered, and closed at termin
   assert.equal((html.match(/idea-tree-phase completed/g) ?? []).length, 2);
 });
 
+test("keeps an autonomous Idea Tree research card in the conversation timeline", () => {
+  const entries = apply([
+    { researchId: "research-1", type: "idea_research.created" },
+    { researchId: "research-1", type: "idea_research.created" },
+    { content: "The research continues in the background.", type: "assistant.snapshot" },
+  ]);
+  assert.deepEqual(entries.map(entry => entry.type), ["idea-research", "assistant"]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle: () => undefined }));
+  assert.match(html, /Idea Tree 研究已启动/);
+});
+
 test("renders completed activity as collapsible disclosures", () => {
   const entries = apply([
     { phase: "thinking", turn: 1, type: "agent.phase" },

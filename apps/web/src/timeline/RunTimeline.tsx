@@ -29,6 +29,7 @@ import type {
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { BrandIcon, CheckIcon, ChevronRightIcon, SpinnerIcon, WarningIcon } from "../icons.js";
+import { IdeaResearchTimelineCard } from "../IdeaResearchTimelineCard.js";
 import { MarkdownRenderer } from "../Markdown.js";
 import { SubagentCards } from "../Orchestration.js";
 import { PermissionDecisionActions, permissionMatchingKey } from "../PermissionDecisionActions.js";
@@ -38,6 +39,7 @@ import { SkillReviewRecords } from "../SkillReviewRecords.js";
 import { ToolIoSections } from "./ToolIoSections.js";
 import { useLocale } from "../i18n/index.js";
 import { formatRunFailure } from "../run-failure.js";
+import type { ApiClient } from "../api.js";
 
 // Memory-graph tools are internal bookkeeping: the LLM uses them to read the
 // graph and record claims/evidence while composing the report, but they are
@@ -50,6 +52,11 @@ function isGraphToolTrace(trace: ToolTrace): boolean {
 }
 
 export type RunTimelineEntry =
+  | {
+      id: string;
+      researchId: string;
+      type: "idea-research";
+    }
   | {
       id: string;
       nodeId?: string;
@@ -340,6 +347,11 @@ export function reduceRunTimeline(
       ...(event.treeId ? { treeId: event.treeId } : {}),
       type: "idea-tree-phase",
     }];
+  }
+
+  if (event.type === "idea_research.created") {
+    if (entries.some(entry => entry.type === "idea-research" && entry.researchId === event.researchId)) return entries;
+    return [...finishThinking(entries), { id: `idea-research-${event.researchId}`, researchId: event.researchId, type: "idea-research" }];
   }
 
   if (event.type === "agent.phase") {
@@ -731,6 +743,8 @@ export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
 export function RunTimeline({
   agentLabel = "ScienceDiscovery",
   artifactReviews = [],
+  ideaResearchClient,
+  ideaResearchSessionId,
   entries,
   footer,
   isRunning,
@@ -750,6 +764,8 @@ export function RunTimeline({
 }: {
   agentLabel?: string;
   artifactReviews?: ArtifactReviewRun[];
+  ideaResearchClient?: ApiClient;
+  ideaResearchSessionId?: string;
   entries: RunTimelineEntry[];
   /** Content that belongs to the completed run, rendered before its final action. */
   footer?: ReactNode;
@@ -820,6 +836,9 @@ export function RunTimeline({
         <div><span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span></div>
       </header>
       {entries.map((entry) => {
+        if (entry.type === "idea-research") {
+          return <IdeaResearchTimelineCard client={ideaResearchClient} key={entry.id} researchId={entry.researchId} sessionId={ideaResearchSessionId} />;
+        }
         if (entry.type === "idea-tree-phase") {
           const label = t(`ideaTree.phase.${entry.phase}`);
           return (
