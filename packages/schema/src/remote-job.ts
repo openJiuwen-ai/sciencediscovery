@@ -78,6 +78,20 @@ export interface RemoteHostKeyChallenge {
   fingerprint: string;
 }
 
+/**
+ * Whether the machine itself answers, independently of whether a Runner is
+ * connected to it. A disconnected Runner says nothing about the machine: it may
+ * be powered off, unreachable on the network, or perfectly fine and simply not
+ * connected yet, and those need different actions from whoever is looking.
+ */
+export interface RemoteHostReachability {
+  checkedAt: string;
+  /** Why the machine did not answer. Present only when `state` is `offline`. */
+  error?: string;
+  /** `unknown` when this installation has no way to ask (no stored credentials). */
+  state: "checking" | "offline" | "online" | "unknown";
+}
+
 export interface RemoteHostEndpoint {
   /** IP address or hostname of a self-deployed runner. */
   host: string;
@@ -137,6 +151,12 @@ export interface RemoteHostTarget {
   username?: string;
   /** Pre-installed executable or absolute executable path; never a shell expression. */
   runnerCommand: string;
+  /**
+   * Whether the machine answered just now. Response-only, never persisted, and
+   * only filled in while no Runner is connected — a connected Runner is proof
+   * enough that the machine is up.
+   */
+  reachability?: RemoteHostReachability;
   /** Ephemeral connection state supplied by the API; never persisted. */
   runnerStatus?: RemoteRunnerStatus;
   status: "error" | "ready";

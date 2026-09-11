@@ -380,6 +380,68 @@ function directRemoteHost(port: number): RemoteHostTarget {
   };
 }
 
+test("a machine with no Runner connected still reports whether it answers", async () => {
+  // "Runner disconnected" is not a machine state. A powered-off host, a broken
+  // route and a healthy host nobody connected yet look identical without this.
+  const sshHost: RemoteHostTarget = {
+    alias: "compute-node", connectionKind: "ssh", createdAt: "2026-09-01T00:00:00.000Z",
+    id: "host-ssh", runnerCommand: "sciencediscovery-runner", status: "ready",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+  const transport = new FakeTransport([
+    { exitCode: 0, stderr: "", stdout: "" },
+    { exitCode: 255, stderr: "ssh: connect to host compute-node port 22: No route to host", stdout: "" },
+  ]);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+
+  const online = await client.reachability(sshHost);
+  assert.equal(online.state, "online");
+  assert.equal(transport.calls.length, 1, "asking a machine costs one short command");
+  assert.equal(transport.calls[0]?.script.trim(), "true");
+  assert.ok((transport.calls[0]?.timeoutMs ?? 0) <= 10_000, "a dead machine must not stall the list");
+
+  // A page render is not a question about one machine: the answer is cached.
+  const cached = await client.reachability(sshHost);
+  assert.deepEqual(cached, online);
+  assert.equal(transport.calls.length, 1);
+
+  client.forgetReachability(sshHost.id);
+  const offline = await client.reachability(sshHost);
+  assert.equal(offline.state, "offline");
+  assert.match(offline.error ?? "", /No route to host/u);
+});
+
+test("a machine this installation cannot reach at all is unknown, not offline", async () => {
+  // Saying "offline" would send someone to check a machine that is probably up.
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => {
+    throw new Error("This machine has no stored SSH credentials");
+  }, new FakeTransport([]));
+  const result = await client.reachability({
+    alias: "no-credentials", connectionKind: "ssh", createdAt: "2026-09-01T00:00:00.000Z",
+    id: "host-nocreds", runnerCommand: "sciencediscovery-runner", status: "ready",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  });
+  assert.equal(result.state, "unknown");
+  assert.equal(result.error, undefined);
+});
+
+test("a self-deployed Runner is asked for its health endpoint rather than a shell", async (context) => {
+  const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1" });
+  context.after(() => runner.close());
+  const transport = new FakeTransport([]);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+
+  const online = await client.reachability(directRemoteHost(runner.port));
+  assert.equal(online.state, "online", "answering at all proves the machine is up; the token is a separate question");
+  assert.equal(transport.calls.length, 0, "a self-deployed Runner has no shell to use");
+
+  await runner.close();
+  client.forgetReachability("host-direct");
+  const offline = await client.reachability(directRemoteHost(runner.port));
+  assert.equal(offline.state, "offline");
+  assert.ok(offline.error);
+});
+
 test("a self-deployed runner is reachable by address only with the token it was started with", async (context) => {
   const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1" });
   context.after(() => runner.close());

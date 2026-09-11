@@ -19,6 +19,7 @@ import type {
   RemoteConnectLogEntry,
   RemoteHostCapabilities,
   RemoteHostEndpoint,
+  RemoteHostReachability,
   RemoteHostTarget,
   RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
@@ -84,6 +85,11 @@ export interface RemoteTransport {
   open(target: RemoteSshAccess): Promise<SshSession>;
   run(target: RemoteSshAccess, script: string, timeoutMs: number): Promise<RemoteCommandResult>;
 }
+
+/** One reachability answer is good for this long; a page render is not a question. */
+const REACHABILITY_TTL_MS = 30_000;
+/** Long enough for a handshake on a slow link, short enough not to stall a list. */
+const REACHABILITY_TIMEOUT_MS = 8_000;
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -207,6 +213,7 @@ export class RemoteComputeClient {
     stop?: () => void;
   }>();
   private readonly runnerStatuses = new Map<string, RemoteRunnerStatus>();
+  private readonly reachabilityChecks = new Map<string, RemoteHostReachability>();
   private readonly connectLogs = new Map<string, RemoteConnectLogEntry[]>();
 
   /** The connection story so far for one host, oldest first. */
@@ -333,6 +340,58 @@ export class RemoteComputeClient {
       });
       throw error;
     }
+  }
+
+  /**
+   * Whether the machine answers right now, asked the cheapest honest way.
+   *
+   * "Runner disconnected" is not a machine state: a powered-off host, a host
+   * behind a broken route, and a healthy host nobody has connected yet all look
+   * identical on the settings page, and they need different actions. An SSH
+   * machine is asked to run `true`, which exercises the route, the credentials
+   * and the trusted host key — the same three things a connection needs — and a
+   * self-deployed Runner is asked for its health endpoint.
+   *
+   * Answers are cached briefly because listing machines is a page render, not a
+   * user asking a question about one machine, and an unreachable host costs the
+   * full connect timeout every time it is asked.
+   */
+  async reachability(host: RemoteHostTarget, now: number = Date.now()): Promise<RemoteHostReachability> {
+    const cached = this.reachabilityChecks.get(host.id);
+    if (cached && now - Date.parse(cached.checkedAt) < REACHABILITY_TTL_MS) return { ...cached };
+    const checkedAt = new Date(now).toISOString();
+    let result: RemoteHostReachability;
+    try {
+      if (host.connectionKind === "direct") {
+        const endpoint = host.endpoint;
+        if (!endpoint) throw new Error("This self-deployed Runner has no endpoint");
+        const response = await fetch(`${endpoint.protocol}://${endpoint.host.includes(":") ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}/health`, {
+          signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS),
+        });
+        // Any answer proves the machine is up; the token is a separate question.
+        result = { checkedAt, state: response.status < 500 ? "online" : "offline" };
+      } else {
+        const access = await this.resolveAccess(host.id);
+        const probe = await this.transport.run(access, "true\n", REACHABILITY_TIMEOUT_MS);
+        result = probe.exitCode === 0
+          ? { checkedAt, state: "online" }
+          : { checkedAt, error: probe.stderr.trim() || `SSH exited ${probe.exitCode}`, state: "offline" };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // No stored credentials is not the machine being down; saying "offline"
+      // would send an operator to check a machine that is probably fine.
+      result = /no stored SSH credentials|has no endpoint/u.test(message)
+        ? { checkedAt, state: "unknown" }
+        : { checkedAt, error: message, state: "offline" };
+    }
+    this.reachabilityChecks.set(host.id, result);
+    return { ...result };
+  }
+
+  /** Drop a machine's cached answer, so the next read asks the machine again. */
+  forgetReachability(hostId: string): void {
+    this.reachabilityChecks.delete(hostId);
   }
 
   runnerStatus(hostId: string): RemoteRunnerStatus {

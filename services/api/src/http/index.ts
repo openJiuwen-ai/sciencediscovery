@@ -1145,10 +1145,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/remote-hosts") {
-        sendJson(response, 200, await Promise.all(store.listRemoteHosts().map(async (host) => ({
-          ...host,
-          runnerStatus: await remoteCompute.runnerStatusWithResources(host.id),
-        }))));
+        sendJson(response, 200, await Promise.all(store.listRemoteHosts().map(async (host) => {
+          const runnerStatus = await remoteCompute.runnerStatusWithResources(host.id);
+          // A connected Runner already proves the machine is up. Only ask the
+          // machine itself when it is not connected, which is exactly when
+          // "disconnected" would otherwise say nothing about the machine.
+          const reachability = runnerStatus.state === "ready"
+            ? undefined
+            : await remoteCompute.reachability(host);
+          return { ...host, runnerStatus, ...(reachability ? { reachability } : {}) };
+        })));
         return;
       }
       if (request.method === "POST" && ["/api/remote-hosts", "/api/runners"].includes(url.pathname)) {

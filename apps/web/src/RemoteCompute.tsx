@@ -808,7 +808,16 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <header className="remote-host-card-header">
         <div className="remote-host-card-main">
-          <div className="remote-host-card-title"><strong>{host.id === "local" ? t("remote.localRunner") : host.runnerName ?? host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? t("remote.connected") : state}</span></div>
+          <div className="remote-host-card-title"><strong>{host.id === "local" ? t("remote.localRunner") : host.runnerName ?? host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? t("remote.connected") : state}</span>
+            {/* A disconnected Runner says nothing about the machine, so while
+                nothing is connected the machine's own answer is shown beside
+                the connection state. */}
+            {connected || !host.reachability ? null
+              : <span
+                className={`remote-host-reachability ${host.reachability.state}`}
+                title={host.reachability.error ?? t(`remote.reachability.${host.reachability.state}Help`)}
+              >{t(`remote.reachability.${host.reachability.state}`)}</span>}
+          </div>
           <div className="remote-host-identity">
             <span>{host.id === "local" ? t("remote.localRunnerHelp") : `${destination ?? t("remote.addressUnknown")}:${port ?? "?"}`}</span>
             {host.id !== "local" ? <span>{host.connectionKind === "ssh" ? t("remote.identityUser", { username: host.username ?? t("remote.identityUserSshConfig") }) : t("remote.tokenAuth")}</span> : null}

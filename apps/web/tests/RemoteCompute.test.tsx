@@ -191,6 +191,34 @@ test("machine identity and actions lead the card, with metadata and public key b
   await act(async () => renderer.unmount());
 });
 
+test("a machine with no Runner connected says whether the machine itself answers", async () => {
+  // Without this the card says "disconnected" for a powered-off machine and for
+  // a healthy one nobody has connected yet, which are different problems.
+  const { output } = await renderHost(buildHost({
+    reachability: { checkedAt: timestamp, state: "online" },
+    runnerStatus: { hostId: "host-1", state: "disconnected" },
+  }));
+  assert.match(output, /machine online/);
+
+  const offline = await renderHost(buildHost({
+    reachability: { checkedAt: timestamp, error: "ssh: connect to host research-node port 22: No route to host", state: "offline" },
+    runnerStatus: { hostId: "host-1", state: "disconnected" },
+  }));
+  assert.match(offline.output, /machine unreachable/);
+  // The machine's own words are the tooltip, not a translated paraphrase.
+  assert.match(offline.output, /No route to host/);
+
+  const unknown = await renderHost(buildHost({ reachability: { checkedAt: timestamp, state: "unknown" } }));
+  assert.match(unknown.output, /machine not checked/);
+
+  // A connected Runner is proof enough; the badge would be noise.
+  const connected = await renderHost(buildHost({
+    reachability: { checkedAt: timestamp, state: "online" },
+    runnerStatus: { hostId: "host-1", state: "ready" },
+  }));
+  assert.doesNotMatch(connected.output, /machine online/);
+});
+
 test("direct runner identity uses endpoint and token authentication, never an SSH username", async () => {
   const { renderer } = await renderHost(buildHost({ connectionKind: "direct", endpoint: { host: "::1", port: 4311, protocol: "http" }, hasToken: true }));
   const identity = renderer.root.findByProps({ className: "remote-host-identity" });
