@@ -192,6 +192,33 @@ export interface KeDocumentAnchorContext {
   };
 }
 
+/** W10 citation row (both ends' titles joined). */
+export interface KeCitation {
+  id: string;
+  srcDocId: string;
+  srcTitle: string | null;
+  dstDocId: string | null;
+  dstTitle: string | null;
+  dstKey: string;
+  sentence: string;
+  section: string | null;
+  intent: string | null;
+  confidence: number | null;
+}
+
+export type KeCitationIntent = "uses" | "extends" | "contrasts_with" | "baseline_for" | "motivated_by" | "mentions";
+
+/** W10 formula row (display-math LaTeX with retrieval context). */
+export interface KeFormula {
+  id: string;
+  docId: string;
+  docTitle: string | null;
+  latex: string;
+  displayLatex: string;
+  context: string;
+  label: string | null;
+}
+
 /** `/api/knowledge-engine` — knowledge base graph, seeding and job status. */
 export class KnowledgeEngineApiClient extends EvolveApiClient {
 
@@ -233,6 +260,27 @@ export class KnowledgeEngineApiClient extends EvolveApiClient {
     return this.request(
       `/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/anchors/${encodeURIComponent(anchorId)}`,
     );
+  }
+
+  /** W10: citation rows, filterable by intent / src / dst document. */
+  listKeCitations(kbId: string, filter: { intent?: string; srcDocId?: string; dstDocId?: string; limit?: number } = {}): Promise<{ citations: KeCitation[] }> {
+    const params = new URLSearchParams();
+    if (filter.intent) params.set("intent", filter.intent);
+    if (filter.srcDocId) params.set("srcDocId", filter.srcDocId);
+    if (filter.dstDocId) params.set("dstDocId", filter.dstDocId);
+    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/citations${query ? `?${query}` : ""}`);
+  }
+
+  /** W10: formula rows, filterable by document and LaTeX/label substring. */
+  listKeFormulae(kbId: string, filter: { docId?: string; q?: string; limit?: number } = {}): Promise<{ formulae: KeFormula[] }> {
+    const params = new URLSearchParams();
+    if (filter.docId) params.set("docId", filter.docId);
+    if (filter.q) params.set("q", filter.q);
+    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/formulae${query ? `?${query}` : ""}`);
   }
 
   listKeJobs(kbId: string): Promise<{ jobs: KeJob[] }> {

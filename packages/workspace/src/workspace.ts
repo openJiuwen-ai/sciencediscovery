@@ -1247,7 +1247,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "entity_unified_search",
         "Unified entity search",
-        "One call, concurrent independent sections over a knowledge base for one entity — graph (neighborhood), evidence (verbatim quotes per edge), documents (keyword-matched source documents). Sections are returned independently (no cross-source fusion); a failing section reports status=error without affecting the others. Ambiguous names surface merged candidates instead of guessing. The citations section is not enabled in this build.",
+        "One call, concurrent independent sections over a knowledge base for one entity — graph (neighborhood), evidence (verbatim quotes per edge), documents (keyword-matched source documents), citations ([@rid] contexts whose sentence or resolved target mentions the entity, with intent labels). Sections are returned independently (no cross-source fusion); a failing section reports status=error without affecting the others. Ambiguous names surface merged candidates instead of guessing.",
         Type.Object({
           kbId: kbIdField,
           entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),

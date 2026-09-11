@@ -140,6 +140,8 @@ curl -X POST http://127.0.0.1:4310/api/proxy/servers \
 | `GET /api/knowledge-engine/kbs/:id/documents` | 无 | `200`，精简文档列表 |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId` | `?level=L0\|L1\|L2`（默认 `L0`） | `200`，三级阅读：L0 确定性摘要（summary/tags/source）、L1 带锚点块（`{docId}:{type}:{index}`）、L2 全文；跨 KB 文档 `404` |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId/anchors/:anchorId` | 无 | `200`，锚点块 + 邻块上下文；锚点不存在 `404`，文档未解析 `409` |
+| `GET /api/knowledge-engine/kbs/:id/citations` | `?intent=`（白名单校验）、`?srcDocId=`、`?dstDocId=`、`?limit=`（1–500） | `200`，W10 引用行（句子/章节/意图，两端标题联查）；intent/limit 非法 `400`，跨库文档 `404` |
+| `GET /api/knowledge-engine/kbs/:id/formulae` | `?docId=`、`?q=`（LaTeX/标签子串）、`?limit=`（1–300） | `200`，W10 展示公式行；limit 非法 `400`，跨库文档 `404` |
 | `GET /api/knowledge-engine/kbs/:id/jobs` | 无 | `200`，最近作业 |
 | `GET /api/knowledge-engine/kbs/:id/graph` | 无 | `200`，精简实体+边（无全文/embedding） |
 | `GET /api/knowledge-engine/kbs/:id/roots` | 无 | `200`，社区 roots（指纹缓存，SWR） |

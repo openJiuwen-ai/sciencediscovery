@@ -18,6 +18,7 @@ export * from "./text/jats.js";
 export * from "./text/levels.js";
 export * from "./text/search.js";
 export * from "./text/anti-hallucination.js";
+export * from "./text/citations.js";
 export * from "./extraction/schema.js";
 export * from "./extraction/parse.js";
 export * from "./extraction/provenance-gate.js";

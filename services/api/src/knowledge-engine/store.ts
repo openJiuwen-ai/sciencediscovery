@@ -146,6 +146,55 @@ export interface KeJobRow {
   readonly updatedAt: string;
 }
 
+/** W10 citation-context row (DA citation_contexts). dstDocId links only on
+ *  unambiguous (surname, year) resolution — null means cited-but-not-in-KB. */
+export interface KeCitationRow {
+  readonly id: string;
+  readonly kbId: string;
+  readonly srcDocId: string;
+  readonly dstDocId: string | null;
+  readonly dstKey: string;
+  readonly sentence: string;
+  readonly section: string | null;
+  readonly intent: string | null;
+  readonly confidence: number | null;
+  readonly createdAt: string;
+}
+
+/** W10 formula row (extracted display-math LaTeX with retrieval context). */
+export interface KeFormulaRow {
+  readonly id: string;
+  readonly kbId: string;
+  readonly docId: string;
+  readonly latex: string;
+  readonly displayLatex: string;
+  readonly context: string;
+  readonly label: string | null;
+  readonly section: string | null;
+  readonly createdAt: string;
+}
+
+export interface KeCitationInput {
+  readonly kbId: string;
+  readonly srcDocId: string;
+  readonly dstDocId: string | null;
+  readonly dstKey: string;
+  readonly sentence: string;
+  readonly section: string | null;
+  readonly intent: string | null;
+  readonly confidence: number | null;
+}
+
+export interface KeFormulaInput {
+  readonly kbId: string;
+  readonly docId: string;
+  readonly latex: string;
+  readonly displayLatex: string;
+  readonly context: string;
+  readonly label: string | null;
+  readonly section: string | null;
+}
+
 interface Migration {
   readonly version: number;
   readonly name: string;
@@ -344,6 +393,43 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX ke_entity_docs_kb ON ke_entity_docs (kb_id, entity_id);
       INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id)
         SELECT id, first_seen_doc, kb_id FROM ke_entities WHERE first_seen_doc IS NOT NULL;
+    `,
+  },
+  {
+    version: 4,
+    name: "ke_citations_formulae",
+    sql: `
+      -- W10 citation chain (DA citation_contexts): one row per [@rid] anchor
+      -- occurrence. dst_doc_id only for unambiguous KB-internal resolution.
+      CREATE TABLE ke_citations (
+        id TEXT PRIMARY KEY,
+        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        src_doc_id TEXT NOT NULL REFERENCES ke_documents(id) ON DELETE CASCADE,
+        dst_doc_id TEXT REFERENCES ke_documents(id) ON DELETE SET NULL,
+        dst_key TEXT NOT NULL,
+        sentence TEXT NOT NULL,
+        section TEXT,
+        intent TEXT,
+        confidence REAL,
+        created_at TEXT NOT NULL,
+        UNIQUE (src_doc_id, dst_key, sentence)
+      );
+      CREATE INDEX ke_citations_kb_intent ON ke_citations (kb_id, intent);
+      CREATE INDEX ke_citations_dst ON ke_citations (kb_id, dst_doc_id);
+      -- W10 formula store: display-math LaTeX with retrieval context.
+      CREATE TABLE ke_formulae (
+        id TEXT PRIMARY KEY,
+        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        doc_id TEXT NOT NULL REFERENCES ke_documents(id) ON DELETE CASCADE,
+        latex TEXT NOT NULL,
+        display_latex TEXT NOT NULL,
+        context TEXT NOT NULL,
+        label TEXT,
+        section TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (doc_id, latex)
+      );
+      CREATE INDEX ke_formulae_kb_doc ON ke_formulae (kb_id, doc_id);
     `,
   },
 ];
@@ -1919,6 +2005,166 @@ export class KnowledgeEngineStore {
       .all(kbId, limit) as Array<Record<string, unknown>>;
     return rows.map(mapDocument);
   }
+
+  // -------------------------------------------------------------- citations
+
+  /** Replace a document's citation rows (idempotent re-extraction; the whole
+   *  per-doc set derives deterministically from the fulltext, so delete-then-
+   *  insert is the correct re-derivation semantics). */
+  replaceCitations(kbId: string, srcDocId: string, rows: readonly KeCitationInput[]): void {
+    const insert = this.database.prepare(
+      `INSERT INTO ke_citations (id, kb_id, src_doc_id, dst_doc_id, dst_key, sentence, section, intent, confidence, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.inTransaction(() => {
+      this.database
+        .prepare("DELETE FROM ke_citations WHERE kb_id = ? AND src_doc_id = ?")
+        .run(kbId, srcDocId);
+      for (const row of rows) {
+        insert.run(
+          randomUUID(), kbId, srcDocId, row.dstDocId, row.dstKey, row.sentence,
+          row.section, row.intent, row.confidence, now(),
+        );
+      }
+    });
+  }
+
+  /** List citation rows with document titles joined for both ends. */
+  listCitations(
+    kbId: string,
+    options: { intent?: string; srcDocId?: string; dstDocId?: string; limit?: number } = {},
+  ): Array<KeCitationRow & { srcTitle: string | null; dstTitle: string | null }> {
+    const limit = options.limit ?? 200;
+    const clauses = ["c.kb_id = ?"];
+    const params: Array<string | number> = [kbId];
+    if (options.intent) {
+      clauses.push("c.intent = ?");
+      params.push(options.intent);
+    }
+    if (options.srcDocId) {
+      clauses.push("c.src_doc_id = ?");
+      params.push(options.srcDocId);
+    }
+    if (options.dstDocId) {
+      clauses.push("c.dst_doc_id = ?");
+      params.push(options.dstDocId);
+    }
+    params.push(Math.max(1, Math.min(limit, 500)));
+    const rows = this.database
+      .prepare(
+        `SELECT c.*, src.title AS src_title, dst.title AS dst_title
+         FROM ke_citations c
+         JOIN ke_documents src ON src.id = c.src_doc_id
+         LEFT JOIN ke_documents dst ON dst.id = c.dst_doc_id
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY c.created_at, c.id LIMIT ?`,
+      )
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      ...mapCitation(row),
+      srcTitle: row["src_title"] === null ? null : String(row["src_title"]),
+      dstTitle: row["dst_title"] === null ? null : String(row["dst_title"]),
+    }));
+  }
+
+  /** Citation rows where any of the given documents is the citing (src) side. */
+  listCitationsFromDocs(kbId: string, docIds: readonly string[], limit = 50): Array<KeCitationRow & { srcTitle: string | null; dstTitle: string | null }> {
+    if (docIds.length === 0) return [];
+    const placeholders = docIds.map(() => "?").join(", ");
+    const rows = this.database
+      .prepare(
+        `SELECT c.*, src.title AS src_title, dst.title AS dst_title
+         FROM ke_citations c
+         JOIN ke_documents src ON src.id = c.src_doc_id
+         LEFT JOIN ke_documents dst ON dst.id = c.dst_doc_id
+         WHERE c.kb_id = ? AND c.src_doc_id IN (${placeholders})
+         ORDER BY c.created_at, c.id LIMIT ?`,
+      )
+      .all(kbId, ...docIds, Math.max(1, Math.min(limit, 200))) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      ...mapCitation(row),
+      srcTitle: row["src_title"] === null ? null : String(row["src_title"]),
+      dstTitle: row["dst_title"] === null ? null : String(row["dst_title"]),
+    }));
+  }
+
+  /** Per-doc citation counts for badge aggregation: outgoing (this doc cites)
+   *  and incoming (KB docs citing this doc), plus resolved-intent totals. */
+  citationStats(kbId: string): Map<string, { outgoing: number; outgoingResolved: number; incoming: number; incomingResolved: number }> {
+    const stats = new Map<string, { outgoing: number; outgoingResolved: number; incoming: number; incomingResolved: number }>();
+    const bump = (docId: string, kind: "outgoing" | "incoming", resolved: boolean) => {
+      const entry = stats.get(docId) ?? { outgoing: 0, outgoingResolved: 0, incoming: 0, incomingResolved: 0 };
+      entry[kind] += 1;
+      if (resolved) entry[`${kind}Resolved`] += 1;
+      stats.set(docId, entry);
+    };
+    const rows = this.database
+      .prepare("SELECT src_doc_id, dst_doc_id FROM ke_citations WHERE kb_id = ?")
+      .all(kbId) as Array<{ src_doc_id: string; dst_doc_id: string | null }>;
+    for (const row of rows) {
+      // Each row counts once toward its kind; the resolved counter is a
+      // subset (rows with a linked dst), never an extra row.
+      bump(row.src_doc_id, "outgoing", row.dst_doc_id !== null);
+      if (row.dst_doc_id) {
+        bump(row.dst_doc_id, "incoming", true);
+      }
+    }
+    return stats;
+  }
+
+  // ---------------------------------------------------------------- formulae
+
+  /** Replace a document's formula rows (idempotent re-extraction, same
+   *  delete-then-insert semantics as citations). */
+  replaceFormulae(kbId: string, docId: string, rows: readonly KeFormulaInput[]): void {
+    const insert = this.database.prepare(
+      `INSERT INTO ke_formulae (id, kb_id, doc_id, latex, display_latex, context, label, section, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.inTransaction(() => {
+      this.database
+        .prepare("DELETE FROM ke_formulae WHERE kb_id = ? AND doc_id = ?")
+        .run(kbId, docId);
+      for (const row of rows) {
+        insert.run(
+          randomUUID(), kbId, docId, row.latex, row.displayLatex, row.context, row.label, row.section, now(),
+        );
+      }
+    });
+  }
+
+  /** List formula rows; `q` filters by LaTeX/label substring (LIKE). */
+  listFormulae(
+    kbId: string,
+    options: { docId?: string; q?: string; limit?: number } = {},
+  ): Array<KeFormulaRow & { docTitle: string | null }> {
+    const limit = options.limit ?? 100;
+    const clauses = ["f.kb_id = ?"];
+    const params: Array<string | number> = [kbId];
+    if (options.docId) {
+      clauses.push("f.doc_id = ?");
+      params.push(options.docId);
+    }
+    if (options.q && options.q.trim().length > 0) {
+      clauses.push("(f.latex LIKE ? ESCAPE '\\' OR f.label LIKE ? ESCAPE '\\')");
+      const needle = `%${options.q.trim().replace(/[%_]/g, (char) => `\\${char}`)}%`;
+      params.push(needle, needle);
+    }
+    params.push(Math.max(1, Math.min(limit, 300)));
+    const rows = this.database
+      .prepare(
+        `SELECT f.*, d.title AS doc_title
+         FROM ke_formulae f
+         JOIN ke_documents d ON d.id = f.doc_id
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY f.created_at, f.id LIMIT ?`,
+      )
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      ...mapFormula(row),
+      docTitle: row["doc_title"] === null ? null : String(row["doc_title"]),
+    }));
+  }
 }
 
 // ------------------------------------------------------------------ mappers
@@ -1950,6 +2196,35 @@ function mapDocument(row: Record<string, unknown>): KeDocumentRow {
     sourceMeta: parseJson<Record<string, unknown>>(row["source_meta"], {}),
     createdAt: String(row["created_at"]),
     updatedAt: String(row["updated_at"]),
+  };
+}
+
+function mapCitation(row: Record<string, unknown>): KeCitationRow {
+  return {
+    id: String(row["id"]),
+    kbId: String(row["kb_id"]),
+    srcDocId: String(row["src_doc_id"]),
+    dstDocId: (row["dst_doc_id"] as string | null) ?? null,
+    dstKey: String(row["dst_key"]),
+    sentence: String(row["sentence"]),
+    section: (row["section"] as string | null) ?? null,
+    intent: (row["intent"] as string | null) ?? null,
+    confidence: (row["confidence"] as number | null) ?? null,
+    createdAt: String(row["created_at"]),
+  };
+}
+
+function mapFormula(row: Record<string, unknown>): KeFormulaRow {
+  return {
+    id: String(row["id"]),
+    kbId: String(row["kb_id"]),
+    docId: String(row["doc_id"]),
+    latex: String(row["latex"]),
+    displayLatex: String(row["display_latex"]),
+    context: String(row["context"]),
+    label: (row["label"] as string | null) ?? null,
+    section: (row["section"] as string | null) ?? null,
+    createdAt: String(row["created_at"]),
   };
 }
 

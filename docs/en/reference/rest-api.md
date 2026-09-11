@@ -136,6 +136,8 @@ Subject knowledge bases: literature ingestion, entity/relation graph, growth cyc
 | `GET /api/knowledge-engine/kbs/:id/documents` | none | `200`, lean document list |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId` | `?level=L0\|L1\|L2` (default `L0`) | `200`, three-level read: L0 deterministic abstract (summary/tags/source), L1 anchored blocks (`{docId}:{type}:{index}`), L2 fulltext; `404` cross-KB doc |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId/anchors/:anchorId` | none | `200`, anchor block + neighbor context; `404` unknown anchor, `409` document not parsed |
+| `GET /api/knowledge-engine/kbs/:id/citations` | `?intent=` (whitelisted), `?srcDocId=`, `?dstDocId=`, `?limit=` (1–500) | `200`, W10 citation rows (sentence/section/intent, both titles joined); `400` bad intent/limit, `404` cross-KB doc |
+| `GET /api/knowledge-engine/kbs/:id/formulae` | `?docId=`, `?q=` (LaTeX/label substring), `?limit=` (1–300) | `200`, W10 display-math formula rows; `400` bad limit, `404` cross-KB doc |
 | `GET /api/knowledge-engine/kbs/:id/jobs` | none | `200`, recent jobs |
 | `GET /api/knowledge-engine/kbs/:id/graph` | none | `200`, lean entities + edges (no fulltext/embeddings) |
 | `GET /api/knowledge-engine/kbs/:id/roots` | none | `200`, community roots (fingerprint-cached, stale-while-revalidate) |

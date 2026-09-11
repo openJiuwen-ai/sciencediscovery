@@ -21,6 +21,8 @@
 | `ke_frontier` | 增长前沿：按周期的候选，命中矩阵 `sources`（Chao1 输入）、深度、相关度 |
 | `ke_jobs` | 持久作业队列（KE 全部作业类型：seed/ingest/extract/grow/resolution） |
 | `ke_settings` | 水位、graph-roots 缓存、消解开关 |
+| `ke_citations` | W10 引用上下文：每个 [@rid] 锚点出现一行（句子/章节/意图/置信度）；dst_doc_id 只链接（姓, 年）唯一匹配 |
+| `ke_formulae` | W10 展示公式 LaTeX（带检索上下文与可选 label） |
 | FTS5 | `ke_entities_fts`、`ke_documents_fts`（触发器维护） |
 
 ## 3. 摄取管线

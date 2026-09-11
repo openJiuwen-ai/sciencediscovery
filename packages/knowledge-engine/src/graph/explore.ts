@@ -345,12 +345,26 @@ export interface DocumentsSection {
   readonly hits?: Array<{ docId: string; title: string; snippet: string }>;
 }
 
-/** The DA citations section (citation_contexts from LaTeX \cite extraction)
- *  is not ported in this wave — it returns status "error" with an explicit
- *  note rather than silently disappearing. */
+/** W10 citation-context hit: a [@rid] anchor row matched to the entity. */
+export interface CitationHit {
+  readonly srcDocId: string;
+  readonly srcTitle: string | null;
+  readonly dstDocId: string | null;
+  readonly dstTitle: string | null;
+  readonly dstKey: string;
+  readonly intent: string | null;
+  readonly sentence: string;
+  readonly section: string | null;
+}
+
+/** Citation contexts (the W10 chain): rows whose sentence or resolved
+ *  destination mentions the entity. Absent dep → explicit error section. */
 export interface CitationsSection {
   readonly status: SourceStatus;
   readonly error?: string;
+  readonly hits?: readonly CitationHit[];
+  /** true when more matched rows exist beyond the section cap. */
+  readonly truncated?: boolean;
 }
 
 export interface EntityUnifiedSearchResult {
@@ -373,6 +387,13 @@ export interface UnifiedSearchDeps {
     query: string,
     topK: number,
   ) => Promise<Array<{ docId: string; title: string; snippet: string }>>;
+  /** W10 citation contexts matching an entity (sentence or resolved
+   *  destination mentions it). Absent → citations section errors. */
+  readonly searchCitations?: (
+    kbId: string,
+    entity: string,
+    limit: number,
+  ) => Promise<readonly CitationHit[]>;
 }
 
 /**
@@ -391,10 +412,11 @@ export async function entityUnifiedSearch(
   const started = Date.now();
   const name = entity.trim();
 
-  const [graphR, evidenceR, documentsR] = await Promise.allSettled([
+  const [graphR, evidenceR, documentsR, citationsR] = await Promise.allSettled([
     queryGraphSection(kbId, name, data, opts),
     queryEvidenceSection(kbId, name, data, opts),
     queryDocumentsSection(kbId, name, opts, deps),
+    queryCitationsSection(kbId, name, deps),
   ]);
 
   const graph: GraphSection =
@@ -405,6 +427,10 @@ export async function entityUnifiedSearch(
     documentsR.status === "fulfilled"
       ? documentsR.value
       : { status: "error", error: errMessage(documentsR.reason) };
+  const citations: CitationsSection =
+    citationsR.status === "fulfilled"
+      ? citationsR.value
+      : { status: "error", error: errMessage(citationsR.reason) };
 
   // Merge candidates from ambiguous graph/evidence resolutions (dedup by id),
   // following the never-guess principle.
@@ -426,7 +452,7 @@ export async function entityUnifiedSearch(
       graph,
       evidence,
       documents,
-      citations: { status: "error", error: "citation contexts are not enabled in this build (W5 optional feature)" },
+      citations,
     },
     elapsedMs: Date.now() - started,
   };
@@ -471,4 +497,28 @@ async function queryDocumentsSection(
   const hits = await deps.searchDocuments(kbId, name, Math.min(Math.max(opts.docTopK ?? 5, 1), 20));
   if (hits.length === 0) return { status: "empty" };
   return { status: "ok", hits: hits.map((hit) => ({ ...hit, snippet: hit.snippet.slice(0, 300) })) };
+}
+
+/** Section cap: enough to answer "where is this entity cited" without
+ *  flooding the tool payload. */
+const CITATIONS_SECTION_CAP = 10;
+
+async function queryCitationsSection(
+  kbId: string,
+  name: string,
+  deps: UnifiedSearchDeps,
+): Promise<CitationsSection> {
+  if (!name) return { status: "empty" };
+  if (!deps.searchCitations) return { status: "error", error: "citation contexts not available in this build" };
+  const hits = await deps.searchCitations(kbId, name, CITATIONS_SECTION_CAP + 1);
+  if (hits.length === 0) return { status: "empty" };
+  const truncated = hits.length > CITATIONS_SECTION_CAP;
+  return {
+    status: "ok",
+    hits: (truncated ? hits.slice(0, CITATIONS_SECTION_CAP) : hits).map((hit) => ({
+      ...hit,
+      sentence: hit.sentence.slice(0, 300),
+    })),
+    ...(truncated ? { truncated } : {}),
+  };
 }

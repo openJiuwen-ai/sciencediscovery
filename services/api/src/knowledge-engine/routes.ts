@@ -29,6 +29,7 @@ import { ApiStatusError } from "../runs/index.js";
 
 import {
   buildDeterministicL0,
+  DEFAULT_INTENT_LABELS,
   documentAnchor,
   parseDocumentBlocks,
   resolveDocumentAnchor,
@@ -318,6 +319,94 @@ export function handleKeGetDocumentAnchor(
       before: hit.before ? anchoredBlock(document.id, hit.before) : null,
       after: hit.after ? anchoredBlock(document.id, hit.after) : null,
     },
+  });
+}
+
+// ------------------------------------------------- citations & formulae (W10)
+
+const INTENT_WHITELIST = new Set(DEFAULT_INTENT_LABELS.map((label) => label.name));
+
+/** GET /kbs/:kbId/citations — filter by ?intent= (whitelist-validated),
+ *  ?srcDocId= / ?dstDocId= (cross-KB ids 404 like every document read),
+ *  ?limit= (1-500, default 200). */
+export function handleKeListCitations(
+  response: ServerResponse,
+  store: KnowledgeEngineStore,
+  kbId: string,
+  query: URLSearchParams,
+): void {
+  requireKb(store, kbId);
+  const intent = query.get("intent");
+  if (intent !== null && intent !== "" && !INTENT_WHITELIST.has(intent)) {
+    throw new KeApiError(
+      `intent must be one of ${[...INTENT_WHITELIST].join("|")}, got "${intent}"`,
+      400,
+      "KE_INVALID_INPUT",
+    );
+  }
+  for (const [param, value] of [["srcDocId", query.get("srcDocId")], ["dstDocId", query.get("dstDocId")]] as const) {
+    if (value) requireKbDocument(store, kbId, value);
+  }
+  const limitRaw = query.get("limit");
+  const limit = limitRaw === null || limitRaw === "" ? 200 : Number(limitRaw);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new KeApiError(`limit must be an integer 1-500, got "${limitRaw}"`, 400, "KE_INVALID_INPUT");
+  }
+  const citations = store.listCitations(kbId, {
+    ...(intent ? { intent } : {}),
+    ...(query.get("srcDocId") ? { srcDocId: query.get("srcDocId")! } : {}),
+    ...(query.get("dstDocId") ? { dstDocId: query.get("dstDocId")! } : {}),
+    limit,
+  });
+  sendJson(response, 200, {
+    kbId,
+    citations: citations.map((row) => ({
+      id: row.id,
+      srcDocId: row.srcDocId,
+      srcTitle: row.srcTitle,
+      dstDocId: row.dstDocId,
+      dstTitle: row.dstTitle,
+      dstKey: row.dstKey,
+      sentence: row.sentence,
+      section: row.section,
+      intent: row.intent,
+      confidence: row.confidence,
+    })),
+  });
+}
+
+/** GET /kbs/:kbId/formulae — filter by ?docId= (404 on cross-KB) and
+ *  ?q= (LaTeX/label substring); ?limit= (1-300, default 100). */
+export function handleKeListFormulae(
+  response: ServerResponse,
+  store: KnowledgeEngineStore,
+  kbId: string,
+  query: URLSearchParams,
+): void {
+  requireKb(store, kbId);
+  const docId = query.get("docId");
+  if (docId) requireKbDocument(store, kbId, docId);
+  const limitRaw = query.get("limit");
+  const limit = limitRaw === null || limitRaw === "" ? 100 : Number(limitRaw);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 300) {
+    throw new KeApiError(`limit must be an integer 1-300, got "${limitRaw}"`, 400, "KE_INVALID_INPUT");
+  }
+  const formulae = store.listFormulae(kbId, {
+    ...(docId ? { docId } : {}),
+    ...(query.get("q") ? { q: query.get("q")! } : {}),
+    limit,
+  });
+  sendJson(response, 200, {
+    kbId,
+    formulae: formulae.map((row) => ({
+      id: row.id,
+      docId: row.docId,
+      docTitle: row.docTitle,
+      latex: row.latex,
+      displayLatex: row.displayLatex,
+      context: row.context,
+      label: row.label,
+    })),
   });
 }
 

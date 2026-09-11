@@ -145,6 +145,27 @@ export function createKnowledgeEngineTools(store: KnowledgeEngineStore): Knowled
       requireKb(kbId);
       return entityUnifiedSearch(kbId, entity, exploreData, opts, {
         searchDocuments: async (id, query, topK) => store.searchDocuments(id, query, topK),
+        searchCitations: async (id, name, limit) => {
+          // Entity-mention match over citation sentences and resolved
+          // destination titles — the W10 chain's agent surface.
+          const needle = name.toLowerCase();
+          return store
+            .listCitations(id, { limit: 500 })
+            .filter((row) =>
+              row.sentence.toLowerCase().includes(needle)
+              || (row.dstTitle ?? "").toLowerCase().includes(needle))
+            .slice(0, limit)
+            .map((row) => ({
+              srcDocId: row.srcDocId,
+              srcTitle: row.srcTitle,
+              dstDocId: row.dstDocId,
+              dstTitle: row.dstTitle,
+              dstKey: row.dstKey,
+              intent: row.intent,
+              sentence: row.sentence,
+              section: row.section,
+            }));
+        },
       });
     },
 

@@ -62,7 +62,9 @@ import {
   handleKeGetGraph,
   handleKeGetGrow,
   handleKeGetKb,
+  handleKeListCitations,
   handleKeListDocuments,
+  handleKeListFormulae,
   handleKeListJobs,
   handleKeListKbs,
   handleKeSeed,
@@ -2244,6 +2246,26 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const keDocsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents$/);
       if (keDocsMatch && request.method === "GET") {
         handleKeListDocuments(response, knowledgeEngineStore, decodeURIComponent(keDocsMatch[1]!));
+        return;
+      }
+      const keCitationsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/citations$/);
+      if (keCitationsMatch && request.method === "GET") {
+        handleKeListCitations(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keCitationsMatch[1]!),
+          url.searchParams,
+        );
+        return;
+      }
+      const keFormulaeMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/formulae$/);
+      if (keFormulaeMatch && request.method === "GET") {
+        handleKeListFormulae(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keFormulaeMatch[1]!),
+          url.searchParams,
+        );
         return;
       }
       // Anchor resolution first — the doc match's `[^/]+$` cannot capture it,

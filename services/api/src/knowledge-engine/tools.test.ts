@@ -104,7 +104,9 @@ test("tools: unified search documents section hits FTS over fulltext", async (co
   assert.equal(result.sources.documents.status, "ok");
   assert.equal(result.sources.documents.hits?.length, 1);
   assert.equal(result.sources.documents.hits?.[0]?.title, "mAb114 neutralizes Ebola");
-  assert.equal(result.sources.citations.status, "error"); // not enabled in this build
+  // W10: the citations section is live — no citation rows exist for this
+  // fixture, so the honest answer is empty (not the old error stub).
+  assert.equal(result.sources.citations.status, "empty");
 });
 
 test("tools: gapCandidates finds the structural hole between GP and Ebola virus", async (context) => {

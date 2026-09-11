@@ -21,6 +21,8 @@
 | `ke_frontier` | Grow frontier: per-cycle candidates with hit-matrix `sources` (Chao1 input), depth, relevance |
 | `ke_jobs` | Persistent job queue (all KE work: seed/ingest/extract/grow/resolution) |
 | `ke_settings` | Watermarks, graph-roots cache, resolution mode |
+| `ke_citations` | W10 citation contexts: one row per [@rid] anchor occurrence (sentence, section, intent, confidence); dst_doc_id links only unambiguous (surname, year) matches |
+| `ke_formulae` | W10 display-math LaTeX with retrieval context and optional label |
 | FTS5 | `ke_entities_fts`, `ke_documents_fts` (trigger-maintained) |
 
 ## 3. Ingestion pipeline
