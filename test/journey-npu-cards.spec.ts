@@ -102,9 +102,9 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
     selections = { ...selections, [runnerId]: body.devices };
     return route.fulfill({ json: { devices: body.devices, runnerId } });
   });
-  await page.route("**/api/remote-hosts", (route) => {
+  await page.route("**/api/runners", (route) => {
     if (route.request().method() !== "GET") return route.continue();
-    return route.fulfill({ json: [{
+    return route.fulfill({ json: [{ id: "local", alias: "local", location: "local", connectionKind: "direct", status: "ready", runnerStatus: { state: "ready", resources: { npu: localNpu() } } }, {
       alias: "npu-910b-lab",
       runnerName: "910B analysis",
       description: "Ascend 910B analysis server",
@@ -143,7 +143,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
     const dialog = page.getByRole("dialog", { name: "系统设置" });
     if (!await dialog.isVisible()) await page.getByRole("button", { name: /^系统设置/ }).click();
     await dialog.getByRole("navigation", { name: "设置分组" })
-      .getByRole("button", { name: /^远程计算/ })
+      .getByRole("button", { name: /^Runner/ })
       .click();
     return dialog;
   };

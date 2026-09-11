@@ -25,10 +25,11 @@ import type {
   Session,
   UpdateSessionRequest,
 } from "@sciencediscovery/schema";
-import { LOCAL_RUNNER_ID, selectableNpuDevices } from "@sciencediscovery/schema";
+import { effectiveRunnerIds, selectableNpuDevices } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
+import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { CopyButton } from "./CopyButton.js";
 import { useLocale } from "./i18n/index.js";
 import { SshKeyFileField } from "./SshKeyFileField.js";
@@ -38,11 +39,10 @@ import { activityCardId, type ActivityCardDisclosure } from "./session/run-activ
 
 /**
  * Remote machines a Session may use: its own `remoteRunnerHostIds` override
- * (`[]` forbids every remote machine), else the Project allowlist. Local
- * execution stays available either way.
+ * (`[]` forbids every remote machine), else the Project allowlist. Local execution is controlled by the unified selection when present.
  */
 export function effectiveRemoteRunnerHostIds(project: Project | undefined, session: Session | undefined): string[] {
-  return session?.remoteRunnerHostIds ?? project?.remoteRunnerHostIds ?? [];
+  return project ? effectiveRunnerIds(project, session).filter((id) => id !== "local") : [];
 }
 
 function resourceBytes(bytes: number): string {
@@ -189,6 +189,7 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
  * either carry the runner already or be able to receive the deployed one.
  */
 function runnerUsable(host: RemoteHostTarget): boolean {
+  if (host.id === "local") return true;
   if (host.status !== "ready") return false;
   if (host.connectionKind === "direct") return Boolean(host.endpoint && host.hasToken);
   return host.capabilities?.platform === "Linux";
@@ -199,7 +200,7 @@ function useRemoteHosts(client: ApiClient, onError: (message: string) => void): 
   const [hosts, setHosts] = useState<RemoteHostTarget[]>();
   useEffect(() => {
     let cancelled = false;
-    void client.listRemoteHosts()
+    void client.listRunners()
       .then((list) => { if (!cancelled) setHosts(list); })
       .catch((error: Error) => { if (!cancelled) onError(error.message); });
     return () => { cancelled = true; };
@@ -212,7 +213,7 @@ function useRemoteHosts(client: ApiClient, onError: (message: string) => void): 
 type Translate = ReturnType<typeof useLocale>["t"];
 
 function hostKindLabel(host: RemoteHostTarget, t: Translate): string {
-  return host.connectionKind === "direct" ? t("remote.kindSelfDeployed") : "SSH";
+  return host.id === "local" ? t("remote.localRunner") : host.connectionKind === "direct" ? t("remote.kindSelfDeployed") : "SSH";
 }
 
 interface HostKeyPrompt {
@@ -238,14 +239,13 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
 }) {
   const { t } = useLocale();
   const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
-  // Which cards each Runner may hand to its sandboxes, plus this machine's own
-  // cards. Kept beside the machines rather than on them: the local Runner has
-  // no machine record, and one state keeps both paths identical.
+  // One selection map covers every Runner, including the built-in endpoint.
   const [npu, setNpu] = useState<NpuRunnerSelectionsResponse>();
   const npuSelections = npu?.selections ?? {};
   const selectNpu = (runnerId: string, devices: number[]): void => {
     setNpu((current) => current && { ...current, selections: { ...current.selections, [runnerId]: devices } });
   };
+  const [managingRunner, setManagingRunner] = useState<string>();
   const [adding, setAdding] = useState<"direct" | "ssh">();
   const [alias, setAlias] = useState("");
   const [runnerName, setRunnerName] = useState("");
@@ -275,7 +275,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   const [credGeneratedKey, setCredGeneratedKey] = useState<GeneratedRemoteHostKey>();
 
   async function refresh(): Promise<void> {
-    setHosts(await client.listRemoteHosts());
+    setHosts(await client.listRunners());
   }
 
   useEffect(() => { void refresh().catch((error: Error) => onError(error.message)); }, [client]);
@@ -518,7 +518,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       if (!connected && trust) await client.trustRemoteHostKey(host.id, trust);
       const status = connected
         ? await client.disconnectRemoteRunner(host.id)
-        : await client.connectRemoteRunner(host.id);
+        : await client.connectRunner(host.id);
       await refresh();
       if (!connected && status.hostKeyChallenge) {
         const challenge = status.hostKeyChallenge;
@@ -642,19 +642,6 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
 
   return <div className="remote-host-manager">
     <div className="settings-detail-header"><span className="eyebrow">{t("remote.eyebrow")}</span><h3>{t("remote.runnersTitle")}</h3><p>{t("remote.runnersHelp")}</p></div>
-    <article className="remote-host-card ready">
-      <div className="remote-host-card-main"><strong>{t("remote.localRunner")}</strong><small>{t("remote.runnerId", { id: "local" })}</small><small>{t("remote.localRunnerHelp")}</small></div>
-      {/* This machine can carry the NPUs too, so its cards are ticked here
-          rather than requiring an operator to register it as a remote one. */}
-      <NpuDeviceSelector
-        client={client}
-        inventory={npu?.local}
-        onError={onError}
-        onSelected={(devices) => selectNpu(LOCAL_RUNNER_ID, devices)}
-        runnerId={LOCAL_RUNNER_ID}
-        selected={npuSelections[LOCAL_RUNNER_ID] ?? []}
-      />
-    </article>
     {hosts.length ? <div className="remote-host-list">{hosts.map((host) => {
       const connected = host.runnerStatus?.state === "ready";
       const state = connected ? "ready" : host.runnerStatus?.state ?? host.status;
@@ -670,18 +657,19 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <header className="remote-host-card-header">
         <div className="remote-host-card-main">
-          <div className="remote-host-card-title"><strong>{host.runnerName ?? host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? t("remote.connected") : state}</span></div>
+          <div className="remote-host-card-title"><strong>{host.id === "local" ? t("remote.localRunner") : host.runnerName ?? host.alias}</strong><span className={`remote-host-status ${connected ? "ready" : state === "error" ? "error" : ""}`}>{connected ? t("remote.connected") : state}</span></div>
           <div className="remote-host-identity">
-            <span>{destination ?? t("remote.addressUnknown")}:{port ?? "?"}</span>
-            <span>{host.connectionKind === "ssh" ? t("remote.identityUser", { username: host.username ?? t("remote.identityUserSshConfig") }) : t("remote.tokenAuth")}</span>
+            <span>{host.id === "local" ? t("remote.localRunnerHelp") : `${destination ?? t("remote.addressUnknown")}:${port ?? "?"}`}</span>
+            {host.id !== "local" ? <span>{host.connectionKind === "ssh" ? t("remote.identityUser", { username: host.username ?? t("remote.identityUserSshConfig") }) : t("remote.tokenAuth")}</span> : null}
           </div>
         </div>
         <div className="remote-host-actions">
-          <button className="secondary-button" disabled={Boolean(busyId) || (!connected && !runnerUsable(host))} onClick={() => void toggleRunnerConnection(host, connected)} type="button">{connected ? t("remote.disconnect") : t("remote.connectRunner")}</button>
-          <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void probe(host)} type="button">{t("remote.refreshProbe")}</button>
+          <button className="secondary-button" disabled={Boolean(busyId) || (!connected && !runnerUsable(host))} onClick={() => void toggleRunnerConnection(host, false)} type="button">{connected ? t("runnerCatalog.checkConnection") : t("remote.connectRunner")}</button>
+          <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void refresh().catch((error: Error) => onError(error.message))} type="button">{t("runnerCatalog.refreshResources")}</button>
           {host.connectionKind === "ssh" ? <button aria-expanded={editingCredentials === host.id} className="secondary-button" disabled={Boolean(busyId)} onClick={() => toggleCredentialsEditor(host)} type="button">{t("remote.credentials")}</button> : null}
           {untrustedKey ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">{t("remote.trustHostKey")}</button> : null}
-          <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">{t("common.delete")}</button>
+          <button className="secondary-button" onClick={() => setManagingRunner(managingRunner === host.id ? undefined : host.id)} type="button">{t("runnerCatalog.manage")}</button>
+          {host.id !== "local" ? <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">{t("common.delete")}</button> : null}
         </div>
         </header>
         {[...new Set([host.error, host.runnerStatus?.error].filter(Boolean))].map((error) =>
@@ -692,7 +680,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         <div className="remote-host-card-details">
           <section className="remote-host-connection" aria-label={t("remote.connectionAria")}>
             <div className="remote-detail-badges">
-              <span className="remote-detail-badge info">{host.connectionKind === "ssh" ? t("remote.sshTunnel") : t("remote.selfDeployedDirect")}</span>
+              <span className="remote-detail-badge info">{host.id === "local" ? t("runnerCatalog.stackConnection") : host.connectionKind === "ssh" ? t("remote.sshTunnel") : t("remote.selfDeployedDirect")}</span>
               {host.capabilities?.platform ? <span className="remote-detail-badge neutral">{host.capabilities.platform}</span> : null}
               {host.runnerStatus?.versionMismatch ? <span className="remote-detail-badge warning">{t("remote.versionDiffers")}</span> : null}
             </div>
@@ -707,7 +695,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           <RunnerResourceSummary host={host} />
           <NpuDeviceSelector
             client={client}
-            inventory={host.runnerStatus?.resources?.npu}
+            inventory={host.runnerStatus?.resources?.npu ?? (host.id === "local" ? npu?.local : undefined)}
             onError={onError}
             onSelected={(devices) => selectNpu(host.id, devices)}
             runnerId={host.id}
@@ -715,13 +703,18 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           />
         </div>
         </details>
+        {host.id !== "local" ? <details className="remote-host-disclosure"><summary>{t("runnerCatalog.connectionSettings")}</summary><div className="remote-host-actions">
+          <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void probe(host)} type="button">{t("remote.refreshProbe")}</button>
+          {connected ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void toggleRunnerConnection(host, true)} type="button">{t("remote.disconnect")}</button> : null}
+        </div></details> : null}
+        {managingRunner === host.id ? <RunnerEnvironmentSettings key={host.id} client={client} initialRunnerId={host.id} onError={onError} /> : null}
         {renderHostKeyPrompt(host.id)}
         {editingCredentials === host.id ? credentialsEditor(host) : null}
       </article>;
     })}</div> : <p className="remote-host-empty">{t("remote.empty")}</p>}
     <div className="remote-host-add-row">
-      <button aria-expanded={adding === "ssh"} className="secondary-button" onClick={() => setAdding(adding === "ssh" ? undefined : "ssh")} type="button">{t("remote.addSshMachine")}</button>
-      <button aria-expanded={adding === "direct"} className="secondary-button" onClick={() => setAdding(adding === "direct" ? undefined : "direct")} type="button">{t("remote.addDirectRunner")}</button>
+      <button aria-expanded={Boolean(adding)} className="secondary-button" onClick={() => setAdding(adding ? undefined : "ssh")} type="button">{t("runnerCatalog.addRunner")}</button>
+      {adding ? <label><span>{t("runnerCatalog.connectionMethod")}</span><select value={adding} onChange={(event) => setAdding(event.target.value as "ssh" | "direct")}><option value="ssh">{t("remote.addSshMachine")}</option><option value="direct">{t("remote.addDirectRunner")}</option></select></label> : null}
     </div>
     {adding === "ssh" ? <form className="remote-host-form remote-host-ssh-form" aria-label={t("remote.addSshMachine")} onSubmit={(event) => { event.preventDefault(); void submitSshForm(); }}>
       <div className="remote-host-form-heading"><strong>{t("remote.addSshMachine")}</strong><p className="remote-host-form-help">{t("remote.addSshHelp")}</p></div>
@@ -817,10 +810,10 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
   async function toggle(host: RemoteHostTarget): Promise<void> {
     setBusyId(host.id);
     try {
-      const ids = project.remoteRunnerHostIds.includes(host.id)
-        ? project.remoteRunnerHostIds.filter((id) => id !== host.id)
-        : [...project.remoteRunnerHostIds, host.id];
-      onProjectChange(await client.updateProject(project.id, { remoteRunnerHostIds: ids }));
+      const ids = effectiveRunnerIds(project).includes(host.id)
+        ? effectiveRunnerIds(project).filter((id) => id !== host.id)
+        : [...effectiveRunnerIds(project), host.id];
+      onProjectChange(await client.updateProject(project.id, { runnerIds: ids }));
     } catch (error) {
       onError(error instanceof Error ? error.message : t("remote.errorUpdateProjectAllowlist"));
     } finally {
@@ -832,8 +825,8 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
     <div className="editor-heading"><strong>{t("remote.scopedTitle")}</strong><small>{t("remote.projectHelp")}</small></div>
     {!hosts ? <p className="muted">{t("remote.loading")}</p>
       : usable.length ? <div className="settings-choices">{usable.map((host) => <label key={host.id}>
-        <input checked={project.remoteRunnerHostIds.includes(host.id)} disabled={Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
-        <span>{host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host, t)}</small></span>
+        <input checked={effectiveRunnerIds(project).includes(host.id)} disabled={Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
+        <span>{host.id === "local" ? t("remote.localRunner") : host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host, t)}</small></span>
       </label>)}</div>
       : <p className="settings-choice-empty">{t("remote.noUsable", { title: t("remote.scopedTitle") })}</p>}
   </section>;
@@ -843,7 +836,7 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
  * Session-scoped override of Project defaults. Workspace and scientific
  * environment administration lives in system settings. Allowing a
  * remote machine only makes it available; local file access and local
- * execution always stay available.
+ * file access stays in the Session workspace.
  */
 export function SessionRemoteSettings({ client, disabled = false, onError, onSessionChange, project, session }: {
   client: ApiClient;
@@ -857,10 +850,10 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   const hosts = useRemoteHosts(client, onError);
   const [busyId, setBusyId] = useState<string>();
 
-  const override = session.remoteRunnerHostIds;
+  const override = session.runnerIds ?? (session.remoteRunnerHostIds === undefined ? undefined : ["local", ...session.remoteRunnerHostIds]);
   const mode = override == null ? "inherit" : "override";
   const availableHosts = (hosts ?? []).filter(runnerUsable);
-  const effectiveIds = effectiveRemoteRunnerHostIds(project, session);
+  const effectiveIds = effectiveRunnerIds(project, session);
 
   async function update(body: UpdateSessionRequest, fallback: string): Promise<void> {
     setBusyId("session-remote");
@@ -874,18 +867,18 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
   }
 
   async function setMode(next: "inherit" | "override"): Promise<void> {
-    if (next === "inherit") await update({ remoteRunnerHostIds: null }, t("remote.errorRestoreProjectAllowlist"));
+    if (next === "inherit") await update({ runnerIds: null }, t("remote.errorRestoreProjectAllowlist"));
     // Start the override from what the Session may use today, so switching
     // modes never silently widens or drops machines.
-    else await update({ remoteRunnerHostIds: effectiveIds }, t("remote.errorOverrideAllowlist"));
+    else await update({ runnerIds: effectiveIds }, t("remote.errorOverrideAllowlist"));
   }
 
   async function toggle(host: RemoteHostTarget): Promise<void> {
-    const selected = override ?? project.remoteRunnerHostIds;
+    const selected = override ?? effectiveRunnerIds(project);
     const ids = selected.includes(host.id)
       ? selected.filter((id) => id !== host.id)
       : [...selected, host.id];
-    await update({ remoteRunnerHostIds: ids }, t("remote.errorUpdateSessionAllowlist"));
+    await update({ runnerIds: ids }, t("remote.errorUpdateSessionAllowlist"));
   }
 
   return <section className="scoped-remote-settings">
@@ -893,7 +886,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
     <label className="settings-field">
       <span>{t("remote.allowedRunners")}</span>
       <select disabled={disabled || Boolean(busyId)} value={mode} onChange={(event) => void setMode(event.target.value as "inherit" | "override")}>
-        <option value="inherit">{t("remote.inheritOption", { count: project.remoteRunnerHostIds.length })}</option>
+        <option value="inherit">{t("remote.inheritOption", { count: effectiveRunnerIds(project).length })}</option>
         <option value="override">{t("remote.overrideOption", { count: mode === "override" ? (override?.length ?? 0) : effectiveIds.length })}</option>
       </select>
     </label>
@@ -901,7 +894,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
       !hosts ? <p className="muted">{t("remote.loading")}</p>
         : availableHosts.length ? <div className="settings-choices">{availableHosts.map((host) => <label key={host.id}>
           <input checked={(override ?? []).includes(host.id)} disabled={disabled || Boolean(busyId)} onChange={() => void toggle(host)} type="checkbox" />
-          <span>{host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host, t)}</small></span>
+          <span>{host.id === "local" ? t("remote.localRunner") : host.runnerName ?? host.alias}<small>{host.id} · {host.alias} · {hostKindLabel(host, t)}</small></span>
         </label>)}</div>
         : <p className="settings-choice-empty">{t("remote.noUsable", { title: t("remote.scopedTitle") })}</p>
     ) : null}

@@ -8,31 +8,29 @@ import type { ApiClient, RunnerWorkspaceBinding } from "./api/client.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { useLocale } from "./i18n/index.js";
 
-export function RunnerEnvironmentSettings({ client, onError }: { client: ApiClient; onError: (message: string) => void }) {
+export function RunnerEnvironmentSettings({ client, onError, initialRunnerId = "local" }: { client: ApiClient; onError: (message: string) => void; initialRunnerId?: string }) {
   const { t } = useLocale();
   const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
-  const [runnerId, setRunnerId] = useState("local");
+  const [runnerId, setRunnerId] = useState(initialRunnerId);
   const [tab, setTab] = useState<"environments" | "workspaces">("environments");
   const scopedClient = useMemo(() => client.forEnvironmentRunner(runnerId), [client, runnerId]);
   const host = hosts.find((item) => item.id === runnerId);
   useEffect(() => {
     let disposed = false;
-    void client.listRemoteHosts().then((items) => { if (!disposed) setHosts(items); }).catch((error: Error) => { if (!disposed) onError(error.message); });
+    void client.listRunners().then((items) => { if (!disposed) setHosts(items); }).catch((error: Error) => { if (!disposed) onError(error.message); });
     return () => { disposed = true; };
   }, [client]);
   return <div className="runner-environment-settings">
     <div className="settings-detail-header"><h3>{t("runnerWorkspaces.title")}</h3><p>{t("runnerWorkspaces.help")}</p></div>
     <label className="settings-field"><span>{t("runnerWorkspaces.runnerLabel")}</span><select aria-label={t("runnerWorkspaces.manageRunnerAria")} value={runnerId} onChange={(event) => setRunnerId(event.target.value)}>
-      <option value="local">{t("runnerWorkspaces.localRunner")}</option>
-      {hosts.map((item) => <option key={item.id} value={item.id}>{item.runnerName ?? item.alias} · {item.id}</option>)}
+      {hosts.map((item) => <option key={item.id} value={item.id}>{item.id === "local" ? t("runnerWorkspaces.localRunner") : item.runnerName ?? item.alias} · {item.id}</option>)}
     </select></label>
     <div className="runner-management-tabs" role="group" aria-label={t("runnerWorkspaces.tabsAria")}>
       <button type="button" className={tab === "environments" ? "primary-button" : "secondary-button"} onClick={() => setTab("environments")}>{t("runnerWorkspaces.environmentsTab")}</button>
       <button type="button" className={tab === "workspaces" ? "primary-button" : "secondary-button"} onClick={() => setTab("workspaces")}>{t("runnerWorkspaces.workspacesTab")}</button>
     </div>
-    {runnerId !== "local" && host?.runnerStatus?.state !== "ready" ? <p role="status">{t("runnerWorkspaces.connectFirst")}</p> : null}
-    {tab === "environments" ? <EnvironmentManager key={runnerId} client={scopedClient} compact={runnerId !== "local"} onError={onError} />
-      : runnerId === "local" ? <p>{t("runnerWorkspaces.localNote")}</p>
+    {host?.runnerStatus?.state !== "ready" ? <p role="status">{t("runnerWorkspaces.connectFirst")}</p> : null}
+    {tab === "environments" ? <EnvironmentManager key={runnerId} client={scopedClient} compact onError={onError} />
       : <RunnerWorkspaces key={runnerId} client={client} runnerId={runnerId} runnerName={host?.runnerName ?? host?.alias ?? runnerId} />}
   </div>;
 }
@@ -42,6 +40,7 @@ function RunnerWorkspaces({ client, runnerId, runnerName }: { client: ApiClient;
   const [items, setItems] = useState<RunnerWorkspaceBinding[]>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState<Record<string, Array<{ path: string; size: number }>>>({});
   const [deleted, setDeleted] = useState<string[]>([]);
   async function refresh() {
     setBusy(true); setError("");
@@ -62,8 +61,16 @@ function RunnerWorkspaces({ client, runnerId, runnerName }: { client: ApiClient;
     <small>{t("runnerWorkspaces.description")}</small>
     {error ? <div role="alert">{error}</div> : null}
     {!items ? <p>{busy ? t("runnerWorkspaces.loading") : t("runnerWorkspaces.unavailable")}</p> : !items.length ? <p>{t("runnerWorkspaces.empty")}</p> : items.map((item) => <article className="remote-workspace-host" key={item.sessionId}>
-      <header><div><strong>{item.sessionTitle}</strong><small>{item.projectName}</small></div><button type="button" className="danger-button" disabled={busy} onClick={() => void remove(item)}>{t("runnerWorkspaces.delete")}</button></header>
+      <header><div><strong>{item.sessionTitle}</strong><small>{item.projectName}</small></div><div className="remote-host-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => {
+        setBusy(true); setError("");
+        void client.listRunnerWorkspaceFiles(runnerId, item.sessionId).then((result) => setFiles((current) => ({ ...current, [item.sessionId]: result.files })))
+          .catch((reason: Error) => setError(reason.message)).finally(() => setBusy(false));
+      }}>{t("runnerCatalog.browseFiles")}</button>
+      {runnerId !== "local" ? <button type="button" className="danger-button" disabled={busy} onClick={() => void remove(item)}>{t("runnerWorkspaces.delete")}</button> : null}</div></header>
       <code>{item.workspaceKey}</code>
+      {files[item.sessionId] ? <ul className="runner-workspace-files" aria-label={t("runnerCatalog.browseFiles")}>{files[item.sessionId]!.length
+        ? files[item.sessionId]!.map((file) => <li key={file.path}><code>{file.path}</code><small>{file.size} B</small></li>)
+        : <li>{t("runnerCatalog.emptyFiles")}</li>}</ul> : null}
       {deleted.includes(item.sessionId) ? <p role="status">{t("runnerWorkspaces.deleted")}</p> : null}
       <details><summary>{t("runnerWorkspaces.transferHistory", { count: item.records.length })}</summary><div className="remote-workspace-records">{item.records.length ? item.records.map((record) => <small key={record.id}>{t("runnerWorkspaces.transferRecord", { agent: record.agentId ? t("runnerWorkspaces.agentId", { id: record.agentId }) : t("runnerWorkspaces.mainAgent"), direction: record.direction, status: record.status, count: record.fileCount, paths: record.paths.join(", "), error: record.error ? ` · ${record.error}` : "" })}</small>) : <small>{t("runnerWorkspaces.noTransfers")}</small>}</div></details>
     </article>)}

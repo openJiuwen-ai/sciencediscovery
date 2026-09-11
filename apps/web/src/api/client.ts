@@ -20,6 +20,9 @@ export { ApiRequestError } from "./auth.js";
 
 export interface RunnerWorkspaceBinding {
   sessionId: string;
+  projectId: string;
+  runnerId: string;
+  location: "local" | "remote";
   sessionTitle: string;
   projectName: string;
   workspaceKey: string;
@@ -28,15 +31,19 @@ export interface RunnerWorkspaceBinding {
 
 export class ApiClient extends WebApiClient {
   forEnvironmentRunner(runnerId: string): ApiClient {
-    return runnerId === "local" ? this : new RunnerEnvironmentApiClient(this.token, this.onAuthFailure, runnerId);
+    return new RunnerEnvironmentApiClient(this.token, this.onAuthFailure, runnerId);
   }
 
   listRunnerWorkspaces(runnerId: string): Promise<RunnerWorkspaceBinding[]> {
-    return this.request(`/api/remote-hosts/${encodeURIComponent(runnerId)}/workspaces`);
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/workspaces`);
+  }
+
+  listRunnerWorkspaceFiles(runnerId: string, sessionId: string): Promise<{ runnerId: string; workspaceKey: string; files: Array<{ path: string; size: number }> }> {
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/workspaces/${encodeURIComponent(sessionId)}/files`);
   }
 
   deleteRunnerWorkspace(runnerId: string, sessionId: string): Promise<{ deleted: boolean }> {
-    return this.request(`/api/remote-hosts/${encodeURIComponent(runnerId)}/workspaces/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/workspaces/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   }
 }
 
@@ -46,7 +53,7 @@ class RunnerEnvironmentApiClient extends ApiClient {
   protected override request<T>(path: string, init: RequestInit = {}): Promise<T> {
     // Source preferences remain global; only execution-environment APIs route remotely.
     if (/^\/api\/(?:environments(?:\/|$)|environment-setup$|environment-revisions$)/.test(path)) {
-      path = `/api/remote-hosts/${encodeURIComponent(this.runnerId)}/${path.slice(5)}`;
+      path = `/api/runners/${encodeURIComponent(this.runnerId)}/${path.slice(5)}`;
     }
     return super.request(path, init);
   }

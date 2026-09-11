@@ -41,6 +41,7 @@ import type {
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
   RemoteHostTarget,
+  RunnerTarget,
   SshConfigHostImport,
   SshKeyFileListing,
   TrustedRemoteHostKey,
@@ -222,6 +223,12 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   deleteRemoteHost(hostId: string): Promise<{ deleted: string }> {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}`, { method: "DELETE" });
+  }
+
+  listRunners(): Promise<RunnerTarget[]> { return this.request("/api/runners"); }
+
+  connectRunner(id: string): Promise<RemoteRunnerStatus> {
+    return this.request(`/api/runners/${encodeURIComponent(id)}/connect`, { method: "POST" });
   }
 
   connectRemoteRunner(hostId: string): Promise<RemoteRunnerStatus> {
