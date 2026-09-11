@@ -37,7 +37,8 @@
  *   decisive tool calls lived.
  * - Each stage fires at most once per run (this class is composed per run);
  *   the loop additionally caps continuations at MAX_FINISH_GATE_CONTINUATIONS
- *   (=2, exactly stage-1 + stage-2), so a misbehaving policy can never spin.
+ *   (=3, exactly stage-1 + stage-1.5 + stage-2), so a misbehaving policy can
+ *   never spin.
  * - The gate never blocks a finish: it can only ask for one extra turn per
  *   stage. The already-reviewed scan is bounded to the current run's segment
  *   (messages after the last genuine user input), so a fresh task in the same
@@ -61,6 +62,51 @@ const EVIDENCE_LEDGER_TOOL = "evidence_ledger";
 const DIRECTIVE_PREFIX = "Pre-finish verification required by skill";
 /** Prefix identifying stage-2 grounding directives (also not user input). */
 const GROUNDING_DIRECTIVE_PREFIX = "Pre-finish grounding enforcement:";
+/** Prefix identifying stage-1.5 intervention directives (also not user input). */
+const INTERVENTION_DIRECTIVE_PREFIX = "Pre-finish termination intervention:";
+
+/**
+ * Deterministic termination-intervention detection (V2-C6 — SA
+ * termination-interventions.ts adapted): catches premature finishes the
+ * audit and grounding stages do not cover. Evaluated in order; the first
+ * hit wins. Returns the directive text, or undefined when the finish is clean.
+ */
+export function detectTerminationIntervention(input: {
+  assistantContents: readonly string[];
+  draftText: string;
+  pendingPlanItems?: readonly { id: string; text: string }[];
+}): string | undefined {
+  const { assistantContents, draftText, pendingPlanItems } = input;
+  // Thinking-only / empty turn: reasoning streamed but no answer text.
+  if (!draftText.trim()) {
+    return (
+      `${INTERVENTION_DIRECTIVE_PREFIX} your last turn produced reasoning but no answer text. ` +
+      "Write the actual answer now, or take a concrete action — do not end the run on an empty turn."
+    );
+  }
+  // Degenerate repetition: the same assistant text three turns in a row.
+  const normalize = (text: string) => text.replaceAll(/\s+/g, " ").trim();
+  const draft = normalize(draftText);
+  if (draft && assistantContents.length >= 2
+    && normalize(assistantContents[assistantContents.length - 1]!) === draft
+    && normalize(assistantContents[assistantContents.length - 2]!) === draft) {
+    return (
+      `${INTERVENTION_DIRECTIVE_PREFIX} you have produced the same answer text three turns in a row — the loop is degenerate. ` +
+      "Change the approach now: use a different tool, a different angle, or state plainly what is blocking you. Do not repeat the same text again."
+    );
+  }
+  // Plan-not-execute: research_state has unfinished plan items.
+  if (pendingPlanItems?.length) {
+    const listed = pendingPlanItems.slice(0, 3).map((item) => `${item.id} "${item.text.length > 60 ? `${item.text.slice(0, 60)}…` : item.text}"`).join(", ");
+    const extra = pendingPlanItems.length > 3 ? ` and ${pendingPlanItems.length - 3} more` : "";
+    return (
+      `${INTERVENTION_DIRECTIVE_PREFIX} your research plan (research_state) still has ${pendingPlanItems.length} unfinished item${pendingPlanItems.length > 1 ? "s" : ""}: ${listed}${extra}. ` +
+      "Execute them now, or update them to done/dropped with a one-line reason via research_state plan-update — do not silently abandon planned work. " +
+      "If they are genuinely out of scope for the answer, say so explicitly in the answer."
+    );
+  }
+  return undefined;
+}
 
 // --- Stage 2: groundedness enforcement (V2-C3) ------------------------------
 // OpenScholar-style mandatory citation verification as a hard pipeline
@@ -195,7 +241,9 @@ function currentRunSegmentStart(history: readonly { role?: string; content?: unk
     const message = history[i]!;
     if (message.role !== "user") continue;
     const content = typeof message.content === "string" ? message.content : "";
-    if (!content.startsWith(DIRECTIVE_PREFIX) && !content.startsWith(GROUNDING_DIRECTIVE_PREFIX)) return i + 1;
+    if (!content.startsWith(DIRECTIVE_PREFIX)
+      && !content.startsWith(GROUNDING_DIRECTIVE_PREFIX)
+      && !content.startsWith(INTERVENTION_DIRECTIVE_PREFIX)) return i + 1;
   }
   return 0;
 }
@@ -220,6 +268,12 @@ export interface FinishGateLifecycleOptions<M extends RuntimeMessage, I, U> {
    * always passes the real detection.
    */
   quoteVerificationAvailable?: boolean;
+  /**
+   * Deterministic plan-pending probe (V2-C6): returns the run's unfinished
+   * research_state plan items (pending/in_progress, capped), or undefined
+   * when none. The assembly wires it to the workspace research-state file.
+   */
+  pendingPlanItems?: () => Promise<Array<{ id: string; text: string }> | undefined>;
   /** Test seam / protocol seam: build the injected user message. */
   createMessage?: (text: string) => M;
 }
@@ -246,6 +300,7 @@ export function buildFinishGateDirective(skillIds: readonly string[], auditCompa
 export class FinishGateLifecycle<M extends RuntimeMessage, I, U> implements TurnLifecycle<M, I, U> {
   private auditFired = false;
   private groundingFired = false;
+  private interventionFired = false;
   private readonly options: FinishGateLifecycleOptions<M, I, U>;
 
   constructor(options: FinishGateLifecycleOptions<M, I, U>) {
@@ -264,7 +319,7 @@ export class FinishGateLifecycle<M extends RuntimeMessage, I, U> implements Turn
     return this.options.inner?.afterTurn(input) ?? Promise.resolve();
   }
 
-  beforeFinish(input: { turn: number; history: M[]; modelTurn: ModelTurn<M, U> }): Promise<FinishGateDecision<M> | undefined> {
+  async beforeFinish(input: { turn: number; history: M[]; modelTurn: ModelTurn<M, U> }): Promise<FinishGateDecision<M> | undefined> {
     const createMessage = this.options.createMessage ?? ((text: string) => ({ content: text, role: "user" }) as unknown as M);
     const segment = input.history.slice(currentRunSegmentStart(input.history));
 
@@ -297,11 +352,39 @@ export class FinishGateLifecycle<M extends RuntimeMessage, I, U> implements Turn
       }
     }
 
+    // Stage 1.5 — deterministic termination interventions (once per run):
+    // empty turns, degenerate repetition, and plan-not-execute — premature
+    // finishes the audit and grounding stages do not cover.
+    if (!this.interventionFired) {
+      const draft = typeof input.modelTurn.assistantMessage?.content === "string"
+        ? input.modelTurn.assistantMessage.content as string
+        : "";
+      const assistantContents = segment
+        .filter((message) => message.role === "assistant" && typeof message.content === "string")
+        .map((message) => message.content as string)
+        // The current draft is the last assistant message in history — the
+        // repetition check compares against the turns BEFORE it.
+        .slice(0, -1);
+      // A throwing probe must never kill the run — degrade to no plan data.
+      const pendingPlanItems = this.options.pendingPlanItems
+        ? await this.options.pendingPlanItems().catch(() => undefined)
+        : undefined;
+      const intervention = detectTerminationIntervention({
+        assistantContents,
+        draftText: draft,
+        ...(pendingPlanItems ? { pendingPlanItems } : {}),
+      });
+      if (intervention) {
+        this.interventionFired = true;
+        return Promise.resolve({ action: "continue", message: createMessage(intervention) });
+      }
+    }
+
     // Stage 2 — groundedness enforcement (once per run, skill-independent):
     // verbatim-intended quotes in the draft answer must carry a verification
-    // verdict from this run. The runtime's continuation cap (2) bounds
-    // stage-1 + stage-2 together, so this can never spin. Silent when no
-    // verification tool exists in this run's registry.
+    // verdict from this run. The runtime's continuation cap (3) bounds
+    // stage-1 + stage-1.5 + stage-2 together, so this can never spin. Silent
+    // when no verification tool exists in this run's registry.
     if (!this.groundingFired && this.options.quoteVerificationAvailable !== false) {
       const draft = typeof input.modelTurn.assistantMessage?.content === "string"
         ? input.modelTurn.assistantMessage.content as string

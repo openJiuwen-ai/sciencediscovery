@@ -1878,6 +1878,9 @@ async function executeAgentRun(
     if (event.type === "finish_gate") {
       void emit({ action: event.action, turn: turnNumber, type: "finish_gate" });
     }
+    if (event.type === "stall_kick") {
+      void emit({ kick: event.kick, turn: turnNumber, type: "stall_kick" });
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       assistantText += event.assistantMessageEvent.delta;
       void emit({ delta: event.assistantMessageEvent.delta, type: "assistant.delta" });

@@ -429,8 +429,8 @@ test("finish gate: continuations are capped and never exceed maxModelTurns", asy
     },
   });
   const result = await loop.run([], new AbortController().signal, () => undefined);
-  assert.equal(modelCalls, 1 + 2, "initial finish attempt plus MAX_FINISH_GATE_CONTINUATIONS");
-  assert.equal(result.turns, 3);
+  assert.equal(modelCalls, 1 + 3, "initial finish attempt plus MAX_FINISH_GATE_CONTINUATIONS (=3)");
+  assert.equal(result.turns, 4);
   assert.equal(loop.snapshot().phase, "completed");
 
   let smallCalls = 0;
@@ -506,6 +506,90 @@ test("finish gate: a capped continue is reported as denied, not finish", async (
   await loop.run([], new AbortController().signal, () => undefined);
   assert.deepEqual(
     events.filter((event) => event.type === "finish_gate").map((event) => event.type === "finish_gate" ? event.action : ""),
-    ["continue", "continue", "denied"],
+    ["continue", "continue", "continue", "denied"],
   );
+});
+
+test("stall guard kicks a silent model call and the run recovers with a kick message", async () => {
+  let calls = 0;
+  const events: string[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 4,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke(_input, signal) {
+      calls += 1;
+      if (calls === 1) {
+        // Silent call: settles only if the stall guard aborts it.
+        await new Promise((_, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted by guard")), { once: true });
+        });
+      }
+      return { assistantMessage: { role: "assistant", content: "recovered" }, toolCalls: [] };
+    } },
+    stallGuard: {
+      createKickMessage: (kick, maxKicks) => ({ content: `kick ${kick}/${maxKicks}`, role: "user" }),
+      idleMs: 20,
+      maxKicks: 2,
+    },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    eventSink: (event) => { if (event.type === "stall_kick") events.push(`kick:${event.kick}`); },
+  });
+  const result = await loop.run([], new AbortController().signal, () => {});
+  assert.deepEqual(events, ["kick:1"]);
+  assert.equal(result.turns, 2);
+  const last = result.history.at(-1);
+  assert.equal((last as { content?: string }).content, "recovered");
+  assert.ok(result.history.some((message) => (message as { content?: string }).content === "kick 1/2"), "the kick message entered the history");
+});
+
+test("stall guard fails the run after maxKicks", async () => {
+  let calls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 8,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke(_input, signal) {
+      calls += 1;
+      await new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted by guard")), { once: true });
+      });
+      throw new Error("unreachable");
+    } },
+    stallGuard: {
+      createKickMessage: (kick) => ({ content: `kick ${kick}`, role: "user" }),
+      idleMs: 15,
+      maxKicks: 2,
+    },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+  });
+  await assert.rejects(loop.run([], new AbortController().signal, () => {}), /stalled: no progress after 2 stall-guard kicks/);
+  assert.equal(loop.snapshot().phase, "failed");
+  assert.equal(calls, 3, "initial attempt + 2 kicked retries, then the stall fails the run");
+});
+
+test("an outer abort is never mistaken for a stall kick", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const events: string[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 4,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke(_input, signal): Promise<never> {
+      calls += 1;
+      setTimeout(() => controller.abort(), 10);
+      await new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("outer abort")), { once: true });
+      });
+    } },
+    stallGuard: {
+      createKickMessage: () => ({ content: "kick", role: "user" }),
+      idleMs: 60_000,
+      maxKicks: 3,
+    },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    eventSink: (event) => { if (event.type === "stall_kick") events.push("kick"); },
+  });
+  await assert.rejects(loop.run([], controller.signal, () => {}));
+  assert.equal(loop.snapshot().phase, "cancelled", "an outer abort keeps the cancellation semantics");
+  assert.equal(calls, 1, "no retry happened");
+  assert.deepEqual(events, [], "no stall kick was emitted");
 });

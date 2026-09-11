@@ -361,6 +361,7 @@ export type RunStreamEvent =
    * through. Consumers that predate the gate can ignore this safely.
    */
   | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
+  | { kick: number; turn: number; type: "stall_kick" }
   | { delta: string; turn: number; type: "assistant.thinking.delta" }
   | { content: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
   | { delta: string; type: "assistant.delta" }

@@ -21,7 +21,10 @@ export type AgentEvent =
   | { type: "turn_truncated" }
   /** The finish gate acted on a no-tool answer (see RunEvent finish_gate in
    *  runtime-core). Consumers that ignore it behave exactly as before. */
-  | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" };
+  | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
+  /** The stall guard restarted a silent model call (V2-C6): kick N fired.
+   *  Consumers that ignore it behave exactly as before. */
+  | { kick: number; turn: number; type: "stall_kick" };
 
 export interface Agent {
   abort(): void;

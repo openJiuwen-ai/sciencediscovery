@@ -277,3 +277,43 @@ test("stage 2 stays silent when quote-verification tooling is unavailable", asyn
   });
   assert.equal(decision, undefined, "no gate without a verification tool to point at");
 });
+
+// --- Stage 1.5: termination interventions (V2-C6) ---------------------------
+
+test("detectTerminationIntervention: empty turn, repetition, plan-pending, clean finish", () => {
+  // Empty draft.
+  assert.match(detectTerminationIntervention({ assistantContents: [], draftText: "  " }) ?? "", /no answer text/);
+  // Degenerate repetition (draft equals the two previous assistant texts).
+  assert.match(
+    detectTerminationIntervention({ assistantContents: ["same answer", "same answer"], draftText: "same answer" }) ?? "",
+    /three turns in a row/,
+  );
+  // Plan-not-execute.
+  assert.match(
+    detectTerminationIntervention({ assistantContents: [], draftText: "some draft", pendingPlanItems: [{ id: "p2", text: "grow the corpus" }] }) ?? "",
+    /p2/,
+  );
+  // Clean finish → undefined.
+  assert.equal(detectTerminationIntervention({ assistantContents: ["a", "b"], draftText: "c" }), undefined);
+});
+
+test("stage 1.5 fires the plan-pending intervention once via the probe", async () => {
+  const lifecycle = new FinishGateLifecycle<M, unknown, never>({
+    pendingPlanItems: async () => [{ id: "p3", text: "run the tournament" }],
+    reviewCheckpointAvailable: false,
+    skills: [],
+  });
+  const draft = "Here is my tentative answer without executing the plan.";
+  const first = await lifecycle.beforeFinish({
+    history: [{ role: "user", content: "go" }, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.match(String((first as { message?: { content?: unknown } })?.message?.content), /p3/);
+  const second = await lifecycle.beforeFinish({
+    history: [{ role: "user", content: "go" }, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 3,
+  });
+  assert.equal(second, undefined, "the intervention fires once per run");
+});

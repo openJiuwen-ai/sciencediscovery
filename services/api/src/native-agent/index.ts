@@ -86,6 +86,7 @@ import {
   buildSkillSystemSection,
   buildWorkspacePromptParts,
   buildWorkspaceSystemPrompt,
+  createResearchStatePort,
   createWorkspaceTools,
   normalizeLegacyEnvironmentToolName,
   type WorkspaceAgentOptions,
@@ -100,6 +101,14 @@ import { FINISH_GATE_REVIEW_TOOL, FinishGateLifecycle } from "./finish-gate.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
+
+/** Stall-guard idle window (V2-C6): a model call with no progress for this
+ *  long gets its attempt kicked. Defaults to half the outer idle watchdog so
+ *  a kick always lands before the watchdog would kill the run. */
+export function configuredStallIdleMs(raw = process.env.SCIENCE_AGENT_STALL_IDLE_MS): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 10_000 ? Math.floor(value) : 120_000;
+}
 
 /** Hard safety net against a runaway model loop; time budgets remain the
  *  primary bound (`runTimeoutMs` / `runIdleTimeoutMs`). */
@@ -576,6 +585,20 @@ class NativeAgent implements NativeAgentHandle {
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
       const finishGate = new FinishGateLifecycle<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         inner: this.versionRecorder,
+        // Termination-intervention probe (V2-C6): the run's unfinished
+        // research_state plan items, read straight from the workspace file.
+        pendingPlanItems: async () => {
+          try {
+            const full = await createResearchStatePort().get({ workspaceRoot: this.options.workspaceRoot });
+            const items = full.state.plan
+              .filter((item) => item.status === "pending" || item.status === "in_progress")
+              .slice(0, 5)
+              .map((item) => ({ id: item.id, text: item.text }));
+            return items.length ? items : undefined;
+          } catch {
+            return undefined;
+          }
+        },
         quoteVerificationAvailable: this.toolRegistry.values().some((tool) => tool.name === "verify_citation" || tool.name === "evidence_ledger"),
         reviewCheckpointAvailable: this.toolRegistry.values().some((tool) => tool.name === FINISH_GATE_REVIEW_TOOL),
         skills: this.promptSkills,
@@ -587,6 +610,22 @@ class NativeAgent implements NativeAgentHandle {
         modelClient,
         toolDispatcher: this.toolRegistry,
         eventSink: (event) => { this.versionRecorder?.event(event); this.emitRuntimeEvent(event); },
+        // Stall guard (V2-C6): a model call with no progress for the idle
+        // window gets its attempt kicked (run history/budget survive); three
+        // kicks bound the failure. The outer idle watchdog (runIdleTimeoutMs)
+        // stays as the final backstop and covers tool-batch stalls.
+        stallGuard: (() => {
+          const idleMs = configuredStallIdleMs();
+          const idleSeconds = Math.round(idleMs / 1000);
+          return {
+            createKickMessage: (kick: number, maxKicks: number) => ({
+              content: `Stall guard: the previous model call produced no progress for ${idleSeconds} seconds and was restarted (kick ${kick}/${maxKicks}). Continue from your current state — do not restart the task; if a call stalls again, switch to a different tool or approach.`,
+              role: "user",
+            }) as unknown as WireMessage,
+            idleMs,
+            maxKicks: 3,
+          };
+        })(),
         turnLifecycle: finishGate,
         waitController: this.waitController,
       });
@@ -723,6 +762,9 @@ class NativeAgent implements NativeAgentHandle {
         break;
       case "finish_gate":
         this.emit({ action: event.action, turn: event.turn, type: "finish_gate" });
+        break;
+      case "stall_kick":
+        this.emit({ kick: event.kick, turn: event.turn, type: "stall_kick" });
         break;
       case "context_recovery":
       case "state_changed":
