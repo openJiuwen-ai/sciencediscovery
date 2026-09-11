@@ -432,6 +432,29 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX ke_formulae_kb_doc ON ke_formulae (kb_id, doc_id);
     `,
   },
+  {
+    version: 5,
+    name: "ke_proposal_rejects",
+    sql: `
+      -- C3① proposal-validation gate (OpenDDE "failures stay evidence"):
+      -- extraction-proposal items the deterministic validator rejected after
+      -- the corrective retries ran out. Kept for quality analysis (schema
+      -- drift, model regressions), never for the graph.
+      CREATE TABLE ke_proposal_rejects (
+        id TEXT PRIMARY KEY,
+        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        doc_id TEXT NOT NULL REFERENCES ke_documents(id) ON DELETE CASCADE,
+        job_id TEXT,
+        section TEXT NOT NULL,
+        item_index INTEGER NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL,
+        excerpt TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX ke_proposal_rejects_kb ON ke_proposal_rejects (kb_id, created_at);
+    `,
+  },
 ];
 
 /** Deterministic name normalization shared by entity upsert and lookup. */
@@ -2189,6 +2212,78 @@ export class KnowledgeEngineStore {
     return rows.map((row) => ({
       ...mapFormula(row),
       docTitle: row["doc_title"] === null ? null : String(row["doc_title"]),
+    }));
+  }
+
+  // --------------------------------------------- proposal-validation rejects
+
+  /** Cap per extraction run — evidence sampling, not unbounded logging. */
+  static readonly MAX_RECORDED_REJECTS = 50;
+
+  /** Persist final-state proposal rejects (after corrective retries ran out). */
+  recordProposalRejects(
+    kbId: string,
+    docId: string,
+    rejects: ReadonlyArray<{ section: string; index: number; reason: string; excerpt: string }>,
+    options: { jobId?: string; attempts?: number } = {},
+  ): number {
+    if (rejects.length === 0) return 0;
+    const insert = this.database.prepare(
+      `INSERT INTO ke_proposal_rejects (id, kb_id, doc_id, job_id, section, item_index, reason, excerpt, attempts, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const capped = rejects.slice(0, KnowledgeEngineStore.MAX_RECORDED_REJECTS);
+    const timestamp = now();
+    this.inTransaction(() => {
+      for (const reject of capped) {
+        insert.run(
+          randomUUID(),
+          kbId,
+          docId,
+          options.jobId ?? null,
+          reject.section,
+          reject.index,
+          reject.reason,
+          reject.excerpt,
+          options.attempts ?? 1,
+          timestamp,
+        );
+      }
+    });
+    return capped.length;
+  }
+
+  listProposalRejects(
+    kbId: string,
+    options: { docId?: string; limit?: number } = {},
+  ): Array<{
+    id: string; docId: string; jobId: string | null; section: string; index: number;
+    reason: string; excerpt: string; attempts: number; createdAt: string;
+  }> {
+    const clauses = ["r.kb_id = ?"];
+    const params: Array<string | number> = [kbId];
+    if (options.docId) {
+      clauses.push("r.doc_id = ?");
+      params.push(options.docId);
+    }
+    params.push(Math.max(1, Math.min(options.limit ?? 100, 500)));
+    const rows = this.database
+      .prepare(
+        `SELECT r.* FROM ke_proposal_rejects r
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY r.created_at DESC, r.id LIMIT ?`,
+      )
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row["id"]),
+      docId: String(row["doc_id"]),
+      jobId: row["job_id"] === null ? null : String(row["job_id"]),
+      section: String(row["section"]),
+      index: Number(row["item_index"]),
+      reason: String(row["reason"]),
+      excerpt: String(row["excerpt"]),
+      attempts: Number(row["attempts"]),
+      createdAt: String(row["created_at"]),
     }));
   }
 

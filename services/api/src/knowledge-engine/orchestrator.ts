@@ -36,12 +36,13 @@ import {
   extractAbbrevPairs,
   extractCitationContexts,
   extractFormulas,
+  buildExtractionCorrectionPrompt,
   MAX_INTENT_PER_DOC,
-  parseExtractionResponse,
   parseIntentResponse,
   parseJudgeVerdict,
   parseReferenceEntries,
   resolveCitedDocuments,
+  validateExtractionProposal,
   resolveEntityCandidate,
   DEFAULT_RESOLVER_THRESHOLDS,
   HAYSTACK_CAP,
@@ -92,6 +93,9 @@ export type { CrawlBudget, GrowCycleHandle, GrowDeps };
 
 const CORE_ENTITY_LIST_SIZE = 50;
 const MIN_EXTRACTABLE_TEXT = 200;
+/** C3①: total LLM rounds per extraction — one initial + bounded corrective
+ *  retries feeding validator rejection reasons back to the model. */
+const MAX_EXTRACT_ATTEMPTS = 3;
 
 export interface KeOrchestratorDeps {
   readonly store: KnowledgeEngineStore;
@@ -122,6 +126,10 @@ export interface ExtractionOutcome {
   readonly edges: number;
   readonly droppedUnverifiable: number;
   readonly skipped?: string;
+  /** C3①: proposal items the validator rejected after corrective retries. */
+  readonly rejectedProposals?: number;
+  /** C3①: LLM rounds actually used (1..MAX_EXTRACT_ATTEMPTS). */
+  readonly attempts?: number;
 }
 
 export class KeOrchestrator {
@@ -502,15 +510,51 @@ export class KeOrchestrator {
       .map((entity) => `${entity.name} (${entity.type})`);
     const prompt = buildExtractionPrompt(fulltext, { schema: this.deps.schema, coreEntityLines: coreLines });
 
-    const response = await callPipelineLlm(
-      { endpoint, ...(this.deps.llmInvoke ? { invoke: this.deps.llmInvoke } : {}) },
-      EXTRACTION_SYSTEM_PROMPT,
-      prompt,
-      signal,
-    );
-    const { entities, relations } = parseExtractionResponse(response, this.deps.schema);
+    // C3① proposal-validation gate: the model output is always a PROPOSAL —
+    // deterministic validation judges it, bounded corrective retries feed
+    // the rejection reasons back, and only then is anything written.
+    // Final-state rejects are preserved as evidence below.
+    let validation!: ReturnType<typeof validateExtractionProposal>;
+    let attemptsUsed = 0;
+    for (let attempt = 1; attempt <= MAX_EXTRACT_ATTEMPTS; attempt += 1) {
+      attemptsUsed = attempt;
+      const feedback = attempt === 1
+        ? ""
+        : `\n\n---\nCORRECTION FEEDBACK (attempt ${attempt} of ${MAX_EXTRACT_ATTEMPTS}):\n` +
+          `${buildExtractionCorrectionPrompt(validation, this.deps.schema)}\n\nRe-emit the complete corrected JSON.`;
+      const response = await callPipelineLlm(
+        { endpoint, ...(this.deps.llmInvoke ? { invoke: this.deps.llmInvoke } : {}) },
+        EXTRACTION_SYSTEM_PROMPT,
+        `${prompt}${feedback}`,
+        signal,
+      );
+      validation = validateExtractionProposal(response, this.deps.schema);
+      if (validation.parseError === null && validation.rejects.length === 0) break;
+      this.warn("ke_extract_proposal_rejected", {
+        docId,
+        attempt,
+        rejects: validation.rejects.length,
+        parseError: validation.parseError,
+      });
+    }
+    const { entities, relations } = validation;
     if (entities.length === 0) {
-      throw new Error("extraction model response contained no valid entities");
+      throw new Error(`extraction model response contained no valid entities after ${attemptsUsed} attempts`);
+    }
+    // Failures stay evidence (OpenDDE lineage): record final-state rejects —
+    // fail-soft, a recording outage never fails the extraction job.
+    let rejectedProposals = 0;
+    if (validation.parseError !== null || validation.rejects.length > 0) {
+      try {
+        rejectedProposals = this.deps.store.recordProposalRejects(
+          doc.kbId,
+          doc.id,
+          validation.rejects,
+          { jobId: job.id, attempts: attemptsUsed },
+        );
+      } catch (error) {
+        this.warn("ke_extract_rejects_record_failed", { docId, error: errorMessage(error) });
+      }
     }
 
     // Deterministic provenance gate: unverifiable relations never reach the graph.
@@ -744,7 +788,14 @@ export class KeOrchestrator {
     }
 
     this.warn("ke_extract_done", { docId, entities: writtenIds.length, edges: edgesWritten, dropped });
-    return { docId, entities: writtenIds.length, edges: edgesWritten, droppedUnverifiable: dropped };
+    return {
+      docId,
+      entities: writtenIds.length,
+      edges: edgesWritten,
+      droppedUnverifiable: dropped,
+      rejectedProposals,
+      attempts: attemptsUsed,
+    };
   }
 
   /**

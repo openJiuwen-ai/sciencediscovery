@@ -84,6 +84,11 @@ export function isBibliographicOrGeneric(name: string): boolean {
  * Parse the model's extraction response. Unparseable input yields empty
  * lists (never throws) — the caller treats zero entities as a retryable
  * model failure.
+ *
+ * @deprecated Lenient legacy parser (unknown types coerced, invalid rows
+ * silently dropped). New callers use {@link validateExtractionProposal},
+ * which keeps every rejection as inspectable evidence; this remains for
+ * backwards compatibility.
  */
 export function parseExtractionResponse(
   response: string,
@@ -132,4 +137,221 @@ export function parseExtractionResponse(
     .filter((relation) => relation.source && relation.target && relation.evidence_quote.length >= 10);
 
   return { entities, relations };
+}
+
+// ---------------------------------------------------------------------------
+// C3① proposal-validation gate (OpenDDE typed-proposal contract): LLM output
+// is always a PROPOSAL — the executor validates deterministically, rejects
+// carry a reason and a truncated excerpt so failures stay inspectable
+// instead of silently vanishing, and the caller can feed the reasons back
+// for a bounded corrective retry.
+// ---------------------------------------------------------------------------
+
+/** Longer quotes can never verify verbatim against a capped haystack. */
+export const MAX_EVIDENCE_QUOTE_CHARS = 1_000;
+
+const MIN_EVIDENCE_QUOTE_CHARS = 10;
+const REJECT_EXCERPT_CHARS = 200;
+
+export interface ProposalReject {
+  readonly section: "response" | "entities" | "relations";
+  readonly index: number;
+  readonly reason: string;
+  readonly excerpt: string;
+}
+
+export interface ValidatedProposal {
+  readonly entities: RawEntity[];
+  readonly relations: RawRelation[];
+  readonly rejects: ProposalReject[];
+  /** Non-null when the response itself was not a parseable proposal. */
+  readonly parseError: string | null;
+}
+
+function rejectExcerpt(value: unknown): string {
+  const text = typeof value === "string"
+    ? value
+    : (() => {
+        try {
+          return JSON.stringify(value) ?? "";
+        } catch {
+          return String(value);
+        }
+      })();
+  return text.slice(0, REJECT_EXCERPT_CHARS);
+}
+
+/**
+ * Strict structural validation of an extraction proposal.
+ *
+ * Differences from the legacy parser: schema-enum violations are REJECTIONS
+ * (no coercion to "other", no raw unknown edge types), quote length has an
+ * upper bound, and every dropped row is reported with a reason + excerpt.
+ * The bibliographic/generic screen stays a silent deterministic policy drop
+ * (it is a quality filter, not a model contract violation).
+ */
+export function validateExtractionProposal(
+  response: string,
+  schema: ExtractionSchema,
+): ValidatedProposal {
+  const rejects: ProposalReject[] = [];
+  const salvaged = salvageJson(response);
+  if (salvaged === null) {
+    return {
+      entities: [],
+      relations: [],
+      rejects: [{ section: "response", index: 0, reason: "response is not parseable JSON", excerpt: rejectExcerpt(response) }],
+      parseError: "unparseable-json",
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(salvaged);
+  } catch {
+    try {
+      parsed = JSON.parse(salvaged.replace(/,\s*([}\]])/g, "$1"));
+    } catch {
+      return {
+        entities: [],
+        relations: [],
+        rejects: [{ section: "response", index: 0, reason: "response is not parseable JSON", excerpt: rejectExcerpt(response) }],
+        parseError: "unparseable-json",
+      };
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return {
+      entities: [],
+      relations: [],
+      rejects: [{ section: "response", index: 0, reason: "top-level value must be a JSON object", excerpt: rejectExcerpt(parsed) }],
+      parseError: "invalid-shape",
+    };
+  }
+  const obj = parsed as Record<string, unknown>;
+  const entityTypes = new Set(schema.entityTypes);
+  const edgeTypes = new Set(schema.edgeTypes);
+
+  const entities: RawEntity[] = [];
+  const entityRows = Array.isArray(obj["entities"]) ? (obj["entities"] as unknown[]) : [];
+  if (!Array.isArray(obj["entities"])) {
+    rejects.push({ section: "response", index: 0, reason: "entities must be an array", excerpt: rejectExcerpt(obj["entities"]) });
+  }
+  entityRows.forEach((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      rejects.push({ section: "entities", index, reason: "entity must be an object", excerpt: rejectExcerpt(entry) });
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const name = typeof record["name"] === "string" ? record["name"].trim() : "";
+    if (!name) {
+      rejects.push({ section: "entities", index, reason: "entity.name is required", excerpt: rejectExcerpt(entry) });
+      return;
+    }
+    if (typeof record["type"] !== "string" || !entityTypes.has(record["type"])) {
+      rejects.push({
+        section: "entities",
+        index,
+        reason: `entity.type must be one of: ${schema.entityTypes.join(", ")}`,
+        excerpt: rejectExcerpt(entry),
+      });
+      return;
+    }
+    if (record["definition"] !== undefined && typeof record["definition"] !== "string") {
+      rejects.push({ section: "entities", index, reason: "entity.definition must be a string when present", excerpt: rejectExcerpt(entry) });
+      return;
+    }
+    if (record["aliases"] !== undefined
+      && (!Array.isArray(record["aliases"]) || record["aliases"].some((alias) => typeof alias !== "string"))) {
+      rejects.push({ section: "entities", index, reason: "entity.aliases must be an array of strings when present", excerpt: rejectExcerpt(entry) });
+      return;
+    }
+    if (isBibliographicOrGeneric(name)) return; // deterministic policy screen — not a model error
+    entities.push({
+      name,
+      type: record["type"],
+      definition: typeof record["definition"] === "string" ? record["definition"] : undefined,
+      aliases: Array.isArray(record["aliases"]) ? (record["aliases"] as string[]) : undefined,
+    });
+  });
+
+  const relations: RawRelation[] = [];
+  const relationRows = Array.isArray(obj["relations"]) ? (obj["relations"] as unknown[]) : [];
+  if (!Array.isArray(obj["relations"])) {
+    rejects.push({ section: "response", index: 0, reason: "relations must be an array", excerpt: rejectExcerpt(obj["relations"]) });
+  }
+  relationRows.forEach((entry, index) => {
+    if (typeof entry !== "object" || entry === null) {
+      rejects.push({ section: "relations", index, reason: "relation must be an object", excerpt: rejectExcerpt(entry) });
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    const source = typeof record["source"] === "string" ? record["source"].trim() : "";
+    const target = typeof record["target"] === "string" ? record["target"].trim() : "";
+    const quote = typeof record["evidence_quote"] === "string" ? record["evidence_quote"].trim() : "";
+    if (!source || !target) {
+      rejects.push({ section: "relations", index, reason: "relation.source and relation.target are required", excerpt: rejectExcerpt(entry) });
+      return;
+    }
+    if (typeof record["type"] !== "string" || !edgeTypes.has(record["type"])) {
+      rejects.push({
+        section: "relations",
+        index,
+        reason: `relation.type must be one of: ${schema.edgeTypes.join(", ")}`,
+        excerpt: rejectExcerpt(entry),
+      });
+      return;
+    }
+    if (quote.length < MIN_EVIDENCE_QUOTE_CHARS) {
+      rejects.push({
+        section: "relations",
+        index,
+        reason: `relation.evidence_quote must be at least ${MIN_EVIDENCE_QUOTE_CHARS} characters`,
+        excerpt: rejectExcerpt(entry),
+      });
+      return;
+    }
+    if (quote.length > MAX_EVIDENCE_QUOTE_CHARS) {
+      rejects.push({
+        section: "relations",
+        index,
+        reason: `relation.evidence_quote exceeds ${MAX_EVIDENCE_QUOTE_CHARS} characters`,
+        excerpt: rejectExcerpt(entry),
+      });
+      return;
+    }
+    relations.push({ source, target, type: record["type"], evidence_quote: quote });
+  });
+
+  return { entities, relations, rejects, parseError: null };
+}
+
+/**
+ * Correction feedback for the bounded retry loop: itemized rejection
+ * reasons the model is asked to fix in one complete re-emission.
+ */
+export function buildExtractionCorrectionPrompt(
+  validation: ValidatedProposal,
+  schema: ExtractionSchema,
+): string {
+  const lines: string[] = [];
+  if (validation.parseError) {
+    lines.push(`Your previous response could not be parsed (${validation.parseError}).`);
+  } else {
+    lines.push("Your previous extraction response failed deterministic validation:");
+  }
+  for (const reject of validation.rejects.slice(0, 20)) {
+    lines.push(`- ${reject.section}[${reject.index}]: ${reject.reason}`);
+  }
+  if (validation.rejects.length > 20) {
+    lines.push(`- ...and ${validation.rejects.length - 20} more`);
+  }
+  lines.push("");
+  lines.push("Fix every listed problem and re-emit the COMPLETE corrected JSON object with \"entities\" and \"relations\" arrays.");
+  lines.push(`Entity types (exact): ${schema.entityTypes.join(" / ")}.`);
+  lines.push(`Edge types (exact): ${schema.edgeTypes.join(" / ")}.`);
+  lines.push(
+    `Every relation needs source and target names that exactly match emitted entity names, a listed edge type, ` +
+      `and a verbatim evidence_quote (${MIN_EVIDENCE_QUOTE_CHARS}-${MAX_EVIDENCE_QUOTE_CHARS} characters) copied from the document.`,
+  );
+  return lines.join("\n");
 }

@@ -49,8 +49,42 @@ test("open applies migrations idempotently and persists data", async (context) =
     version: number;
     name: string;
   }>;
-  assert.deepEqual(migrations.map((row) => row.version), [1, 2, 3, 4]);
+  assert.deepEqual(migrations.map((row) => row.version), [1, 2, 3, 4, 5]);
   sidecar.close();
+});
+
+test("proposal rejects are recorded (capped) and queryable per KB/doc", async (context) => {
+  const root = tempRoot("ke-store-rejects");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const kb = store.createKnowledgeBase({ name: "kb" });
+  const doc = store.upsertDocument({ kbId: kb.id, dedupKey: "doi:10.1/x", title: "Paper A" });
+
+  const rejects = [
+    { section: "entities", index: 3, reason: "entity.type must be one of: virus, protein", excerpt: '{"name":"X","type":"cell"}' },
+    { section: "relations", index: 0, reason: "relation.evidence_quote must be at least 10 characters", excerpt: '{"source":"A","target":"B"}' },
+    { section: "response", index: 0, reason: "response is not parseable JSON", excerpt: "I cannot..." },
+  ];
+  const inserted = store.recordProposalRejects(kb.id, doc.id, rejects, { jobId: "job-1", attempts: 3 });
+  assert.equal(inserted, 3);
+
+  const listed = store.listProposalRejects(kb.id);
+  assert.equal(listed.length, 3);
+  assert.deepEqual(
+    listed.map((row) => row.section).sort(),
+    ["entities", "relations", "response"],
+  );
+  assert.ok(listed.every((row) => row.attempts === 3 && row.docId === doc.id));
+  assert.equal(listed[0]?.jobId, "job-1");
+
+  // Per-doc filter and the per-run recording cap.
+  assert.equal(store.listProposalRejects(kb.id, { docId: doc.id }).length, 3);
+  assert.equal(store.listProposalRejects(kb.id, { docId: "missing" }).length, 0);
+  const many = Array.from({ length: 80 }, (_unused, index) => ({
+    section: "entities", index, reason: "r", excerpt: "e",
+  }));
+  assert.equal(store.recordProposalRejects(kb.id, doc.id, many), KnowledgeEngineStore.MAX_RECORDED_REJECTS);
 });
 
 test("document upsert dedups by (kb, dedupKey) and preserves unset fields", async (context) => {

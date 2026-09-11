@@ -14,7 +14,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isBibliographicOrGeneric, parseExtractionResponse } from "./parse.js";
+import {
+  buildExtractionCorrectionPrompt,
+  isBibliographicOrGeneric,
+  MAX_EVIDENCE_QUOTE_CHARS,
+  parseExtractionResponse,
+  validateExtractionProposal,
+} from "./parse.js";
 import { buildExtractionPrompt, PROMPT_TEXT_CAP } from "./prompt.js";
 import { applyProvenanceGate, verifyEvidence } from "./provenance-gate.js";
 import { BIOMEDICAL_SCHEMA, DEFAULT_SCHEMA } from "./schema.js";
@@ -55,6 +61,87 @@ void test("isBibliographicOrGeneric filters institutions and generic words", () 
   assert.ok(isBibliographicOrGeneric("2024"));
   assert.ok(!isBibliographicOrGeneric("Ebola virus glycoprotein"));
   assert.ok(!isBibliographicOrGeneric("mAb114"));
+});
+
+void test("validateExtractionProposal accepts a clean proposal with zero rejects", () => {
+  const response = JSON.stringify({
+    entities: [{ name: "Ebola virus", type: "virus", definition: "Filoviridae" }],
+    relations: [{
+      source: "Ebola virus", target: "glycoprotein", type: "encodes",
+      evidence_quote: "Ebola virus encodes the glycoprotein GP.",
+    }],
+  });
+  const validated = validateExtractionProposal(response, BIOMEDICAL_SCHEMA);
+  assert.equal(validated.parseError, null);
+  assert.deepEqual(validated.rejects, []);
+  assert.equal(validated.entities.length, 1);
+  assert.equal(validated.relations.length, 1);
+});
+
+void test("validateExtractionProposal rejects schema violations with reason and excerpt", () => {
+  const response = JSON.stringify({
+    entities: [
+      { name: "", type: "protein" },                              // missing name
+      { name: "GP", type: "membrane-thing" },                     // bad enum
+      { name: "VP40", type: "protein", aliases: [7] },            // bad aliases
+      { name: "Stanford University", type: "other" },             // policy screen: silent drop
+      { name: "NP", type: "protein" },                            // valid
+    ],
+    relations: [
+      { source: "NP", type: "binds", evidence_quote: "NP binds RNA." },                       // missing target
+      { source: "NP", target: "NP", type: "wrap", evidence_quote: "NP wraps the genome." },    // bad edge type
+      { source: "NP", target: "NP", evidence_quote: "NP binds RNA." },                        // missing edge type
+      { source: "NP", target: "NP", type: "binds", evidence_quote: "short" },                 // quote < 10
+      { source: "NP", target: "NP", type: "binds", evidence_quote: "x".repeat(MAX_EVIDENCE_QUOTE_CHARS + 1) },
+      { source: "NP", target: "NP", type: "binds", evidence_quote: "NP binds the viral RNA genome." }, // valid
+    ],
+  });
+  const validated = validateExtractionProposal(response, BIOMEDICAL_SCHEMA);
+  assert.equal(validated.parseError, null);
+  assert.equal(validated.entities.length, 1); // only NP survives
+  assert.equal(validated.relations.length, 1);
+  const reasons = validated.rejects.map((reject) => reject.reason).sort();
+  assert.equal(validated.rejects.length, 8);
+  assert.ok(reasons.some((reason) => reason.includes("entity.name is required")));
+  assert.ok(reasons.some((reason) => reason.includes("entity.type must be one of")));
+  assert.ok(reasons.some((reason) => reason.includes("aliases must be an array of strings")));
+  assert.ok(reasons.some((reason) => reason.includes("relation.source and relation.target are required")));
+  assert.ok(reasons.some((reason) => reason.includes("relation.type must be one of")));
+  assert.ok(reasons.some((reason) => reason.includes("at least 10 characters")));
+  assert.ok(reasons.some((reason) => reason.includes(`exceeds ${MAX_EVIDENCE_QUOTE_CHARS} characters`)));
+  // Every reject carries a truncated excerpt of the offending raw item.
+  for (const reject of validated.rejects) {
+    assert.ok(reject.excerpt.length > 0 && reject.excerpt.length <= 200);
+  }
+});
+
+void test("validateExtractionProposal reports unparseable responses as parse errors", () => {
+  const validated = validateExtractionProposal("no json here at all", DEFAULT_SCHEMA);
+  assert.equal(validated.parseError, "unparseable-json");
+  assert.equal(validated.rejects.length, 1);
+  assert.equal(validated.rejects[0]?.section, "response");
+  assert.deepEqual(validated.entities, []);
+  const shaped = validateExtractionProposal('["an", "array"]', DEFAULT_SCHEMA);
+  assert.equal(shaped.parseError, "invalid-shape");
+});
+
+void test("buildExtractionCorrectionPrompt itemizes reasons and restates the contract", () => {
+  const validated = validateExtractionProposal(
+    JSON.stringify({
+      entities: [{ name: "GP", type: "membrane-thing" }],
+      relations: [{ source: "GP", target: "GP", type: "binds", evidence_quote: "short" }],
+    }),
+    BIOMEDICAL_SCHEMA,
+  );
+  const prompt = buildExtractionCorrectionPrompt(validated, BIOMEDICAL_SCHEMA);
+  assert.match(prompt, /failed deterministic validation/);
+  assert.match(prompt, /entities\[0\]: entity\.type must be one of/);
+  assert.match(prompt, /relations\[0\]: relation\.evidence_quote must be at least 10 characters/);
+  assert.match(prompt, /virus \/ protein \/ antibody/);
+  assert.match(prompt, /binds \/ neutralizes/);
+  assert.match(prompt, /COMPLETE corrected JSON/);
+  const parseFailed = validateExtractionProposal("garbage", DEFAULT_SCHEMA);
+  assert.match(buildExtractionCorrectionPrompt(parseFailed, DEFAULT_SCHEMA), /could not be parsed \(unparseable-json\)/);
 });
 
 void test("buildExtractionPrompt embeds schema vocabularies and core entity list", () => {

@@ -230,6 +230,106 @@ test("re-seeding the same query is idempotent (watermarks)", async (context) => 
   assert.equal(store.listEdges(kb.id).length, 2);
 });
 
+test("C3①: an invalid proposal is corrected on a bounded retry, no rejects recorded", async (context) => {
+  const root = tempRoot("ke-orch-correct");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const transport = stubTransport([
+    { match: "/search?query=", status: 200, body: EPMC_SEARCH },
+    { match: "fullTextXML", status: 200, body: JATS },
+  ]);
+  const userPrompts: string[] = [];
+  const responses = [
+    // Attempt 1: one entity carries an off-vocabulary type.
+    JSON.stringify({
+      entities: [
+        { name: "Ebola virus", type: "virus" },
+        { name: "glycoprotein", type: "viral-envelope-molecule", aliases: ["GP"] },
+        { name: "mAb114", type: "antibody" },
+      ],
+      relations: [],
+    }),
+    EXTRACTION_RESPONSE,
+  ];
+  const orchestrator = new KeOrchestrator({
+    store,
+    chain: buildSourceChain({ transport }),
+    transport,
+    schema: BIOMEDICAL_SCHEMA,
+    resolveEndpoint: () => ({ baseUrl: "http://stub", model: "m" }),
+    llmInvoke: async (_endpoint, _system, userPrompt) => {
+      userPrompts.push(userPrompt);
+      return responses[Math.min(userPrompts.length - 1, responses.length - 1)]!;
+    },
+    assertUrl: async () => {},
+  });
+  const runner = new KeJobRunner(store);
+  orchestrator.registerJobs(runner);
+
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  await orchestrator.seedKb(kb.id, "ebola glycoprotein antibody", 10);
+  await drain(runner);
+
+  // Two LLM rounds: initial + one corrective retry.
+  assert.equal(userPrompts.length, 2);
+  assert.match(userPrompts[1]!, /CORRECTION FEEDBACK \(attempt 2 of 3\)/);
+  assert.match(userPrompts[1]!, /entity\.type must be one of/);
+  // The corrected proposal lands complete — all 3 entities, nothing rejected.
+  assert.equal(store.listEntities(kb.id).length, 3);
+  assert.equal(store.listProposalRejects(kb.id).length, 0);
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "succeeded" }).length, 1);
+});
+
+test("C3①: persistent proposal violations are kept as evidence after 3 attempts", async (context) => {
+  const root = tempRoot("ke-orch-rejects");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const transport = stubTransport([
+    { match: "/search?query=", status: 200, body: EPMC_SEARCH },
+    { match: "fullTextXML", status: 200, body: JATS },
+  ]);
+  let llmCalls = 0;
+  const stubbornResponse = JSON.stringify({
+    entities: [
+      { name: "Ebola virus", type: "virus" },
+      { name: "glycoprotein", type: "viral-envelope-molecule", aliases: ["GP"] },
+      { name: "mAb114", type: "antibody" },
+    ],
+    relations: [],
+  });
+  const orchestrator = new KeOrchestrator({
+    store,
+    chain: buildSourceChain({ transport }),
+    transport,
+    schema: BIOMEDICAL_SCHEMA,
+    resolveEndpoint: () => ({ baseUrl: "http://stub", model: "m" }),
+    llmInvoke: async () => {
+      llmCalls += 1;
+      return stubbornResponse;
+    },
+    assertUrl: async () => {},
+  });
+  const runner = new KeJobRunner(store);
+  orchestrator.registerJobs(runner);
+
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  await orchestrator.seedKb(kb.id, "ebola glycoprotein antibody", 10);
+  await drain(runner);
+
+  // The corrective loop gave up after the bounded retries.
+  assert.equal(llmCalls, 3);
+  // Survivors are written; the violation is evidence, not a silent drop.
+  assert.equal(store.listEntities(kb.id).length, 2);
+  const rejects = store.listProposalRejects(kb.id);
+  assert.equal(rejects.length, 1);
+  assert.equal(rejects[0]?.section, "entities");
+  assert.match(rejects[0]?.reason ?? "", /entity\.type must be one of/);
+  assert.equal(rejects[0]?.attempts, 3);
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "succeeded" }).length, 1);
+});
+
 test("ingest with no full text anywhere marks the document error without retry", async (context) => {
   const root = tempRoot("ke-orch-notfound");
   context.after(() => rm(root, { force: true, recursive: true }));
