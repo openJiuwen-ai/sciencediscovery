@@ -40,6 +40,7 @@ import type {
   ModelCatalogDetails,
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
+  RemoteConnectLog,
   RemoteHostTarget,
   RunnerTarget,
   SshConfigHostImport,
@@ -233,6 +234,14 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   connectRemoteRunner(hostId: string): Promise<RemoteRunnerStatus> {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/runner/connect`, { method: "POST" });
+  }
+
+  /**
+   * The in-flight connection story of one host. Polled while `connectRemoteRunner`
+   * is still waiting: the connect itself only answers when it is over.
+   */
+  remoteRunnerConnectLog(hostId: string): Promise<RemoteConnectLog> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/runner/connect-log`);
   }
 
   disconnectRemoteRunner(hostId: string): Promise<RemoteRunnerStatus> {

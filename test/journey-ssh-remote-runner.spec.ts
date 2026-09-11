@@ -33,7 +33,7 @@ type SessionWithRemoteOverride = SessionDetail & { remoteRunnerHostIds?: string[
  *   5. 登记请求只发送 privateKeyPath；未知主机密钥在设置对话框内确认后重试成功。
  *   6. 更新凭据时用户名回填、秘密不回显；外层保存不会丢弃子表单，提交后卡片展示安全的已保存标记和最新探测错误。
  *   7. 在 Project 设置里勾选允许名单，Session 可收窄、禁用或恢复继承；没有互斥选机下拉。
- *   8. 会话栏徽章完整显示且文案只表示“远端可用”；连接 runner 后展示版本差异与部署来源。
+ *   8. 会话栏徽章完整显示且文案只表示“远端可用”；连接 runner 时卡片下方实时展示连接步骤（连接过程面板），连接成功后面板消失，并展示版本差异与部署来源。
  *   9. 远端 workspace 只读同步记录与删除入口在 Session 设置里，且没有任何路径输入或 Push/Pull 控件。
  * Environment: Isolated local stack at E2E_BASE_URL；Project/Session 真实创建，SSH 主机、自动部署、隧道和同步记录由浏览器本地路由确定性模拟。
  * Type: mocked
@@ -255,9 +255,36 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     };
     return route.fulfill({ json: registeredSshHost });
   });
+  // Connecting is held back until the journey releases it, so the progress
+  // panel has time to appear; the connect-log endpoint answers immediately
+  // with a story that grows one line per poll, like the real connect would.
+  // Playwright matches the last registered route first, so the more specific
+  // connect-log route must come after the wildcard.
+  let connectRelease: (() => void) | undefined;
+  let connectReleased = false;
+  let connectLogPolls = 0;
   await page.route(`**/api/runners/${hostId}/*`, async (route) => {
-    connected = route.request().url().endsWith("/connect");
+    if (route.request().url().endsWith("/connect")) {
+      // Only the first connect is held back; a reconnect later in the journey
+      // must not wait on a release that already happened.
+      if (!connectReleased) await new Promise<void>((resolve) => { connectRelease = resolve; });
+      connected = true;
+      return route.fulfill({ json: sshHost().runnerStatus });
+    }
+    connected = false;
     return route.fulfill({ json: sshHost().runnerStatus });
+  });
+  await page.route(`**/api/remote-hosts/${hostId}/runner/connect-log`, (route) => {
+    const story = [
+      "Connecting to institution-linux over SSH…",
+      "No Runner found on the machine; preparing its data directory before deployment…",
+      "Uploading the Runner binary (x64) — this is the slow step on a first connect…",
+    ];
+    connectLogPolls += 1;
+    return route.fulfill({ json: {
+      entries: story.slice(0, connectLogPolls).map((line, index) => ({ at: new Date(Date.now() + index * 1000).toISOString(), line })),
+      hostId,
+    } });
   });
   // URL navigation reloads the app, so the Project list must reflect PATCHes
   // made through the scoped-settings dialogs.
@@ -744,12 +771,25 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     );
 
     await journey.step(
-      "连接后查看 Runner 版本和资源使用量",
-      "状态变为 connected，详情顶部显示更新时间，紧凑容量条展示磁盘已用 40/100 GiB（40%）、内存已用 48/128 GiB（37.5%），版本和 CPU 读数不重复。",
+      "连接过程实时可见，连接后查看 Runner 版本和资源使用量",
+      "点击「连接 Runner」后卡片下方出现「连接过程」面板，标注实时更新中并逐步列出连接步骤（SSH 建连、准备数据目录、上传 Runner 二进制）；"
+      + "连接完成后面板消失，状态变为 connected，详情顶部显示更新时间，紧凑容量条展示磁盘已用 40/100 GiB（40%）、内存已用 48/128 GiB（37.5%），版本和 CPU 读数不重复。",
       async () => {
         const dialog = await openRemoteSettings();
-        await dialog.getByRole("button", { name: "连接 Runner" }).first().click();
-        await expect(dialog.locator(".remote-host-card", { hasText: hostId }).getByText("已连接", { exact: true })).toBeVisible();
+        const hostCard = dialog.locator("article.remote-host-card").filter({ hasText: "GPU analysis" });
+        await hostCard.getByRole("button", { name: "连接 Runner" }).click();
+        // The connect is held back by the route mock, so the panel must carry
+        // the story on its own while the button waits.
+        const connectLog = hostCard.getByRole("log", { name: "连接过程" });
+        await expect(connectLog).toBeVisible();
+        await expect(connectLog).toContainText("实时更新中");
+        await expect(connectLog).toContainText("Connecting to institution-linux over SSH");
+        await expect(connectLog).toContainText("preparing its data directory");
+        connectReleased = true;
+        connectRelease?.();
+        await expect(hostCard.getByText("已连接", { exact: true })).toBeVisible();
+        // A successful connect has nothing left to say; the panel goes away.
+        await expect(connectLog).toHaveCount(0);
         await expect(dialog.getByText(
           /版本 0\.0\.0-remote · 本地 0\.0\.0-local/,
         )).toBeVisible();

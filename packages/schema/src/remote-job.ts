@@ -285,6 +285,27 @@ export interface RemoteRunnerStatus {
   versionMismatch?: boolean;
 }
 
+/**
+ * One line of the connection story a Runner connect attempt tells.
+ *
+ * A connect can take minutes (deploying the Runner bundle, seeding the
+ * provisioner), and for all that time the settings page would otherwise show
+ * nothing but a disabled button. Each step appends a line here so the page
+ * can show what is happening — and, on failure, what the remote side last
+ * said. Lines are operator-facing diagnostics in English, like the error
+ * messages above them; only the panel around them is translated.
+ */
+export interface RemoteConnectLogEntry {
+  at: string;
+  line: string;
+}
+
+/** The connection log of one host, as the settings page polls it. */
+export interface RemoteConnectLog {
+  entries: RemoteConnectLogEntry[];
+  hostId: string;
+}
+
 export type RemoteWorkspaceSyncDirection = "pull" | "push";
 
 export interface RemoteWorkspaceSyncRequest {

@@ -249,6 +249,33 @@ test("the probe, the deployment and the tunnel all use the same credentials and 
   assert.deepEqual(transport.opened[0]!.trustedHostKey, TRUSTED_KEY);
 });
 
+test("a connect attempt tells its story as a pollable log, ending with the failure cause", async () => {
+  const transport = new FakeTransport([
+    { exitCode: 1, stderr: "disk full", stdout: "" },
+    { exitCode: 1, stderr: "disk full", stdout: "" },
+  ]);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+  const host = readyRemoteHost();
+
+  const status = await client.connectRunner(host, { localVersion: "local-build" });
+  assert.equal(status.state, "error");
+  const entries = client.connectLog(host.id);
+  assert.deepEqual(entries.map((entry) => entry.line), [
+    "Connecting to 10.0.0.8 over SSH…",
+    "Runner command found on the machine; preparing its data directory…",
+    "Failed: Remote runner deployment failed (1): disk full",
+  ]);
+  for (const entry of entries) assert.ok(!Number.isNaN(Date.parse(entry.at)), "every line carries its timestamp");
+
+  // A second attempt starts a fresh story rather than appending to the last.
+  await client.connectRunner(host, { localVersion: "local-build" });
+  assert.deepEqual(client.connectLog(host.id).map((entry) => entry.line), [
+    "Connecting to 10.0.0.8 over SSH…",
+    "Runner command found on the machine; preparing its data directory…",
+    "Failed: Remote runner deployment failed (1): disk full",
+  ]);
+});
+
 test("a machine whose key is not trusted is refused with the fingerprint to trust", async () => {
   const untrusted = new SshHostKeyUntrustedError(
     { algorithm: "ssh-ed25519", changed: false, fingerprint: `SHA256:${"b".repeat(43)}` },

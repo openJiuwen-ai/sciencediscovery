@@ -126,6 +126,7 @@ import type {
   WorkspaceCapabilities,
   WorkspaceUploadResult,
   RegisterRemoteHostRequest,
+  RemoteConnectLog,
   RemoteHostTarget,
   RemoteRunnerStatus,
   NpuRunnerSelectionsResponse,
@@ -1342,6 +1343,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           throw hostKeyError(new SshHostKeyUntrustedError(status.hostKeyChallenge, host.alias), host.id);
         }
         sendJson(response, status.state === "ready" ? 200 : 503, status);
+        return;
+      }
+      // The connect above can take minutes while it deploys the Runner; this
+      // is what the settings page polls to show the attempt's progress.
+      const remoteConnectLogMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/connect-log$/);
+      if (remoteConnectLogMatch && request.method === "GET") {
+        const hostId = remoteConnectLogMatch[1]!;
+        sendJson(response, 200, { entries: remoteCompute.connectLog(hostId), hostId } satisfies RemoteConnectLog);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/connectors") {

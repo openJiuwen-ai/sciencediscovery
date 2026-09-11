@@ -23,7 +23,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
 import { hostKeyFromError } from "../src/api/settings.js";
-import { NpuDeviceSelector, RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
+import { ConnectLogPanel, NpuDeviceSelector, RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
 import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
@@ -308,6 +308,7 @@ test("connect runner presents a changed host key and resumes from the settings t
   const client = {
     listRunners: async () => [host],
     listRunnerNpuDevices: noNpu,
+    remoteRunnerConnectLog: async () => ({ entries: [], hostId: host.id }),
     connectRunner: async () => {
       if (++connects === 1) throw new ApiRequestError("Host key changed", 409, "SSH_HOST_KEY_CHANGED", {
         hostId: host.id, hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:new" },
@@ -456,6 +457,28 @@ test("a card the sandbox probe refused cannot be ticked and says why on the row"
 test("the checkbox and its card name stay on one reading line", () => {
   // One label wraps both, so the control can never wrap away from its name.
   assert.match(renderNpu(), /<label class="remote-npu-pick"><input type="checkbox"[^>]*\/><span class="remote-npu-name">NPU 0/);
+});
+
+test("the connect log panel lists every step with its timestamp", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectLogPanel, {
+    entries: [
+      { at: "2026-09-11T05:00:00.000Z", line: "Connecting to lab over SSH…" },
+      { at: "2026-09-11T05:00:03.000Z", line: "Runner is ready (version 1.2.3)." },
+    ],
+    live: true,
+  }));
+  assert.match(markup, /role="log"/);
+  assert.match(markup, /Connection progress/);
+  assert.match(markup, /updating live/);
+  assert.match(markup, /Connecting to lab over SSH/);
+  assert.match(markup, /Runner is ready \(version 1\.2\.3\)\./);
+  assert.match(markup, /remote-connect-log live/);
+});
+
+test("an idle connect log panel says it is waiting rather than showing nothing", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectLogPanel, { entries: [], live: true }));
+  assert.match(markup, /Waiting for the first step/);
+  assert.doesNotMatch(markup, /remote-connect-log-line/);
 });
 
 test("ticking a card saves the selection against the Runner it belongs to", async () => {

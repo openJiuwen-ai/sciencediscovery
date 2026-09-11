@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 
 import type {
+  RemoteConnectLogEntry,
   RemoteHostCapabilities,
   RemoteHostEndpoint,
   RemoteHostTarget,
@@ -206,6 +207,24 @@ export class RemoteComputeClient {
     stop?: () => void;
   }>();
   private readonly runnerStatuses = new Map<string, RemoteRunnerStatus>();
+  private readonly connectLogs = new Map<string, RemoteConnectLogEntry[]>();
+
+  /** The connection story so far for one host, oldest first. */
+  connectLog(hostId: string): RemoteConnectLogEntry[] {
+    return structuredClone(this.connectLogs.get(hostId) ?? []);
+  }
+
+  /**
+   * Append one line to a host's connection story. Bounded: a connect that
+   * retries forever must not grow memory forever, and the earliest lines are
+   * the least useful once the story gets long.
+   */
+  private logConnect(hostId: string, line: string): void {
+    const entries = this.connectLogs.get(hostId) ?? [];
+    entries.push({ at: new Date().toISOString(), line });
+    if (entries.length > 200) entries.splice(0, entries.length - 200);
+    this.connectLogs.set(hostId, entries);
+  }
 
   constructor(
     /** Only used to import an existing `ssh_config` entry; never to reach a machine. */
@@ -356,6 +375,9 @@ export class RemoteComputeClient {
     const capabilities = host.capabilities!;
     const runnerCommand = validateRunnerCommand(host.runnerCommand);
     const deploy = !capabilities.runnerCommandAvailable;
+    this.logConnect(host.id, deploy
+      ? "No Runner found on the machine; preparing its data directory before deployment…"
+      : "Runner command found on the machine; preparing its data directory…");
     const script = [
       "set -eu",
       "test \"$(uname -s)\" = Linux",
@@ -375,6 +397,7 @@ export class RemoteComputeClient {
     const dataDir = /^data_dir=(.+)$/m.exec(result.stdout)?.[1]?.trim();
     if (!dataDir?.startsWith("/")) throw new Error("The remote host did not report its ScienceDiscovery data directory");
     const architecture = /^architecture=(.+)$/m.exec(result.stdout)?.[1]?.trim() ?? "";
+    this.logConnect(host.id, `Remote data directory ready: ${dataDir} (${architecture || "unknown architecture"})`);
     let startCommand = shellQuote(runnerCommand);
     if (deploy) {
       const binary = await executable(architecture);
@@ -391,6 +414,7 @@ export class RemoteComputeClient {
         ].join("\n"), 20_000);
         if (check.exitCode) throw new Error(`Runner deployment check failed: ${check.stderr.trim()}`);
         if (check.stdout.trim() !== "reused") {
+          this.logConnect(host.id, `Uploading the Runner binary (${binary.architecture}) — this is the slow step on a first connect…`);
           await connection.upload(binary.path, stage);
           const installed = await connection.run([
             "set -eu",
@@ -398,6 +422,9 @@ export class RemoteComputeClient {
             `chmod 700 -- ${shellQuote(stage)}`, `mv -f -- ${shellQuote(stage)} ${shellQuote(destination)}`,
           ].join("\n"), 30_000);
           if (installed.exitCode) throw new Error(`Runner deployment failed: ${installed.stderr.trim()}`);
+          this.logConnect(host.id, "Runner binary uploaded and verified (sha256).");
+        } else {
+          this.logConnect(host.id, "The Runner binary is already deployed; reusing it.");
         }
       } finally {
         // Only this transfer's staging file is removed; live versions and all
@@ -407,7 +434,7 @@ export class RemoteComputeClient {
       }
       startCommand = shellQuote(destination);
     }
-    await this.seedRemoteProvisioner(access, dataDir, architecture);
+    await this.seedRemoteProvisioner(host.id, access, dataDir, architecture);
     return {
       dataDir,
       deployed: deploy,
@@ -425,18 +452,24 @@ export class RemoteComputeClient {
    * provisioner in its own setup status, and now says what to do about it.
    */
   private async seedRemoteProvisioner(
+    hostId: string,
     access: RemoteSshAccess,
     dataDir: string,
     architecture: string,
   ): Promise<boolean> {
     if (!this.provisionerCacheDir) return false;
-    return await seedRemoteProvisioner({
+    this.logConnect(hostId, "Checking the managed provisioner (micromamba)…");
+    const seeded = await seedRemoteProvisioner({
       access,
       architecture,
       cacheDir: this.provisionerCacheDir,
       dataDir,
       transport: this.transport,
     }).catch(() => false);
+    this.logConnect(hostId, seeded
+      ? "Managed provisioner is in place."
+      : "Managed provisioner not seeded; the Runner will report how to fix that if it matters.");
+    return seeded;
   }
 
   async connectRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions = {}): Promise<RemoteRunnerStatus> {
@@ -454,6 +487,12 @@ export class RemoteComputeClient {
         protocol: host.endpoint.protocol,
       } : {}),
     });
+    // A fresh attempt starts a fresh story; the page polls it while this call
+    // is still in flight.
+    this.connectLogs.set(host.id, []);
+    this.logConnect(host.id, host.connectionKind === "direct"
+      ? `Connecting to the runner at ${host.endpoint?.host ?? host.alias}:${host.endpoint?.port ?? "?"}…`
+      : `Connecting to ${host.alias} over SSH…`);
     try {
       const connected = host.connectionKind === "direct"
         ? await this.connectDirectRunner(host, options)
@@ -468,8 +507,10 @@ export class RemoteComputeClient {
       });
       return connected;
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Remote runner connection failed";
+      this.logConnect(host.id, `Failed: ${message}`);
       const failed: RemoteRunnerStatus = {
-        error: error instanceof Error ? error.message : "Remote runner connection failed",
+        error: message,
         hostId: host.id,
         // An untrusted key travels with the status so the settings page can
         // offer to trust it rather than only showing a failure.
@@ -502,12 +543,14 @@ export class RemoteComputeClient {
     const health = await client.health().catch((error: unknown) => {
       throw new Error(`Could not reach the runner at ${host.endpoint!.host}:${host.endpoint!.port}: ${error instanceof Error ? error.message : "connection failed"}`);
     });
+    this.logConnect(host.id, `The runner answered (version ${health.runnerVersion}); checking the token…`);
     if (health.platform !== "linux") {
       throw new Error(`Remote runners must run on Linux; ${host.alias} reports ${health.platform}`);
     }
     await client.status().catch(() => {
       throw new Error("The runner rejected this token. Re-register the machine with the token it was started with.");
     });
+    this.logConnect(host.id, "Token accepted; the runner is ready.");
     const status: RemoteRunnerStatus = {
       connectedAt: new Date().toISOString(),
       hostId: host.id,
@@ -542,6 +585,7 @@ export class RemoteComputeClient {
     ].join("\n");
 
     const connection = await this.transport.open(access);
+    this.logConnect(host.id, "SSH session established; starting the Runner on the machine…");
     let remoteFailure = "";
     let stopped = false;
     const record: { client: RunnerClient; status: RemoteRunnerStatus; stop?: () => void } = {
@@ -613,6 +657,7 @@ export class RemoteComputeClient {
       const client = new RunnerClient(`http://127.0.0.1:${localPort}`, token);
       record.client = client;
       this.runnerConnections.set(host.id, record);
+      this.logConnect(host.id, "Runner process launched; waiting for its first answer…");
       const deadline = Date.now() + 30_000;
       let health;
       while (Date.now() < deadline && !stopped) {
@@ -626,6 +671,8 @@ export class RemoteComputeClient {
       if (!health) {
         throw new Error(remoteFailure.trim() || "Remote runner did not become ready within 30 seconds");
       }
+      if (remoteFailure.trim()) this.logConnect(host.id, `Runner output: ${remoteFailure.trim()}`);
+      this.logConnect(host.id, `Runner is ready (version ${health.runnerVersion}).`);
       record.status = {
         connectedAt: new Date().toISOString(),
         ...(prepared.deployed ? { deployed: true } : {}),

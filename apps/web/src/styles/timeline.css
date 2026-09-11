@@ -271,6 +271,18 @@
   .config-panel .remote-npu-pick { grid-column: 1 / -1; }
 }
 
+/* The live story of a connect attempt: a terminal-like panel under the card. */
+.remote-connect-log { display: grid; gap: 6px; flex-basis: 100%; min-width: 0; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-sunk); }
+.remote-connect-log.live { border-color: var(--accent-border-soft); }
+.remote-connect-log-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.remote-connect-log-header > strong { font-size: 12px; color: var(--text-heading); }
+.remote-connect-log.live .remote-connect-log-header > small { color: var(--accent); }
+.remote-connect-log-body { display: grid; gap: 2px; max-height: 180px; overflow-y: auto; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; }
+.remote-connect-log-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.remote-connect-log-line > time { flex: none; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.remote-connect-log-line > span { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--text-secondary); }
+.remote-connect-log-waiting { color: var(--text-faint); }
+
 .remote-host-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .remote-host-card-title > strong { font-size: 15px; }
 .remote-host-card small { color: var(--muted); }

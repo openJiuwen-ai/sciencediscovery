@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import type {
   PermissionDecision,
   NpuInventory,
   NpuRunnerSelectionsResponse,
   Project,
+  RemoteConnectLogEntry,
   SshConfigHostImport,
   RemoteHostTarget,
   RemoteJob,
@@ -94,6 +95,46 @@ export function RunnerResourceSummary({ host }: { host: RemoteHostTarget }): Rea
 function npuMemory(usedMb: number | undefined, totalMb: number | undefined): string | undefined {
   if (usedMb === undefined || totalMb === undefined || totalMb <= 0) return undefined;
   return `${(usedMb / 1024).toFixed(1)} / ${(totalMb / 1024).toFixed(1)} GiB`;
+}
+
+/**
+ * The live story of a Runner connect attempt.
+ *
+ * Connecting can take minutes — the Runner bundle may be uploaded and the
+ * provisioner seeded before the first health answer — and the connect request
+ * only returns at the very end. The page polls this log while the request is
+ * in flight, so the operator watches the steps instead of a dead button. The
+ * panel stays after a failure (its last lines usually name the cause) and is
+ * cleared by the next attempt or a successful connect.
+ */
+export function ConnectLogPanel({ entries, live }: {
+  entries: readonly RemoteConnectLogEntry[];
+  live: boolean;
+}): ReactNode {
+  const { t } = useLocale();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Follow the tail like a terminal would, but never yank the scroll away from
+  // someone who scrolled up to read an earlier line.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+    if (nearBottom) body.scrollTop = body.scrollHeight;
+  }, [entries.length]);
+  return <div className={`remote-connect-log${live ? " live" : ""}`} role="log" aria-label={t("remote.connectLogTitle")}>
+    <div className="remote-connect-log-header">
+      <strong>{t("remote.connectLogTitle")}</strong>
+      {live ? <small>{t("remote.connectLogLive")}</small> : null}
+    </div>
+    <div className="remote-connect-log-body" ref={bodyRef}>
+      {entries.length === 0
+        ? <small className="remote-connect-log-waiting">{t("remote.connectLogWaiting")}</small>
+        : entries.map((entry, index) => <div className="remote-connect-log-line" key={`${entry.at}:${index}`}>
+          <time dateTime={entry.at}>{new Date(entry.at).toLocaleTimeString(undefined, { hour12: false })}</time>
+          <span>{entry.line}</span>
+        </div>)}
+    </div>
+  </div>;
 }
 
 /**
@@ -298,6 +339,9 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   const [directPort, setDirectPort] = useState("4311");
   const [directToken, setDirectToken] = useState("");
   const [busyId, setBusyId] = useState<string>();
+  // The in-flight (or last failed) connection story per host, polled while the
+  // connect request is still waiting for its answer.
+  const [connectLogs, setConnectLogs] = useState<Record<string, RemoteConnectLogEntry[]>>({});
   const [hostKeyPrompt, setHostKeyPrompt] = useState<HostKeyPrompt>();
   const [editingCredentials, setEditingCredentials] = useState<string>();
   const [credUsername, setCredUsername] = useState("");
@@ -546,6 +590,26 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
 
   async function toggleRunnerConnection(host: RemoteHostTarget, connected: boolean, trust?: RemoteHostKeyInfo): Promise<void> {
     setBusyId(`runner:${host.id}`);
+    // Connecting can take minutes; poll the attempt's story while the request
+    // is in flight so the operator sees progress instead of a dead button.
+    let stopLogPolling: (() => void) | undefined;
+    if (!connected) {
+      setConnectLogs((current) => ({ ...current, [host.id]: [] }));
+      const poll = async (): Promise<void> => {
+        const log = await client.remoteRunnerConnectLog(host.id).catch(() => undefined);
+        // A cleared story (successful connect, disconnect) stays cleared even
+        // when a poll was already in flight while it happened.
+        if (log) setConnectLogs((current) => host.id in current ? { ...current, [host.id]: log.entries } : current);
+      };
+      const timer = setInterval(() => void poll(), 800);
+      stopLogPolling = () => clearInterval(timer);
+    } else {
+      setConnectLogs((current) => {
+        const next = { ...current };
+        delete next[host.id];
+        return next;
+      });
+    }
     try {
       if (!connected && trust) await client.trustRemoteHostKey(host.id, trust);
       const status = connected
@@ -565,10 +629,26 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           },
         });
       }
+      // A successful connect's story has nothing left to say; a failed one
+      // keeps its lines, they usually name the cause.
+      if (!connected && status.state === "ready") {
+        setConnectLogs((current) => {
+          const next = { ...current };
+          delete next[host.id];
+          return next;
+        });
+      }
     } catch (error) {
+      // The story's last lines are written as the attempt fails; fetch them
+      // once more so the panel shows the cause, not just the middle.
+      if (!connected) {
+        const log = await client.remoteRunnerConnectLog(host.id).catch(() => undefined);
+        if (log) setConnectLogs((current) => ({ ...current, [host.id]: log.entries }));
+      }
       handleFailure(error, host.alias, host.id, (hostKey) => toggleRunnerConnection(host, connected, hostKey), t("remote.errorRunnerConnection"));
       await refresh();
     } finally {
+      stopLogPolling?.();
       setBusyId(undefined);
     }
   }
@@ -686,6 +766,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         host.hasPassword ? t("remote.passwordStored") : undefined,
         host.hasPrivateKey ? t("remote.keyStored") : undefined,
       ].filter(Boolean).join(" · ");
+      const connectLog = connectLogs[host.id];
+      const connectInFlight = busyId === `runner:${host.id}` && !connected;
       return <article className={`remote-host-card ${host.status}`} key={host.id}>
         <header className="remote-host-card-header">
         <div className="remote-host-card-main">
@@ -706,6 +788,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         </header>
         {[...new Set([host.error, host.runnerStatus?.error].filter(Boolean))].map((error) =>
           <div className="remote-host-error" role="alert" key={error}>{error}</div>)}
+        {connectInFlight || connectLog?.length ? <ConnectLogPanel entries={connectLog ?? []} live={connectInFlight} /> : null}
         {host.description && ![host.alias, host.runnerName].includes(host.description) ? <p className="remote-host-description">{host.description}</p> : null}
         <details className="remote-host-disclosure" open>
         <summary><span>{t("remote.machineDetails")}</span>{connected && host.runnerStatus?.resources ? <small>{t("remote.updated")} <time dateTime={host.runnerStatus.resources.capturedAt}>{new Date(host.runnerStatus.resources.capturedAt).toLocaleString()}</time></small> : null}</summary>
