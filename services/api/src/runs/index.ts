@@ -599,12 +599,13 @@ async function executeAgentRun(
   if (skillPackagesRoot) {
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
-  const runtimeSkills = activeSkills.map(({ content, description, hash, id, readResource, resources, revision, version }) => ({
+  const runtimeSkills = activeSkills.map(({ content, description, hash, id, preFinishAudit, readResource, resources, revision, version }) => ({
     content,
     description,
     hash,
     id,
     ...(skillPackagesRoot ? { packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}` } : {}),
+    ...(preFinishAudit ? { preFinishAudit } : {}),
     readResource,
     resources,
     revision,
@@ -965,6 +966,11 @@ async function executeAgentRun(
       steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
     });
   };
+  // review_checkpoint registers when the reviewer specialist is explicitly on
+  // AND requested, OR when an active skill declares a pre-finish audit
+  // (metadata.pre-finish-audit) — the finish gate's directive requires the tool
+  // in this run's registry, and a skill-declared audit is an explicit request.
+  const finishGateAuditDeclared = activeSkills.some((skill) => skill.preFinishAudit);
   const agentOptions: WorkspaceAgentOptions = {
     config: agentConfig,
     createSkill: async (input) => {
@@ -1144,7 +1150,8 @@ async function executeAgentRun(
       }
       return result;
     },
-    ...(reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, body.content)
+    // Level gate applies either way: quick is the minimum.
+    ...((reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, body.content) || finishGateAuditDeclared)
       && reviewerSpecialistSupportsLevel(reviewerSpecialistSettings.level, "quick") ? {
       reviewCheckpoint: async (input, signal, toolCallId) => {
         const checkpointToolCallId = toolCallId ?? randomUUID();
@@ -1781,6 +1788,9 @@ async function executeAgentRun(
       });
     }
     if (event.type === "turn_truncated") turnTruncated = true;
+    if (event.type === "finish_gate") {
+      void emit({ action: event.action, turn: turnNumber, type: "finish_gate" });
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       assistantText += event.assistantMessageEvent.delta;
       void emit({ delta: event.assistantMessageEvent.delta, type: "assistant.delta" });

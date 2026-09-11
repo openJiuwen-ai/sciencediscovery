@@ -73,6 +73,7 @@ export const BUNDLED_SKILL_IDS = [
   "evidence-notes",
   "evolve-design",
   "hypothesis-tournament",
+  "idea-debate",
   "knowledge-engine-explore",
   "knowledge-engine-grow",
   "life-science-evidence-brief",
@@ -83,6 +84,7 @@ export const BUNDLED_SKILL_IDS = [
   "science-research-team",
   "skill-creator",
   "structure-pocket-inspection",
+  "systematic-review",
   "tree-search",
   "virtual-lab",
 ] as const;
@@ -104,19 +106,21 @@ const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "evidence-extractor": "1.0.0",
   "evidence-notes": "1.0.0",
   "evolve-design": "1.0.0",
-  "hypothesis-tournament": "1.0.0",
+  "hypothesis-tournament": "1.1.0",
+  "idea-debate": "1.0.0",
   "knowledge-engine-explore": "1.0.0",
   "knowledge-engine-grow": "1.0.0",
   "life-science-evidence-brief": "1.1.0",
   "literature-searcher": "1.0.0",
   "report-writer": "1.0.0",
   "result-evaluator": "1.0.0",
-  "robin-chain": "1.0.0",
+  "robin-chain": "1.1.0",
   "science-research-team": "1.0.0",
   "skill-creator": "1.3.0",
   "structure-pocket-inspection": "1.0.0",
-  "tree-search": "1.0.0",
-  "virtual-lab": "1.0.0",
+  "systematic-review": "1.0.0",
+  "tree-search": "1.1.0",
+  "virtual-lab": "1.1.0",
 };
 const FRONTMATTER_KEYS = new Set([
   "allowed-tools",
@@ -176,6 +180,13 @@ export interface RuntimeSkillSnapshot {
   description: string;
   hash: string;
   id: string;
+  /**
+   * Skill-declared finish gate (frontmatter `metadata.pre-finish-audit: "true"`):
+   * the run loop injects a verification directive when the model tries to
+   * finish without a review_checkpoint call. Enforced by the native-agent
+   * finish-gate lifecycle, not here.
+   */
+  preFinishAudit?: boolean;
   readPackageFiles: () => SkillPackageFileBytes[];
   readResource: (path: string) => SkillResourceContent;
   resources: SkillResource[];
@@ -1871,6 +1882,7 @@ export class SkillCatalog {
         description: detail.description,
         hash: detail.hash,
         id: detail.id,
+        ...(declaresPreFinishAudit(value.detail.frontmatter) ? { preFinishAudit: true } : {}),
         readPackageFiles: () => packageFileBytes(files),
         readResource: (path: string) => resourceContent(detail, files, path),
         resources: structuredClone(detail.resources),
@@ -1879,4 +1891,11 @@ export class SkillCatalog {
       };
     });
   }
+}
+
+/** Read the finish-gate declaration from preserved frontmatter metadata. */
+function declaresPreFinishAudit(frontmatter: Record<string, unknown>): boolean {
+  const metadata = frontmatter["metadata"];
+  if (typeof metadata !== "object" || metadata === null) return false;
+  return (metadata as Record<string, unknown>)["pre-finish-audit"] === "true";
 }

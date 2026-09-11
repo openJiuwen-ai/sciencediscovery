@@ -1,6 +1,8 @@
 ---
 name: tree-search
 description: Use this skill when the user asks to deeply explore multiple research paths, iteratively improve/debug/cross hypotheses along branches, and systematically backtrack with replication checks ("explore several directions and pick the best", "deepen these directions generation by generation", "search research plans like a tree", "compare several technical routes in depth and verify stability"). Runs budget-pinned agentic tree search — multi-perspective initial branches via subagents, greedy best-first expansion (improve/debug/crossover operators), pruning, ablation replication, and a held-out-signal final tournament. For flat generate-then-rank see hypothesis-tournament; for graph-whitespace-driven debates see idea-debate (when available).
+metadata:
+  pre-finish-audit: "true"
 ---
 
 # Agentic Tree Search over Hypotheses

@@ -121,6 +121,8 @@ export interface RuntimeSkill {
   id: string;
   /** Sandbox path of the staged frozen package; absent for nested agents that run without a sandbox. */
   packagePath?: string;
+  /** Skill-declared finish gate (metadata.pre-finish-audit); consumed by the native-agent finish-gate lifecycle. */
+  preFinishAudit?: boolean;
   readResource: (path: string) => SkillResourceContent | Promise<SkillResourceContent>;
   resources: SkillResource[];
   revision: number;

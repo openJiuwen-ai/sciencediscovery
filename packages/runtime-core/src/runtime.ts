@@ -146,6 +146,7 @@ export type RunEvent<TUsage> =
   | { call: RuntimeToolCall; type: "tool_execution_start" }
   | { call: RuntimeToolCall; content: string; isError: boolean; type: "tool_execution_end" }
   | { attempt: 1; reason: "model-input-overflow"; turn: number; type: "context_recovery" }
+  | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
   | { type: "completed"; truncated?: boolean; usage?: TUsage };
 
 export type RunEventSink<TUsage> = (event: RunEvent<TUsage>) => void;
@@ -197,11 +198,37 @@ export class ExternalWaitController {
   }
 }
 
+/**
+ * Finish-gate verdict. The model produced a turn with no tool calls — the
+ * loop is about to complete. "finish" (or an undefined return) completes the
+ * run; "continue" injects `message` into the canonical history and takes one
+ * more model turn, consuming from the same maxModelTurns budget.
+ */
+export type FinishGateDecision<TMessage extends RuntimeMessage> =
+  | { action: "finish" }
+  | { action: "continue"; message: TMessage };
+
+/**
+ * Hard bound on finish-gate continuations per run, independent of the
+ * policy's own bookkeeping: a stuck or buggy gate can never loop forever.
+ * Two allows one audit round plus one re-audit after the model acted on the
+ * findings; anything more is churn.
+ */
+export const MAX_FINISH_GATE_CONTINUATIONS = 2;
+
 /** Awaited durable boundary, unlike best-effort event observers. Failures stop the run. */
 export interface TurnLifecycle<TMessage extends RuntimeMessage, TModelInput, TUsage> {
   beforeTurn(input: { turn: number; history: TMessage[] }): Promise<void>;
   afterAssembly(input: { turn: number; assembly: ContextAssembly<TMessage, TModelInput> }): Promise<void>;
   afterTurn(input: { turn: number; history: TMessage[]; modelTurn: ModelTurn<TMessage, TUsage>; results: ToolDispatchResult<TMessage>[] }): Promise<void>;
+  /**
+   * Optional finish gate, invoked when the model answered without tool calls,
+   * AFTER afterTurn has durably recorded the turn. Returning "continue"
+   * appends the message (typically a verification directive) and runs another
+   * turn; the loop caps continuations at MAX_FINISH_GATE_CONTINUATIONS and
+   * never exceeds maxModelTurns.
+   */
+  beforeFinish?(input: { turn: number; history: TMessage[]; modelTurn: ModelTurn<TMessage, TUsage> }): Promise<FinishGateDecision<TMessage> | undefined>;
 }
 
 export interface AgentLoopOptions<TMessage extends RuntimeMessage, TModelInput, TUsage> {
@@ -244,6 +271,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
     if (this.state.phase !== "idle") throw new Error("AgentLoop instances execute exactly once");
     this.state = { history: structuredClone([...history]), phase: "idle", turn: 0 };
     let usage: TUsage | undefined;
+    let finishGateContinuations = 0;
     const unsubscribeWait = this.options.waitController?.subscribe((activeCount) => {
       if (this.isTerminal(this.state.phase)) return;
       if (activeCount > 0 && this.state.phase !== "waiting_external") {
@@ -303,6 +331,22 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         if (modelTurn.toolCalls.length === 0) {
           if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results: [] });
           this.raiseForAbort(signal);
+          const decision = this.options.turnLifecycle?.beforeFinish
+            ? await this.options.turnLifecycle.beforeFinish({ turn, history: structuredClone(this.state.history), modelTurn })
+            : undefined;
+          if (decision?.action === "continue"
+            && finishGateContinuations < MAX_FINISH_GATE_CONTINUATIONS
+            && turn + 1 < this.options.maxModelTurns
+          ) {
+            finishGateContinuations += 1;
+            this.state.history.push(structuredClone(decision.message));
+            this.emit({ type: "finish_gate", action: "continue", turn });
+            continue;
+          }
+          // A "continue" the caps denied is reported as denied — conflating it
+          // with an actual finish verdict would hide a stuck gate.
+          if (decision?.action === "continue") this.emit({ type: "finish_gate", action: "denied", turn });
+          else if (decision !== undefined) this.emit({ type: "finish_gate", action: "finish", turn });
           this.transition("completed", turn);
           this.emit({
             type: "completed",

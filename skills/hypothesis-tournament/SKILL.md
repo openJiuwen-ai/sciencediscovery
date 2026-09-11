@@ -1,6 +1,8 @@
 ---
 name: hypothesis-tournament
 description: Use this skill when the user asks to propose, generate, or evaluate research hypotheses, mechanistic explanations, or experimental ideas, or to compare multiple candidate directions ("what mechanisms could explain this", "propose a few testable hypotheses", "which of these directions is worth pursuing", "brainstorm research ideas"). Runs the full tournament loop — parallel multi-perspective generation via subagents, critic-stance review, pairwise debate with deterministic Elo ranking, evolution rewrites, diversity checks, and a meta-review. For graph-whitespace-driven research-direction debates see idea-debate (when available); for multi-generation deepening with pruning and replication see tree-search.
+metadata:
+  pre-finish-audit: "true"
 ---
 
 # Hypothesis Tournament

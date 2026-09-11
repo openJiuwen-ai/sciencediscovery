@@ -18,7 +18,10 @@ export type AgentEvent =
   | { type: "usage"; usage: SubagentUsage }
   /** The last turn was cut at `max_tokens`. Emitted only when it was, so a
    *  consumer that ignores it behaves exactly as before. */
-  | { type: "turn_truncated" };
+  | { type: "turn_truncated" }
+  /** The finish gate acted on a no-tool answer (see RunEvent finish_gate in
+   *  runtime-core). Consumers that ignore it behave exactly as before. */
+  | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" };
 
 export interface Agent {
   abort(): void;

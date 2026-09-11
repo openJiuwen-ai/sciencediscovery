@@ -94,6 +94,7 @@ import {
 import { composeRuntime } from "../bootstrap/runtime.js";
 import { runLog } from "../logging.js";
 import { AgentVersionRecorder, type AgentVersioningOptions } from "./versioning.js";
+import { FINISH_GATE_REVIEW_TOOL, FinishGateLifecycle } from "./finish-gate.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
@@ -564,6 +565,11 @@ class NativeAgent implements NativeAgentHandle {
           tools: () => this.toolRegistry.visibleSpecs(),
         });
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
+      const finishGate = new FinishGateLifecycle<WireMessage, ModelInput<WireMessage>, ModelUsage>({
+        inner: this.versionRecorder,
+        reviewCheckpointAvailable: this.toolRegistry.values().some((tool) => tool.name === FINISH_GATE_REVIEW_TOOL),
+        skills: this.promptSkills,
+      });
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,
         maxParallelToolCalls: configuredMaxParallelToolCalls(),
@@ -571,7 +577,7 @@ class NativeAgent implements NativeAgentHandle {
         modelClient,
         toolDispatcher: this.toolRegistry,
         eventSink: (event) => { this.versionRecorder?.event(event); this.emitRuntimeEvent(event); },
-        turnLifecycle: this.versionRecorder,
+        turnLifecycle: finishGate,
         waitController: this.waitController,
       });
       const result = await loop.run(this.history, controller.signal, markProgress)
@@ -703,6 +709,9 @@ class NativeAgent implements NativeAgentHandle {
         break;
       case "completed":
         if (event.truncated) this.emit({ type: "turn_truncated" });
+        break;
+      case "finish_gate":
+        this.emit({ action: event.action, turn: event.turn, type: "finish_gate" });
         break;
       case "context_recovery":
       case "state_changed":

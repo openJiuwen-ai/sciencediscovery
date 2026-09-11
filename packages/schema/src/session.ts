@@ -354,6 +354,13 @@ export type RunStreamEvent =
   | { reason?: string; runId: string; type: "run.cancelled" }
   | { droppedEvents: number; type: "run.history.truncated" }
   | { phase: "thinking"; turn: number; type: "agent.phase" }
+  /**
+   * The finish gate acted on a no-tool answer: "continue" = audit directive
+   * injected and the run takes another turn; "denied" = the gate asked but the
+   * continuation caps said no; "finish" = the gate explicitly passed the run
+   * through. Consumers that predate the gate can ignore this safely.
+   */
+  | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
   | { delta: string; turn: number; type: "assistant.thinking.delta" }
   | { content: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
   | { delta: string; type: "assistant.delta" }

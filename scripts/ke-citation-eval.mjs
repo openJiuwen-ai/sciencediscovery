@@ -115,13 +115,22 @@ if (judgeEnabled) {
         body: JSON.stringify({
           model: judgeModel,
           messages: buildEntailmentMessages(statement, passages),
-          max_tokens: 32,
+          max_tokens: 2048,
           temperature: 0,
         }),
       });
       if (!response.ok) throw new Error(`judge endpoint HTTP ${response.status}`);
       const payload = await response.json();
-      return parseCitationJudgeVerdict(payload?.choices?.[0]?.message?.content ?? "");
+      // Reasoning-model judges (e.g. MiniMax-M3) embed <think>…</think> in
+      // content; strip it so the tail scan sees the verdict, and give the
+      // verdict room beyond the thinking budget (max_tokens above).
+      const raw = payload?.choices?.[0]?.message?.content ?? "";
+      // A terminated think block AND an unterminated one (judge truncated
+      // mid-thought) both have to go, or the tail scan misses the verdict.
+      const visible = String(raw)
+        .replace(/<think>[\s\S]*?<\/think>/g, "")
+        .replace(/<think>[\s\S]*$/g, "");
+      return parseCitationJudgeVerdict(visible);
     } catch (err) {
       console.warn(`  [judge] verdict failed (excluded from aggregates): ${err instanceof Error ? err.message : String(err)}`);
       return null;

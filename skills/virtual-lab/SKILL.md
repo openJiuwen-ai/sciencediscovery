@@ -1,6 +1,8 @@
 ---
 name: virtual-lab
 description: Use this skill when the user poses a complex open question that needs repeated deliberation across multiple expert perspectives and conclusions hardened under sustained criticism (plan reviews, major decisions with multi-party trade-offs, "organize an expert panel to discuss this", "pressure-test this plan over several rounds"). Provides the Virtual-Lab meeting protocol — a PI (you) chairing heterogeneous expert agents in lab-meeting rounds with a standing Critic, optional individual meetings for deep dives, semantic convergence signals instead of fixed round counts, and a resolution with a point-by-point Critic-response table. For generate-then-rank tournaments see hypothesis-tournament; for dependency-ordered pipelines see robin-chain; for multi-generation deepening see tree-search.
+metadata:
+  pre-finish-audit: "true"
 ---
 
 # Virtual Lab (meeting-style multi-agent organization)

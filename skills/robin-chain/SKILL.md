@@ -1,6 +1,8 @@
 ---
 name: robin-chain
 description: Use this skill when the user's task decomposes into stages with explicit sequential dependencies (a retrieve → screen → analyze → synthesize pipeline) where each stage must be independently auditable and individually re-runnable on failure. Provides the Robin-style minimal orchestration — 2-4 single-responsibility atomic agents chained explicitly, contract-first JSON handoffs between legs, per-leg persistence for auditability, and single-leg failure isolation. For open-ended multi-round deliberation see virtual-lab; for multi-candidate generate-and-rank see hypothesis-tournament; for graph-whitespace debates see idea-debate (when available).
+metadata:
+  pre-finish-audit: "true"
 ---
 
 # Atomic Agent Chain (Robin-style minimal orchestration)
