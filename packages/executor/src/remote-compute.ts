@@ -21,6 +21,7 @@ import type {
   RemoteHostTarget,
   RemoteRunnerStatus,
 } from "@sciencediscovery/schema";
+import { seedRemoteProvisioner } from "./remote-provisioner.js";
 import { loadRunnerExecutable, type RunnerExecutable } from "./runner-executable.js";
 import { RunnerClient } from "./runner-client.js";
 import {
@@ -183,6 +184,12 @@ export class RemoteComputeClient {
       throw new Error("This machine has no stored SSH credentials");
     },
     transport?: RemoteTransport,
+    /**
+     * Where the pinned micromamba is kept for machines that cannot download it
+     * themselves. Absent disables seeding, which is what tests want and what an
+     * installation gets if it never configures a data directory.
+     */
+    private readonly provisionerCacheDir?: string,
   ) {
     this.transport = transport ?? new NativeSshTransport();
   }
@@ -294,9 +301,9 @@ export class RemoteComputeClient {
     }
     const dataDir = /^data_dir=(.+)$/m.exec(result.stdout)?.[1]?.trim();
     if (!dataDir?.startsWith("/")) throw new Error("The remote host did not report its ScienceDiscovery data directory");
+    const architecture = /^architecture=(.+)$/m.exec(result.stdout)?.[1]?.trim() ?? "";
     let startCommand = shellQuote(runnerCommand);
     if (deploy) {
-      const architecture = /^architecture=(.+)$/m.exec(result.stdout)?.[1]?.trim() ?? "";
       const binary = await executable(architecture);
       const expectedArch = architecture === "x86_64" ? "x64" : architecture === "aarch64" ? "arm64" : undefined;
       if (!expectedArch || binary.architecture !== expectedArch || !/^[a-f0-9]{64}$/.test(binary.id)) throw new Error("Runner SEA artifact does not match the remote Linux architecture");
@@ -327,11 +334,36 @@ export class RemoteComputeClient {
       }
       startCommand = shellQuote(destination);
     }
+    await this.seedRemoteProvisioner(access, dataDir, architecture);
     return {
       dataDir,
       deployed: deploy,
       startCommand,
     };
+  }
+
+  /**
+   * Give the machine the micromamba it cannot fetch for itself.
+   *
+   * Never fatal: a machine may legitimately be here without managed
+   * environments, and this control plane may itself be offline. A connection
+   * that works for executions must not be refused because an optional
+   * convenience could not be arranged — the Runner reports the missing
+   * provisioner in its own setup status, and now says what to do about it.
+   */
+  private async seedRemoteProvisioner(
+    access: RemoteSshAccess,
+    dataDir: string,
+    architecture: string,
+  ): Promise<boolean> {
+    if (!this.provisionerCacheDir) return false;
+    return await seedRemoteProvisioner({
+      access,
+      architecture,
+      cacheDir: this.provisionerCacheDir,
+      dataDir,
+      transport: this.transport,
+    }).catch(() => false);
   }
 
   async connectRunner(host: RemoteHostTarget, options: RemoteRunnerConnectOptions = {}): Promise<RemoteRunnerStatus> {

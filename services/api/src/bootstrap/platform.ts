@@ -388,6 +388,11 @@ export function createPlatformServices(
     remoteCompute: dependencies.remoteCompute ?? new RemoteComputeClient(
       config.sshConfigPath,
       async (hostId) => store.remoteHostSshAccess(hostId),
+      undefined,
+      // Machines on an isolated network cannot fetch the environment
+      // provisioner themselves; this installation keeps one per architecture
+      // and hands it over when it deploys their Runner.
+      resolve(config.dataDir, "provisioners"),
     ),
     runnerClient,
     skillCatalog,
