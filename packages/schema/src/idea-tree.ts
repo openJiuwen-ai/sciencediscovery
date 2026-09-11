@@ -295,6 +295,11 @@ export interface IdeaResearchActivity {
   finishedAt: string | null;
   error: string | null;
 }
+export interface IdeaResearchTemplate {
+  id: string;
+  label: string;
+  assessors: Array<{ id: string; label: string }>;
+}
 export interface IdeaResearchState {
   activities?: IdeaResearchActivity[];
   id: string;
@@ -310,5 +315,7 @@ export interface IdeaResearchState {
   modelId: string;
   currentNodeId: string | null;
   settings: IdeaResearchSettings;
+  /** Frozen template metadata for rendering the assessment stages of this research. */
+  template?: IdeaResearchTemplate;
 }
 export interface IdeaResearchView { research: IdeaResearchState; graph: IdeaTreeGraph }

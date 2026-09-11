@@ -2,11 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
 import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
+import { ideaResearchPhaseLabel, IDEA_RESEARCH_STATUSES } from "./IdeaResearchLabels.js";
 
-const phases: Record<string, string> = {ideate: "构思方向与改进", design: "设计候选", activity: "活性评估", stability: "稳定性评估", sustainability: "可持续性评估", aggregate: "聚合评估", propagate: "汇总研究发现", complete: "已完成"};
-const statuses: Record<string, string> = {running: "运行中", pausing: "正在暂停", paused: "已暂停", interrupted: "已中断", completed: "已完成", ended: "已结束"};
-
-export function IdeaResearchCard({client, sessionId, onError}: {client: ApiClient; sessionId: string; onError: (message: string) => void}) {
+export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (message: string) => void; onResearchAvailability?: (available: boolean) => void}) {
   const element = useRef<HTMLElement>(null);
   const [items, setItems] = useState<IdeaResearchView[]>([]);
   const [selected, setSelected] = useState<string>();
@@ -20,6 +18,7 @@ export function IdeaResearchCard({client, sessionId, onError}: {client: ApiClien
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [client, sessionId]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => onResearchAvailability?.(items.length > 0), [items.length, onResearchAvailability]);
   const activeId = items.find(i => ["running", "pausing"].includes(i.research.status))?.research.id;
   const [reconnect, setReconnect] = useState(0);
   useEffect(() => {
@@ -59,20 +58,20 @@ export function IdeaResearchCard({client, sessionId, onError}: {client: ApiClien
   return <section ref={element} className="idea-research-panel" aria-label="Idea Tree 研究控制">
     {error && <p role="alert">{error} <button type="button" onClick={() => { void load(); setReconnect(n => n + 1); }}>重新连接</button></p>}
     <button className="idea-tree-view" type="button" onClick={() => setOpen(true)}>
-      <span className="idea-tree-view-header"><strong>Idea Tree</strong><em>{statuses[r.status]}</em></span>
+      <span className="idea-tree-view-header"><strong>Idea Tree</strong><em>{IDEA_RESEARCH_STATUSES[r.status] ?? r.status}</em></span>
       <span className="idea-tree-view-objective">{r.objective}</span>
       <span className="idea-tree-view-stats">第 {r.round} / {r.settings.maxRounds} 轮 · {view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length} 个候选已完成</span>
-      <span className="idea-tree-view-stats">{r.activities?.filter(a => a.status === "running").map(a => phases[a.role] ?? a.role).join(" · ") || phases[r.phase] || r.phase}</span>
+      <span className="idea-tree-view-stats">{r.activities?.filter(a => a.status === "running").map(a => ideaResearchPhaseLabel(r, a.role)).join(" · ") || ideaResearchPhaseLabel(r, r.phase)}</span>
       <span className="idea-tree-view-action">查看研究进度 →</span>
     </button>
     {open && <IdeaTreeExplorer autonomous graph={view.graph} treeIds={items.map(i => i.research.id)} onClose={() => setOpen(false)} onSelectTree={setSelected}
       controls={<div className="idea-research-progress">
-        <p>{statuses[r.status]} · 第 {r.round} / {r.settings.maxRounds} 轮 · 本轮完成 {r.batchCompleted} / {r.batch.length || r.batchCompleted}</p>
-        <p>{phases[r.phase] ?? r.phase} · 已评估 {view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length} 个候选 · tokens {r.usageKnown ? r.tokens : `${r.tokens}（部分用量未知）`}</p>
+        <p>{IDEA_RESEARCH_STATUSES[r.status] ?? r.status} · 第 {r.round} / {r.settings.maxRounds} 轮 · 本轮完成 {r.batchCompleted} / {r.batch.length || r.batchCompleted}</p>
+        <p>{ideaResearchPhaseLabel(r, r.phase)} · 已评估 {view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length} 个候选 · tokens {r.usageKnown ? r.tokens : `${r.tokens}（部分用量未知）`}</p>
         {r.reason && <p>{r.reason}</p>}
         <ol aria-label="研究执行进度">
           {(r.activities ?? []).slice(-12).map((activity, index) => <li key={`${activity.startedAt}-${activity.role}-${index}`}>
-            {phases[activity.role] ?? activity.role}{activity.nodeId ? ` · 节点 ${activity.nodeId}` : ""} · {{running: "执行中", completed: "已完成", stopped: "已停止", failed: "失败"}[activity.status]}
+            {ideaResearchPhaseLabel(r, activity.role)}{activity.nodeId ? ` · 节点 ${activity.nodeId}` : ""} · {{running: "执行中", completed: "已完成", stopped: "已停止", failed: "失败"}[activity.status]}
             {" · "}{Math.max(0, Math.round(((activity.finishedAt ? Date.parse(activity.finishedAt) : clock) - Date.parse(activity.startedAt)) / 1000))} 秒
             {activity.error && <p role="alert">{activity.error}</p>}
           </li>)}

@@ -135,5 +135,10 @@ function LegacyIdeaTreeView({
 }
 
 export function IdeaTreeView(props: Parameters<typeof LegacyIdeaTreeView>[0]) {
-  return <><IdeaResearchCard key={props.sessionId} client={props.client} sessionId={props.sessionId} onError={props.onError} /><LegacyIdeaTreeView {...props} /></>;
+  const [hasResearch, setHasResearch] = useState<boolean>();
+  useEffect(() => setHasResearch(undefined), [props.sessionId]);
+  return <>
+    <IdeaResearchCard key={props.sessionId} client={props.client} sessionId={props.sessionId} onError={props.onError} onResearchAvailability={setHasResearch} />
+    {hasResearch === false ? <LegacyIdeaTreeView {...props} /> : null}
+  </>;
 }
