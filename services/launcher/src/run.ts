@@ -300,6 +300,8 @@ export async function runCommand(context: RunContext, log: (message: string) => 
         break;
       case "assistant.thinking.delta":
       case "assistant.thinking.snapshot":
+      case "assistant.response.started":
+      case "assistant.response.settled":
         if (outputMode !== "text") process.stdout.write(JSON.stringify(event) + "\n");
         break;
       case "tool.started":

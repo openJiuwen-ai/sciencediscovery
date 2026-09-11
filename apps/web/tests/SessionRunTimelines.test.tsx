@@ -754,3 +754,124 @@ test("refresh hydration rebuilds SubAgent steps from its child stream", () => {
   assert.equal(group?.type === "subagents" && group.subagents[0]?.steps[0]?.content, "persisted child result");
   assert.equal(hydrated.lastSequence, 5, "a child cursor never replaces the main cursor");
 });
+
+test("a refresh replays identity deltas around an approval switch into one container", () => {
+  const finished = sessionRun("run-identity", 1, "completed");
+  const records: SessionRunEvent[] = [
+    {
+      createdAt: "2026-01-01T00:00:01.000Z",
+      event: { phase: "thinking", turn: 1, type: "agent.phase" },
+      runId: finished.id,
+      sequence: 1,
+      sessionId: finished.sessionId,
+    },
+    {
+      createdAt: "2026-01-01T00:00:02.000Z",
+      event: { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+      runId: finished.id,
+      sequence: 2,
+      sessionId: finished.sessionId,
+    },
+    {
+      createdAt: "2026-01-01T00:00:03.000Z",
+      event: { delta: "3. **", responseId: "response-1", type: "assistant.delta" },
+      runId: finished.id,
+      sequence: 3,
+      sessionId: finished.sessionId,
+    },
+    {
+      createdAt: "2026-01-01T00:00:04.000Z",
+      event: {
+        approvalMode: "always_allow",
+        permissionEpochId: "epoch-2",
+        previousApprovalMode: "ask_for_dangerous",
+        type: "session.approval_mode.changed",
+      },
+      runId: finished.id,
+      sequence: 4,
+      sessionId: finished.sessionId,
+    },
+    {
+      createdAt: "2026-01-01T00:00:05.000Z",
+      event: { delta: "科研脚本** 完成", responseId: "response-1", type: "assistant.delta" },
+      runId: finished.id,
+      sequence: 5,
+      sessionId: finished.sessionId,
+    },
+    {
+      createdAt: "2026-01-01T00:00:06.000Z",
+      event: { responseId: "response-1", turn: 1, type: "assistant.response.settled" },
+      runId: finished.id,
+      sequence: 6,
+      sessionId: finished.sessionId,
+    },
+  ];
+
+  const replayed = hydrateTerminalRunTimelines({}, [finished], { [finished.id]: records });
+  const entries = replayed[finished.id]?.entries ?? [];
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "approval-mode"]);
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers.length, 1, "full replay rebuilds the single container the live stream produced");
+  assert.equal(answers[0]?.type === "assistant" && answers[0].content, "3. **科研脚本** 完成");
+  assert.equal(answers[0]?.type === "assistant" && answers[0].streaming, false);
+  assert.equal(entries.some((entry) => entry.type === "thinking"), false,
+    "no empty thinking placeholder survives the settled response");
+});
+
+test("an off-screen run keeps one container when the switch lands mid-stream, and hydration matches live", () => {
+  const run = sessionRun("run-live", 1, "running");
+  const switchEvent: RunStreamEvent = {
+    approvalMode: "always_allow",
+    permissionEpochId: "epoch-2",
+    previousApprovalMode: "ask_for_dangerous",
+    type: "session.approval_mode.changed",
+  };
+  const liveEvents: RunStreamEvent[] = [
+    { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+    { delta: "Before ", responseId: "response-1", type: "assistant.delta" },
+    switchEvent,
+    { delta: "after", responseId: "response-1", type: "assistant.delta" },
+  ];
+  const live = liveEvents.reduce(
+    (timelines: SessionRunTimelines, event) => recordSessionTimelineEvent(timelines, run.sessionId, event, { runId: run.id }),
+    {} as SessionRunTimelines,
+  );
+  const liveEntries = live[run.sessionId]?.entries ?? [];
+  assert.deepEqual(liveEntries.map((entry) => entry.type), ["assistant", "approval-mode"]);
+
+  const records: SessionRunEvent[] = liveEvents.map((event, index) => ({
+    createdAt: `2026-01-01T00:00:0${index + 1}.000Z`,
+    event,
+    runId: run.id,
+    sequence: index + 1,
+    sessionId: run.sessionId,
+  }));
+  const replayed = hydrateSessionRunTimeline({}, run.sessionId, run, records);
+  assert.deepEqual(replayed[run.sessionId]?.entries, liveEntries,
+    "cold replay after refresh rebuilds the exact live projection");
+});
+
+test("a second response after tool calls never continues the first container", () => {
+  const run = sessionRun("run-two-responses", 1, "running");
+  const first: RunStreamEvent[] = [
+    { delta: "Running the tool now.", responseId: "response-1", type: "assistant.delta" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.settled" },
+    { trace: { id: "tool-1", name: "run_shell", status: "running" }, type: "tool.started" },
+    { trace: { id: "tool-1", name: "run_shell", status: "completed", summary: "ok" }, type: "tool.completed" },
+  ];
+  const second: RunStreamEvent[] = [
+    { responseId: "response-2", turn: 2, type: "assistant.response.started" },
+    { delta: "Tool finished; here is the report.", responseId: "response-2", type: "assistant.delta" },
+    { responseId: "response-2", turn: 2, type: "assistant.response.settled" },
+  ];
+
+  const timelines = [...first, ...second].reduce(
+    (current: SessionRunTimelines, event) => recordSessionTimelineEvent(current, run.sessionId, event, { runId: run.id }),
+    {} as SessionRunTimelines,
+  );
+  const entries = timelines[run.sessionId]?.entries ?? [];
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "tool", "assistant"]);
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers[0]?.type === "assistant" && answers[0].streaming, false);
+  assert.equal(answers[1]?.type === "assistant" && answers[1].content, "Tool finished; here is the report.");
+});

@@ -2699,7 +2699,9 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
 
@@ -3480,7 +3482,9 @@ test("legacy Reviewer does not inject findings or block the main agent", async (
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
   const started = parseSseEvents(stream).find((event) => event.type === "run.started");
@@ -3806,11 +3810,15 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
+    "assistant.response.settled",
     "tool.started",
     "tool.output",
     "tool.completed",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
   assert.deepEqual(subagentSseGoldens(stream), [[
@@ -5354,6 +5362,8 @@ test("API runs two task calls concurrently with independent persisted records", 
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
+    "assistant.response.settled",
     "tool.started",
     "tool.started",
     "tool.output",
@@ -5361,7 +5371,9 @@ test("API runs two task calls concurrently with independent persisted records", 
     "tool.output",
     "tool.completed",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
   const childGolden = [
@@ -6730,6 +6742,47 @@ test("delta coalescing publishes a window when its timer fires", async () => {
   assert.deepEqual(published, [{ delta: "slow stream", type: "assistant.delta" }]);
   await sink.flush();
   assert.equal(published.length, 1, "an empty buffer flushes to nothing");
+});
+
+test("delta coalescing never merges text across response identities", async () => {
+  const published: RunStreamEvent[] = [];
+  const sink = createDeltaCoalescingSink((event) => { published.push(event); }, 10_000, 1_000);
+  void sink.emit({ delta: "first ", responseId: "response-1", type: "assistant.delta" });
+  void sink.emit({ delta: "attempt", responseId: "response-1", type: "assistant.delta" });
+  // Same type, no turn change — only the response identity differs (a retry
+  // after input-overflow recovery). The open window must flush first.
+  void sink.emit({ delta: "second ", responseId: "response-2", type: "assistant.delta" });
+  void sink.emit({ delta: "attempt", responseId: "response-2", type: "assistant.delta" });
+  await sink.flush();
+  assert.deepEqual(published, [
+    { delta: "first attempt", responseId: "response-1", type: "assistant.delta" },
+    { delta: "second attempt", responseId: "response-2", type: "assistant.delta" },
+  ], "merged text never crosses a model-response boundary");
+
+  const thinking: RunStreamEvent[] = [];
+  const thinkingSink = createDeltaCoalescingSink((event) => { thinking.push(event); }, 10_000, 1_000);
+  void thinkingSink.emit({ delta: "reason ", responseId: "response-1", turn: 1, type: "assistant.thinking.delta" });
+  // Same response, different channel: thinking and text never interleave.
+  void thinkingSink.emit({ delta: "answer", responseId: "response-1", type: "assistant.delta" });
+  await thinkingSink.flush();
+  assert.deepEqual(thinking, [
+    { delta: "reason ", responseId: "response-1", turn: 1, type: "assistant.thinking.delta" },
+    { delta: "answer", responseId: "response-1", type: "assistant.delta" },
+  ], "channels of one response stay separate windows");
+});
+
+test("response lifecycle events flush the open delta window before publishing", async () => {
+  const published: RunStreamEvent[] = [];
+  const sink = createDeltaCoalescingSink((event) => { published.push(event); }, 10_000, 1_000);
+  void sink.emit({ delta: "partial", responseId: "response-1", type: "assistant.delta" });
+  void sink.emit({ responseId: "response-1", turn: 1, type: "assistant.response.settled" });
+  void sink.emit({ responseId: "response-2", turn: 1, type: "assistant.response.started" });
+  await sink.flush();
+  assert.deepEqual(published, [
+    { delta: "partial", responseId: "response-1", type: "assistant.delta" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.settled" },
+    { responseId: "response-2", turn: 1, type: "assistant.response.started" },
+  ], "lifecycle boundaries order strictly around buffered deltas");
 });
 
 test("publishing routes growable payloads into child streams and keeps the main timeline slim", async (context) => {

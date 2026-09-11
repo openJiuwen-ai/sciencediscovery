@@ -54,6 +54,8 @@ export type RunTimelineEntry =
       expanded: boolean;
       userExpanded?: boolean;
       id: string;
+      /** Response identity this thinking belongs to, when the producing event carried one. */
+      responseId?: string;
       status: "completed" | "running";
       truncated?: boolean;
       turn: number;
@@ -69,6 +71,13 @@ export type RunTimelineEntry =
   | {
       content: string;
       id: string;
+      /** Response identity this answer belongs to, when the producing event carried one. */
+      responseId?: string;
+      /** True while the response that produced this entry is still streaming.
+       * Cleared when the response settles or the run terminates, so bypass
+       * cards appended after the entry (approval switches, permissions)
+       * cannot hide the streaming cursor. */
+      streaming?: boolean;
       /** Chip references the run.completed message carried. Filled when the
        * terminal event arrives so the assistant entry renders [alias] chips
        * from the message's own references rather than the session-wide
@@ -217,9 +226,17 @@ function approvalModeLabelKey(mode: ApprovalMode): "timeline.approvalModeAlwaysA
   return mode === "always_allow" ? "timeline.approvalModeAlwaysAllow" : "timeline.approvalModeAsk";
 }
 
-function finishThinking(entries: RunTimelineEntry[]): RunTimelineEntry[] {
+/** Close running thinking entries. Identity-carrying entries belong to a
+ * response that has not settled: a bypass event (approval switch, permission
+ * prompt, subagent progress) must not fake their end. Only the response's
+ * own first text — reasoning precedes the answer — its settled lifecycle
+ * event, or a terminal run event may close them. */
+function finishThinking(entries: RunTimelineEntry[], scope: { all?: boolean; responseId?: string } = {}): RunTimelineEntry[] {
   return entries
     .map((entry) => entry.type === "thinking" && entry.status === "running"
+      && (scope.all
+        || entry.responseId === undefined
+        || (scope.responseId !== undefined && entry.responseId === scope.responseId))
       ? { ...entry, expanded: entry.userExpanded ?? false, status: "completed" }
       : entry)
     // Drop a thinking step that ended up with no reasoning text — it would
@@ -236,6 +253,36 @@ function nextAnswerId(entries: RunTimelineEntry[]): string {
 function nextThinkingId(entries: RunTimelineEntry[], turn: number): string {
   const segment = entries.filter((entry) => entry.type === "thinking" && entry.turn === turn).length + 1;
   return segment === 1 ? `thinking-${turn}` : `thinking-${turn}-${segment}`;
+}
+
+/** Entry index of the assistant entry carrying this response identity, if any. */
+function findAssistantByResponseId(entries: RunTimelineEntry[], responseId: string): number {
+  return entries.findIndex((entry) => entry.type === "assistant" && entry.responseId === responseId);
+}
+
+/** Entry index of the thinking entry carrying this response identity, if any. */
+function findThinkingByResponseId(entries: RunTimelineEntry[], responseId: string): number {
+  return entries.findIndex((entry) => entry.type === "thinking" && entry.responseId === responseId);
+}
+
+/**
+ * Legacy events carry no response identity. This conservative lookup only
+ * repairs the known historical defect where approval-switch audit cards sat
+ * between two halves of one answer: skip trailing approval-mode entries and
+ * resume the nearest assistant behind them. Everything else (tools,
+ * permissions, subagents, non-empty thinking) still stops the search, keeping
+ * old replay segmentation intact. Never used for events that do carry an ID.
+ */
+function findLegacyContinuation(entries: RunTimelineEntry[]): number {
+  let index = entries.length - 1;
+  while (index >= 0 && entries[index]!.type === "approval-mode") index -= 1;
+  const entry = entries[index];
+  return entry?.type === "assistant" && entry.responseId === undefined ? index : -1;
+}
+
+/** Update one entry in place; entries keep the position of first appearance. */
+function replaceEntry(entries: RunTimelineEntry[], index: number, update: (entry: RunTimelineEntry) => RunTimelineEntry): RunTimelineEntry[] {
+  return entries.map((entry, entryIndex) => entryIndex === index ? update(entry) : entry);
 }
 
 /** Keep streamed agent activity in the exact order in which each step started. */
@@ -263,7 +310,10 @@ export function reduceRunTimeline(
   if (event.type === "agent.phase") {
     const finished = finishThinking(entries);
     const last = finished.at(-1);
-    if (last?.type === "thinking" && last.turn === event.turn) {
+    // Reopen only an unstamped placeholder: one carrying a responseId belongs
+    // to a settled attempt (e.g. a retried invoke or a second execution of
+    // the same run), and that attempt keeps its own completed card.
+    if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return finished.map((entry, index) => index === finished.length - 1 && entry.type === "thinking"
         ? { ...entry, expanded: entry.userExpanded ?? true, status: "running" }
         : entry);
@@ -279,8 +329,25 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.thinking.delta") {
+    if (event.responseId !== undefined) {
+      const index = findThinkingByResponseId(entries, event.responseId);
+      if (index >= 0) {
+        return replaceEntry(entries, index, (entry) => entry.type === "thinking"
+          ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? true, status: "running" }
+          : entry);
+      }
+      return [...entries, {
+        content: event.delta,
+        expanded: true,
+        id: nextThinkingId(entries, event.turn),
+        responseId: event.responseId,
+        status: "running",
+        turn: event.turn,
+        type: "thinking",
+      }];
+    }
     const last = entries.at(-1);
-    if (last?.type === "thinking" && last.turn === event.turn) {
+    if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return entries.map((entry, entryIndex) => entryIndex === entries.length - 1 && entry.type === "thinking"
         ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? true, status: "running" }
         : entry);
@@ -297,9 +364,30 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.thinking.snapshot") {
+    if (event.responseId !== undefined) {
+      const index = findThinkingByResponseId(entries, event.responseId);
+      const thinkingFields = {
+        content: event.content,
+        ...(event.truncated ? { truncated: true } : {}),
+      } as const;
+      if (index >= 0) {
+        return replaceEntry(entries, index, (entry) => entry.type === "thinking"
+          ? { ...entry, ...thinkingFields }
+          : entry);
+      }
+      return [...entries, {
+        expanded: false,
+        id: nextThinkingId(entries, event.turn),
+        responseId: event.responseId,
+        status: "completed",
+        turn: event.turn,
+        type: "thinking",
+        ...thinkingFields,
+      }];
+    }
     const finished = finishThinking(entries);
     const last = finished.at(-1);
-    if (last?.type === "thinking" && last.turn === event.turn) {
+    if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return finished.map((entry, entryIndex) => entryIndex === finished.length - 1 && entry.type === "thinking"
         ? {
             ...entry,
@@ -317,6 +405,47 @@ export function reduceRunTimeline(
       turn: event.turn,
       type: "thinking",
     }];
+  }
+
+  // Response lifecycle: `started` cannot render anything by itself — the first
+  // delta (or snapshot) of the identity creates the entry where it first
+  // appears. What it does is adopt the unstamped thinking placeholder that
+  // `agent.phase` opened for this turn (agent.phase fires at turn_start,
+  // before this response's identity exists), so later thinking deltas of this
+  // response land on that card instead of stacking a second one. A retry
+  // attempt finds no unstamped placeholder and is a no-op.
+  if (event.type === "assistant.response.started") {
+    let adoptIndex = -1;
+    entries.forEach((entry, index) => {
+      if (entry.type === "thinking" && entry.status === "running"
+        && entry.responseId === undefined && entry.turn === event.turn) adoptIndex = index;
+    });
+    if (adoptIndex < 0) return entries;
+    return entries.map((entry, index) => index === adoptIndex && entry.type === "thinking"
+      ? { ...entry, responseId: event.responseId }
+      : entry);
+  }
+
+  // `settled` is terminal for this response identity only — the run may
+  // continue with tool calls or another attempt. Close the response's
+  // thinking (dropping an adopted placeholder that never received reasoning)
+  // and stop its streaming cursor, even while the run itself keeps running.
+  if (event.type === "assistant.response.settled") {
+    let changed = false;
+    const closed = entries.map((entry) => {
+      if (entry.type === "thinking" && entry.responseId === event.responseId && entry.status === "running") {
+        changed = true;
+        return { ...entry, expanded: entry.userExpanded ?? false, status: "completed" as const };
+      }
+      if (entry.type === "assistant" && entry.responseId === event.responseId && entry.streaming) {
+        changed = true;
+        return { ...entry, streaming: false };
+      }
+      return entry;
+    });
+    if (!changed) return entries;
+    return closed.filter((entry): boolean =>
+      !(entry.type === "thinking" && entry.responseId === event.responseId && !entry.content.trim())) as RunTimelineEntry[];
   }
 
   if (event.type === "tool.started") {
@@ -365,10 +494,28 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.delta") {
-    const finished = finishThinking(entries);
-    const last = finished.at(-1);
-    if (last?.type === "assistant") {
-      return finished.map((entry, index) => index === finished.length - 1 && entry.type === "assistant"
+    // Text of a response closes that response's own thinking (reasoning
+    // precedes the answer); other responses' thinking is left to its own
+    // lifecycle events.
+    const finished = finishThinking(entries, { responseId: event.responseId });
+    if (event.responseId !== undefined) {
+      const index = findAssistantByResponseId(finished, event.responseId);
+      if (index >= 0) {
+        return replaceEntry(finished, index, (entry) => entry.type === "assistant"
+          ? { ...entry, content: entry.content + event.delta, streaming: entry.streaming ?? true }
+          : entry);
+      }
+      return [...finished, {
+        content: event.delta,
+        id: nextAnswerId(finished),
+        responseId: event.responseId,
+        streaming: true,
+        type: "assistant",
+      }];
+    }
+    const legacy = findLegacyContinuation(finished);
+    if (legacy >= 0) {
+      return replaceEntry(finished, legacy, (entry) => entry.type === "assistant"
         ? { ...entry, content: entry.content + event.delta }
         : entry);
     }
@@ -376,23 +523,30 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.snapshot") {
-    const finished = finishThinking(entries);
-    const last = finished.at(-1);
-    if (last?.type === "assistant") {
-      return finished.map((entry, index) => index === finished.length - 1 && entry.type === "assistant"
-        ? {
-            ...entry,
-            content: event.content,
-            ...(event.truncated ? { truncated: true } : {}),
-          }
+    const finished = finishThinking(entries, { responseId: event.responseId });
+    const snapshotFields = { content: event.content, ...(event.truncated ? { truncated: true } : {}) } as const;
+    if (event.responseId !== undefined) {
+      const index = findAssistantByResponseId(finished, event.responseId);
+      if (index >= 0) {
+        return replaceEntry(finished, index, (entry) => entry.type === "assistant"
+          ? { ...entry, ...snapshotFields }
+          : entry);
+      }
+      return [...finished, {
+        id: nextAnswerId(finished),
+        responseId: event.responseId,
+        streaming: true,
+        type: "assistant",
+        ...snapshotFields,
+      }];
+    }
+    const legacy = findLegacyContinuation(finished);
+    if (legacy >= 0) {
+      return replaceEntry(finished, legacy, (entry) => entry.type === "assistant"
+        ? { ...entry, ...snapshotFields }
         : entry);
     }
-    return [...finished, {
-      content: event.content,
-      id: nextAnswerId(finished),
-      ...(event.truncated ? { truncated: true } : {}),
-      type: "assistant",
-    }];
+    return [...finished, { id: nextAnswerId(finished), type: "assistant", ...snapshotFields }];
   }
 
   if (event.type === "permission.required" || event.type === "permission.resolved") {
@@ -439,7 +593,8 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "run.completed") {
-    const finished = finishThinking(entries);
+    const finished = finishThinking(entries, { all: true }).map((entry) =>
+      entry.type === "assistant" && entry.streaming ? { ...entry, streaming: false } : entry);
     const messageReferences = event.message.references;
     // Thread the message's own chip references onto the assistant entry that
     // carries the same report prose. The terminal message is the authoritative
@@ -465,7 +620,8 @@ export function reduceRunTimeline(
     const summary = event.type === "run.failed"
       ? formatRunFailure(event.errorCode, event.error)
       : event.reason;
-    return finishThinking(entries).map((entry) => {
+    return finishThinking(entries, { all: true }).map((entry) => {
+      if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running") {
         return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
@@ -479,7 +635,8 @@ export function reduceRunTimeline(
       || event.status === "cancelled"
       || event.status === "interrupted")) {
     const summary = event.reason ?? event.run.error ?? `Run ${event.status}`;
-    return finishThinking(entries).map((entry) => {
+    return finishThinking(entries, { all: true }).map((entry) => {
+      if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running" && event.status !== "completed") {
         return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
@@ -710,7 +867,9 @@ export function RunTimeline({
                   workspaceSessionId={workspaceSessionId}
                 />
                 {entry.truncated ? <p className="muted">Earlier replay text was truncated by the retention policy.</p> : null}
-                {isRunning && entries.at(-1)?.id === entry.id ? <span className="cursor" /> : null}
+                {isRunning && (entry.responseId !== undefined
+                  ? entry.streaming
+                  : entries[findLegacyContinuation(entries)]?.id === entry.id) ? <span className="cursor" /> : null}
               </div>
             </article>
           );

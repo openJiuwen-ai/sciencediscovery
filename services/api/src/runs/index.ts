@@ -1872,9 +1872,16 @@ async function executeAgentRun(
       turnNumber += 1;
       void emit({ phase: "thinking", turn: turnNumber, type: "agent.phase" });
     }
+    if (event.type === "response_start") {
+      void emit({ responseId: event.responseId, turn: turnNumber, type: "assistant.response.started" });
+    }
+    if (event.type === "response_settled") {
+      void emit({ responseId: event.responseId, turn: turnNumber, type: "assistant.response.settled" });
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
       void emit({
         delta: event.assistantMessageEvent.delta,
+        responseId: event.assistantMessageEvent.responseId,
         turn: turnNumber,
         type: "assistant.thinking.delta",
       });
@@ -1882,7 +1889,11 @@ async function executeAgentRun(
     if (event.type === "turn_truncated") turnTruncated = true;
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       assistantText += event.assistantMessageEvent.delta;
-      void emit({ delta: event.assistantMessageEvent.delta, type: "assistant.delta" });
+      void emit({
+        delta: event.assistantMessageEvent.delta,
+        responseId: event.assistantMessageEvent.responseId,
+        type: "assistant.delta",
+      });
     }
     if (event.type === "tool_execution_start") {
       const trace: ToolTrace = {
@@ -2230,7 +2241,9 @@ export interface DeltaCoalescingSink {
  * Streamed text arrives token-sized, but every published record pays a fixed
  * envelope in the JSONL stream. Buffer consecutive same-stream deltas and
  * publish one merged record per window: the text is concatenated exactly, so
- * nothing is lost except transport chunk boundaries. Any non-delta event
+ * nothing is lost except transport chunk boundaries. The buffer key includes
+ * the response identity, so a new response flushes the previous one first —
+ * merged text never crosses a model-response boundary. Any non-delta event
  * flushes first, which keeps tool/permission ordering intact.
  */
 export function createDeltaCoalescingSink(
@@ -2238,7 +2251,12 @@ export function createDeltaCoalescingSink(
   windowMs = 250,
   maxChars = 8_192,
 ): DeltaCoalescingSink {
-  let pending: { delta: string; turn?: number; type: "assistant.delta" | "assistant.thinking.delta" } | undefined;
+  let pending: {
+    delta: string;
+    responseId?: string;
+    turn?: number;
+    type: "assistant.delta" | "assistant.thinking.delta";
+  } | undefined;
   let timer: NodeJS.Timeout | undefined;
 
   const flush = (): Promise<void> => {
@@ -2248,8 +2266,17 @@ export function createDeltaCoalescingSink(
     }
     if (!pending) return Promise.resolve();
     const merged: RunStreamEvent = pending.type === "assistant.thinking.delta"
-      ? { delta: pending.delta, turn: pending.turn!, type: "assistant.thinking.delta" }
-      : { delta: pending.delta, type: "assistant.delta" };
+      ? {
+          delta: pending.delta,
+          ...(pending.responseId !== undefined ? { responseId: pending.responseId } : {}),
+          turn: pending.turn!,
+          type: "assistant.thinking.delta",
+        }
+      : {
+          delta: pending.delta,
+          ...(pending.responseId !== undefined ? { responseId: pending.responseId } : {}),
+          type: "assistant.delta",
+        };
     pending = undefined;
     return Promise.resolve(publish(merged));
   };
@@ -2257,9 +2284,10 @@ export function createDeltaCoalescingSink(
   const emit: RunEventSink = (event) => {
     if (event.type === "assistant.delta" || event.type === "assistant.thinking.delta") {
       const turn = event.type === "assistant.thinking.delta" ? event.turn : undefined;
-      if (pending && (pending.type !== event.type || pending.turn !== turn)) void flush();
+      const responseId = event.responseId;
+      if (pending && (pending.type !== event.type || pending.turn !== turn || pending.responseId !== responseId)) void flush();
       if (!pending) {
-        pending = { delta: "", ...(turn === undefined ? {} : { turn }), type: event.type };
+        pending = { delta: "", ...(responseId === undefined ? {} : { responseId }), ...(turn === undefined ? {} : { turn }), type: event.type };
         timer = setTimeout(() => void flush(), windowMs);
         timer.unref?.();
       }

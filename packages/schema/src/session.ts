@@ -383,10 +383,23 @@ export type RunStreamEvent =
   | { reason?: string; runId: string; type: "run.cancelled" }
   | { droppedEvents: number; type: "run.history.truncated" }
   | { phase: "thinking"; turn: number; type: "agent.phase" }
-  | { delta: string; turn: number; type: "assistant.thinking.delta" }
-  | { content: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
-  | { delta: string; type: "assistant.delta" }
-  | { content: string; truncated?: boolean; type: "assistant.snapshot" }
+  | { delta: string; responseId?: string; turn: number; type: "assistant.thinking.delta" }
+  | { content: string; responseId?: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
+  | { delta: string; responseId?: string; type: "assistant.delta" }
+  | { content: string; responseId?: string; truncated?: boolean; type: "assistant.snapshot" }
+  /**
+   * One actual model invoke attempt begins. Its text/thinking deltas and the
+   * matching assistant.response.settled carry the same `responseId`, so the
+   * timeline can keep one Markdown container even when audit events (e.g. an
+   * approval-policy switch) interleave. Old records predate the identity and
+   * omit it entirely.
+   */
+  | { responseId: string; turn: number; type: "assistant.response.started" }
+  /**
+   * The model invoke attempt settled (completed, failed, or was aborted).
+   * Terminal for that response only; the run may continue with a new identity.
+   */
+  | { responseId: string; turn: number; type: "assistant.response.settled" }
   | { trace: ToolTrace; type: "tool.started" }
   | { trace: ToolTrace; type: "tool.completed" }
   | { chunk: string; toolCallId: string; type: "tool.output" }

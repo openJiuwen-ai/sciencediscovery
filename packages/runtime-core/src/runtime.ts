@@ -126,6 +126,7 @@ export interface RunTransition {
 }
 
 const TERMINAL_PHASES: ReadonlySet<AgentLoopPhase> = new Set(["completed", "cancelled", "failed"]);
+
 const phaseSet = (...phases: AgentLoopPhase[]): ReadonlySet<AgentLoopPhase> => new Set(phases);
 const NEXT_PHASES: Readonly<Record<AgentLoopPhase, ReadonlySet<AgentLoopPhase>>> = Object.freeze({
   idle: phaseSet("assembling_context", "cancelled", "failed"),
@@ -153,7 +154,14 @@ export function reduceRunState<TMessage extends RuntimeMessage>(
 export type RunEvent<TUsage> =
   | { state: AgentLoopPhase; turn: number; type: "state_changed" }
   | { type: "turn_start"; turn: number }
-  | { delta: string; kind: "text" | "thinking"; type: "model_delta" }
+  /** One actual model invoke attempt begins. All text/thinking deltas of the
+   *  attempt share `responseId`; a retry (e.g. input-overflow recovery) or a
+   *  new turn starts a fresh identity. */
+  | { responseId: string; turn: number; type: "response_start" }
+  | { delta: string; kind: "text" | "thinking"; responseId: string; type: "model_delta" }
+  /** The model invoke attempt settled (completed, failed, or aborted mid-invoke).
+   *  Terminal for the responseId only — a run continues with the next attempt. */
+  | { responseId: string; turn: number; type: "response_settled" }
   | { call: RuntimeToolCall; type: "tool_execution_start" }
   | { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; type: "tool_execution_end" }
   | { type: "model_usage"; usage: TUsage }
@@ -283,14 +291,9 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
 
         this.transition("calling_model", turn);
         this.emit({ type: "turn_start", turn });
-        const observer: ModelClientObserver = {
-          onProgress,
-          onTextDelta: (delta) => this.emit({ type: "model_delta", kind: "text", delta }),
-          onThinkingDelta: (delta) => this.emit({ type: "model_delta", kind: "thinking", delta }),
-        };
         let modelTurn: ModelTurn<TMessage, TUsage>;
         try {
-          modelTurn = await this.options.modelClient.invoke(assembly.modelInput, signal, observer);
+          modelTurn = await this.invokeModel(assembly.modelInput, signal, turn, onProgress);
         } catch (error) {
           if (!this.options.modelClient.isInputTooLargeError?.(error) || signal.aborted) throw error;
           this.transition("assembling_context", turn);
@@ -306,7 +309,7 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           if (this.options.turnLifecycle) await this.options.turnLifecycle.afterAssembly({ turn, assembly: structuredClone(assembly) });
           this.raiseForAbort(signal);
           this.transition("calling_model", turn);
-          modelTurn = await this.options.modelClient.invoke(assembly.modelInput, signal, observer);
+          modelTurn = await this.invokeModel(assembly.modelInput, signal, turn, onProgress);
         }
         if (modelTurn.usage !== undefined) {
           usage = modelTurn.usage;
@@ -371,6 +374,22 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
       throw error;
     } finally {
       unsubscribeWait?.();
+    }
+  }
+
+  /** Each attempt owns its identity, including a recovery attempt that fails. */
+  private async invokeModel(modelInput: TModelInput, signal: AbortSignal, turn: number, onProgress: () => void): Promise<ModelTurn<TMessage, TUsage>> {
+    const responseId = globalThis.crypto.randomUUID();
+    this.emit({ responseId, turn, type: "response_start" });
+    const observer: ModelClientObserver = {
+      onProgress,
+      onTextDelta: (delta) => this.emit({ type: "model_delta", kind: "text", delta, responseId }),
+      onThinkingDelta: (delta) => this.emit({ type: "model_delta", kind: "thinking", delta, responseId }),
+    };
+    try {
+      return await this.options.modelClient.invoke(modelInput, signal, observer);
+    } finally {
+      this.emit({ responseId, turn, type: "response_settled" });
     }
   }
 

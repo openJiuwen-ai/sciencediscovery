@@ -408,3 +408,121 @@ test("observer failures cannot change run control flow or its terminal state", a
   assert.equal(result.history.at(-1)?.content, "done");
   assert.equal(loop.snapshot().phase, "completed");
 });
+
+test("model deltas carry a response identity that settles once per invoke attempt", async () => {
+  const events: RunEvent<never>[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 2,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: {
+      async invoke(input, _signal, observer) {
+        observer.onTextDelta("part one ");
+        observer.onThinkingDelta("reasoning ");
+        observer.onTextDelta("part two");
+        const toolCalls = input.history.length >= 3 ? [] : [{ id: "t1", name: "lookup", args: {} }];
+        return { assistantMessage: { role: "assistant", content: "turn" }, toolCalls };
+      },
+    },
+    toolDispatcher: { async execute() { return { content: "ok", isError: false, message: { role: "tool" } }; } },
+    eventSink: (event) => events.push(event),
+  });
+  await loop.run([{ role: "user", content: "go" }], new AbortController().signal, () => undefined);
+  const starts = events.filter((event) => event.type === "response_start");
+  const deltas = events.filter((event) => event.type === "model_delta");
+  const settled = events.filter((event) => event.type === "response_settled");
+  assert.equal(starts.length, 2, "one response per model turn");
+  assert.equal(settled.length, 2);
+  assert.notEqual(starts[0]!.responseId, starts[1]!.responseId, "each turn gets a fresh identity");
+  for (const delta of deltas) {
+    assert.ok(starts.some((start) => start.responseId === delta.responseId), "every delta names its response");
+  }
+  const first = deltas.filter((delta) => delta.responseId === starts[0]!.responseId);
+  assert.deepEqual(first.map((delta) => delta.kind), ["text", "thinking", "text"], "text and thinking share the response identity");
+});
+
+test("a failed or cancelled invoke still settles its response identity", async () => {
+  const controller = new AbortController();
+  const events: RunEvent<never>[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke(_input, _signal, observer) { observer.onTextDelta("partial"); controller.abort(); throw new Error("cancelled writer"); } },
+    toolDispatcher: { async execute() { throw new Error("not called"); } },
+    eventSink: (event) => events.push(event),
+  });
+  await assert.rejects(() => loop.run([], controller.signal, () => undefined), /cancelled writer/);
+  const starts = events.filter((event) => event.type === "response_start");
+  const settled = events.filter((event) => event.type === "response_settled");
+  assert.equal(starts.length, 1);
+  assert.equal(settled.length, 1, "a mid-invoke abort settles the open response");
+  assert.equal(starts[0]!.responseId, settled[0]!.responseId);
+});
+
+test("input-overflow recovery retries with a new response identity", async () => {
+  const events: RunEvent<never>[] = [];
+  let calls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 1,
+    contextAssembler: {
+      async assemble({ history, recovery }) {
+        const next = recovery ? [{ role: "summary", content: "compacted" }] : [...history];
+        return { history: next, modelInput: { history: next } };
+      },
+    },
+    modelClient: {
+      isInputTooLargeError(error) { return error instanceof Error && error.message === "context too large"; },
+      async invoke(_input, _signal, observer) {
+        calls += 1;
+        if (calls === 1) { observer.onTextDelta("lost prefix"); throw new Error("context too large"); }
+        observer.onTextDelta("recovered answer");
+        return { assistantMessage: { role: "assistant", content: "done" }, toolCalls: [] };
+      },
+    },
+    toolDispatcher: { async execute() { throw new Error("not called"); } },
+    eventSink: (event) => events.push(event),
+  });
+  await loop.run([{ role: "user", content: "large" }], new AbortController().signal, () => undefined);
+  const starts = events.filter((event) => event.type === "response_start");
+  const settled = events.filter((event) => event.type === "response_settled");
+  const deltas = events.filter((event) => event.type === "model_delta");
+  assert.equal(starts.length, 2, "the retried invoke is a new response");
+  assert.equal(settled.length, 2, "the failed attempt settles before the retry starts");
+  assert.notEqual(starts[0]!.responseId, starts[1]!.responseId);
+  assert.deepEqual(deltas.map((delta) => [delta.responseId, delta.delta]), [
+    [starts[0]!.responseId, "lost prefix"],
+    [starts[1]!.responseId, "recovered answer"],
+  ]);
+});
+
+test("a recovery attempt settles even when it fails or is cancelled", async () => {
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    const events: RunEvent<never>[] = [];
+    let calls = 0;
+    const loop = new AgentLoop<RuntimeMessage, Input, never>({
+      maxModelTurns: 1,
+      contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+      modelClient: {
+        isInputTooLargeError(error) { return error instanceof Error && error.message === "overflow"; },
+        async invoke(_input, _signal, observer) {
+          calls += 1;
+          observer.onTextDelta(`attempt ${calls}`);
+          if (calls === 1) throw new Error("overflow");
+          if (cancel) controller.abort();
+          throw new Error("recovery failed");
+        },
+      },
+      toolDispatcher: { async execute() { throw new Error("unused"); } },
+      eventSink: (event) => events.push(event),
+    });
+    await assert.rejects(loop.run([], controller.signal, () => undefined), /recovery failed/);
+    const lifecycle = events.filter((event) => event.type === "response_start" || event.type === "response_settled");
+    assert.deepEqual(lifecycle.map((event) => event.type), [
+      "response_start", "response_settled", "response_start", "response_settled",
+    ]);
+    assert.equal(lifecycle[0]!.responseId, lifecycle[1]!.responseId);
+    assert.equal(lifecycle[2]!.responseId, lifecycle[3]!.responseId);
+    assert.notEqual(lifecycle[0]!.responseId, lifecycle[2]!.responseId);
+    assert.equal(loop.snapshot().phase, cancel ? "cancelled" : "failed");
+  }
+});

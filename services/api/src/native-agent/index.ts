@@ -685,13 +685,19 @@ class NativeAgent implements NativeAgentHandle {
       case "turn_start":
         this.emit({ type: "turn_start" });
         break;
+      case "response_start":
+        this.emit({ responseId: event.responseId, turn: event.turn, type: "response_start" });
+        break;
       case "model_delta":
         this.emit({
           type: "message_update",
           assistantMessageEvent: event.kind === "text"
-            ? { type: "text_delta", delta: event.delta }
-            : { type: "thinking_delta", delta: event.delta },
+            ? { type: "text_delta", delta: event.delta, responseId: event.responseId }
+            : { type: "thinking_delta", delta: event.delta, responseId: event.responseId },
         });
+        break;
+      case "response_settled":
+        this.emit({ responseId: event.responseId, turn: event.turn, type: "response_settled" });
         break;
       case "tool_execution_start":
         this.emit({

@@ -6,12 +6,17 @@ import type { SubagentUsage } from "@sciencediscovery/schema";
 import type { AgentToolResult } from "@sciencediscovery/tools";
 
 export type AssistantMessageEvent =
-  | { delta: string; type: "text_delta" }
-  | { delta: string; type: "thinking_delta" };
+  | { delta: string; responseId: string; type: "text_delta" }
+  | { delta: string; responseId: string; type: "thinking_delta" };
 
 export type AgentEvent =
   | { type: "turn_start" }
+  /** One actual model invoke attempt begins; its text/thinking deltas carry the
+   *  same `responseId`. Legacy compatibility belongs to stored Run events. */
+  | { responseId: string; turn: number; type: "response_start" }
   | { assistantMessageEvent: AssistantMessageEvent; type: "message_update" }
+  /** The model invoke attempt settled (completed, failed, or was aborted). */
+  | { responseId: string; turn: number; type: "response_settled" }
   | { type: "model_usage"; usage?: ModelUsage; usageReported: boolean }
   | { args: Record<string, unknown>; toolCallId: string; toolName: string; type: "tool_execution_start" }
   | { isError: boolean; result: AgentToolResult; toolCallId: string; toolName: string; type: "tool_execution_end" }

@@ -789,3 +789,255 @@ test("replaying the same approval switch does not stack duplicate timeline recor
   assert.deepEqual(entries.map((entry) => entry.type), ["approval-mode"]);
   assert.equal(entries[0]?.type === "approval-mode" && entries[0].approvalMode, "ask_for_dangerous");
 });
+
+test("an approval switch between deltas of one response keeps a single markdown container", () => {
+  // Issue #76 方式 B：同一次模型响应的两个 delta 之间插入审批切换。
+  const entries = apply([
+    { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+    { delta: "3. **", responseId: "response-1", type: "assistant.delta" },
+    {
+      approvalMode: "always_allow",
+      permissionEpochId: "epoch-2",
+      previousApprovalMode: "ask_for_dangerous",
+      type: "session.approval_mode.changed",
+    },
+    { delta: "科研脚本** — 完成", responseId: "response-1", type: "assistant.delta" },
+  ]);
+
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers.length, 1, "identity-carrying deltas of one response never split");
+  assert.equal(answers[0]?.type === "assistant" && answers[0].content, "3. **科研脚本** — 完成");
+  assert.equal(answers[0]?.type === "assistant" && answers[0].id, "answer-1");
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "approval-mode"],
+    "the audit card stays after the container it interrupted");
+
+  const html = renderToStaticMarkup(createElement(RunTimeline, {
+    entries,
+    isRunning: true,
+    onToggle: () => undefined,
+  }));
+  assert.equal((html.match(/message assistant streaming/g) ?? []).length, 1);
+  assert.match(html, /<strong>科研脚本<\/strong>/);
+  assert.match(html, /Approval policy changed/);
+});
+
+test("bypass events between identity deltas never split the response container", () => {
+  // 第 7 节矩阵：同一 responseId 的正文间插入权限请求、未知 resolved、
+  // 新子任务和审批切换，正文仍是一个 entry，旁路卡片都保留。
+  const entries = apply([
+    { delta: "Before ", responseId: "response-7", type: "assistant.delta" },
+    {
+      request: {
+        action: "code",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        id: "permission-1",
+        resource: "workspace-code",
+        sessionId: "session-1",
+        state: "pending",
+        summary: "Run Python",
+      },
+      type: "permission.required",
+    },
+    { subagent: timelineSubagent("lane-a", "2026-01-01T00:00:01.000Z"), type: "subagent.updated" },
+    {
+      approvalMode: "always_allow",
+      permissionEpochId: "epoch-2",
+      previousApprovalMode: "ask_for_dangerous",
+      type: "session.approval_mode.changed",
+    },
+    { delta: "after", responseId: "response-7", type: "assistant.delta" },
+  ]);
+
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.type === "assistant" && answers[0].content, "Before after");
+  assert.equal(answers[0]?.type === "assistant" && answers[0].responseId, "response-7",
+    "the container keeps the position of its first delta");
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "permission", "subagents", "approval-mode"]);
+});
+
+test("different response identities stay separate answers in one run", () => {
+  const entries = apply([
+    { delta: "First answer.", responseId: "response-1", type: "assistant.delta" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.settled" },
+    { trace: { id: "tool-1", name: "run_python", status: "running" }, type: "tool.started" },
+    { trace: { id: "tool-1", name: "run_python", status: "completed", summary: "42" }, type: "tool.completed" },
+    { responseId: "response-2", turn: 2, type: "assistant.response.started" },
+    { delta: "Second answer.", responseId: "response-2", type: "assistant.delta" },
+  ]);
+
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers.length, 2);
+  assert.equal(answers[0]?.type === "assistant" && answers[0].content, "First answer.");
+  assert.equal(answers[1]?.type === "assistant" && answers[1].content, "Second answer.");
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "tool", "assistant"]);
+});
+
+test("a snapshot replaces the response container instead of concatenating", () => {
+  const entries = apply([
+    { delta: "Partial", responseId: "response-1", type: "assistant.delta" },
+    { content: "Full answer.", responseId: "response-1", type: "assistant.snapshot" },
+    { delta: " Continued.", responseId: "response-1", type: "assistant.delta" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.settled" },
+  ]);
+
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.type === "assistant" && answers[0].content, "Full answer. Continued.");
+  assert.equal(answers[0]?.type === "assistant" && answers[0].streaming, false,
+    "settled clears the streaming cursor even while the run continues");
+});
+
+test("an identity thinking card survives bypass events and closes on the response lifecycle", () => {
+  const streamingEvents: RunStreamEvent[] = [
+    { phase: "thinking", turn: 1, type: "agent.phase" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+    { delta: "Reasoning so far", responseId: "response-1", turn: 1, type: "assistant.thinking.delta" },
+    {
+      approvalMode: "always_allow",
+      permissionEpochId: "epoch-2",
+      previousApprovalMode: "ask_for_dangerous",
+      type: "session.approval_mode.changed",
+    },
+    { delta: "More reasoning", responseId: "response-1", turn: 1, type: "assistant.thinking.delta" },
+  ];
+  const entries = apply(streamingEvents);
+
+  const thinking = entries.filter((entry) => entry.type === "thinking");
+  assert.equal(thinking.length, 1, "the approval switch does not split same-response thinking");
+  assert.equal(thinking[0]?.type === "thinking" && thinking[0].status, "running",
+    "the switch does not fake the reasoning's end either");
+  assert.equal(thinking[0]?.type === "thinking" && thinking[0].content, "Reasoning so farMore reasoning");
+  assert.equal(thinking[0]?.type === "thinking" && thinking[0].responseId, "response-1",
+    "response.started adopted the agent.phase placeholder");
+
+  const settled = apply([...streamingEvents, {
+    responseId: "response-1",
+    turn: 1,
+    type: "assistant.response.settled",
+  }]);
+  const settledThinking = settled.filter((entry) => entry.type === "thinking");
+  assert.equal(settledThinking.length, 1);
+  assert.equal(settledThinking[0]?.type === "thinking" && settledThinking[0].status, "completed",
+    "the response lifecycle closes its own thinking");
+});
+
+test("a settled empty thinking placeholder is dropped rather than rendering an empty card", () => {
+  const entries = apply([
+    { phase: "thinking", turn: 1, type: "agent.phase" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.started" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.settled" },
+    { responseId: "response-2", turn: 1, type: "assistant.response.started" },
+    { delta: "Recovered answer.", responseId: "response-2", type: "assistant.delta" },
+  ]);
+
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant"],
+    "the overflow-retry attempt leaves no empty thinking wedge and no split text");
+  assert.equal(entries[0]?.type === "assistant" && entries[0].content, "Recovered answer.");
+});
+
+test("legacy deltas around an approval switch still repair to one container", () => {
+  // 旧记录无 responseId：兼容分支只跳过尾部审批提示修复已知历史缺陷。
+  const entries = apply([
+    { delta: "3. **", type: "assistant.delta" },
+    {
+      approvalMode: "always_allow",
+      permissionEpochId: "epoch-2",
+      previousApprovalMode: "ask_for_dangerous",
+      type: "session.approval_mode.changed",
+    },
+    { delta: "科研脚本**", type: "assistant.delta" },
+  ]);
+
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers.length, 1);
+  assert.equal(answers[0]?.type === "assistant" && answers[0].content, "3. **科研脚本**");
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "approval-mode"]);
+});
+
+test("legacy deltas keep stopping at a real boundary after an approval switch", () => {
+  const entries = apply([
+    { delta: "First answer.", type: "assistant.delta" },
+    {
+      approvalMode: "always_allow",
+      permissionEpochId: "epoch-2",
+      previousApprovalMode: "ask_for_dangerous",
+      type: "session.approval_mode.changed",
+    },
+    { trace: { id: "tool-1", name: "run_python", status: "completed", summary: "42" }, type: "tool.completed" },
+    { delta: "Second answer.", type: "assistant.delta" },
+  ]);
+
+  const answers = entries.filter((entry) => entry.type === "assistant");
+  assert.equal(answers.length, 2, "a tool card is still a real boundary for legacy events");
+  assert.equal(answers[1]?.type === "assistant" && answers[1].content, "Second answer.");
+});
+
+test("response identity preserves Markdown across each kind of inserted process entry", () => {
+  const inserted: RunStreamEvent[] = [
+    { type: "permission.resolved", request: { action: "code", createdAt: "2026-01-01T00:00:00Z", id: "resolved", resource: "workspace", sessionId: "session-1", state: "allowed", summary: "Allowed" } },
+    { type: "tool.started", trace: { id: "started", name: "run_python", status: "running" } },
+    { type: "tool.completed", trace: { id: "finished", name: "run_python", status: "completed" } },
+    { type: "subagent.updated", subagent: timelineSubagent("lane", "2026-01-01T00:00:00Z") },
+    { type: "session.approval_mode.changed", approvalMode: "always_allow", previousApprovalMode: "ask_for_dangerous", permissionEpochId: "epoch" },
+  ];
+  const markdown = [
+    ["1. first\n2. **", "second**", /<strong>second<\/strong>/],
+    ["```python\nprint(", "42)\n```", /language-python/],
+    ["| Name | Value |\n| --- | --- |\n| Test | ", "42 |", /<td>42<\/td>/],
+  ] as const;
+  for (const event of inserted) {
+    for (const [prefix, suffix, rendered] of markdown) {
+      const entries = apply([
+        { type: "assistant.delta", responseId: "one", delta: prefix }, event,
+        { type: "assistant.delta", responseId: "one", delta: suffix },
+      ]);
+      const answers = entries.filter((entry) => entry.type === "assistant");
+      assert.equal(answers.length, 1, event.type);
+      assert.equal(answers[0]!.content, prefix + suffix);
+      assert.equal(entries.length, 2, "the process entry is retained");
+      const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle: () => undefined }));
+      assert.match(html, rendered);
+      assert.equal((html.match(/class="cursor"/g) ?? []).length, 1);
+      const settled = reduceRunTimeline(entries, { type: "assistant.response.settled", responseId: "one", turn: 1 });
+      assert.doesNotMatch(renderToStaticMarkup(createElement(RunTimeline, { entries: settled, isRunning: true, onToggle: () => undefined })), /class="cursor"/);
+    }
+  }
+});
+
+test("empty thinking and hidden tools do not merge different model responses", () => {
+  const entries = apply([
+    { type: "assistant.delta", responseId: "one", delta: "First" },
+    { type: "assistant.response.settled", responseId: "one", turn: 1 },
+    { type: "tool.started", trace: { id: "graph", name: "query_graph", status: "running" } },
+    { type: "tool.completed", trace: { id: "graph", name: "query_graph", status: "completed" } },
+    { type: "agent.phase", turn: 2, phase: "thinking" },
+    { type: "assistant.response.started", responseId: "two", turn: 2 },
+    { type: "assistant.delta", responseId: "two", delta: "Second" },
+    { type: "assistant.response.settled", responseId: "two", turn: 2 },
+  ]);
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "assistant"]);
+  assert.deepEqual(entries.flatMap((entry) => entry.type === "assistant" ? [entry.content] : []), ["First", "Second"]);
+});
+
+test("legacy continuation never overwrites an identified response", () => {
+  const entries = apply([
+    { type: "assistant.delta", responseId: "one", delta: "Identified" },
+    { type: "session.approval_mode.changed", approvalMode: "always_allow", previousApprovalMode: "ask_for_dangerous", permissionEpochId: "epoch" },
+    { type: "assistant.snapshot", content: "Legacy" },
+    { type: "assistant.delta", delta: " continued" },
+  ]);
+  assert.deepEqual(entries.flatMap((entry) => entry.type === "assistant" ? [entry.content] : []), ["Identified", "Legacy continued"]);
+});
+
+test("legacy snapshots keep one answer and a cursor across repeated approval switches", () => {
+  const change: RunStreamEvent = { type: "session.approval_mode.changed", approvalMode: "always_allow", previousApprovalMode: "ask_for_dangerous", permissionEpochId: "epoch" };
+  const entries = apply([
+    { type: "assistant.snapshot", content: "Partial" }, change, change,
+    { ...change, permissionEpochId: "epoch-2", approvalMode: "ask_for_dangerous", previousApprovalMode: "always_allow" },
+    { type: "assistant.snapshot", content: "Complete" },
+  ]);
+  assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "approval-mode", "approval-mode"]);
+  assert.equal(entries[0]?.type === "assistant" && entries[0].content, "Complete");
+  assert.match(renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle: () => undefined })), /class="cursor"/);
+});
