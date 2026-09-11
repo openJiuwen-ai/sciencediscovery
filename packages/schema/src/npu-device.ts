@@ -44,7 +44,28 @@ export interface NpuDeviceStatus {
   hbmUsedMb?: number;
   /** On-chip memory capacity, in MiB. */
   hbmTotalMb?: number;
-  /** Host device index: the `N` in `/dev/davinciN` and the NPU ID `npu-smi` prints. */
+  /**
+   * On-chip memory in use, as a percentage. The driver reports the ratio
+   * directly while absolute capacity needs a separate call, so this is what a
+   * DCMI read carries and `hbmUsedMb`/`hbmTotalMb` is what an `npu-smi` read
+   * carries; a reader may have either.
+   */
+  hbmPercent?: number;
+  /**
+   * The board this chip sits on, as `npu-smi` numbers cards. Two chips of one
+   * 910C card share it; on a single-die card it equals `hostIndex`.
+   */
+  cardId?: number;
+  /** Which chip on that board, for cards that carry more than one. */
+  chipId?: number;
+  /**
+   * Host device index: the `N` in `/dev/davinciN`.
+   *
+   * This is the driver's *chip logic id*, not the card number. They coincide on
+   * one-chip-per-card hardware like 910B, and they do not on a 910C, where one
+   * card carries two dies with two device nodes. Everything that binds a device
+   * or stores a selection uses this, so a die is addressed as itself.
+   */
   hostIndex: number;
   /** Board power draw in watts. */
   powerWatts?: number;

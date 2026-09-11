@@ -14,6 +14,19 @@ Container ID verify failed (session ct_id=0; device ct_id=...)
 
 因此当前设计不继续把 NPU 设备直接绑进 bwrap，而是保留普通工具的沙箱隔离，并为需要 Ascend 初始化的长作业提供 Runner 管理的宿主 Broker。
 
+## 1.1 沙箱内的 NPU 与状态读取
+
+Broker 之外，Runner 现在也能把选中的 Ascend 芯片交给 bubblewrap 沙箱（新建 `/dev` + 逐设备 `--dev-bind`，沙箱内从 0 重新编号）。这条路径要回答两个问题：机器上有哪些计算芯片，以及每颗芯片对应哪个 `/dev/davinciN`。
+
+读取顺序是先驱动、后命令行：
+
+- **DCMI（默认）**：用宿主 Python 以 `ctypes` 调用驱动自带的 `libdcmi.so`，逐芯片拿到所在卡号、卡内芯片号、chip logic id（就是设备号）、芯片名、健康与占用。不需要编译任何东西；`SCIENCE_AGENT_NPU_PYTHON_PATH` 可指定解释器。
+- **npu-smi（回退）**：宿主没有可用 Python 或驱动调用失败时，用 `npu-smi info -m` 取「卡 / 芯片 / chip logic id / 芯片名」的对应关系，再用 `npu-smi info` 的表格补读数，按（卡, 芯片）join。`-m` 中 logic id 为 `-` 的芯片（如 Mcu）不是计算设备，不会出现在清单里。
+
+**设备身份一律用 chip logic id，不用卡号**：一卡一芯的硬件（910B）上两者相等，一卡两 die 的硬件（910C）上不相等，用卡号会绑错 die。用户勾选的粒度因此是芯片（die），勾选集合按 logic id 升序在沙箱内从 0 重新编号，与运行时 rank 一一对应。
+
+支持范围是 Ascend 910 系列；其他芯片（包括 310 开发板）会被列出但不可勾选，理由里会写明芯片名。
+
 ## 2. 设计边界
 
 - 常规执行统一使用 `run_shell`，包括 `python -m`、Python 文件和 `Rscript`；每次使用新沙箱（Linux 上为 bubblewrap + seccomp），不跨调用保留解释器状态。

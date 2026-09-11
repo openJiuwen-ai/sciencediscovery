@@ -55,14 +55,22 @@ export const NPU_MANAGEMENT_DEVICES = ["/dev/davinci_manager", "/dev/devmm_svm",
 /** Candidate `npu-smi` locations; 910B images ship it in one of these. */
 const NPU_SMI_CANDIDATES = ["/usr/local/bin/npu-smi", "/usr/local/sbin/npu-smi", "/usr/bin/npu-smi"] as const;
 
+/** Where a host Python usually is; only used to read the driver through DCMI. */
+const NPU_PYTHON_CANDIDATES = ["/usr/bin/python3", "/usr/local/bin/python3"] as const;
+
 /** Ascend install roots. Overridable for hosts that relocate the toolkit. */
 const ASCEND_ROOT = "/usr/local/Ascend";
 const ASCEND_TOOLKIT = `${ASCEND_ROOT}/ascend-toolkit/latest`;
 /** The driver's install record; the sandbox needs it or the driver warns. */
 const ASCEND_INSTALL_INFO = "/etc/ascend_install.info";
 
-/** Only 910B is in scope; other chips are listed but never offered. */
-const SUPPORTED_CHIP_PATTERN = /910B/iu;
+/**
+ * The Ascend 910 series is what this supports: 910A, 910B, 910C and their
+ * variants. Other chips are listed but never offered — notably 310 development
+ * boards, whose driver differs enough that pretending to support them would be
+ * a promise this code cannot keep.
+ */
+const SUPPORTED_CHIP_PATTERN = /910/u;
 
 /** A cold probe spawns bubblewrap and npu-smi; generous but still bounded. */
 export const NPU_PROBE_TIMEOUT_MS = 20_000;
@@ -73,6 +81,8 @@ export const NPU_INVENTORY_TTL_MS = 60_000;
 export interface NpuHostTools {
   /** Absolute path to `npu-smi`, or undefined when the host has no Ascend tooling. */
   npuSmiPath?: string;
+  /** Host Python used to read the driver through DCMI; absent falls back to npu-smi. */
+  pythonPath?: string;
   /** Ascend toolkit root used for the sandbox library and Python paths. */
   toolkitPath: string;
 }
@@ -104,14 +114,22 @@ async function exists(path: string): Promise<boolean> {
 /** Locate the host's Ascend tooling. Absent tooling is a normal, non-Ascend host. */
 export async function resolveNpuHostTools(env: NodeJS.ProcessEnv = process.env): Promise<NpuHostTools> {
   const toolkitPath = env.SCIENCE_AGENT_ASCEND_TOOLKIT?.trim() || ASCEND_TOOLKIT;
+  // The host Python is only used to read the driver through DCMI. An Ascend
+  // host has one because CANN itself needs one, but a machine without it still
+  // works: npu-smi answers the same questions.
+  const configuredPython = env.SCIENCE_AGENT_NPU_PYTHON_PATH?.trim();
+  let pythonPath: string | undefined;
+  for (const candidate of configuredPython ? [configuredPython] : NPU_PYTHON_CANDIDATES) {
+    if (await isExecutable(candidate)) { pythonPath = candidate; break; }
+  }
   const configured = env.SCIENCE_AGENT_NPU_SMI_PATH?.trim();
   if (configured) {
-    return { npuSmiPath: await isExecutable(configured) ? configured : undefined, toolkitPath };
+    return { npuSmiPath: await isExecutable(configured) ? configured : undefined, ...(pythonPath ? { pythonPath } : {}), toolkitPath };
   }
   for (const candidate of NPU_SMI_CANDIDATES) {
-    if (await isExecutable(candidate)) return { npuSmiPath: candidate, toolkitPath };
+    if (await isExecutable(candidate)) return { npuSmiPath: candidate, ...(pythonPath ? { pythonPath } : {}), toolkitPath };
   }
-  return { toolkitPath };
+  return { ...(pythonPath ? { pythonPath } : {}), toolkitPath };
 }
 
 function parseNumber(value: string | undefined): number | undefined {
@@ -136,6 +154,7 @@ const CHIP_METRICS_PATTERN = /^(\S+)\s+(\S+)\s*\/\s*(\S+)\s+(\S+)\s*\/\s*(\S+)\s
  */
 export function parseNpuSmiInfo(text: string): NpuDeviceStatus[] {
   const devices: NpuDeviceStatus[] = [];
+  let card: { health: string; id: number; name: string; powerWatts?: number; temperatureCelsius?: number } | undefined;
   for (const line of text.split("\n")) {
     // `npu-smi info` prints a second table of running processes below the
     // devices, and its rows start with the same "<npu> <chip>" shape. Without
@@ -146,15 +165,26 @@ export function parseNpuSmiInfo(text: string): NpuDeviceStatus[] {
     if (cells.length < 3) continue;
     const chipRow = CHIP_ROW_PATTERN.exec(cells[0] ?? "");
     if (chipRow) {
-      const device = devices.at(-1);
-      if (!device) continue;
-      if (cells[1]) device.busId = cells[1];
+      // One row per chip, not per card: a card with two dies prints two of
+      // these under one head row, and each is its own device.
+      if (!card) continue;
       const metrics = CHIP_METRICS_PATTERN.exec(cells[2] ?? "");
-      if (metrics) {
-        device.aiCorePercent = parseNumber(metrics[1]);
-        device.hbmUsedMb = parseNumber(metrics[4]);
-        device.hbmTotalMb = parseNumber(metrics[5]);
-      }
+      devices.push({
+        cardId: card.id,
+        chipId: Number(chipRow[1]),
+        chipName: card.name,
+        health: card.health,
+        hostIndex: card.id,
+        sandboxUsable: false,
+        ...(cells[1] ? { busId: cells[1] } : {}),
+        ...(card.powerWatts === undefined ? {} : { powerWatts: card.powerWatts }),
+        ...(card.temperatureCelsius === undefined ? {} : { temperatureCelsius: card.temperatureCelsius }),
+        ...(metrics ? {
+          aiCorePercent: parseNumber(metrics[1]),
+          hbmTotalMb: parseNumber(metrics[5]),
+          hbmUsedMb: parseNumber(metrics[4]),
+        } : {}),
+      });
       continue;
     }
     const head = DEVICE_HEAD_PATTERN.exec(cells[0] ?? "");
@@ -165,17 +195,64 @@ export function parseNpuSmiInfo(text: string): NpuDeviceStatus[] {
     // the row belongs to some other table rather than the device listing.
     if (!/[A-Za-z]/u.test(head[2] ?? "")) continue;
     const metrics = HEAD_METRICS_PATTERN.exec(cells[2] ?? "");
-    devices.push({
-      chipName: head[2] ?? "",
+    card = {
       health: cells[1] ?? "",
-      hostIndex,
+      id: hostIndex,
+      name: head[2] ?? "",
       powerWatts: parseNumber(metrics?.[1]),
-      // Not probed yet: collectNpuInventory fills this in per card.
-      sandboxUsable: false,
       temperatureCelsius: parseNumber(metrics?.[2]),
-    });
+    };
   }
   return devices;
+}
+
+/**
+ * One row of `npu-smi info -m`: which board a chip sits on, and the device
+ * number the driver gave it.
+ */
+export interface NpuChipMapping {
+  cardId: number;
+  chipId: number;
+  chipName: string;
+  /** The `N` in `/dev/davinciN`. */
+  logicId: number;
+}
+
+/**
+ * Parse `npu-smi info -m`, which is the only place the machine states the
+ * relationship between a card, a chip on it, and the device node the driver
+ * exposes:
+ *
+ * ```
+ * NPU ID    Chip ID    Chip Logic ID    Chip Name
+ * 0         0          0                Ascend 910B3
+ * 0         1          -                Mcu
+ * ```
+ *
+ * Two things make this worth a separate call rather than reading the pretty
+ * table. A card can carry more than one compute die — a 910C carries two — and
+ * only this table says which device node each one is; assuming the card number
+ * is the device number binds the wrong die. And a card also carries chips that
+ * are not compute devices at all (the `Mcu` above), which have no logic id and
+ * must not become entries an operator can tick.
+ */
+export function parseNpuSmiMapping(text: string): NpuChipMapping[] {
+  const rows: NpuChipMapping[] = [];
+  for (const line of text.split("\n")) {
+    const cells = line.trim().split(/\s{2,}/u).map((cell) => cell.trim()).filter(Boolean);
+    if (cells.length < 4) continue;
+    const [card, chip, logic, ...name] = cells;
+    const cardId = Number(card);
+    const chipId = Number(chip);
+    const logicId = Number(logic);
+    if (!Number.isSafeInteger(cardId) || !Number.isSafeInteger(chipId)) continue;
+    // A non-compute chip has no device node: its logic id prints as "-".
+    if (!Number.isSafeInteger(logicId)) continue;
+    const chipName = name.join(" ").trim();
+    if (!chipName || !/[A-Za-z]/u.test(chipName)) continue;
+    rows.push({ cardId, chipId, chipName, logicId });
+  }
+  return rows;
 }
 
 /** Host path of a card's character device. */
@@ -368,19 +445,15 @@ export async function collectNpuInventory(options: {
     procMode: options.procMode,
     toolkitPath: tools.toolkitPath,
   };
-  let listing: string;
+  let devices: NpuDeviceStatus[];
   try {
-    const result = await execFileAsync(tools.npuSmiPath, ["info"], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      timeout: NPU_PROBE_TIMEOUT_MS,
-    });
-    listing = result.stdout;
+    // The driver's own interface first; npu-smi is the fallback for machines
+    // without a usable Python or an older driver.
+    devices = await readDcmiDevices(tools.pythonPath) ?? await readNpuSmiDevices(tools.npuSmiPath);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { capturedAt, devices: [], error: `Could not read NPU status: ${message}`, supported: true };
   }
-  const devices = parseNpuSmiInfo(listing);
   await probeListedDevices(
     options.only ? devices.filter((device) => options.only!.includes(device.hostIndex)) : devices,
     context,
@@ -392,13 +465,183 @@ export async function collectNpuInventory(options: {
   };
 }
 
+/**
+ * The driver's own interface, asked through a few lines of Python.
+ *
+ * `npu-smi` is a client of this library, and scraping its output is two steps
+ * removed from the machine: a column layout that shifts between CANN releases,
+ * on top of a table that cannot even say which device node a chip owns without
+ * a second call. DCMI answers all of it directly — cards, chips per card, the
+ * logic id that *is* the device number, chip name, health, load — and it does
+ * so per chip, so a two-die card needs no special case.
+ *
+ * It is reached with `ctypes` rather than a compiled addon on purpose: a native
+ * addon would have to be built per architecture, shipped inside a single-file
+ * Runner it cannot be loaded from, and kept in step with a driver ABI. A short
+ * script run by the host's Python costs none of that, and measured on an 8-card
+ * 910B3 it reads the whole machine in under half a second — the same work takes
+ * about fifteen seconds through per-card `npu-smi` queries.
+ *
+ * Structure layouts are mirrored by hand here, so this stays to scalar returns
+ * and one small stable struct, checks every return code, and leaves npu-smi as
+ * the fallback rather than trusting a guess.
+ */
+const DCMI_INVENTORY_SCRIPT = `
+import ctypes, json, sys
+
+LIB = "/usr/local/Ascend/driver/lib64/driver/libdcmi.so"
+NAME_LEN = 32
+
+class ChipInfo(ctypes.Structure):
+    _fields_ = [("chip_type", ctypes.c_ubyte * NAME_LEN), ("chip_name", ctypes.c_ubyte * NAME_LEN),
+                ("chip_ver", ctypes.c_ubyte * NAME_LEN), ("aicore_cnt", ctypes.c_uint),
+                ("npu_name", ctypes.c_ubyte * NAME_LEN)]
+
+def text(buffer):
+    return bytes(buffer).split(b"\\x00")[0].decode("utf8", "replace")
+
+def main():
+    lib = ctypes.CDLL(LIB)
+    if lib.dcmi_init() != 0:
+        raise SystemExit("dcmi_init failed")
+    count = ctypes.c_int(0)
+    cards = (ctypes.c_int * 64)()
+    if lib.dcmi_get_card_num_list(ctypes.byref(count), cards, 64) != 0:
+        raise SystemExit("dcmi_get_card_num_list failed")
+    chips = []
+    for card in list(cards)[:count.value]:
+        per_card = ctypes.c_int(0)
+        if lib.dcmi_get_device_num_in_card(card, ctypes.byref(per_card)) != 0:
+            continue
+        for chip in range(per_card.value):
+            logic = ctypes.c_int(-1)
+            if lib.dcmi_get_device_logic_id(ctypes.byref(logic), card, chip) != 0:
+                continue
+            entry = {"cardId": card, "chipId": chip, "hostIndex": logic.value}
+            info = ChipInfo()
+            if lib.dcmi_get_device_chip_info_v2(card, chip, ctypes.byref(info)) == 0:
+                entry["chipName"] = text(info.chip_name)
+            health = ctypes.c_uint(0)
+            if lib.dcmi_get_device_health(card, chip, ctypes.byref(health)) == 0:
+                entry["health"] = "OK" if health.value == 0 else "Alarm"
+            for code, key in ((2, "aiCorePercent"), (6, "hbmPercent")):
+                rate = ctypes.c_uint(0)
+                if lib.dcmi_get_device_utilization_rate(card, chip, code, ctypes.byref(rate)) == 0:
+                    entry[key] = rate.value
+            temperature = ctypes.c_int(0)
+            if lib.dcmi_get_device_temperature(card, chip, ctypes.byref(temperature)) == 0:
+                entry["temperatureCelsius"] = temperature.value
+            chips.append(entry)
+    json.dump(chips, sys.stdout)
+
+main()
+`;
+
+/** What the DCMI script reports for one chip. */
+interface DcmiChip {
+  aiCorePercent?: number;
+  cardId: number;
+  chipId: number;
+  chipName?: string;
+  hbmPercent?: number;
+  health?: string;
+  hostIndex: number;
+  temperatureCelsius?: number;
+}
+
+/**
+ * Read the machine through DCMI, or return undefined so the caller falls back.
+ *
+ * Every reason this can fail is a normal machine state — no Python, no driver
+ * library, a driver too old for one of these calls — and none of them should
+ * turn into an error an operator has to read. npu-smi answers the same question
+ * more slowly.
+ */
+export async function readDcmiDevices(
+  pythonPath: string | undefined,
+): Promise<NpuDeviceStatus[] | undefined> {
+  if (!pythonPath) return undefined;
+  let payload: string;
+  try {
+    const result = await execFileAsync(pythonPath, ["-c", DCMI_INVENTORY_SCRIPT], {
+      encoding: "utf8", maxBuffer: 1024 * 1024, timeout: NPU_PROBE_TIMEOUT_MS,
+    });
+    payload = result.stdout;
+  } catch {
+    return undefined;
+  }
+  let chips: DcmiChip[];
+  try {
+    chips = JSON.parse(payload) as DcmiChip[];
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(chips) || chips.length === 0) return undefined;
+  return chips.map((chip) => ({
+    cardId: chip.cardId,
+    chipId: chip.chipId,
+    chipName: chip.chipName ?? "",
+    health: chip.health ?? "",
+    hostIndex: chip.hostIndex,
+    sandboxUsable: false,
+    ...(chip.aiCorePercent === undefined ? {} : { aiCorePercent: chip.aiCorePercent }),
+    ...(chip.hbmPercent === undefined ? {} : { hbmPercent: chip.hbmPercent }),
+    ...(chip.temperatureCelsius === undefined ? {} : { temperatureCelsius: chip.temperatureCelsius }),
+  }));
+}
+
+/**
+ * The machine's chips and their readings, from `npu-smi`.
+ *
+ * Identity comes from `npu-smi info -m` and readings from `npu-smi info`,
+ * joined on (card, chip). The pretty table alone cannot answer "which device
+ * node is this": it prints the card number, which is the device number only on
+ * hardware that puts one chip on a card. Reading identity from the mapping
+ * table costs one extra half-second call and makes a two-die card two entries
+ * that address themselves correctly.
+ *
+ * A chip the mapping table lists but the reading table does not still appears,
+ * with no readings: it exists and can be bound, which matters more than its
+ * temperature.
+ */
+async function readNpuSmiDevices(npuSmiPath: string): Promise<NpuDeviceStatus[]> {
+  const run = async (args: string[]) => (await execFileAsync(npuSmiPath, args, {
+    encoding: "utf8", maxBuffer: 1024 * 1024, timeout: NPU_PROBE_TIMEOUT_MS,
+  })).stdout;
+  const listing = await run(["info"]);
+  const readings = parseNpuSmiInfo(listing);
+  let mapping: NpuChipMapping[] = [];
+  try {
+    mapping = parseNpuSmiMapping(await run(["info", "-m"]));
+  } catch {
+    // An npu-smi too old for `-m` leaves the readings as the only source; on
+    // one-chip cards that is exactly what it was before.
+    return readings;
+  }
+  if (mapping.length === 0) return readings;
+  const byCardChip = new Map(readings.map((device) => [`${device.cardId ?? device.hostIndex}:${device.chipId ?? 0}`, device]));
+  return mapping.map((chip) => {
+    const reading = byCardChip.get(`${chip.cardId}:${chip.chipId}`);
+    return {
+      ...reading,
+      cardId: chip.cardId,
+      chipId: chip.chipId,
+      chipName: chip.chipName.replace(/^Ascend\s+/u, "") || reading?.chipName || "",
+      health: reading?.health ?? "",
+      // The device node follows the chip's logic id, never the card number.
+      hostIndex: chip.logicId,
+      sandboxUsable: false,
+    } satisfies NpuDeviceStatus;
+  });
+}
+
 /** Probe each listed card in its own throwaway sandbox, concurrently. */
 async function probeListedDevices(devices: NpuDeviceStatus[], context: NpuProbeContext): Promise<void> {
   const managementDevices = await availableNpuManagementDevices();
   await Promise.all(devices.map(async (device) => {
     if (!SUPPORTED_CHIP_PATTERN.test(device.chipName)) {
       device.sandboxUsable = false;
-      device.sandboxUnusableReason = `Only Ascend 910B cards are supported; this card reports "${device.chipName}".`;
+      device.sandboxUnusableReason = `Only Ascend 910 series chips are supported; this one reports "${device.chipName}".`;
       return;
     }
     const probe = await probeNpuDeviceInSandbox({ context, hostIndex: device.hostIndex, managementDevices });

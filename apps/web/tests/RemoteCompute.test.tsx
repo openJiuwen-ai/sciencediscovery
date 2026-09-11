@@ -616,6 +616,24 @@ test("an unusable card that is not ticked still cannot be ticked", () => {
   assert.match(unusableRow, /disabled=""/);
 });
 
+test("a card with two dies names each die, because that is what a rank runs on", () => {
+  // 910C puts two compute dies on one board with two device nodes. Naming them
+  // both "NPU 0" would hide which one a tick actually binds.
+  const dual = {
+    ...NPU_INVENTORY,
+    devices: [
+      { cardId: 0, chipId: 0, chipName: "910C", health: "OK", hostIndex: 0, hbmPercent: 12, sandboxUsable: true },
+      { cardId: 0, chipId: 1, chipName: "910C", health: "OK", hostIndex: 1, hbmPercent: 80, sandboxUsable: true },
+    ],
+  };
+  const markup = renderNpu({ inventory: dual, selected: [1] });
+  assert.match(markup, /NPU 0 · die 0 · 910C \(device 0\)/);
+  assert.match(markup, /NPU 0 · die 1 · 910C \(device 1\)/);
+  // The driver reports a ratio where npu-smi reports absolute figures; the bar
+  // works either way.
+  assert.match(markup, /80%/);
+});
+
 test("a machine whose cards are all unusable says so instead of offering an empty tick list", () => {
   const inventory = { ...NPU_INVENTORY, devices: NPU_INVENTORY.devices.map((device) => ({ ...device, sandboxUsable: false })) };
   assert.match(renderNpu({ inventory }), /No card on this machine can currently be opened inside a sandbox/);

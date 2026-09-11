@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, test, type TestContext } from "node:test";
 
@@ -35,6 +35,8 @@ import {
   npuSandboxProbeArguments,
   npuSandboxPythonPath,
   parseNpuSmiInfo,
+  parseNpuSmiMapping,
+  readDcmiDevices,
   prepareSandboxNpu,
   resolveExecutionNpu,
   type NpuProbeContext,
@@ -75,6 +77,8 @@ describe("npu-smi parsing", () => {
     assert.deepEqual(devices[0], {
       aiCorePercent: 0,
       busId: "0000:C1:00.0",
+      cardId: 0,
+      chipId: 0,
       chipName: "910B3",
       health: "OK",
       hbmTotalMb: 65_536,
@@ -109,6 +113,119 @@ describe("npu-smi parsing", () => {
 
   test("returns nothing for output that holds no device rows", () => {
     assert.deepEqual(parseNpuSmiInfo("dcmi model initialized failed\n"), []);
+  });
+});
+
+/** Verbatim `npu-smi info -m` from the 8-card 910B3 host used for validation. */
+const NPU_SMI_MAPPING_910B3 = `\tNPU ID                         Chip ID                        Chip Logic ID                  Chip Name                     
+\t0                              0                              0                              Ascend 910B3
+\t0                              1                              -                              Mcu                           
+\t1                              0                              1                              Ascend 910B3
+\t1                              1                              -                              Mcu                           
+`;
+
+/** A two-die card, as a 910C reports it: one board, two devices. */
+const NPU_SMI_MAPPING_DUAL_DIE = `\tNPU ID                         Chip ID                        Chip Logic ID                  Chip Name
+\t0                              0                              0                              Ascend 910C
+\t0                              1                              1                              Ascend 910C
+\t0                              2                              -                              Mcu
+\t1                              0                              2                              Ascend 910C
+\t1                              1                              3                              Ascend 910C
+`;
+
+describe("reading the driver through DCMI", () => {
+  test("a machine with no usable Python falls back instead of failing", async () => {
+    assert.equal(await readDcmiDevices(undefined), undefined);
+    assert.equal(await readDcmiDevices("/nonexistent/python3"), undefined);
+  });
+
+  test("turns the driver's own answer into chips, keyed by their device number", async (context) => {
+    // Stand in for the host Python: the contract under test is the JSON shape
+    // the shipped script prints, which was verified against a real 910B3.
+    const root = resolve(process.cwd(), ".tmp", `dcmi-${process.pid}-${Date.now()}`);
+    await mkdir(root, { recursive: true });
+    context.after(() => rm(root, { force: true, recursive: true }));
+    const fake = resolve(root, "python3");
+    await writeFile(fake, `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify([
+      { aiCorePercent: 0, cardId: 0, chipId: 0, chipName: "910C", hbmPercent: 94, health: "OK", hostIndex: 0, temperatureCelsius: 47 },
+      { aiCorePercent: 41, cardId: 0, chipId: 1, chipName: "910C", hbmPercent: 10, health: "OK", hostIndex: 1, temperatureCelsius: 51 },
+    ])}\nJSON\n`);
+    await chmod(fake, 0o755);
+
+    const devices = await readDcmiDevices(fake);
+    assert.equal(devices?.length, 2);
+    // One card, two dies, two device numbers: this is what the card number
+    // alone cannot express and what a rank actually runs on.
+    assert.deepEqual(devices?.map((device) => [device.cardId, device.chipId, device.hostIndex]), [[0, 0, 0], [0, 1, 1]]);
+    assert.equal(devices?.[1]?.aiCorePercent, 41);
+    assert.equal(devices?.[1]?.hbmPercent, 10);
+    assert.ok(devices?.every((device) => device.sandboxUsable === false), "usability is still decided by the sandbox probe");
+  });
+
+  test("output that is not the expected JSON falls back rather than inventing cards", async (context) => {
+    const root = resolve(process.cwd(), ".tmp", `dcmi-bad-${process.pid}-${Date.now()}`);
+    await mkdir(root, { recursive: true });
+    context.after(() => rm(root, { force: true, recursive: true }));
+    for (const [name, body] of [["empty", "[]"], ["garbage", "Traceback (most recent call last):"]] as const) {
+      const fake = resolve(root, name);
+      await writeFile(fake, `#!/bin/sh\nprintf '%s' '${body}'\n`);
+      await chmod(fake, 0o755);
+      assert.equal(await readDcmiDevices(fake), undefined, name);
+    }
+  });
+});
+
+describe("chip mapping", () => {
+  test("reads the device node each chip owns, not the card number", () => {
+    const mapping = parseNpuSmiMapping(NPU_SMI_MAPPING_910B3);
+    assert.deepEqual(mapping, [
+      { cardId: 0, chipId: 0, chipName: "Ascend 910B3", logicId: 0 },
+      { cardId: 1, chipId: 0, chipName: "Ascend 910B3", logicId: 1 },
+    ]);
+  });
+
+  test("skips chips that are not compute devices", () => {
+    // An Mcu sits on every card and has no device node; listing it would offer
+    // an operator something that can never be bound.
+    assert.ok(parseNpuSmiMapping(NPU_SMI_MAPPING_910B3).every((chip) => chip.chipName !== "Mcu"));
+  });
+
+  test("gives each die of a two-die card its own device node", () => {
+    // On a 910C the card number is not the device number: card 1 carries the
+    // dies that are /dev/davinci2 and /dev/davinci3.
+    const mapping = parseNpuSmiMapping(NPU_SMI_MAPPING_DUAL_DIE);
+    assert.deepEqual(mapping.map((chip) => [chip.cardId, chip.chipId, chip.logicId]), [
+      [0, 0, 0], [0, 1, 1], [1, 0, 2], [1, 1, 3],
+    ]);
+    assert.deepEqual([...new Set(mapping.map((chip) => chip.chipName))], ["Ascend 910C"]);
+  });
+
+  test("ignores headers and anything that is not four columns", () => {
+    assert.deepEqual(parseNpuSmiMapping(NPU_SMI_MAPPING_910B3.split("\n")[0] ?? ""), []);
+    assert.deepEqual(parseNpuSmiMapping("garbage\n\t1 2\n"), []);
+  });
+});
+
+describe("a card with two dies", () => {
+  const DUAL_DIE_TABLE = `+------------------------------------------------------------------------------------------------+
+| npu-smi 25.5.1                   Version: 25.5.1                                               |
++===========================+===============+====================================================+
+| 0     910C                | OK            | 210.8       52                0    / 0             |
+| 0                         | 0000:C1:00.0  | 30          0    / 0          1024 / 65536         |
+| 1                         | 0000:C1:00.1  | 70          0    / 0          2048 / 65536         |
++===========================+===============+====================================================+
+`;
+
+  test("reads one entry per die from the readings table", () => {
+    // The card row is shared; each chip row is its own device with its own load.
+    const devices = parseNpuSmiInfo(DUAL_DIE_TABLE);
+    assert.equal(devices.length, 2);
+    assert.deepEqual(devices.map((device) => [device.cardId, device.chipId, device.aiCorePercent, device.hbmUsedMb]), [
+      [0, 0, 30, 1024],
+      [0, 1, 70, 2048],
+    ]);
+    // Both carry the card-level readings, which are per board on this hardware.
+    assert.ok(devices.every((device) => device.temperatureCelsius === 52 && device.health === "OK"));
   });
 });
 

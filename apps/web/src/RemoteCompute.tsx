@@ -181,6 +181,15 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
   if (!inventory) return null;
   const ticked = new Set(draft ?? selected);
   const usableCount = selectableNpuDevices(inventory).length;
+  // A card that carries several dies is named per die, because each die is what
+  // gets bound and what a rank runs on. Naming every card that way on hardware
+  // with one die per card would only add noise.
+  const chipsPerCard = new Map<number, number>();
+  for (const device of inventory.devices) {
+    const card = device.cardId ?? device.hostIndex;
+    chipsPerCard.set(card, (chipsPerCard.get(card) ?? 0) + 1);
+  }
+  const multiChipCards = new Set([...chipsPerCard].filter(([, count]) => count > 1).map(([card]) => card));
   const dirty = draft !== undefined && (draft.length !== selected.length
     || draft.some((hostIndex, position) => hostIndex !== selected[position]));
 
@@ -216,9 +225,11 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
       : <ul className="remote-npu-list">
         {inventory.devices.map((device) => {
           const memory = npuMemory(device.hbmUsedMb, device.hbmTotalMb);
-          const memoryPercent = device.hbmUsedMb === undefined || !device.hbmTotalMb
-            ? undefined
-            : Math.min(100, Math.max(0, (device.hbmUsedMb / device.hbmTotalMb) * 100));
+          // The driver reports the ratio and npu-smi reports the absolute
+          // figures, so the bar takes whichever the reader could get.
+          const memoryPercent = device.hbmUsedMb !== undefined && device.hbmTotalMb
+            ? Math.min(100, Math.max(0, (device.hbmUsedMb / device.hbmTotalMb) * 100))
+            : device.hbmPercent === undefined ? undefined : Math.min(100, Math.max(0, device.hbmPercent));
           const aiCore = device.aiCorePercent === undefined
             ? undefined
             : Math.min(100, Math.max(0, device.aiCorePercent));
@@ -233,17 +244,19 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
                 disabled={(!device.sandboxUsable && !isTicked) || saving}
                 onChange={(event) => toggle(device.hostIndex, event.target.checked)}
               />
-              <span className="remote-npu-name">{t("remote.npuCard", { chip: device.chipName, index: device.hostIndex })}</span>
+              <span className="remote-npu-name">{multiChipCards.has(device.cardId ?? device.hostIndex)
+                ? t("remote.npuCardChip", { card: device.cardId ?? device.hostIndex, chip: device.chipName, die: device.chipId ?? 0, index: device.hostIndex })
+                : t("remote.npuCard", { chip: device.chipName, index: device.hostIndex })}</span>
               {device.health ? <span className={`remote-detail-badge ${device.health === "OK" ? "neutral" : "warning"}`}>{device.health}</span> : null}
             </label>
             {/* Every cell is rendered even when its reading is missing, so the
                 columns stay aligned from card to card. */}
-            {memory === undefined || memoryPercent === undefined
+            {memoryPercent === undefined
               ? <span className="remote-npu-meter" />
               : <span className="remote-npu-meter" title={t("remote.npuMemoryLabel")}>
                 <span className="remote-npu-meter-caption">{t("remote.npuMemoryCaption")}</span>
                 <span className="remote-npu-meter-track"><span style={{ width: `${memoryPercent}%` }} /></span>
-                <small className="remote-npu-meter-value">{memory}</small>
+                <small className="remote-npu-meter-value">{memory ?? `${Math.round(memoryPercent)}%`}</small>
               </span>}
             {aiCore === undefined
               ? <span className="remote-npu-meter core" />

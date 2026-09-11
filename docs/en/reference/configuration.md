@@ -50,6 +50,7 @@ set -a && source .env && set +a
 | `SCIENTIFIC_ENVS` | `1` | Expose managed Python/R and persistent kernels; runner can start before setup completes |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator provisioner override |
 | `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | Optional mirror directory URL serving the pinned micromamba release under the same file names; empty uses the upstream release host. The pinned SHA-256 is enforced wherever the file comes from |
+| `SCIENCE_AGENT_NPU_PYTHON_PATH` | auto-detected | Host Python used to read NPU state through the driver's DCMI interface; empty tries `/usr/bin/python3` then `/usr/local/bin/python3`, and falls back to `npu-smi` when neither works |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache; source safety checks still apply |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated allowed channels; built-in TUNA/USTC presets are always recognized |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | Initial persistent-kernel idle timeout (`0` is unlimited) |

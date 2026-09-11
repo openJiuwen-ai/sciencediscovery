@@ -50,6 +50,7 @@ set -a && source .env && set +a
 | `SCIENTIFIC_ENVS` | `1` | 暴露托管 Python/R 与持久内核；完成 setup 前 runner 也可安全启动 |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员提供的 provisioner 覆盖；正常 setup 安装应用自有固定二进制 |
 | `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，托管 micromamba 固定版本的同名发布件；留空使用上游发布地址。无论从哪里下载，固定的 SHA-256 校验都不放宽 |
+| `SCIENCE_AGENT_NPU_PYTHON_PATH` | 自动探测 | 读取 NPU 状态时调用驱动 DCMI 接口所用的宿主 Python；留空按 `/usr/bin/python3`、`/usr/local/bin/python3` 顺序探测，都没有则回退到 `npu-smi` |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存；设置后 provision 离线运行，不再拉取允许渠道。pip `indexUrl` 与 conda channel 仍执行安全校验，但安装时不访问这些网络源（见 [sandbox-execution.md](../explanation/sandbox-execution.md) §6 受控软件源） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单；内置镜像预设（TUNA/USTC）对应的频道 URL 始终被 Runner 接受，自定义频道仍须显式列入 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | 初始持久内核空闲超时（`0` = 无限） |
