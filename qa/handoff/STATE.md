@@ -40,19 +40,29 @@ dev_round_status:
     再切层=永远切不了）+ P2 gate/reader 不对称（词重叠臂通过的引文读不到块）→ gate 对称修复；
     #2（W8+W9）NO-GO→修复后 GO：P1-2 stub 正则匹配不到转义 JSON（工具结果是 body 里的 JSON 字符串，
     引号带反斜杠）→ JSON.parse 后在解码内容上匹配；P2 ReDoS 扫描预算/ledger 并发竞争/50 文档静默假阴性；
-    #3（W10 轮）P1 漏提交 orchestrator 修复；#4（Z6+C3①③+Z8 四提交）已派后台跑中，结果待记
+    #3（W10 轮）P1 漏提交 orchestrator 修复；
+    #4（Z6+C3①③+Z8+J-KE7）FIX-FIRST→修复后 GO（41b39c1）：0 P1；4 P2 全修——kb_search 向量臂
+    全量加载文档（改 topK×2 over-fetch+onWarn 降级日志）、重抽取抹向量（replaceDocChunks 保留存活
+    锚点的 embedding）、纠错重试末轮覆盖最优轮（best-attempt 保留）、悬空关系端点不留证（对全部
+    已发射名判定→纠错循环+留证）；顺手修 P3×6（空提案重试/FTS 臂对称截断/死字段/truncated 精确
+    语义/RRF 注释失实/pubchem 值上限）；七旅程 stub 端点闭合性核验=行为中性。遗留 P3×6 记录在
+    review 报告（biogrid 形状漂移告警/afdb URL 注记/directives 措辞/孤儿 settings 等，低风险）
   e2e_mocked: >-
     全绿（第 5-6 轮，隔离栈 4390 + 私有检出场 ~/sd-e2e-checkout@df6ba07）：J-KE1 1.9m ✓
-    J-KE2 58s ✓（/api/environments 503 豁免，见下）J-KE3/4/5/6 ✓ 4.0m。前四轮失败全数定位修复：
-    ①600s 预算<实际管线（本机 8-10 分钟；净栈实测每库 ~50s，超时是叠加争用）→ 900s；②KE 全屏浮层盖住
-    侧栏（W6 布局，会话型旅程骨架首跑）→ step2 先 ke-close；③点击已激活 KB 清空面板且轮询链死（P2 产品
-    缺陷，c5c2ab9）→ 同库重点击=手动刷新；④页面开机拉一次 /api/models，API 侧注册的 stub 对长活页面
-    不可见 → 注册后 page.reload（产品改进项：UI 注册走设置页会就地刷新，带外注册不感知）；⑤词重叠过门
-    的引文跨页拆块无单块≥85% → reader 加 60% 兜底档（61fc4bc）；⑥离线栈科学环境 provisioner 拉不动
-    → /api/environments 恒 503 → J-KE2 零 console 断言定向豁免（df6ba07）。
-    LaTeX 通路 fixture 已录（W10 E2E 旅程 J-KE7 待写）；实测坑：原 10 篇 arXiv PDF fixture 的 id 全是
-    PDF-only 投稿（/e-print/ 拿不到 TeX），录 LaTeX 面需另选有源投稿（1706.03762 冒烟通过：
-    input 递归内联+53 个 [@rid] 锚）
+    J-KE2 58s ✓（/api/environments 503 豁免，见下）J-KE3/4/5/6 ✓ 4.0m。
+    **J-KE7（arXiv LaTeX-first 摄取）2026-09-11 下午新增并全绿**（6.0s 暖栈；隔离栈 data7 +
+    ~/start-sd-e2e-jke7.sh 启动器，fixture 目录指向私有检出场）：短语引号种子查询 → 1706.03762
+    走 e-print tarball → API 断言 ingest_channel=arxiv-latex → 阅读器 L0 摘要（TeX 转写的标签/
+    50 条引用/[@rid] 句）→ 切 L1 锚点块渲染。首轮失败=断言找 L1/L2 容器而默认层级是 L0（旅程修
+    正 cc98894 后继提交）；两轮报错根因=误用 checkout 自带 playwright 副本（与 spec 解析的
+    ~/sciencediscovery 副本成双实例→test.use 收集失败；正确跑法=memory 里的 cli.js 路径）。
+    前四轮历史失败与修复：①600s 预算<实际管线→900s；②KE 全屏浮层盖侧栏→step2 先 ke-close；
+    ③点击已激活 KB 清空面板且轮询链死（P2 产品缺陷，c5c2ab9）→同库重点击=手动刷新；④页面开机
+    拉一次 /api/models→注册后 page.reload；⑤引文跨页拆块无单块≥85%→reader 加 60% 兜底档
+    （61fc4bc）；⑥离线栈 provisioner 恒 503→J-KE2 定向豁免（df6ba07）。
+    七旅程 stub 端点闭合性已核验=review #4 修复对现有旅程行为中性；全套 7 旅程复验挂下次栈重部署
+    （当前 4390 跑的是 ~/sciencediscovery 现有 dist，未含 41b39c1 修复——重部署归 Claude 节奏，
+    勿覆盖他的 dist）
   mcp_visual: >-
     完成——Windows Edge 实访 4390：KE 页图谱（mAb114⇄GP binds）→节点详情证据卡（校准 quote）→
     查看原文→L1 自动切换+逐字高亮（无 miss/fuzzy）→L0（摘要+标签+来源）→L2（markdown 渲染）全过
