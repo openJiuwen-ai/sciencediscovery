@@ -67,6 +67,7 @@ import {
   handleKeListFormulae,
   handleKeListJobs,
   handleKeListKbs,
+  handleKeSimilarDocuments,
   handleKeSeed,
   handleKeStartGrow,
   handleKeGetGraphRoots,
@@ -2280,6 +2281,18 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           decodeURIComponent(keDocAnchorMatch[1]!),
           decodeURIComponent(keDocAnchorMatch[2]!),
           decodeURIComponent(keDocAnchorMatch[3]!),
+        );
+        return;
+      }
+      const keDocSimilarMatch = url.pathname.match(
+        /^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents\/([^/]+)\/similar$/,
+      );
+      if (keDocSimilarMatch && request.method === "GET") {
+        handleKeSimilarDocuments(
+          response,
+          knowledgeEngineStore,
+          decodeURIComponent(keDocSimilarMatch[1]!),
+          decodeURIComponent(keDocSimilarMatch[2]!),
         );
         return;
       }

@@ -688,6 +688,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
               kbId={activeKbId}
               docId={readerDoc.docId}
               highlightQuote={readerDoc.highlightQuote}
+              onOpenDocument={(targetDocId) => setReaderDoc({ docId: targetDocId, highlightQuote: null })}
               onClose={() => setReaderDoc(null)}
             />
           ) : null}

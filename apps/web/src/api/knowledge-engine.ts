@@ -283,6 +283,13 @@ export class KnowledgeEngineApiClient extends EvolveApiClient {
     return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/formulae${query ? `?${query}` : ""}`);
   }
 
+  /** W10: similar documents by shared-entity count. */
+  getKeSimilarDocuments(kbId: string, docId: string): Promise<{ docId: string; similar: Array<{ docId: string; title: string; sharedEntities: number }> }> {
+    return this.request(
+      `/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/similar`,
+    );
+  }
+
   listKeJobs(kbId: string): Promise<{ jobs: KeJob[] }> {
     return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/jobs`);
   }

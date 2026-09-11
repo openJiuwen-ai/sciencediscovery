@@ -19,6 +19,7 @@ import type { KeDocumentBlock, KeDocumentLevel, KeDocumentRead } from "../api/kn
 import { KnowledgeEngineApiClient } from "../api/knowledge-engine.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
 import { MarkdownRenderer } from "../Markdown.js";
+import { KeCitationPanel } from "./KeCitationPanel.js";
 
 export interface KeDocumentReaderProps {
   client: KnowledgeEngineApiClient;
@@ -27,6 +28,8 @@ export interface KeDocumentReaderProps {
   /** Verbatim evidence quote — when provided, the reader jumps to L1 and
    *  highlights the block containing it (NotebookLM-style click-through). */
   highlightQuote?: string | null;
+  /** Open another document in place (citation panel navigation). */
+  onOpenDocument?: (docId: string) => void;
   onClose: () => void;
 }
 
@@ -156,7 +159,7 @@ function blockBody(block: KeDocumentBlock): ReactNode {
  * the address space shared with chat evidence links (W8). KaTeX renders the
  * `$..$` formulas the JATS pipeline emits (CSS is loaded once in main.tsx).
  */
-export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose }: KeDocumentReaderProps) {
+export function KeDocumentReader({ client, kbId, docId, highlightQuote, onOpenDocument, onClose }: KeDocumentReaderProps) {
   const { t } = useLocale();
 
   const [level, setLevel] = useState<KeDocumentLevel>(readDefaultLevel);
@@ -449,6 +452,14 @@ export function KeDocumentReader({ client, kbId, docId, highlightQuote, onClose 
           </div>
         )}
       </div>
+      {doc && doc.status === "ready" ? (
+        <KeCitationPanel
+          client={client}
+          kbId={kbId}
+          docId={doc.docId}
+          {...(onOpenDocument ? { onOpenDocument } : {})}
+        />
+      ) : null}
     </div>
   );
 }

@@ -2165,6 +2165,30 @@ export class KnowledgeEngineStore {
       docTitle: row["doc_title"] === null ? null : String(row["doc_title"]),
     }));
   }
+
+  /** Similar documents by shared-entity count (ke_entity_docs overlap) —
+   *  the honest zero-vector "Similar" signal: papers citing into the same
+   *  entity set. Ties break on doc id for determinism. */
+  similarDocuments(kbId: string, docId: string, limit = 5): Array<{ docId: string; title: string; sharedEntities: number }> {
+    const rows = this.database
+      .prepare(
+        `SELECT d.id AS doc_id, d.title AS title, COUNT(DISTINCT ed2.entity_id) AS shared
+         FROM ke_entity_docs ed1
+         JOIN ke_entity_docs ed2
+           ON ed1.entity_id = ed2.entity_id AND ed2.doc_id != ed1.doc_id AND ed2.kb_id = ?
+         JOIN ke_documents d ON d.id = ed2.doc_id
+         WHERE ed1.doc_id = ?
+         GROUP BY d.id
+         ORDER BY shared DESC, d.id
+         LIMIT ?`,
+      )
+      .all(kbId, docId, Math.max(1, Math.min(limit, 20))) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      docId: String(row["doc_id"]),
+      title: String(row["title"] ?? ""),
+      sharedEntities: Number(row["shared"] ?? 0),
+    }));
+  }
 }
 
 // ------------------------------------------------------------------ mappers

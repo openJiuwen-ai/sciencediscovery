@@ -322,6 +322,21 @@ export function handleKeGetDocumentAnchor(
   });
 }
 
+/** GET /kbs/:kbId/documents/:docId/similar — shared-entity similar docs. */
+export function handleKeSimilarDocuments(
+  response: ServerResponse,
+  store: KnowledgeEngineStore,
+  kbId: string,
+  docId: string,
+): void {
+  const document = requireKbDocument(store, kbId, docId);
+  sendJson(response, 200, {
+    kbId,
+    docId: document.id,
+    similar: store.similarDocuments(kbId, document.id),
+  });
+}
+
 // ------------------------------------------------- citations & formulae (W10)
 
 const INTENT_WHITELIST = new Set(DEFAULT_INTENT_LABELS.map((label) => label.name));
