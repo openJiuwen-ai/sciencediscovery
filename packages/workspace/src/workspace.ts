@@ -610,10 +610,19 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     ...(options.localRunnerAllowed === false ? [] : [{ runnerId: "local", description: "Sandbox on this machine; current Agent workspace." }]),
     ...(options.remoteRunners ?? []).map((runner) => ({ runnerId: runner.runnerId, description: runner.description || runner.hostAlias })),
   ];
+  const runnerSelectionHint = options.localRunnerAllowed !== false
+    ? "Optional (default: local)."
+    : runnerCatalog.length === 1
+      ? `Required. Pass runner_id=${JSON.stringify(runnerCatalog[0]!.runnerId)}; it is the only allowed Runner.`
+      : runnerCatalog.length > 1
+        ? "Required. Choose an allowed Runner ID explicitly."
+        : "No Runner is allowed for this Session; do not invoke Runner tools.";
+  const runnerIdParameter = Type.String({
+    minLength: 1,
+    description: `Sandboxed execution environment ID. ${runnerSelectionHint} Available Runners: ${JSON.stringify(runnerCatalog)}. Runners have independent workspaces; sync selected inputs explicitly.`,
+  });
   const machineParameter = {
-    runner_id: Type.Optional(Type.String({
-      description: `Sandboxed execution environment ID (default: local). Available Runners: ${JSON.stringify(runnerCatalog)}. Non-default Runners have independent workspaces; sync selected inputs explicitly.`,
-    })),
+    runner_id: options.localRunnerAllowed === false ? runnerIdParameter : Type.Optional(runnerIdParameter),
   };
   const listFiles: AgentTool<typeof emptyParameters> = {
     description: "List files in the current session workspace",

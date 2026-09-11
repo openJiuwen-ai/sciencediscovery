@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import { Check } from "typebox/value";
 
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
@@ -95,6 +96,66 @@ test("run_shell selects the latest environment by ID and preserves its execution
   assert.equal(executedToolCallId, "tool-call");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
 });
+
+for (const selection of [
+  { name: "legacy local default", localRunnerAllowed: undefined, ids: [] },
+  { name: "local and remote", localRunnerAllowed: true, ids: ["runner-1"] },
+  { name: "one remote only", localRunnerAllowed: false, ids: ["runner-1"] },
+  { name: "multiple remotes", localRunnerAllowed: false, ids: ["runner-1", "runner-2"] },
+  { name: "no Runner", localRunnerAllowed: false, ids: [] },
+]) {
+  test(`Runner tool schemas respect selection: ${selection.name}`, async () => {
+    const calls: Array<string | undefined> = [];
+    const unused = async (): Promise<never> => { throw new Error("not used"); };
+    const tools = createWorkspaceTools(process.cwd(), {
+      enabledConnectorIds: [], environments: [],
+      localRunnerAllowed: selection.localRunnerAllowed,
+      remoteRunners: selection.ids.map((runnerId) => ({ runnerId, hostAlias: runnerId, list: unused, sync: unused })),
+      executePython: unused, executeShell: unused,
+      environmentManagement: {
+        list: async (_signal, runnerId) => { calls.push(runnerId); return []; },
+        setup: unused, create: unused, delete: unused, install: unused, uninstall: unused,
+      },
+    });
+    const inputs = {
+      run_shell: { command: "echo ok" },
+      environment_list: {},
+      environment_setup: {},
+      environment_create: { name: "analysis", language: "python" },
+      environment_delete: { environmentId: "analysis" },
+      environment_install: { environmentId: "analysis", packages: ["numpy"], manager: "conda" },
+      environment_uninstall: { environmentId: "analysis", packages: ["numpy"] },
+    };
+    const localAllowed = selection.localRunnerAllowed !== false;
+    for (const [name, input] of Object.entries(inputs)) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      assert.ok(tool, name);
+      const schema = tool.parameters as { properties: { runner_id: { description: string } } };
+      const description = schema.properties.runner_id.description;
+      assert.equal(Check(tool.parameters, input), localAllowed, `${name}: omission follows local selection`);
+      assert.equal(Check(tool.parameters, { ...input, runner_id: "" }), false, `${name}: blank ID is invalid`);
+      if (localAllowed) assert.match(description, /default: local/);
+      else assert.doesNotMatch(description, /default: local/);
+      for (const id of selection.ids) {
+        assert.ok(description.includes(id), `${name}: allowed ID is visible`);
+        assert.ok(Check(tool.parameters, { ...input, runner_id: id }), `${name}: explicit selection is valid`);
+      }
+      if (!localAllowed && selection.ids.length === 1) {
+        assert.match(description, /Pass runner_id="runner-1"; it is the only allowed Runner/);
+      } else if (!localAllowed && selection.ids.length === 0) {
+        assert.match(description, /No Runner is allowed/);
+      }
+    }
+    const list = tools.find((candidate) => candidate.name === "environment_list")!;
+    if (localAllowed) {
+      await list.execute("default", {});
+      assert.deepEqual(calls, [undefined], "omission preserves the local-default callback contract");
+    } else if (selection.ids.length) {
+      await list.execute("selected", { runner_id: selection.ids[0] });
+      assert.deepEqual(calls, [selection.ids[0]], "explicit Runner is forwarded unchanged");
+    }
+  });
+}
 
 test("get_file_provenance returns the backend record without inferring fields", async () => {
   const timestamp = "2026-08-01T10:00:00.000Z";
