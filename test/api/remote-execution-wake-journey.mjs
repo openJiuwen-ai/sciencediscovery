@@ -149,7 +149,7 @@ try {
         return runs.some((run) => run.id === initial.id && run.status === "completed") && runs.some((run) => run.automaticWake && run.status === "completed");
       });
       const wake = runs.find((run) => run.automaticWake);
-      const messages = await json(`/api/sessions/${session.id}/messages`);
+      const { messages } = await json(`/api/sessions/${session.id}`);
       assert.ok(messages.some((message) => message.kind === "wake_notice"));
       assert.match(messages.find((message) => message.id === wake.assistantMessageId).content, /results inspected without replay/);
       const activity = await json(`/api/sessions/${session.id}/agent-activity`);
