@@ -28,6 +28,7 @@ export * from "./growth/selection.js";
 export * from "./growth/convergence.js";
 export * from "./growth/patch-queries.js";
 export * from "./growth/eval-metrics.js";
+export * from "./eval/citation.js";
 export * from "./eval/discoverer.js";
 export * from "./graph/explore.js";
 export * from "./graph/gaps.js";
