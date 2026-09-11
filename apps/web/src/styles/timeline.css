@@ -222,8 +222,13 @@
 .remote-host-reachability.online { border-color: rgba(22, 163, 74, .45); color: #15803d; }
 .remote-host-reachability.offline { border-color: rgba(220, 38, 38, .45); color: #b91c1c; }
 .remote-npu-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
-.remote-npu-actions { display: flex; align-items: center; gap: 8px; }
-.remote-npu-unsaved { color: var(--warning-text, #8a5a00); }
+/* The settings dialog's blanket full-width primary button would push the note
+   and the discard button onto their own lines. This row keeps its controls
+   inline while they fit and wraps as one group only when they do not. */
+.remote-npu-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.remote-npu-actions .primary-button,
+.config-panel .remote-npu-actions .primary-button { width: auto; }
+.remote-npu-unsaved { color: var(--warning-text, #8a5a00); white-space: nowrap; }
 .remote-npu-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; }
 .remote-npu-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 /* Every card row uses the same column tracks, so a reading sits at the same
