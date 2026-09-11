@@ -297,6 +297,7 @@ class NativeAgent implements NativeAgentHandle {
       });
     }
     const governance = {
+      localRunnerAllowed: options.localRunnerAllowed,
       ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
       ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
       ...(options.remoteRunners?.length ? { remoteRunners: options.remoteRunners.map((runner) => `${runner.runnerId}: ${runner.description || runner.hostAlias}`) } : {}),
@@ -765,6 +766,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),
     ...(options.proposeSkillLibraryUpdate ? { proposeSkillLibraryUpdate: options.proposeSkillLibraryUpdate } : {}),
     ...(options.publishSkillLibraryUpdate ? { publishSkillLibraryUpdate: options.publishSkillLibraryUpdate } : {}),
+    localRunnerAllowed: options.localRunnerAllowed,
     ...(options.remoteRunners ? { remoteRunners: options.remoteRunners } : {}),
     ...(options.workspaceTransfers ? { workspaceTransfers: options.workspaceTransfers } : {}),
     ...(options.shellExecutions ? { shellExecutions: options.shellExecutions } : {}),

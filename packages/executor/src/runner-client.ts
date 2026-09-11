@@ -86,7 +86,7 @@ export class RunnerClient {
   }
 
   async health(): Promise<RunnerHealth> {
-    const response = await fetch(`${this.baseUrl}/health`);
+    const response = await fetch(`${this.baseUrl}/health`, { signal: AbortSignal.timeout(5_000) });
     if (!response.ok) throw new Error(`Runner health check failed (${response.status})`);
     return await response.json() as RunnerHealth;
   }

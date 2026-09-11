@@ -202,7 +202,8 @@ ${skillItems}
 export interface WorkspacePromptGovernance {
   approvalMode?: "always_allow" | "ask_for_dangerous";
   memoryGraphEnabled?: boolean;
-  /** Remote machines this Session may use; local execution is always available too. */
+  localRunnerAllowed?: boolean;
+  /** Additional locations selected for this Session. */
   remoteRunners?: string[];
   specialist?: { description: string; instructions: string; name: string };
   builtinSpecialists?: Array<{ description: string; name: string }>;
@@ -229,7 +230,9 @@ function buildWorkspacePromptValues(
 ): string[] {
   return [
     WORKSPACE_SYSTEM_PROMPT,
-    'Runner local: default local sandbox and this Agent workspace. Execute Shell/Python/R only through Runner tools. Independent SSH/SLURM jobs are not supported.',
+    governance?.localRunnerAllowed === false
+      ? 'Runner local is not selected for this Session. Pass an allowed runner_id explicitly for execution. Workspace file access remains available; never silently change execution location.'
+      : 'Runner local: sandbox on this machine and this Agent workspace. Execute Shell/Python/R only through Runner tools. Independent SSH/SLURM jobs are not supported.',
     scientificEnvsAvailable
       ? "\nManaged scientific environments can contain Python, R, and other tools. Use environment_list/environment_create/environment_delete/environment_install/environment_uninstall for managed environments. Select an environment ID with run_shell to run its latest state; revisions are audit-only. Every Shell call starts fresh without retained cd/export or interpreter memory. Managed prefixes are read-only in the sandbox; use environment_create/install/uninstall/delete for dependency changes. environment_install accepts conda, pip, CRAN and Bioconductor; pip supports package specs or explicitly staged local wheel files. Its optional HTTPS indexUrl overrides the configured package source for that installation. Create a named environment to customize dependencies; the shared base is read-only."
       : "\nLocal managed environments are unavailable. run_shell without environment_id uses the system Shell sandbox. Check environment_setup on the selected Runner; local readiness does not determine remote readiness.",
@@ -255,7 +258,7 @@ function buildWorkspacePromptValues(
       }`
       : "",
     governance?.remoteRunners?.length
-      ? `\nAvailable additional sandboxed Runners (ID and description): ${governance.remoteRunners.map(escapePromptTagText).join(", ")}. This machine remains the default: run code here unless the work needs the remote machine's data, scale, or hardware, and keep ordinary workspace file reads and writes local. To use one, pass its ID as the runner_id parameter of run_shell. Each remote machine has its own independent persistent workspace, so local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
+      ? `\nAvailable additional sandboxed Runners (ID and description): ${governance.remoteRunners.map(escapePromptTagText).join(", ")}. Use a Runner selected for this Session. An omitted runner_id means local only when local is allowed; it never selects another location implicitly. Ordinary workspace file reads and writes stay in this Agent's workspace. To use one, pass its ID as the runner_id parameter of run_shell. Each remote machine has its own independent persistent workspace, so local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
       : "",
     buildSkillSystemSection(skills),
     ...(governance?.memoryGraphEnabled
@@ -298,6 +301,7 @@ export function buildWorkspaceSystemPrompt(
 }
 
 export interface WorkspaceAgentOptions {
+  localRunnerAllowed?: boolean;
   workspaceTransfers?: WorkspaceToolOptions["workspaceTransfers"];
   shellExecutions?: WorkspaceToolOptions["shellExecutions"];
   timers?: WorkspaceToolOptions["timers"];

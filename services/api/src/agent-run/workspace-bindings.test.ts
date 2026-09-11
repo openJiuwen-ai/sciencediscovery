@@ -32,7 +32,7 @@ import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 test("one-time timer binding validates time and execution ownership without execution or a write lease", async (t) => {
   const db = new DatabaseSync(":memory:"); t.after(() => db.close());
   const notifications = new AgentNotifications(db, () => false);
-  const store = { assertSessionWritable() {}, notifications,
+  const store = { assertSessionWritable() {}, assertSessionAllowsRunner() {}, notifications,
     shellExecutions: { get: async (id: string, owner: { agentId: string }) => {
       assert.equal(owner.agentId, "main"); if (id !== "owned") throw new Error("not owned"); return {};
     } },
@@ -57,7 +57,7 @@ test("Transfer binding exposes only owned Workspaces and rechecks Runner access 
   let allowed = true; let starts = 0;
   const store = {
     workspaceIdentity: (_session: string, agent: string, runner = "local") => ({ id: `${agent}-${runner}` }),
-    assertSessionWritable() {}, assertSessionAllowsRemoteRunner() { if (!allowed) throw new Error("revoked"); },
+    assertSessionWritable() {}, assertSessionAllowsRunner() {}, assertSessionAllowsRemoteRunner() { if (!allowed) throw new Error("revoked"); },
     transfers: { start() { starts++; return {}; } },
   } as unknown as SessionStore;
   const binding = createWorkspaceExecutionBindings({
@@ -143,7 +143,7 @@ test("main and child execution bindings route by Runner ID and record isolated w
     sessionId: "session-1",
     skillPackagesRoot: skillRoot,
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() {},
       // No network in this epoch, so the binding resolves no outbound route.
       // No cards ticked on this Runner, so no NPU reaches the request.
       npuDeviceSelection: () => [],
@@ -229,7 +229,7 @@ test("main and child scientific environment operations use the selected Runner a
     const binding = createWorkspaceExecutionBindings({
       agentId, executionId: "test", sessionId: "session", permissionScopeLabel: "test", workspaceRoot: "/local/workspace",
       permission: { requirePrivilege: async () => { approvals++; if (revokeOnApproval) allowed = false; } } as unknown as AgentPermissionRuntime,
-      store: { assertSessionWritable() {}, getEnvironmentSourceSettings: () => ({ condaSource: "upstream", pipSource: "upstream" }),
+      store: { assertSessionWritable() {}, assertSessionAllowsRunner() {}, getEnvironmentSourceSettings: () => ({ condaSource: "upstream", pipSource: "upstream" }),
         replaceScientificEnvironmentCatalog: async () => { throw new Error("remote catalog must not replace local catalog"); },
       } as unknown as SessionStore,
       runnerClient: new Proxy({} as RunnerClient, { get() { throw new Error("must not call local Runner"); } }),
@@ -285,7 +285,7 @@ test("scientific executions forward the current outbound route and omit it for n
     scientificEnvironments: [],
     sessionId: "session-1",
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() {},
       npuDeviceSelection: () => [],
       resolveSandboxEgressProxy: () => resolved,
     } as unknown as SessionStore,
@@ -332,7 +332,7 @@ test("environment install forwards the trusted workspace only from the Agent bin
     scientificEnvironments: [],
     sessionId: "session-1",
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() {},
       getEnvironmentSourceSettings: () => ({ condaSource: "tsinghua", pipSource: "ustc" }),
       replaceScientificEnvironmentCatalog: async () => undefined,
     } as unknown as SessionStore,
@@ -410,7 +410,7 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
     } as unknown as RunnerClient,
     sessionId: "session-1",
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() {},
       // No network in this epoch, so the binding resolves no outbound route.
       // No cards ticked on this Runner, so no NPU reaches the request.
       npuDeviceSelection: () => [],

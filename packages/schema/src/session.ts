@@ -76,9 +76,10 @@ export interface Session {
   /**
    * Independent Session selection from the global remote catalog. Absent means the
    * Session inherits the Project list; an empty array means this Session may not
-   * use any remote machine. Local execution is always available either way.
+   * use any remote machine. Legacy selections implicitly include local execution.
    */
   remoteRunnerHostIds?: string[];
+  runnerIds?: string[];
   /** Enables automatic Reviewer Specialist tasks for this Session only. */
   reviewerAutomaticReviewEnabled: boolean;
   /** Quick is the default; Deep adds semantic verification for this Session. */
@@ -455,6 +456,7 @@ export interface CreateSessionRequest {
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
   remoteRunnerHostIds?: string[];
+  runnerIds?: string[];
   settingsOverrides?: RuntimeSettingsOverrides;
   specialistId?: string;
   title?: string;
@@ -470,6 +472,7 @@ export interface UpdateSessionRequest {
   reviewMode?: "auto" | "manual";
   /** Set to null to drop the override and inherit the Project's allowed machines. */
   remoteRunnerHostIds?: string[] | null;
+  runnerIds?: string[] | null;
   reviewModelId?: string;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;

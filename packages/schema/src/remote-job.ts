@@ -337,3 +337,9 @@ export interface DecideRemoteJobRequest {
   decision: PermissionDecision;
   expectedVersion: number;
 }
+
+/** A Runner's connection details; location does not change its execution contract. */
+export interface RunnerTarget extends RemoteHostTarget {
+  location: "local" | "remote";
+  workspaceRoot?: string;
+}

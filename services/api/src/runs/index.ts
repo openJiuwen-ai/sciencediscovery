@@ -683,6 +683,7 @@ async function executeAgentRun(
     {
       approvalMode: session.approvalMode,
       memoryGraphEnabled: memoryGraphSink.enabled,
+      localRunnerAllowed: store.effectiveRunnerIds(sessionId).includes("local"),
       ...(allowedRemoteHosts.length ? { remoteRunners: allowedRemoteHosts.map((host) => `${host.id}: ${host.description || host.runnerName || host.alias}`) } : {}),
       ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
       ...(enabledBuiltinSpecialists.length
@@ -1116,6 +1117,7 @@ async function executeAgentRun(
       permission: requestExecution.permission,
     }),
     approvalMode: session.approvalMode,
+    localRunnerAllowed: store.effectiveRunnerIds(sessionId).includes("local"),
     remoteRunners: workspaceRunners(store.workspacePath(sessionId), runId, requestExecution.permission),
     proposeSkillLibraryUpdate: async (input, _signal, toolCallId) => {
       const library = skillLibraryCatalog.get(input.libraryId);
@@ -1652,6 +1654,7 @@ async function executeAgentRun(
               });
               return await skillLibraryCatalog.publishProposals(input.proposalIds);
             },
+            localRunnerAllowed: store.effectiveRunnerIds(sessionId).includes("local"),
             remoteRunners: workspaceRunners(subagentWorkspaceRoot, childExecution.identity.executionId, childExecution.permission, subagent.id, handoff.privateWorkspacePath),
             runSubagent: async () => {
               throw new Error("Nested subagents are disabled");

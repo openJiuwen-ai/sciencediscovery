@@ -60,7 +60,7 @@ export interface WorkspaceExecutionBindingOptions {
   provenanceRecorder: ProvenanceRecorder;
   readOnlyWorkspaceRoot?: string;
   skillPackagesRoot?: string;
-  /** The local runner: always available, and the default for every execution. */
+  /** The built-in Runner, used by default only when selected for this Session. */
   runnerClient: RunnerClient;
   remoteTargets?: RemoteExecutionTarget[];
   scientificEnvironments?: Environment[];
@@ -124,6 +124,7 @@ export function createWorkspaceExecutionBindings(
     skillPackagesRoot?: string;
   } => {
     const requested = machine?.trim();
+    options.store.assertSessionAllowsRunner(options.sessionId, requested || "local");
     if (!requested || requested === "local") {
       return {
         runnerId: "local",

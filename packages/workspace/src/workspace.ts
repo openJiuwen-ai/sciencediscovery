@@ -309,6 +309,7 @@ export interface WorkspaceToolOptions {
     get(id: string): WorkspaceTransfer;
     cancel(id: string): Promise<WorkspaceTransfer>;
   };
+  localRunnerAllowed?: boolean;
   remoteRunners?: Array<{
     runnerId: string;
     description?: string;
@@ -602,13 +603,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   const loadedSkillIds = new Set<string>();
 
   /**
-   * The machines this Session may run on. Local is always one of them, so this
-   * parameter only appears once a remote machine is allowed: a Session with no
-   * remote machine sees the same tool surface it always had, and no machine name
-   * it is not allowed to use ever reaches the model.
+   * Describe only the Runners selected for this Session; location does not
+   * bypass the execution permission check.
    */
   const runnerCatalog = [
-    { runnerId: "local", description: "Default local sandbox; current Agent workspace and installed local environments." },
+    ...(options.localRunnerAllowed === false ? [] : [{ runnerId: "local", description: "Sandbox on this machine; current Agent workspace." }]),
     ...(options.remoteRunners ?? []).map((runner) => ({ runnerId: runner.runnerId, description: runner.description || runner.hostAlias })),
   ];
   const machineParameter = {

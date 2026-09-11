@@ -2,11 +2,36 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 
-import type { RunnerClient } from "@sciencediscovery/executor";
-import type { CreateEnvironmentRequest, InstallEnvironmentRequest, UninstallEnvironmentRequest } from "@sciencediscovery/schema";
+import { resolve } from "node:path";
+import type { RemoteComputeClient, RunnerClient } from "@sciencediscovery/executor";
+import { effectiveRunnerIds, type RunnerTarget, type RemoteRunnerStatus, type CreateEnvironmentRequest, type InstallEnvironmentRequest, type UninstallEnvironmentRequest } from "@sciencediscovery/schema";
 import type { SessionStore } from "./store.js";
 import { resolveEnvironmentInstallRequest } from "./environment-sources.js";
 import { remoteWorkspaceKey } from "./remote-runner.js";
+
+/** The built-in endpoint and registered endpoints share one observable catalog. */
+export async function runnerTarget(store: SessionStore, local: RunnerClient, remote: RemoteComputeClient, id: string): Promise<RunnerTarget> {
+  if (id !== "local") {
+    const host = store.getRemoteHost(id);
+    if (!host) throw new Error("Runner not found");
+    const status = await remote.runnerStatusWithResources(id);
+    return { ...host, location: "remote", runnerStatus: status, workspaceRoot: status.resources?.workspaceDisk?.path };
+  }
+  const now = new Date().toISOString();
+  let status: RemoteRunnerStatus;
+  try {
+    const health = await local.health();
+    status = { hostId: id, state: "ready", remoteVersion: health.runnerVersion, localVersion: health.runnerVersion };
+    try { status.resources = await local.resources(); }
+    catch (error) { status.resourcesError = error instanceof Error ? error.message : "Runner resource query failed"; }
+  } catch (error) {
+    status = { hostId: id, state: "error", error: error instanceof Error ? error.message : "Runner connection failed" };
+  }
+  return { id, alias: "local", runnerName: "Local Runner", location: "local", connectionKind: "direct",
+    runnerCommand: "sciencediscovery-runner", createdAt: now, updatedAt: now,
+    status: status.state === "ready" ? "ready" : "error", runnerStatus: status,
+    workspaceRoot: resolve(store.dataDir, "projects") };
+}
 
 /** Remote catalogs stay on their Runner: IDs may overlap the local catalog. */
 export async function manageRunnerEnvironment(runner: RunnerClient, store: SessionStore, path: string, method: string, body: unknown): Promise<unknown> {
@@ -39,17 +64,19 @@ export async function manageRunnerEnvironment(runner: RunnerClient, store: Sessi
 
 /** Catalog known Session workspaces, including historical references after deselection. */
 export async function runnerWorkspaceBindings(store: SessionStore, hostId: string) {
-  const host = store.getRemoteHost(hostId);
-  if (!host) throw new Error("Remote host not found");
+  const local = hostId === "local";
+  const host = local ? undefined : store.getRemoteHost(hostId);
+  if (!local && !host) throw new Error("Runner not found");
   const result = [];
   for (const project of store.listProjects()) {
     for (const session of store.listSessions(project.id, "all")) {
       const records = store.listRemoteWorkspaceSyncs(session.id).filter((record) => record.hostId === hostId);
-      const selected = (session.remoteRunnerHostIds ?? project.remoteRunnerHostIds).includes(hostId);
+      const selected = local || effectiveRunnerIds(project, session).includes(hostId);
       const executions = selected || records.length ? [] : await store.listExecutionRuns(session.id);
       if (!selected && !records.length && !executions.some((run) => run.runnerId === hostId)) continue;
       result.push({ sessionId: session.id, sessionTitle: session.title, projectName: project.name,
-        workspaceKey: remoteWorkspaceKey(project.id, session.id, host.workspaceNamespace), records });
+        workspaceKey: local ? store.workspacePath(session.id) : remoteWorkspaceKey(project.id, session.id, host?.workspaceNamespace),
+        runnerId: hostId, location: local ? "local" : "remote", projectId: project.id, records });
     }
   }
   return result;

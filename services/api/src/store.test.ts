@@ -4129,3 +4129,41 @@ test("a runner token stored before SSH credentials existed keeps working", async
   assert.equal(restored.hasToken, true);
   assert.equal(legacy.remoteHostToken(host.id), "runner-connection-token");
 });
+
+
+test("Runner selections treat local and remote alike and preserve legacy defaults across reload", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `runner-selection-${Date.now()}-${process.pid}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  await store.load();
+  const host = await store.registerRemoteHost({ alias: "selection-runner", connectionKind: "direct",
+    endpoint: { host: "127.0.0.1", port: 44444, protocol: "http" }, token: "test-only",
+    capabilities: { conda: false, containerRuntimes: [], cpuCores: 1, cuda: null, gpu: null,
+      memoryBytes: 1024, modules: false, nodeVersion: null, platform: "Linux", probedAt: new Date().toISOString(),
+      runnerCommandAvailable: true, scratchPaths: [], slurm: false } });
+  const project = await store.createProject("Runner contract", undefined, [host.id]);
+  const session = await store.createSession(project.id, "Selection", {}, {}, { allowUnconfiguredModel: true });
+  assert.deepEqual(store.effectiveRunnerIds(session.id), ["local", host.id]);
+  for (const id of ["local", host.id]) {
+    await store.updateProject(project.id, { runnerIds: [id] });
+    assert.deepEqual(store.effectiveRunnerIds(session.id), [id]);
+    assert.doesNotThrow(() => store.assertSessionAllowsRunner(session.id, id));
+    assert.throws(() => store.assertSessionAllowsRunner(session.id, id === "local" ? host.id : "local"), /not allowed/);
+  }
+  await store.updateSession(session.id, { runnerIds: ["local"] });
+  assert.deepEqual(store.effectiveRunnerIds(session.id), ["local"], "Session override is independent of Project default");
+  await store.updateSession(session.id, { runnerIds: [] });
+  assert.deepEqual(store.effectiveRunnerIds(session.id), []);
+  assert.throws(() => store.assertSessionAllowsRunner(session.id, "local"), /not allowed/);
+  const reloaded = new SessionStore(root);
+  await reloaded.load();
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), [], "empty override survives persistence");
+  await reloaded.updateSession(session.id, { runnerIds: null });
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), [host.id]);
+  await assert.rejects(reloaded.updateProject(project.id, { remoteRunnerHostIds: ["missing"] }), /not found/);
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), [host.id], "invalid legacy write cannot discard current selection");
+  await reloaded.updateSession(session.id, { remoteRunnerHostIds: [] });
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), ["local"], "legacy empty array still means local only");
+  await assert.rejects(reloaded.updateSession(session.id, { runnerIds: [" "] }), /must not be empty/);
+  await assert.rejects(reloaded.registerRemoteHost({ id: "local", alias: "reserved" }), /reserved/);
+});
