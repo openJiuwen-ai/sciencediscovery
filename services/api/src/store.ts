@@ -1437,6 +1437,7 @@ export class SessionStore {
       enabledConnectorIds: [],
       enabledSkillLibraries: [],
       enabledSkillIds: [],
+      kbScopeKbIds: [],
       semanticReviewEnabled: true,
       skillSelectionMode: DEFAULT_SKILL_SELECTION_MODE,
     };
@@ -1454,6 +1455,8 @@ export class SessionStore {
         if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
         else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
+        else if (field === "kbScopeKbIds") effective.kbScopeKbIds = [...value as string[]];
+        else if (field === "kbScopeWebSearch") effective.kbScopeWebSearch = value as boolean;
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;

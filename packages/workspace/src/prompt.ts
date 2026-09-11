@@ -205,6 +205,20 @@ ${skillItems}
 
 export interface WorkspacePromptGovernance {
   approvalMode?: "always_allow" | "ask_for_dangerous";
+  /**
+   * Bound knowledge-base scope (V2-C1): the conversation answers from these
+   * KBs only. kbLabels are "Name (id)" pairs for display; singleKbId is the
+   * default kbId when exactly one KB is bound; webSearchEnabled=false bans
+   * web tools (they are also removed from the registry, and this text tells
+   * the model why); droppedKbIds are scope entries that named nonexistent
+   * KBs — disclosed so the model does not claim coverage it does not have.
+   */
+  knowledgeBaseScope?: {
+    droppedKbIds: string[];
+    kbLabels: string[];
+    singleKbId?: string;
+    webSearchEnabled: boolean;
+  };
   memoryGraphEnabled?: boolean;
   /** Remote machines this Session may use; local execution is always available too. */
   remoteRunners?: string[];
@@ -261,6 +275,11 @@ function buildWorkspacePromptValues(
     governance?.remoteRunners?.length
       ? `\nAvailable additional sandboxed Runners (ID and description): ${governance.remoteRunners.map(escapePromptTagText).join(", ")}. This machine remains the default: run code here unless the work needs the remote machine's data, scale, or hardware, and keep ordinary workspace file reads and writes local. To use one, pass its ID as the runner_id parameter of run_python, run_r or run_shell. Each remote machine has its own independent persistent workspace, so local workspace file tools do not see remote-only files. Use sync_remote_workspace explicitly to list, push inputs, or pull selected outputs. Never assume files are mirrored; only pulled files can be declared as local Project artifacts.`
       : "",
+    governance?.knowledgeBaseScope
+      ? (governance.knowledgeBaseScope.kbLabels.length
+        ? `\nKnowledge-base scope: this conversation is bound to ${governance.knowledgeBaseScope.kbLabels.map(escapePromptTagText).join(", ")}. Answer from ${governance.knowledgeBaseScope.singleKbId ? "this knowledge base" : "these knowledge bases"} — knowledge tools only accept the bound kbId${governance.knowledgeBaseScope.singleKbId ? " (it is the default and may be omitted)" : "s"}.${governance.knowledgeBaseScope.webSearchEnabled ? "" : " Web search and fetch tools are DISABLED for this conversation (they are not in your tool list; MCP scientific connectors stay available): if the bound knowledge base does not contain the answer, say that explicitly — and what you searched — instead of filling the gap from general model knowledge."}${governance.knowledgeBaseScope.droppedKbIds.length ? ` Scope entries ignored because no such knowledge base exists: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")} — do not claim coverage of them.` : ""}`
+        : `\nKnowledge-base scope: the configured scope named no existing knowledge base (ignored entries: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")}). The conversation is therefore UNBOUND — answer normally, but do not claim coverage of those entries.`)
+      : "",
     buildSkillSystemSection(skills),
     ...(governance?.memoryGraphEnabled
       ? [
@@ -285,6 +304,7 @@ export function buildWorkspacePromptParts(
     { id: "subagent.identity", kind: "identity", protected: true },
     { id: "subagent.governance", kind: "governance", protected: true },
     { id: "remote-runner.capabilities", kind: "capabilities", protected: false },
+    { id: "kb-scope.governance", kind: "governance", protected: true },
     { id: "skills.catalog", kind: "skills", protected: false },
     { id: "citation.governance", kind: "governance", protected: true },
   ];
@@ -354,6 +374,8 @@ export interface WorkspaceAgentOptions {
    *  `concept_explore` / `deep_dive` / `entity_unified_search` /
    *  `validate_entities` / `gap_candidates` tools). */
   knowledgeEngine?: WorkspaceToolOptions["knowledgeEngine"];
+  /** Bound knowledge-base scope for the KE tools (see WorkspaceToolOptions). */
+  knowledgeEngineScope?: WorkspaceToolOptions["knowledgeEngineScope"];
   /** Create an Evidence node + extracts edge, Paper → Evidence
    * (`declare_evidence` tool). */
   declareEvidence?: (input: DeclareEvidenceInput) => Promise<DeclareResult>;

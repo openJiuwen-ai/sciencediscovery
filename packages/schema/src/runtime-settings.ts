@@ -21,6 +21,8 @@ export type RuntimeSettingsField =
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
   | "enabledSkillIds"
+  | "kbScopeKbIds"
+  | "kbScopeWebSearch"
   | "modelId"
   | "reviewModelId"
   | "semanticReviewEnabled"
@@ -52,6 +54,18 @@ export interface RuntimeSettingsOverrides {
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
+  /**
+   * Knowledge-base scope (phase V, V2-C1): bind the conversation to these
+   * knowledge bases. When exactly one id is bound, knowledge tools treat it
+   * as the default kbId; ids outside the scope are rejected at the tool
+   * layer. Empty/unset = no restriction.
+   */
+  kbScopeKbIds?: string[];
+  /**
+   * Only meaningful with kbScopeKbIds: false bans web_search/web_fetch so
+   * answers come from the bound knowledge bases alone. Default true.
+   */
+  kbScopeWebSearch?: boolean;
   modelId?: string;
   reviewModelId?: string;
   semanticReviewEnabled?: boolean;
@@ -69,6 +83,10 @@ export interface EffectiveRuntimeSettings {
   enabledSkillLibraries: EnabledSkillLibrary[];
   /** Resolved skill set: the whole catalog in `all` mode, the whitelist in `selected`. */
   enabledSkillIds: string[];
+  /** Bound knowledge bases (see RuntimeSettingsOverrides.kbScopeKbIds). */
+  kbScopeKbIds: string[];
+  /** False bans web tools when a KB scope is bound; default true. */
+  kbScopeWebSearch?: boolean;
   modelId?: string;
   reviewModelId?: string;
   semanticReviewEnabled: boolean;

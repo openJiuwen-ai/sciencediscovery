@@ -330,6 +330,16 @@ export interface WorkspaceToolOptions {
     noveltyCheck: (kbId: string, claim: string) => Promise<unknown>;
     verifyCitation: (kbId: string, quote: string) => Promise<unknown>;
   };
+  /**
+   * Bound knowledge-base scope (phase V, V2-C1): when the session binds KBs,
+   * a single bound KB becomes the default kbId (its parameter turns optional
+   * in the tool schemas), and any kbId outside the bound set is rejected at
+   * the tool layer — scope is a mechanism, not a prompt wish.
+   */
+  knowledgeEngineScope?: {
+    kbIds: string[];
+    singleKbId?: string;
+  };
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
    * `declare_evidence` LLM tool). Returns a structured error code instead of
    * degrading. */
@@ -1183,6 +1193,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.knowledgeEngine) {
     const knowledgeEngine = options.knowledgeEngine;
+    const kbScope = options.knowledgeEngineScope;
     const keTool = <T extends TSchema>(
       name: string,
       label: string,
@@ -1193,7 +1204,22 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     ): AgentTool<T> => ({
       description,
       execute: async (_toolCallId, params) => {
-        const result = await invoke(params);
+        // Bound-scope enforcement: fill the default kbId when the session
+        // binds exactly one KB, and reject out-of-scope kbIds outright.
+        let effectiveParams = params;
+        if (kbScope) {
+          const raw = (params as Record<string, unknown>).kbId;
+          const kbId = typeof raw === "string" && raw ? raw : kbScope.singleKbId;
+          if (kbId !== undefined) {
+            if (!kbScope.kbIds.includes(kbId)) {
+              throw new Error(
+                `kbId "${kbId}" is outside this session's bound knowledge-base scope (${kbScope.kbIds.join(", ")}). Use one of the bound ids, or answer from what is already in context.`,
+              );
+            }
+            if (raw !== kbId) effectiveParams = { ...params, kbId } as Static<T>;
+          }
+        }
+        const result = await invoke(effectiveParams);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
       // Every KE tool is a pure concurrent-safe store read — except the
@@ -1212,6 +1238,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       ...(opts.trusted ? {} : { untrustedCategory: "knowledge-base" }),
     });
     const kbIdField = Type.String({ minLength: 1, description: "Knowledge base id (see list_knowledge_bases)." });
+    // With exactly one bound KB, kbId becomes optional everywhere (the scope
+    // fills it); without a scope the parameter stays required.
+    const kbIdParam = kbScope?.singleKbId
+      ? Type.Optional(Type.String({ minLength: 1, description: `Knowledge base id (defaults to the session-bound knowledge base; only bound ids are accepted).` }))
+      : kbIdField;
 
     tools.push(
       keTool(
@@ -1228,7 +1259,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Explore concept neighborhood",
         "Read the neighborhood of an entity in a knowledge base's entity graph. Returns the center entity plus neighbors, each with name/type/description/support count/trust level, the relation type to the center, direction, and hop (1 = direct, 2 = via the strongest 1-hop neighbors). Name resolution: exact (normalized) → alias → substring; ambiguity returns candidates instead of guessing. LIMITATION: covers only content already extracted into the graph; truncated=true means edges remain beyond the limit. Not for: what the papers SAY (use kb_search); an entity's full evidence quotes (use deep_dive).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
           hops: Type.Optional(Type.Union([Type.Literal(1), Type.Literal(2)])),
           limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
@@ -1244,7 +1275,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Deep dive entity",
         "Full detail for one entity in the knowledge graph: aliases, description, and its relation edges each with the VERBATIM evidence quote (evidenceQuote) and source document (evidenceDocId/evidenceDocName). Use it to ground claims about an entity in citable evidence. LIMITATION: covers only extracted content; truncated=true means more edges exist beyond maxEdges. Not for: browsing a neighborhood (use concept_explore); passage-level retrieval beyond this entity's edges (use kb_search).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
           maxEdges: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
         }),
@@ -1258,7 +1289,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Unified entity search",
         "One call, concurrent independent sections over a knowledge base for one entity — graph (neighborhood), evidence (verbatim quotes per edge), documents (keyword-matched source documents), citations ([@rid] contexts whose sentence or resolved target mentions the entity, with intent labels). Sections are returned independently (no cross-source fusion); a failing section reports status=error without affecting the others. Ambiguous names surface merged candidates instead of guessing. Not for: a quick neighborhood lookup (use concept_explore — one section instead of four); exact-pattern text search across all documents (use doc_grep).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
           graphLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
           maxEdges: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
@@ -1276,7 +1307,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Validate entity names",
         "Anti-hallucination check: verify a list of entity names against the knowledge graph BEFORE citing them. Per name returns found (with the entity), ambiguous (with candidates), or unknown. Names that come back unknown are not in the graph — do not present them as established knowledge-base facts. Not for: verifying quotes (use verify_citation); novelty claims (use novelty_check); reading an entity's evidence (use deep_dive).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           names: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
         }),
         (params) => knowledgeEngine.validateEntities(params.kbId, params.names),
@@ -1289,7 +1320,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Search knowledge-base documents",
         "Hybrid retrieval over a knowledge base's documents, returning passage-level hits: each hit carries the document (docId/docTitle), an anchorId that resolves to the exact block in the three-level reader, the section, a snippet, matched terms, and a fused score. The keyword arm (FTS) always runs; when the deployment has an embedding provider and stored document vectors, a semantic arm joins via reciprocal-rank fusion (the result's sources field lists which arms contributed; a keyword-only note means the semantic arm was unavailable). Use it for questions about what the papers SAY (methods, numbers, setup) — the graph tools cover extracted entities and relations. Hits are spread across at most 2 per document; truncated=true means more matches exist. LIMITATION: paraphrase recall depends on the semantic arm being present; a miss is unknown, not evidence of absence. Not for: exact string/pattern matching (use doc_grep); reading a hit's full block in context (use kb_expand with its anchorId); graph-structure questions (use concept_explore/gap_candidates).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           query: Type.String({ minLength: 1, description: "Free-text keyword query" }),
           topK: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
           docLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10 })),
@@ -1305,7 +1336,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Expand a document anchor",
         "Read the full block behind an anchorId from kb_search (or an evidence card), plus its neighbouring before/after blocks — the passage in context instead of a snippet. Anchors have the form {docId}:{blockType}:{index}. Structured not-found reasons: document-not-found (wrong docId), document-not-parsed (no fulltext yet), anchor-not-found (block type/index does not exist in this document). Not for: discovery — search first with kb_search/doc_grep and copy the anchorId from a hit; never construct an anchorId yourself.",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           anchorId: Type.String({ minLength: 1, description: "Anchor id from kb_search hits or evidence cards" }),
         }),
         (params) => knowledgeEngine.kbExpand(params.kbId, params.anchorId),
@@ -1315,7 +1346,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Regex search document texts",
         "Case-insensitive regular-expression search over a knowledge base's document fulltexts, line-grained like grep: each match reports the document, a 1-based line number, and the matched line. Use it when you need an exact pattern (a measurement like 'IC50', a gene variant spelling, a table token) rather than the keyword recall of kb_search. Invalid regex returns a structured error you can fix and retry. LIMITATION: matches are per line (multi-line patterns do not span lines); truncated=true means more matches exist beyond maxMatches. Not for: fuzzy or semantic questions (use kb_search); reading blocks in context (use kb_expand).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           pattern: Type.String({ minLength: 1, maxLength: 200, description: "JavaScript regex source (case-insensitive)" }),
           maxMatches: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
         }),
@@ -1329,7 +1360,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Check a claim's novelty against the knowledge base",
         "Anti-hallucination check for novelty claims ('first to show…', 'novel mechanism…'): three deterministic probes (entity / relation / passage) against ONE knowledge base. collision = the KB already covers this subject — reframe as building on it; partial = weak overlap; no-collision = nothing in THIS KB overlaps. LIMITATION: internal to the knowledge base — 'no-collision' says nothing about the wider literature (external novelty search is out of scope for this build); absence of evidence is not evidence of absence. Not for: verifying a quote's wording (use verify_citation); checking entity existence (use validate_entities).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           claim: Type.String({ minLength: 1, maxLength: 1000, description: "The candidate novelty claim, verbatim" }),
         }),
         (params) => knowledgeEngine.noveltyCheck(params.kbId, params.claim),
@@ -1341,7 +1372,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Verify a quote against the papers",
         "Three-state verification of a quote you intend to attribute to a paper: verbatim (normalized substring in at least one scanned document — safe to quote), fuzzy (≥85% word overlap — a paraphrase, not the paper's wording), not-found (do not present it as a paper's words). Returns which documents verified it. Use BEFORE quoting any sentence in a final answer. Not for: entity existence (use validate_entities); finding which paper says X (use kb_search first).",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           quote: Type.String({ minLength: 10, maxLength: 2000, description: "The quote to verify" }),
         }),
         (params) => knowledgeEngine.verifyCitation(params.kbId, params.quote),
@@ -1402,7 +1433,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Find gap candidates",
         "Deterministic whitespace analysis over the entity graph — three structural signals (the LLM never decides what the candidates ARE): holes (entity pairs with ≥3 shared neighbors but no direct edge; crossCommunity=true marks the most valuable cross-community holes), conflicts (high-support contradicts/contrasts_with edges with a sample quote), transfers (method used by A where context-sharing B has no link to it). LIMITATION: analyzes the top-500 entities by support (stats.truncated reports truncation); a missing edge means unknown (possibly merely unextracted), not disproven — semantic relevance and novelty need separate verification.",
         Type.Object({
-          kbId: kbIdField,
+          kbId: kbIdParam,
           signals: Type.Optional(
             Type.Array(Type.Union([Type.Literal("holes"), Type.Literal("conflicts"), Type.Literal("transfers")])),
           ),

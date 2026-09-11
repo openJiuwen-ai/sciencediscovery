@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
 import { auditCompanionIds } from "./audit-companions.js";
+import { apiLog } from "../logging.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -554,6 +555,59 @@ async function executeAgentRun(
   if (!initialPermissionEpoch) {
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }
+  // Bound knowledge-base scope (V2-C1): validate the configured ids against
+  // the knowledge engine — unknown ids drop with a disclosed note rather
+  // than failing the run. The tool layer enforces the scope; the prompt
+  // explains it. A KE that is absent or erroring degrades the scope to
+  // unbound-with-disclosure, never to a run-start 500 (review P3).
+  let kbToolScope: { kbIds: string[]; singleKbId?: string } | undefined;
+  let kbScopePrompt: {
+    droppedKbIds: string[];
+    kbLabels: string[];
+    singleKbId?: string;
+    webSearchEnabled: boolean;
+  } | undefined;
+  const configuredKbScope = settingsSnapshot.kbScopeKbIds;
+  if (configuredKbScope.length && knowledgeEngineTools) {
+    let known: Map<string, string> | undefined;
+    try {
+      known = new Map(
+        (await knowledgeEngineTools.listKnowledgeBases()).map((kb) => [kb.id, kb.name] as const),
+      );
+    } catch { /* fall through to the degraded path below */ }
+    if (known) {
+      const valid = configuredKbScope.filter((id) => known!.has(id));
+      const dropped = configuredKbScope.filter((id) => !known!.has(id));
+      if (valid.length) {
+        const singleKbId = valid.length === 1 ? valid[0]! : undefined;
+        kbToolScope = { kbIds: valid, ...(singleKbId ? { singleKbId } : {}) };
+        kbScopePrompt = {
+          droppedKbIds: dropped,
+          kbLabels: valid.map((id) => `${known!.get(id)} (${id})`),
+          ...(singleKbId ? { singleKbId } : {}),
+          webSearchEnabled: settingsSnapshot.kbScopeWebSearch !== false,
+        };
+      } else {
+        // Every configured id named a nonexistent KB — disclose instead of
+        // silently degrading to unbound (review P3).
+        kbScopePrompt = {
+          droppedKbIds: dropped,
+          kbLabels: [],
+          webSearchEnabled: settingsSnapshot.kbScopeWebSearch !== false,
+        };
+      }
+    } else {
+      apiLog.warn("knowledge_engine", {
+        message: "kb_scope_validation_degraded",
+        reason: "list_knowledge_bases failed at run start; scope left unenforced",
+      });
+    }
+  } else if (configuredKbScope.length && !knowledgeEngineTools) {
+    apiLog.warn("knowledge_engine", {
+      message: "kb_scope_ignored_no_engine",
+      reason: "kbScopeKbIds configured but the knowledge engine is not deployed in this stack",
+    });
+  }
   const apiToken = store.getModelApiToken(selectedModel.id);
   if (!apiToken && !store.modelAllowsMissingToken(selectedModel)) {
     throw new ApiStatusError(400, "The selected model does not have a saved API token");
@@ -630,6 +684,7 @@ async function executeAgentRun(
     {
       approvalMode: session.approvalMode,
       memoryGraphEnabled: memoryGraphSink.enabled,
+      ...(kbScopePrompt ? { knowledgeBaseScope: kbScopePrompt } : {}),
       ...(allowedRemoteHosts.length ? { remoteRunners: allowedRemoteHosts.map((host) => `${host.id}: ${host.description || host.runnerName || host.alias}`) } : {}),
       ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
       ...(enabledBuiltinSpecialists.length
@@ -1070,6 +1125,7 @@ async function executeAgentRun(
       return await skillLibraryCatalog.publishProposals(input.proposalIds);
     },
     ...(knowledgeEngineTools ? { knowledgeEngine: knowledgeEngineTools } : {}),
+    ...(kbToolScope ? { knowledgeEngineScope: kbToolScope } : {}),
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -1390,7 +1446,16 @@ async function executeAgentRun(
           const subagentProfile = createSubagentProfile({
             allowedToolNames: subagentConfig.tools ?? undefined,
             connectorIds: subagentConnectorIds,
-            deniedToolNames: subagentConfig.disallowedTools,
+            // A bound scope's web ban extends into subagents — otherwise the
+            // main agent could delegate "look it up online" and bypass the
+            // mechanism (review P2). KE scope needs no mirror: the subagent
+            // workspace never receives the knowledgeEngine port.
+            deniedToolNames: [
+              ...subagentConfig.disallowedTools,
+              ...(kbToolScope && kbScopePrompt && !kbScopePrompt.webSearchEnabled
+                ? ["web_capture", "web_fetch", "web_search", "image_search"]
+                : []),
+            ],
             gatewayThreadId: subagent.id,
             maxModelTurns: subagentConfig.maxTurns,
             presetId: subagentConfig.name,
@@ -1771,6 +1836,13 @@ async function executeAgentRun(
   };
   const mainProfile = createMainAgentProfile({
     connectorIds: settingsSnapshot.enabledConnectorIds,
+    // The bound scope's web ban must ride the PROFILE's tool policy — the run
+    // composer builds the registry policy from profile.toolPolicy alone and
+    // overrides any workspace-level policy (E2E-caught bug: a
+    // WorkspaceAgentOptions.toolPolicy here is silently overridden).
+    deniedToolNames: kbToolScope && kbScopePrompt && !kbScopePrompt.webSearchEnabled
+      ? ["web_capture", "web_fetch", "web_search", "image_search"]
+      : [],
     gatewayThreadId: sessionId,
     runTimeoutMs: timeoutSettings.gatewayTurnTimeoutMs,
     skills: runtimeSkills.map(({ id, revision, version }) => ({ id, revision, version })),
@@ -1852,7 +1924,19 @@ async function executeAgentRun(
       // per-KB graph digests so the model knows which KBs exist and how
       // mature they are before calling the consumption tools.
       ...(knowledgeEngineTools
-        ? { contextContributorFactories: [createKeResidentSummaryFactory<AgentHistoryMessage>(knowledgeEngineTools)] }
+        ? { contextContributorFactories: [createKeResidentSummaryFactory<AgentHistoryMessage>(
+            // Bound scope: the resident summary must not leak out-of-scope KB
+            // digests into context (or advertise them as available) — wrap
+            // the port so the factory only ever sees the bound KBs (review P2).
+            kbToolScope
+              ? {
+                  ...knowledgeEngineTools,
+                  listKnowledgeBases: async () =>
+                    (await knowledgeEngineTools.listKnowledgeBases())
+                      .filter((kb) => kbToolScope.kbIds.includes(kb.id)),
+                }
+              : knowledgeEngineTools,
+          )] }
         : {}),
       planRepository: {
         abandon: async (input) => {

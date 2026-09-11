@@ -1808,3 +1808,53 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
     assert.equal(bareNames.has(absent), false, `${absent} must not register without the port`);
   }
 });
+
+test("knowledge-engine tools enforce a bound KB scope: default fill, optional schema, out-of-scope rejection", async () => {
+  const calls: string[] = [];
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [{ id: "kb1", name: "Bound KB", stats: { documents: 1, entities: 1, edges: 1 } }],
+    conceptExplore: async (kbId: string, entity: string) => { calls.push(`concept_explore:${kbId}:${entity}`); return { found: true }; },
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async (kbId: string, query: string) => { calls.push(`kb_search:${kbId}:${query}`); return { hits: [] }; },
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineScope: { kbIds: ["kb1"], singleKbId: "kb1" },
+  });
+  const search = tools.find((tool) => tool.name === "kb_search")!;
+
+  // The scope turns kbId into an optional schema parameter …
+  const required = (search.parameters as { required?: string[] }).required ?? [];
+  assert.ok(!required.includes("kbId"), "kbId must be optional when a single KB is bound");
+  // … fills the default when omitted …
+  await search.execute("ke-call", { query: "helical parameters" });
+  assert.deepEqual(calls, ["kb_search:kb1:helical parameters"]);
+  // … honours an explicit in-scope kbId …
+  await search.execute("ke-call", { kbId: "kb1", query: "explicit" });
+  assert.deepEqual(calls.at(-1), "kb_search:kb1:explicit");
+  // … and rejects out-of-scope ids at the tool layer.
+  await assert.rejects(
+    search.execute("ke-call", { kbId: "kb-other", query: "escape" }),
+    /outside this session's bound knowledge-base scope/,
+  );
+  assert.equal(calls.length, 2, "the rejected call must not reach the port");
+
+  // Without a scope, kbId stays required (schema-level contract unchanged).
+  const unscoped = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+  });
+  const unscopedSearch = unscoped.find((tool) => tool.name === "kb_search")!;
+  const unscopedRequired = (unscopedSearch.parameters as { required?: string[] }).required ?? [];
+  assert.ok(unscopedRequired.includes("kbId"), "kbId must stay required without a scope");
+});

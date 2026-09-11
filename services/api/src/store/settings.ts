@@ -66,6 +66,8 @@ export const RUNTIME_SETTINGS_FIELDS = [
   "enabledConnectorIds",
   "enabledSkillLibraries",
   "enabledSkillIds",
+  "kbScopeKbIds",
+  "kbScopeWebSearch",
   "modelId",
   "reviewModelId",
   "semanticReviewEnabled",
@@ -192,6 +194,23 @@ export function normalizeRuntimeSettings(
       continue;
     }
     normalized[field] = modelId;
+  }
+  if (hasOwn(value, "kbScopeKbIds")) {
+    // KB ids are not known to the store layer — existence is validated at
+    // run start against the knowledge engine (unknown ids drop with a
+    // disclosed note). Here we only enforce shape.
+    if (!Array.isArray(value.kbScopeKbIds) || value.kbScopeKbIds.some((id) => typeof id !== "string" || !id)) {
+      if (strict) throw new Error("kbScopeKbIds must be an array of non-empty strings");
+    } else {
+      normalized.kbScopeKbIds = [...new Set(value.kbScopeKbIds as string[])];
+    }
+  }
+  if (hasOwn(value, "kbScopeWebSearch")) {
+    if (typeof value.kbScopeWebSearch !== "boolean") {
+      if (strict) throw new Error("kbScopeWebSearch must be a boolean");
+    } else {
+      normalized.kbScopeWebSearch = value.kbScopeWebSearch;
+    }
   }
   if (hasOwn(value, "semanticReviewEnabled")) {
     if (typeof value.semanticReviewEnabled !== "boolean") {
