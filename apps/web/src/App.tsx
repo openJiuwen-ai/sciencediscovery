@@ -100,7 +100,7 @@ import type {
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
 import type { ModelCatalogDetails } from "@sciencediscovery/schema";
-import { constrainCatalogThinking, setModelCatalogSnapshot } from "@sciencediscovery/schema";
+import { constrainCatalogThinking, setModelCatalogSnapshot, effectiveRunnerIds } from "@sciencediscovery/schema";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import {
   classifyScientificArtifact,
@@ -192,7 +192,7 @@ import {
   SandboxNetworkSettingsEditor,
   TimeoutSettingsEditor,
 } from "./RuntimeControls.js";
-import { effectiveRemoteRunnerHostIds, ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
+import { ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
 import { AgentActivityPanel } from "./AgentActivityPanel.js";
 import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
@@ -3649,12 +3649,9 @@ export function App() {
   }
 
   const activeProject = projects.find((project) => project.id === activeProjectId);
-  // Remote machines the open Session may use (its own override, else the
-  // Project allowlist); drives the session-bar badge. Allowing remote machines
-  // never disables local file access or local execution.
-  const allowedRemoteHosts = session
-    ? remoteHosts.filter((host) => effectiveRemoteRunnerHostIds(activeProject, session).includes(host.id))
-    : [];
+  const selectedRunnerIds = activeProject && session ? effectiveRunnerIds(activeProject, session) : [];
+  const selectedRunnerNames = selectedRunnerIds.map((id) => id === "local" ? t("remote.localRunner")
+    : remoteHosts.find((host) => host.id === id)?.runnerName ?? remoteHosts.find((host) => host.id === id)?.alias ?? id);
   // The Project/Session behind the scoped settings dialog, for the remote-compute sections.
   const scopedSettingsProject = settingsTarget?.kind === "project"
     ? projects.find((project) => project.id === settingsTarget.id)
@@ -4240,10 +4237,10 @@ export function App() {
                 ) : null}
               </div>
               <div className="session-bar-meta">
-                {session ? <span className="session-runner-target" title={allowedRemoteHosts.length
-                  ? t("app.runnerRemoteTooltip", { hosts: allowedRemoteHosts.map((host) => host.alias).join(", ") })
-                  : t("app.runnerLocalTooltip")}>
-                  {allowedRemoteHosts.length ? t("app.runnerRemoteChip") : t("app.runnerLocalChip")}
+                {session ? <span className="session-runner-target" title={selectedRunnerIds.length
+                  ? t("app.runnerSelectionTooltip", { hosts: selectedRunnerNames.join(", ") })
+                  : t("app.runnerSelectionEmpty")}>
+                  {t("app.runnerSelectionChip", { count: selectedRunnerIds.length })}
                 </span> : null}
                 {session ? (
                   <SessionUsageChip

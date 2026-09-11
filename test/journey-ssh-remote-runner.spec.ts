@@ -346,7 +346,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByLabel("Token", { exact: true })).toHaveCount(0);
         await expect(dialog.getByRole("checkbox", { name: /institution-linux/ })).toHaveCount(0);
         await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
-        await expect(dialog.getByRole("combobox", { name: "允许的远程 Runner" })).toHaveCount(0);
+        await expect(dialog.getByRole("combobox", { name: "允许的 Runner" })).toHaveCount(0);
         await expect(dialog.getByText(/一次性作业卡/)).toHaveCount(0);
         await expect(dialog.getByText(/所有 Shell\/Python\/R 命令均通过/)).toBeVisible();
       },
@@ -681,7 +681,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         await page.getByRole("dialog", { name: "项目设置" }).getByRole("button", { name: "关闭作用域设置" }).click();
         const dialog = await openSessionSettings();
-        const mode = dialog.getByRole("combobox", { name: "允许的远程 Runner" });
+        const mode = dialog.getByRole("combobox", { name: "允许的 Runner" });
         await expect(mode).toHaveValue("inherit");
         await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
         await mode.selectOption("override");
@@ -715,14 +715,14 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       "Session 设置不再展示工作区删除控件；全局设置按 Runner 展示 Project/Session 工作区及只读同步记录。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "会话设置" });
-        await dialog.getByRole("combobox", { name: "允许的远程 Runner" }).selectOption("inherit");
+        await dialog.getByRole("combobox", { name: "允许的 Runner" }).selectOption("inherit");
         await expect(dialog.getByRole("button", { name: "删除远程工作区" })).toHaveCount(0);
         await dialog.getByRole("button", { name: "关闭作用域设置" }).click();
         const settings = await openRemoteSettings();
         await settings.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
         await settings.getByRole("combobox", { name: "管理 Runner" }).selectOption(hostId);
         await settings.getByRole("button", { name: "工作区", exact: true }).click();
-        await expect(settings.getByText("远程工作区", { exact: true })).toBeVisible();
+        await expect(settings.getByText("工作区", { exact: true }).last()).toBeVisible();
         await settings.getByText("传输历史 · 1").click();
         await expect(settings.getByText(/主 Agent · pull · completed · 1 个文件 · results\/report\.md/)).toBeVisible();
         await expect(settings.getByRole("button", { name: /Push|Pull/ })).toHaveCount(0);
@@ -735,8 +735,8 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         await page.getByRole("dialog", { name: "系统设置" }).locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         const badge = page.locator(".session-runner-target");
-        await expect(badge).toHaveText("可用远程");
-        await expect(badge).toHaveAttribute("title", /本地 Runner 始终可用/);
+        await expect(badge).toHaveText("Runner · 2");
+        await expect(badge).toHaveAttribute("title", /允许的 Runner：本地 Runner/);
         await expect(page.locator('[title="Fixed Session execution target"]')).toHaveCount(0);
         const clipped = await badge.evaluate((element) => element.scrollWidth > element.clientWidth + 1);
         expect(clipped).toBe(false);
@@ -749,7 +749,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       async () => {
         const dialog = await openRemoteSettings();
         await dialog.getByRole("button", { name: "连接 Runner" }).first().click();
-        await expect(dialog.getByText("已连接", { exact: true })).toBeVisible();
+        await expect(dialog.locator(".remote-host-card", { hasText: hostId }).getByText("已连接", { exact: true })).toBeVisible();
         await expect(dialog.getByText(
           /版本 0\.0\.0-remote · 本地 0\.0\.0-local/,
         )).toBeVisible();
@@ -814,7 +814,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await card.locator(".remote-host-disclosure > summary").first().click();
         await expect(card.getByLabel("Runner 资源")).toBeHidden();
         await expect(card.getByLabel("Runner 连接")).toBeHidden();
-        await expect(card.getByRole("button", { name: "断开连接", exact: true })).toBeVisible();
+        await expect(card.getByRole("button", { name: "检查连接", exact: true })).toBeVisible();
         await expect(card.locator(".remote-host-disclosure > summary").first()).toContainText("更新于");
       },
     );

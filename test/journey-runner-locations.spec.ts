@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { expect } from "@playwright/test";
+import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
@@ -73,5 +74,15 @@ test("R1 本机与远程使用同一套连接和工作区交互", { tag: "@mocke
       });
       await card.getByRole("button", { name: "环境与工作区", exact: true }).click();
     }
+    await journey.step("空名单与本机选择显示真实数量", "未选择 Runner 时显示 0，重新允许本机后显示 1 和本机名称。", async () => {
+      for (const runnerIds of [[], ["local"]]) {
+        const response = await page.request.patch(`${apiBaseUrl()}/api/sessions/${fixture.session.id}`, { headers: authorizationHeader(), data: { runnerIds } });
+        expect(response.ok()).toBe(true);
+        await openProjectSession(page, fixture);
+        const badge = page.locator(".session-runner-target");
+        await expect(badge).toHaveText(`Runner · ${runnerIds.length}`);
+        await expect(badge).toHaveAttribute("title", runnerIds.length ? "允许的 Runner：本地 Runner" : "此会话未选择任何 Runner");
+      }
+    });
   } finally { await cleanupJourney(page, fixture); }
 });
