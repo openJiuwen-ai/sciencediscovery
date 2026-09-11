@@ -104,7 +104,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
   });
   await page.route("**/api/runners", (route) => {
     if (route.request().method() !== "GET") return route.continue();
-    return route.fulfill({ json: [{ id: "local", alias: "local", location: "local", connectionKind: "direct", status: "ready", runnerStatus: { state: "ready", resources: { npu: localNpu() } } }, {
+    return route.fulfill({ json: [{ id: "local", alias: "local", location: "local", connectionKind: "direct", status: "ready", runnerStatus: { state: "ready" } }, {
       alias: "npu-910b-lab",
       runnerName: "910B analysis",
       description: "Ascend 910B analysis server",

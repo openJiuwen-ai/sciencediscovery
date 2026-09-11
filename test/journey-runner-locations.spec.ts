@@ -32,7 +32,7 @@ test("R1 本机与远程使用同一套连接和工作区交互", { tag: "@mocke
   await page.route("**/api/runners", (route) => route.fulfill({ json: descriptors }));
   for (const id of ids) {
     await page.route(`**/api/runners/${id}/connect`, (route) => route.fulfill({ json: { state: "ready", hostId: id } }));
-    await page.route(`**/api/runners/${id}/environment-setup`, (route) => route.fulfill({ json: { state: "disabled", provisioner: "micromamba", allowedChannels: [] } }));
+    await page.route(`**/api/runners/${id}/environment-setup`, (route) => route.fulfill({ json: { state: "disabled", provisioner: "micromamba", allowedChannels: [], starterPackages: { python: [], r: [] }, components: { micromamba: { state: "disabled" }, conda: { state: "disabled" } } } }));
     for (const path of ["environment-revisions", "environments"]) await page.route(`**/api/runners/${id}/${path}`, (route) => route.fulfill({ json: [] }));
     const workspaceKey = `${id === "local" ? "/application/projects" : "/runner/workspaces"}/${fixture.session.id}`;
     await page.route(`**/api/runners/${id}/workspaces`, (route) => route.fulfill({ json: [{ runnerId: id, sessionId: fixture.session.id, sessionTitle: fixture.session.title, projectName: fixture.project.name, workspaceKey, records: [] }] }));

@@ -295,7 +295,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   });
   const remoteEnvironments = [{ id: "remote-python", name: "Remote Python base", language: "python", kind: "starter", currentRevisionId: "remote-revision" }];
   await page.route(`**/api/runners/${hostId}/environment-setup`, (route) => route.fulfill({ json: {
-    state: "ready", provisioner: "micromamba", allowedChannels: ["conda-forge"],
+    state: "ready", provisioner: "micromamba", allowedChannels: ["conda-forge"], starterPackages: { python: [], r: [] },
     components: { micromamba: { state: "ready", phase: "ready", message: "Ready" }, conda: { state: "ready", phase: "ready", message: "Ready" } },
   } }));
   await page.route(`**/api/runners/${hostId}/environment-revisions`, (route) => route.fulfill({ json: [{ id: "remote-revision", packages: ["python", "numpy"] }] }));

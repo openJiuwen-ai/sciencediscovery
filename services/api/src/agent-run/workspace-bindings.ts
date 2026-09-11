@@ -304,7 +304,7 @@ export function createWorkspaceExecutionBindings(
         return await options.runnerClient.npuJobResult(jobId, options.sessionId);
       },
       submit: async (input: Parameters<NonNullable<WorkspaceAgentOptions["npuBroker"]>["submit"]>[0], signal?: AbortSignal) => {
-        options.store.assertSessionWritable(options.sessionId);
+        resolveExecutionTarget("local");
         await options.permission.requirePrivilege({
           action: "code",
           executionId: options.executionId,
@@ -312,6 +312,7 @@ export function createWorkspaceExecutionBindings(
           signal,
           summary: `Run host NPU workload ${input.workloadId} ${options.permissionScopeLabel}`,
         });
+        resolveExecutionTarget("local");
         const { environmentId: selectedId, ...request } = input;
         let environmentId = selectedId;
         const epochRevision = options.permission.getEpoch().environmentRevisionId;

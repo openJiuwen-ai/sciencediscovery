@@ -14,6 +14,7 @@
  * OtherExternal: local bubblewrap commands; no SSH or NPU dependency.
  * Credentials: random journey-owned tokens; no external credentials.
  * CostSideEffects: local processes/data only, removed in finally; no external service charges.
+ * Browser: add --browser to run the shared-location, SSH and NPU settings journeys against these same isolated product CLIs.
  * Run: pnpm --filter @sciencediscovery/api... --filter @sciencediscovery/runner build && node test/api/runner-location-journey.mjs
  */
 import assert from "node:assert/strict";
@@ -192,6 +193,16 @@ try {
     });
   }
   }
+  if (process.argv.includes("--browser")) await step(`${steps.length + 1}. 浏览器验证相同位置交互与 SSH 兼容`, "共同目录、工作区、失败重试、窄屏、SSH/NPU 设置旅程均通过。", async () => {
+    const child = spawn("npm", ["--prefix", ".e2e", "run", "test:mocked", "--", "journey-runner-locations.spec.ts", "journey-ssh-remote-runner.spec.ts", "journey-npu-cards.spec.ts"], {
+      stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, TMPDIR: root, E2E_BASE_URL: api, E2E_API_URL: api, E2E_API_TOKEN: token,
+        PLAYWRIGHT_BROWSERS_PATH: resolve(".tmp/browsers"), npm_config_cache: resolve(".tmp/npm-cache"), E2E_JOURNEY_REPORTS: resolve(root, "browser") },
+    });
+    for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { process.stdout.write(redact(chunk)); });
+    const code = await new Promise((done, reject) => { child.once("error", reject); child.once("exit", done); });
+    assert.equal(code, 0, "affected browser journeys must pass");
+    return "3 browser journeys passed; per-step screenshots and reports in browser/";
+  });
   outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); process.exitCode = 1; }
 finally {
