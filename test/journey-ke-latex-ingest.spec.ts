@@ -163,13 +163,16 @@ test("J-KE7 arXiv LaTeX 源走 LaTeX-first 摄取通道", { tag: "@mocked" }, as
 
     await journey.step(
       "阅读器解析 LaTeX 转写全文",
-      "点文档行的查看按钮打开三级阅读器，L1 结构块渲染出 TeX 转写的锚点块。",
+      "点文档行的查看按钮打开三级阅读器（默认 L0 摘要），切到 L1 后结构块渲染出 TeX 转写的锚点块。",
       async () => {
         await page.getByTestId(`ke-document-${docId}`).click();
         await expect(page.getByTestId("ke-doc-reader")).toBeVisible({ timeout: 30_000 });
-        // The structure level parses the LaTeX-derived markdown into anchored
-        // blocks — headings from the paper outline must be present.
-        await expect(page.getByTestId("ke-doc-blocks").or(page.getByTestId("ke-doc-fulltext"))).toBeVisible();
+        // The reader opens on the deterministic L0 summary — itself derived
+        // from the LaTeX channel's markdown (tags from the paper outline).
+        await expect(page.getByTestId("ke-doc-summary")).toBeVisible({ timeout: 30_000 });
+        // Switch to L1: the structure level must have parsed the LaTeX-derived
+        // fulltext into anchored blocks.
+        await page.getByTestId("ke-doc-level-L1").click();
         await expect(page.getByTestId("ke-doc-blocks").locator("[data-testid^='ke-doc-block']").first()).toBeVisible({ timeout: 30_000 });
         await page.getByTestId("ke-doc-close").click();
       },
