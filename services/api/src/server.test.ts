@@ -2928,14 +2928,23 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     "code-engineer",
     "computation-reviewer",
     "evidence-extractor",
+    "evidence-notes",
     "evolve-design",
+    "hypothesis-tournament",
+    "idea-debate",
+    "knowledge-engine-explore",
+    "knowledge-engine-grow",
     "life-science-evidence-brief",
     "literature-searcher",
     "report-writer",
     "result-evaluator",
+    "robin-chain",
     "science-research-team",
     "skill-creator",
     "structure-pocket-inspection",
+    "systematic-review",
+    "tree-search",
+    "virtual-lab",
   ]);
   assert.equal(initial.body[0]?.readOnly, true);
   assert.equal("instructions" in (initial.body[0] ?? {}), false);
