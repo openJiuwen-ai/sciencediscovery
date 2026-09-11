@@ -49,6 +49,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_PERMISSION_WAIT_TIMEOUT_MS` | `0` | 初始权限决策等待上限（`0` = 无限） |
 | `SCIENTIFIC_ENVS` | `1` | 暴露托管 Python/R 与持久内核；完成 setup 前 runner 也可安全启动 |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员提供的 provisioner 覆盖；正常 setup 安装应用自有固定二进制 |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，托管 micromamba 固定版本的同名发布件；留空使用上游发布地址。无论从哪里下载，固定的 SHA-256 校验都不放宽 |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存；设置后 provision 离线运行，不再拉取允许渠道。pip `indexUrl` 与 conda channel 仍执行安全校验，但安装时不访问这些网络源（见 [sandbox-execution.md](../explanation/sandbox-execution.md) §6 受控软件源） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单；内置镜像预设（TUNA/USTC）对应的频道 URL 始终被 Runner 接受，自定义频道仍须显式列入 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | 初始持久内核空闲超时（`0` = 无限） |
@@ -91,6 +92,7 @@ Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单 |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验副本 |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，供无法访问上游发布地址的部署使用；SHA-256 仍按固定版本校验 |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板展示币种换算开关；关闭后费用只显示各模型原始币种 |

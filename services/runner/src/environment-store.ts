@@ -45,6 +45,8 @@ const MANAGED_MICROMAMBA_BASE_URL = `${micromambaManifest.baseUrl}/${MANAGED_MIC
 const MANAGED_MICROMAMBA_RELEASES = micromambaManifest.releases;
 const MANAGED_MICROMAMBA_DARWIN_RELEASES = micromambaManifest.darwinReleases;
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
+/** One provisioner download; long enough for a slow mirror, short enough to fail. */
+const MANAGED_PROVISIONER_TIMEOUT_MS = 120_000;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
 );
@@ -98,9 +100,27 @@ export interface EnvironmentRuntime {
   revision: EnvironmentRevision;
 }
 
+/**
+ * Where the pinned micromamba release is fetched from.
+ *
+ * An installation whose machines cannot reach the upstream release host points
+ * this at a mirror serving the same file names. The pinned SHA-256 is still
+ * enforced, so a mirror can host the release but cannot change it.
+ */
+export function managedMicromambaBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.SCIENCE_AGENT_MICROMAMBA_BASE_URL?.trim().replace(/\/+$/, "");
+  return configured || MANAGED_MICROMAMBA_BASE_URL;
+}
+
+/** Where a Runner keeps the managed provisioner inside its data directory. */
+export function managedProvisionerPath(dataDir: string): string {
+  return resolve(dataDir, "scientific-envs", "bin", "micromamba");
+}
+
 export function managedMicromambaRelease(
   architecture: string = process.arch,
   platform: string = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ) {
   const releases = platform === "linux"
     ? MANAGED_MICROMAMBA_RELEASES
@@ -112,9 +132,64 @@ export function managedMicromambaRelease(
   }
   return {
     ...release,
-    url: `${MANAGED_MICROMAMBA_BASE_URL}/${release.filename}`,
+    url: `${managedMicromambaBaseUrl(env)}/${release.filename}`,
     version: MANAGED_MICROMAMBA_VERSION,
   };
+}
+
+/**
+ * Which step of the provisioner install failed. The three have nothing in
+ * common for whoever has to fix them — an unreachable host, a mirror serving
+ * something else, and a data directory the Runner cannot write are different
+ * problems — so the guidance differs and the caller must be able to tell them
+ * apart without parsing a message.
+ */
+export type ManagedProvisionerFailure = "download" | "verify" | "write";
+
+export class ManagedProvisionerError extends Error {
+  readonly failure: ManagedProvisionerFailure;
+  /** The release the Runner tried to install, so the message can name it. */
+  readonly url: string;
+
+  constructor(failure: ManagedProvisionerFailure, url: string, detail: string, cause?: unknown) {
+    super(failure === "download"
+      ? `Could not download the micromamba provisioner from ${url}: ${detail}`
+      : failure === "verify"
+        ? `The micromamba provisioner downloaded from ${url} is not the pinned release: ${detail}`
+        : `Could not install the micromamba provisioner: ${detail}`, cause === undefined ? undefined : { cause });
+    this.name = "ManagedProvisionerError";
+    this.failure = failure;
+    this.url = url;
+  }
+}
+
+/**
+ * What actually went wrong underneath a failed `fetch`.
+ *
+ * Node reports every transport failure as `TypeError: fetch failed` and keeps
+ * the real reason — DNS, refused connection, TLS, timeout — in `cause`, often
+ * nested a level deeper. Reporting only the top-level message is what made an
+ * unreachable release host indistinguishable from a broken proxy or an expired
+ * certificate, so the chain is walked and the first thing with substance wins.
+ */
+export function describeFetchFailure(error: unknown): string {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  const parts: string[] = [];
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; errno?: unknown; message?: unknown; name?: unknown; cause?: unknown };
+    if (candidate.name === "AbortError" || candidate.name === "TimeoutError") {
+      return `the download timed out after ${MANAGED_PROVISIONER_TIMEOUT_MS / 1000}s`;
+    }
+    if (typeof candidate.code === "string") parts.push(candidate.code);
+    if (typeof candidate.message === "string" && candidate.message && candidate.message !== "fetch failed") {
+      parts.push(candidate.message);
+    }
+    current = candidate.cause;
+  }
+  // Keep the first concrete reason; the rest of the chain repeats it.
+  return parts.find((part) => part !== "fetch failed") ?? "the connection failed";
 }
 
 export async function installManagedMicromamba(
@@ -125,28 +200,46 @@ export async function installManagedMicromamba(
 ): Promise<void> {
   const release = managedMicromambaRelease(architecture, platform);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const timeout = setTimeout(() => controller.abort(), MANAGED_PROVISIONER_TIMEOUT_MS);
   const temporary = `${destination}.${process.pid}.${randomUUID()}.download`;
   try {
-    const response = await fetcher(release.url, {
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`Managed provisioner download failed (${response.status})`);
+    let response: Response;
+    try {
+      response = await fetcher(release.url, { redirect: "follow", signal: controller.signal });
+    } catch (error) {
+      throw new ManagedProvisionerError("download", release.url, describeFetchFailure(error), error);
+    }
+    if (!response.ok) {
+      throw new ManagedProvisionerError("download", release.url, `the server answered HTTP ${response.status}`);
+    }
     const declaredLength = Number(response.headers.get("content-length") ?? "0");
-    if (declaredLength > MAX_PROVISIONER_BYTES) throw new Error("Managed provisioner download exceeds size limit");
-    const bytes = Buffer.from(await response.arrayBuffer());
+    if (declaredLength > MAX_PROVISIONER_BYTES) {
+      throw new ManagedProvisionerError("verify", release.url,
+        `the release is larger than the ${MAX_PROVISIONER_BYTES} byte limit`);
+    }
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      throw new ManagedProvisionerError("download", release.url, describeFetchFailure(error), error);
+    }
     if (!bytes.length || bytes.length > MAX_PROVISIONER_BYTES) {
-      throw new Error("Managed provisioner download has an invalid size");
+      throw new ManagedProvisionerError("verify", release.url, `the download is ${bytes.length} bytes`);
     }
     const hash = createHash("sha256").update(bytes).digest("hex");
     if (hash !== release.sha256) {
-      throw new Error("Managed provisioner download failed SHA-256 verification");
+      throw new ManagedProvisionerError("verify", release.url,
+        `expected SHA-256 ${release.sha256}, got ${hash}`);
     }
-    await mkdir(resolve(destination, ".."), { recursive: true });
-    await writeFile(temporary, bytes, { flag: "wx", mode: 0o700 });
-    await chmod(temporary, 0o700);
-    await rename(temporary, destination);
+    try {
+      await mkdir(resolve(destination, ".."), { recursive: true });
+      await writeFile(temporary, bytes, { flag: "wx", mode: 0o700 });
+      await chmod(temporary, 0o700);
+      await rename(temporary, destination);
+    } catch (error) {
+      throw new ManagedProvisionerError("write", release.url,
+        `${destination} could not be written: ${(error as NodeJS.ErrnoException).code ?? String(error)}`, error);
+    }
   } finally {
     clearTimeout(timeout);
     await rm(temporary, { force: true });
@@ -1036,9 +1129,7 @@ export class EnvironmentStore {
     const micromambaFailure = component === "micromamba";
     const message = micromambaFailure ? "micromamba setup failed" : "Conda environment setup failed";
     const action = micromambaFailure
-      ? this.config.provisionerPath
-        ? "Verify the configured micromamba executable path and execute permissions, then retry setup."
-        : "Retry setup. If it fails again, verify access to the pinned micromamba release and write access to the application data directory."
+      ? this.provisionerAction(error)
       : "Check free disk space and write permissions in the Runner data directory, then the configured Conda channels or offline cache, and retry setup. Existing system Conda and shell settings are not modified.";
     this.updateSetupComponent(component, "failed", "failed", message, {
       action,
@@ -1046,6 +1137,29 @@ export class EnvironmentStore {
       error: this.lastSetupError,
     });
     this.updateSetup("failed", "failed", message, { completed: true });
+  }
+
+  /**
+   * What the operator can actually do next. "Retry" was the only advice this
+   * gave, which is useless on a machine that has no route to the release host:
+   * retrying fails identically forever, and nothing said that a mirror, a
+   * pre-placed executable or the control plane's own copy would fix it.
+   */
+  private provisionerAction(error: unknown): string {
+    if (this.config.provisionerPath) {
+      return `Verify that ${this.config.provisionerPath} exists on this machine, is executable by the Runner user, and is the pinned micromamba release, then retry setup.`;
+    }
+    const failure = error instanceof ManagedProvisionerError ? error.failure : undefined;
+    if (failure === "download") {
+      return `This machine could not reach the release. Either give it a route, point SCIENCE_AGENT_MICROMAMBA_BASE_URL at a mirror it can reach, or place the pinned micromamba at ${this.provisionerPath} (a Runner deployed over SSH is seeded with it automatically when the control plane can reach the release). Then retry setup.`;
+    }
+    if (failure === "verify") {
+      return "The downloaded file is not the pinned release. If SCIENCE_AGENT_MICROMAMBA_BASE_URL points at a mirror, check that the mirror serves the pinned version unmodified, then retry setup.";
+    }
+    if (failure === "write") {
+      return `The Runner user could not write ${this.provisionerPath}. Check ownership, permissions and free space on the Runner data directory, then retry setup.`;
+    }
+    return "Retry setup. If it fails again, verify access to the pinned micromamba release and write access to the application data directory.";
   }
 
   private async runProvisioner(arguments_: string[], jobId: string): Promise<string> {
