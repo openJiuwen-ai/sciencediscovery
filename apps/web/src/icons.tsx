@@ -425,3 +425,29 @@ export function PanelRightIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function ThermometerIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z" />
+    </IconBase>
+  );
+}
+
+export function ZapIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" />
+    </IconBase>
+  );
+}
+
+export function CpuIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <rect x="9" y="9" width="6" height="6" />
+      <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+    </IconBase>
+  );
+}

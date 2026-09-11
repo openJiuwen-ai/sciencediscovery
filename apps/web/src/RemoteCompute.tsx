@@ -33,7 +33,7 @@ import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { CopyButton } from "./CopyButton.js";
 import { useLocale } from "./i18n/index.js";
 import { SshKeyFileField } from "./SshKeyFileField.js";
-import { ChevronRightIcon } from "./icons.js";
+import { ChevronRightIcon, CpuIcon, ThermometerIcon, ZapIcon } from "./icons.js";
 import { PermissionDecisionActions } from "./PermissionDecisionActions.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
 
@@ -149,9 +149,17 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
       : <ul className="remote-npu-list">
         {inventory.devices.map((device) => {
           const memory = npuMemory(device.hbmUsedMb, device.hbmTotalMb);
+          const memoryPercent = device.hbmUsedMb === undefined || !device.hbmTotalMb
+            ? undefined
+            : Math.min(100, Math.max(0, (device.hbmUsedMb / device.hbmTotalMb) * 100));
+          const aiCore = device.aiCorePercent === undefined
+            ? undefined
+            : Math.min(100, Math.max(0, device.aiCorePercent));
+          const temperature = device.temperatureCelsius;
+          const temperatureTone = temperature === undefined ? "" : temperature >= 75 ? " hot" : temperature >= 60 ? " warm" : "";
           const isTicked = ticked.has(device.hostIndex);
           return <li key={device.hostIndex} className={device.sandboxUsable ? "" : "unusable"}>
-            <label>
+            <label className="remote-npu-pick">
               <input
                 type="checkbox"
                 checked={isTicked}
@@ -159,13 +167,36 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
                 onChange={(event) => { void toggle(device.hostIndex, event.target.checked); }}
               />
               <span className="remote-npu-name">{t("remote.npuCard", { chip: device.chipName, index: device.hostIndex })}</span>
-              <span className="remote-npu-metrics">
-                {device.health ? <span className={`remote-detail-badge ${device.health === "OK" ? "neutral" : "warning"}`}>{device.health}</span> : null}
-                {memory ? <small>{memory}</small> : null}
-                {device.aiCorePercent === undefined ? null : <small>{t("remote.npuAiCore", { percent: device.aiCorePercent })}</small>}
-                {device.temperatureCelsius === undefined ? null : <small>{t("remote.npuTemperature", { celsius: device.temperatureCelsius })}</small>}
-              </span>
+              {device.health ? <span className={`remote-detail-badge ${device.health === "OK" ? "neutral" : "warning"}`}>{device.health}</span> : null}
             </label>
+            {/* Every cell is rendered even when its reading is missing, so the
+                columns stay aligned from card to card. */}
+            {memory === undefined || memoryPercent === undefined
+              ? <span className="remote-npu-meter" />
+              : <span className="remote-npu-meter" title={t("remote.npuMemoryLabel")}>
+                <span className="remote-npu-meter-caption">{t("remote.npuMemoryCaption")}</span>
+                <span className="remote-npu-meter-track"><span style={{ width: `${memoryPercent}%` }} /></span>
+                <small className="remote-npu-meter-value">{memory}</small>
+              </span>}
+            {aiCore === undefined
+              ? <span className="remote-npu-meter core" />
+              : <span className={`remote-npu-meter core${aiCore >= 85 ? " high" : ""}`} title={t("remote.npuAiCoreLabel")}>
+                <CpuIcon size={12} />
+                <span className="remote-npu-meter-track"><span style={{ width: `${aiCore}%` }} /></span>
+                <small className="remote-npu-meter-value">{t("remote.npuAiCore", { percent: aiCore })}</small>
+              </span>}
+            {temperature === undefined
+              ? <span className="remote-npu-chip temperature" />
+              : <span className={`remote-npu-chip temperature${temperatureTone}`} title={t("remote.npuTemperatureLabel")}>
+                <ThermometerIcon size={12} />
+                {t("remote.npuTemperature", { celsius: temperature })}
+              </span>}
+            {device.powerWatts === undefined
+              ? <span className="remote-npu-chip power" />
+              : <span className="remote-npu-chip power" title={t("remote.npuPowerLabel")}>
+                <ZapIcon size={12} />
+                {t("remote.npuPower", { watts: Math.round(device.powerWatts) })}
+              </span>}
             {device.sandboxUsable
               ? null
               // The driver's own wording stays as the machine reported it; only

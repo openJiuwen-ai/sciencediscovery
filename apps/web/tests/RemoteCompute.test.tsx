@@ -414,7 +414,7 @@ const NPU_INVENTORY = {
       aiCorePercent: 0, temperatureCelsius: 45, sandboxUsable: false,
       sandboxUnusableReason: "NPU 0 cannot be opened inside the sandbox: dcmi model initialized failed, because the device is used. ret is -8020" },
     { chipName: "910B3", health: "OK", hostIndex: 4, hbmUsedMb: 3418, hbmTotalMb: 65_536,
-      aiCorePercent: 12, temperatureCelsius: 49, sandboxUsable: true },
+      aiCorePercent: 12, temperatureCelsius: 49, powerWatts: 68.4, sandboxUsable: true },
   ],
 };
 
@@ -439,6 +439,7 @@ test("NPU cards list every card with its status and usage, including unusable on
   assert.match(markup, /3\.4 \/ 64\.0 GiB/);
   assert.match(markup, /12% AI core/);
   assert.match(markup, /49 °C/);
+  assert.match(markup, /68 W/);
   assert.match(markup, /2 on this machine · 1 usable in the sandbox/);
 });
 
@@ -454,7 +455,7 @@ test("a card the sandbox probe refused cannot be ticked and says why on the row"
 
 test("the checkbox and its card name stay on one reading line", () => {
   // One label wraps both, so the control can never wrap away from its name.
-  assert.match(renderNpu(), /<label><input type="checkbox"[^>]*\/><span class="remote-npu-name">NPU 0/);
+  assert.match(renderNpu(), /<label class="remote-npu-pick"><input type="checkbox"[^>]*\/><span class="remote-npu-name">NPU 0/);
 });
 
 test("ticking a card saves the selection against the Runner it belongs to", async () => {
