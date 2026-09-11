@@ -488,6 +488,11 @@ export const PUBLIC_BIOMED_SOURCE_DEFINITIONS: SourceDefinition[] = [
     caveats: [
       "Predicted structures are not experimentally determined: mean pLDDT >70 is trustworthy, <50 is usually a disordered region.",
       "For experimental structures prefer the PDB source.",
+      // KNOWN GAP: the platform URL allowlist (assertMcpProviderResult) only
+      // governs record landing pages, so the cifUrl/pdbUrl/paeUrl fields that
+      // afdb_lookup passes through inside structuredData are unvetted — they
+      // come from the upstream payload verbatim.
+      "Model file links (cifUrl/pdbUrl/paeUrl) are passed through from the upstream payload verbatim; the connector URL allowlist only governs the record landing page.",
     ],
     description: "AlphaFold protein structure predictions from AlphaFold DB.",
     displayName: "AlphaFold DB",

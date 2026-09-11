@@ -1053,6 +1053,7 @@ async def afdb_lookup(uniprot_acc: str) -> dict[str, Any]:
                 warnings=[
                     "Predicted structures are not experimentally determined: mean pLDDT >70 is trustworthy, <50 is usually a disordered region.",
                     "For experimental structures prefer the PDB source.",
+                    "Model file links (cifUrl/pdbUrl/paeUrl) are passed through from the upstream payload verbatim; the connector URL allowlist only governs the record landing page.",
                 ],
             )
         ],
@@ -1330,9 +1331,16 @@ async def biogrid_interactions(gene: str, taxon_id: int = 9606, limit: int = 20)
         "format": "json",
         "accesskey": access_key,
     })
+    # BioGRID's contract is a map keyed by an internal interaction hash, not a
+    # list. Any other shape (error body, degraded response) must fail loud —
+    # treating it as "no interactions" would report curated data as absent.
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"thebiogrid.org returned an unexpected payload shape ({type(payload).__name__}) "
+            f"for gene {name!r}"
+        )
     records = []
-    # The response is a map keyed by an internal interaction hash, not a list.
-    for entry in list(payload.values()) if isinstance(payload, dict) else []:
+    for entry in payload.values():
         gene_a, gene_b = entry.get("OFFICIAL_SYMBOL_A"), entry.get("OFFICIAL_SYMBOL_B")
         if not gene_a or not gene_b:
             continue

@@ -67,15 +67,19 @@ export function buildGrowDirectives(facts: GrowCycleFacts): GrowDirective[] {
   const directives: GrowDirective[] = [];
 
   for (const source of facts.sources) {
-    const encountered = source.done + source.failed + source.skipped;
-    if (encountered < DIRECTIVE_MIN_SOURCE_ENCOUNTERS) continue;
-    const failureRate = source.failed / encountered;
+    // Failure verdicts only count attempted items: skipped candidates were
+    // never tried (budget/cap), so including them would both dilute the rate
+    // and misstate the wording below as if they had resolved no full text.
+    const attempted = source.done + source.failed;
+    if (attempted < DIRECTIVE_MIN_SOURCE_ENCOUNTERS) continue;
+    const failureRate = source.failed / attempted;
     if (failureRate >= DIRECTIVE_SOURCE_FAILURE_RATE) {
       directives.push({
         kind: "deprioritize-source",
         text:
-          `Deprioritize ${source.source}: ${source.failed}/${encountered} candidates resolved ` +
-          `no full text last cycle — prefer other discovery paths before expanding this source again.`,
+          `Deprioritize ${source.source}: ${source.failed}/${attempted} attempted candidates failed to ` +
+          `reach full text last cycle (ingest failures and rate-limit exhaustion) — prefer other discovery ` +
+          `paths before expanding this source again.`,
       });
     }
   }

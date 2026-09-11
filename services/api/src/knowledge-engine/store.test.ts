@@ -53,6 +53,33 @@ test("open applies migrations idempotently and persists data", async (context) =
   sidecar.close();
 });
 
+test("open purges grow_directives settings orphaned by out-of-band KB removal", async (context) => {
+  const root = tempRoot("ke-store-orphan-directives");
+  context.after(() => rm(root, { force: true, recursive: true }));
+
+  const store = KnowledgeEngineStore.open(root);
+  const kb = store.createKnowledgeBase({ name: "Purged KB" });
+  const survivor = store.createKnowledgeBase({ name: "Survivor" });
+  store.setSetting(`grow_directives:${kb.id}`, JSON.stringify({ cycleId: "c1", directives: [] }));
+  store.setSetting(`grow_directives:${survivor.id}`, JSON.stringify({ cycleId: "c1", directives: [] }));
+  store.setSetting("grow_seed_phase:c1", "[]");
+  store.close();
+
+  // Simulate the out-of-band SQL purge that is the only KB removal path today
+  // (KE has no delete-KB API): tables cleared by kb_id, settings orphaned.
+  const surgery = new DatabaseSync(resolve(root, "knowledge-engine", "knowledge-engine.sqlite"));
+  surgery.exec("PRAGMA foreign_keys = ON;");
+  surgery.prepare("DELETE FROM knowledge_bases WHERE id = ?").run(kb.id);
+  surgery.close();
+
+  const reopened = KnowledgeEngineStore.open(root);
+  context.after(() => reopened.close());
+  assert.equal(reopened.getSetting(`grow_directives:${kb.id}`), null);
+  assert.ok(reopened.getSetting(`grow_directives:${survivor.id}`) !== null);
+  // grow_seed_phase rows stay untouched — resume semantics are load-bearing.
+  assert.equal(reopened.getSetting("grow_seed_phase:c1"), "[]");
+});
+
 test("doc chunks round-trip with embeddings and rewrite idempotently", async (context) => {
   const root = tempRoot("ke-store-chunks");
   context.after(() => rm(root, { force: true, recursive: true }));

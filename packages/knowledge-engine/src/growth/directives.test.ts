@@ -36,7 +36,21 @@ void test("buildGrowDirectives deprioritizes sources with high failure rates", (
   });
   const deprioritized = directives.filter((directive) => directive.kind === "deprioritize-source");
   assert.equal(deprioritized.length, 1);
-  assert.match(deprioritized[0]!.text, /Deprioritize backward_citation: 9\/10/);
+  assert.match(deprioritized[0]!.text, /Deprioritize backward_citation: 9\/10 attempted/);
+});
+
+void test("buildGrowDirectives failure verdicts ignore never-attempted skipped candidates", () => {
+  // 90 skipped items must neither dilute the failure rate nor be worded as
+  // "resolved no full text" — only the 10 attempted items carry a verdict.
+  const directives = buildGrowDirectives({
+    counts: { ...emptyCounts, total: 100, done: 1, failed: 9, skipped: 90 },
+    sources: [{ source: "entity_query", items: 100, done: 1, failed: 9, skipped: 90, encounters: 100 }],
+    duplicates: 0,
+    converged: false,
+  });
+  const deprioritized = directives.filter((directive) => directive.kind === "deprioritize-source");
+  assert.equal(deprioritized.length, 1);
+  assert.match(deprioritized[0]!.text, /9\/10 attempted candidates failed to reach full text/);
 });
 
 void test("buildGrowDirectives narrows patch queries under dedup saturation", () => {

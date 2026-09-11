@@ -546,6 +546,19 @@ class Z6BiodataConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["structuredData"]["pubmedId"], "9150133")
         self.assertEqual(record["url"], "https://thebiogrid.org")
 
+    async def test_biogrid_rejects_non_dict_payloads_loudly(self) -> None:
+        # A degraded response must not silently read as "no interactions".
+        with (
+            patch.dict(os.environ, {"BIOGRID_API_KEY": "test-key"}),
+            patch(
+                "sciencediscovery_gateway.public_biomed_mcp._get_json",
+                new=AsyncMock(return_value=[{"OFFICIAL_SYMBOL_A": "TP53"}]),
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                await biogrid_interactions("TP53")
+        self.assertIn("unexpected payload shape", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

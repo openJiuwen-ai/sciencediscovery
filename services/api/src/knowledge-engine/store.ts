@@ -540,6 +540,7 @@ export class KnowledgeEngineStore {
     database.exec("PRAGMA foreign_keys = ON;");
     const store = new KnowledgeEngineStore(database);
     store.migrate();
+    store.purgeOrphanGrowthSettings();
     return store;
   }
 
@@ -1814,6 +1815,28 @@ export class KnowledgeEngineStore {
     this.database
       .prepare("INSERT INTO ke_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(key, value);
+  }
+
+  deleteSetting(key: string): void {
+    this.database.prepare("DELETE FROM ke_settings WHERE key = ?").run(key);
+  }
+
+  /**
+   * Drop grow_directives rows whose KB no longer exists. ke_settings has no
+   * FK to knowledge_bases and KE has no delete-KB API — removals happen
+   * out-of-band (SQL purge), so this runs once at open to keep the settings
+   * table from accumulating orphans. grow_seed_phase rows are deliberately
+   * left alone: they are keyed by cycle and their resume semantics are
+   * load-bearing for in-flight cycles.
+   */
+  private purgeOrphanGrowthSettings(): void {
+    this.database
+      .prepare(
+        `DELETE FROM ke_settings
+         WHERE key LIKE 'grow_directives:%'
+           AND substr(key, ?) NOT IN (SELECT id FROM knowledge_bases)`,
+      )
+      .run("grow_directives:".length + 1);
   }
 
   // --------------------------------------------------------------- frontier
