@@ -55,6 +55,9 @@ pipeline {
     agent none
 
     options {
+        // The implicit checkout runs on the node, outside any container, so it is
+        // disabled; every stage checks out inside its own agent instead.
+        skipDefaultCheckout()
         // The caches are shared, so two builds of this job cannot overlap. The
         // three layers inside one build still run in parallel.
         disableConcurrentBuilds()
@@ -95,6 +98,7 @@ pipeline {
                 }
             }
             steps {
+                checkout scm
                 // The build context is .ci/, so the Dockerfile cannot copy the
                 // product checkout into a layer. Fully cached, and therefore a
                 // few seconds, whenever .ci/Dockerfile has not changed.
@@ -148,12 +152,20 @@ fi
                             image "${env.CI_IMAGE}"
                             args layerArgs()
                             alwaysPull false
+                            // A fixed workspace keeps the checkout at the same
+                            // absolute path every build. The E2E service
+                            // environments are editable installs whose .pth
+                            // files record that path, so a workspace that moved
+                            // between builds would leave the stack importable
+                            // only from the directory that provisioned it.
+                            customWorkspace 'sciencediscovery-ci-ut'
                         }
                     }
                     environment {
                         CI_RESULTS_DIR = "${WORKSPACE}/.tmp/ci-results"
                     }
                     steps {
+                        checkout scm
                         sh 'rm -rf "$CI_RESULTS_DIR" && mkdir -p "$CI_RESULTS_DIR"'
                         // The aggregate entry point: the host tier followed by
                         // the guest tier, the latter running bubblewrap
@@ -176,12 +188,20 @@ fi
                             image "${env.CI_IMAGE}"
                             args layerArgs()
                             alwaysPull false
+                            // A fixed workspace keeps the checkout at the same
+                            // absolute path every build. The E2E service
+                            // environments are editable installs whose .pth
+                            // files record that path, so a workspace that moved
+                            // between builds would leave the stack importable
+                            // only from the directory that provisioned it.
+                            customWorkspace 'sciencediscovery-ci-st'
                         }
                     }
                     environment {
                         CI_RESULTS_DIR = "${WORKSPACE}/.tmp/ci-results"
                     }
                     steps {
+                        checkout scm
                         sh 'rm -rf "$CI_RESULTS_DIR" && mkdir -p "$CI_RESULTS_DIR"'
                         sh 'pnpm ci:st'
                     }
@@ -199,6 +219,13 @@ fi
                             image "${env.CI_IMAGE}"
                             args layerArgs()
                             alwaysPull false
+                            // A fixed workspace keeps the checkout at the same
+                            // absolute path every build. The E2E service
+                            // environments are editable installs whose .pth
+                            // files record that path, so a workspace that moved
+                            // between builds would leave the stack importable
+                            // only from the directory that provisioned it.
+                            customWorkspace 'sciencediscovery-ci-e2e'
                         }
                     }
                     environment {
@@ -206,6 +233,7 @@ fi
                         CI_E2E_STACK_TIMEOUT_SECONDS = "${env.CI_E2E_STACK_TIMEOUT_SECONDS ?: '900'}"
                     }
                     steps {
+                        checkout scm
                         sh 'rm -rf "$CI_RESULTS_DIR" && mkdir -p "$CI_RESULTS_DIR"'
                         // The E2E stack's data directory lives in the shared
                         // cache and survives builds. Without a reset, state
