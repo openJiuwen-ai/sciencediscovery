@@ -86,13 +86,15 @@ test("attachToEntity unions aliases, bumps support, records doc detail", async (
   context.after(cleanup);
 
   const doc = store.upsertDocument({ kbId, dedupKey: "d1", title: "Paper", status: "ready" });
+  const d2 = store.upsertDocument({ kbId, dedupKey: "d2", title: "Paper 2", status: "ready" });
   const target = store.upsertEntity({ kbId, name: "Ebola virus glycoprotein", type: "protein", firstSeenDoc: doc.id });
 
+  // Attach from a NEW document earns the distinct-doc bump.
   const attached = store.attachToEntity(target.id, {
     name: "GP",
     aliases: ["EBOV GP", "GP"], // dup of name → attached once
     description: "surface glycoprotein",
-    docId: doc.id,
+    docId: d2.id,
   });
   assert.equal(attached.supportCount, target.supportCount + 1);
   assert.ok(attached.aliases.includes("GP"));
@@ -101,6 +103,26 @@ test("attachToEntity unions aliases, bumps support, records doc detail", async (
   assert.equal(attached.description, "surface glycoprotein");
   // L1 now resolves the new alias
   assert.equal(store.findEntityByAlias(kbId, "ebov gp")?.id, target.id);
+});
+
+test("attachToEntity is idempotent on re-run: same doc never double-counts support", async (context) => {
+  const { store, kbId, cleanup } = setup("ke-res-attach-rerun");
+  context.after(cleanup);
+
+  const doc = store.upsertDocument({ kbId, dedupKey: "d1", title: "Paper", status: "ready" });
+  const target = store.upsertEntity({ kbId, name: "Ebola virus glycoprotein", type: "protein", firstSeenDoc: doc.id });
+
+  // Same document re-attaches (extraction job retry): support stays put,
+  // aliases still merge, and the MAX() recount cannot resurrect the bump.
+  const rerun = store.attachToEntity(target.id, { name: "GP", aliases: ["EBOV GP"], docId: doc.id });
+  assert.equal(rerun.supportCount, target.supportCount);
+  assert.ok(rerun.aliases.includes("EBOV GP"));
+  const rerun2 = store.attachToEntity(target.id, { name: "GP", docId: doc.id });
+  assert.equal(rerun2.supportCount, target.supportCount);
+  // ...while a genuinely new document still earns +1.
+  const d2 = store.upsertDocument({ kbId, dedupKey: "d2", title: "Paper 2", status: "ready" });
+  const grown = store.attachToEntity(target.id, { name: "GP", docId: d2.id });
+  assert.equal(grown.supportCount, target.supportCount + 1);
 });
 
 test("mergeEntities redirects edges, folds collisions, drops self-loops, recounts distinct docs", async (context) => {

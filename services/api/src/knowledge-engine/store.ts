@@ -1018,9 +1018,9 @@ export class KnowledgeEngineStore {
 
   /**
    * Online-resolution attach: the candidate merged into an EXISTING entity at
-   * write time. Mirrors upsertEntity's merge semantics (support +1, alias
-   * union normalized-dedup + capped, description fills only when null) plus
-   * the distinct-doc detail row. The audit row is the caller's job
+   * write time. Mirrors upsertEntity's merge semantics (distinct-doc support
+   * increment, alias union normalized-dedup + capped, description fills only
+   * when null) plus the distinct-doc detail row. The audit row is the caller's job
    * (recordEntityMerge) — keeping the two separate lets shadow mode record
    * without writing.
    */
@@ -1056,6 +1056,22 @@ export class KnowledgeEngineStore {
       };
       pushAlias(input.name);
       for (const alias of input.aliases ?? []) pushAlias(alias);
+      // Distinct-doc idempotency anchor BEFORE the support update
+      // (upsertEntity parity): a repeat (entity, docId) pair means a re-run,
+      // and support must not double-count it — the MAX() recount below never
+      // lowers, so an inflated bump here would be permanent.
+      let docRowInserted = false;
+      if (input.docId) {
+        const inserted = this.database
+          .prepare("INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id) VALUES (?, ?, ?)")
+          .run(targetId, input.docId, existing.kbId);
+        docRowInserted = Number(inserted.changes) > 0;
+      }
+      // Without a docId the caller opts out of detail tracking and the
+      // increment stays unconditional; with one, only a NEW detail row earns
+      // the bump.
+      const supportDelta =
+        input.incrementSupport === false ? 0 : input.docId ? (docRowInserted ? 1 : 0) : 1;
       this.database
         .prepare(
           `UPDATE ke_entities SET
@@ -1063,12 +1079,7 @@ export class KnowledgeEngineStore {
              description = coalesce(?, description), updated_at = ?
            WHERE id = ?`,
         )
-        .run(input.incrementSupport === false ? 0 : 1, JSON.stringify(aliases), input.description ?? null, timestamp, targetId);
-      if (input.docId) {
-        this.database
-          .prepare("INSERT OR IGNORE INTO ke_entity_docs (entity_id, doc_id, kb_id) VALUES (?, ?, ?)")
-          .run(targetId, input.docId, existing.kbId);
-      }
+        .run(supportDelta, JSON.stringify(aliases), input.description ?? null, timestamp, targetId);
       // DA parity (online-attach recountSupport): distinct-doc recount that
       // never lowers support, and promotion to 'core' at ≥3 supporting docs.
       // (upsertEntity deliberately stays promotion-free — pre-existing
