@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+export * from "./agent-memory.js";
 export * from "./runtime-settings.js";
 export * from "./project.js";
 export * from "./plan.js";

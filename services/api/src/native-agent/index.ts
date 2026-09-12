@@ -324,6 +324,8 @@ class NativeAgent implements NativeAgentHandle {
         : {}),
       ...(options.subagent ? { subagent: options.subagent } : {}),
       ...(options.runSubagent && !options.subagent ? { subagentOrchestration: true } : {}),
+      ...(options.knowledgeBaseScope ? { knowledgeBaseScope: options.knowledgeBaseScope } : {}),
+      ...(options.agentMemories?.length ? { agentMemories: options.agentMemories } : {}),
     };
     const baseSystemPrompt = buildWorkspaceSystemPrompt(
       this.promptSkills,
@@ -804,6 +806,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.knowledgeEngine ? { knowledgeEngine: options.knowledgeEngine } : {}),
     ...(options.knowledgeEngineScope ? { knowledgeEngineScope: options.knowledgeEngineScope } : {}),
     ...(options.researchProjectRoot ? { researchProjectRoot: options.researchProjectRoot } : {}),
+    ...(options.agentMemory ? { agentMemory: options.agentMemory } : {}),
     ...(options.declareEvidence ? { declareEvidence: options.declareEvidence } : {}),
     ...(options.declareClaim ? { declareClaim: options.declareClaim } : {}),
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),

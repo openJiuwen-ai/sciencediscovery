@@ -42,7 +42,8 @@ import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
-import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
+import { recoverSessionRuns, scheduleSessionRuns, setBackgroundReviewManager } from "../runs/index.js";
+import { BackgroundReviewManager } from "../agent-memory/background-review.js";
 import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
@@ -418,7 +419,8 @@ export function createPlatformServices(
     }
   }
   // Pipeline model endpoint (global default task model) shared by KE
-  // extraction, resolution judging and community naming.
+  // extraction, resolution judging, community naming and (V3-C1) the
+  // background reviewer.
   const keResolveEndpoint = () => {
     const modelId = store.getGlobalSettings().overrides.modelId;
     const model = store.getModel(modelId);
@@ -431,6 +433,15 @@ export function createPlatformServices(
       ...(model.apiVariant ? { apiVariant: model.apiVariant } : {}),
     };
   };
+  // V3-C1: offline experience extraction from completed runs. Gated by the
+  // layered agentMemoryBackgroundReview setting (default off); candidates
+  // always await human promote before reaching any prompt.
+  setBackgroundReviewManager(new BackgroundReviewManager({
+    store,
+    resolveEndpoint: keResolveEndpoint,
+    enabled: (sessionId) => store.resolveRuntimeSettings(sessionId).effective.agentMemoryBackgroundReview === true,
+    log: (event, detail) => apiLog.info("background_review", { event, ...detail }),
+  }));
   const keOrchestrator = new KeOrchestrator({
     store: knowledgeEngineStore,
     chain: keChain,

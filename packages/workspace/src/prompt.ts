@@ -220,6 +220,13 @@ export interface WorkspacePromptGovernance {
     webSearchEnabled: boolean;
   };
   memoryGraphEnabled?: boolean;
+  /**
+   * Human-reviewed experiential memories (V3-C1), pre-formatted with
+   * reliability labels ([已核验]/[参考]/[低置信]). Injected as an advisory
+   * (non-protected) governance section: under context-budget pressure it may
+   * be dropped — memory is a hint, never a rule the run depends on.
+   */
+  agentMemories?: Array<{ category: string; content: string; reliabilityLabel: string }>;
   /** Remote machines this Session may use; local execution is always available too. */
   remoteRunners?: string[];
   specialist?: { description: string; instructions: string; name: string };
@@ -280,6 +287,9 @@ function buildWorkspacePromptValues(
         ? `\nKnowledge-base scope: this conversation is bound to ${governance.knowledgeBaseScope.kbLabels.map(escapePromptTagText).join(", ")}. Answer from ${governance.knowledgeBaseScope.singleKbId ? "this knowledge base" : "these knowledge bases"} — knowledge tools only accept the bound kbId${governance.knowledgeBaseScope.singleKbId ? " (it is the default and may be omitted)" : "s"}.${governance.knowledgeBaseScope.webSearchEnabled ? "" : " Web search and fetch tools are DISABLED for this conversation (they are not in your tool list; MCP scientific connectors stay available): if the bound knowledge base does not contain the answer, say that explicitly — and what you searched — instead of filling the gap from general model knowledge."}${governance.knowledgeBaseScope.droppedKbIds.length ? ` Scope entries ignored because no such knowledge base exists: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")} — do not claim coverage of them.` : ""}`
         : `\nKnowledge-base scope: the configured scope named no existing knowledge base (ignored entries: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")}). The conversation is therefore UNBOUND — answer normally, but do not claim coverage of those entries.`)
       : "",
+    governance?.agentMemories?.length
+      ? `\nWorking-method memory (experiential notes reviewed and approved by a human; reliability label per entry — treat 参考/低置信 entries as hints to verify, not rules):\n${governance.agentMemories.map((memory) => `- [${escapePromptTagText(memory.category)}]${memory.reliabilityLabel} ${escapePromptTagText(memory.content)}`).join("\n")}`
+      : "",
     buildSkillSystemSection(skills),
     ...(governance?.memoryGraphEnabled
       ? [
@@ -305,6 +315,7 @@ export function buildWorkspacePromptParts(
     { id: "subagent.governance", kind: "governance", protected: true },
     { id: "remote-runner.capabilities", kind: "capabilities", protected: false },
     { id: "kb-scope.governance", kind: "governance", protected: true },
+    { id: "agent-memory.governance", kind: "governance", protected: false },
     { id: "skills.catalog", kind: "skills", protected: false },
     { id: "citation.governance", kind: "governance", protected: true },
   ];
@@ -377,6 +388,12 @@ export interface WorkspaceAgentOptions {
   /** Bound knowledge-base scope for the KE tools (see WorkspaceToolOptions). */
   knowledgeEngineScope?: WorkspaceToolOptions["knowledgeEngineScope"];
   /** Project-ledger root for research_state promote/hydrate (see WorkspaceToolOptions). */
+  agentMemory?: WorkspaceToolOptions["agentMemory"];
+  /** V3-C1: human-reviewed memories for prompt injection (advisory part). */
+  agentMemories?: WorkspacePromptGovernance["agentMemories"];
+  /** V2-C1: bound KB scope for the prompt disclosure line (mirrors the
+   *  tool-level knowledgeEngineScope enforcement). */
+  knowledgeBaseScope?: WorkspacePromptGovernance["knowledgeBaseScope"];
   researchProjectRoot?: WorkspaceToolOptions["researchProjectRoot"];
   /** Create an Evidence node + extracts edge, Paper → Evidence
    * (`declare_evidence` tool). */

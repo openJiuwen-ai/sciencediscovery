@@ -73,6 +73,7 @@ export const RUNTIME_SETTINGS_FIELDS = [
   "enabledConnectorIds",
   "enabledSkillLibraries",
   "enabledSkillIds",
+  "agentMemoryBackgroundReview",
   "kbScopeKbIds",
   "kbScopeWebSearch",
   "modelId",
@@ -210,6 +211,13 @@ export function normalizeRuntimeSettings(
       if (strict) throw new Error("kbScopeKbIds must be an array of non-empty strings");
     } else {
       normalized.kbScopeKbIds = [...new Set(value.kbScopeKbIds as string[])];
+    }
+  }
+  if (hasOwn(value, "agentMemoryBackgroundReview")) {
+    if (typeof value.agentMemoryBackgroundReview !== "boolean") {
+      if (strict) throw new Error("agentMemoryBackgroundReview must be a boolean");
+    } else {
+      normalized.agentMemoryBackgroundReview = value.agentMemoryBackgroundReview;
     }
   }
   if (hasOwn(value, "kbScopeWebSearch")) {

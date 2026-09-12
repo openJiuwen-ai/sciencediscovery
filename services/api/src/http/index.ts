@@ -76,7 +76,10 @@ import {
   handleKeUnmerge,
   parseKeDocumentLevel,
 } from "../knowledge-engine/routes.js";
+import { AGENT_MEMORY_CATEGORIES } from "@sciencediscovery/schema";
 import type {
+  AgentMemoryCategory,
+  AgentMemoryStatus,
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
   CancelRunResult,
@@ -1996,6 +1999,60 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "GET" && url.pathname === "/api/permission-grants") {
         sendJson(response, 200, store.listPermissionGrants());
+        return;
+      }
+
+      // Agent memory (V3-C1): the human review gate. Candidates written by
+      // the agent_memory tool or the background reviewer wait here for
+      // promote (verified → prompt-eligible), stale, supersede or delete.
+      if (request.method === "GET" && url.pathname === "/api/agent-memories") {
+        const category = url.searchParams.get("category");
+        const status = url.searchParams.get("status");
+        sendJson(response, 200, store.listAgentMemories({
+          ...(category ? { category: category as AgentMemoryCategory } : {}),
+          ...(status ? { status: status as AgentMemoryStatus } : {}),
+        }));
+        return;
+      }
+      const agentMemoryActionMatch = url.pathname.match(/^\/api\/agent-memories\/([^/]+)\/(promote|stale|supersede)$/);
+      if (agentMemoryActionMatch && request.method === "POST") {
+        const memoryId = agentMemoryActionMatch[1]!;
+        const action = agentMemoryActionMatch[2]!;
+        try {
+          if (action === "promote") {
+            sendJson(response, 200, store.promoteAgentMemory(memoryId));
+            return;
+          }
+          if (action === "stale") {
+            sendJson(response, 200, store.markAgentMemoryStale(memoryId));
+            return;
+          }
+          const body = await readJson<{ category?: AgentMemoryCategory; content?: string }>(request);
+          if (!body.content?.trim()) return sendError(response, 400, "content is required");
+          if (body.category && !AGENT_MEMORY_CATEGORIES.includes(body.category)) {
+            return sendError(response, 400, `category must be one of ${AGENT_MEMORY_CATEGORIES.join(", ")}`);
+          }
+          // A human-written replacement is born verified at the default band.
+          sendJson(response, 201, store.supersedeAgentMemory(memoryId, {
+            content: body.content,
+            ...(body.category ? { category: body.category } : {}),
+            provenance: { kind: "manual", requiresReview: false },
+          }));
+          return;
+        } catch (error) {
+          if (error instanceof SessionStoreHttpError) {
+            return sendError(response, error.statusCode, error.message);
+          }
+          if (error instanceof Error && /conflicts/.test(error.message)) {
+            return sendError(response, 409, error.message);
+          }
+          return sendError(response, 404, error instanceof Error ? error.message : "Agent memory not found");
+        }
+      }
+      const agentMemoryDeleteMatch = url.pathname.match(/^\/api\/agent-memories\/([^/]+)$/);
+      if (agentMemoryDeleteMatch && request.method === "DELETE") {
+        store.removeAgentMemory(agentMemoryDeleteMatch[1]!);
+        sendJson(response, 200, { removed: agentMemoryDeleteMatch[1] });
         return;
       }
       const sessionPermissionRequestMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/permission-requests$/);

@@ -151,6 +151,12 @@ import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
+import type {
+  AgentMemoryCategory,
+  AgentMemoryEntry,
+  AgentMemoryProvenance,
+  AgentMemoryStatus,
+} from "@sciencediscovery/schema";
 
 import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
 import {
@@ -370,6 +376,24 @@ function savedWorkspaceFileRevision(value: unknown): WorkspaceFileRevision | und
   } as WorkspaceFileRevision;
 }
 
+function mapAgentMemoryRow(row: Record<string, unknown>): AgentMemoryEntry {
+  return {
+    category: row["category"] as AgentMemoryEntry["category"],
+    confidence: Number(row["confidence"]),
+    content: String(row["content"]),
+    createdAt: String(row["created_at"]),
+    id: String(row["id"]),
+    provenance: row["provenance"] ? (JSON.parse(String(row["provenance"])) as AgentMemoryProvenance) : null,
+    relevance: Number(row["relevance"]),
+    reviewedAt: row["reviewed_at"] ? String(row["reviewed_at"]) : null,
+    source: String(row["source"]),
+    status: row["status"] as AgentMemoryEntry["status"],
+    supersedesId: row["supersedes_id"] ? String(row["supersedes_id"]) : null,
+    updatedAt: String(row["updated_at"]),
+    useCount: Number(row["use_count"]),
+  };
+}
+
 export class SessionStoreHttpError extends Error {
   constructor(message: string, readonly statusCode: 400 | 404 | 409) {
     super(message);
@@ -513,6 +537,28 @@ export class SessionStore {
         ON permission_authorizations(session_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS permission_authorizations_execution
         ON permission_authorizations(execution_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS agent_memory (
+        id TEXT PRIMARY KEY,
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT NOT NULL,
+        relevance INTEGER NOT NULL DEFAULT 5,
+        use_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        supersedes_id TEXT,
+        confidence REAL NOT NULL DEFAULT 0.7,
+        provenance TEXT,
+        reviewed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (category, content)
+      );
+      CREATE INDEX IF NOT EXISTS agent_memory_status_category
+        ON agent_memory(status, category);
+      CREATE TABLE IF NOT EXISTS agent_memory_meta (
+        id TEXT PRIMARY KEY,
+        json TEXT NOT NULL
+      );
     `);
     this.secretKey = await this.loadOrCreateSecretKey();
     this.migrateRemoteHostTokens();
@@ -1457,6 +1503,7 @@ export class SessionStore {
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
         else if (field === "kbScopeKbIds") effective.kbScopeKbIds = [...value as string[]];
         else if (field === "kbScopeWebSearch") effective.kbScopeWebSearch = value as boolean;
+        else if (field === "agentMemoryBackgroundReview") effective.agentMemoryBackgroundReview = value as boolean;
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
@@ -5102,6 +5149,212 @@ export class SessionStore {
     if (!session) throw new Error("Session not found");
     return resolve(this.dataDir, "projects", session.projectId, "sessions", session.id, "workspace");
   }
+
+  // ------------------------------------------------------------ agent memory
+  // V3-C1 (DeepAnalyze agent_memory port). The machine never self-certifies:
+  // every agent/background-review write lands as a candidate whose provenance
+  // carries requiresReview; only a human promote() clears that flag and lifts
+  // confidence to the verified band. Prompt injection reads reviewed entries
+  // only (listDiverseAgentMemories callers decide the policy).
+
+  addAgentMemory(input: {
+    category: AgentMemoryCategory;
+    content: string;
+    source: string;
+    relevance?: number;
+    confidence?: number;
+    provenance?: AgentMemoryProvenance | null;
+  }): AgentMemoryEntry | null {
+    const timestamp = new Date().toISOString();
+    const id = randomUUID();
+    const inserted = this.database!
+      .prepare(
+        `INSERT INTO agent_memory
+           (id, category, content, source, relevance, use_count, status,
+            supersedes_id, confidence, provenance, reviewed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 0, 'active', NULL, ?, ?, NULL, ?, ?)
+         ON CONFLICT (category, content) DO NOTHING`,
+      )
+      .run(
+        id,
+        input.category,
+        input.content.trim(),
+        input.source,
+        input.relevance ?? 5,
+        input.confidence ?? 0.7,
+        input.provenance ? JSON.stringify(input.provenance) : null,
+        timestamp,
+        timestamp,
+      );
+    return Number(inserted.changes) > 0 ? this.getAgentMemory(id) : null;
+  }
+
+  getAgentMemory(id: string): AgentMemoryEntry | null {
+    const row = this.database!.prepare("SELECT * FROM agent_memory WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? mapAgentMemoryRow(row) : null;
+  }
+
+  listAgentMemories(
+    filter: { category?: AgentMemoryCategory; status?: AgentMemoryStatus } = {},
+  ): AgentMemoryEntry[] {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (filter.category) {
+      clauses.push("category = ?");
+      params.push(filter.category);
+    }
+    if (filter.status) {
+      clauses.push("status = ?");
+      params.push(filter.status);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.database!
+      .prepare(`SELECT * FROM agent_memory${where} ORDER BY updated_at DESC`)
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map(mapAgentMemoryRow);
+  }
+
+  /** Pareto-diverse selection (DeepAnalyze parity): the top-scored entry of
+   *  each category first, then fill by score — one hot category cannot
+   *  crowd out the whole prompt budget. `reviewedOnly` drops candidates
+   *  still awaiting human promote (the SEAL-safe default for prompt use). */
+  listDiverseAgentMemories(limit: number, options: { reviewedOnly?: boolean } = {}): AgentMemoryEntry[] {
+    const reviewedOnly = options.reviewedOnly !== false;
+    // Fail-CLOSED (review P1): only an explicit requiresReview:false passes —
+    // a null provenance must never slip an unreviewed note into the prompt.
+    const pool = this.listAgentMemories({ status: "active" }).filter(
+      (entry) => !reviewedOnly || entry.provenance?.requiresReview === false,
+    );
+    const score = (entry: AgentMemoryEntry) =>
+      entry.relevance * 2 + entry.confidence * 10 + Math.min(entry.useCount, 10);
+    const byCategory = new Map<AgentMemoryCategory, AgentMemoryEntry[]>();
+    for (const entry of pool) {
+      const bucket = byCategory.get(entry.category) ?? [];
+      bucket.push(entry);
+      byCategory.set(entry.category, bucket);
+    }
+    const picked: AgentMemoryEntry[] = [];
+    const rest: AgentMemoryEntry[] = [];
+    for (const bucket of byCategory.values()) {
+      bucket.sort((a, b) => score(b) - score(a) || b.updatedAt.localeCompare(a.updatedAt));
+      const [top, ...others] = bucket;
+      if (top) picked.push(top);
+      rest.push(...others);
+    }
+    rest.sort((a, b) => score(b) - score(a) || b.updatedAt.localeCompare(a.updatedAt));
+    return [...picked, ...rest].slice(0, Math.max(0, limit));
+  }
+
+  /** Replace content in place. A previously verified memory does NOT keep
+   *  its verified label — the edit lands as a fresh candidate. */
+  replaceAgentMemoryContent(
+    id: string,
+    content: string,
+    provenance: AgentMemoryProvenance,
+  ): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    const timestamp = new Date().toISOString();
+    const updated = this.database!
+      .prepare(
+        `UPDATE agent_memory SET content = ?, provenance = ?, reviewed_at = NULL, updated_at = ?
+         WHERE id = ? AND NOT EXISTS (
+           SELECT 1 FROM agent_memory other
+           WHERE other.category = ? AND other.content = ? AND other.id != ?)`,
+      )
+      .run(content.trim(), JSON.stringify(provenance), timestamp, id, existing.category, content.trim(), id);
+    if (Number(updated.changes) === 0) {
+      throw new Error("Agent memory replace conflicts with an existing entry");
+    }
+    return this.getAgentMemory(id)!;
+  }
+
+  /** Human review: promote to verified. Clears requiresReview, lifts
+   *  confidence into the verified band, stamps reviewed_at. */
+  promoteAgentMemory(id: string): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    // Promoting an archived (superseded) entry would resurrect an outdated
+    // version alongside its replacement (review P2).
+    if (existing.status === "archived") throw new Error("Agent memory is archived (superseded) — promote the replacement instead");
+    const provenance: AgentMemoryProvenance = { ...(existing.provenance ?? { kind: "manual" }), requiresReview: false };
+    const timestamp = new Date().toISOString();
+    this.database!
+      .prepare(
+        `UPDATE agent_memory SET status = 'active', confidence = MAX(confidence, 0.8),
+           provenance = ?, reviewed_at = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(JSON.stringify(provenance), timestamp, timestamp, id);
+    return this.getAgentMemory(id)!;
+  }
+
+  markAgentMemoryStale(id: string): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    const timestamp = new Date().toISOString();
+    this.database!
+      .prepare("UPDATE agent_memory SET status = 'stale', updated_at = ? WHERE id = ?")
+      .run(timestamp, id);
+    return this.getAgentMemory(id)!;
+  }
+
+  removeAgentMemory(id: string): void {
+    this.database!.prepare("DELETE FROM agent_memory WHERE id = ?").run(id);
+  }
+
+  /** Atomic supersede: old entry archived, replacement created active with
+   *  supersedes_id pointing back. The replacement is always a candidate —
+   *  superseding never inherits verification. */
+  supersedeAgentMemory(
+    id: string,
+    input: { content: string; category?: AgentMemoryCategory; provenance: AgentMemoryProvenance },
+  ): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    let begun = false;
+    this.database!.exec("BEGIN IMMEDIATE");
+    begun = true;
+    try {
+      const created = this.addAgentMemory({
+        category: input.category ?? existing.category,
+        content: input.content,
+        source: existing.source,
+        relevance: existing.relevance,
+        confidence: 0.7,
+        provenance: input.provenance,
+      });
+      if (!created) throw new Error("Agent memory supersede conflicts with an existing entry");
+      const timestamp = new Date().toISOString();
+      this.database!
+        .prepare("UPDATE agent_memory SET status = 'archived', updated_at = ? WHERE id = ?")
+        .run(timestamp, id);
+      this.database!
+        .prepare("UPDATE agent_memory SET supersedes_id = ? WHERE id = ?")
+        .run(id, created.id);
+      this.database!.exec("COMMIT");
+      return this.getAgentMemory(created.id)!;
+    } catch (error) {
+      if (begun) this.database!.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Small KV for background-review bookkeeping (review cadence state). */
+  getAgentMemoryMeta<T>(id: string): T | null {
+    const row = this.database!.prepare("SELECT json FROM agent_memory_meta WHERE id = ?").get(id) as
+      | { json: string }
+      | undefined;
+    return row ? (JSON.parse(row.json) as T) : null;
+  }
+
+  setAgentMemoryMeta(id: string, value: unknown): void {
+    this.database!
+      .prepare("INSERT INTO agent_memory_meta (id, json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json")
+      .run(id, JSON.stringify(value));
+  }
+
 
   /** Content-addressed root for one selected Skill set, shared by every run that selects it. */
   skillPackagesPath(sessionId: string, packageSetHash: string): string {

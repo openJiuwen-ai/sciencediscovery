@@ -1907,3 +1907,69 @@ test("polish_report verifies fragments via verifyCitation and rewrites the file 
   assert.ok(!polishedText.includes("Based on the documents"), "boilerplate is stripped");
   assert.ok(polishedText.includes("## Section"), "headings are normalized");
 });
+
+test("agent_memory is registered only with a port and routes every action through it", async () => {
+  const root = process.cwd();
+  const withoutPort = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  assert.equal(withoutPort.find((tool) => tool.name === "agent_memory"), undefined);
+
+  const calls: Array<{ action: string; args: unknown }> = [];
+  const entry = { id: "m1", category: "workflow", content: "先检索后综合" };
+  const tools = createWorkspaceTools(root, {
+    agentMemory: {
+      add: (input) => {
+        calls.push({ action: "add", args: input });
+        return entry as never;
+      },
+      list: (filter) => {
+        calls.push({ action: "list", args: filter });
+        return [entry] as never;
+      },
+      remove: (id) => calls.push({ action: "remove", args: id }),
+      replace: (id, content) => {
+        calls.push({ action: "replace", args: { content, id } });
+        return entry as never;
+      },
+      supersede: (id, content, category) => {
+        calls.push({ action: "supersede", args: { category, content, id } });
+        return entry as never;
+      },
+    },
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const tool = tools.find((candidate) => candidate.name === "agent_memory")!;
+
+  await tool.execute("c", { action: "add", category: "workflow", content: "先检索后综合" });
+  assert.deepEqual(calls.at(-1), { action: "add", args: { category: "workflow", content: "先检索后综合" } });
+  await tool.execute("c", { action: "replace", content: "改写", id: "m1" });
+  assert.deepEqual(calls.at(-1), { action: "replace", args: { content: "改写", id: "m1" } });
+  await tool.execute("c", { action: "supersede", content: "新版", id: "m1" });
+  assert.deepEqual(calls.at(-1), { action: "supersede", args: { category: undefined, content: "新版", id: "m1" } });
+  await tool.execute("c", { action: "remove", id: "m1" });
+  assert.deepEqual(calls.at(-1), { action: "remove", args: "m1" });
+  const list = await tool.execute("c", { action: "list", status: "active" });
+  assert.deepEqual(calls.at(-1), { action: "list", args: { status: "active" } });
+  assert.match(list.content[0]?.type === "text" ? list.content[0].text : "", /先检索后综合/);
+  await assert.rejects(tool.execute("c", { action: "nuke" }), /Unknown action/);
+});
+
+test("agent_memory add surfaces deduplication honestly", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    agentMemory: {
+      add: () => null,
+      list: () => [],
+      remove: () => undefined,
+      replace: () => { throw new Error("not used"); },
+      supersede: () => { throw new Error("not used"); },
+    },
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const tool = tools.find((candidate) => candidate.name === "agent_memory")!;
+  const result = await tool.execute("c", { action: "add", category: "convention", content: "重复条目" });
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /deduplicated/);
+});

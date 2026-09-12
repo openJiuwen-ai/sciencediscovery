@@ -235,3 +235,19 @@ test("memory graph prompt is absent when the feature is disabled", () => {
   const prompt = buildWorkspaceSystemPrompt([], false, { memoryGraphEnabled: false });
   assert.doesNotMatch(prompt, /Citation chain/i);
 });
+
+test("agent-memory governance part renders labeled entries and stays non-protected", () => {
+  const parts = buildWorkspacePromptParts([], false, {
+    agentMemories: [
+      { category: "workflow", content: "先检索后综合", reliabilityLabel: " [已核验]" },
+      { category: "lesson_learned", content: "长报告先出大纲", reliabilityLabel: " [参考]" },
+    ],
+  });
+  const part = parts.find((candidate) => candidate.id === "agent-memory.governance");
+  assert.ok(part);
+  assert.equal(part!.protected, false, "memory is advisory — droppable under budget pressure");
+  assert.match(part!.content, /\[workflow\] \[已核验\] 先检索后综合/);
+  assert.match(part!.content, /\[lesson_learned\] \[参考\] 长报告先出大纲/);
+  // Without entries the part disappears entirely (no empty section noise).
+  assert.equal(buildWorkspacePromptParts([], false, {}).find((candidate) => candidate.id === "agent-memory.governance"), undefined);
+});

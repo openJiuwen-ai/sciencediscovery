@@ -18,6 +18,7 @@ import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
+  | "agentMemoryBackgroundReview"
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
   | "enabledSkillIds"
@@ -51,6 +52,10 @@ export function isSkillSelectionMode(value: unknown): value is SkillSelectionMod
 }
 
 export interface RuntimeSettingsOverrides {
+  /** V3-C1: offline extraction of experiential notes from completed runs into
+   *  agent-memory candidates (human review gate before prompt use). Default
+   *  false — opt-in, DeepAnalyze parity. */
+  agentMemoryBackgroundReview?: boolean;
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
@@ -78,6 +83,7 @@ export interface RuntimeSettingsOverrides {
 }
 
 export interface EffectiveRuntimeSettings {
+  agentMemoryBackgroundReview?: boolean;
   enabledConnectorIds: ConnectorId[];
   /** Versioned skill libraries searched at run creation/execution time. */
   enabledSkillLibraries: EnabledSkillLibrary[];

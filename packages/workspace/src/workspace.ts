@@ -26,6 +26,7 @@ import {
   SKILL_PACKAGES_PORTABLE_ROOT,
   skillRootAliases,
 } from "@sciencediscovery/schema";
+import type { AgentMemoryCategory, AgentMemoryEntry, AgentMemoryStatus } from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
 import { createEvidenceLedgerPort } from "./ke-evidence-ledger.js";
 import { polishReport } from "./report-polish.js";
@@ -211,6 +212,16 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  /** V3-C1: experiential-memory port. The wiring layer (runs/index.ts)
+   *  hardcodes candidate provenance on every write — the tool can never
+   *  self-verify. Undefined = the agent_memory tool is not registered. */
+  agentMemory?: {
+    add: (input: { category: AgentMemoryCategory; content: string }) => AgentMemoryEntry | null;
+    replace: (id: string, content: string) => AgentMemoryEntry;
+    remove: (id: string) => void;
+    supersede: (id: string, content: string, category?: AgentMemoryCategory) => AgentMemoryEntry;
+    list: (filter: { category?: AgentMemoryCategory; status?: AgentMemoryStatus }) => AgentMemoryEntry[];
+  };
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   declareArtifact?: (input: {
     description?: string;
@@ -1661,6 +1672,83 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       }),
     };
     tools.push(researchStateTool);
+
+    // Agent memory (V3-C1, DeepAnalyze agent_memory port): the agent may
+    // write experiential notes about its own working methods — but every
+    // write lands as a CANDIDATE whose provenance carries requiresReview;
+    // only a human promote (web UI / API) turns it into a verified rule the
+    // system prompt may carry. The tool layer cannot bypass that gate: the
+    // port (wired in runs/index.ts) hardcodes the candidate provenance.
+    if (options.agentMemory) {
+      const port = options.agentMemory;
+      tools.push({
+        description:
+          "Long-term experiential memory about your own working methods. Actions: add a note (category + self-contained content, e.g. a tool technique that worked, a workflow ordering, a user convention, a lesson from a failure); replace a note's content; supersede a note with a better version (old one archived); remove a note; list current notes. IMPORTANT: notes you write are stored as candidates marked 待核验 (pending human review) — they do NOT affect future runs until a human promotes them in the review UI, so write notes that would still make sense to a human reviewer reading them cold. Keep content self-contained and under 200 characters. Do NOT use this for task state (use research_state) or user facts — this is only for reusable working-method experience.",
+        execute: async (_toolCallId, params) => {
+          const input = params as Record<string, unknown>;
+          const action = String(input.action ?? "");
+          const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : undefined);
+          let result: unknown;
+          switch (action) {
+            case "add":
+              result = port.add({
+                category: (text("category") ?? "lesson_learned") as AgentMemoryCategory,
+                content: text("content") ?? "",
+              });
+              if (!result) result = { deduplicated: true, note: "an identical note already exists" };
+              break;
+            case "replace":
+              result = port.replace(text("id") ?? "", text("content") ?? "");
+              break;
+            case "supersede":
+              result = port.supersede(
+                text("id") ?? "",
+                text("content") ?? "",
+                text("category") as AgentMemoryCategory | undefined,
+              );
+              break;
+            case "remove":
+              port.remove(text("id") ?? "");
+              result = { removed: text("id") ?? "" };
+              break;
+            case "list":
+              result = port.list({
+                ...(text("category") ? { category: text("category") as AgentMemoryCategory } : {}),
+                ...(text("status") ? { status: text("status") as AgentMemoryStatus } : {}),
+              });
+              break;
+            default:
+              throw new Error("Unknown action: " + action + ". Supported: add, replace, supersede, remove, list");
+          }
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        },
+        isConcurrencySafe: () => false,
+        label: "Agent memory",
+        name: "agent_memory",
+        parameters: Type.Object({
+          action: Type.Union([
+            Type.Literal("add"),
+            Type.Literal("replace"),
+            Type.Literal("supersede"),
+            Type.Literal("remove"),
+            Type.Literal("list"),
+          ]),
+          category: Type.Optional(
+            Type.Union(
+              [Type.Literal("tool_technique"), Type.Literal("workflow"), Type.Literal("convention"), Type.Literal("lesson_learned")],
+              { description: "add/supersede/list: note category (add defaults to lesson_learned)" },
+            ),
+          ),
+          content: Type.Optional(Type.String({ minLength: 5, maxLength: 400, description: "add/replace/supersede: self-contained note text, <200 chars preferred" })),
+          id: Type.Optional(Type.String({ description: "replace/supersede/remove: the note id" })),
+          status: Type.Optional(
+            Type.Union([Type.Literal("active"), Type.Literal("archived"), Type.Literal("stale")], {
+              description: "list: filter by status (default all)",
+            }),
+          ),
+        }),
+      });
+    }
 
     const tournamentRankTool: AgentTool<TSchema> = {
       description:

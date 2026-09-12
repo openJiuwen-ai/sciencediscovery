@@ -121,7 +121,8 @@ import {
   THINKING_EFFORT_VARIANTS,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
-import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import { agentMemoryReliabilityLabel, reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import type { BackgroundReviewManager } from "../agent-memory/background-review.js";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "@sciencediscovery/executor";
@@ -678,12 +679,16 @@ async function executeAgentRun(
     await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
     scientificEnvironments = store.listEnvironments();
   }
+  // V3-C1: only HUMAN-REVIEWED memories reach the prompt (SEAL-safe default
+  // — candidates await promote() and never self-inject).
+  const agentMemories = agentMemoryPromptEntries(store);
   const systemPrompt = buildWorkspaceSystemPrompt(
     runtimeSkills,
     Boolean(scientificEnvironments),
     {
       approvalMode: session.approvalMode,
       memoryGraphEnabled: memoryGraphSink.enabled,
+      ...(agentMemories.length ? { agentMemories } : {}),
       ...(kbScopePrompt ? { knowledgeBaseScope: kbScopePrompt } : {}),
       ...(allowedRemoteHosts.length ? { remoteRunners: allowedRemoteHosts.map((host) => `${host.id}: ${host.description || host.runnerName || host.alias}`) } : {}),
       ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
@@ -1129,6 +1134,36 @@ async function executeAgentRun(
     // Project-ledger root for research_state promote/hydrate (V2-C2) — the
     // cross-trajectory world model lives outside any session workspace.
     researchProjectRoot: resolve(store.dataDir, "research-ledgers", session.projectId),
+    // Prompt-layer disclosures (V2-C1 kbScope line, V3-C1 memory section):
+    // the SAME values the manifest prompt uses — manifest and execution must
+    // never diverge (review P0: native-agent rebuilds its own governance).
+    ...(kbScopePrompt ? { knowledgeBaseScope: kbScopePrompt } : {}),
+    ...(agentMemories.length ? { agentMemories } : {}),
+    // V3-C1: experiential memory. Every write path hardcodes the candidate
+    // provenance — the agent can never mark its own note verified.
+    agentMemory: {
+      add: (input) =>
+        store.addAgentMemory({
+          ...input,
+          source: "agent_tool",
+          provenance: { kind: "agent_proposal", requiresReview: true, actorId: sessionId, source: runId },
+        }),
+      replace: (id, content) =>
+        store.replaceAgentMemoryContent(id, content, {
+          kind: "agent_proposal",
+          requiresReview: true,
+          actorId: sessionId,
+          source: runId,
+        }),
+      remove: (id) => store.removeAgentMemory(id),
+      supersede: (id, content, category) =>
+        store.supersedeAgentMemory(id, {
+          content,
+          ...(category ? { category } : {}),
+          provenance: { kind: "agent_proposal", requiresReview: true, actorId: sessionId, source: runId },
+        }),
+      list: (filter) => store.listAgentMemories(filter),
+    },
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -2653,6 +2688,31 @@ export async function createSkillEvolutionRun(
   });
 }
 
+// --- Agent memory (V3-C1) ---------------------------------------------------
+const AGENT_MEMORY_PROMPT_LIMIT = 12;
+const AGENT_MEMORY_PROMPT_CONTENT_CHARS = 200;
+
+/** Human-reviewed memories formatted for prompt injection. Memory must
+ *  never break prompt assembly — any store hiccup degrades to no section. */
+function agentMemoryPromptEntries(store: SessionStore): Array<{ category: string; content: string; reliabilityLabel: string }> {
+  try {
+    return store.listDiverseAgentMemories(AGENT_MEMORY_PROMPT_LIMIT).map((entry) => ({
+      category: entry.category,
+      content: entry.content.slice(0, AGENT_MEMORY_PROMPT_CONTENT_CHARS),
+      reliabilityLabel: agentMemoryReliabilityLabel(entry.confidence, entry.provenance),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// Registered by the composition root (bootstrap/platform.ts); the run
+// completion hook fires recordCompletedRun fire-and-forget.
+let backgroundReviewManager: BackgroundReviewManager | null = null;
+export function setBackgroundReviewManager(manager: BackgroundReviewManager | null): void {
+  backgroundReviewManager = manager;
+}
+
 export function scheduleSessionRuns(
   store: SessionStore,
   runnerClient: RunnerClient,
@@ -2754,6 +2814,10 @@ export function scheduleSessionRuns(
           const durationMs = Math.max(0, Date.now() - Date.parse(startedAt));
           if (status === "completed") {
             runLog.info("run_completed", { durationMs, runId: next.id, sessionId });
+            // V3-C1: cadence counter + offline experience extraction
+            // (fire-and-forget; gated by the agentMemoryBackgroundReview
+            // setting inside the manager).
+            backgroundReviewManager?.recordCompletedRun(sessionId);
           } else if (status === "cancelled") {
             runLog.info("run_cancelled", { durationMs, reason: "user_cancelled", runId: next.id, sessionId });
           } else {
