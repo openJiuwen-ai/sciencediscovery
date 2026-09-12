@@ -2967,6 +2967,109 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
   assert.equal(final.body.some((environment) => environment.id === created.body.id), false);
 });
 
+test("the built-in Runner answers setup queries before its scientific environments exist", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `runner-setup-unconfigured-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const snapshot = Buffer.from("{\"format\":\"scientific-test\"}\n");
+  const snapshotHash = createHash("sha256").update(snapshot).digest("hex");
+  const revision: EnvironmentRevision = {
+    channels: ["conda-forge"], createdAt: new Date().toISOString(), environmentId: "starter-python",
+    id: "rev-starter-python", language: "python", languageVersion: "test", packages: [], packageSpecHash: snapshotHash,
+    platform: "linux-x64", provisioner: "test", runnerVersion: "test",
+    snapshot: { hash: snapshotHash, size: snapshot.length },
+  };
+  const environment: Environment = {
+    createdAt: new Date().toISOString(), currentRevisionId: revision.id, id: "starter-python", kind: "starter",
+    language: "python", name: "Starter python", updatedAt: new Date().toISOString(),
+  };
+  // A Runner whose environments are not installed yet reports its setup and refuses its
+  // catalog: exactly the state the settings page opens in on a first start.
+  const catalogReads: string[] = [];
+  let state: ScientificEnvironmentSetup["state"] = "not-configured";
+  const component = (): ScientificEnvironmentSetup["components"]["conda"] => ({
+    action: null, completedAt: null, error: null, message: "Waiting for the installation to start",
+    phase: state === "ready" ? "complete" : "pending", startedAt: null, state, updatedAt: new Date().toISOString(),
+  });
+  const runner = createHttpServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://runner.test");
+    const send = (status: number, body: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(body)}\n`);
+    };
+    if (url.pathname === "/health") {
+      return send(200, {
+        cgroupDelegated: false, cgroupMode: "none", cgroupRoot: "",
+        executionAuth: "bearer+hmac-sha256", executionUser: "test", executionTimeoutMs: 60_000,
+        maxFileBytes: 0, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 1024, networkPolicy: "none",
+        noNewPrivileges: true, runnerVersion: "test", sandbox: "bubblewrap",
+        scientificEnvs: state === "ready"
+          ? { available: true, enabled: true, languages: ["python"], provisioner: "test", startersReady: true }
+          : { available: false, enabled: true, languages: [], provisioner: null, startersReady: false,
+            unavailableReason: "Scientific environments are not configured; install them in System Settings" },
+        seccompBaseline: "multiarch-v1-profile-aware", status: "ok", workerConcurrency: null,
+      });
+    }
+    if (url.pathname === "/environment-setup") {
+      if (request.method === "POST") state = "installing";
+      return send(request.method === "POST" ? 202 : 200, {
+        allowedChannels: ["conda-forge"], completedAt: null, components: { conda: component(), micromamba: component() },
+        error: null, managedProvisioner: true, message: "Scientific environments are not installed yet",
+        networkPolicy: "allowed-channels", phase: state === "ready" ? "complete" : "pending", provisioner: null,
+        provisionerVersion: null, startedAt: null, starterPackages: { python: ["python=3.12"], r: ["r-base=4.4"] },
+        state, updatedAt: new Date().toISOString(),
+      } satisfies ScientificEnvironmentSetup);
+    }
+    if (url.pathname === "/environments" || url.pathname === "/environment-revisions") {
+      catalogReads.push(url.pathname);
+      if (state !== "ready") {
+        return send(500, { error: "Scientific environments are not configured; install them in System Settings" });
+      }
+      return send(200, url.pathname === "/environments" ? [environment] : [revision]);
+    }
+    if (url.pathname === `/environment-revisions/${revision.id}/snapshot`) {
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end(snapshot);
+    }
+    send(404, { error: "not found" });
+  });
+  await new Promise<void>((listening) => runner.listen(0, "127.0.0.1", listening));
+  context.after(() => new Promise<void>((closed) => runner.close(() => closed())));
+  const server = createApiServer(testConfig(tempRoot, `http://127.0.0.1:${(runner.address() as AddressInfo).port}`));
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+  context.after(() => new Promise<void>((closed) => { server.close(() => closed()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const unconfigured = await jsonRequest<ScientificEnvironmentSetup>(
+    `${origin}/api/runners/local/environment-setup`,
+    { headers: authorization },
+  );
+  assert.equal(unconfigured.response.status, 200, JSON.stringify(unconfigured.body));
+  assert.equal(unconfigured.body.state, "not-configured");
+  assert.deepEqual(catalogReads, [], "a setup query must not read a catalog the Runner has not built yet");
+
+  const started = await jsonRequest<ScientificEnvironmentSetup>(`${origin}/api/runners/local/environment-setup`, {
+    body: JSON.stringify({ confirmed: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(started.response.status, 201);
+  assert.equal(started.body.state, "installing");
+  assert.deepEqual(catalogReads, [], "an installation that has only started has no catalog to mirror");
+
+  state = "ready";
+  const ready = await jsonRequest<ScientificEnvironmentSetup>(
+    `${origin}/api/runners/local/environment-setup`,
+    { headers: authorization },
+  );
+  assert.equal(ready.body.state, "ready");
+  assert.deepEqual([...new Set(catalogReads)].sort(), ["/environment-revisions", "/environments"]);
+  const installed = await jsonRequest<Environment[]>(`${origin}/api/runners/local/environments`, { headers: authorization });
+  assert.deepEqual(installed.body.map((item) => item.id), ["starter-python"]);
+  const mirrored = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
+  assert.deepEqual(mirrored.body.map((item) => item.id), ["starter-python"]);
+});
+
 test("an active run keeps its effective settings snapshot while later runs use updates", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

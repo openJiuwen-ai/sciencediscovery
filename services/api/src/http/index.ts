@@ -1627,7 +1627,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         const body = request.method === "POST" ? await readJson(request) : undefined;
         const result = await manageRunnerEnvironment(target, store, operation, request.method ?? "GET", body);
-        if (hostId === "local") await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
+        // Mirroring the built-in catalog lists the Runner's environments, which the Runner
+        // refuses until its setup reaches ready. Setup queries exist to report the states
+        // before that — not-configured, installing, failed — so they must not carry that
+        // refusal; every other operation already needs a ready Runner to have succeeded.
+        const setupState = operation === "environment-setup" ? (result as ScientificEnvironmentSetup).state : undefined;
+        if (hostId === "local" && (setupState === undefined || setupState === "ready")) {
+          await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
+        }
         sendJson(response, request.method === "POST" ? 201 : 200, result);
         return;
       }
