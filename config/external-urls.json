@@ -137,6 +137,43 @@
     "biogrid": {
       "interactions_api": "https://webservice.thebiogrid.org/interactions",
       "home_page": "https://thebiogrid.org"
+    },
+    "gnomad": {
+      "graphql_api": "https://gnomad.broadinstitute.org/api",
+      "gene_page_template": "https://gnomad.broadinstitute.org/gene/{gene_id}",
+      "variant_page_template": "https://gnomad.broadinstitute.org/variant/{variant_id}"
+    },
+    "gwas": {
+      "associations_api": "https://www.ebi.ac.uk/gwas/rest/api/v2/associations",
+      "search_page_template": "https://www.ebi.ac.uk/gwas/search?query={query}"
+    },
+    "gtopdb": {
+      "targets_api": "https://www.guidetopharmacology.org/services/targets",
+      "ligands_api": "https://www.guidetopharmacology.org/services/ligands",
+      "ligand_interactions_template": "https://www.guidetopharmacology.org/services/ligands/{ligand_id}/interactions",
+      "target_page_template": "https://www.guidetopharmacology.org/GRAC/ObjectDisplayForward?objectId={target_id}",
+      "ligand_page_template": "https://www.guidetopharmacology.org/GRAC/LigandDisplayForward?ligandId={ligand_id}"
+    },
+    "kegg": {
+      "find_template": "https://rest.kegg.jp/find/{database}/{query}",
+      "get_template": "https://rest.kegg.jp/get/{entry}",
+      "link_template": "https://rest.kegg.jp/link/{target_db}/{source}",
+      "entry_page_template": "https://www.kegg.jp/entry/{entry}"
+    },
+    "pride": {
+      "search_projects_api": "https://www.ebi.ac.uk/pride/ws/archive/v2/search/projects",
+      "project_api_template": "https://www.ebi.ac.uk/pride/ws/archive/v2/projects/{accession}",
+      "project_files_api_template": "https://www.ebi.ac.uk/pride/ws/archive/v2/projects/{accession}/files",
+      "project_page_template": "https://www.ebi.ac.uk/pride/archive/projects/{accession}"
+    },
+    "wikidata": {
+      "sparql_endpoint": "https://query.wikidata.org/sparql",
+      "entity_page_template": "https://www.wikidata.org/wiki/{entity}"
+    },
+    "datacite": {
+      "dois_api": "https://api.datacite.org/dois",
+      "doi_api_template": "https://api.datacite.org/dois/{doi}",
+      "doi_url_template": "https://doi.org/{doi}"
     }
   },
   "web": {
@@ -169,7 +206,14 @@
     "interpro": "https://www.ebi.ac.uk/about/terms-of-use",
     "optimade": "https://www.optimade.org/providers/",
     "string": "https://string-db.org/cgi/about",
-    "biogrid": "https://wiki.thebiogrid.org/doku.php/termsandconditions"
+    "biogrid": "https://wiki.thebiogrid.org/doku.php/termsandconditions",
+    "gnomad": "https://gnomad.broadinstitute.org/about",
+    "gwas": "https://www.ebi.ac.uk/about/terms-of-use/",
+    "gtopdb": "https://www.guidetopharmacology.org/about.jsp",
+    "kegg": "https://www.kegg.jp/kegg/legal.html",
+    "pride": "https://www.ebi.ac.uk/about/terms-of-use/",
+    "wikidata": "https://www.wikidata.org/wiki/Wikidata:Data_access",
+    "datacite": "https://datacite.org/terms-of-service/"
   },
   "connector_hosts": {
     "arxiv": [
@@ -247,6 +291,30 @@
     "biogrid": [
       "webservice.thebiogrid.org",
       "thebiogrid.org"
+    ],
+    "gnomad": [
+      "gnomad.broadinstitute.org"
+    ],
+    "gwas": [
+      "www.ebi.ac.uk"
+    ],
+    "gtopdb": [
+      "www.guidetopharmacology.org"
+    ],
+    "kegg": [
+      "rest.kegg.jp",
+      "www.kegg.jp"
+    ],
+    "pride": [
+      "www.ebi.ac.uk"
+    ],
+    "wikidata": [
+      "query.wikidata.org",
+      "www.wikidata.org"
+    ],
+    "datacite": [
+      "api.datacite.org",
+      "doi.org"
     ]
   }
 }

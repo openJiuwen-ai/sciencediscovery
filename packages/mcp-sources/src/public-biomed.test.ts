@@ -25,6 +25,7 @@ test("public biomedical MCP manifests register every requested source and operat
     [
       "arxiv", "pubmed", "europe-pmc", "biorxiv", "medrxiv", "pdb", "ensembl", "reactome",
       "clinvar", "chembl", "geo", "pubchem", "afdb", "interpro", "optimade", "string", "biogrid",
+      "gnomad", "gwas", "gtopdb", "kegg", "pride", "wikidata", "datacite",
     ],
   );
   assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "pdb")!.manifest.tools).sort(), [
@@ -70,14 +71,48 @@ test("public biomedical MCP manifests register every requested source and operat
   assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "biogrid")!.manifest.tools), [
     "interactions",
   ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "gnomad")!.manifest.tools).sort(), [
+    "gene",
+    "variant",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "gwas")!.manifest.tools).sort(), [
+    "search_gene",
+    "search_trait",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "gtopdb")!.manifest.tools).sort(), [
+    "interactions",
+    "search_ligand",
+    "search_target",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "kegg")!.manifest.tools).sort(), [
+    "find",
+    "get",
+    "link",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "pride")!.manifest.tools).sort(), [
+    "files",
+    "project",
+    "search_projects",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "wikidata")!.manifest.tools).sort(), [
+    "resolve_entity",
+    "sparql",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "datacite")!.manifest.tools).sort(), [
+    "lookup",
+    "search",
+  ]);
   assert.ok(sources.every((source) => source.manifest.transport.mcpServerId === "biomed"));
 });
 
 test("Z6 biodata sources never mirror into the memory graph as papers", () => {
   const sources = createPublicBiomedSources();
   const biodata = sources.filter((source) =>
-    ["pubchem", "afdb", "interpro", "optimade", "string", "biogrid"].includes(source.manifest.id));
-  assert.equal(biodata.length, 6);
+    [
+      "pubchem", "afdb", "interpro", "optimade", "string", "biogrid",
+      "gnomad", "gwas", "gtopdb", "kegg", "pride", "wikidata", "datacite",
+    ].includes(source.manifest.id));
+  assert.equal(biodata.length, 13);
   for (const source of biodata) {
     for (const tool of Object.values(source.manifest.tools)) {
       assert.equal(tool.kind, "lookup", `${source.manifest.id}/${tool.id}`);
@@ -113,7 +148,7 @@ test("arXiv governance follows the provider terms: one connection, one request e
 
 test("built-in sources explicitly opt into the existing queue and pacing guards", () => {
   const manifests = createBuiltinMcpSourceRegistry().listManifests();
-  assert.equal(manifests.length, 18);
+  assert.equal(manifests.length, 25);
   for (const manifest of manifests) {
     assert.equal(manifest.governance.maxQueueDepth, 8, manifest.id);
     assert.equal(manifest.governance.queueTimeoutMs, 20_000, manifest.id);

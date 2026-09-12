@@ -117,9 +117,9 @@ test("MCP source API exposes only native MCP sources", async (context) => {
     status: McpSourceStatus;
   }>;
   assert.deepEqual(sources.map((source) => source.manifest.id).sort(), [
-    "afdb", "arxiv", "biogrid", "biorxiv", "chembl", "clinvar", "ensembl", "europe-pmc",
-    "geo", "interpro", "medrxiv", "optimade", "pdb", "pubchem", "pubmed", "reactome",
-    "string", "uniprot",
+    "afdb", "arxiv", "biogrid", "biorxiv", "chembl", "clinvar", "datacite", "ensembl", "europe-pmc",
+    "geo", "gnomad", "gtopdb", "gwas", "interpro", "kegg", "medrxiv", "optimade", "pdb", "pride",
+    "pubchem", "pubmed", "reactome", "string", "uniprot", "wikidata",
   ]);
   assert.equal(sources.find((source) => source.manifest.id === "uniprot")?.status.status, "ready");
   assert.ok(sources.filter((source) => source.manifest.transport.mcpServerId === "biomed")

@@ -66,6 +66,13 @@ async def _get_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
         return response.json()
 
 
+async def _post_json(url: str, *, json_body: dict[str, Any]) -> Any:
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
+        response = await client.post(url, json=json_body, headers={"accept": "application/json"})
+        _raise_for_status(response)
+        return response.json()
+
+
 async def _get_text(url: str, *, params: dict[str, Any] | None = None, accept: str = "text/plain") -> str:
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
         response = await client.get(url, params=params, headers={"accept": accept})
@@ -1340,7 +1347,14 @@ async def biogrid_interactions(gene: str, taxon_id: int = 9606, limit: int = 20)
             f"for gene {name!r}"
         )
     records = []
+    degraded_entries = 0
     for entry in payload.values():
+        # The hash map can carry non-dict junk entries (error envelopes): skip
+        # them but count, so a degraded response is visible instead of an
+        # AttributeError or a silent partial success.
+        if not isinstance(entry, dict):
+            degraded_entries += 1
+            continue
         gene_a, gene_b = entry.get("OFFICIAL_SYMBOL_A"), entry.get("OFFICIAL_SYMBOL_B")
         if not gene_a or not gene_b:
             continue
@@ -1357,9 +1371,579 @@ async def biogrid_interactions(gene: str, taxon_id: int = 9606, limit: int = 20)
             },
             scope="curated-record",
         ))
+    warnings = [
+        "All BioGRID edges are manually curated experimental interactions; preserve the PubMed evidence identifiers.",
+    ]
+    if degraded_entries:
+        warnings.append(
+            f"{degraded_entries} degraded non-record entries were skipped from the response payload."
+        )
+    return _result("biogrid", "interactions", records[: max(1, min(limit, 25))], warnings=warnings)
+
+
+# gnomAD / GWAS Catalog / Guide to PHARMACOLOGY / KEGG / PRIDE / Wikidata / DataCite
+# (Z6 second tier — ported from the DA adapters with their measured upstream
+# deviations kept as English comments.)
+
+
+@SERVER.tool()
+async def gnomad_gene(gene: str, reference_genome: str = "GRCh38") -> dict[str, Any]:
+    """Look up gnomAD gene-level constraint metrics (LOF/missense observed/expected)."""
+    symbol = re.sub(r"[^A-Za-z0-9-]", "", gene.strip())
+    if not symbol:
+        raise ValueError("gene is required")
+    if reference_genome not in ("GRCh37", "GRCh38"):
+        raise ValueError("reference_genome must be GRCh37 or GRCh38")
+    payload = await _post_json(external_url("data_sources.gnomad.graphql_api"), json_body={
+        # DA-measured: the public API tolerates ~10 req/min — point queries only.
+        "query": (
+            f'query {{ gene(gene_symbol: "{symbol}", reference_genome: {reference_genome}) '
+            "{ gene_id symbol gnomad_constraint { oe_lof oe_mis oe_lof_upper oe_mis_upper } } }"
+        ),
+    })
+    gene_data = ((payload.get("data") or {}).get("gene")) or None
+    if not gene_data:
+        raise RuntimeError(f"HTTP 404 Not Found from gnomad.broadinstitute.org (no gene {symbol!r})")
+    constraint = gene_data.get("gnomad_constraint") or None
+    gene_id = gene_data.get("gene_id") or symbol
+    return _result("gnomad", "gene", [
+        _record(
+            "gnomad", str(gene_id), f"gnomAD constraint for {gene_data.get('symbol') or symbol}",
+            format_external_url("data_sources.gnomad.gene_page_template", gene_id=gene_id),
+            {
+                "geneId": gene_id,
+                "symbol": gene_data.get("symbol"),
+                "constraint": {
+                    "oeLof": constraint.get("oe_lof"),
+                    "oeMis": constraint.get("oe_mis"),
+                    "lofUpper": constraint.get("oe_lof_upper"),
+                    "misUpper": constraint.get("oe_mis_upper"),
+                } if constraint else None,
+            },
+            scope="structured-record",
+            warnings=["Constraint metrics are intolerance references, not pathogenicity verdicts."],
+        ),
+    ])
+
+
+@SERVER.tool()
+async def gnomad_variant(variant_id: str, reference_genome: str = "GRCh38") -> dict[str, Any]:
+    """Look up gnomAD population allele frequencies for a variant id (chr-pos-ref-alt)."""
+    variant = variant_id.strip()
+    if not re.fullmatch(r"\d{1,2}[XYM]?-\d+-[ACGT]+-[ACGT]+", variant):
+        raise ValueError("variant_id must look like 1-55516888-G-A")
+    payload = await _post_json(external_url("data_sources.gnomad.graphql_api"), json_body={
+        "query": (
+            f'query {{ variant(variantId: "{variant}", dataset: gnomad_r4) '
+            "{ variant_id genome { ac an af } exome { ac an af } } }"
+        ),
+    })
+    variant_data = ((payload.get("data") or {}).get("variant")) or None
+    if not variant_data:
+        raise RuntimeError(f"HTTP 404 Not Found from gnomad.broadinstitute.org (no variant {variant!r})")
+    return _result("gnomad", "variant", [
+        _record(
+            "gnomad", variant, f"gnomAD frequencies for {variant}",
+            format_external_url("data_sources.gnomad.variant_page_template", variant_id=quote(variant, safe="")),
+            {"variantId": variant_data.get("variant_id"), "genome": variant_data.get("genome"), "exome": variant_data.get("exome")},
+            scope="structured-record",
+            warnings=["Allele frequencies are population references, not pathogenicity verdicts."],
+        ),
+    ])
+
+
+def _gwas_association_records(associations: list[dict[str, Any]], query_value: str) -> list[dict[str, Any]]:
+    search_page = format_external_url(
+        "data_sources.gwas.search_page_template", query=quote(query_value, safe=""),
+    )
+    records = []
+    for index, association in enumerate(associations, start=1):
+        snp_alleles = association.get("snp_allele") or []
+        rs_id = snp_alleles[0].get("rs_id") if snp_alleles and isinstance(snp_alleles[0], dict) else None
+        identifier = str(rs_id or f"assoc-{index}")
+        mapped_genes = association.get("mapped_genes") or []
+        genes = ",".join(
+            str(gene.get("gene_name") if isinstance(gene, dict) else gene)
+            for gene in mapped_genes if (gene.get("gene_name") if isinstance(gene, dict) else gene)
+        ) or None
+        reported = "; ".join(str(t) for t in (association.get("reported_trait") or []) if t)
+        traits = "; ".join(
+            str(t.get("efo_trait")) for t in (association.get("efo_traits") or [])
+            if isinstance(t, dict) and t.get("efo_trait")
+        )
+        beta = association.get("beta")
+        records.append(_record(
+            "gwas", identifier, f"GWAS association {identifier}",
+            search_page,
+            {
+                "riskAllele": (association.get("snp_effect_allele") or [None])[0] or (
+                    f"{snp_alleles[0].get('rs_id')}-{snp_alleles[0].get('effect_allele')}" if snp_alleles and isinstance(snp_alleles[0], dict) else None
+                ),
+                "gene": genes,
+                "trait": reported or traits or None,
+                "pvalue": association.get("p_value"),
+                "riskFrequency": association.get("risk_frequency"),
+                "beta": None if beta == "-" else beta,
+                "pubmedId": association.get("pubmed_id"),
+                "firstAuthor": association.get("first_author"),
+            },
+            scope="structured-record",
+            warnings=["Association is not causation: verify ancestry and model in the cited publication."],
+        ))
+    return records
+
+
+@SERVER.tool()
+async def gwas_search_trait(trait: str, limit: int = 20) -> dict[str, Any]:
+    """Search NHGRI-EBI GWAS Catalog SNP-trait associations by trait name."""
+    value = trait.strip()
+    if not value:
+        raise ValueError("trait is required")
+    # DA-measured (2026-08-31): the v1 findBy* endpoints retired with 404 —
+    # only the v2 associations endpoint remains, envelope _embedded.associations.
+    payload = await _get_json(external_url("data_sources.gwas.associations_api"), params={
+        "efo_trait": value,
+        "size": max(1, min(limit, 50)),
+    })
+    associations = ((payload.get("_embedded") or {}).get("associations")) or []
+    return _result("gwas", "search_trait", _gwas_association_records(associations, value)[: max(1, min(limit, 50))])
+
+
+@SERVER.tool()
+async def gwas_search_gene(gene: str, limit: int = 20) -> dict[str, Any]:
+    """Search NHGRI-EBI GWAS Catalog associations mapped to a gene."""
+    value = gene.strip()
+    if not value:
+        raise ValueError("gene is required")
+    payload = await _get_json(external_url("data_sources.gwas.associations_api"), params={
+        "mapped_gene": value,
+        "size": max(1, min(limit, 50)),
+    })
+    associations = ((payload.get("_embedded") or {}).get("associations")) or []
+    return _result("gwas", "search_gene", _gwas_association_records(associations, value)[: max(1, min(limit, 50))])
+
+
+def _gtopdb_decode_entities(value: str) -> str:
+    # GtoPdb names carry HTML entities and tags (&beta;<sub>2</sub>).
+    replaced = (value
+                .replace("&beta;", "β").replace("&alpha;", "α").replace("&gamma;", "γ")
+                .replace("&delta;", "δ").replace("&mu;", "μ").replace("&kappa;", "κ")
+                .replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"))
+    return re.sub(r"<[^>]+>", "", re.sub(r"</?(sub|sup)>", "", replaced))
+
+
+@SERVER.tool()
+async def gtopdb_search_target(name: str) -> dict[str, Any]:
+    """Search Guide to PHARMACOLOGY targets (receptors, ion channels, enzymes)."""
+    value = name.strip()
+    if not value:
+        raise ValueError("name is required")
+    payload = await _get_json(external_url("data_sources.gtopdb.targets_api"), params={"name": value})
+    targets = payload if isinstance(payload, list) else []
+    return _result("gtopdb", "search_target", [
+        _record(
+            "gtopdb", str(target.get("targetId")), _gtopdb_decode_entities(str(target.get("name") or "")),
+            format_external_url("data_sources.gtopdb.target_page_template", target_id=target.get("targetId")),
+            {"targetId": target.get("targetId"), "name": _gtopdb_decode_entities(str(target.get("name") or "")), "type": target.get("type")},
+            scope="curated-record",
+        )
+        for target in targets[:20] if target.get("targetId")
+    ], warnings=["CC-BY-SA licensed source: quote results, never persist full records."])
+
+
+@SERVER.tool()
+async def gtopdb_search_ligand(name: str) -> dict[str, Any]:
+    """Search Guide to PHARMACOLOGY ligands (drugs, endogenous ligands)."""
+    value = name.strip()
+    if not value:
+        raise ValueError("name is required")
+    payload = await _get_json(external_url("data_sources.gtopdb.ligands_api"), params={"name": value})
+    ligands = payload if isinstance(payload, list) else []
+    return _result("gtopdb", "search_ligand", [
+        _record(
+            "gtopdb", str(ligand.get("ligandId")), str(ligand.get("name") or ""),
+            format_external_url("data_sources.gtopdb.ligand_page_template", ligand_id=ligand.get("ligandId")),
+            {"ligandId": ligand.get("ligandId"), "name": ligand.get("name"), "type": ligand.get("type"), "approved": ligand.get("approved")},
+            scope="curated-record",
+        )
+        for ligand in ligands[:20] if ligand.get("ligandId")
+    ], warnings=["CC-BY-SA licensed source: quote results, never persist full records."])
+
+
+@SERVER.tool()
+async def gtopdb_interactions(ligand_id: int) -> dict[str, Any]:
+    """Look up Guide to PHARMACOLOGY ligand-target interactions (affinity, action)."""
+    if not isinstance(ligand_id, int) or ligand_id < 1:
+        raise ValueError("ligand_id must be a positive integer")
+    payload = await _get_json(format_external_url(
+        "data_sources.gtopdb.ligand_interactions_template", ligand_id=ligand_id,
+    ))
+    interactions = payload if isinstance(payload, list) else []
+    if not interactions:
+        raise RuntimeError(f"HTTP 404 Not Found from www.guidetopharmacology.org (no interactions for ligand {ligand_id})")
+    return _result("gtopdb", "interactions", [
+        _record(
+            "gtopdb", f"{ligand_id}->{interaction.get('targetId')}",
+            f"{interaction.get('targetName')} interaction",
+            format_external_url("data_sources.gtopdb.target_page_template", target_id=interaction.get("targetId")),
+            {
+                "target": interaction.get("targetName"),
+                "targetId": interaction.get("targetId"),
+                "type": interaction.get("type"),
+                "action": interaction.get("action"),
+                "affinity": f"{interaction['affinity']} {interaction.get('affinityUnits') or ''}".strip()
+                if interaction.get("affinity") is not None else None,
+                "endogenous": interaction.get("endogenous"),
+            },
+            scope="curated-record",
+        )
+        for interaction in interactions if interaction.get("targetId")
+    ])
+
+
+# KEGG db names: find/link accept the whitelisted libraries plus 3-4 letter
+# organism codes. DA-measured (2026-09-01): 'gene'/'organism' both 400 — the
+# valid names are 'genes'/'genome'; the frequent-misuse forms are rejected
+# with a pointer instead of leaking through the organism-code regex.
+KEGG_DB_WHITELIST = (
+    "pathway", "compound", "genes", "genome", "ko", "disease", "enzyme", "reaction", "module", "glycan", "drug",
+)
+KEGG_DB_REJECT_HINTS = {
+    "gene": "use 'genes' or an organism code (e.g. hsa) instead of 'gene'",
+    "organism": "use 'genome' instead of 'organism'",
+}
+
+
+def _kegg_require_db(value: Any, name: str) -> str:
+    db = str(value or "").strip().lower()
+    if db in KEGG_DB_REJECT_HINTS:
+        raise ValueError(f"{name}: {KEGG_DB_REJECT_HINTS[db]}")
+    if db in KEGG_DB_WHITELIST or re.fullmatch(r"[a-z]{3,4}", db):
+        return db
+    raise ValueError(f"{name} must be a KEGG db ({', '.join(KEGG_DB_WHITELIST)}) or organism code (e.g. hsa)")
+
+
+def _kegg_parse_tsv(text_value: str) -> list[tuple[str, str]]:
+    rows = []
+    for line in text_value.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        rows.append((parts[0] or "", (parts[1] if len(parts) > 1 else "").strip()))
+    return rows
+
+
+@SERVER.tool()
+async def kegg_find(database: str, query: str) -> dict[str, Any]:
+    """Find entries in a KEGG database by keyword (pathway, compound, genes, ko, or organism code)."""
+    db = _kegg_require_db(database, "database")
+    value = query.strip()
+    if not value:
+        raise ValueError("query is required")
+    text_value = await _get_text(format_external_url(
+        "data_sources.kegg.find_template", database=quote(db, safe=""), query=quote(value, safe=""),
+    ))
+    rows = _kegg_parse_tsv(text_value)
+    return _result("kegg", "find", [
+        _record(
+            "kegg", entry, names or entry,
+            format_external_url("data_sources.kegg.entry_page_template", entry=quote(entry, safe=":")),
+            {"entry": entry, "names": names},
+            scope="structured-record",
+        )
+        for entry, names in rows[:50]
+    ], warnings=["Academic-use source: no bulk scraping; prefer Reactome for cacheable pathway data."])
+
+
+@SERVER.tool()
+async def kegg_get(entry_id: str) -> dict[str, Any]:
+    """Get one KEGG flat-file record by entry id (e.g. hsa:10458, C00031), truncated to ~4k chars."""
+    entry = entry_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9:_.-]{1,64}", entry):
+        raise ValueError("entry_id must look like hsa:10458 / C00031 / hsa04517")
+    text_value = await _get_text(format_external_url(
+        "data_sources.kegg.get_template", entry=quote(entry, safe=":"),
+    ))
+    max_chars = 4_000
+    return _result("kegg", "get", [
+        _record(
+            "kegg", entry, f"KEGG entry {entry}",
+            format_external_url("data_sources.kegg.entry_page_template", entry=quote(entry, safe=":")),
+            {"text": text_value[:max_chars], "truncated": len(text_value) > max_chars, "totalChars": len(text_value)},
+            scope="structured-record",
+        ),
+    ])
+
+
+@SERVER.tool()
+async def kegg_link(source_db: str, target_db: str, id: str) -> dict[str, Any]:
+    """Map one KEGG entry across databases (e.g. gene to pathway) via the link endpoint."""
+    source = _kegg_require_db(source_db, "source_db")
+    target = _kegg_require_db(target_db, "target_db")
+    entry = id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", entry):
+        raise ValueError("id is required (e.g. 10458)")
+    text_value = await _get_text(format_external_url(
+        "data_sources.kegg.link_template",
+        target_db=quote(target, safe=""), source=quote(f"{source}:{entry}", safe=":"),
+    ))
+    rows = _kegg_parse_tsv(text_value)
+    return _result("kegg", "link", [
+        _record(
+            "kegg", mapped, f"{source}:{entry} -> {mapped}",
+            format_external_url("data_sources.kegg.entry_page_template", entry=quote(mapped, safe=":")),
+            {"source": f"{source}:{entry}", "target": mapped},
+            scope="structured-record",
+        )
+        for _source_entry, mapped in rows[:200]
+    ])
+
+
+def _pride_names_of(list_value: Any) -> list[str]:
+    # DA-measured: search/projects returns plain string arrays for
+    # organisms/instruments, while /projects/{acc} returns CvParam objects.
+    if not isinstance(list_value, list):
+        return []
+    names = []
+    for item in list_value:
+        name = item if isinstance(item, str) else (item.get("name") if isinstance(item, dict) else None)
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _pride_project_summary(project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "accession": project.get("accession"),
+        "title": project.get("title"),
+        "species": _pride_names_of(project.get("organisms")),
+        "instruments": _pride_names_of(project.get("instruments")),
+        "projectTags": project.get("projectTags"),
+        "submissionType": project.get("submissionType"),
+        "publicationDate": project.get("publicationDate"),
+    }
+
+
+@SERVER.tool()
+async def pride_search_projects(keyword: str, limit: int = 20) -> dict[str, Any]:
+    """Search PRIDE Archive proteomics dataset projects by keyword."""
+    value = keyword.strip()
+    if not value:
+        raise ValueError("keyword is required")
+    payload = await _get_json(external_url("data_sources.pride.search_projects_api"), params={
+        "keyword": value, "page": 0, "pageSize": max(1, min(limit, 50)),
+    })
+    projects = payload if isinstance(payload, list) else []
+    return _result("pride", "search_projects", [
+        _record(
+            "pride", str(project.get("accession")), str(project.get("title") or project.get("accession")),
+            format_external_url("data_sources.pride.project_page_template", accession=project.get("accession")),
+            _pride_project_summary(project),
+            scope="structured-record",
+        )
+        for project in projects if project.get("accession")
+    ])
+
+
+@SERVER.tool()
+async def pride_project(accession: str) -> dict[str, Any]:
+    """Look up one PRIDE project by PXD accession (description, species, instruments, references)."""
+    normalized = accession.strip().upper()
+    if not re.fullmatch(r"PXD\d{1,9}", normalized):
+        raise ValueError("accession must look like PXD000001")
+    project = await _get_json(format_external_url(
+        "data_sources.pride.project_api_template", accession=normalized,
+    ))
+    if not isinstance(project, dict) or not project.get("accession"):
+        raise RuntimeError(f"HTTP 404 Not Found from www.ebi.ac.uk (no PRIDE project {normalized})")
+    references = (project.get("references") or [])[:5]
+    return _result("pride", "project", [
+        _record(
+            "pride", normalized, str(project.get("title") or normalized),
+            format_external_url("data_sources.pride.project_page_template", accession=normalized),
+            {
+                **_pride_project_summary(project),
+                "description": _clean(project.get("projectDescription"), 1_000) or None,
+                "experimentTypes": [
+                    item.get("name") for item in (project.get("experimentTypes") or [])
+                    if isinstance(item, dict) and item.get("name")
+                ],
+                "doi": project.get("doi"),
+                "datasetLicense": project.get("license"),
+                "references": [
+                    {"title": ref.get("referenceLine"), "doi": ref.get("doi"), "pubmedId": ref.get("pubmedID")}
+                    for ref in references if isinstance(ref, dict)
+                ],
+            },
+            scope="structured-record",
+        ),
+    ])
+
+
+@SERVER.tool()
+async def pride_files(accession: str) -> dict[str, Any]:
+    """List a PRIDE project's files by PXD accession (metadata only, first 50)."""
+    normalized = accession.strip().upper()
+    if not re.fullmatch(r"PXD\d{1,9}", normalized):
+        raise ValueError("accession must look like PXD000001")
+    # DA-measured (2026-09-01): /files/byProject returns 200 with an empty
+    # body — the file list must use /projects/{accession}/files. pageSize=51
+    # so exactly-50 files do not false-positive the truncated flag.
+    payload = await _get_json(format_external_url(
+        "data_sources.pride.project_files_api_template", accession=normalized,
+    ), params={"page": 0, "pageSize": 51})
+    files = payload if isinstance(payload, list) else []
     return _result(
-        "biogrid", "interactions", records[: max(1, min(limit, 25))],
-        warnings=["All BioGRID edges are manually curated experimental interactions; preserve the PubMed evidence identifiers."],
+        "pride", "files",
+        [
+            _record(
+                "pride", str(item.get("fileName")), str(item.get("fileName") or ""),
+                format_external_url("data_sources.pride.project_page_template", accession=normalized),
+                {
+                    "fileName": item.get("fileName"),
+                    "category": (item.get("fileCategory") or {}).get("value") if isinstance(item.get("fileCategory"), dict) else None,
+                    "sizeBytes": item.get("fileSizeBytes"),
+                    "checksum": item.get("checksum"),
+                    "downloadUrls": [
+                        {"protocol": location.get("name"), "url": location.get("value")}
+                        for location in (item.get("publicFileLocations") or []) if isinstance(location, dict)
+                    ],
+                    "publicationDate": item.get("publicationDate"),
+                },
+                scope="structured-record",
+            )
+            for item in files[:50] if item.get("fileName")
+        ],
+        warnings=["Metadata only — download URLs point at upstream FTP/HTTP hosts outside this connector's allowlist."],
+    )
+
+
+@SERVER.tool()
+async def wikidata_sparql(query: str, limit: int = 20) -> dict[str, Any]:
+    """Run a read-only SPARQL SELECT query against Wikidata (id mapping, entity properties)."""
+    value = query.strip()
+    if not value:
+        raise ValueError("query is required")
+    if not re.match(r"^(\s*prefix[\s\S]*?)?\s*select\b", value, re.IGNORECASE) or re.search(
+        r"\b(insert|delete|load|clear|create|drop)\b", value, re.IGNORECASE,
+    ):
+        raise ValueError("only read-only SPARQL SELECT queries are allowed")
+    capped = max(1, min(limit, 25))
+    limited = value if re.search(r"\blimit\b", value, re.IGNORECASE) else f"{value} LIMIT {capped}"
+    payload = await _get_json(external_url("data_sources.wikidata.sparql_endpoint"), params={
+        "format": "json", "query": limited,
+    })
+    bindings = (((payload.get("results") or {}).get("bindings")) or [])
+    endpoint = external_url("data_sources.wikidata.sparql_endpoint")
+    records = []
+    for binding in bindings[:100]:
+        row = {key: str(term.get("value")) for key, term in binding.items() if isinstance(term, dict) and term.get("value") is not None}
+        first = next(iter(row.values()), "row")
+        entity = _entity_of(row.get("item") or row.get("entity") or "")
+        url = (format_external_url("data_sources.wikidata.entity_page_template", entity=entity)
+               if entity else endpoint)
+        records.append(_record("wikidata", entity or first, row.get("itemLabel") or first, url, row, scope="structured-record"))
+    return _result("wikidata", "sparql", records, warnings=[
+        "Community-edited data: verify critical facts against an authoritative source.",
+    ])
+
+
+@SERVER.tool()
+async def wikidata_resolve_entity(name: str, language: str = "en") -> dict[str, Any]:
+    """Resolve a name to Wikidata entities (Q ids) in a given language."""
+    value = " ".join(name.split())
+    if not value:
+        raise ValueError("name is required")
+    lang = re.sub(r"[^a-z-]", "", language.strip().lower()) or "en"
+    escaped = value.replace('"', '\\"')
+    sparql = (
+        f'SELECT ?item ?itemLabel ?itemDescription WHERE {{ '
+        f'?item rdfs:label "{escaped}"@{lang}. '
+        f'SERVICE wikibase:label {{ bd:serviceParam wikibase:language "{lang}". }} }} LIMIT 5'
+    )
+    payload = await _get_json(external_url("data_sources.wikidata.sparql_endpoint"), params={
+        "format": "json", "query": sparql,
+    })
+    bindings = (((payload.get("results") or {}).get("bindings")) or [])
+    return _result("wikidata", "resolve_entity", [
+        _record(
+            "wikidata", entity_id, label or entity_id,
+            format_external_url("data_sources.wikidata.entity_page_template", entity=entity_id),
+            {"entity": entity_id, "label": label, "description": row.get("itemDescription")},
+            scope="structured-record",
+        )
+        for row in [
+            {key: str(term.get("value")) for key, term in binding.items() if isinstance(term, dict) and term.get("value") is not None}
+            for binding in bindings
+        ]
+        for entity_id, label in [(_entity_of(row.get("item")), row.get("itemLabel"))]
+        if entity_id
+    ])
+
+
+def _entity_of(item_value: Any) -> str | None:
+    value = str(item_value or "")
+    match = re.search(r"(Q\d+)$", value)
+    return match.group(1) if match else None
+
+
+@SERVER.tool()
+async def datacite_search(query: str, year: int = 0, limit: int = 20) -> dict[str, Any]:
+    """Search research datasets across 100+ DataCite repositories by keyword and optional year."""
+    value = query.strip()
+    if not value:
+        raise ValueError("query is required")
+    params: dict[str, Any] = {
+        "page[size]": max(1, min(limit, 25)),
+        "query": value,
+        "resource-type-general": "dataset",
+    }
+    if year:
+        if not 1_900 <= year <= 3_000:
+            raise ValueError("year must be a plausible publication year")
+        params["publicationYear"] = year
+    payload = await _get_json(external_url("data_sources.datacite.dois_api"), params=params)
+    entries = payload.get("data") or []
+    return _result("datacite", "search", [
+        _datacite_record(entry) for entry in entries if isinstance(entry, dict)
+    ], warnings=["Metadata is CC0; each dataset carries its own license — check before download."])
+
+
+@SERVER.tool()
+async def datacite_lookup(doi: str) -> dict[str, Any]:
+    """Look up one dataset's metadata by DOI via DataCite."""
+    normalized = doi.strip().replace("https://doi.org/", "")
+    if not normalized:
+        raise ValueError("doi is required")
+    payload = await _get_json(format_external_url(
+        "data_sources.datacite.doi_api_template", doi=quote(normalized, safe="/."),
+    ))
+    entry = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"HTTP 404 Not Found from api.datacite.org (no dataset for DOI {normalized!r})")
+    return _result("datacite", "lookup", [_datacite_record(entry)])
+
+
+def _datacite_record(entry: dict[str, Any]) -> dict[str, Any]:
+    attributes = entry.get("attributes") or {}
+    doi = str(entry.get("id") or "")
+    return _record(
+        "datacite", doi,
+        str((attributes.get("titles") or [{}])[0].get("title") or doi),
+        format_external_url("data_sources.datacite.doi_url_template", doi=quote(doi, safe="/.")),
+        {
+            "doi": doi,
+            "title": (attributes.get("titles") or [{}])[0].get("title"),
+            "repository": attributes.get("publisher"),
+            "year": attributes.get("publicationYear"),
+            "type": ((attributes.get("types") or {}).get("resourceType")
+                     or (attributes.get("types") or {}).get("resourceTypeGeneral")),
+            "creators": [creator.get("name") for creator in (attributes.get("creators") or [])[:5] if creator.get("name")],
+            "url": attributes.get("url"),
+            "description": _clean((attributes.get("descriptions") or [{}])[0].get("description"), 500) or None,
+        },
+        scope="structured-record",
     )
 
 

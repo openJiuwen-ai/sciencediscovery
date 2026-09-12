@@ -59,6 +59,13 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
     "optimade",
     "string",
     "biogrid",
+    "gnomad",
+    "gwas",
+    "gtopdb",
+    "kegg",
+    "pride",
+    "wikidata",
+    "datacite",
   ]);
 }
 
