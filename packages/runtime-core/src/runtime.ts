@@ -498,6 +498,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   private toolDispatcher?: ToolDispatcher<TMessage>;
   private waitController?: ExternalWaitController;
   private turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  private stallGuard?: AgentLoopOptions<TMessage, TModelInput, TUsage>["stallGuard"];
 
   withContextAssembler(value: ContextAssembler<TMessage, TModelInput>): this { this.contextAssembler = value; return this; }
   withEventSink(value: RunEventSink<TUsage>): this { this.eventSink = value; return this; }
@@ -507,6 +508,8 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
   withToolDispatcher(value: ToolDispatcher<TMessage>): this { this.toolDispatcher = value; return this; }
   withWaitController(value: ExternalWaitController): this { this.waitController = value; return this; }
   withTurnLifecycle(value: TurnLifecycle<TMessage, TModelInput, TUsage> | undefined): this { this.turnLifecycle = value; return this; }
+  /** V2-C6 stall guard — forwarded to AgentLoop when set (optional, additive). */
+  withStallGuard(value: AgentLoopOptions<TMessage, TModelInput, TUsage>["stallGuard"]): this { this.stallGuard = value; return this; }
 
   build(): AgentLoop<TMessage, TModelInput, TUsage> {
     const missing = [
@@ -525,6 +528,7 @@ export class RuntimeBuilder<TMessage extends RuntimeMessage, TModelInput, TUsage
       ...(this.eventSink ? { eventSink: this.eventSink } : {}),
       ...(this.waitController ? { waitController: this.waitController } : {}),
       ...(this.turnLifecycle ? { turnLifecycle: this.turnLifecycle } : {}),
+      ...(this.stallGuard ? { stallGuard: this.stallGuard } : {}),
     });
   }
 }

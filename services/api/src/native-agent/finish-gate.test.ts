@@ -21,6 +21,7 @@ import {
   FINISH_GATE_REVIEW_TOOL,
   FinishGateLifecycle,
   buildFinishGateDirective,
+  detectTerminationIntervention,
   extractQuotedSpans,
 } from "./finish-gate.js";
 

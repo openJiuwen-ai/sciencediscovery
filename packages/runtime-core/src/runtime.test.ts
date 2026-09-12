@@ -579,6 +579,8 @@ test("an outer abort is never mistaken for a stall kick", async () => {
       await new Promise((_, reject) => {
         signal?.addEventListener("abort", () => reject(new Error("outer abort")), { once: true });
       });
+      // Promise<never> must not have a reachable end point (tsc strictness).
+      throw new Error("unreachable: the abort rejection is the only exit");
     } },
     stallGuard: {
       createKickMessage: () => ({ content: "kick", role: "user" }),
