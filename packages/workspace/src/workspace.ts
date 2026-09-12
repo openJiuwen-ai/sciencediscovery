@@ -31,7 +31,7 @@ import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.
 import { createEvidenceLedgerPort } from "./ke-evidence-ledger.js";
 import { polishReport } from "./report-polish.js";
 import { createResearchStatePort } from "./research-state.js";
-import { computeDivergence, rankFromVerdicts } from "./tournament-rank.js";
+import { computeDivergence, computeProximityPairs, rankFromVerdicts } from "./tournament-rank.js";
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
@@ -1752,7 +1752,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
 
     const tournamentRankTool: AgentTool<TSchema> = {
       description:
-        "Deterministic tournament ranking math (no LLM, no network). action=rank: given candidate labels (items) and pairwise verdicts (matches: a, b from items, scoreA∈[0,1] = a's score against b, 1=a wins / 0.5=tie / 0=a loses), compute each item's Elo (K=32, initial 1000), win rate, and match count, sorted by Elo descending. Pair orientation does not matter (reversed submissions flip automatically); pairs without a verdict are filled as 0.5 ties and honestly counted in autoTies; duplicate pairs are overridden by the later submission and counted in duplicatePairs. action=divergence: given texts, return the mean pairwise token-Jaccard divergence (0=identical, 1=completely different) — a heuristic for whether a set of perspective outputs actually diverges; whitespace-free text (e.g. Chinese sentences) falls back to character bigrams. LIMITATIONS: garbage in, garbage out — verdict quality is entirely the caller's responsibility; Elo is only comparable within the same item set; the round-robin follows the items array order (later matches weigh more) — re-run with shuffled items and aggregate if order sensitivity matters; divergence is not a semantic measure.",
+        "Deterministic tournament ranking math (no LLM, no network). action=rank: given candidate labels (items) and pairwise verdicts (matches: a, b from items, scoreA∈[0,1] = a's score against b, 1=a wins / 0.5=tie / 0=a loses), compute each item's Elo (K=32, initial 1000), win rate, and match count, sorted by Elo descending. Pair orientation does not matter (reversed submissions flip automatically); pairs without a verdict are filled as 0.5 ties and honestly counted in autoTies; duplicate pairs are overridden by the later submission and counted in duplicatePairs. action=divergence: given texts, return the mean pairwise token-Jaccard divergence (0=identical, 1=completely different) — a heuristic for whether a set of perspective outputs actually diverges; whitespace-free text (e.g. Chinese sentences) falls back to character bigrams. action=proximity: like divergence but ALSO returns the top-3 most-similar text pairs (a/b = indices into YOUR texts array, Jaccard similarity) — the collapse suspects to merge or replace (anti-collapse check after generation and after evolution rewrites). LIMITATIONS: garbage in, garbage out — verdict quality is entirely the caller's responsibility; Elo is only comparable within the same item set; the round-robin follows the items array order (later matches weigh more) — re-run with shuffled items and aggregate if order sensitivity matters; divergence is not a semantic measure.",
       execute: async (_toolCallId, params) => {
         const input = params as Record<string, unknown>;
         const action = String(input.action ?? "");
@@ -1789,8 +1789,25 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             }
             break;
           }
+          case "proximity": {
+            // NO filtering here (review P1): mostSimilar.a/b are indices into
+            // the caller's own candidate list — dropping entries would
+            // silently shift every index after a blank text. Blank strings
+            // tokenize to the empty set and compare honestly (blank-vs-blank
+            // similarity 1).
+            const texts = Array.isArray(input.texts)
+              ? (input.texts as unknown[]).map((text) => String(text))
+              : [];
+            if (texts.length < 2) {
+              result = { error: "proximity requires texts (at least 2 entries)." };
+            } else {
+              const proximity = computeProximityPairs(texts);
+              result = { ...proximity, count: texts.length };
+            }
+            break;
+          }
           default:
-            result = { error: `Unknown action: ${action}. Supported: rank, divergence` };
+            result = { error: `Unknown action: ${action}. Supported: rank, divergence, proximity` };
         }
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
@@ -1798,7 +1815,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       label: "Tournament rank",
       name: "tournament_rank",
       parameters: Type.Object({
-        action: Type.Union([Type.Literal("rank"), Type.Literal("divergence")]),
+        action: Type.Union([Type.Literal("rank"), Type.Literal("divergence"), Type.Literal("proximity")]),
         items: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "rank: candidate labels (unique)" })),
         matches: Type.Optional(
           Type.Array(
@@ -1810,7 +1827,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             { description: "rank: pairwise verdicts (scoreA = a's score against b in [0,1])" },
           ),
         ),
-        texts: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "divergence: the set of texts" })),
+        texts: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "divergence/proximity: the set of texts (proximity pair indices refer to this array)" })),
       }),
     };
     tools.push(tournamentRankTool);

@@ -59,9 +59,11 @@ Every candidate must have: **a one-line claim + supporting evidence
 with `evidence_ledger(add)` (a missing source is marked honestly, never
 back-filled).
 
-**Diversity check**: with >4 candidates, run `tournament_rank(action=
-"divergence")` over the candidate texts — divergence < 0.6 means the
-perspectives converged; solicit one genuinely different-stance candidate.
+**Diversity check (anti-collapse)**: with >4 candidates, run
+`tournament_rank(action="proximity")` over the candidate texts —
+meanDivergence < 0.6 means the perspectives converged, and the returned
+`mostSimilar` pairs are the collapse suspects: merge or replace the
+near-duplicate pair, or solicit one genuinely different-stance candidate.
 
 ## Stage 2: Critic review (reflection)
 
@@ -93,7 +95,10 @@ exactly what was removed and why).
    (items = candidate labels, matches = verdict records) — **the Elo math is
    computed by the tool, never by hand**.
 3. Archive the verdict records with `evidence_ledger` or a workspace file
-   (auditable: the user can see every match's rationale).
+   (auditable: the user can see every match's rationale). **Archive the
+   exact `items` list order and `matches` array you submitted** — the
+   pre-finish audit re-runs the tool with them and Elo is order-sensitive,
+   so a replay from a reordered archive cannot reproduce the table.
 
 ## Stage 4: Evolution
 
@@ -102,6 +107,12 @@ criticism** (close evidence gaps, tighten claim boundaries, improve test
 design). Keep originals and evolved versions side by side (label `v2`). If
 the evolution is substantial, run one more tournament round among the
 leaders (verdicts note they judge evolved versions).
+**Post-evolution proximity re-check**: evolution tends to pull candidates
+toward the same fixes — re-run `tournament_rank(action="proximity")` on the
+**evolved (v2) candidates only** (exclude their v1 originals: a v2 compared
+against its own v1 is near-identical by construction, and the side-by-side
+presentation above is deliberate). A v2-v2 pair above ~0.8 similarity has
+effectively merged and should be presented as one candidate, not two.
 
 ## Stage 5: Output
 
@@ -126,6 +137,14 @@ Look back over the tournament and distill **patterns, not anecdotes**:
   reusable improvement to a user-level skill, submit it with
   `propose_skill_library_update` (human review gate); bundled skills like
   this one cannot be self-modified — present those lessons inline instead.
+- Durable, cross-run working-method lessons (e.g. "pairwise judging with >6
+  candidates drifts without parallel judge subagents") go to
+  `agent_memory(add)` (keep each under 200 chars) — they land as
+  review-gated candidates and only affect future runs after a human
+  promotes them. Task-specific findings stay in `research_state`, not agent
+  memory. **One destination per lesson**: a skill-improvement lesson goes to
+  `propose_skill_library_update` OR an inline note (bundled skills), a
+  working-method lesson goes to `agent_memory` — never both.
 
 ## Rules
 

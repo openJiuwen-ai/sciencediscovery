@@ -135,6 +135,49 @@ export function tokenizeForDivergence(text: string): string[] {
   return out;
 }
 
+export interface ProximityPair {
+  /** Indices into the input array. */
+  a: number;
+  b: number;
+  /** Jaccard similarity (0-1) — 1 = token-identical. */
+  similarity: number;
+}
+
+export interface ProximityResult {
+  meanDivergence: number;
+  /** The most-similar pairs, descending — the collapse suspects. */
+  mostSimilar: ProximityPair[];
+}
+
+/**
+ * Proximity anti-collapse (V3-C4, Co-Scientist proximity-agent port): the
+ * mean divergence PLUS the identities of the most-similar pairs, so the
+ * caller can merge/replace near-duplicates instead of only knowing that the
+ * set converged. Same tokenization heuristic as computeDivergence.
+ */
+export function computeProximityPairs(responses: readonly string[], top = 3): ProximityResult {
+  const tokenSets = responses.map((response) => new Set(tokenizeForDivergence(response)));
+  const pairs: ProximityPair[] = [];
+  let divergenceSum = 0;
+  for (let i = 0; i < tokenSets.length; i++) {
+    for (let j = i + 1; j < tokenSets.length; j++) {
+      const a = tokenSets[i]!;
+      const b = tokenSets[j]!;
+      let intersection = 0;
+      for (const token of a) if (b.has(token)) intersection += 1;
+      const union = a.size + b.size - intersection;
+      const similarity = union > 0 ? intersection / union : 1;
+      pairs.push({ a: i, b: j, similarity: Number(similarity.toFixed(3)) });
+      divergenceSum += 1 - similarity;
+    }
+  }
+  pairs.sort((left, right) => right.similarity - left.similarity || left.a - right.a || left.b - right.b);
+  return {
+    meanDivergence: pairs.length > 0 ? Number((divergenceSum / pairs.length).toFixed(3)) : 0,
+    mostSimilar: pairs.slice(0, Math.max(1, top)),
+  };
+}
+
 export interface TournamentVerdict {
   /** Both must be entries of the rank items list. */
   a: string;

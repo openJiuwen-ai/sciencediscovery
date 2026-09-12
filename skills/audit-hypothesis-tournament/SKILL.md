@@ -27,11 +27,21 @@ critical issues) before giving the final answer.
    - Exactly one anchor holds → warning `generation-anchor-mismatch`; state
      which is missing (if compaction pruned the early trajectory, check
      `research_state(summary)` and the evidence ledger before concluding).
-2. **Elo ranking source (deterministic)**
+2. **Elo ranking source + recomputation (deterministic)**
    - The trajectory contains a `tournament_rank` call and the reported Elo
      scores/order come from its output.
    - Concrete Elo numbers without a `tournament_rank` call → critical
      `elo-hand-computed` (the numbers are fabricated).
+   - **Auto-Elo deviation check**: recover the archived verdict records
+     (evidence_ledger / the workspace verdict file from stage 3) **in the
+     exact items/matches order originally submitted** (Elo is
+     order-sensitive), re-run `tournament_rank(action="rank")` with them
+     yourself, and compare against the presented Elo table — the replay is
+     fully deterministic, so order AND scores must match **exactly**
+     (tolerance 0). Any deviation → critical `elo-deviation` (the presented
+     table does not come from the recorded verdicts). Verdict records (or
+     their order) unrecoverable → warning `verdict-records-missing`, not a
+     pass by default.
 3. **Candidate content (read the actual artifacts with file tools)**
    - **Evidence grading**: every head candidate labels its support as
      direct evidence / indirect inference / speculation — mixed or missing
@@ -54,7 +64,7 @@ critical issues) before giving the final answer.
 Report the audit compactly in the `review_checkpoint` reason:
 `score=N; critical: [...]; warning: [...]`. Issue vocabulary:
 perspective-generation-skipped (critical) / generation-anchor-mismatch /
-elo-hand-computed (critical) / hallucinated-evidence (critical) /
+elo-hand-computed (critical) / elo-deviation (critical) / verdict-records-missing / hallucinated-evidence (critical) /
 evidence-grading-missing / unfalsifiable-candidate / boundary-not-presented.
 
 ## Discipline

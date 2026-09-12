@@ -1973,3 +1973,24 @@ test("agent_memory add surfaces deduplication honestly", async () => {
   const result = await tool.execute("c", { action: "add", category: "convention", content: "重复条目" });
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /deduplicated/);
 });
+
+test("tournament_rank proximity returns collapse suspects with caller-array indices", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const tool = tools.find((candidate) => candidate.name === "tournament_rank")!;
+  const texts = [
+    "IL-6 抑制剂通过阻断下游信号缓解细胞因子风暴",
+    " ", // blank entry: indices must NOT shift (review P1)
+    "IL-6 抑制剂通过阻断下游信号缓解细胞因子风暴反应",
+    "表观遗传重编程可能逆转 T 细胞耗竭状态",
+  ];
+  const result = await tool.execute("c", { action: "proximity", texts });
+  const details = result.details as { count: number; meanDivergence: number; mostSimilar: Array<{ a: number; b: number; similarity: number }> };
+  assert.equal(details.count, 4, "blank entries stay in the index space");
+  assert.deepEqual([details.mostSimilar[0]!.a, details.mostSimilar[0]!.b], [0, 2], "indices refer to the caller's array");
+  assert.ok(details.mostSimilar[0]!.similarity > 0.7);
+  const tooFew = await tool.execute("c", { action: "proximity", texts: ["only one"] });
+  assert.match(tooFew.content[0]?.type === "text" ? tooFew.content[0].text : "", /at least 2/);
+});

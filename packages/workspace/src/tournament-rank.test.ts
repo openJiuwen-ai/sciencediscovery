@@ -16,6 +16,7 @@ import test from "node:test";
 
 import {
   computeDivergence,
+  computeProximityPairs,
   eloTournament,
   rankFromVerdicts,
   tokenizeForDivergence,
@@ -118,4 +119,43 @@ test("tokenizeForDivergence: CJK runs fall back to char bigrams", async () => {
   assert.ok(tokens.every((token) => token.length === 2));
   // Mixed text keeps short words intact.
   assert.deepEqual(tokenizeForDivergence("hi there"), ["hi", "there"]);
+});
+
+test("computeProximityPairs returns the collapse suspects sorted by similarity", () => {
+  const texts = [
+    "IL-6 抑制剂通过阻断下游信号缓解细胞因子风暴",
+    "IL-6 抑制剂通过阻断下游信号缓解细胞因子风暴反应", // near-duplicate of 0
+    "表观遗传重编程可能逆转 T 细胞耗竭状态",
+    "肠道菌群代谢物调节全身炎症水平",
+  ];
+  const result = computeProximityPairs(texts);
+  assert.equal(result.mostSimilar[0]!.a, 0);
+  assert.equal(result.mostSimilar[0]!.b, 1);
+  assert.ok(result.mostSimilar[0]!.similarity > 0.7, `near-duplicates score high (${result.mostSimilar[0]!.similarity})`);
+  // All C(n,2) pairs are evaluated; mean divergence agrees with computeDivergence.
+  assert.equal(result.mostSimilar.length, 3);
+  assert.equal(result.meanDivergence, Number(computeDivergence(texts).toFixed(3)));
+  // A fully identical pair reports similarity 1.
+  const identical = computeProximityPairs(["same text", "same text"]);
+  assert.equal(identical.mostSimilar[0]!.similarity, 1);
+  assert.equal(identical.meanDivergence, 0);
+});
+
+test("computeProximityPairs: top parameter, degenerate inputs, tie-break order", () => {
+  // top=1 truncates to the single most-similar pair.
+  const texts = ["alpha beta gamma", "alpha beta delta", "wholly different content", "another disjoint text"];
+  assert.equal(computeProximityPairs(texts, 1).mostSimilar.length, 1);
+  // top larger than the pair count returns everything.
+  assert.equal(computeProximityPairs(texts, 99).mostSimilar.length, 6);
+  // Single text / empty input: no pairs, zero divergence.
+  assert.deepEqual(computeProximityPairs(["only one"]), { meanDivergence: 0, mostSimilar: [] });
+  assert.deepEqual(computeProximityPairs([]), { meanDivergence: 0, mostSimilar: [] });
+  // Two empty token sets are similarity 1 (same convention as divergence's union=0 → 0).
+  assert.equal(computeProximityPairs(["", ""]).mostSimilar[0]!.similarity, 1);
+  // Tie-break: equal similarity falls back to (a, b) ascending.
+  const ties = computeProximityPairs(["a b", "a b", "a b"]);
+  assert.deepEqual(
+    ties.mostSimilar.map((pair) => [pair.a, pair.b]),
+    [[0, 1], [0, 2], [1, 2]],
+  );
 });
