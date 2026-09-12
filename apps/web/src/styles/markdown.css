@@ -72,3 +72,16 @@ td { color: var(--text-secondary); }
 .graph-chip:hover { border-color: var(--accent, #4a90d9); color: var(--accent, #4a90d9); }
 .graph-chip:disabled { cursor: default; opacity: .65; }
 .graph-chip:disabled:hover { border-color: var(--border); color: var(--text-strong); }
+
+/* Evidence chip hover preview (V3-C3). The card portals to body with fixed
+   positioning; the anchor span only carries the mouse handlers. */
+.evidence-hover-anchor { display: inline; }
+.evidence-hover-card { position: fixed; z-index: var(--z-popover); border: 1px solid var(--border-strong, var(--border)); border-radius: var(--radius-m, 10px); background: var(--surface); box-shadow: var(--shadow-3, 0 12px 32px rgba(15, 23, 42, .22)); padding: 10px 12px; font-size: 12px; line-height: 1.5; }
+.evidence-hover-card-header { margin-bottom: 4px; }
+.evidence-hover-card-body .evidence-hover-loading,
+.evidence-hover-card-body .evidence-hover-unavailable { margin: 4px 0; color: var(--muted); }
+.evidence-hover-source { margin: 2px 0 6px; color: var(--text-heading); font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.evidence-hover-snippet { margin: 0; color: var(--text-secondary); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow-wrap: anywhere; white-space: pre-wrap; }
+.evidence-hover-card-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
+.evidence-hover-open { border: 0; border-radius: 6px; background: var(--accent-softer); color: var(--accent-ink); padding: 4px 10px; font-size: 11px; cursor: pointer; }
+.evidence-hover-open:hover { filter: brightness(1.05); }

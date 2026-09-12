@@ -222,6 +222,7 @@ import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./Provi
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
+import { EvidenceHover } from "./EvidenceHoverCard.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
 import { MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
@@ -2200,6 +2201,21 @@ export function App() {
     else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  // V3-C3: wrap evidence chips with the hover preview card; other chip kinds
+  // keep their bare rendering. The click path (handleChipClick → EvidenceModal)
+  // is unchanged — the card's "open details" lands on the same modal.
+  const wrapEvidenceChip = useCallback((reference: ComposerReference, chip: ReactNode): ReactNode => {
+    if (reference.kind !== "evidence" || !activeSessionId) return chip;
+    return (
+      <EvidenceHover
+        client={client}
+        evidenceId={reference.id}
+        onOpenDetails={setEvidenceDetailId}
+        sessionId={activeSessionId}
+      >{chip}</EvidenceHover>
+    );
+  }, [activeSessionId, client]);
+
   function handleMessagesScroll(): void {
     const messageContainer = messagesViewport.current;
     if (!messageContainer) return;
@@ -3976,7 +3992,7 @@ export function App() {
           busy={planActionBusy}
           expandedCards={activityCardExpansion}
           onDecidePlan={(plan, decision) => void decidePlanApproval(plan, decision)}
-          onRevisePlan={(plan, body) => void revisePlanArtifact(plan, body)}
+          onRevisePlan={(plan, body) => revisePlanArtifact(plan, body)}
           onToggleCard={toggleActivityCard}
           plans={group.plans}
         />
@@ -4295,6 +4311,7 @@ export function App() {
                             content={block.message.content}
                             loadWorkspaceImage={block.message.role === "assistant" ? loadMarkdownImage : undefined}
                             onChipClick={block.message.role === "assistant" ? handleChipClick : undefined}
+                            wrapChip={block.message.role === "assistant" ? wrapEvidenceChip : undefined}
                             onOpenArtifacts={block.message.role === "assistant" ? openMarkdownImageArtifacts : undefined}
                             references={block.message.role === "assistant" ? block.message.references : undefined}
                             workspaceSessionId={block.message.role === "assistant" ? session.id : undefined}
