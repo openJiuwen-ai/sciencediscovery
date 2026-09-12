@@ -537,16 +537,34 @@ export async function expandToolStep(page: Page, options: { contains: string | R
   return card;
 }
 
-/** Open the user-visible scientific environment settings page. */
+/**
+ * Open the user-visible scientific environment page of the built-in Runner.
+ *
+ * Scientific environments belong to a machine, so settings reach them through
+ * the Runner tree — pick the Runner, then its environment tab — instead of a
+ * standalone group.
+ */
 export async function openEnvironmentPage(page: Page): Promise<Locator> {
   await page.getByRole("button", { name: /^(System configuration|系统设置)/ }).click();
   const dialog = page.getByRole("dialog", { name: /^(System configuration|系统设置)$/ });
+  // Narrow widths collapse the settings tree behind a directory button.
+  const directory = dialog.getByRole("button", { name: /^(Settings directory|设置目录)/ });
+  if (await directory.isVisible().catch(() => false)) await directory.click();
   await dialog.getByRole("navigation", { name: /^(Setting groups|设置分组)$/ })
-    .getByRole("button", { name: /^(Environments|环境)/ })
+    .getByRole("button", { name: /^(Local Runner|本地 Runner)$/ })
     .click();
+  await dialog.getByRole("tab", { name: /^(Scientific environments|科学环境)$/ }).click();
   const manager = dialog.locator(".environment-manager");
   await expect(manager).toBeVisible();
   return manager;
+}
+
+/** Open one of the Runner environment page's disclosures, which start closed. */
+export async function openEnvironmentDisclosure(manager: Locator, content: string): Promise<Locator> {
+  const disclosure = manager.locator("details").filter({ has: manager.page().locator(content) });
+  await expect(disclosure).toHaveCount(1);
+  if (await disclosure.getAttribute("open") === null) await disclosure.locator(":scope > summary").click();
+  return disclosure;
 }
 
 /** Expand and return the Project-level artifact catalog in the workspace rail. */
@@ -623,6 +641,16 @@ export async function currentEnvironmentRevision(
   const revision = revisions.find((candidate) => candidate.id === environment.currentRevisionId);
   if (!revision) throw new Error(`Current revision ${environment.currentRevisionId} was not returned by the API`);
   return { environment, revision };
+}
+
+/** The executions a Session recorded, with the environment revision each one ran on. */
+export function sessionExecutionRuns(page: Page, sessionId: string): Promise<Array<{
+  environmentRevisionId: string | null;
+  exitCode: number | null;
+  status: string;
+  tool: string;
+}>> {
+  return apiJson(page, `/api/sessions/${encodeURIComponent(sessionId)}/execution-runs`);
 }
 
 /** Query the setup state without triggering installation or other environment changes. */
