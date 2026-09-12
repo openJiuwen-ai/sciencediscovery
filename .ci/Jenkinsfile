@@ -22,8 +22,15 @@
 // Optional ones (all fall back to upstream defaults):
 //   CI_DOCKER_CLI_IMAGE, CI_NODE_IMAGE, CI_UV_IMAGE, CI_BUILD_PROXY,
 //   CI_RUN_PROXY, CI_APT_MIRROR, CI_NPM_REGISTRY, CI_UV_PYTHON_MIRROR,
-//   CI_E2E_STACK_TIMEOUT_SECONDS
-// No machine path or private mirror is written into the repository.
+//   CI_E2E_STACK_TIMEOUT_SECONDS,
+//   CI_OBS_AK_CREDENTIAL_ID / CI_OBS_SK_CREDENTIAL_ID
+//
+// Publishing results to OBS needs two Jenkins secret-text credentials holding
+// the access key and the secret key. Their ids default to `codearts-obs-ak`
+// and `codearts-obs-sk`; only the ids live here, never the values.
+//
+// No machine path, private mirror or credential value is written into the
+// repository.
 
 // These three options are what lets bubblewrap create a user namespace inside
 // the container. Drop any one of them and the Runner tests report
@@ -65,6 +72,38 @@ mkdir -p "\$CI_RUNTIME_DIR"
 echo "runtime dir: \$CI_RUNTIME_DIR  (checkout \$PWD)"
 rm -rf "\$CI_RESULTS_DIR"; mkdir -p "\$CI_RESULTS_DIR"
 """
+}
+
+// Publishing is diagnostics, never a verdict. It runs after the layer has
+// recorded its exit code, so it cannot turn a red layer green; and a broken
+// upload marks the build unstable rather than impersonating a test failure.
+//
+// The key layout is the one in
+// .agents/skills/ci/references/codearts-obs.md: commit and run id both appear,
+// so reruns of a commit cannot overwrite one another. The run id is prefixed
+// here to keep this worker's objects distinguishable from a CodeArts run.
+void publishResults(String layer) {
+    archiveArtifacts artifacts: '.tmp/ci-results/**', allowEmptyArchive: true
+    catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE',
+               message: "OBS upload for ${layer} failed") {
+        withCredentials([
+            string(credentialsId: env.CI_OBS_AK_CREDENTIAL_ID ?: 'codearts-obs-ak',
+                   variable: 'OBS_ACCESS_KEY_ID'),
+            string(credentialsId: env.CI_OBS_SK_CREDENTIAL_ID ?: 'codearts-obs-sk',
+                   variable: 'OBS_SECRET_ACCESS_KEY'),
+        ]) {
+            sh label: "obs upload ${layer}", script: """
+set -eu
+if [ ! -d "\$CI_RESULTS_DIR" ]; then
+    echo "obs-upload: \$CI_RESULTS_DIR does not exist, nothing to publish"
+    exit 0
+fi
+uv run --script .ci/obs-upload.py \\
+    --prefix "sciencediscovery/ci/\$(git rev-parse HEAD)/jenkins-\$BUILD_NUMBER/${layer}" \\
+    "\$CI_RESULTS_DIR"
+"""
+        }
+    }
 }
 
 pipeline {
@@ -183,10 +222,7 @@ fi
                         sh label: 'pnpm ci:ut', script: 'set -eu' + runtimeDir('ut') + 'pnpm ci:ut'
                     }
                     post {
-                        always {
-                            archiveArtifacts artifacts: '.tmp/ci-results/**',
-                                             allowEmptyArchive: true
-                        }
+                        always { publishResults('ut') }
                     }
                 }
 
@@ -206,10 +242,7 @@ fi
                         sh label: 'pnpm ci:st', script: 'set -eu' + runtimeDir('st') + 'pnpm ci:st'
                     }
                     post {
-                        always {
-                            archiveArtifacts artifacts: '.tmp/ci-results/**',
-                                             allowEmptyArchive: true
-                        }
+                        always { publishResults('st') }
                     }
                 }
 
@@ -246,10 +279,7 @@ E2E_COMMIT_SHA="$(git rev-parse HEAD)" pnpm ci:e2e
 '''
                     }
                     post {
-                        always {
-                            archiveArtifacts artifacts: '.tmp/ci-results/**',
-                                             allowEmptyArchive: true
-                        }
+                        always { publishResults('e2e') }
                     }
                 }
             }
