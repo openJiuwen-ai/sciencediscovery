@@ -24,11 +24,24 @@ ARG PNPM_VERSION=11.1.2
 ARG PLAYWRIGHT_VERSION=1.61.1
 ARG PYTHON_VERSION=3.12
 
+# Optional dependency mirrors, for networks where the upstream hosts are slow
+# or unreachable. Each one is empty by default, so an unmodified build still
+# talks to the upstream host and produces the same image. APT_MIRROR replaces
+# the scheme and host only; the Debian path layout below it is unchanged.
+ARG APT_MIRROR=
+ARG NPM_REGISTRY=
+ARG UV_PYTHON_INSTALL_MIRROR=
+
 COPY --from=uv /uv /uvx /usr/local/bin/
 
 # bubblewrap is exercised by Runner tests and by mocked journeys. Playwright's
-# own installer supplies the architecture-appropriate Chromium system libs.
-RUN apt-get update \
+# own installer supplies the architecture-appropriate Chromium system libs, and
+# installs them with apt, so it benefits from APT_MIRROR too.
+RUN if [ -n "${APT_MIRROR}" ]; then \
+      sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+ && export npm_config_registry="${NPM_REGISTRY:-https://registry.npmjs.org/}" \
+ && apt-get update \
  && apt-get install --yes --no-install-recommends \
       bash \
       bubblewrap \
@@ -50,7 +63,11 @@ RUN apt-get update \
 # interpreter in the immutable toolchain while project venvs remain in the
 # bind-mounted checkout.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
-RUN uv python install "${PYTHON_VERSION}"
+# An ARG is visible to RUN as an environment variable, and uv reads an empty
+# UV_PYTHON_INSTALL_MIRROR as a mirror rather than as "unset", so drop it when
+# no mirror was supplied.
+RUN if [ -z "${UV_PYTHON_INSTALL_MIRROR}" ]; then unset UV_PYTHON_INSTALL_MIRROR; fi; \
+    uv python install "${PYTHON_VERSION}"
 
 ENV CI=1 \
     CI_RESULTS_DIR=/ci-results \
