@@ -1495,7 +1495,11 @@ def _gwas_association_records(associations: list[dict[str, Any]], query_value: s
 
 @SERVER.tool()
 async def gwas_search_trait(trait: str, limit: int = 20) -> dict[str, Any]:
-    """Search NHGRI-EBI GWAS Catalog SNP-trait associations by trait name."""
+    """Search NHGRI-EBI GWAS Catalog SNP-trait associations by trait name.
+
+    The v2 API matches the EFO trait label EXACTLY (case-insensitive):
+    \"type 2 diabetes mellitus\" matches, \"type 2 diabetes\" does not.
+    """
     value = trait.strip()
     if not value:
         raise ValueError("trait is required")
@@ -1506,7 +1510,19 @@ async def gwas_search_trait(trait: str, limit: int = 20) -> dict[str, Any]:
         "size": max(1, min(limit, 50)),
     })
     associations = ((payload.get("_embedded") or {}).get("associations")) or []
-    return _result("gwas", "search_trait", _gwas_association_records(associations, value)[: max(1, min(limit, 50))])
+    records = _gwas_association_records(associations, value)[: max(1, min(limit, 50))]
+    # Measured live (2026-09-12 smoke): efo_trait is exact-label match with no
+    # server-side search — a near-miss phrasing returns an empty page that
+    # looks like "no evidence". Tell the caller how to retry instead.
+    warnings = None
+    if not records:
+        warnings = [
+            f"No associations for efo_trait={value!r}: the GWAS v2 API matches the EFO label "
+            "exactly (case-insensitive) and has no partial search. Retry with the canonical "
+            "EFO label, e.g. 'type 2 diabetes mellitus', 'coronary artery disease', "
+            "'body mass index'.",
+        ]
+    return _result("gwas", "search_trait", records, warnings=warnings)
 
 
 @SERVER.tool()

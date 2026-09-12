@@ -651,6 +651,20 @@ class Z6BiodataConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["structuredData"]["gene"], "F5")
         self.assertIsNone(record["structuredData"]["beta"])  # '-' sentinel must become null
 
+    async def test_gwas_empty_label_match_returns_retry_guidance(self) -> None:
+        # Live-measured (2026-09-12): efo_trait is exact-label match — a
+        # near-miss phrasing yields an empty page that must not look like
+        # "no evidence exists".
+        with patch(
+            "sciencediscovery_gateway.public_biomed_mcp._get_json",
+            new=AsyncMock(return_value={"_embedded": {"associations": []}, "page": {"totalElements": 0}}),
+        ):
+            result = await gwas_search_trait("type 2 diabetes", 5)
+        self.assertEqual(result["records"], [])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("exactly", result["warnings"][0])
+        self.assertIn("type 2 diabetes mellitus", result["warnings"][0])
+
     async def test_gtopdb_decodes_entity_names_and_maps_interactions(self) -> None:
         with patch(
             "sciencediscovery_gateway.public_biomed_mcp._get_json",
