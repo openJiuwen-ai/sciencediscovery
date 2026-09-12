@@ -172,7 +172,23 @@ test("J-KE4 三级阅读与证据原文高亮", { tag: "@mocked" }, async ({ jou
         });
         const detail = page.getByTestId("ke-entity-detail");
         await expect(detail).toBeVisible({ timeout: 30_000 });
-        await page.getByTestId("ke-evidence-source").first().click();
+        // Two edges share the stub's calibrated quote against different docs:
+        // the Surfactant Protein D fixture carries it VERBATIM, while the
+        // COVID-antibody paper only passes the edge gate's doc-level ≥85%
+        // word-overlap arm (the words scatter across blocks, so no single
+        // block can be highlighted there — known reader-vs-gate parity gap).
+        // Both edges sit at support=1, so the API's support-DESC-then-id
+        // ordering breaks the tie on random UUIDs — clicking `.first()` is a
+        // coin flip between the highlightable and the non-highlightable doc.
+        // Pin the deterministic card. The testid sits on the small source
+        // BUTTON; the doc title renders in the preceding sibling div, so
+        // match structurally (title-div adjacent button) — filtering the
+        // button by its own text matches nothing and hangs without an
+        // actionTimeout. Explicit timeout keeps any future drift loud.
+        await page
+          .locator('div:has-text("Surfactant Protein D in Ebola") + [data-testid="ke-evidence-source"]')
+          .first()
+          .click({ timeout: 15_000 });
         await expect(page.getByTestId("ke-doc-reader")).toBeVisible();
         // The reader auto-switches to L1 from any stored level and locates the
         // block with gate parity (verbatim substring OR ≥85% word overlap —
