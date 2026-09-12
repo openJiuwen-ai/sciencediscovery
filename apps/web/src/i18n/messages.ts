@@ -13,6 +13,17 @@
 // limitations under the License.
 
 export const en = {
+  "settings.runner.environments": "Scientific environments",
+  "settings.runner.workspaces": "Workspaces",
+  "settings.runner.machine": "Machine",
+  "settings.runner.sections": "Runner details",
+  "settings.runner.help": "Manage this Runner’s machine, workspaces, and scientific environments.",
+  "settings.tree.browse": "Settings directory",
+  "settings.tree.resources": "Runtime & resources",
+  "settings.tree.access": "Network & access",
+  "settings.tree.capabilities": "Models & capabilities",
+  "settings.tree.runners": "Runners",
+  "settings.tree.general": "General",
   "app.localRuntime": "Local research runtime",
   "app.usage": "Usage",
   "app.systemConfiguration": "System configuration",
@@ -2434,6 +2445,17 @@ export const en = {
 export type MessageKey = keyof typeof en;
 
 export const zhCN: Partial<Record<MessageKey, string>> = {
+  "settings.runner.environments": "科学环境",
+  "settings.runner.workspaces": "工作区",
+  "settings.runner.machine": "机器信息",
+  "settings.runner.sections": "Runner 详情",
+  "settings.runner.help": "管理这台 Runner 的机器、工作区与科学环境。",
+  "settings.tree.browse": "设置目录",
+  "settings.tree.resources": "运行与资源",
+  "settings.tree.access": "网络与访问",
+  "settings.tree.capabilities": "模型与能力",
+  "settings.tree.runners": "Runner",
+  "settings.tree.general": "常规",
   "app.localRuntime": "本地科研运行环境",
   "app.usage": "用量",
   "app.systemConfiguration": "系统设置",

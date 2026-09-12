@@ -143,7 +143,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
     const dialog = page.getByRole("dialog", { name: "系统设置" });
     if (!await dialog.isVisible()) await page.getByRole("button", { name: /^系统设置/ }).click();
     await dialog.getByRole("navigation", { name: "设置分组" })
-      .getByRole("button", { name: /^Runner/ })
+      .getByRole("button", { name: "本地 Runner", exact: true })
       .click();
     return dialog;
   };
@@ -239,6 +239,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
       "远端 910B analysis 卡显示自己的清单（NPU 1/3/5），勾选 NPU 1 保存到 e2e-npu-host；local 的选择不受影响。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
+        await dialog.getByRole("navigation").getByRole("button", { name: "910B analysis", exact: true }).click();
         const remoteCard = dialog.locator(".remote-host-list article.remote-host-card").filter({ hasText: "910B analysis" });
         await expect(remoteCard).toBeVisible();
         const npu = remoteCard.locator("section[aria-label='NPU 卡']");
@@ -271,6 +272,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
           .locator("section[aria-label='NPU 卡']");
         await expect(localNpu.locator("li", { hasText: "NPU 0" }).getByRole("checkbox")).toBeChecked();
         await expect(localNpu.locator("li", { hasText: "NPU 4" }).getByRole("checkbox")).not.toBeChecked();
+        await reopened.getByRole("navigation").getByRole("button", { name: "910B analysis", exact: true }).click();
         const remoteNpu = reopened.locator(".remote-host-list article.remote-host-card").filter({ hasText: "910B analysis" })
           .locator("section[aria-label='NPU 卡']");
         await expect(remoteNpu.locator("li", { hasText: "NPU 1" }).getByRole("checkbox")).toBeChecked();
@@ -281,6 +283,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
       "390px 窄屏：NPU 区无横向溢出",
       "窄屏下 NPU 区、每个卡行与不可用原因都不越界；复选框与卡名仍可见。",
       async () => {
+        await page.getByRole("dialog", { name: "系统设置" }).getByRole("navigation").getByRole("button", { name: "本地 Runner", exact: true }).click();
         await page.setViewportSize({ width: 390, height: 844 });
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const localCard = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" });

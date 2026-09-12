@@ -682,6 +682,8 @@ export function mergeRefreshedSessionDetail(
 }
 
 export type SystemSettingsGroup =
+  | `runner:${string}`
+  | "runner-add"
   | "connection"
   | "environments"
   | "global"
@@ -723,7 +725,7 @@ const SYSTEM_SETTINGS_GROUPS: Array<{
 ];
 
 function isSystemSettingsGroup(value: string | undefined): value is SystemSettingsGroup {
-  return SYSTEM_SETTINGS_GROUPS.some((group) => group.id === value);
+  return value === "runner-add" || Boolean(value?.startsWith("runner:") && value.length > 7) || SYSTEM_SETTINGS_GROUPS.some((group) => group.id === value);
 }
 
 function proxyMcpServers(sources: McpSourceManifest[]): Array<{ id: string; label: string }> {
@@ -754,30 +756,56 @@ function findResourceTarget(
   return session ? { id: session.id, kind, label: session.title } : undefined;
 }
 
-export function SystemSettingsLayout({
-  activeGroup,
-  children,
-  onSelect,
-}: {
+const SETTINGS_CATEGORIES = [
+  { id: "general", groups: ["global", "language"] },
+  { id: "runners", groups: [] },
+  { id: "capabilities", groups: ["models", "mcp", "web", "memory-graph", "skills", "specialists"] },
+  { id: "access", groups: ["proxies", "sandbox-network", "permissions", "connection"] },
+  { id: "resources", groups: ["timeouts", "quotas", "runtime"] },
+] as const;
+
+export function SystemSettingsLayout({ activeGroup, children, onSelect, runners = [] }: {
   activeGroup: SystemSettingsGroup;
   children: ReactNode;
   onSelect: (group: SystemSettingsGroup) => void;
+  runners?: RemoteHostTarget[];
 }) {
   const { t } = useLocale();
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const runnerGroup = activeGroup.startsWith("runner:") || ["remote", "environments", "runner-add"].includes(activeGroup);
+  useEffect(() => {
+    const category = SETTINGS_CATEGORIES.find((item) => item.id === "runners" ? runnerGroup : (item.groups as readonly string[]).includes(activeGroup));
+    if (category) setCollapsed((current) => ({ ...current, [category.id]: false }));
+    setNavigationOpen(false);
+  }, [activeGroup]);
+  const select = (group: SystemSettingsGroup) => { onSelect(group); setNavigationOpen(false); };
+  const selectedRunnerId = activeGroup.startsWith("runner:") ? activeGroup.slice(7) : "local";
+  const selectedLabel = runnerGroup
+    ? activeGroup === "runner-add" ? t("runnerCatalog.addRunner") : selectedRunnerId === "local" ? t("remote.localRunner") : runners.find((runner) => runner.id === selectedRunnerId)?.runnerName ?? runners.find((runner) => runner.id === selectedRunnerId)?.alias ?? selectedRunnerId
+    : t(`settings.groups.${activeGroup}.label` as MessageKey);
   return <div className="system-config-layout">
-    <nav aria-label={t("settings.groups")} className="settings-group-nav">
-      {SYSTEM_SETTINGS_GROUPS.map((group) => <button
-        aria-current={activeGroup === group.id ? "page" : undefined}
-        className={activeGroup === group.id ? "active" : ""}
-        key={group.id}
-        onClick={() => onSelect(group.id)}
-        type="button"
-      >
-        <strong>{t(`settings.groups.${group.id}.label` as MessageKey)}</strong>
-        <small>{t(`settings.groups.${group.id}.description` as MessageKey)}</small>
-      </button>)}
+    <button className="settings-navigation-toggle secondary-button" type="button" aria-expanded={navigationOpen} aria-controls="settings-tree" onClick={() => setNavigationOpen(!navigationOpen)}>
+      <span>{t("settings.tree.browse")}</span><strong>{selectedLabel}</strong>
+    </button>
+    <nav id="settings-tree" aria-label={t("settings.groups")} className={`settings-group-nav${navigationOpen ? " navigation-open" : ""}`}>
+      {SETTINGS_CATEGORIES.map((category) => <section className="settings-tree-category" key={category.id}>
+        <div className="settings-tree-heading">
+          <button type="button" aria-expanded={!collapsed[category.id]} aria-controls={`settings-category-${category.id}`} onClick={() => setCollapsed((current) => ({ ...current, [category.id]: !current[category.id] }))}>
+            <span aria-hidden="true">{collapsed[category.id] ? "▸" : "▾"}</span><strong>{t(`settings.tree.${category.id}`)}</strong>
+          </button>
+          {category.id === "runners" ? <button className="settings-tree-add" type="button" aria-label={t("runnerCatalog.addRunner")} title={t("runnerCatalog.addRunner")} aria-current={activeGroup === "runner-add" ? "page" : undefined} onClick={() => select("runner-add")}>+</button> : null}
+        </div>
+        <ul id={`settings-category-${category.id}`} hidden={collapsed[category.id]}>
+          {category.id === "runners" ? runners.map((runner) => <li key={runner.id}><button type="button" title={runner.id} aria-current={runnerGroup && activeGroup !== "runner-add" && runner.id === selectedRunnerId ? "page" : undefined} className={runnerGroup && activeGroup !== "runner-add" && runner.id === selectedRunnerId ? "active" : ""} onClick={() => select(`runner:${runner.id}`)}>
+            <strong>{runner.id === "local" ? t("remote.localRunner") : runner.runnerName ?? runner.alias}</strong>
+          </button></li>) : category.groups.map((group) => <li key={group}><button aria-current={activeGroup === group ? "page" : undefined} className={activeGroup === group ? "active" : ""} onClick={() => select(group)} type="button" title={t(`settings.groups.${group}.description` as MessageKey)}>
+            <strong>{t(`settings.groups.${group}.label` as MessageKey)}</strong>
+          </button></li>)}
+        </ul>
+      </section>)}
     </nav>
-    <div className="settings-group-detail">{children}</div>
+    <div className="settings-group-detail" key={activeGroup}>{children}</div>
   </div>;
 }
 
@@ -1026,6 +1054,7 @@ export function App() {
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
+  const [settingsRunners, setSettingsRunners] = useState<RemoteHostTarget[]>([]);
   const [remoteHosts, setRemoteHosts] = useState<RemoteHostTarget[]>([]);
   const [specialists, setSpecialists] = useState<Specialist[]>([]);
   const [mcpInvocations, setMcpInvocations] = useState<McpInvocation[]>([]);
@@ -2494,6 +2523,21 @@ export function App() {
     reportSystemSettingsError();
     setSkillWorkspaceLaunch(undefined);
     setShowConfig(false);
+  }
+
+  useEffect(() => {
+    if (!showConfig) return;
+    let disposed = false;
+    void client.listRunners().then((items) => { if (!disposed) setSettingsRunners(items); })
+      .catch((error: Error) => { if (!disposed) reportSystemSettingsError(error.message); });
+    return () => { disposed = true; };
+  }, [client, showConfig]);
+
+  const selectedSettingsRunnerId = systemSettingsGroup.startsWith("runner:") ? systemSettingsGroup.slice(7) : "local";
+  const selectedSettingsRunner = settingsRunners.find((item) => item.id === selectedSettingsRunnerId);
+  function updateSettingsRunners(items: RemoteHostTarget[]): void {
+    setSettingsRunners(items);
+    setSystemSettingsGroup((current) => current.startsWith("runner:") && !items.some((item) => item.id === current.slice(7)) ? "runner:local" : current);
   }
 
   function selectSystemSettingsGroup(group: SystemSettingsGroup): void {
@@ -4782,7 +4826,7 @@ export function App() {
               key={detail}
               onDismiss={() => setSystemSettingsErrors((current) => current.filter((item) => item !== detail))}
             />)}
-            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={selectSystemSettingsGroup}>
+            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={selectSystemSettingsGroup} runners={settingsRunners}>
               {systemSettingsGroup === "global" ? (
                 globalSettings ? <ScopedSettingsEditor allowInheritance={false} connectors={connectors} details={globalSettings} draft={globalSettingsEdit ?? globalSettingsDraft(globalSettings)} models={models} onDraftChange={setGlobalSettingsEdit} onSave={saveGlobalSettings} scopeLabel={t("settings.global")} showActions={false} skillScope="global" skills={skills} /> : <p className="muted">{t("settings.loadingGlobal")}</p>
               ) : null}
@@ -4879,12 +4923,16 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "specialists" ? <SpecialistManager client={client} connectors={connectors} onChanged={setSpecialists} onError={reportSystemSettingsError} skills={skills} /> : null}
               {systemSettingsGroup === "permissions" ? <PermissionGrantManager grants={permissionGrants.filter((grant) => grant.scope !== "once")} onRevoke={(grant) => void revokePermission(grant)} /> : null}
-              {systemSettingsGroup === "remote" ? <RemoteHostManager
-                client={client}
-                onCredentialEditStateChange={setRemoteCredentialDraftOpen}
-                onError={reportSystemSettingsError}
+              {systemSettingsGroup === "runner-add" ? <RemoteHostManager
+                client={client} addMode onHostsChange={updateSettingsRunners}
+                onAdded={(id) => setSystemSettingsGroup(`runner:${id}`)} onCancelAdd={() => setSystemSettingsGroup("runner:local")}
+                onCredentialEditStateChange={setRemoteCredentialDraftOpen} onError={reportSystemSettingsError}
               /> : null}
-              {systemSettingsGroup === "environments" ? <RunnerEnvironmentSettings client={client} onError={reportSystemSettingsError} /> : null}
+              {systemSettingsGroup.startsWith("runner:") || systemSettingsGroup === "remote" || systemSettingsGroup === "environments" ? <RunnerEnvironmentSettings
+                key={selectedSettingsRunnerId} client={client} runnerId={selectedSettingsRunnerId} runner={selectedSettingsRunner} onError={reportSystemSettingsError}
+                machine={<RemoteHostManager client={client} selectedRunnerId={selectedSettingsRunnerId} onHostsChange={updateSettingsRunners}
+                  onCredentialEditStateChange={setRemoteCredentialDraftOpen} onError={reportSystemSettingsError} />}
+              /> : null}
               {systemSettingsGroup === "connection" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.localAccess")}</span><h3>{t("settings.connection")}</h3><p>{t("settings.connectionHelp")}</p></div>
                 {tokenRejected ? <InlineErrorAlert detail={t("settings.tokenRejected")} title={t("settings.tokenRejectedTitle")} /> : null}

@@ -882,3 +882,7 @@
 .runner-workspace-files li { display: flex; align-items: baseline; gap: 12px; }
 .runner-workspace-files code { min-width: 0; overflow-wrap: anywhere; }
 .runner-workspace-files small { flex-shrink: 0; white-space: nowrap; }
+
+.runner-environment-settings > .runner-management-tabs { margin-bottom: 20px; }
+.runner-management-tabs > button { width: auto; min-width: 0; overflow-wrap: anywhere; }
+.runner-environment-settings [role="tabpanel"] { min-width: 0; }

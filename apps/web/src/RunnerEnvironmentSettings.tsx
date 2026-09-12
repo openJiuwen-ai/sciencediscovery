@@ -2,36 +2,35 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { RemoteHostTarget } from "@sciencediscovery/schema";
 import type { ApiClient, RunnerWorkspaceBinding } from "./api/client.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
 import { useLocale } from "./i18n/index.js";
 
-export function RunnerEnvironmentSettings({ client, onError, initialRunnerId = "local" }: { client: ApiClient; onError: (message: string) => void; initialRunnerId?: string }) {
+export function RunnerEnvironmentSettings({ client, onError, runnerId, runner, machine }: {
+  client: ApiClient; onError: (message: string) => void; runnerId: string; runner?: RemoteHostTarget; machine: ReactNode;
+}) {
   const { t } = useLocale();
-  const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
-  const [runnerId, setRunnerId] = useState(initialRunnerId);
-  const [tab, setTab] = useState<"environments" | "workspaces">("environments");
+  const [tab, setTab] = useState<"machine" | "workspaces" | "environments">("machine");
   const scopedClient = useMemo(() => client.forEnvironmentRunner(runnerId), [client, runnerId]);
-  const host = hosts.find((item) => item.id === runnerId);
-  useEffect(() => {
-    let disposed = false;
-    void client.listRunners().then((items) => { if (!disposed) setHosts(items); }).catch((error: Error) => { if (!disposed) onError(error.message); });
-    return () => { disposed = true; };
-  }, [client]);
+  const runnerName = runnerId === "local" ? t("remote.localRunner") : runner?.runnerName ?? runner?.alias ?? runnerId;
+  const tabs = ["machine", "workspaces", "environments"] as const;
   return <div className="runner-environment-settings">
-    <div className="settings-detail-header"><h3>{t("runnerWorkspaces.title")}</h3><p>{t("runnerWorkspaces.help")}</p></div>
-    <label className="settings-field"><span>{t("runnerWorkspaces.runnerLabel")}</span><select aria-label={t("runnerWorkspaces.manageRunnerAria")} value={runnerId} onChange={(event) => setRunnerId(event.target.value)}>
-      {hosts.map((item) => <option key={item.id} value={item.id}>{item.id === "local" ? t("runnerWorkspaces.localRunner") : item.runnerName ?? item.alias} · {item.id}</option>)}
-    </select></label>
-    <div className="runner-management-tabs" role="group" aria-label={t("runnerWorkspaces.tabsAria")}>
-      <button type="button" className={tab === "environments" ? "primary-button" : "secondary-button"} onClick={() => setTab("environments")}>{t("runnerWorkspaces.environmentsTab")}</button>
-      <button type="button" className={tab === "workspaces" ? "primary-button" : "secondary-button"} onClick={() => setTab("workspaces")}>{t("runnerWorkspaces.workspacesTab")}</button>
+    <div className="settings-detail-header"><span className="eyebrow">Runner</span><h3>{runnerName}</h3><p>{t("settings.runner.help")}</p></div>
+    <div className="runner-management-tabs" role="tablist" aria-label={t("settings.runner.sections")}>
+      {tabs.map((item) => <button key={item} id={`runner-tab-${item}`} type="button" role="tab" aria-selected={tab === item} aria-controls={`runner-panel-${item}`} tabIndex={tab === item ? 0 : -1}
+        className={tab === item ? "primary-button" : "secondary-button"} onClick={() => setTab(item)}
+        onKeyDown={(event) => {
+          const index = tabs.indexOf(item);
+          const next = event.key === "ArrowRight" ? tabs[(index + 1) % tabs.length] : event.key === "ArrowLeft" ? tabs[(index + tabs.length - 1) % tabs.length] : event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[2] : undefined;
+          if (next) { event.preventDefault(); setTab(next); document.getElementById(`runner-tab-${next}`)?.focus(); }
+        }}>{t(`settings.runner.${item}`)}</button>)}
     </div>
-    {host && host.runnerStatus?.state !== "ready" ? <p role="status">{t("runnerWorkspaces.connectFirst")}</p> : null}
-    {tab === "environments" ? <EnvironmentManager key={runnerId} client={scopedClient} compact onError={onError} />
-      : <RunnerWorkspaces key={runnerId} client={client} runnerId={runnerId} runnerName={host?.runnerName ?? host?.alias ?? runnerId} />}
+    {runner && runner.runnerStatus?.state !== "ready" ? <p role="status">{t("runnerWorkspaces.connectFirst")}</p> : null}
+    <div role="tabpanel" id="runner-panel-machine" aria-labelledby="runner-tab-machine" hidden={tab !== "machine"}>{machine}</div>
+    {tab === "workspaces" ? <div role="tabpanel" id="runner-panel-workspaces" aria-labelledby="runner-tab-workspaces"><RunnerWorkspaces key={runnerId} client={client} runnerId={runnerId} runnerName={runnerName} /></div> : null}
+    {tab === "environments" ? <div role="tabpanel" id="runner-panel-environments" aria-labelledby="runner-tab-environments"><EnvironmentManager key={runnerId} client={scopedClient} compact onError={onError} /></div> : null}
   </div>;
 }
 

@@ -45,14 +45,13 @@
   .document-markdown, .artifact-modal-body { padding: 28px 20px 44px; }
   .environment-source-settings { grid-template-areas: "intro intro" "pip conda" "save save"; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .system-config-dialog { width: calc(100vw - 32px); height: min(80vh, calc(100vh - 56px)); }
-  /* In the 601-900px band the dialog is narrower than its 240px nav plus the
-     inner multi-column grids (skill toolbar, environment form, host cards),
-     so the detail pane clipped content at the right edge. Below 900px the
-     layout goes single-column with a horizontal nav, the same pattern the
-     <=600px band already uses. */
-  .system-config-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
+  /* The same two-level directory folds away to leave room for narrow forms. */
+  .system-config-layout { position: relative; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-navigation-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 12px; min-width: 0; text-align: left; }
+  .settings-navigation-toggle strong { overflow-wrap: anywhere; }
+  .settings-group-nav { display: none; }
+  .settings-group-nav.navigation-open { display: flex; position: absolute; inset: 52px 0 0; z-index: 5; border-right: 0; }
+  .settings-group-nav button { width: 100%; min-width: 0; }
   .settings-group-detail { padding: 22px 18px 30px; }
   .skill-workspace-dialog { width: calc(100vw - 20px); height: calc(100vh - 20px); }
   .skill-workspace-layout { grid-template-columns: 190px minmax(0, 1fr); grid-template-rows: 170px minmax(0, 1fr) minmax(120px, 170px); }

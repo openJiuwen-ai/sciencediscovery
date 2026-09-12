@@ -98,6 +98,16 @@
 .settings-group-nav strong, .settings-group-nav small { display: block; }
 .settings-group-nav strong { font-size: 14px; }
 .settings-group-nav small { margin-top: 5px; color: var(--text-faint); font-size: 11px; line-height: 1.4; }
+.settings-navigation-toggle { display: none; }
+.settings-tree-category { flex: 0 0 auto; }
+.settings-tree-heading { display: flex; align-items: center; gap: 4px; }
+.settings-tree-heading > button:first-child { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 8px; }
+.settings-tree-heading strong { overflow-wrap: anywhere; }
+.settings-tree-heading .settings-tree-add { flex: 0 0 32px; width: 32px; padding: 4px; text-align: center; font-size: 22px; color: var(--accent-ink); }
+.settings-tree-category ul { list-style: none; margin: 2px 0 8px 16px; padding: 0 0 0 8px; border-left: 1px solid var(--border); }
+.settings-tree-category li > button { padding: 8px 10px; overflow-wrap: anywhere; }
+.settings-tree-category li strong { font-size: 13px; font-weight: 500; }
+.settings-group-nav button:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
 .settings-group-detail { min-width: 0; overflow-y: auto; padding: 28px 32px 36px; }
 .settings-group-detail > :first-child { margin-top: 0; }
 .settings-detail-header { margin-bottom: 26px; }

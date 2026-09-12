@@ -109,8 +109,7 @@ test("the machine catalog shows the list first and keeps add forms behind button
     onError: () => undefined,
   }));
 
-  assert.match(html, /No remote machines registered yet/);
-  assert.match(html, /class="secondary-button"[^>]*>Add Runner</);
+  assert.doesNotMatch(html, /Add Runner|Manage Runner/);
   assert.doesNotMatch(html, /<form/);
   // No blank form competes with the list until the user asks for one.
   assert.doesNotMatch(html, /Probe and add/);
@@ -136,12 +135,14 @@ const noNpu = async () => ({ local: null, selections: {} });
 async function renderHost(
   host: RemoteHostTarget,
   onCredentialEditStateChange?: (editing: boolean) => void,
+  addMode = false,
 ): Promise<{ output: string; renderer: ReactTestRenderer }> {
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(createElement(RemoteHostManager, {
       client: { listRunners: async () => [host], listRunnerNpuDevices: noNpu } as ApiClient,
       onCredentialEditStateChange,
+      addMode,
       onError: () => undefined,
     }));
   });
@@ -149,13 +150,12 @@ async function renderHost(
 }
 
 test("SSH add form groups connection login and runner details without hiding username", async () => {
-  const { renderer } = await renderHost(buildHost());
+  const { renderer } = await renderHost(buildHost(), undefined, true);
   const click = async (name: string) => {
     const button = renderer.root.findAllByType("button").find((node) => node.children.join("") === name);
     assert.ok(button);
     await act(async () => button.props.onClick());
   };
-  await click("Add Runner");
   const form = renderer.root.findByType("form");
   assert.deepEqual(form.findAllByType("legend").map((node) => node.children.join("")), ["1. Connection", "2. Login", "3. Runner details"]);
   const user = form.findByProps({ "aria-describedby": "ssh-add-username-help" });
@@ -168,8 +168,6 @@ test("SSH add form groups connection login and runner details without hiding use
   assert.equal(form.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "scientist");
   await click("Cancel");
   assert.equal(renderer.root.findAllByType("form").length, 0);
-  await click("Add Runner");
-  assert.equal(renderer.root.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "");
   await act(async () => renderer.unmount());
 });
 
@@ -181,7 +179,7 @@ test("machine identity and actions lead the card, with metadata and public key b
   const header = renderer.root.findByProps({ className: "remote-host-card-header" });
   assert.equal(header.findByProps({ className: "remote-host-identity" }).findAllByType("span")[0]!.children.join(""), "192.0.2.40:2222");
   assert.equal(header.findByProps({ className: "remote-host-identity" }).findAllByType("span")[1]!.children.join(""), "user scientist");
-  assert.equal(header.findByProps({ className: "remote-host-actions" }).findAllByType("button").length, 5);
+  assert.equal(header.findByProps({ className: "remote-host-actions" }).findAllByType("button").length, 4);
   assert.equal(header.findAllByType("details").length, 0);
   assert.equal(renderer.root.findAllByProps({ className: "remote-host-description" }).length, 0);
   const details = renderer.root.findByProps({ className: "remote-host-card-details" });
@@ -331,13 +329,12 @@ test("generated-key registration resumes trust by host id without resubmitting t
     },
     trustRemoteHostKey: async (id: string) => { trusted.push(id); return buildHost({ id, hasPrivateKey: true }); },
   } as unknown as ApiClient;
-  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, onError: (error) => errors.push(error) })); });
+  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, addMode: true, onError: (error) => errors.push(error) })); });
   const click = async (label: string) => {
     const button = renderer!.root.findAllByType("button").find((candidate) => candidate.children.join("") === label);
     assert.ok(button, label);
     await act(async () => button.props.onClick());
   };
-  await click("Add Runner");
   await click("SSH key (optional)");
   await click("Generate a key pair");
   assert.match(JSON.stringify(renderer!.toJSON()), /public-fixture/);

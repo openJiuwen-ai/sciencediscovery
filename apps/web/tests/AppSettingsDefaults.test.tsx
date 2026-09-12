@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Project, Session, SessionDetail } from "@sciencediscovery/schema";
+import type { Project, RemoteHostTarget, Session, SessionDetail } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -244,7 +244,10 @@ test("renders System settings groups beside the selected details", () => {
   assert.match(html, /Global defaults/);
   assert.match(html, />Timeouts</);
   assert.match(html, />Runtime status</);
-  assert.match(html, />Environments</);
+  assert.doesNotMatch(html, />Environments</);
+  assert.match(html, /aria-expanded="true"/);
+  assert.match(html, />Models &amp; capabilities</);
+  assert.match(html, /aria-label="Add Runner"/);
   assert.match(html, />Skills</);
   assert.match(html, />Specialists</);
   assert.match(html, />Runners</);
@@ -269,4 +272,15 @@ test("renders the shared System settings commit and discard actions", () => {
 test("System settings save tells users to submit an open machine credentials form", () => {
   assert.match(remoteCredentialDraftSaveError(true) ?? "", /Save credentials/);
   assert.equal(remoteCredentialDraftSaveError(false), undefined);
+});
+
+
+test("Runner navigation keeps every machine at the second level without global workspace entries", () => {
+  const runners = ["local", "lab/gpu"].map((id) => ({ id, alias: id, runnerName: id, connectionKind: "direct", status: "ready", createdAt: "2026-01-01", updatedAt: "2026-01-01" })) as RemoteHostTarget[];
+  const html = renderToStaticMarkup(createElement(SystemSettingsLayout, { activeGroup: "runner:lab/gpu", children: null, onSelect: () => {}, runners }));
+  assert.match(html, /Local Runner/);
+  assert.match(html, /aria-current="page" class="active"[^>]*><strong>lab\/gpu/);
+  assert.equal((html.match(/aria-label="Add Runner"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="settings-tree-category"/g) ?? []).length, 5);
+  assert.doesNotMatch(html, />Environments<|>Workspaces<|Manage Runner/);
 });

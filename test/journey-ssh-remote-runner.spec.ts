@@ -340,9 +340,9 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
   const openRemoteSettings = async () => {
     const dialog = page.getByRole("dialog", { name: "系统设置" });
     if (!await dialog.isVisible()) await page.getByRole("button", { name: /^系统设置/ }).click();
-    await dialog.getByRole("navigation", { name: "设置分组" })
-      .getByRole("button", { name: /^Runner/ })
-      .click();
+    const directory = dialog.getByRole("button", { name: /^设置目录/ });
+    if (await directory.isVisible()) await directory.click();
+    await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: "GPU analysis", exact: true }).click();
     return dialog;
   };
   const openProjectSettings = async () => {
@@ -358,14 +358,14 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     await openProjectSession(page, fixture);
 
     await journey.step(
-      "全局页默认只有机器列表与添加入口",
-      "远程计算页只管理机器目录：默认显示已配置列表，SSH 与自行接入的表单都藏在添加按钮后面；页面上没有 Project 允许名单，也没有 Session 选机。",
+      "Runner 目录默认显示已有机器，详情只展示所选机器",
+      "左侧 Runner 目录列出本机和远程机器；选中 GPU analysis 后只显示该机详情，添加表单默认隐藏；页面上没有 Project 或 Session 选机。",
       async () => {
         const dialog = await openRemoteSettings();
-        await expect(dialog.getByRole("heading", { name: "Runners" })).toBeVisible();
-        await expect(dialog.getByText("GPU analysis", { exact: true })).toBeVisible();
+        await expect(dialog.getByRole("heading", { name: "GPU analysis" })).toBeVisible();
+        await expect(dialog.getByRole("navigation").getByRole("button", { name: "GPU analysis", exact: true })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "添加 Runner", exact: true })).toBeVisible();
-        await expect(dialog.getByText("Runner ID：local", { exact: true })).toBeVisible();
+        await expect(dialog.getByRole("navigation").getByRole("button", { name: "本地 Runner", exact: true })).toBeVisible();
         await expect(dialog.getByText(`Runner ID：${hostId}`, { exact: true })).toBeVisible();
         await expect(dialog.getByText("Python and R analysis on the lab GPU", { exact: true })).toBeVisible();
         // No blank form competes with the list, and no scoped controls live here.
@@ -375,7 +375,6 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByRole("combobox", { exact: true, name: "Runner" })).toHaveCount(0);
         await expect(dialog.getByRole("combobox", { name: "允许的 Runner" })).toHaveCount(0);
         await expect(dialog.getByText(/一次性作业卡/)).toHaveCount(0);
-        await expect(dialog.getByText(/所有 Shell\/Python\/R 命令均通过/)).toBeVisible();
       },
     );
 
@@ -746,9 +745,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
         await expect(dialog.getByRole("button", { name: "删除远程工作区" })).toHaveCount(0);
         await dialog.getByRole("button", { name: "关闭作用域设置" }).click();
         const settings = await openRemoteSettings();
-        await settings.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
-        await settings.getByRole("combobox", { name: "管理 Runner" }).selectOption(hostId);
-        await settings.getByRole("button", { name: "工作区", exact: true }).click();
+        await settings.getByRole("tab", { name: "工作区", exact: true }).click();
         await expect(settings.getByText("工作区", { exact: true }).last()).toBeVisible();
         await settings.getByText("传输历史 · 1").click();
         await expect(settings.getByText(/主 Agent · pull · completed · 1 个文件 · results\/report\.md/)).toBeVisible();
@@ -890,8 +887,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
       await page.getByRole("dialog", { name: "项目设置" }).getByRole("button", { name: "关闭作用域设置" }).click();
       await page.setViewportSize({ width: 1440, height: 1000 });
       const dialog = await openRemoteSettings();
-      await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^环境/ }).click();
-      await dialog.getByRole("combobox", { name: "管理 Runner" }).selectOption(hostId);
+      await dialog.getByRole("tab", { name: "科学环境", exact: true }).click();
       await expect(dialog.getByText("Remote Python base", { exact: true })).toBeVisible();
       await expect(dialog.getByRole("textbox", { name: "环境名称" })).toHaveCount(0);
       await dialog.getByRole("button", { name: "新增环境" }).click();
@@ -905,7 +901,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     await journey.step("窄窗口集中清理远端工作区", "工作区按 Project/Session 展示；取消删除不发请求，确认后显示清理结果，记录保留。", async () => {
       await page.setViewportSize({ width: 640, height: 960 });
       const dialog = page.getByRole("dialog", { name: "系统设置" });
-      await dialog.getByRole("button", { name: "工作区", exact: true }).click();
+      await dialog.getByRole("tab", { name: "工作区", exact: true }).click();
       const remove = dialog.getByRole("button", { name: "删除远程工作区" });
       page.once("dialog", (prompt) => prompt.dismiss());
       await remove.click();

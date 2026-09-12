@@ -30,7 +30,6 @@ import { effectiveRunnerIds, selectableNpuDevices } from "@sciencediscovery/sche
 
 import type { ApiClient } from "./api.js";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
-import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { CopyButton } from "./CopyButton.js";
 import { useLocale } from "./i18n/index.js";
 import { SshKeyFileField } from "./SshKeyFileField.js";
@@ -363,7 +362,12 @@ interface HostKeyPrompt {
  * raises a permission card in the conversation; Project/Session allowlists
  * deliberately live on those objects' own settings.
  */
-export function RemoteHostManager({ client, onCredentialEditStateChange, onError }: {
+export function RemoteHostManager({ client, onCredentialEditStateChange, onError, selectedRunnerId, addMode = false, onHostsChange, onAdded, onCancelAdd }: {
+  selectedRunnerId?: string;
+  addMode?: boolean;
+  onHostsChange?: (hosts: RemoteHostTarget[]) => void;
+  onAdded?: (id: string) => void;
+  onCancelAdd?: () => void;
   client: ApiClient;
   onCredentialEditStateChange?: (editing: boolean) => void;
   onError: (message: string) => void;
@@ -376,8 +380,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   const selectNpu = (runnerId: string, devices: number[]): void => {
     setNpu((current) => current && { ...current, selections: { ...current.selections, [runnerId]: devices } });
   };
-  const [managingRunner, setManagingRunner] = useState<string>();
-  const [adding, setAdding] = useState<"direct" | "ssh">();
+  const [adding, setAdding] = useState<"direct" | "ssh" | undefined>(addMode ? "ssh" : undefined);
   const [alias, setAlias] = useState("");
   const [runnerName, setRunnerName] = useState("");
   const [description, setDescription] = useState("");
@@ -409,7 +412,9 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   const [credGeneratedKey, setCredGeneratedKey] = useState<GeneratedRemoteHostKey>();
 
   async function refresh(): Promise<void> {
-    setHosts(await client.listRunners());
+    const items = await client.listRunners();
+    setHosts(items);
+    onHostsChange?.(items);
   }
 
   useEffect(() => { void refresh().catch((error: Error) => onError(error.message)); }, [client]);
@@ -530,6 +535,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       clearSshForm();
       setAdding(undefined);
       await refresh();
+      onAdded?.(host.id);
       if (host.error) reportHostError(host);
     } catch (error) {
       const hostId = hostKeyFromError(error)?.hostId ?? registeredHostId;
@@ -638,6 +644,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       setDirectToken("");
       setAdding(undefined);
       await refresh();
+      onAdded?.(host.id);
       if (host.error) onError(host.error);
     } catch (error) {
       onError(error instanceof Error ? error.message : t("remote.errorRegisterRunner"));
@@ -811,8 +818,8 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   }
 
   return <div className="remote-host-manager">
-    <div className="settings-detail-header"><span className="eyebrow">{t("remote.eyebrow")}</span><h3>{t("remote.runnersTitle")}</h3><p>{t("remote.runnersHelp")}</p></div>
-    {hosts.length ? <div className="remote-host-list">{hosts.map((host) => {
+    {addMode ? <div className="settings-detail-header"><h3>{t("runnerCatalog.addRunner")}</h3><p>{t("remote.runnersHelp")}</p></div> : null}
+    {!addMode ? <div className="remote-host-list">{hosts.filter((host) => !selectedRunnerId || host.id === selectedRunnerId).map((host) => {
       const connected = host.runnerStatus?.state === "ready";
       const state = connected ? "ready" : host.runnerStatus?.state ?? host.status;
       const untrustedKey = host.hostKey?.trusted === false ? host.hostKey : undefined;
@@ -856,7 +863,6 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void refresh().catch((error: Error) => onError(error.message))} type="button">{t("runnerCatalog.refreshResources")}</button>
           {host.connectionKind === "ssh" ? <button aria-expanded={editingCredentials === host.id} className="secondary-button" disabled={Boolean(busyId)} onClick={() => toggleCredentialsEditor(host)} type="button">{t("remote.credentials")}</button> : null}
           {untrustedKey ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">{t("remote.trustHostKey")}</button> : null}
-          <button className="secondary-button" onClick={() => setManagingRunner(managingRunner === host.id ? undefined : host.id)} type="button">{t("runnerCatalog.manage")}</button>
           {host.id !== "local" ? <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">{t("common.delete")}</button> : null}
         </div>
         </header>
@@ -900,13 +906,11 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
           <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void probe(host)} type="button">{t("remote.refreshProbe")}</button>
           {connected ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void toggleRunnerConnection(host, true)} type="button">{t("remote.disconnect")}</button> : null}
         </div></details> : null}
-        {managingRunner === host.id ? <RunnerEnvironmentSettings key={host.id} client={client} initialRunnerId={host.id} onError={onError} /> : null}
         {renderHostKeyPrompt(host.id)}
         {editingCredentials === host.id ? credentialsEditor(host) : null}
       </article>;
-    })}</div> : <p className="remote-host-empty">{t("remote.empty")}</p>}
+    })}</div> : null}
     <div className="remote-host-add-row">
-      <button aria-expanded={Boolean(adding)} className="secondary-button" onClick={() => setAdding(adding ? undefined : "ssh")} type="button">{t("runnerCatalog.addRunner")}</button>
       {adding ? <label><span>{t("runnerCatalog.connectionMethod")}</span><select aria-label={t("runnerCatalog.connectionMethod")} value={adding} onChange={(event) => setAdding(event.target.value as "ssh" | "direct")}><option value="ssh">{t("remote.addSshMachine")}</option><option value="direct">{t("remote.addDirectRunner")}</option></select></label> : null}
     </div>
     {adding === "ssh" ? <form className="remote-host-form remote-host-ssh-form" aria-label={t("remote.addSshMachine")} onSubmit={(event) => { event.preventDefault(); void submitSshForm(); }}>
@@ -966,7 +970,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       </fieldset>
       {renderHostKeyPrompt("add")}
       <div className="remote-host-form-actions">
-        <button className="secondary-button" onClick={() => { clearSshForm(); setAdding(undefined); }} type="button">{t("common.cancel")}</button>
+        <button className="secondary-button" onClick={() => { clearSshForm(); setAdding(undefined); onCancelAdd?.(); }} type="button">{t("common.cancel")}</button>
         <button className="primary-button" disabled={busyId === "new" || !alias.trim() || !runnerCommand.trim()} type="submit">{t("remote.probeAndAdd")}</button>
       </div>
     </form> : null}
@@ -980,11 +984,11 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         <label><span>{t("remote.tokenLabel")}</span><input required type="password" value={directToken} onChange={(event) => setDirectToken(event.target.value)} placeholder="SCIENCE_AGENT_RUNNER_TOKEN" /></label>
       </div>
       <div className="remote-host-form-actions">
-        <button className="secondary-button" onClick={() => setAdding(undefined)} type="button">{t("common.cancel")}</button>
+        <button className="secondary-button" onClick={() => { setAdding(undefined); setDirectToken(""); onCancelAdd?.(); }} type="button">{t("common.cancel")}</button>
         <button className="primary-button" disabled={busyId === "new-direct" || !directLabel.trim() || !directAddress.trim() || !directToken.trim()} type="submit">{t("remote.connectAndAdd")}</button>
       </div>
     </form> : null}
-    <div className="config-note">{t("remote.configNote")}</div>
+    {addMode ? <div className="config-note">{t("remote.configNote")}</div> : null}
   </div>;
 }
 
