@@ -274,7 +274,7 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     connected = false;
     return route.fulfill({ json: sshHost().runnerStatus });
   });
-  await page.route(`**/api/remote-hosts/${hostId}/runner/connect-log`, (route) => {
+  await page.route(`**/api/runners/${hostId}/connect-log`, (route) => {
     const story = [
       "Connecting to institution-linux over SSH…",
       "No Runner found on the machine; preparing its data directory before deployment…",

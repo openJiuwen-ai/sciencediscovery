@@ -359,7 +359,7 @@ test("connect runner presents a changed host key and resumes from the settings t
   const client = {
     listRunners: async () => [host],
     listRunnerNpuDevices: noNpu,
-    remoteRunnerConnectLog: async () => ({ entries: [], hostId: host.id }),
+    runnerConnectLog: async () => ({ entries: [], hostId: host.id }),
     connectRunner: async () => {
       if (++connects === 1) throw new ApiRequestError("Host key changed", 409, "SSH_HOST_KEY_CHANGED", {
         hostId: host.id, hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:new" },

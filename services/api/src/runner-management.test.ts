@@ -75,3 +75,24 @@ test("built-in Runner reports connection and resource errors without claiming it
   assert.equal(reachable.runnerStatus?.resources, undefined);
   assert.match(reachable.runnerStatus?.resourcesError ?? "", /resources unavailable/);
 });
+
+test("the unified catalog retains machine reachability when its Runner is disconnected", async () => {
+  const host = { id: "host", alias: "node" };
+  const store = { getRemoteHost: () => host } as unknown as SessionStore;
+  let probes = 0;
+  const remote = {
+    runnerStatusWithResources: async () => ({ state: "disconnected" }),
+    reachability: async (target: unknown) => {
+      assert.equal(target, host);
+      probes++;
+      return { state: "online", checkedAt: "2026-09-12T00:00:00.000Z" };
+    },
+  } as unknown as Parameters<typeof runnerTarget>[2];
+  const target = await runnerTarget(store, {} as RunnerClient, remote, "host");
+  assert.equal(target.reachability?.state, "online");
+  assert.equal(target.runnerStatus?.state, "disconnected");
+  remote.runnerStatusWithResources = async () => ({ hostId: "host", state: "ready" });
+  const connected = await runnerTarget(store, {} as RunnerClient, remote, "host");
+  assert.equal(connected.reachability, undefined);
+  assert.equal(probes, 1, "a connected Runner already proves the machine is online");
+});

@@ -1353,9 +1353,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       // The connect above can take minutes while it deploys the Runner; this
       // is what the settings page polls to show the attempt's progress.
-      const remoteConnectLogMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/connect-log$/);
+      const remoteConnectLogMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/connect-log$/)
+        ?? url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/connect-log$/);
       if (remoteConnectLogMatch && request.method === "GET") {
-        const hostId = remoteConnectLogMatch[1]!;
+        const hostId = decodeURIComponent(remoteConnectLogMatch[1]!);
+        if (hostId !== "local" && !store.getRemoteHost(hostId)) return sendError(response, 404, "Runner not found");
         sendJson(response, 200, { entries: remoteCompute.connectLog(hostId), hostId } satisfies RemoteConnectLog);
         return;
       }

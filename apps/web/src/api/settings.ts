@@ -236,6 +236,10 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/runner/connect`, { method: "POST" });
   }
 
+  runnerConnectLog(runnerId: string): Promise<RemoteConnectLog> {
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/connect-log`);
+  }
+
   /**
    * The in-flight connection story of one host. Polled while `connectRemoteRunner`
    * is still waiting: the connect itself only answers when it is over.

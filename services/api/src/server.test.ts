@@ -434,14 +434,14 @@ test("closing the API server drains active connections before closing the MCP tr
   let closeCalls = 0;
   let closeCompleted = false;
   const mcpTransport: McpTransportClient = {
-    catalog: async () => emptyMcpCatalog,
+    catalog: offlineMcpTransport.catalog,
     close: async () => {
       closeCalls += 1;
       await new Promise<void>((done) => setTimeout(done, 20));
       closeCompleted = true;
     },
     invoke: async () => { throw new Error("MCP invocation is not expected"); },
-    reload: async () => emptyMcpCatalog,
+    reload: offlineMcpTransport.reload,
   };
   const server = createApiServer(testConfig(root), { mcpTransport });
   let forcedConnectionsClosed = false;
@@ -696,9 +696,9 @@ test("updating SSH credentials immediately probes with the newly stored username
     servers: [],
   };
   const mcpTransport: McpTransportClient = {
-    catalog: async () => emptyMcpCatalog,
+    catalog: offlineMcpTransport.catalog,
     invoke: async () => { throw new Error("Credential updates do not invoke MCP"); },
-    reload: async () => emptyMcpCatalog,
+    reload: offlineMcpTransport.reload,
   };
   const server = createApiServer(testConfig(tempRoot), { mcpTransport, remoteCompute });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));

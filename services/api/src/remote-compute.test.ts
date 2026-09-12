@@ -254,7 +254,7 @@ test("a connect attempt tells its story as a pollable log, ending with the failu
     { exitCode: 1, stderr: "disk full", stdout: "" },
     { exitCode: 1, stderr: "disk full", stdout: "" },
   ]);
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport });
   const host = readyRemoteHost();
 
   const status = await client.connectRunner(host, { localVersion: "local-build" });
@@ -402,7 +402,7 @@ test("a Runner whose clock is minutes off still gets signatures it accepts", asy
   context.after(() => new Promise<void>((closed) => runner.close(() => closed())));
   const port = (runner.address() as AddressInfo).port;
 
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]));
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport: new FakeTransport([]) });
   const status = await client.connectRunner(directRemoteHost(port), { token: "any-token" });
   assert.equal(status.state, "ready");
   // Measured, not configured: within a second of the real skew.
@@ -443,7 +443,7 @@ test("times the Runner reported come back on this machine's clock, with its meas
   await new Promise<void>((listening) => runner.listen(0, "127.0.0.1", listening));
   context.after(() => new Promise<void>((closed) => runner.close(() => closed())));
 
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), new FakeTransport([]));
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport: new FakeTransport([]) });
   await client.connectRunner(directRemoteHost((runner.address() as AddressInfo).port), { token: "any-token" });
   const execution = await client.runnerClient("host-direct").getShellExecution("exec-1", { agentId: "main", sessionId: "session-1" });
 
@@ -467,7 +467,7 @@ test("a machine with no Runner connected still reports whether it answers", asyn
     { exitCode: 0, stderr: "", stdout: "" },
     { exitCode: 255, stderr: "ssh: connect to host compute-node port 22: No route to host", stdout: "" },
   ]);
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport });
 
   const online = await client.reachability(sshHost);
   assert.equal(online.state, "online");
@@ -490,7 +490,7 @@ test("a machine this installation cannot reach at all is unknown, not offline", 
   // Saying "offline" would send someone to check a machine that is probably up.
   const client = new RemoteComputeClient("/unused/ssh_config", async () => {
     throw new Error("This machine has no stored SSH credentials");
-  }, new FakeTransport([]));
+  }, { transport: new FakeTransport([]) });
   const result = await client.reachability({
     alias: "no-credentials", connectionKind: "ssh", createdAt: "2026-09-01T00:00:00.000Z",
     id: "host-nocreds", runnerCommand: "sciencediscovery-runner", status: "ready",
@@ -504,7 +504,7 @@ test("a self-deployed Runner is asked for its health endpoint rather than a shel
   const runner = await startFakeRunner({ platform: "linux", token: "correct-token", version: "runner-v1" });
   context.after(() => runner.close());
   const transport = new FakeTransport([]);
-  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), transport);
+  const client = new RemoteComputeClient("/unused/ssh_config", async () => access(), { transport });
 
   const online = await client.reachability(directRemoteHost(runner.port));
   assert.equal(online.state, "online", "answering at all proves the machine is up; the token is a separate question");

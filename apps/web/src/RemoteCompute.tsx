@@ -654,7 +654,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
     if (!connected) {
       setConnectLogs((current) => ({ ...current, [host.id]: [] }));
       const poll = async (): Promise<void> => {
-        const log = await client.remoteRunnerConnectLog(host.id).catch(() => undefined);
+        const log = await client.runnerConnectLog(host.id).catch(() => undefined);
         // A cleared story (successful connect, disconnect) stays cleared even
         // when a poll was already in flight while it happened.
         if (log) setConnectLogs((current) => host.id in current ? { ...current, [host.id]: log.entries } : current);
@@ -700,7 +700,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       // The story's last lines are written as the attempt fails; fetch them
       // once more so the panel shows the cause, not just the middle.
       if (!connected) {
-        const log = await client.remoteRunnerConnectLog(host.id).catch(() => undefined);
+        const log = await client.runnerConnectLog(host.id).catch(() => undefined);
         if (log) setConnectLogs((current) => ({ ...current, [host.id]: log.entries }));
       }
       handleFailure(error, host.alias, host.id, (hostKey) => toggleRunnerConnection(host, connected, hostKey), t("remote.errorRunnerConnection"));

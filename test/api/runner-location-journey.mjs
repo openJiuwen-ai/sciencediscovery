@@ -144,6 +144,9 @@ try {
   for (const id of ["local", remoteRunnerId]) {
     runnerId = id;
     assert.equal((await json(`/api/runners/${id}/connect`, {})).state, "ready");
+    const connectLog = await json(`/api/runners/${id}/connect-log`);
+    assert.equal(connectLog.hostId, id);
+    assert.ok(Array.isArray(connectLog.entries), "both locations expose connection progress through the same API");
     for (const mode of ["foreground", "background"]) {
     await step(`${steps.length + 1}. ${id === "local" ? "本机" : "远程"} ${mode} 命令完成后查看工作区并继续会话`, "执行成功；wake 查询结果并回复；只提交一次命令；后续用户消息仍可完成。", async () => {
       const session = await json(`/api/projects/${project.id}/sessions`, { title: mode, modelId: model.id,

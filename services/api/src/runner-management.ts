@@ -15,7 +15,9 @@ export async function runnerTarget(store: SessionStore, local: RunnerClient, rem
     const host = store.getRemoteHost(id);
     if (!host) throw new Error("Runner not found");
     const status = await remote.runnerStatusWithResources(id);
-    return { ...host, location: "remote", runnerStatus: status, workspaceRoot: status.resources?.workspaceDisk?.path };
+    const reachability = status.state === "ready" ? undefined : await remote.reachability(host);
+    return { ...host, location: "remote", runnerStatus: status, workspaceRoot: status.resources?.workspaceDisk?.path,
+      ...(reachability ? { reachability } : {}) };
   }
   const now = new Date().toISOString();
   let status: RemoteRunnerStatus;
