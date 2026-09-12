@@ -391,11 +391,65 @@ test("tools: noveltyCheck probes the store graph and documents", async (context)
   const none = await tools.noveltyCheck(kb.id, "zebra quantum entanglement cures everything");
   assert.equal(none.verdict, "no-collision");
   assert.match(none.note, /wider literature|out of scope/i);
+  // No external sources injected → the stage is reported as not executed and
+  // the combined verdict discloses its internal-only scope.
+  assert.equal(none.external, null);
+  assert.equal(none.novelty.verdict, "novel");
+  assert.match(none.novelty.caveat, /external stage not executed/);
 
   await assert.rejects(
     () => tools.noveltyCheck("nonexistent", "x", ),
     (error: unknown) => error instanceof KeKbNotFoundError,
   );
+});
+
+test("tools: noveltyCheck runs injected external counter-evidence and composes the verdict", async (context) => {
+  const root = tempRoot("ke-tools-novelty-ext");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const claim = "zebra fish regenerate cardiac tissue after cryoinjury";
+
+  const withHit = createKnowledgeEngineTools(store, {
+    noveltyExternal: [
+      {
+        name: "semantic-scholar",
+        search: async () => [
+          { title: "Zebrafish cardiac regeneration after cryoinjury", year: 2020, url: "https://doi.org/10.1/x", venue: "Nature", abstract: "zebra fish regenerate cardiac tissue following cryoinjury" },
+        ],
+      },
+    ],
+  });
+  const kbHit = store.createKnowledgeBase({ name: "Hit" });
+  const hit = await withHit.noveltyCheck(kbHit.id, claim);
+  assert.equal(hit.external?.status, "ok");
+  assert.equal(hit.external?.items[0]?.aboveThreshold, true);
+  assert.equal(hit.novelty.verdict, "similar-found");
+  // The internal verdict stays the first `verdict` key for existing consumers.
+  assert.equal(hit.verdict, "no-collision");
+
+  const withFailure = createKnowledgeEngineTools(store, {
+    noveltyExternal: [
+      { name: "semantic-scholar", search: async () => { throw new Error("Semantic Scholar API HTTP 429"); } },
+      { name: "openalex", search: async () => { throw new Error("OpenAlex API HTTP 403"); } },
+    ],
+  });
+  const failed = await withFailure.noveltyCheck(kbHit.id, claim);
+  assert.equal(failed.external?.status, "error");
+  assert.equal(failed.novelty.verdict, "inconclusive");
+  assert.match(failed.novelty.reasons.join(" "), /external counter-evidence failed/);
+
+  // Internal collisions win regardless of external state.
+  const collisionTools = createKnowledgeEngineTools(store, {
+    noveltyExternal: [
+      { name: "semantic-scholar", search: async () => { throw new Error("HTTP 500"); } },
+    ],
+  });
+  const kbCollision = store.createKnowledgeBase({ name: "Collision" });
+  seedGraph(store, kbCollision.id);
+  const collision = await collisionTools.noveltyCheck(kbCollision.id, "mAb114 binds GP and thereby neutralizes the virus");
+  assert.equal(collision.verdict, "collision");
+  assert.equal(collision.novelty.verdict, "similar-found");
 });
 
 test("tools: verifyCitation checks quotes against ready documents", async (context) => {

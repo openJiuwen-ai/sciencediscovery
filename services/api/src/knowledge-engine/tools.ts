@@ -36,6 +36,8 @@ import {
   searchBlocks,
   validateEntities,
   verifyCitation,
+  combineNovelty,
+  runExternalNoveltyStage,
   type BriefKbUncertainty,
   type CitationVerifyResult,
   type DeepDiveResult,
@@ -48,6 +50,9 @@ import {
   type KbSearchDocumentInput,
   type KbSearchResult,
   type NoveltyCheckResult,
+  type NoveltyCombined,
+  type NoveltyExternalSection,
+  type NoveltyExternalSource,
   type ResidentSummary,
   type ValidateEntitiesResult,
   type VectorChunkCandidate,
@@ -88,9 +93,14 @@ export interface KnowledgeEngineToolPort {
   /** W8: regex over document fulltexts, line-grained (doc_grep). Invalid
    *  patterns come back as a structured error, not a throw. */
   docGrep(kbId: string, pattern: string, opts: { maxMatches?: number }): Promise<DocGrepResult>;
-  /** W9: offline novelty check for a candidate claim (novelty_check) —
-   *  entity/relation/passage probes against THIS KB only. */
-  noveltyCheck(kbId: string, claim: string): Promise<NoveltyCheckResult>;
+  /** W9/V1-Z1: novelty check for a candidate claim (novelty_check) —
+   *  entity/relation/passage probes against THIS KB plus, when external
+   *  sources are configured, the S2→OpenAlex counter-evidence stage and the
+   *  combined PU-worded verdict under `novelty`. */
+  noveltyCheck(kbId: string, claim: string): Promise<NoveltyCheckResult & {
+    external: NoveltyExternalSection | null;
+    novelty: NoveltyCombined;
+  }>;
   /** W9: three-state quote verification across the KB's documents
    *  (verify_citation) — verbatim / fuzzy / not-found. */
   verifyCitation(kbId: string, quote: string): Promise<CitationVerifyResult>;
@@ -116,6 +126,11 @@ export function createKnowledgeEngineTools(
     embedding?: EmbeddingClient;
     /** Degradation telemetry for the hybrid search arm (logged, never fatal). */
     onWarn?: (message: string) => void;
+    /** V1-Z1: external counter-evidence sources for novelty_check —
+     *  connector-backed (S2 first, OpenAlex fallback) in production. Absent
+     *  → the external stage reports "no sources configured" and the combined
+     *  verdict discloses its internal-only scope. */
+    noveltyExternal?: readonly NoveltyExternalSource[];
   } = {},
 ): KnowledgeEngineToolPort {
   // Read bounds: 10k entities / 500 edges-per-entity / 50k edges total are
@@ -313,7 +328,7 @@ export function createKnowledgeEngineTools(
         .filter((document) => Boolean(document.fulltext))
         .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
       const capped = documents.length > 200;
-      const result = noveltyCheck({
+      const internal = noveltyCheck({
         kbId,
         claim,
         entities: entities.map((entity) => ({
@@ -325,7 +340,30 @@ export function createKnowledgeEngineTools(
         relations,
         documents: capped ? documents.slice(0, 200) : documents,
       });
-      return capped ? { ...result, note: `${result.note} (passage probe scanned the first 200 ready documents — a miss there is not final)` } : result;
+      // V1-Z1: external counter-evidence (S2 → OpenAlex), then the combined
+      // PU-worded verdict. Field order matters for consumers that read the
+      // first `verdict` key (the stub in the J-KE6 journey): the internal
+      // verdict stays first, the combined verdict lands under `novelty`.
+      const external = options.noveltyExternal
+        ? await runExternalNoveltyStage(claim, options.noveltyExternal).catch((error: unknown) => ({
+          status: "error" as const,
+          checkedSources: [],
+          error: `external stage crashed: ${error instanceof Error ? error.message : String(error)}`,
+          candidates: 0,
+          items: [],
+        }))
+        : null;
+      const combined = combineNovelty({ claim, internal, external });
+      const cappedNote = capped
+        ? " (passage probe scanned the first 200 ready documents — a miss there is not final)"
+        : "";
+      const result = {
+        ...internal,
+        note: `${internal.note}${cappedNote}`,
+        external,
+        novelty: combined,
+      };
+      return result;
     },
 
     async verifyCitation(kbId, quote) {

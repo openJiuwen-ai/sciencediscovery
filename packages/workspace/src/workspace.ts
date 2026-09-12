@@ -1365,8 +1365,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       ),
       keTool(
         "novelty_check",
-        "Check a claim's novelty against the knowledge base",
-        "Anti-hallucination check for novelty claims ('first to show…', 'novel mechanism…'): three deterministic probes (entity / relation / passage) against ONE knowledge base. collision = the KB already covers this subject — reframe as building on it; partial = weak overlap; no-collision = nothing in THIS KB overlaps. LIMITATION: internal to the knowledge base — 'no-collision' says nothing about the wider literature (external novelty search is out of scope for this build); absence of evidence is not evidence of absence. Not for: verifying a quote's wording (use verify_citation); checking entity existence (use validate_entities).",
+        "Check a claim's novelty against the knowledge base and external indexes",
+        "Anti-hallucination check for novelty claims ('first to show…', 'novel mechanism…'): deterministic probes (entity / relation / passage) against ONE knowledge base, plus an external counter-evidence stage (Semantic Scholar → OpenAlex fallback) when configured. collision = the KB already covers this subject — reframe as building on it; partial = weak overlap; no-collision = nothing in THIS KB overlaps. The combined `novelty` verdict (novel / similar-found / inconclusive) carries the PU-principle caveat: 'novel' only means no similar item was found within the searches actually completed — unseen ≠ nonexistent. Not for: verifying a quote's wording (use verify_citation); checking entity existence (use validate_entities).",
         Type.Object({
           kbId: kbIdParam,
           claim: Type.String({ minLength: 1, maxLength: 1000, description: "The candidate novelty claim, verbatim" }),

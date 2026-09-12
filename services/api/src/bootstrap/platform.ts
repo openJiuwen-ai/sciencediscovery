@@ -463,9 +463,30 @@ export function createPlatformServices(
   // Consumption tools (concept_explore / deep_dive / unified search /
   // validate / gaps) — a plain port object; the agent runtime registers the
   // LLM tools when this is present. The embedding client enables kb_search's
-  // semantic arm (RRF-fused with FTS; absent → keyword-only).
+  // semantic arm (RRF-fused with FTS; absent → keyword-only). The novelty
+  // sources reuse the scholarly source chain's S2/OpenAlex connectors (same
+  // rate-limited transport, fixture-replayable in mocked E2E).
+  const keNoveltyExternal = keChain.connectors
+    .filter((connector): connector is (typeof keChain.connectors)[number] =>
+      connector.name === "semantic-scholar" || connector.name === "openalex")
+    .map((connector) => ({
+      name: connector.name as "semantic-scholar" | "openalex",
+      search: async (claim: string, limit: number) => {
+        const refs = await connector.search(claim, limit);
+        return refs
+          .filter((ref) => ref.title)
+          .map((ref) => ({
+            title: ref.title,
+            year: ref.year ?? null,
+            url: ref.doi ? `https://doi.org/${ref.doi}` : ref.arxivId ? `https://arxiv.org/abs/${ref.arxivId}` : null,
+            venue: null,
+            abstract: ref.abstract ?? null,
+          }));
+      },
+    }));
   const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore, {
     ...(keEmbedding ? { embedding: keEmbedding } : {}),
+    noveltyExternal: keNoveltyExternal,
     onWarn: (message) => apiLog.warn("knowledge_engine", { message }),
   });
   // Community roots for the progressive graph drill-down (fingerprint-cached,

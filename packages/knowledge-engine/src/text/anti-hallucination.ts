@@ -217,7 +217,7 @@ export function noveltyCheck(input: {
     ? "this knowledge base already covers the claim's subject matter — reframe as building on it, or verify the delta explicitly"
     : partial
       ? "weak overlap inside this knowledge base — the claim is not fully covered either"
-      : "no overlap inside this knowledge base — this says nothing about the wider literature (external novelty search is out of scope for this build)";
+      : "no overlap inside this knowledge base — this alone says nothing about the wider literature (external counter-evidence, when configured, lands in the result's `novelty` section; absence of evidence is not evidence of absence)";
   return {
     kbId: input.kbId,
     claim: input.claim,
@@ -290,7 +290,7 @@ export function buildAntiHallucinationBrief(kbs: readonly BriefKbUncertainty[]):
 }
 
 /** Extract the uncertain signals from raw entity/edge rows (composition
- *  helper for the port layer: bounded, deterministic). */
+ * helper for the port layer: bounded, deterministic). */
 export function briefUncertaintyFrom(kb: { id: string; name: string }, rows: {
   entities: readonly { name: string; supportCount: number }[];
   edges: readonly { type: string; sourceName: string; targetName: string; quote: string | null }[];
@@ -306,4 +306,261 @@ export function briefUncertaintyFrom(kb: { id: string; name: string }, rows: {
     entityCount: rows.entities.length,
     edgeCount: rows.edges.length,
   };
+}
+
+// --------------------------------------------- external counter-evidence (V1-Z1)
+// Port of SA's novelty-check external stage: Semantic Scholar first (one
+// backoff retry on retryable failures), OpenAlex as fallback, per-source
+// structured ProbeStatus — a failed source can never read as "no prior art".
+
+/** PU principle wording, always attached to the combined verdict. */
+export const PU_CAVEAT_NOVEL =
+  "PU principle: unseen ≠ nonexistent. 'novel' only means no item reached the similarity threshold within " +
+  "the searches actually completed this run; coverage is limited (internal scope: ingested and extracted KB " +
+  "content; external scope: Semantic Scholar / OpenAlex indexes) — identical or substantially similar work " +
+  "may exist in sources not covered.";
+export const PU_CAVEAT_SIMILAR =
+  "Similarity is decided by deterministic lexical/structural signals (claim-word coverage, entity-name " +
+  "overlap, direct graph edges), not semantic equivalence; each listed item's actual relation to the claim " +
+  "needs human review.";
+export const PU_CAVEAT_INCONCLUSIVE =
+  "'inconclusive' means this run produced insufficient novelty evidence (search scope unavailable or the " +
+  "claim too weak); it must be read as neither 'novel' nor 'prior work exists'.";
+
+export const NOVELTY_MIN_CLAIM_WORDS = 3;
+export const NOVELTY_SIMILAR_COVERAGE = 0.5;
+export const NOVELTY_EXTERNAL_RESULT_LIMIT = 5;
+/** Deterministic score assigned to a direct KB graph edge between claim entities. */
+const NOVELTY_EDGE_SIGNAL_SCORE = 1.0;
+/** Combined similar-items list cap. */
+const NOVELTY_MAX_SIMILAR_ITEMS = 10;
+/** S2/OpenAlex query text cap (API query length guard). */
+const NOVELTY_QUERY_CHARS = 300;
+/** Backoff before the single S2 retry on a retryable failure. */
+const NOVELTY_DEFAULT_BACKOFF_MS = 2_000;
+
+export interface NoveltyExternalPaper {
+  readonly title: string;
+  readonly year?: number | null;
+  readonly url?: string | null;
+  readonly venue?: string | null;
+  readonly abstract?: string | null;
+}
+
+export type NoveltyExternalSourceName = "semantic-scholar" | "openalex";
+
+/** A search source injected by the port layer (connector-backed in production). */
+export interface NoveltyExternalSource {
+  readonly name: NoveltyExternalSourceName;
+  search(claim: string, limit: number): Promise<readonly NoveltyExternalPaper[]>;
+}
+
+export interface NoveltyExternalItem {
+  readonly title: string;
+  readonly source: NoveltyExternalSourceName;
+  /** Claim-word coverage in [0,1]. */
+  readonly coverage: number;
+  readonly aboveThreshold: boolean;
+  readonly reason: string;
+  readonly snippet?: string;
+  readonly link?: string | null;
+  readonly year?: number | null;
+}
+
+export interface NoveltyExternalSection {
+  readonly status: "ok" | "empty" | "error" | "disabled";
+  readonly checkedSources: readonly string[];
+  readonly error?: string;
+  readonly candidates: number;
+  readonly items: readonly NoveltyExternalItem[];
+}
+
+export interface NoveltyCombined {
+  readonly verdict: "novel" | "similar-found" | "inconclusive";
+  readonly caveat: string;
+  readonly reasons: readonly string[];
+  readonly similarItems: readonly (NoveltyExternalItem | {
+    readonly title: string;
+    readonly source: "kb-graph";
+    readonly coverage: number;
+    readonly aboveThreshold: boolean;
+    readonly reason: string;
+    readonly link: null;
+  })[];
+}
+
+/** Unicode-aware content-word set; CJK single characters stay searchable. */
+function normalizeClaimWords(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/)
+      .filter((word) => word.length > 2 || /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(word)),
+  );
+}
+
+function claimCoverage(claimWords: ReadonlySet<string>, text: string): number {
+  if (claimWords.size === 0) return 0;
+  const textWords = normalizeClaimWords(text);
+  let hit = 0;
+  for (const word of claimWords) {
+    if (textWords.has(word)) hit += 1;
+  }
+  return hit / claimWords.size;
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function assessExternalPapers(
+  claimWords: ReadonlySet<string>,
+  papers: readonly NoveltyExternalPaper[],
+  source: NoveltyExternalSourceName,
+  threshold: number,
+): NoveltyExternalItem[] {
+  return papers.map((paper) => {
+    const coverage = claimCoverage(claimWords, `${paper.title}\n${paper.abstract ?? ""}`);
+    return {
+      title: paper.title,
+      source,
+      coverage,
+      aboveThreshold: coverage >= threshold,
+      reason:
+        `external index hit; claim-word coverage ${percent(coverage)} (threshold ${percent(threshold)})` +
+        (paper.year != null ? `; year ${paper.year}` : "") +
+        (paper.venue ? `; ${paper.venue}` : ""),
+      ...(paper.abstract ? { snippet: paper.abstract.slice(0, 300) } : {}),
+      link: paper.url ?? null,
+      year: paper.year ?? null,
+    };
+  });
+}
+
+function isRetryableExternalError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /HTTP 429|HTTP 5\d\d|timed? ?out|abort/i.test(message);
+}
+
+/** S2-first with one backoff retry, OpenAlex fallback (SA semantics). */
+export async function runExternalNoveltyStage(
+  claim: string,
+  sources: readonly NoveltyExternalSource[],
+  options: { backoffMs?: number } = {},
+): Promise<NoveltyExternalSection> {
+  const claimWords = normalizeClaimWords(claim);
+  const threshold = NOVELTY_SIMILAR_COVERAGE;
+  const primary = sources.find((source) => source.name === "semantic-scholar");
+  const fallback = sources.find((source) => source.name === "openalex");
+  if (!primary && !fallback) {
+    return { status: "disabled", checkedSources: [], error: "no external search sources configured", candidates: 0, items: [] };
+  }
+  const query = claim.slice(0, NOVELTY_QUERY_CHARS);
+  const checked: string[] = [];
+  const sleep = (ms: number) => (ms <= 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms)));
+
+  let primaryError: string | null = null;
+  if (primary) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        checked.push(attempt === 0 ? primary.name : `${primary.name}(retry)`);
+        const papers = await primary.search(query, NOVELTY_EXTERNAL_RESULT_LIMIT);
+        return {
+          status: papers.length > 0 ? "ok" : "empty",
+          checkedSources: checked,
+          candidates: papers.length,
+          items: assessExternalPapers(claimWords, papers, primary.name, threshold),
+        };
+      } catch (error) {
+        primaryError = error instanceof Error ? error.message : String(error);
+        if (!isRetryableExternalError(error) || attempt === 1) break;
+        await sleep(options.backoffMs ?? NOVELTY_DEFAULT_BACKOFF_MS);
+      }
+    }
+  }
+
+  if (fallback) {
+    try {
+      checked.push(fallback.name);
+      const papers = await fallback.search(query, NOVELTY_EXTERNAL_RESULT_LIMIT);
+      return {
+        status: papers.length > 0 ? "ok" : "empty",
+        checkedSources: checked,
+        ...(primaryError ? { error: `semantic-scholar unavailable (${primaryError}); degraded to openalex` } : {}),
+        candidates: papers.length,
+        items: assessExternalPapers(claimWords, papers, fallback.name, threshold),
+      };
+    } catch (error) {
+      const fallbackError = error instanceof Error ? error.message : String(error);
+      return {
+        status: "error",
+        checkedSources: checked,
+        error: `semantic-scholar: ${primaryError ?? "not configured"}; openalex: ${fallbackError}`,
+        candidates: 0,
+        items: [],
+      };
+    }
+  }
+
+  return {
+    status: "error",
+    checkedSources: checked,
+    error: `semantic-scholar: ${primaryError ?? "not configured"}`,
+    candidates: 0,
+    items: [],
+  };
+}
+
+/** Compose the internal KB probes and the external stage into one verdict.
+ *  Pure: any inputs in, verdict out (SA's better-to-miss-than-to-overclaim
+ *  ordering — found evidence wins, probe errors degrade novel to
+ *  inconclusive, a skipped external stage is disclosed, never hidden). */
+export function combineNovelty(input: {
+  claim: string;
+  internal: NoveltyCheckResult;
+  external: NoveltyExternalSection | null;
+}): NoveltyCombined {
+  const claimWords = normalizeClaimWords(input.claim);
+  const reasons: string[] = [];
+  if (claimWords.size < NOVELTY_MIN_CLAIM_WORDS) {
+    reasons.push(
+      `claim normalizes to only ${claimWords.size} content word(s) (need >= ${NOVELTY_MIN_CLAIM_WORDS}) — not a reliable search term set`,
+    );
+    return { verdict: "inconclusive", caveat: PU_CAVEAT_INCONCLUSIVE, reasons, similarItems: [] };
+  }
+
+  const internalCollision = input.internal.verdict === "collision";
+  const graphItems = input.internal.relationHits.map((hit) => ({
+    title: `${hit.sourceName} —[${hit.type}]→ ${hit.targetName}`,
+    source: "kb-graph" as const,
+    coverage: NOVELTY_EDGE_SIGNAL_SCORE,
+    aboveThreshold: true,
+    reason: "direct graph edge between claim entities inside the knowledge base",
+    link: null,
+  }));
+  const items = [...graphItems, ...(input.external?.items ?? [])]
+    .sort((a, b) => b.coverage - a.coverage || a.source.localeCompare(b.source) || a.title.localeCompare(b.title))
+    .slice(0, NOVELTY_MAX_SIMILAR_ITEMS);
+
+  if (internalCollision || items.some((item) => item.aboveThreshold)) {
+    return { verdict: "similar-found", caveat: PU_CAVEAT_SIMILAR, reasons, similarItems: items };
+  }
+
+  if (input.external?.status === "error") {
+    // A failed external probe means absence cannot be claimed.
+    reasons.push(`external counter-evidence failed: ${input.external.error ?? "unknown error"}`);
+    return { verdict: "inconclusive", caveat: PU_CAVEAT_INCONCLUSIVE, reasons, similarItems: items };
+  }
+
+  if (input.external === null || input.external.status === "disabled") {
+    const scopeNote = input.external === null
+      ? "external stage not executed (no sources configured)"
+      : `external stage skipped (${input.external.error ?? "disabled"})`;
+    return {
+      verdict: "novel",
+      caveat: `${PU_CAVEAT_NOVEL} (Note: ${scopeNote} — this verdict covers the internal knowledge-base scope only.)`,
+      reasons,
+      similarItems: items,
+    };
+  }
+
+  return { verdict: "novel", caveat: PU_CAVEAT_NOVEL, reasons, similarItems: items };
 }
