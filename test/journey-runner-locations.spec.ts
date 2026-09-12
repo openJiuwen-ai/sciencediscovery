@@ -48,7 +48,7 @@ test("R1 设置树按 Runner 集中管理机器、工作区和科学环境", { t
     await page.route(`**/api/runners/${id}/connect`, (route) => route.fulfill({ json: { state: "ready", hostId: id } }));
     await page.route(`**/api/runners/${id}/environment-setup`, (route) => route.fulfill({ json: { state: "ready", provisioner: "micromamba", allowedChannels: [], starterPackages: { python: [], r: [] }, components: { micromamba: { state: "ready" }, conda: { state: "ready" } } } }));
     await page.route(`**/api/runners/${id}/environment-revisions`, (route) => route.fulfill({ json: [] }));
-    await page.route(`**/api/runners/${id}/environments`, (route) => route.fulfill({ json: [{ id: `${id}-python`, name: `${id} Python`, language: "python", kind: "task" }] }));
+    await page.route(`**/api/runners/${id}/environments`, (route) => route.fulfill({ json: [{ id: `${id}-python`, name: `${id} Python`, language: "python", kind: "task", createdAt: "2026-01-01", updatedAt: "2026-01-01", currentRevisionId: `${id}-rev-1` }] }));
     const workspaceKey = `${id === "local" ? "/application/projects" : "/runner/workspaces"}/${fixture.session.id}`;
     await page.route(`**/api/runners/${id}/workspaces`, (route) => route.fulfill({ json: [{ runnerId: id, sessionId: fixture.session.id, sessionTitle: fixture.session.title, projectName: fixture.project.name, workspaceKey, records: [] }] }));
     await page.route(`**/api/runners/${id}/workspaces/${fixture.session.id}/files`, (route) => route.fulfill(filesUnavailable ? { status: 503, json: { error: "Runner workspace temporarily unavailable" } } : { json: { runnerId: id, workspaceKey, files: [{ path: `${id}-result.txt`, size: 42 }] } }));
@@ -105,7 +105,7 @@ test("R1 设置树按 Runner 集中管理机器、工作区和科学环境", { t
         await dialog.getByRole("tab", { name: "科学环境", exact: true }).click();
         await expect(dialog.getByText(`${id} Python`, { exact: true })).toBeVisible();
         await expect(dialog.getByRole("button", { name: "新增环境" })).toBeVisible();
-        await expect(dialog.getByText("全局软件包源", { exact: true })).toBeVisible();
+        await expect(dialog.locator("summary", { hasText: "全局软件包源" })).toBeVisible();
       });
     }
     await journey.step("添加 Runner 并取消", "添加入口打开 SSH 表单，取消后收起，目录保留原有机器。", async () => {
