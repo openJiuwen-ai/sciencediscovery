@@ -46,7 +46,7 @@ test("R1 设置树按 Runner 集中管理机器、工作区和科学环境", { t
   });
   for (const id of ids) {
     await page.route(`**/api/runners/${id}/connect`, (route) => route.fulfill({ json: { state: "ready", hostId: id } }));
-    await page.route(`**/api/runners/${id}/environment-setup`, (route) => route.fulfill({ json: { state: "disabled", provisioner: "micromamba", allowedChannels: [], starterPackages: { python: [], r: [] }, components: { micromamba: { state: "disabled" }, conda: { state: "disabled" } } } }));
+    await page.route(`**/api/runners/${id}/environment-setup`, (route) => route.fulfill({ json: { state: "ready", provisioner: "micromamba", allowedChannels: [], starterPackages: { python: [], r: [] }, components: { micromamba: { state: "ready" }, conda: { state: "ready" } } } }));
     await page.route(`**/api/runners/${id}/environment-revisions`, (route) => route.fulfill({ json: [] }));
     await page.route(`**/api/runners/${id}/environments`, (route) => route.fulfill({ json: [{ id: `${id}-python`, name: `${id} Python`, language: "python", kind: "task" }] }));
     const workspaceKey = `${id === "local" ? "/application/projects" : "/runner/workspaces"}/${fixture.session.id}`;

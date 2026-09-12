@@ -156,7 +156,7 @@ test("J7 Runner NPU 卡片：可选/不可用/本地与远端一致且窄屏可�
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openRemoteSettings();
-        await expect(dialog.getByRole("heading", { name: "Runners" })).toBeVisible();
+        await expect(dialog.getByRole("heading", { name: "本地 Runner" })).toBeVisible();
         const localCard = dialog.locator("article.remote-host-card").filter({ hasText: "Runner ID：local" });
         await expect(localCard).toBeVisible();
         const npu = localCard.locator("section[aria-label='NPU 卡']");

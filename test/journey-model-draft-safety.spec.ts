@@ -189,7 +189,7 @@ test("T1 服务商草稿不会静默丢失", { tag: "@mocked" }, async ({ journe
           .getByRole("button", { name: /^全局默认值/ })
           .click();
         expect(acceptCount).toBe(1);
-        await expect(dialog.getByText("全局默认值", { exact: true })).toBeVisible();
+        await expect(dialog.getByRole("navigation").getByRole("button", { name: "全局默认值", exact: true })).toHaveAttribute("aria-current", "page");
 
         const reopened = await openModelRegistry();
         await openProviderEditor(reopened);
