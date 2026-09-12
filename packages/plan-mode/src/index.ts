@@ -45,6 +45,10 @@ export type PlanModeEvent =
   | { plan: SessionPlan; type: "plan.abandoned" };
 
 export interface PlanModeOptions {
+  /** V3-C2: under an approval-gated session propose/revise park the plan for
+   *  a human decision and BLOCK until it lands — the description must say so
+   *  honestly instead of promising "does not require user approval". */
+  approvalMayBlock?: boolean;
   onEvent?(event: PlanModeEvent): void | Promise<void>;
   repository: PlanRepository;
 }
@@ -63,7 +67,9 @@ async function emit(options: PlanModeOptions, event: PlanModeEvent): Promise<voi
 export function createPlanLifecycleTools(options: PlanModeOptions): AgentTool[] {
   const proposeParameters = Type.Object(planBody);
   const propose: AgentTool<typeof proposeParameters> = {
-    description: "Create the current structured plan. This records execution state but does not require user approval and does not block ordinary tools.",
+    description: options.approvalMayBlock
+      ? "Create the current structured plan. In this session the plan goes to the user for review and this call BLOCKS until they approve (the plan becomes active), reject (this call fails — propose a revised plan or continue without one), or edit it first. A rejected plan is not a run failure."
+      : "Create the current structured plan. This records execution state but does not require user approval and does not block ordinary tools.",
     async execute(_id, params, signal) {
       const plan = await options.repository.propose(params, signal);
       await emit(options, { plan, type: "plan.proposed" });
@@ -80,7 +86,9 @@ export function createPlanLifecycleTools(options: PlanModeOptions): AgentTool[] 
     planId: Type.String({ minLength: 1 }),
   });
   const revise: AgentTool<typeof reviseParameters> = {
-    description: "Replace the scope, confidence, caveats, and steps of the current plan. Supply its latest version to prevent lost updates.",
+    description: options.approvalMayBlock
+      ? "Replace the scope, confidence, caveats, and steps of the current plan. Supply its latest version to prevent lost updates. Approving an earlier version does NOT approve this revision: in this session a substantive revision re-enters user review and this call BLOCKS for the new decision."
+      : "Replace the scope, confidence, caveats, and steps of the current plan. Supply its latest version to prevent lost updates.",
     async execute(_id, params, signal) {
       const { planId, ...input } = params;
       const plan = await options.repository.revise(planId, input, signal);

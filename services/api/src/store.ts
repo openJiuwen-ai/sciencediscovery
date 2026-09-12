@@ -156,6 +156,8 @@ import type {
   AgentMemoryEntry,
   AgentMemoryProvenance,
   AgentMemoryStatus,
+  DecidePlanApprovalRequest,
+  PlanApprovalDecision,
 } from "@sciencediscovery/schema";
 
 import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
@@ -811,9 +813,14 @@ export class SessionStore {
     const sessionPlans = savedSessionPlans.map((plan) => ({
       ...plan,
       mode: "recorded" as const,
-      state: plan.state === "completed" || plan.state === "abandoned" ? plan.state : "recorded" as const,
+      state: plan.state === "completed" || plan.state === "abandoned" || plan.state === "awaiting_user"
+        ? plan.state
+        : "recorded" as const,
     }));
     const migratedSessionPlans = JSON.stringify(sessionPlans) !== JSON.stringify(savedSessionPlans);
+    // Plan approval decision log (V3-C2) — append-only, capped like other
+    // catalog logs; missing on pre-V3 catalogs.
+    const savedPlanApprovalDecisions = Array.isArray(saved.planApprovalDecisions) ? saved.planApprovalDecisions : [];
     const savedSubagents = Array.isArray(saved.subagents)
       ? saved.subagents
       : Array.isArray(saved.delegationTracks) ? saved.delegationTracks : [];
@@ -1042,6 +1049,7 @@ export class SessionStore {
       remoteJobs,
       remoteWorkspaceSyncs,
       sessionPlans,
+      planApprovalDecisions: savedPlanApprovalDecisions,
       sessions,
       specialists,
       timeoutSettings,
@@ -2624,7 +2632,12 @@ export class SessionStore {
     };
   }
 
-  async proposeSessionPlan(sessionId: string, input: ProposePlanRequest, runId?: string): Promise<SessionPlan> {
+  async proposeSessionPlan(
+    sessionId: string,
+    input: ProposePlanRequest,
+    runId?: string,
+    options: { awaitingUser?: boolean } = {},
+  ): Promise<SessionPlan> {
     this.assertSessionWritable(sessionId);
     const normalized = this.normalizePlanInput(input);
     const now = new Date().toISOString();
@@ -2635,7 +2648,8 @@ export class SessionStore {
       mode: "recorded",
       ...(runId ? { runId } : {}),
       sessionId,
-      state: "recorded",
+      // V3-C2: approval-gated sessions park the plan for a human decision.
+      state: options.awaitingUser ? "awaiting_user" : "recorded",
       updatedAt: now,
       version: 1,
     };
@@ -2644,15 +2658,112 @@ export class SessionStore {
     return structuredClone(plan);
   }
 
-  async reviseSessionPlan(sessionId: string, planId: string, input: RevisePlanRequest): Promise<SessionPlan> {
+  async reviseSessionPlan(
+    sessionId: string,
+    planId: string,
+    input: RevisePlanRequest,
+    options: { markAwaitingUser?: boolean } = {},
+  ): Promise<SessionPlan> {
     this.assertSessionWritable(sessionId);
     const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === planId && candidate.sessionId === sessionId);
     if (!plan) throw new Error("Plan not found");
-    if (plan.state !== "recorded") throw new Error("Only a recorded plan can be revised");
+    if (plan.state !== "recorded" && plan.state !== "awaiting_user") {
+      throw new Error("Only a recorded or awaiting-approval plan can be revised");
+    }
     if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before revising");
     Object.assign(plan, this.normalizePlanInput(input), { updatedAt: new Date().toISOString(), version: plan.version + 1 });
+    // V3-C2: an agent revision under an approval-gated session re-enters
+    // review — approving version N never approves version N+1. User edits
+    // via REST keep the current state (they ARE the reviewer).
+    if (options.markAwaitingUser) plan.state = "awaiting_user";
     await this.saveCatalog();
     return structuredClone(plan);
+  }
+
+  // -------------------------------------------------- plan approval (V3-C2)
+
+  private appendPlanApprovalDecision(decision: PlanApprovalDecision): void {
+    this.catalog.planApprovalDecisions.push(decision);
+    // Append-only but bounded — same retention spirit as other catalog logs.
+    if (this.catalog.planApprovalDecisions.length > 500) {
+      this.catalog.planApprovalDecisions.splice(0, this.catalog.planApprovalDecisions.length - 500);
+    }
+  }
+
+  /** Record an automatic approval (always_allow sessions) — the decision
+   *  log is mode-agnostic: auto-approvals are logged too, with actor auto. */
+  async recordAutoPlanApproval(plan: SessionPlan): Promise<PlanApprovalDecision> {
+    const decision: PlanApprovalDecision = {
+      actor: "auto",
+      approvalMode: this.getSession(plan.sessionId)?.approvalMode ?? "always_allow",
+      createdAt: new Date().toISOString(),
+      decision: "approved",
+      id: randomUUID(),
+      planId: plan.id,
+      planVersion: plan.version,
+      ...(plan.runId ? { runId: plan.runId } : {}),
+      sessionId: plan.sessionId,
+    };
+    this.appendPlanApprovalDecision(decision);
+    await this.saveCatalog();
+    return structuredClone(decision);
+  }
+
+  /** Human decision on an awaiting_user plan. Binds the CURRENT version:
+   *  approve → recorded; reject → abandoned (reason preserved). */
+  async decideSessionPlanApproval(
+    sessionId: string,
+    planId: string,
+    input: DecidePlanApprovalRequest,
+  ): Promise<{ decision: PlanApprovalDecision; plan: SessionPlan }> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === planId && candidate.sessionId === sessionId);
+    if (!plan) throw new SessionStoreHttpError("Plan not found", 404);
+    if (plan.state !== "awaiting_user") {
+      throw new SessionStoreHttpError("Plan is not awaiting a decision", 409);
+    }
+    if (input.decision !== "approve" && input.decision !== "reject") {
+      throw new SessionStoreHttpError("Invalid plan decision", 400);
+    }
+    if (input.expectedVersion !== undefined && plan.version !== input.expectedVersion) {
+      throw new SessionStoreHttpError("Plan version changed; refresh before deciding", 409);
+    }
+    const reason = input.reason?.trim();
+    if (reason && reason.length > 2_000) throw new SessionStoreHttpError("Plan decision reason must not exceed 2000 characters", 400);
+    const now = new Date().toISOString();
+    plan.state = input.decision === "approve" ? "recorded" : "abandoned";
+    if (input.decision === "reject" && reason) plan.abandonmentReason = reason;
+    plan.updatedAt = now;
+    const decision: PlanApprovalDecision = {
+      actor: "user",
+      approvalMode: this.getSession(sessionId)?.approvalMode ?? "ask_for_dangerous",
+      createdAt: now,
+      decision: input.decision === "approve" ? "approved" : "rejected",
+      id: randomUUID(),
+      planId: plan.id,
+      planVersion: plan.version,
+      ...(reason ? { reason } : {}),
+      ...(plan.runId ? { runId: plan.runId } : {}),
+      sessionId,
+    };
+    this.appendPlanApprovalDecision(decision);
+    await this.saveCatalog();
+    return { decision: structuredClone(decision), plan: structuredClone(plan) };
+  }
+
+  listPlanApprovalDecisions(sessionId: string, planId?: string): PlanApprovalDecision[] {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return structuredClone(
+      this.catalog.planApprovalDecisions.filter(
+        (decision) => decision.sessionId === sessionId && (!planId || decision.planId === planId),
+      ),
+    );
+  }
+
+  /** Read-side state probe for the run's blocking wait. */
+  getSessionPlan(sessionId: string, planId: string): SessionPlan | undefined {
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === planId && candidate.sessionId === sessionId);
+    return plan ? structuredClone(plan) : undefined;
   }
 
   async updateSessionPlanStep(
@@ -2681,7 +2792,9 @@ export class SessionStore {
     this.assertSessionWritable(sessionId);
     const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
     if (!plan) throw new Error("Plan not found");
-    if (plan.state !== "recorded") throw new Error("Only a recorded plan can be abandoned");
+    // Awaiting-user plans are abandonable too (run-interrupt sweep, user
+    // withdrawing a pending proposal); completed/abandoned are terminal.
+    if (plan.state !== "recorded" && plan.state !== "awaiting_user") throw new Error("Only a recorded or awaiting-approval plan can be abandoned");
     if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before abandoning");
     const reason = input.reason?.trim();
     if (reason && reason.length > 2_000) throw new Error("Plan abandonment reason must not exceed 2000 characters");

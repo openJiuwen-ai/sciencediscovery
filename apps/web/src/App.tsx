@@ -76,6 +76,7 @@ import type {
   SessionArtifactOutput,
   SessionDetail,
   SessionListState,
+  RevisePlanRequest,
   SessionPlan,
   SessionRunEvent,
   SessionUsageSummary,
@@ -2602,6 +2603,55 @@ export function App() {
     setPermissionEpoch(epoch);
   }
 
+  // V3-C2: plan approval decision + user edit of the plan artifact.
+  const [planActionBusy, setPlanActionBusy] = useState(false);
+
+  async function refreshPlans(sessionId: string): Promise<void> {
+    try {
+      setPlans(await client.listSessionPlans(sessionId));
+    } catch {
+      // a failed refresh leaves the SSE-driven state as-is
+    }
+  }
+
+  async function decidePlanApproval(plan: SessionPlan, decision: "approve" | "reject", reason?: string): Promise<void> {
+    if (!session || planActionBusy) return;
+    setPlanActionBusy(true);
+    try {
+      const outcome = await client.decideSessionPlanApproval(session.id, plan.id, {
+        decision,
+        expectedVersion: plan.version,
+        ...(reason ? { reason } : {}),
+      });
+      setPlans((current) => [...current.filter((item) => item.id !== outcome.plan.id), outcome.plan]);
+      setError(undefined);
+      pushToast(decision === "approve" ? "success" : "info", decision === "approve" ? `Plan v${outcome.decision.planVersion} approved` : "Plan rejected");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not decide the plan");
+      await refreshPlans(session.id);
+    } finally {
+      setPlanActionBusy(false);
+    }
+  }
+
+  async function revisePlanArtifact(plan: SessionPlan, body: RevisePlanRequest): Promise<boolean> {
+    if (!session || planActionBusy) return false;
+    setPlanActionBusy(true);
+    try {
+      const revised = await client.reviseSessionPlan(session.id, plan.id, body);
+      setPlans((current) => [...current.filter((item) => item.id !== revised.id), revised]);
+      setError(undefined);
+      pushToast("success", `Plan revised to v${revised.version}`);
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not revise the plan");
+      await refreshPlans(session.id);
+      return false;
+    } finally {
+      setPlanActionBusy(false);
+    }
+  }
+
   async function decidePermission(request: PermissionRequest, decision: PermissionDecision): Promise<void> {
     try {
       const result = await client.decidePermissionRequest(request.id, { decision });
@@ -3062,6 +3112,9 @@ export function App() {
       });
     }
     if (streamEvent.type === "plan.proposed") {
+      setPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
+    }
+    if (streamEvent.type === "plan.approval_decided") {
       setPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
     }
     if (streamEvent.type === "subagent.updated"
@@ -3919,7 +3972,14 @@ export function App() {
     const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
-        <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={group.plans} />
+        <OrchestrationPanel
+          busy={planActionBusy}
+          expandedCards={activityCardExpansion}
+          onDecidePlan={(plan, decision) => void decidePlanApproval(plan, decision)}
+          onRevisePlan={(plan, body) => void revisePlanArtifact(plan, body)}
+          onToggleCard={toggleActivityCard}
+          plans={group.plans}
+        />
         <SubagentCards onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />

@@ -80,6 +80,7 @@ import { AGENT_MEMORY_CATEGORIES } from "@sciencediscovery/schema";
 import type {
   AgentMemoryCategory,
   AgentMemoryStatus,
+  DecidePlanApprovalRequest,
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
   CancelRunResult,
@@ -263,6 +264,7 @@ import {
   emptyTrace,
   getActiveSessionRun,
   publishApprovalModeChange,
+  publishPlanApprovalDecision,
   scheduleSessionRuns,
   sessionHasActiveRun,
   streamAgentRun,
@@ -1735,6 +1737,31 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
         });
         sendJson(response, 200, plan);
+        return;
+      }
+      // Plan approval (V3-C2): the human decision endpoint that wakes a run
+      // blocked in awaiting_user, plus the decision log read.
+      const sessionPlanDecisionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plans\/([^/]+)\/decision$/);
+      if (sessionPlanDecisionMatch && request.method === "POST") {
+        try {
+          const body = await readJson<DecidePlanApprovalRequest>(request);
+          const outcome = await store.decideSessionPlanApproval(sessionPlanDecisionMatch[1]!, sessionPlanDecisionMatch[2]!, body);
+          await publishPlanApprovalDecision(store, sessionPlanDecisionMatch[1]!, outcome);
+          sendJson(response, 200, outcome);
+          return;
+        } catch (error) {
+          if (error instanceof SessionStoreHttpError) {
+            return sendError(response, error.statusCode, error.message);
+          }
+          throw error;
+        }
+      }
+      const sessionPlanApprovalsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/plan-approvals$/);
+      if (sessionPlanApprovalsMatch && request.method === "GET") {
+        sendJson(response, 200, store.listPlanApprovalDecisions(
+          sessionPlanApprovalsMatch[1]!,
+          url.searchParams.get("planId") ?? undefined,
+        ));
         return;
       }
       const sessionSubagentsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents$/);

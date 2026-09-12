@@ -40,3 +40,23 @@ test("plan lifecycle tools record and complete step state", async () => {
   assert.equal(repository.plan?.state, "completed");
   assert.equal(repository.plan?.version, 2);
 });
+
+test("approvalMayBlock rewrites propose/revise descriptions honestly", () => {
+  const repository = {
+    abandon: async () => { throw new Error("not used"); },
+    latest: async () => undefined,
+    propose: async () => { throw new Error("not used"); },
+    revise: async () => { throw new Error("not used"); },
+    updateStep: async () => { throw new Error("not used"); },
+  };
+  const open = createPlanLifecycleTools({ repository });
+  assert.match(open.find((tool) => tool.name === "propose_plan")!.description, /does not require user approval/);
+
+  const gated = createPlanLifecycleTools({ approvalMayBlock: true, repository });
+  const propose = gated.find((tool) => tool.name === "propose_plan")!;
+  assert.match(propose.description, /user for review/);
+  assert.match(propose.description, /BLOCKS/);
+  assert.doesNotMatch(propose.description, /does not require user approval/);
+  const revise = gated.find((tool) => tool.name === "revise_plan")!;
+  assert.match(revise.description, /re-enters user review/);
+});

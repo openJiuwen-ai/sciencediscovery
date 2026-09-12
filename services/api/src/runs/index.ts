@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
 import { auditCompanionIds } from "./audit-companions.js";
 import { apiLog } from "../logging.js";
@@ -123,6 +124,7 @@ import {
 } from "@sciencediscovery/schema";
 import { agentMemoryReliabilityLabel, reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 import type { BackgroundReviewManager } from "../agent-memory/background-review.js";
+import type { PlanApprovalDecision, SessionPlan } from "@sciencediscovery/schema";
 
 import { SessionStore, SessionStoreHttpError } from "../store.js";
 import { RunnerClient } from "@sciencediscovery/executor";
@@ -1033,6 +1035,61 @@ async function executeAgentRun(
       domain: inferDomain(plan.scope),
       steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
     });
+  };
+  // V3-C2 constraint-level plan approval: ask_for_dangerous parks propose/
+  // revise in awaiting_user and BLOCKS the run until the human decides via
+  // the REST endpoint (state flip is the wake mechanism; SSE is display
+  // only). always_allow auto-approves but still logs the decision — the
+  // decision log is mode-agnostic.
+  const planApprovalGated = session.approvalMode === "ask_for_dangerous";
+  const resolvePlanApproval = async (plan: SessionPlan, toolSignal?: AbortSignal): Promise<SessionPlan> => {
+    if (!planApprovalGated) {
+      const decision = await store.recordAutoPlanApproval(plan);
+      await emit({ decision, plan, type: "plan.approval_decided" });
+      return plan;
+    }
+    let blocked = false;
+    const resume = async (reason: string) => {
+      if (!blocked) return;
+      const running = await store.updateSessionRunStatusIfCurrent(sessionId, runId, "blocked", "running");
+      if (running) await emit({ reason, run: running, status: "running", type: "run.status" });
+      blocked = false;
+    };
+    // Pause the idle watchdog for the whole human wait (review P1): without
+    // this the run is condemned as stalled after 240s of the user reading,
+    // and with the tool signal never firing the wait would wedge forever.
+    const releaseWait = mainExecution?.beginExternalWait();
+    // Race the run-level controller AND the tool-call signal — either one
+    // aborting must end the wait.
+    const waitSignal = toolSignal
+      ? AbortSignal.any([requestAbortController.signal, toolSignal])
+      : requestAbortController.signal;
+    try {
+      for (;;) {
+        const current = store.getSessionPlan(sessionId, plan.id);
+        if (!current) throw new Error("Plan disappeared while awaiting a decision");
+        if (current.state !== "awaiting_user") {
+          await resume("Plan decision received");
+          if (current.state === "abandoned") {
+            throw new Error(`Plan rejected by the user${current.abandonmentReason ? `: ${current.abandonmentReason}` : ""} — propose a new plan or continue without one`);
+          }
+          return current;
+        }
+        if (!blocked) {
+          const blockedRun = await store.updateSessionRunStatusIfCurrent(sessionId, runId, "running", "blocked");
+          if (blockedRun) {
+            blocked = true;
+            await emit({ reason: "Waiting for plan approval", run: blockedRun, status: "blocked", type: "run.status" });
+          }
+        }
+        await delay(200, undefined, { signal: waitSignal });
+      }
+    } catch (error) {
+      await resume("Plan approval wait ended");
+      throw error;
+    } finally {
+      releaseWait?.();
+    }
   };
   // review_checkpoint registers when the reviewer specialist is explicitly on
   // AND requested, OR when an active skill declares a pre-finish audit
@@ -1990,17 +2047,20 @@ async function executeAgentRun(
           return plan;
         },
         latest: async () => store.latestSessionPlan(sessionId, runId),
-        propose: async (input) => {
-          if (store.latestSessionPlan(sessionId, runId)) throw new Error("A plan already exists for this run; call revise_plan instead");
-          const plan = await store.proposeSessionPlan(sessionId, input, runId);
+        propose: async (input, signal) => {
+          const existing = store.latestSessionPlan(sessionId, runId);
+          if (existing && existing.state !== "abandoned") throw new Error("A plan already exists for this run; call revise_plan instead");
+          let plan = await store.proposeSessionPlan(sessionId, input, runId, { awaitingUser: planApprovalGated });
           // Let plan.scope correct the goal's fallback domain. This remains
           // non-blocking when the optional graph sidecar is unavailable.
           await publishPlan(plan, true);
+          plan = await resolvePlanApproval(plan, signal);
           return plan;
         },
-        revise: async (planId, input) => {
-          const plan = await store.reviseSessionPlan(sessionId, planId, input);
+        revise: async (planId, input, signal) => {
+          let plan = await store.reviseSessionPlan(sessionId, planId, input, { markAwaitingUser: planApprovalGated });
           await publishPlan(plan, true);
+          plan = await resolvePlanApproval(plan, signal);
           return plan;
         },
         updateStep: async (input) => {
@@ -2388,6 +2448,29 @@ export async function publishRunEvent(
  * after a reload; a Session that has never started a run has no timeline to
  * carry it and keeps only the Permission Epoch as its audit record.
  */
+/** V3-C2: surface a human plan decision (made via REST, outside any run
+ *  loop) on the active/latest run's event stream so the timeline renders it
+ *  in place. The blocked run's waiter polls the store and does not depend
+ *  on this event. */
+export async function publishPlanApprovalDecision(
+  store: SessionStore,
+  sessionId: string,
+  payload: { decision: PlanApprovalDecision; plan: SessionPlan },
+): Promise<SessionRunEvent | undefined> {
+  const runs = await store.listSessionRuns(sessionId);
+  // Target the run the decision belongs to (review P2): falling back to the
+  // latest run could pin the event on an unrelated timeline.
+  const target = (payload.decision.runId ? runs.find((run) => run.id === payload.decision.runId) : undefined)
+    ?? runs.findLast((run) => run.status === "running" || run.status === "blocked")
+    ?? runs.findLast((run) => run.status !== "queued");
+  if (!target) return undefined;
+  return await publishRunEvent(store, sessionId, target.id, {
+    decision: payload.decision,
+    plan: payload.plan,
+    type: "plan.approval_decided",
+  });
+}
+
 export async function publishApprovalModeChange(
   store: SessionStore,
   sessionId: string,
@@ -2882,6 +2965,17 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
         }
         for (const request of await store.cancelPendingPermissionRequests(run.id)) {
           await publishRunEvent(store, session.id, run.id, { request, type: "permission.resolved" });
+        }
+        // V3-C2: an interrupted run can never receive its plan decision —
+        // abandon any plan it left awaiting_user so the approval buttons do
+        // not stay clickable on a dead run (review P2).
+        for (const plan of store.listSessionPlans(session.id)) {
+          if (plan.runId !== run.id || plan.state !== "awaiting_user") continue;
+          await store.abandonSessionPlan(session.id, {
+            expectedVersion: plan.version,
+            planId: plan.id,
+            reason: "Run interrupted before the plan decision",
+          });
         }
         await publishRunEvent(store, session.id, run.id, {
           reason,

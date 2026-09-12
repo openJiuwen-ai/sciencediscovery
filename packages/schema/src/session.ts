@@ -23,7 +23,7 @@ import type { ConnectorId } from "./connectors.js";
 import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { PermissionRequest } from "./permission.js";
-import type { ApprovalMode, SessionPlan } from "./plan.js";
+import type { ApprovalMode, PlanApprovalDecision, SessionPlan } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
 import type { EffectiveRuntimeSettings, EnabledSkillLibrary, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
@@ -372,6 +372,9 @@ export type RunStreamEvent =
   | { changedPaths: string[]; files: WorkspaceFile[]; type: "workspace.changed" }
   | { artifact: ScientificArtifact; type: "artifact.upserted"; version?: ScientificArtifactVersion }
   | { plan: SessionPlan; type: "plan.proposed" }
+  /** A plan approval decision (V3-C2): carries the decision record and the
+   *  post-decision plan so the timeline updates both without a refetch. */
+  | { decision: PlanApprovalDecision; plan: SessionPlan; type: "plan.approval_decided" }
   | { subagent: Subagent; type: "subagent.updated" }
   | { step: SubagentStep; subagentId: string; type: "subagent.step" }
   | { subagentId: string; type: "subagent.usage"; usage: SubagentUsage }

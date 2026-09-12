@@ -16,7 +16,9 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type {
   ConnectorManifest,
+  PlanConfidence,
   ReviewerSpecialistLevel,
+  RevisePlanRequest,
   Subagent,
   SubagentStep,
   SessionPlan,
@@ -25,6 +27,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { useLocale } from "./i18n/index.js";
 import { ChevronRightIcon } from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
@@ -41,14 +44,50 @@ function planSummary(plan: SessionPlan): string {
 }
 
 export function PlanCard({
+  busy,
   expanded,
+  onDecide,
+  onRevise,
   onToggle,
   plan,
 }: {
+  busy?: boolean;
   expanded: boolean;
+  onDecide?: (plan: SessionPlan, decision: "approve" | "reject", reason?: string) => void;
+  onRevise?: (plan: SessionPlan, body: RevisePlanRequest) => Promise<boolean>;
   onToggle: (expanded: boolean) => void;
   plan: SessionPlan;
 }) {
+  const { t } = useLocale();
+  const [editing, setEditing] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [scopeDraft, setScopeDraft] = useState(plan.scope);
+  const [stepsDraft, setStepsDraft] = useState(plan.steps.map((step) => step.description).join("\n"));
+  const [caveatsDraft, setCaveatsDraft] = useState(plan.caveats.join("\n"));
+  const [confidenceDraft, setConfidenceDraft] = useState<PlanConfidence>(plan.feasibilityConfidence);
+  const editable = Boolean(onRevise) && (plan.state === "awaiting_user" || plan.state === "recorded");
+  const startEdit = () => {
+    setScopeDraft(plan.scope);
+    setStepsDraft(plan.steps.map((step) => step.description).join("\n"));
+    setCaveatsDraft(plan.caveats.join("\n"));
+    setConfidenceDraft(plan.feasibilityConfidence);
+    setEditing(true);
+  };
+  const saveEdit = async () => {
+    const steps = stepsDraft.split("\n").map((step) => step.trim()).filter(Boolean);
+    const caveats = caveatsDraft.split("\n").map((caveat) => caveat.trim()).filter(Boolean);
+    // Keep the draft open on failure (version conflict, validation) — the
+    // user must not lose their edit (review P2).
+    const saved = await onRevise?.(plan, {
+      caveats,
+      expectedVersion: plan.version,
+      feasibilityConfidence: confidenceDraft,
+      scope: scopeDraft.trim(),
+      steps,
+    });
+    if (saved) setEditing(false);
+  };
   return (
     <article className={`plan-card ${plan.state}`}>
       <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
@@ -57,20 +96,68 @@ export function PlanCard({
         <i>{plan.state === "recorded" ? "active" : plan.state.replaceAll("_", " ")}</i>
       </button>
       {expanded ? <div className="plan-card-body">
-        <p>{plan.scope}</p>
-        <ol>{plan.steps.map((step) => <li key={step.id} data-status={step.status}>{step.description}</li>)}</ol>
-        {plan.abandonmentReason ? <p className="plan-card-note">Abandoned: {plan.abandonmentReason}</p> : null}
-        {plan.caveats.length ? <details><summary>Method caveats</summary><ul>{plan.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)}</ul></details> : null}
+        {editing ? <div className="plan-card-edit">
+          <label>{t("plan.scope")}<textarea onChange={(event) => setScopeDraft(event.target.value)} rows={3} value={scopeDraft} /></label>
+          <label>{t("plan.stepsPerLine")}<textarea onChange={(event) => setStepsDraft(event.target.value)} rows={Math.min(10, stepsDraft.split("\n").length + 1)} value={stepsDraft} /></label>
+          <label>{t("plan.caveatsPerLine")}<textarea onChange={(event) => setCaveatsDraft(event.target.value)} rows={3} value={caveatsDraft} /></label>
+          <label>{t("plan.feasibility")}
+            <select onChange={(event) => setConfidenceDraft(event.target.value as PlanConfidence)} value={confidenceDraft}>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+          <div className="plan-card-actions">
+            <button disabled={busy || !scopeDraft.trim() || !stepsDraft.trim()} onClick={() => void saveEdit()} type="button">{t("plan.saveRevision")}</button>
+            <button disabled={busy} onClick={() => setEditing(false)} type="button">{t("plan.cancel")}</button>
+          </div>
+        </div> : <>
+          <p>{plan.scope}</p>
+          <ol>{plan.steps.map((step) => <li key={step.id} data-status={step.status}>{step.description}</li>)}</ol>
+          {plan.abandonmentReason ? <p className="plan-card-note">Abandoned: {plan.abandonmentReason}</p> : null}
+          {plan.caveats.length ? <details><summary>Method caveats</summary><ul>{plan.caveats.map((caveat) => <li key={caveat}>{caveat}</li>)}</ul></details> : null}
+          {plan.state === "awaiting_user" ? <p className="plan-card-note">{t("plan.awaitingDecision", { version: plan.version })}</p> : null}
+          <div className="plan-card-actions">
+            {plan.state === "awaiting_user" && onDecide && !rejecting ? <>
+              <button disabled={busy} onClick={() => onDecide(plan, "approve")} type="button">{t("plan.approveVersion", { version: plan.version })}</button>
+              <button disabled={busy} onClick={() => setRejecting(true)} type="button">{t("plan.reject")}</button>
+            </> : null}
+            {editable ? <button disabled={busy} onClick={startEdit} type="button">{t("plan.edit")}</button> : null}
+          </div>
+          {rejecting ? <div className="plan-card-actions">
+            <input
+              onChange={(event) => setRejectReason(event.target.value)}
+              placeholder={t("plan.rejectReasonPlaceholder")}
+              value={rejectReason}
+            />
+            <button
+              disabled={busy}
+              onClick={() => {
+                onDecide?.(plan, "reject", rejectReason.trim() || undefined);
+                setRejecting(false);
+                setRejectReason("");
+              }}
+              type="button"
+            >{t("plan.confirmReject")}</button>
+            <button disabled={busy} onClick={() => setRejecting(false)} type="button">{t("plan.cancel")}</button>
+          </div> : null}
+        </>}
       </div> : null}
     </article>
   );
 }
 
 export function OrchestrationPanel({
+  busy,
   expandedCards,
+  onDecidePlan,
+  onRevisePlan,
   onToggleCard,
   plans,
 }: ActivityCardDisclosure & {
+  busy?: boolean;
+  onDecidePlan?: (plan: SessionPlan, decision: "approve" | "reject", reason?: string) => void;
+  onRevisePlan?: (plan: SessionPlan, body: RevisePlanRequest) => Promise<boolean>;
   plans: SessionPlan[];
 }) {
   if (!plans.length) return null;
@@ -78,8 +165,11 @@ export function OrchestrationPanel({
     {plans.map((plan) => {
       const cardId = activityCardId("plan", plan.id);
       return <PlanCard
+        busy={busy}
         expanded={Boolean(expandedCards[cardId])}
         key={plan.id}
+        onDecide={onDecidePlan}
+        onRevise={onRevisePlan}
         onToggle={(expanded) => onToggleCard(cardId, expanded)}
         plan={plan}
       />;

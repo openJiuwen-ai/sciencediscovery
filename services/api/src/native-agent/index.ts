@@ -256,7 +256,10 @@ class NativeAgent implements NativeAgentHandle {
       },
     } : {}) });
     const planTools = options.planRepository
-      ? createPlanLifecycleTools({ repository: options.planRepository })
+      ? createPlanLifecycleTools({
+          approvalMayBlock: options.approvalMode === "ask_for_dangerous",
+          repository: options.planRepository,
+        })
       : [];
     // Same shape as the plan capability: the composition root either built a
     // runtime for this turn or it did not, and that single fact decides

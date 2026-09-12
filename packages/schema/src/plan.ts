@@ -32,7 +32,13 @@ export interface SessionPlan {
   runId?: string;
   scope: string;
   sessionId: string;
-  state: "abandoned" | "completed" | "recorded";
+  /**
+   * awaiting_user (V3-C2): proposed under an approval-gated session and
+   * paused for a human decision. recorded = active (approved, or proposed
+   * under always_allow). Decisions bind (planId, version) — a substantive
+   * revision re-enters awaiting_user under ask_for_dangerous.
+   */
+  state: "abandoned" | "awaiting_user" | "completed" | "recorded";
   steps: PlanStep[];
   updatedAt: string;
   version: number;
@@ -47,4 +53,32 @@ export interface ProposePlanRequest {
 
 export interface RevisePlanRequest extends ProposePlanRequest {
   expectedVersion: number;
+}
+
+/**
+ * Plan approval decision log entry (V3-C2, Pharos-style constraint-level
+ * approval): every decision — human or automatic — is recorded with the
+ * exact plan version it binds, the session's approval mode at decision
+ * time, and the actor. Approving version N never approves version N+1.
+ */
+export interface PlanApprovalDecision {
+  actor: "auto" | "user";
+  approvalMode: ApprovalMode;
+  createdAt: string;
+  decision: "approved" | "rejected";
+  id: string;
+  planId: string;
+  planVersion: number;
+  reason?: string;
+  runId?: string;
+  sessionId: string;
+}
+
+export interface DecidePlanApprovalRequest {
+  decision: "approve" | "reject";
+  /** Constraint-level binding (V3-C2): when present, the decision applies
+   *  ONLY if the plan is still at this version — a stale click after an
+   *  edit/agent revision fails 409 instead of approving the wrong version. */
+  expectedVersion?: number;
+  reason?: string;
 }

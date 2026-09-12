@@ -101,6 +101,14 @@ export type RunTimelineEntry =
       type: "finish-gate";
     }
   | {
+      actor: "auto" | "user";
+      decision: "approved" | "rejected";
+      id: string;
+      planVersion: number;
+      reason?: string;
+      type: "plan-decision";
+    }
+  | {
       id: string;
       subagents: Subagent[];
       type: "subagents";
@@ -460,6 +468,20 @@ export function reduceRunTimeline(
     }];
   }
 
+  if (event.type === "plan.approval_decided") {
+    const finished = finishThinking(entries);
+    const id = `plan-decision-${event.decision.id}`;
+    if (finished.some((entry) => entry.id === id)) return finished;
+    return [...finished, {
+      actor: event.decision.actor,
+      decision: event.decision.decision,
+      id,
+      planVersion: event.decision.planVersion,
+      ...(event.decision.reason ? { reason: event.decision.reason } : {}),
+      type: "plan-decision",
+    }];
+  }
+
   if (event.type === "run.history.truncated") {
     const existing = entries.findIndex((entry) => entry.type === "history-truncated");
     if (existing >= 0) {
@@ -690,6 +712,22 @@ export function RunTimeline({
                     ? "timeline.finishGateDenied"
                     : "timeline.finishGateFinish",
                 { turn: entry.turn },
+              )}</p>
+            </aside>
+          );
+        }
+
+        if (entry.type === "plan-decision") {
+          return (
+            <aside className="boundary-note" key={entry.id}>
+              <span><WarningIcon size={15} /></span>
+              <p>{t(
+                entry.decision === "approved" ? "timeline.planDecisionApproved" : "timeline.planDecisionRejected",
+                {
+                  actor: entry.actor === "auto" ? t("timeline.planDecisionAuto") : "",
+                  reason: entry.reason ? `: ${entry.reason}` : "",
+                  version: entry.planVersion,
+                },
               )}</p>
             </aside>
           );

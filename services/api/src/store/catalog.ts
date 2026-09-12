@@ -36,6 +36,7 @@ import type {
   ScientificArtifact,
   ScientificArtifactVersion,
   Session,
+  PlanApprovalDecision,
   SessionPlan,
   Specialist,
   Subagent,
@@ -85,6 +86,8 @@ export interface Catalog {
   remoteJobs: RemoteJob[];
   remoteWorkspaceSyncs: RemoteWorkspaceSyncRecord[];
   sessionPlans: SessionPlan[];
+  /** Plan approval decision log (V3-C2) — append-only, capped. */
+  planApprovalDecisions: PlanApprovalDecision[];
   sessions: Session[];
   specialists: Specialist[];
   timeoutSettings: SystemTimeoutSettings;
@@ -128,6 +131,7 @@ export function emptyCatalog(
     remoteJobs: [],
     remoteWorkspaceSyncs: [],
     sessionPlans: [],
+    planApprovalDecisions: [],
     sessions: [],
     // Built-in specialists are seeded (read-only) and all enabled by default
     // (no `enabled` key means enabled).
