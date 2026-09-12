@@ -438,20 +438,24 @@ export function createPlatformServices(
     schema: BIOMEDICAL_SCHEMA,
     embedding: keEmbedding,
     resolveEndpoint: keResolveEndpoint,
-    paperText: (pdfBytes, docId) =>
-      extractPdfText({
+    paperText: async (pdfBytes, docId) => {
+      const extracted = await extractPdfText({
         pythonPath: config.paperPythonPath,
         workerPath: config.paperWorkerPath,
         workDirRoot: resolve(config.dataDir, "knowledge-engine", "staging"),
         pdfBytes,
         docId,
+        // V1-Z3: warnings (scanned-without-vision, enhancement hints) must
+        // fire even when no vision endpoint is configured.
+        onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
         ...(keVisionEndpoint
           ? {
               describeImage: (pngBytes: Uint8Array) => describeImageWithVision(keVisionEndpoint, pngBytes),
-              onWarn: (message: string, detail?: unknown) => apiLog.warn("knowledge_engine", { message, detail }),
             }
           : {}),
-      }),
+      });
+      return { fulltext: extracted.fulltext, pdfClassification: extracted.classification };
+    },
     // Fixture mode never touches DNS (see transport selection above).
     ...(keFixtureDir ? { assertUrl: async () => {} } : {}),
     onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),

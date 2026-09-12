@@ -58,6 +58,7 @@ import {
 } from "@sciencediscovery/knowledge-engine";
 import type { ModelEndpoint } from "@sciencediscovery/model";
 
+import type { PdfClassification } from "./pdf-classify.js";
 import type { EmbeddingClient } from "./embedding.js";
 import { callPipelineLlm, type PipelineInvoke } from "./llm.js";
 import { buildResolverRepo, recordOnlineAttach, resolveEntityResolutionMode } from "./resolution.js";
@@ -125,7 +126,10 @@ export interface KeOrchestratorDeps {
   /** Test seam: replace the model transport (defaults to streamModelTurn). */
   readonly llmInvoke?: PipelineInvoke;
   /** PDF bytes → markdown text (paper worker). Required for non-JATS docs. */
-  readonly paperText?: (pdfBytes: Uint8Array, docId: string) => Promise<string>;
+  /** PDF → text port. V1-Z3: may return the extract's classification
+   *  alongside the text — it is persisted into the document's sourceMeta. */
+  readonly paperText?: (pdfBytes: Uint8Array, docId: string) =>
+    Promise<string | { fulltext: string; pdfClassification?: PdfClassification }>;
   /** SSRF guard for downloads (fixture environments pass a no-op). */
   readonly assertUrl?: (url: string) => Promise<void>;
   /** Test seam: override individual grow-cycle dependencies. */
@@ -373,7 +377,9 @@ export class KeOrchestrator {
       }
       throw error;
     }
-    const text = await this.deps.paperText(outcome.bytes, doc.id);
+    const paperResult = await this.deps.paperText(outcome.bytes, doc.id);
+    const text = typeof paperResult === "string" ? paperResult : paperResult.fulltext;
+    const pdfClassification = typeof paperResult === "string" ? undefined : paperResult.pdfClassification;
     if (text.trim().length < MIN_EXTRACTABLE_TEXT) {
       throw new Error(`paper worker produced too little text (${text.trim().length} chars) for ${doc.id}`);
     }
@@ -382,7 +388,15 @@ export class KeOrchestrator {
       dedupKey: doc.dedupKey,
       fulltext: text,
       status: "ready",
-      sourceMeta: { ...doc.sourceMeta, ingested_at: new Date().toISOString(), ingest_channel: `pdf:${outcome.source}` },
+      sourceMeta: {
+        ...doc.sourceMeta,
+        ingested_at: new Date().toISOString(),
+        ingest_channel: `pdf:${outcome.source}`,
+        // V1-Z3: scanned / table-heavy / formula-heavy routing hints.
+        ...(pdfClassification
+          ? { pdf_class: pdfClassification.type, pdf_class_confidence: pdfClassification.confidence }
+          : {}),
+      },
     });
     this.enqueueExtraction(doc.kbId, doc.id);
   }

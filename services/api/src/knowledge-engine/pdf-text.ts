@@ -32,6 +32,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { classifyPdfDocument, type PdfClassification } from "./pdf-classify.js";
 import { selectVisionCandidatePages, VISION_CONCURRENCY, type WorkerPageEntry } from "./pdf-vision.js";
 
 const execFileAsync = promisify(execFile);
@@ -60,6 +61,9 @@ export interface PdfTextOptions {
   readonly describeImage?: VisionDescriber;
   /** Observability hook for per-page vision failures (never throws). */
   readonly onWarn?: (message: string, detail?: unknown) => void;
+  /** V1-Z3: receives the document classification (scanned/table-heavy/…) —
+   *  callers may persist it into the document's source metadata. */
+  readonly onClassification?: (classification: PdfClassification) => void;
 }
 
 interface WorkerManifest {
@@ -112,7 +116,7 @@ export function mergeVisionAnnotations(fulltext: string, annotations: ReadonlyMa
   return out.join("\n");
 }
 
-export async function extractPdfText(options: PdfTextOptions): Promise<string> {
+export async function extractPdfText(options: PdfTextOptions): Promise<{ fulltext: string; classification: PdfClassification }> {
   // Defense in depth: docId is always a store UUID, but this function is
   // exported — never let it become a path-escape vector.
   if (!/^[\w-]+$/.test(options.docId)) {
@@ -136,8 +140,44 @@ export async function extractPdfText(options: PdfTextOptions): Promise<string> {
       throw new Error("paper worker manifest has no textPath");
     }
     const fulltext = await readFile(resolve(outputDir, manifest.textPath), "utf8");
-    if (!options.describeImage) return fulltext;
-    return await applyVisionPass(fulltext, manifest, outputDir, options.describeImage, options.onWarn);
+
+    // V1-Z3: classify from the manifest (no second parse) and surface the
+    // routing-relevant outcomes. A scanned PDF without the vision pass used
+    // to ingest as a silently hollow document — that is now a loud warning.
+    const classification = classifyPdfDocument(fulltext, manifest.pages ?? []);
+    options.onClassification?.(classification);
+    if (classification.type === "scanned") {
+      if (!options.describeImage) {
+        options.onWarn?.("ke_pdf_scanned_no_vision", {
+          type: classification.type,
+          reasons: classification.reasons,
+          signals: classification.signals,
+        });
+      } else {
+        const visionCovered = selectVisionCandidatePages(manifest.pages ?? []).length;
+        if (visionCovered === 0) {
+          options.onWarn?.("ke_pdf_scanned_vision_uncovered", {
+            type: classification.type,
+            reasons: classification.reasons,
+            signals: classification.signals,
+          });
+        }
+      }
+    } else if (classification.reasons.length > 0 && classification.type !== "text-only") {
+      options.onWarn?.("ke_pdf_enhancement_hint", {
+        type: classification.type,
+        reasons: classification.reasons,
+        signals: classification.signals,
+      });
+    }
+
+    if (!options.describeImage) {
+      return { fulltext, classification };
+    }
+    return {
+      fulltext: await applyVisionPass(fulltext, manifest, outputDir, options.describeImage, options.onWarn),
+      classification,
+    };
   } finally {
     await rm(workDir, { force: true, recursive: true }).catch(() => {});
   }

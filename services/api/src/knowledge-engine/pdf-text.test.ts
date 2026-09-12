@@ -60,16 +60,54 @@ test("extractPdfText stages the PDF beside an empty output dir and returns fullt
   context.after(() => rm(root, { force: true, recursive: true }));
   const { pythonPath, workerPath } = await fakeWorkerSetup(root);
 
-  const text = await extractPdfText({
+  const result = await extractPdfText({
     pythonPath,
     workerPath,
     workDirRoot: resolve(root, "staging"),
     pdfBytes: new Uint8Array(200).fill(65),
     docId: "doc-1",
   });
-  assert.match(text, /body text here/);
+  assert.match(result.fulltext, /body text here/);
+  // V1-Z3: the manifest-less fake worker degrades to fulltext-only signals
+  // and still classifies (never throws, conservative text-only here).
+  assert.equal(result.classification.type, "text-only");
   // Staging is cleaned up afterwards.
   assert.equal(existsSync(resolve(root, "staging", "doc-1")), false);
+});
+
+test("extractPdfText warns loudly when a scanned PDF has no vision pass (V1-Z3)", async (context) => {
+  const root = tempRoot("ke-pdftext-scanned");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await mkdir(root, { recursive: true });
+  // Scanned shape: ten pages, ~40 chars of text each, no preview paths.
+  const workerPath = resolve(root, "fake-worker.cjs");
+  await writeFile(workerPath, `
+const fs = require("node:fs");
+const path = require("node:path");
+const [pdf, outDir] = process.argv.slice(2);
+fs.writeFileSync(path.join(outDir, "fulltext.md"), "## Page 1\\n\\nscanned\\n");
+console.log(JSON.stringify({
+  textPath: "fulltext.md",
+  pages: Array.from({ length: 10 }, (_, i) => ({ page: i + 1, textCharacters: 40 })),
+}));
+`);
+
+  const warnings: Array<{ detail?: unknown; message: string }> = [];
+  let classified: string | undefined;
+  const result = await extractPdfText({
+    pythonPath: process.execPath,
+    workerPath,
+    workDirRoot: resolve(root, "staging"),
+    pdfBytes: new Uint8Array(200).fill(65),
+    docId: "doc-1",
+    onWarn: (message, detail) => warnings.push({ message, detail }),
+    onClassification: (classification) => { classified = classification.type; },
+  });
+  assert.equal(result.classification.type, "scanned");
+  assert.equal(classified, "scanned");
+  const loud = warnings.find((warning) => warning.message === "ke_pdf_scanned_no_vision");
+  assert.ok(loud, "scanned without vision must warn loudly, not ingest silently");
+  assert.match(JSON.stringify(loud!.detail), /hollow shell/);
 });
 
 test("extractPdfText rejects a path-escape docId before touching the fs", async (context) => {
@@ -168,7 +206,7 @@ console.log(JSON.stringify({
 }));
 `);
   const described: number[] = [];
-  const text = await extractPdfText({
+  const { fulltext: text } = await extractPdfText({
     pythonPath: process.execPath,
     workerPath,
     workDirRoot: resolve(root, "staging"),
@@ -203,7 +241,7 @@ console.log(JSON.stringify({
   pages: [{ page: 1, textCharacters: 0, needsVision: true, imageAreaRatio: 0.9, previewPath: "pages/page-0001.png" }],
 }));
 `);
-  const text = await extractPdfText({
+  const { fulltext: text } = await extractPdfText({
     pythonPath: process.execPath,
     workerPath,
     workDirRoot: resolve(root, "staging"),
@@ -232,7 +270,7 @@ console.log(JSON.stringify({
 }));
 `);
   const warnings: string[] = [];
-  const text = await extractPdfText({
+  const { fulltext: text } = await extractPdfText({
     pythonPath: process.execPath,
     workerPath,
     workDirRoot: resolve(root, "staging"),
