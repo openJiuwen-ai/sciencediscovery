@@ -35,8 +35,6 @@ import type {
   ConnectorManifest,
   CreateProxyServerRequest,
   DeletionImpact,
-  Environment,
-  EnvironmentRevision,
   ExecutionRun,
   EvidenceLink,
   McpProxyPolicies,
@@ -1031,8 +1029,6 @@ export function App() {
   const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
   const [executionRuns, setExecutionRuns] = useState<ExecutionRun[]>([]);
-  const [environments, setEnvironments] = useState<Environment[]>([]);
-  const [environmentRevisions, setEnvironmentRevisions] = useState<EnvironmentRevision[]>([]);
   const [derivations, setDerivations] = useState<ArtifactDerivation[]>([]);
   const [promptManifests, setPromptManifests] = useState<PromptManifest[]>([]);
   const [artifactReviews, setArtifactReviews] = useState<ArtifactReviewRun[]>([]);
@@ -1915,8 +1911,6 @@ export function App() {
       setSessionRuns([]);
       setArtifactOutputs([]);
       setExecutionRuns([]);
-      setEnvironments([]);
-      setEnvironmentRevisions([]);
       setDerivations([]);
       setPromptManifests([]);
       setArtifactReviews([]);
@@ -1932,7 +1926,7 @@ export function App() {
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, environmentItems, revisionItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -1948,9 +1942,6 @@ export function App() {
       client.listMcpInvocations(sessionId),
       client.listClaims(sessionId),
       client.listEvidenceLinks(sessionId),
-
-      client.listEnvironments().catch(() => []),
-      client.listEnvironmentRevisions().catch(() => []),
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
       client.listArtifactOutputs(sessionId),
@@ -1998,8 +1989,6 @@ export function App() {
     setSessionRuns(sessionRunItems);
     setArtifactOutputs(artifactOutputItems);
     syncSessionRunActivity(sessionId, sessionRunItems);
-    setEnvironments(environmentItems);
-    setEnvironmentRevisions(revisionItems);
     setDerivations(artifactDerivations);
     setPromptManifests(manifests);
     setArtifactReviews(artifactReviewRuns);
