@@ -50,6 +50,23 @@ String layerArgs() {
         " -v ${env.CI_CACHE_DIR}/nss/group:/etc/group:ro"
 }
 
+// Each layer's scratch data — and for E2E the service virtualenvs — lives under
+// CI_RUNTIME_DIR. Those virtualenvs are editable installs whose .pth files
+// record the checkout's absolute path, so the directory is keyed by that path.
+// Parallel branches take whichever of the job's workspaces is free, so a single
+// shared directory would leave the stack importable only from the workspace
+// that provisioned it, and the layer would report BLOCKED on a
+// ModuleNotFoundError. Keying it also keeps the branches' scratch state apart.
+String runtimeDir(String layer) {
+    return """
+KEY="\$(printf '%s' "\$PWD" | md5sum | cut -c1-12)"
+export CI_RUNTIME_DIR="/ci-cache/runtime/${layer}-\$KEY"
+mkdir -p "\$CI_RUNTIME_DIR"
+echo "runtime dir: \$CI_RUNTIME_DIR  (checkout \$PWD)"
+rm -rf "\$CI_RESULTS_DIR"; mkdir -p "\$CI_RESULTS_DIR"
+"""
+}
+
 pipeline {
     // No step may run on the controller; each stage brings its own container.
     agent none
@@ -152,13 +169,6 @@ fi
                             image "${env.CI_IMAGE}"
                             args layerArgs()
                             alwaysPull false
-                            // A fixed workspace keeps the checkout at the same
-                            // absolute path every build. The E2E service
-                            // environments are editable installs whose .pth
-                            // files record that path, so a workspace that moved
-                            // between builds would leave the stack importable
-                            // only from the directory that provisioned it.
-                            customWorkspace 'sciencediscovery-ci-ut'
                         }
                     }
                     environment {
@@ -166,13 +176,11 @@ fi
                     }
                     steps {
                         checkout scm
-                        sh 'rm -rf "$CI_RESULTS_DIR" && mkdir -p "$CI_RESULTS_DIR"'
-                        // The aggregate entry point: the host tier followed by
-                        // the guest tier, the latter running bubblewrap
-                        // natively rather than under QEMU. run-layer.mjs stops
-                        // at the first failing command, so a red host tier
-                        // leaves the guest tier unrun.
-                        sh 'pnpm ci:ut'
+                        // The aggregate entry point: the host tier followed by the guest
+                        // tier, the latter running bubblewrap natively rather than under
+                        // QEMU. run-layer.mjs stops at the first failing command, so a red
+                        // host tier leaves the guest tier unrun.
+                        sh label: 'pnpm ci:ut', script: 'set -eu' + runtimeDir('ut') + 'pnpm ci:ut'
                     }
                     post {
                         always {
@@ -188,13 +196,6 @@ fi
                             image "${env.CI_IMAGE}"
                             args layerArgs()
                             alwaysPull false
-                            // A fixed workspace keeps the checkout at the same
-                            // absolute path every build. The E2E service
-                            // environments are editable installs whose .pth
-                            // files record that path, so a workspace that moved
-                            // between builds would leave the stack importable
-                            // only from the directory that provisioned it.
-                            customWorkspace 'sciencediscovery-ci-st'
                         }
                     }
                     environment {
@@ -202,8 +203,7 @@ fi
                     }
                     steps {
                         checkout scm
-                        sh 'rm -rf "$CI_RESULTS_DIR" && mkdir -p "$CI_RESULTS_DIR"'
-                        sh 'pnpm ci:st'
+                        sh label: 'pnpm ci:st', script: 'set -eu' + runtimeDir('st') + 'pnpm ci:st'
                     }
                     post {
                         always {
@@ -219,13 +219,6 @@ fi
                             image "${env.CI_IMAGE}"
                             args layerArgs()
                             alwaysPull false
-                            // A fixed workspace keeps the checkout at the same
-                            // absolute path every build. The E2E service
-                            // environments are editable installs whose .pth
-                            // files record that path, so a workspace that moved
-                            // between builds would leave the stack importable
-                            // only from the directory that provisioned it.
-                            customWorkspace 'sciencediscovery-ci-e2e'
                         }
                     }
                     environment {
@@ -234,31 +227,23 @@ fi
                     }
                     steps {
                         checkout scm
-                        sh 'rm -rf "$CI_RESULTS_DIR" && mkdir -p "$CI_RESULTS_DIR"'
-                        // The E2E stack's data directory lives in the shared
-                        // cache and survives builds. Without a reset, state
-                        // leaks: journeys that assert an empty state find the
-                        // previous build's providers and Skill library, and
-                        // report a missing "no providers yet" panel or
-                        // "Run this journey with fresh isolated Skill library
-                        // data". envs/ holds the service virtualenvs and must
-                        // survive. Only this layer's own directory is touched:
-                        // UT and ST are running beside it against
-                        // /ci-cache/sciencediscovery-tests.
-                        sh label: 'reset e2e runtime state', script: '''
-set -eu
-if [ -d /ci-cache/sciencediscovery-e2e/data ]; then
-    find /ci-cache/sciencediscovery-e2e/data -mindepth 1 -maxdepth 1 \\
-         ! -name envs -exec rm -rf {} +
+                        // The stack's data directory sits in the runtime directory and
+                        // survives builds. Without a reset, state leaks: journeys that
+                        // assert an empty state find the previous build's providers and
+                        // Skill library, and report a missing "no providers yet" panel or
+                        // "Run this journey with fresh isolated Skill library data".
+                        // envs/ holds the service virtualenvs and must survive.
+                        //
+                        // E2E_COMMIT_SHA gives journey reports an immutable revision. The
+                        // first run provisions those virtualenvs and Chromium, which the
+                        // default 180-second health wait does not cover; that shows up as
+                        // "BLOCKED: isolated E2E stack did not become healthy".
+                        sh label: 'pnpm ci:e2e', script: 'set -eu' + runtimeDir('e2e') + '''
+if [ -d "$CI_RUNTIME_DIR/data" ]; then
+    find "$CI_RUNTIME_DIR/data" -mindepth 1 -maxdepth 1 ! -name envs -exec rm -rf {} +
 fi
+E2E_COMMIT_SHA="$(git rev-parse HEAD)" pnpm ci:e2e
 '''
-                        // E2E_COMMIT_SHA gives journey reports an immutable
-                        // revision. The first run provisions the service
-                        // environments and Chromium, which the default
-                        // 180-second health wait does not cover; that shows up
-                        // as "BLOCKED: isolated E2E stack did not become
-                        // healthy".
-                        sh 'E2E_COMMIT_SHA="$(git rev-parse HEAD)" pnpm ci:e2e'
                     }
                     post {
                         always {
