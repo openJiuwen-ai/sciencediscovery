@@ -86,7 +86,7 @@ export interface KnowledgeEngineToolPort {
   /** W8/Z8: document search with block-level anchor hits (kb_search) —
    *  keyword (FTS) fused with the semantic arm (stored chunk vectors, RRF)
    *  when an embedding client is configured; keyword-only otherwise. */
-  kbSearch(kbId: string, query: string, opts: { topK?: number; docLimit?: number }): Promise<KbSearchResult>;
+  kbSearch(kbId: string, query: string, opts: { topK?: number; docLimit?: number; minScoreRatio?: number }): Promise<KbSearchResult>;
   /** W8: read an anchor's block plus neighbours (kb_expand) — structured
    *  not-found reasons instead of exceptions for missing docs/anchors. */
   kbExpand(kbId: string, anchorId: string): Promise<KbExpandResult>;
@@ -223,6 +223,7 @@ export function createKnowledgeEngineTools(
       // milliseconds per document at this scale.
       const docLimit = Math.max(1, Math.min(opts.docLimit ?? 6, 10));
       const topK = Math.max(1, Math.min(opts.topK ?? 8, 20));
+      const minScoreRatio = opts.minScoreRatio === undefined ? undefined : Math.max(0, Math.min(opts.minScoreRatio, 1));
       const toInput = (document: NonNullable<ReturnType<KnowledgeEngineStore["getDocument"]>>): KbSearchDocumentInput => ({
         docId: document.id,
         title: document.title,
@@ -274,9 +275,9 @@ export function createKnowledgeEngineTools(
         }
       }
       if (vectorCandidates === undefined) {
-        return searchBlocks({ kbId, query, documents, topK });
+        return searchBlocks({ kbId, query, documents, topK, minScoreRatio });
       }
-      return hybridSearchBlocks({ kbId, query, documents, vectorCandidates, topK });
+      return hybridSearchBlocks({ kbId, query, documents, vectorCandidates, topK, minScoreRatio });
     },
 
     async kbExpand(kbId, anchorId) {

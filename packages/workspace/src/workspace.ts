@@ -1326,17 +1326,19 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "kb_search",
         "Search knowledge-base documents",
-        "Hybrid retrieval over a knowledge base's documents, returning passage-level hits: each hit carries the document (docId/docTitle), an anchorId that resolves to the exact block in the three-level reader, the section, a snippet, matched terms, and a fused score. The keyword arm (FTS) always runs; when the deployment has an embedding provider and stored document vectors, a semantic arm joins via reciprocal-rank fusion (the result's sources field lists which arms contributed; a keyword-only note means the semantic arm was unavailable). Use it for questions about what the papers SAY (methods, numbers, setup) — the graph tools cover extracted entities and relations. Hits are spread across at most 2 per document; truncated=true means more matches exist. LIMITATION: paraphrase recall depends on the semantic arm being present; a miss is unknown, not evidence of absence. Not for: exact string/pattern matching (use doc_grep); reading a hit's full block in context (use kb_expand with its anchorId); graph-structure questions (use concept_explore/gap_candidates).",
+        "Hybrid retrieval over a knowledge base's documents, returning passage-level hits: each hit carries the document (docId/docTitle), an anchorId that resolves to the exact block in the three-level reader, the section, a snippet, matched terms, a fused score, and a relative grade — scoreRatio (fraction of the batch's best score) with a relevance tier (high >=0.8, medium >=0.5, low), so hit quality can be judged independently of the scoring scale. The keyword arm (FTS) always runs; when the deployment has an embedding provider and stored document vectors, a semantic arm joins via reciprocal-rank fusion (the result's sources field lists which arms contributed; a keyword-only note means the semantic arm was unavailable). minScoreRatio optionally drops the tail below that fraction of the best hit. Use it for questions about what the papers SAY (methods, numbers, setup) — the graph tools cover extracted entities and relations. Hits are spread across at most 2 per document; truncated=true means more matches exist. LIMITATION: paraphrase recall depends on the semantic arm being present; a miss is unknown, not evidence of absence. Not for: exact string/pattern matching (use doc_grep); reading a hit's full block in context (use kb_expand with its anchorId); graph-structure questions (use concept_explore/gap_candidates).",
         Type.Object({
           kbId: kbIdParam,
           query: Type.String({ minLength: 1, description: "Free-text keyword query" }),
           topK: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
           docLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10 })),
+          minScoreRatio: Type.Optional(Type.Number({ minimum: 0, maximum: 1, description: "Drop hits scoring below this fraction of the batch's best hit (relative tail cut)" })),
         }),
         (params) =>
           knowledgeEngine.kbSearch(params.kbId, params.query, {
             ...(params.topK === undefined ? {} : { topK: params.topK }),
             ...(params.docLimit === undefined ? {} : { docLimit: params.docLimit }),
+            ...(params.minScoreRatio === undefined ? {} : { minScoreRatio: params.minScoreRatio }),
           }),
       ),
       keTool(

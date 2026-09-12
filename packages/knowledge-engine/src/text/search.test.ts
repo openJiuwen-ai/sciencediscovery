@@ -15,12 +15,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyRelativeGrading,
   docIdFromAnchor,
   expandAnchor,
   extractQueryTerms,
   grepDocuments,
   hybridSearchBlocks,
   searchBlocks,
+  type KbSearchHit,
   type KbSearchDocumentInput,
 } from "./search.js";
 
@@ -237,4 +239,73 @@ test("hybridSearchBlocks: the vector arm answers when the query has no keyword t
   assert.deepEqual(result.sources, ["vector"]);
   assert.equal(result.hits.length, 1);
   assert.match(result.hits[0]!.anchorId, /^doc-a:paragraph:0$/);
+});
+
+// --------------------------------------------------- V1-Z2 relative grading
+
+test("applyRelativeGrading annotates scoreRatio and relevance tiers, order preserved", () => {
+  const hits = [
+    { docId: "a", anchorId: "a:paragraph:0", score: 4 },
+    { docId: "b", anchorId: "b:paragraph:0", score: 3.2 },
+    { docId: "c", anchorId: "c:paragraph:0", score: 1.6 },
+    { docId: "d", anchorId: "d:paragraph:0", score: 0.4 },
+  ] as unknown as KbSearchHit[];
+  const graded = applyRelativeGrading(hits);
+  assert.deepEqual(graded.map((hit) => hit.docId), ["a", "b", "c", "d"]);
+  assert.equal(graded[0]?.scoreRatio, 1);
+  assert.equal(graded[0]?.relevance, "high");
+  assert.equal(graded[1]?.scoreRatio, 0.8);
+  assert.equal(graded[1]?.relevance, "high");
+  assert.equal(graded[2]?.scoreRatio, 0.4);
+  assert.equal(graded[2]?.relevance, "low");
+  assert.equal(graded[3]?.relevance, "low");
+});
+
+test("applyRelativeGrading drops the tail below minScoreRatio of the best hit", () => {
+  const hits = [
+    { docId: "a", anchorId: "a:paragraph:0", score: 10 },
+    { docId: "b", anchorId: "b:paragraph:0", score: 6 },
+    { docId: "c", anchorId: "c:paragraph:0", score: 2 },
+  ] as unknown as KbSearchHit[];
+  const graded = applyRelativeGrading(hits, 0.5);
+  assert.deepEqual(graded.map((hit) => hit.docId), ["a", "b"]);
+  // Edge: exactly at the floor survives (>=).
+  const edge = applyRelativeGrading([
+    { docId: "a", anchorId: "a:paragraph:0", score: 10 },
+    { docId: "b", anchorId: "b:paragraph:0", score: 5 },
+  ] as unknown as KbSearchHit[], 0.5);
+  assert.deepEqual(edge.map((hit) => hit.docId), ["a", "b"]);
+});
+
+test("searchBlocks grades hits relative to the batch best", () => {
+  const result = searchBlocks({ kbId: "kb1", query: "mAb114 neutralization assay", documents: [DOC_A, DOC_B] });
+  assert.ok(result.hits.length >= 2);
+  assert.equal(result.hits[0]?.scoreRatio, 1);
+  assert.equal(result.hits[0]?.relevance, "high");
+  for (const hit of result.hits) {
+    assert.ok(hit.scoreRatio !== undefined && hit.scoreRatio > 0 && hit.scoreRatio <= 1);
+    assert.ok(hit.relevance !== undefined);
+  }
+  const cut = searchBlocks({ kbId: "kb1", query: "mAb114 neutralization assay", documents: [DOC_A, DOC_B], minScoreRatio: 0.9 });
+  assert.ok(cut.hits.length <= result.hits.length);
+  if (cut.hits.length > 0) {
+    assert.equal(cut.hits[0]?.docId, result.hits[0]?.docId);
+    for (const hit of cut.hits) {
+      assert.ok(hit.score >= (cut.hits[0]?.score ?? 0) * 0.9 - 1e-9);
+    }
+  }
+});
+
+test("hybridSearchBlocks grades RRF hits on the fused scale", () => {
+  const result = hybridSearchBlocks({
+    kbId: "kb1",
+    query: "mAb114 neutralization assay",
+    documents: [DOC_A, DOC_B],
+    vectorCandidates: [{ docId: "doc-b", anchorId: "doc-b:paragraph:0", score: 0.9 }],
+  });
+  assert.ok(result.hits.length >= 2);
+  assert.equal(result.hits[0]?.scoreRatio, 1);
+  for (const hit of result.hits) {
+    assert.ok(hit.relevance !== undefined);
+  }
 });

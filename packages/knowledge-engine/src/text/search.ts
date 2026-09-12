@@ -45,6 +45,11 @@ export interface KbSearchHit {
   readonly snippet: string;
   readonly matchedTerms: readonly string[];
   readonly score: number;
+  /** V1-Z2: score relative to the batch's best hit (0-1) — mode-agnostic
+   *  grading that survives FTS/RRF/vector scale differences. */
+  readonly scoreRatio?: number;
+  /** V1-Z2: scoreRatio tier — high (>=0.8) / medium (>=0.5) / low. */
+  readonly relevance?: "high" | "medium" | "low";
 }
 
 export interface KbSearchResult {
@@ -122,6 +127,9 @@ export function searchBlocks(input: {
   documents: readonly KbSearchDocumentInput[];
   topK?: number;
   maxPerDoc?: number;
+  /** V1-Z2 opt-in relative tail cut: drop hits below this fraction of the
+   *  batch's best score (scale-free, unlike an absolute minScore). */
+  minScoreRatio?: number;
 }): KbSearchResult {
   const topK = Math.max(1, Math.min(input.topK ?? 8, 20));
   const maxPerDoc = Math.max(1, Math.min(input.maxPerDoc ?? 2, 10));
@@ -156,7 +164,46 @@ export function searchBlocks(input: {
     hits.push(entry.hit);
   }
 
-  return { kbId: input.kbId, query: input.query, hits, truncated, ...(hits.length === 0 ? { note: "terms matched no passage blocks" } : {}) };
+  return {
+    kbId: input.kbId,
+    query: input.query,
+    hits: applyRelativeGrading(hits, input.minScoreRatio),
+    truncated,
+    ...(hits.length === 0 ? { note: "terms matched no passage blocks" } : {}),
+  };
+}
+
+// --------------------------------------------------- V1-Z2 relative grading
+
+export const RELEVANCE_HIGH_RATIO = 0.8;
+export const RELEVANCE_MEDIUM_RATIO = 0.5;
+
+/**
+ * Annotate hits with mode-agnostic relative grading (scoreRatio + relevance)
+ * against the best score of the same batch, and optionally drop the tail
+ * below `minScoreRatio` of that best score. Pure: order and existing fields
+ * are preserved, only the grading fields are appended. Port of SA
+ * retriever.ts applyRelativeGrading.
+ */
+export function applyRelativeGrading(
+  hits: readonly KbSearchHit[],
+  minScoreRatio?: number,
+): KbSearchHit[] {
+  if (hits.length === 0) return [...hits];
+  const maxScore = hits.reduce((best, hit) => (hit.score > best ? hit.score : best), 0);
+  const graded = hits.map((hit) => {
+    const ratio = maxScore > 0 ? hit.score / maxScore : 0;
+    return {
+      ...hit,
+      scoreRatio: Number(ratio.toFixed(4)),
+      relevance: ratio >= RELEVANCE_HIGH_RATIO ? "high" as const
+        : ratio >= RELEVANCE_MEDIUM_RATIO ? "medium" as const
+        : "low" as const,
+    };
+  });
+  if (minScoreRatio === undefined) return graded;
+  const floor = maxScore * minScoreRatio;
+  return graded.filter((hit) => hit.score >= floor);
 }
 
 // ------------------------------------------------------------- Z8 hybrid RRF
@@ -230,6 +277,8 @@ export function hybridSearchBlocks(input: {
   vectorCandidates?: readonly VectorChunkCandidate[];
   topK?: number;
   maxPerDoc?: number;
+  /** V1-Z2 opt-in relative tail cut (same semantics as searchBlocks). */
+  minScoreRatio?: number;
 }): KbSearchResult {
   const topK = Math.max(1, Math.min(input.topK ?? 8, 20));
   const maxPerDoc = Math.max(1, Math.min(input.maxPerDoc ?? 2, 10));
@@ -330,14 +379,15 @@ export function hybridSearchBlocks(input: {
   const note = input.vectorCandidates === undefined && sources.length === 1 && sources[0] === "fts"
     ? "vector source unavailable (no embedding client, no embedded chunks, or embed failure) — keyword-only"
     : undefined;
+  const graded = applyRelativeGrading(hits, input.minScoreRatio);
   return {
     kbId: input.kbId,
     query: input.query,
-    hits,
+    hits: graded,
     truncated,
     sources,
     ...(note ? { note } : {}),
-    ...(hits.length === 0 ? { note: note ?? "no passage blocks matched either retrieval arm" } : {}),
+    ...(graded.length === 0 ? { note: note ?? "no passage blocks matched either retrieval arm" } : {}),
   };
 }
 
