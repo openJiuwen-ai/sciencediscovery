@@ -665,7 +665,11 @@ export async function handleKeGenerateCommunityReports(
   kbId: string,
 ): Promise<void> {
   requireKb(store, kbId);
-  const roots = await rootsService.getGraphRoots(kbId);
+  // Force a fresh partition: the SWR roots cache can lag the store by up to
+  // the revalidate interval, and reports keyed to a fingerprint the graph has
+  // already moved past are correctly refused by live-fingerprint consumers
+  // (drift_search) — generation must bind to the CURRENT graph.
+  const roots = await rootsService.getGraphRoots(kbId, { force: true });
   const result = orchestrator.startCommunityReports(kbId, roots);
   const covered = store
     .listCommunityReports(kbId, roots.fingerprint)

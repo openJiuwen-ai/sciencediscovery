@@ -90,7 +90,10 @@ export interface GraphRootsServiceDeps {
 }
 
 export interface GraphRootsService {
-  getGraphRoots(kbId: string): Promise<GraphRoots>;
+  /** Stale-while-revalidate by default; `force` recomputes synchronously
+   *  against the live store — for callers that must bind artifacts to the
+   *  CURRENT partition (community report generation). */
+  getGraphRoots(kbId: string, opts?: { force?: boolean }): Promise<GraphRoots>;
   /** Test hook: await any in-flight background revalidation for a KB. */
   waitForRevalidate(kbId: string): Promise<void>;
 }
@@ -181,8 +184,15 @@ export function createGraphRootsService(deps: GraphRootsServiceDeps): GraphRoots
   };
 
   return {
-    async getGraphRoots(kbId: string): Promise<GraphRoots> {
+    async getGraphRoots(kbId: string, opts?: { force?: boolean }): Promise<GraphRoots> {
       const fingerprint = fingerprintOf(kbId);
+      if (opts?.force) {
+        // Binding callers (report generation) must never key their artifacts
+        // to a partition the store has already moved past: the SWR cache can
+        // lag by up to REVALIDATE_MIN_INTERVAL_MS, and a stale-bound report
+        // generation is invisible to every live-fingerprint consumer.
+        return compute(kbId, fingerprint);
+      }
       let cached: GraphRoots | null = null;
       const raw = store.getSetting(cacheKey(kbId));
       if (raw) {

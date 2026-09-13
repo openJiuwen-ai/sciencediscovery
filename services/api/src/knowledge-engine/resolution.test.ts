@@ -483,6 +483,39 @@ test("graph roots: stale-while-revalidate serves stale then refreshes in backgro
   assert.equal(fresh.entityCount, 3);
 });
 
+test("graph roots: force bypasses the stale cache and binds to the live store", async (context) => {
+  const root = tempRoot("ke-roots-force");
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  store.upsertEntity({ kbId: kb.id, name: "a", type: "protein" });
+  store.upsertEntity({ kbId: kb.id, name: "b", type: "protein" });
+  store.upsertEdge({ kbId: kb.id, srcId: store.listEntities(kb.id)[0]!.id, dstId: store.listEntities(kb.id)[1]!.id, type: "x" });
+
+  const service = createGraphRootsService({ store });
+  await service.getGraphRoots(kb.id);
+
+  // The graph moves; the plain read still serves the stale partition…
+  store.upsertEntity({ kbId: kb.id, name: "c", type: "protein" });
+  const stale = await service.getGraphRoots(kb.id);
+  assert.equal(stale.entityCount, 2);
+
+  // …but a force read (community report generation's contract) returns the
+  // CURRENT graph synchronously — artifact keying must never lag the store.
+  const forced = await service.getGraphRoots(kb.id, { force: true });
+  assert.equal(forced.entityCount, 3);
+  const liveFingerprint = (() => {
+    const entityStats = store.entitySupportStats(kb.id);
+    const edgeFp = store.edgeFingerprint(kb.id);
+    return `e${entityStats.count}:${entityStats.supportSum}:x${edgeFp.count}:${edgeFp.supportSum}:${edgeFp.maxCreatedAt ?? "none"}`;
+  })();
+  assert.equal(forced.fingerprint, liveFingerprint);
+  // The forced compute also refreshed the cache for plain readers.
+  const after = await service.getGraphRoots(kb.id);
+  assert.equal(after.entityCount, 3);
+});
+
 test("parseNamingResponse: numeric keys only, 30-char cap, garbage → empty", () => {
   const names = parseNamingResponse('{"0": "Glycoprotein entry", "x1": "junk", "2": "' + "长".repeat(40) + '"}');
   assert.equal(names.get(0), "Glycoprotein entry");
