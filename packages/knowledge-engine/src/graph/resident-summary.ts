@@ -59,6 +59,9 @@ export interface ResidentSummaryDataAccess {
   topEdgesBySupport(kbId: string, limit: number): Promise<ResidentEdge[]>;
   /** Name lookup for edge endpoints outside the top set. */
   entityName(id: string): Promise<string | null>;
+  /** V2-Z1 optional: top ready community report titles for the current
+   *  graph fingerprint (absent → the summary simply has no community line). */
+  topCommunityReports?(kbId: string, limit: number): Promise<Array<{ title: string; rating: number | null }>>;
 }
 
 export interface ResidentSummary {
@@ -103,6 +106,17 @@ export async function buildResidentSummary(
       lines.push(`- ${entity.name}（${entity.type}，${entity.supportCount} 篇支持）${trust}${definition}`);
     }
     if (entityCount > TOP_ENTITIES) lines.push(`- … 另有 ${entityCount - TOP_ENTITIES} 个实体`);
+  }
+
+  // V2-Z1: community report titles orient the agent toward corpus-level
+  // themes (one compact line, only when reports exist for this KB).
+  if (data.topCommunityReports) {
+    const reports = await data.topCommunityReports(kbId, 3);
+    if (reports.length > 0) {
+      lines.push(
+        `社区主题：${reports.map((r) => `${r.title}${r.rating !== null ? `（${r.rating}/10）` : ""}`).join("、")}`,
+      );
+    }
   }
 
   // Machine-readable slice

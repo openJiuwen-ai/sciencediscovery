@@ -70,6 +70,59 @@ export async function kePipelineStub(responseJson: unknown): Promise<KePipelineS
 }
 
 // ---------------------------------------------------------------------------
+// Multi-shape pipeline stub: the KE stack issues DIFFERENT LLM calls through
+// one default model (extraction, community reports, …). This stub picks the
+// canned response by matching a marker against the DECODED request body —
+// first matching arm wins; the last entry is the fallback.
+export interface KeStubArm {
+  /** Substring to look for in the decoded request messages. */
+  readonly match: string;
+  readonly json: unknown;
+}
+
+export async function keMultiShapePipelineStub(arms: KeStubArm[]): Promise<KePipelineStub> {
+  const model = "ke-journey-multishape-model";
+  const apiToken = "ke-journey-multishape-token";
+  const fallback = arms[arms.length - 1];
+  let server: Server | undefined;
+  await new Promise<void>((ready) => {
+    server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (part: Buffer) => {
+        body += part.toString("utf8");
+      });
+      request.on("end", () => {
+        const text = toolResultText(body);
+        const arm = arms.find((candidate) => candidate.match !== fallback.match && text.includes(candidate.match)) ?? fallback;
+        const chunk = (delta: Record<string, unknown>, finishReason: string | null) =>
+          `data: ${JSON.stringify({
+            choices: [{ delta, finish_reason: finishReason, index: 0 }],
+            created: 1,
+            id: "chatcmpl-ke-multi",
+            model,
+            object: "chat.completion.chunk",
+          })}\n\n`;
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        response.write(chunk({ content: JSON.stringify(arm.json), role: "assistant" }, null));
+        response.write(chunk({}, "stop"));
+        response.end("data: [DONE]\n\n");
+      });
+    });
+    server.listen(0, "127.0.0.1", () => ready());
+  });
+  const address = server!.address();
+  if (typeof address !== "object" || address === null) {
+    throw new Error("ke multi-shape stub failed to bind");
+  }
+  return {
+    apiToken,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    model,
+    stop: () => new Promise<void>((stopped) => server!.close(() => stopped())),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Agent-session stub with a dynamic kbId: scriptedModel scripts are static,
 // but the KE tools require the runtime-created kbId. This stub reads the id
 // (and the discovered entity name) through getters at request time.

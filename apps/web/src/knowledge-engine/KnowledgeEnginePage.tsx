@@ -23,11 +23,13 @@ import type {
   KeGrowStatus,
   KeJob,
   KeKb,
+  KeReportsStatus,
 } from "../api/knowledge-engine.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
 import { KeDocumentReader } from "./KeDocumentReader.js";
 import { KeGraphCanvas } from "./KeGraphCanvas.js";
 import { KeGrowPanel } from "./KeGrowPanel.js";
+import { KeReportsPanel } from "./KeReportsPanel.js";
 import { KeRootsView } from "./KeRootsView.js";
 
 export interface KnowledgeEnginePageProps {
@@ -155,6 +157,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   const [jobs, setJobs] = useState<KeJob[]>([]);
   const [growStatus, setGrowStatus] = useState<KeGrowStatus | undefined>(undefined);
   const [roots, setRoots] = useState<KeGraphRoots | undefined>(undefined);
+  const [reportsStatus, setReportsStatus] = useState<KeReportsStatus | undefined>(undefined);
   // Progressive drill-down: null = community bubbles (when the graph has
   // communities), "all" = full graph, number = one community's members.
   const [drill, setDrill] = useState<number | "all" | null>(null);
@@ -215,12 +218,13 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   // jobsRef right after the await races React's render flush and can strand
   // the chain on a stale empty list (observed: panel frozen after seeding).
   const refreshKbData = useCallback(async (kbId: string): Promise<{ failed: number; jobs: KeJob[] }> => {
-    const [graphResult, documentsResult, jobsResult, growResult, rootsResult] = await Promise.allSettled([
+    const [graphResult, documentsResult, jobsResult, growResult, rootsResult, reportsResult] = await Promise.allSettled([
       client.getKeGraph(kbId),
       client.listKeDocuments(kbId),
       client.listKeJobs(kbId),
       client.getKeGrow(kbId),
       client.getKeGraphRoots(kbId),
+      client.getKeReports(kbId),
     ]);
     // Drop the response if the user switched KBs (or left) mid-flight.
     if (!mountedRef.current || activeKbIdRef.current !== kbId) return { failed: 0, jobs: jobsRef.current };
@@ -230,6 +234,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
     if (jobsResult.status === "fulfilled") setJobs(jobsResult.value.jobs); else failed.push("jobs");
     if (growResult.status === "fulfilled") setGrowStatus(growResult.value); else failed.push("grow");
     if (rootsResult.status === "fulfilled") setRoots(rootsResult.value); else failed.push("roots");
+    if (reportsResult.status === "fulfilled") setReportsStatus(reportsResult.value); else failed.push("reports");
     if (failed.length === 0) {
       setTransientIssue(undefined);
       setError(undefined);
@@ -493,6 +498,7 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                 </div>
               </section>
               <KeGrowPanel client={client} kbId={activeKbId} status={growStatus} onChanged={kickRefresh} onError={reportError} />
+              <KeReportsPanel client={client} kbId={activeKbId} status={reportsStatus} onChanged={kickRefresh} onError={reportError} />
               <div style={{ marginTop: 12 }}>
                 <button
                   type="button"

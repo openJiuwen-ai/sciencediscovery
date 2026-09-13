@@ -265,6 +265,28 @@ void test("resident summary: null for empty graph; early stage lists names only"
   assert.doesNotMatch(early!.section, /definition/); // no definitions at early stage
 });
 
+void test("resident summary: optional community report titles add one orientation line", async () => {
+  const base = fakeResidentData([residentEntity("1", "GP"), residentEntity("2", "NPC1")], [], null);
+  // Without the optional port method the summary is unchanged.
+  const without = await buildResidentSummary("kb", base);
+  assert.doesNotMatch(without!.section, /社区主题/);
+
+  const withReports: ResidentSummaryDataAccess = {
+    ...base,
+    topCommunityReports: async (_kbId, limit) =>
+      [
+        { title: "Antibody response to the Ebola glycoprotein", rating: 8 },
+        { title: "Innate immune signaling", rating: null },
+        { title: "Vaccine design", rating: 5 },
+        { title: "Fourth report dropped by the limit", rating: 1 },
+      ].slice(0, limit),
+  };
+  const summary = await buildResidentSummary("kb", withReports);
+  assert.match(summary!.section, /社区主题：Antibody response to the Ebola glycoprotein（8\/10）、Innate immune signaling/);
+  assert.match(summary!.section, /Vaccine design（5\/10）/);
+  assert.doesNotMatch(summary!.section, /Fourth report/);
+});
+
 void test("resident summary: engine state → mid; converged → trust levels + strongest edges", async () => {
   const entities = [residentEntity("1", "GP", 10), residentEntity("2", "NPC1", 8)];
   const edges = [{ srcId: "1", dstId: "2", type: "binds", supportCount: 6 }];

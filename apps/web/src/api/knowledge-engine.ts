@@ -323,6 +323,17 @@ export class KnowledgeEngineApiClient extends EvolveApiClient {
       body: JSON.stringify({}),
     });
   }
+
+  getKeReports(kbId: string): Promise<KeReportsStatus> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/reports`);
+  }
+
+  startKeReports(kbId: string): Promise<{ fingerprint: string; enqueued: number; skipped: number; jobIds: string[] }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/reports/generate`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
 }
 
 export interface KeCommunityEntity {
@@ -354,4 +365,37 @@ export interface KeGraphRoots {
   fingerprint: string;
   entityCount: number;
   edgeCount: number;
+}
+
+export interface KeReportFinding {
+  summary: string;
+  explanation: string;
+  evidence?: string;
+}
+
+export interface KeCommunityReport {
+  id: string;
+  communityId: number;
+  title: string;
+  summary: string;
+  rating: number | null;
+  ratingExplanation: string | null;
+  findings: KeReportFinding[];
+  status: "ready" | "error";
+  error?: string;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** GET /kbs/:id/reports payload: current-fingerprint reports + coverage +
+ * community → report map (null = not generated yet). */
+export interface KeReportsStatus {
+  kbId: string;
+  fingerprint: string;
+  method: "louvain" | "entity-type";
+  totalCommunities: number;
+  readyReports: number;
+  reports: KeCommunityReport[];
+  communities: Array<{ id: number; name: string; size: number; reportId: string | null }>;
 }

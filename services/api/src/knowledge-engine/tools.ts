@@ -413,6 +413,8 @@ export function createKnowledgeEngineTools(
         topEntitiesBySupport: async (id, limit) => store.topEntitiesBySupport(id, limit),
         topEdgesBySupport: async (id, limit) => store.topEdgesBySupport(id, limit),
         entityName: async (id) => store.getEntity(id)?.name ?? null,
+        topCommunityReports: async (id, limit) =>
+          store.latestCommunityReports(id, limit).map((row) => ({ title: row.title, rating: row.rating })),
       });
     },
   };

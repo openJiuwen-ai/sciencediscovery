@@ -655,7 +655,8 @@ export async function handleKeListCommunityReports(
 }
 
 /** POST /kbs/:id/reports/generate — one job per community (dedup per
- *  fingerprint+community; ready reports never regenerate). */
+ *  fingerprint+community; ready reports never regenerate). When this
+ *  generation is already complete, older fingerprints are GC'd. */
 export async function handleKeGenerateCommunityReports(
   response: ServerResponse,
   orchestrator: KeOrchestrator,
@@ -665,5 +666,10 @@ export async function handleKeGenerateCommunityReports(
 ): Promise<void> {
   requireKb(store, kbId);
   const roots = await rootsService.getGraphRoots(kbId);
-  sendJson(response, 202, orchestrator.startCommunityReports(kbId, roots));
+  const result = orchestrator.startCommunityReports(kbId, roots);
+  const covered = store
+    .listCommunityReports(kbId, roots.fingerprint)
+    .filter((row) => row.status === "ready" || row.status === "error").length;
+  const prunedStale = covered >= roots.communities.length ? store.deleteCommunityReports(kbId, roots.fingerprint) : 0;
+  sendJson(response, 202, { ...result, ...(prunedStale > 0 ? { prunedStale } : {}) });
 }
