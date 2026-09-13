@@ -90,6 +90,25 @@ export interface KeEdgeRow {
 
 export type KeJobStatus = "pending" | "running" | "succeeded" | "failed" | "dead";
 
+/** V2-Z1 community report row. Valid only for the fingerprint it was
+ *  generated from; findings is a serialized JSON array of ReportFinding. */
+export interface KeCommunityReportRow {
+  readonly id: string;
+  readonly kbId: string;
+  readonly fingerprint: string;
+  readonly communityId: number;
+  readonly title: string;
+  readonly summary: string;
+  readonly rating: number | null;
+  readonly ratingExplanation: string | null;
+  readonly findings: string;
+  readonly status: "ready" | "error";
+  readonly error: string | null;
+  readonly model: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface KeEntityMergeRow {
   readonly id: string;
   readonly kbId: string;
@@ -479,6 +498,38 @@ const MIGRATIONS: readonly Migration[] = [
       );
       CREATE INDEX ke_doc_chunks_kb ON ke_doc_chunks (kb_id);
       CREATE INDEX ke_doc_chunks_pending ON ke_doc_chunks (kb_id) WHERE embedding IS NULL;
+    `,
+  },
+  {
+    version: 7,
+    name: "ke_community_reports",
+    sql: `
+      -- V2-Z1 community report layer (GraphRAG-style): one LLM-written
+      -- structured digest per detected community, keyed to the graph
+      -- fingerprint of the partition it was generated from. Community ids
+      -- are only stable WITHIN a fingerprint (sequential first-seen order
+      -- across recomputes), so (kb_id, fingerprint, community_id) is the
+      -- real key; reports from older fingerprints are history, kept until
+      -- GC'd. findings is a JSON array; status separates ready rows from
+      -- per-community generation errors.
+      CREATE TABLE ke_community_reports (
+        id TEXT PRIMARY KEY,
+        kb_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        fingerprint TEXT NOT NULL,
+        community_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        rating INTEGER,
+        rating_explanation TEXT,
+        findings TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT,
+        model TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX ke_community_reports_key ON ke_community_reports (kb_id, fingerprint, community_id);
+      CREATE INDEX ke_community_reports_kb ON ke_community_reports (kb_id, fingerprint);
     `,
   },
 ];
@@ -1498,6 +1549,102 @@ export class KnowledgeEngineStore {
         update.run(communityId, kbId, id);
       }
     });
+  }
+
+  /** Community members for report generation (support DESC, id tiebreak). */
+  listEntitiesByCommunity(kbId: string, communityId: number, limit = 100): KeEntityRow[] {
+    const rows = this.database
+      .prepare(
+        "SELECT * FROM ke_entities WHERE kb_id = ? AND community_id = ? ORDER BY support_count DESC, id LIMIT ?",
+      )
+      .all(kbId, communityId, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapEntity);
+  }
+
+  /** Relations with BOTH endpoints inside the community (support DESC). */
+  listEdgesWithinCommunity(kbId: string, communityId: number, limit = 200): KeEdgeRow[] {
+    const rows = this.database
+      .prepare(
+        `SELECT e.* FROM ke_edges e
+         JOIN ke_entities sa ON sa.id = e.src_id AND sa.kb_id = e.kb_id
+         JOIN ke_entities da ON da.id = e.dst_id AND da.kb_id = e.kb_id
+         WHERE e.kb_id = ? AND sa.community_id = ? AND da.community_id = ?
+         ORDER BY e.support_count DESC, e.id LIMIT ?`,
+      )
+      .all(kbId, communityId, communityId, limit) as Array<Record<string, unknown>>;
+    return rows.map(mapEdge);
+  }
+
+  upsertCommunityReport(input: {
+    kbId: string;
+    fingerprint: string;
+    communityId: number;
+    title: string;
+    summary: string;
+    rating: number | null;
+    ratingExplanation: string | null;
+    findings: string;
+    status: "ready" | "error";
+    error: string | null;
+    model: string | null;
+  }): KeCommunityReportRow {
+    const id = `${input.kbId}|${input.fingerprint}|${input.communityId}`;
+    const now = new Date().toISOString();
+    this.database
+      .prepare(
+        `INSERT INTO ke_community_reports
+           (id, kb_id, fingerprint, community_id, title, summary, rating, rating_explanation, findings, status, error, model, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title, summary = excluded.summary, rating = excluded.rating,
+           rating_explanation = excluded.rating_explanation, findings = excluded.findings,
+           status = excluded.status, error = excluded.error, model = excluded.model,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        id,
+        input.kbId,
+        input.fingerprint,
+        input.communityId,
+        input.title,
+        input.summary,
+        input.rating,
+        input.ratingExplanation,
+        input.findings,
+        input.status,
+        input.error,
+        input.model,
+        now,
+        now,
+      );
+    return this.getCommunityReport(input.kbId, input.fingerprint, input.communityId)!;
+  }
+
+  getCommunityReport(kbId: string, fingerprint: string, communityId: number): KeCommunityReportRow | undefined {
+    const row = this.database
+      .prepare(
+        "SELECT * FROM ke_community_reports WHERE kb_id = ? AND fingerprint = ? AND community_id = ?",
+      )
+      .get(kbId, fingerprint, communityId) as Record<string, unknown> | undefined;
+    return row ? mapCommunityReport(row) : undefined;
+  }
+
+  /** Reports for one fingerprint, best rating first (nulls last). */
+  listCommunityReports(kbId: string, fingerprint: string): KeCommunityReportRow[] {
+    const rows = this.database
+      .prepare(
+        "SELECT * FROM ke_community_reports WHERE kb_id = ? AND fingerprint = ? ORDER BY rating DESC, community_id",
+      )
+      .all(kbId, fingerprint) as Array<Record<string, unknown>>;
+    return rows.map(mapCommunityReport);
+  }
+
+  /** Drop reports from every fingerprint except the keeper (GC after regen). */
+  deleteCommunityReports(kbId: string, keepFingerprint: string): number {
+    const result = this.database
+      .prepare("DELETE FROM ke_community_reports WHERE kb_id = ? AND fingerprint != ?")
+      .run(kbId, keepFingerprint);
+    return Number(result.changes);
   }
 
   /** FTS5 recall over entity names and aliases; returns entity ids ordered by rank. */
@@ -2571,6 +2718,25 @@ function mapEdge(row: Record<string, unknown>): KeEdgeRow {
     evidenceQuote: (row["evidence_quote"] as string | null) ?? null,
     evidenceDocId: (row["evidence_doc_id"] as string | null) ?? null,
     supportCount: Number(row["support_count"]),
+    createdAt: String(row["created_at"]),
+    updatedAt: String(row["updated_at"]),
+  };
+}
+
+function mapCommunityReport(row: Record<string, unknown>): KeCommunityReportRow {
+  return {
+    id: String(row["id"]),
+    kbId: String(row["kb_id"]),
+    fingerprint: String(row["fingerprint"]),
+    communityId: Number(row["community_id"]),
+    title: String(row["title"]),
+    summary: String(row["summary"]),
+    rating: row["rating"] === null || row["rating"] === undefined ? null : Number(row["rating"]),
+    ratingExplanation: (row["rating_explanation"] as string | null) ?? null,
+    findings: String(row["findings"]),
+    status: String(row["status"]) === "error" ? "error" : "ready",
+    error: (row["error"] as string | null) ?? null,
+    model: (row["model"] as string | null) ?? null,
     createdAt: String(row["created_at"]),
     updatedAt: String(row["updated_at"]),
   };

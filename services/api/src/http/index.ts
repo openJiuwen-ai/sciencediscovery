@@ -72,6 +72,8 @@ import {
   handleKeStartGrow,
   handleKeGetGraphRoots,
   handleKeStartResolution,
+  handleKeListCommunityReports,
+  handleKeGenerateCommunityReports,
   handleKeListMerges,
   handleKeUnmerge,
   parseKeDocumentLevel,
@@ -2411,6 +2413,27 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const keResolutionMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/resolution$/);
       if (keResolutionMatch && request.method === "POST") {
         handleKeStartResolution(response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keResolutionMatch[1]!));
+        return;
+      }
+      const keReportsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/reports$/);
+      if (keReportsMatch && request.method === "GET") {
+        await handleKeListCommunityReports(
+          response,
+          keGraphRoots,
+          knowledgeEngineStore,
+          decodeURIComponent(keReportsMatch[1]!),
+        );
+        return;
+      }
+      const keReportsGenerateMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/reports\/generate$/);
+      if (keReportsGenerateMatch && request.method === "POST") {
+        await handleKeGenerateCommunityReports(
+          response,
+          keOrchestrator,
+          keGraphRoots,
+          knowledgeEngineStore,
+          decodeURIComponent(keReportsGenerateMatch[1]!),
+        );
         return;
       }
       const keMergesMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/merges$/);

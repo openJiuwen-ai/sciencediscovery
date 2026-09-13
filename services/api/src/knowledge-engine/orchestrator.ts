@@ -67,6 +67,11 @@ import {
   runEntityResolution,
   KE_ENTITY_RESOLUTION_JOB,
 } from "./resolution-runner.js";
+import {
+  enqueueCommunityReports,
+  runCommunityReport,
+  KE_COMMUNITY_REPORT_JOB,
+} from "./report-runner.js";
 import type { KeDocumentRow, KeJobRow, KnowledgeEngineStore } from "./store.js";
 import { normalizeEntityName } from "./store.js";
 import type { SourceChain } from "./connectors/source-chain.js";
@@ -92,7 +97,7 @@ import {
 export const KE_SEED_JOB = "ke_seed";
 export const KE_INGEST_JOB = "ke_ingest";
 export const KE_EXTRACT_JOB = "ke_extract";
-export { KE_GROW_JOB, KE_ENTITY_RESOLUTION_JOB };
+export { KE_GROW_JOB, KE_ENTITY_RESOLUTION_JOB, KE_COMMUNITY_REPORT_JOB };
 export type { CrawlBudget, GrowCycleHandle, GrowDeps };
 
 const CORE_ENTITY_LIST_SIZE = 50;
@@ -174,11 +179,32 @@ export class KeOrchestrator {
         signal,
       ),
     );
+    runner.register(KE_COMMUNITY_REPORT_JOB, (job, signal) =>
+      runCommunityReport(
+        {
+          store: this.deps.store,
+          ...(this.deps.resolveEndpoint ? { resolveEndpoint: this.deps.resolveEndpoint } : {}),
+          ...(this.deps.llmInvoke ? { llmInvoke: this.deps.llmInvoke } : {}),
+          ...(this.deps.onWarn ? { onWarn: this.deps.onWarn } : {}),
+        },
+        job,
+        signal,
+      ),
+    );
   }
 
   /** Public API: enqueue a batch entity-resolution run (dedup per KB). */
   startResolution(kbId: string): { jobId: string; enqueued: boolean } {
     return enqueueEntityResolution(this.deps.store, kbId);
+  }
+
+  /** Public API: enqueue one report job per community of the given roots
+   *  partition (ready reports at this fingerprint are skipped). */
+  startCommunityReports(
+    kbId: string,
+    roots: { fingerprint: string; communities: ReadonlyArray<{ id: number; size: number; name?: string | null }> },
+  ): { fingerprint: string; enqueued: number; skipped: number; jobIds: string[] } {
+    return enqueueCommunityReports(this.deps.store, { kbId, ...roots });
   }
 
   /** Public API: enqueue a seed run (deduplicated per kb+query). */

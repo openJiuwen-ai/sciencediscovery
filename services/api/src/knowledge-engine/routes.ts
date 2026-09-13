@@ -40,7 +40,14 @@ import {
 import type { KeOrchestrator } from "./orchestrator.js";
 import { DEFAULT_CRAWL_BUDGET, KE_GROW_JOB, type CrawlBudget } from "./grow.js";
 import type { GraphRootsService } from "./graph-roots.js";
-import type { KeDocumentRow, KeEdgeRow, KeEntityMergeRow, KeEntityRow, KnowledgeEngineStore } from "./store.js";
+import type {
+  KeCommunityReportRow,
+  KeDocumentRow,
+  KeEdgeRow,
+  KeEntityMergeRow,
+  KeEntityRow,
+  KnowledgeEngineStore,
+} from "./store.js";
 
 /** KE request errors ride the top-level classifier via ApiStatusError
  *  (status + machine-readable code), never fall through to a bare 500. */
@@ -593,4 +600,70 @@ export async function handleKeGetGraphRoots(
 ): Promise<void> {
   requireKb(store, kbId);
   sendJson(response, 200, await rootsService.getGraphRoots(kbId));
+}
+
+// ---------------------------------------------------------- community reports
+
+function leanCommunityReport(row: KeCommunityReportRow): Record<string, unknown> {
+  let findings: unknown = [];
+  try {
+    findings = JSON.parse(row.findings);
+  } catch {
+    findings = [];
+  }
+  return {
+    id: row.id,
+    communityId: row.communityId,
+    title: row.title,
+    summary: row.summary,
+    rating: row.rating,
+    ratingExplanation: row.ratingExplanation,
+    findings,
+    status: row.status,
+    ...(row.error ? { error: row.error } : {}),
+    model: row.model,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+/** GET /kbs/:id/reports — reports for the CURRENT roots fingerprint, plus
+ *  coverage stats so the UI can show generation progress. */
+export async function handleKeListCommunityReports(
+  response: ServerResponse,
+  rootsService: GraphRootsService,
+  store: KnowledgeEngineStore,
+  kbId: string,
+): Promise<void> {
+  requireKb(store, kbId);
+  const roots = await rootsService.getGraphRoots(kbId);
+  const reports = store.listCommunityReports(kbId, roots.fingerprint);
+  sendJson(response, 200, {
+    kbId,
+    fingerprint: roots.fingerprint,
+    method: roots.method,
+    totalCommunities: roots.communities.length,
+    readyReports: reports.filter((r) => r.status === "ready").length,
+    reports: reports.map(leanCommunityReport),
+    communities: roots.communities.map((c) => ({
+      id: c.id,
+      name: c.name,
+      size: c.size,
+      reportId: store.getCommunityReport(kbId, roots.fingerprint, c.id)?.id ?? null,
+    })),
+  });
+}
+
+/** POST /kbs/:id/reports/generate — one job per community (dedup per
+ *  fingerprint+community; ready reports never regenerate). */
+export async function handleKeGenerateCommunityReports(
+  response: ServerResponse,
+  orchestrator: KeOrchestrator,
+  rootsService: GraphRootsService,
+  store: KnowledgeEngineStore,
+  kbId: string,
+): Promise<void> {
+  requireKb(store, kbId);
+  const roots = await rootsService.getGraphRoots(kbId);
+  sendJson(response, 202, orchestrator.startCommunityReports(kbId, roots));
 }
