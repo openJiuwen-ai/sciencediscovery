@@ -37,6 +37,7 @@ export * from "./graph/resident-summary.js";
 export * from "./graph/louvain.js";
 export * from "./graph/roots.js";
 export * from "./graph/community-report.js";
+export * from "./graph/drift.js";
 export * from "./resolution/normalize.js";
 export * from "./resolution/abbrev.js";
 export * from "./resolution/resolver.js";

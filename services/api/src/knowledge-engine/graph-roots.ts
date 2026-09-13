@@ -95,6 +95,17 @@ export interface GraphRootsService {
   waitForRevalidate(kbId: string): Promise<void>;
 }
 
+/**
+ * Current graph fingerprint straight from store stats — three cheap counts,
+ * no partition compute. Community-keyed artifacts (reports, DRIFT) must bind
+ * to THIS value: community ids are only stable within a fingerprint.
+ */
+export function graphFingerprintOf(store: KnowledgeEngineStore, kbId: string): string {
+  const entityStats = store.entitySupportStats(kbId);
+  const edgeFp = store.edgeFingerprint(kbId);
+  return `e${entityStats.count}:${entityStats.supportSum}:x${edgeFp.count}:${edgeFp.supportSum}:${edgeFp.maxCreatedAt ?? "none"}`;
+}
+
 export function createGraphRootsService(deps: GraphRootsServiceDeps): GraphRootsService {
   const { store } = deps;
   // Background revalidation state (per KB): at most one recompute in flight,
@@ -105,11 +116,7 @@ export function createGraphRootsService(deps: GraphRootsServiceDeps): GraphRoots
 
   const warn = (message: string, detail?: unknown) => deps.onWarn?.(message, detail);
 
-  const fingerprintOf = (kbId: string): string => {
-    const entityStats = store.entitySupportStats(kbId);
-    const edgeFp = store.edgeFingerprint(kbId);
-    return `e${entityStats.count}:${entityStats.supportSum}:x${edgeFp.count}:${edgeFp.supportSum}:${edgeFp.maxCreatedAt ?? "none"}`;
-  };
+  const fingerprintOf = (kbId: string): string => graphFingerprintOf(store, kbId);
 
   const namer = async (communities: readonly Community[]): Promise<Map<number, string>> => {
     const endpoint = deps.resolveEndpoint?.();

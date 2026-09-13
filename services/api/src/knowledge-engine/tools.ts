@@ -26,6 +26,7 @@ import {
   cosineScan,
   deepDive,
   docIdFromAnchor,
+  driftSearch,
   embeddingFromBlob,
   entityUnifiedSearch,
   expandAnchor,
@@ -42,6 +43,7 @@ import {
   type CitationVerifyResult,
   type DeepDiveResult,
   type DocGrepResult,
+  type DriftSearchResult,
   type EntityUnifiedSearchResult,
   type ExploreDataAccess,
   type ExploreResult,
@@ -59,6 +61,7 @@ import {
 } from "@sciencediscovery/knowledge-engine";
 
 import type { EmbeddingClient } from "./embedding.js";
+import { graphFingerprintOf } from "./graph-roots.js";
 import type { KnowledgeEngineStore } from "./store.js";
 
 export interface KeToolKbInfo {
@@ -93,6 +96,15 @@ export interface KnowledgeEngineToolPort {
   /** W8: regex over document fulltexts, line-grained (doc_grep). Invalid
    *  patterns come back as a structured error, not a throw. */
   docGrep(kbId: string, pattern: string, opts: { maxMatches?: number }): Promise<DocGrepResult>;
+  /** V2-Z2: DRIFT two-stage retrieval (drift_search) — community reports
+   *  (global) select the communities, query-matched members and evidence
+   *  edges (local) come back per community. Requires ready reports for the
+   *  CURRENT graph fingerprint; honest empty states otherwise. */
+  driftSearch(
+    kbId: string,
+    query: string,
+    opts: { maxCommunities?: number; seedsPerCommunity?: number; edgesPerCommunity?: number },
+  ): Promise<DriftSearchResult>;
   /** W9/V1-Z1: novelty check for a candidate claim (novelty_check) —
    *  entity/relation/passage probes against THIS KB plus, when external
    *  sources are configured, the S2→OpenAlex counter-evidence stage and the
@@ -117,6 +129,24 @@ export class KeKbNotFoundError extends Error {
   constructor(kbId: string) {
     super(`knowledge base ${kbId} not found`);
     this.name = "KeKbNotFoundError";
+  }
+}
+
+/** Finding summaries off a serialized findings JSON — defensive parse: the
+ *  column is written by the report runner, but a corrupt row must degrade to
+ *  an empty list, never crash the search. */
+function parseFindingSummaries(findingsJson: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(findingsJson);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) =>
+        typeof item === "object" && item !== null && typeof (item as Record<string, unknown>)["summary"] === "string"
+          ? ((item as Record<string, unknown>)["summary"] as string)
+          : "")
+      .filter((summary) => summary.length > 0);
+  } catch {
+    return [];
   }
 }
 
@@ -309,6 +339,49 @@ export function createKnowledgeEngineTools(
         .filter((document) => Boolean(document.fulltext))
         .map((document) => ({ docId: document.id, title: document.title, fulltext: document.fulltext! }));
       return grepDocuments({ kbId, pattern, documents, maxMatches: opts.maxMatches });
+    },
+
+    async driftSearch(kbId, query, opts) {
+      requireKb(kbId);
+      return driftSearch(kbId, query, {
+        // Fingerprint straight from store stats (no partition compute). An
+        // entity- and edge-less KB reads as "no graph yet" per the port
+        // contract — DRIFT has nothing to traverse there.
+        graphFingerprint: async (id) => {
+          if (store.entitySupportStats(id).count === 0 && store.edgeFingerprint(id).count === 0) return null;
+          return graphFingerprintOf(store, id);
+        },
+        listCommunityReports: async (id, fingerprint) =>
+          store.listCommunityReports(id, fingerprint).map((row) => ({
+            communityId: row.communityId,
+            // The report row carries no partition-time community name — the
+            // LLM-written title IS the display name.
+            communityName: null,
+            title: row.title,
+            summary: row.summary,
+            rating: row.rating,
+            findingSummaries: parseFindingSummaries(row.findings),
+          })),
+        listEntitiesByCommunity: async (id, communityId) =>
+          store.listEntitiesByCommunity(id, communityId, 200).map((entity) => ({
+            id: entity.id,
+            name: entity.name,
+            type: entity.type,
+            description: entity.description,
+            supportCount: entity.supportCount,
+          })),
+        listEdgesWithinCommunity: async (id, communityId) =>
+          store.listEdgesWithinCommunity(id, communityId, 300).map((edge) => ({
+            id: edge.id,
+            srcId: edge.srcId,
+            dstId: edge.dstId,
+            type: edge.type,
+            supportCount: edge.supportCount,
+            evidenceQuote: edge.evidenceQuote,
+            evidenceDocId: edge.evidenceDocId,
+          })),
+        latestReadyFingerprint: async (id) => store.latestReadyFingerprint(id),
+      }, opts);
     },
 
     async noveltyCheck(kbId, claim) {

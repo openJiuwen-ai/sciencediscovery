@@ -24,6 +24,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 import { KnowledgeEngineStore } from "./store.js";
+import { graphFingerprintOf } from "./graph-roots.js";
 import { createKnowledgeEngineTools, KeKbNotFoundError } from "./tools.js";
 
 function tempRoot(name: string): string {
@@ -371,6 +372,123 @@ test("tools: docGrep regex-scans ready documents with structured errors", async 
     () => tools.docGrep("nonexistent", "x", {}),
     (error: unknown) => error instanceof KeKbNotFoundError,
   );
+});
+
+test("tools: driftSearch runs both stages over the store — reports select, members and evidence land", async (context) => {
+  const root = tempRoot("ke-tools-drift");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const { mab, gp, ebola } = seedGraph(store, kb.id);
+  store.setCommunityIds(kb.id, new Map([[mab, 1], [gp, 1], [ebola, 1]]));
+  const fingerprint = graphFingerprintOf(store, kb.id);
+  store.upsertCommunityReport({
+    kbId: kb.id,
+    fingerprint,
+    communityId: 1,
+    title: "Antibody neutralization of Ebola",
+    summary: "mAb114 binds the glycoprotein spike and neutralizes Ebola virus.",
+    rating: 8,
+    ratingExplanation: "central therapeutic cluster",
+    findings: JSON.stringify([{ summary: "mAb114 neutralizes Ebola virus", explanation: "via the glycoprotein" }]),
+    status: "ready",
+    error: null,
+    model: "test",
+  });
+
+  const result = await tools.driftSearch(kb.id, "Ebola glycoprotein", {});
+  assert.equal(result.status, "ok");
+  assert.equal(result.fingerprint, fingerprint);
+  assert.equal(result.communities.length, 1);
+  const section = result.communities[0]!;
+  assert.equal(section.communityId, 1);
+  assert.equal(section.title, "Antibody neutralization of Ebola");
+  assert.ok(section.reportMatchedTerms.includes("ebola"));
+  assert.ok(section.reportMatchedTerms.includes("glycoprotein"));
+  assert.equal(section.memberCount, 3);
+
+  // Seeds: "Ebola virus" matches by name; the rest arrive as support-ranked
+  // orientation entries (matchedTerms empty) — the report prose matched, not
+  // the member names.
+  const byName = new Map(section.seedEntities.map((seed) => [seed.name, seed]));
+  assert.deepEqual(byName.get("Ebola virus")?.matchedTerms, ["ebola"]);
+  assert.equal(byName.get("mAb114")?.matchedTerms.length, 0);
+  assert.equal(byName.get("GP")?.matchedTerms.length, 0);
+
+  // Evidence: the "binds the Ebola glycoprotein" quote hits both terms and
+  // outranks the neutralizes edge (endpoint match only).
+  assert.equal(section.evidenceEdges.length, 2);
+  assert.equal(section.evidenceEdges[0]!.source, "mAb114");
+  assert.equal(section.evidenceEdges[0]!.target, "GP");
+  assert.ok(section.evidenceEdges[0]!.matchedTerms.includes("glycoprotein"));
+  assert.equal(section.evidenceEdges[1]!.target, "Ebola virus");
+
+  // Unknown KB: same guard as every other tool.
+  await assert.rejects(
+    () => tools.driftSearch("nonexistent", "x", {}),
+    (error: unknown) => error instanceof KeKbNotFoundError,
+  );
+});
+
+test("tools: driftSearch empty states distinguish never-generated from a stale generation", async (context) => {
+  const root = tempRoot("ke-tools-drift-empty");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const tools = createKnowledgeEngineTools(store);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+
+  // No graph at all.
+  const noGraph = await tools.driftSearch(kb.id, "interferon", {});
+  assert.equal(noGraph.status, "no-graph");
+
+  const { mab, gp, ebola } = seedGraph(store, kb.id);
+  store.setCommunityIds(kb.id, new Map([[mab, 1], [gp, 1], [ebola, 1]]));
+
+  // Graph exists, no reports ever written.
+  const never = await tools.driftSearch(kb.id, "interferon", {});
+  assert.equal(never.status, "no-reports");
+  assert.match(never.note ?? "", /no community reports exist for the current graph generation/);
+
+  // Reports exist — but for a fingerprint the graph has moved past.
+  store.upsertCommunityReport({
+    kbId: kb.id,
+    fingerprint: "e0:x-stale",
+    communityId: 1,
+    title: "Stale",
+    summary: "written for an older partition",
+    rating: 5,
+    ratingExplanation: null,
+    findings: "[]",
+    status: "ready",
+    error: null,
+    model: "test",
+  });
+  const stale = await tools.driftSearch(kb.id, "interferon", {});
+  assert.equal(stale.status, "no-reports");
+  assert.match(stale.note ?? "", /older graph generation/);
+
+  // A query that lexically misses the only current-fingerprint report comes
+  // back ok with the honest theme-level note.
+  store.upsertCommunityReport({
+    kbId: kb.id,
+    fingerprint: graphFingerprintOf(store, kb.id),
+    communityId: 1,
+    title: "Antibody cluster",
+    summary: "antibody engineering summary",
+    rating: 5,
+    ratingExplanation: null,
+    findings: "[]",
+    status: "ready",
+    error: null,
+    model: "test",
+  });
+  const miss = await tools.driftSearch(kb.id, "crispr cas9", {});
+  assert.equal(miss.status, "ok");
+  assert.deepEqual(miss.communities, []);
+  assert.match(miss.note ?? "", /no community report lexically matches/);
 });
 
 test("tools: noveltyCheck probes the store graph and documents", async (context) => {

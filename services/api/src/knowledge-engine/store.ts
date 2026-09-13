@@ -1647,16 +1647,24 @@ export class KnowledgeEngineStore {
     return Number(result.changes);
   }
 
-  /** Ready reports of the most recently written generation (rating DESC) —
-   *  resident-summary orientation; snapshot semantics, graph may have moved. */
-  latestCommunityReports(kbId: string, limit: number): KeCommunityReportRow[] {
+  /** Fingerprint of the most recently written ready generation (null when
+   *  the KB has no ready reports). Snapshot semantics — the graph may have
+   *  moved past it; compare against the current graph fingerprint. */
+  latestReadyFingerprint(kbId: string): string | null {
     const latest = this.database
       .prepare(
         "SELECT fingerprint FROM ke_community_reports WHERE kb_id = ? AND status = 'ready' ORDER BY updated_at DESC LIMIT 1",
       )
       .get(kbId) as { fingerprint: string } | undefined;
+    return latest?.fingerprint ?? null;
+  }
+
+  /** Ready reports of the most recently written generation (rating DESC) —
+   *  resident-summary orientation; snapshot semantics, graph may have moved. */
+  latestCommunityReports(kbId: string, limit: number): KeCommunityReportRow[] {
+    const latest = this.latestReadyFingerprint(kbId);
     if (!latest) return [];
-    return this.listCommunityReports(kbId, latest.fingerprint)
+    return this.listCommunityReports(kbId, latest)
       .filter((row) => row.status === "ready")
       .slice(0, limit);
   }

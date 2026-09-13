@@ -336,9 +336,14 @@ export interface WorkspaceToolOptions {
       kbId: string,
       opts: { topN?: number; signals?: Array<"holes" | "conflicts" | "transfers"> },
     ) => Promise<unknown>;
-    kbSearch: (kbId: string, query: string, opts: { topK?: number; docLimit?: number }) => Promise<unknown>;
+    kbSearch: (kbId: string, query: string, opts: { topK?: number; docLimit?: number; minScoreRatio?: number }) => Promise<unknown>;
     kbExpand: (kbId: string, anchorId: string) => Promise<unknown>;
     docGrep: (kbId: string, pattern: string, opts: { maxMatches?: number }) => Promise<unknown>;
+    driftSearch: (
+      kbId: string,
+      query: string,
+      opts: { maxCommunities?: number; seedsPerCommunity?: number; edgesPerCommunity?: number },
+    ) => Promise<unknown>;
     noveltyCheck: (kbId: string, claim: string) => Promise<unknown>;
     verifyCitation: (kbId: string, quote: string) => Promise<unknown>;
   };
@@ -1464,6 +1469,24 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           knowledgeEngine.gapCandidates(params.kbId, {
             ...(params.topN === undefined ? {} : { topN: params.topN }),
             ...(params.signals === undefined ? {} : { signals: params.signals }),
+          }),
+      ),
+      keTool(
+        "drift_search",
+        "Two-stage community-anchored retrieval",
+        "DRIFT-style retrieval over a knowledge base that has community reports: stage one (global) lexically matches the query against the LLM-written community report digests and selects the top communities; stage two (local) returns each selected community's query-matched seed entities (name/description hits first, then support-ranked orientation members with empty matchedTerms) and its evidence-backed intra-community relations whose quote or endpoints mention the query (matchedTerms explains every hit; evidence quotes are clamped verbatim). Use it for 'where does this topic live in this corpus' orientation before drilling in — it answers at theme level even when no single entity name matches the query wording. Requires ready reports for the CURRENT graph fingerprint: no-reports says why (never generated vs stale generation) with regeneration guidance. LIMITATION: report matching is lexical (paraphrase needs the report's own vocabulary); traversal stays INSIDE the selected communities (cross-community exploration is concept_explore/entity_unified_search); a community not selected is unmatched, not irrelevant. Not for: passage search (use kb_search); one entity's full neighborhood (use concept_explore/deep_dive).",
+        Type.Object({
+          kbId: kbIdParam,
+          query: Type.String({ minLength: 1, description: "Free-text query (theme, mechanism, question topic)" }),
+          maxCommunities: Type.Optional(Type.Number({ minimum: 1, maximum: 5 })),
+          seedsPerCommunity: Type.Optional(Type.Number({ minimum: 1, maximum: 10 })),
+          edgesPerCommunity: Type.Optional(Type.Number({ minimum: 1, maximum: 15 })),
+        }),
+        (params) =>
+          knowledgeEngine.driftSearch(params.kbId, params.query, {
+            ...(params.maxCommunities === undefined ? {} : { maxCommunities: params.maxCommunities }),
+            ...(params.seedsPerCommunity === undefined ? {} : { seedsPerCommunity: params.seedsPerCommunity }),
+            ...(params.edgesPerCommunity === undefined ? {} : { edgesPerCommunity: params.edgesPerCommunity }),
           }),
       ),
       keTool(

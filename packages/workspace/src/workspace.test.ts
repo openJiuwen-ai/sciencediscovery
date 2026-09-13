@@ -1729,6 +1729,10 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
       calls.push(`verify_citation:${kbId}:${quote}`);
       return { state: "verbatim", verifiedIn: [], scannedDocs: 0 };
     },
+    driftSearch: async (kbId: string, query: string) => {
+      calls.push(`drift_search:${kbId}:${query}`);
+      return { status: "ok", communities: [] };
+    },
   };
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
@@ -1746,6 +1750,7 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
     "kb_search",
     "kb_expand",
     "doc_grep",
+    "drift_search",
     "novelty_check",
     "verify_citation",
     "evidence_ledger",
@@ -1825,6 +1830,7 @@ test("knowledge-engine tools enforce a bound KB scope: default fill, optional sc
     docGrep: async () => ({}),
     noveltyCheck: async () => ({}),
     verifyCitation: async () => ({}),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
   };
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
@@ -1887,6 +1893,7 @@ test("polish_report verifies fragments via verifyCitation and rewrites the file 
       state: text === quote ? "verbatim" : "not-found",
       verifiedIn: text === quote ? [{ docId: "doc-9", docTitle: "Cryo-ET paper", state: "verbatim" }] : [],
     }),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
   };
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
