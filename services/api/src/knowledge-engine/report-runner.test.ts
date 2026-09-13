@@ -37,7 +37,7 @@ function fakeJob(payload: Record<string, unknown>) {
     id: "job-1",
     type: KE_COMMUNITY_REPORT_JOB,
     payload,
-    status: "running",
+    status: "running" as const,
     attempts: 1,
     maxAttempts: 2,
     runAfter: new Date().toISOString(),
