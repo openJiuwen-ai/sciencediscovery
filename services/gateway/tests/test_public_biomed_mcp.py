@@ -608,7 +608,7 @@ class Z6BiodataConnectorTests(unittest.IsolatedAsyncioTestCase):
             }}}),
         ) as post:
             result = await gnomad_gene("TP53")
-        self.assertIn("reference_genome: GRCh38", post.call_args[1]["json_body"]["query"])
+        self.assertIn("reference_genome: GRCh38", post.call_args[0][1]["query"])
         record = result["records"][0]
         self.assertEqual(record["identifier"], "ENSG00000141510")
         self.assertEqual(record["structuredData"]["constraint"]["oeLof"], 0.06)
@@ -620,6 +620,35 @@ class Z6BiodataConnectorTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.assertRaises(RuntimeError):
                 await gnomad_gene("NOPE")
+
+    async def test_gnomad_gene_exercises_the_real_post_helper_signature(self) -> None:
+        # Regression: a duplicate _post_json definition (json_body= keyword)
+        # made every real gnomAD call raise TypeError while AsyncMock seams
+        # kept the unit tests green (caught live on 4310, 2026-09-13). This
+        # test goes through the REAL helper with only httpx faked, so any
+        # future signature drift between caller and helper fails here.
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+                self.status_code = 200
+            def json(self):
+                return self._payload
+        class FakeAsyncClient:
+            def __init__(self, **_kwargs):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *_args):
+                return False
+            async def post(self, _url, json=None, headers=None):
+                return FakeResponse({"data": {"gene": {
+                    "gene_id": "ENSG00000012048", "symbol": "BRCA1",
+                    "gnomad_constraint": {"oe_lof": 0.80, "oe_mis": 0.91, "oe_lof_upper": 0.92, "oe_mis_upper": 0.94},
+                }}})
+        with patch("sciencediscovery_gateway.public_biomed_mcp.httpx.AsyncClient", new=FakeAsyncClient):
+            result = await gnomad_gene("BRCA1")
+        self.assertEqual(result["records"][0]["identifier"], "ENSG00000012048")
+        self.assertEqual(result["records"][0]["structuredData"]["constraint"]["oeLof"], 0.80)
 
     async def test_gnomad_variant_validates_the_id_shape(self) -> None:
         with self.assertRaises(ValueError):

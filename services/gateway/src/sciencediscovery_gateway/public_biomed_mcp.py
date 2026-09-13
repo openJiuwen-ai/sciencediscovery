@@ -66,13 +66,6 @@ async def _get_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
         return response.json()
 
 
-async def _post_json(url: str, *, json_body: dict[str, Any]) -> Any:
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
-        response = await client.post(url, json=json_body, headers={"accept": "application/json"})
-        _raise_for_status(response)
-        return response.json()
-
-
 async def _get_text(url: str, *, params: dict[str, Any] | None = None, accept: str = "text/plain") -> str:
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
         response = await client.get(url, params=params, headers={"accept": accept})
@@ -1394,7 +1387,7 @@ async def gnomad_gene(gene: str, reference_genome: str = "GRCh38") -> dict[str, 
         raise ValueError("gene is required")
     if reference_genome not in ("GRCh37", "GRCh38"):
         raise ValueError("reference_genome must be GRCh37 or GRCh38")
-    payload = await _post_json(external_url("data_sources.gnomad.graphql_api"), json_body={
+    payload = await _post_json(external_url("data_sources.gnomad.graphql_api"), {
         # DA-measured: the public API tolerates ~10 req/min — point queries only.
         "query": (
             f'query {{ gene(gene_symbol: "{symbol}", reference_genome: {reference_genome}) '
@@ -1432,7 +1425,7 @@ async def gnomad_variant(variant_id: str, reference_genome: str = "GRCh38") -> d
     variant = variant_id.strip()
     if not re.fullmatch(r"\d{1,2}[XYM]?-\d+-[ACGT]+-[ACGT]+", variant):
         raise ValueError("variant_id must look like 1-55516888-G-A")
-    payload = await _post_json(external_url("data_sources.gnomad.graphql_api"), json_body={
+    payload = await _post_json(external_url("data_sources.gnomad.graphql_api"), {
         "query": (
             f'query {{ variant(variantId: "{variant}", dataset: gnomad_r4) '
             "{ variant_id genome { ac an af } exome { ac an af } } }"
