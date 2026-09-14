@@ -29,26 +29,6 @@ import {
 
 test.use({ locale: "zh-CN" });
 
-/**
- * E2E-META
- * Purpose: A run whose session enables a pre-finish-audit skill (tree-search) must not complete on the model's first no-tool answer: the finish gate injects the audit directive, the model then calls review_checkpoint, and only the post-audit answer completes the run.
- * Steps:
- *   1. Register a journey-owned stub model; create a Project and Session with the tree-search skill selected (skillSelectionMode=selected, enabledSkillIds=[tree-search]).
- *   2. Send one prompt. The stub's first answer is plain text with no tool calls (a finish attempt).
- *   3. The finish gate injects the pre-finish directive as a user message; the stub observes it in the next request body and answers with a review_checkpoint tool call.
- *   4. With the review observation in history the gate stays silent; the stub's final text completes the run.
- *   5. Assert the run completed, the directive reached the model, and the persisted run events carry review_checkpoint + finish_gate(continue).
- * Environment: Isolated local stack at E2E_BASE_URL; zh-CN locale; no KB or external services needed.
- * Type: mocked
- * LLM: journey-owned OpenAI-compatible stub on 127.0.0.1 with gate-aware turn handling (plain finish attempt → review_checkpoint on directive → final answer).
- * WebSearch: none
- * PaperSources: none
- * MCP: none
- * OtherExternal: none — non-local browser requests are aborted by the network guard.
- * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
- * CostSideEffects: no external cost; project/session records are deleted in finally.
- */
-
 interface FinishGateStub {
   readonly baseUrl: string;
   readonly model: string;
@@ -135,6 +115,25 @@ async function finishGateStub(): Promise<FinishGateStub> {
   };
 }
 
+/**
+ * E2E-META
+ * Purpose: A run whose session enables a pre-finish-audit skill (tree-search) must not complete on the model's first no-tool answer: the finish gate injects the audit directive, the model then calls review_checkpoint, and only the post-audit answer completes the run.
+ * Steps:
+ *   1. Register a journey-owned stub model; create a Project and Session with the tree-search skill selected (skillSelectionMode=selected, enabledSkillIds=[tree-search]).
+ *   2. Send one prompt. The stub's first answer is plain text with no tool calls (a finish attempt).
+ *   3. The finish gate injects the pre-finish directive as a user message; the stub observes it in the next request body and answers with a review_checkpoint tool call.
+ *   4. With the review observation in history the gate stays silent; the stub's final text completes the run.
+ *   5. Assert the run completed, the directive reached the model, and the persisted run events carry review_checkpoint + finish_gate(continue).
+ * Environment: Isolated local stack at E2E_BASE_URL; zh-CN locale; no KB or external services needed.
+ * Type: mocked
+ * LLM: journey-owned OpenAI-compatible stub on 127.0.0.1 with gate-aware turn handling (plain finish attempt → review_checkpoint on directive → final answer).
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none — non-local browser requests are aborted by the network guard.
+ * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
+ * CostSideEffects: no external cost; project/session records are deleted in finally.
+ */
 test("J-FG1 finish-gate 拦截未审计的收尾", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
   test.setTimeout(240_000);
   journey.scenario({
