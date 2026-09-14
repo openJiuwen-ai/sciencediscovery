@@ -207,22 +207,25 @@ class IdeaTreeEngine:
                 if budget and self.state['tokens'] + self.reserved + estimate > budget:
                     raise BudgetReached('Remaining token budget cannot fund the next stage')
                 self.reserved += estimate
+            usage = 0
             try:
                 if self.call_override:
                     raw, usage = await self.call_override(role, payload)
                 else:
                     raw, usage = await asyncio.to_thread(self.transport, system, payload, ceiling)
-                if isinstance(usage, int) and not isinstance(usage, bool) and usage >= 0:
-                    self.state['tokens'] += usage
-                else:
-                    self.state['usageKnown'] = False
-                self.save()
-                self.check_stop()
-                if budget and not self.state['usageKnown']:
-                    raise RuntimeError('Model did not report token usage; cannot enforce the configured token budget')
             finally:
                 async with self.usage_lock:
+                    # Settle actual usage and release its reservation together.
+                    if isinstance(usage, int) and not isinstance(usage, bool) and usage >= 0:
+                        self.state['tokens'] += usage
+                    else:
+                        self.state['usageKnown'] = False
                     self.reserved -= estimate
+                    missing_usage = budget and not self.state['usageKnown']
+            self.save()
+            self.check_stop()
+            if missing_usage:
+                raise RuntimeError('Model did not report token usage; cannot enforce the configured token budget')
             try:
                 result = validate_result(role, json.loads(raw), {item['id'] for item in self.assessors()})
                 return result
@@ -507,7 +510,10 @@ class IdeaTreeEngine:
                 # expensive model calls concurrently. Insight propagation remains below
                 # in deterministic batch order because sibling summaries update shared
                 # ancestors and form the selector's durable learning record.
-                semaphore = asyncio.Semaphore(max(1, s['settings'].get('candidateConcurrency', 1)))
+                # Match assessor scheduling under a cap: spend actual usage before
+                # reserving the next candidate's conservative per-call allowance.
+                concurrency = 1 if s['settings'].get('maxTokens') else s['settings'].get('candidateConcurrency', 1)
+                semaphore = asyncio.Semaphore(max(1, concurrency))
                 results = await asyncio.gather(*(evaluate_candidate(identifier) for identifier in s['batch']), return_exceptions=True)
                 for result in results:
                     if isinstance(result, BaseException):

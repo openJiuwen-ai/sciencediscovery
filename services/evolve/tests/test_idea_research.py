@@ -109,6 +109,41 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(n['score'] is None and not n['stages'] for n in directions))
         self.assertTrue(all(n['insight'] for n in directions))
 
+    async def test_capped_batch_finishes_without_competing_reservations(self):
+        self.state['settings'].update(maxRounds=1, candidatesPerRound=2, maxDepth=1,
+                                      candidateConcurrency=2, maxTokens=60000)
+        calls = 0
+        async def model(role, payload):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0)
+            if role == 'ideate':
+                return json.dumps(dict(candidates=[dict(parentId='ROOT', hypothesis=h)
+                                                  for h in ['Candidate A', 'Candidate B']], reason='Compare')), 100
+            return await self.model(role, payload)
+        engine = IdeaTreeEngine(self.state, self.store, {}, model)
+        await engine.run()
+        self.assertEqual(self.state['status'], 'completed')
+        candidates = [n for n in self.state['nodes'] if n['kind'] == 'candidate']
+        self.assertEqual(len(candidates), 2)
+        self.assertTrue(all(n['cycleComplete'] for n in candidates))
+        self.assertEqual(self.state['tokens'], calls * 100)
+        self.assertEqual(engine.reserved, 0)
+
+    async def test_concurrent_usage_settlement_releases_failed_requests(self):
+        async def model(role, payload):
+            await asyncio.sleep(0)
+            if payload['usage'] == 'error':
+                raise RuntimeError('provider unavailable')
+            return '{"text":"design"}', payload['usage']
+        engine = IdeaTreeEngine(self.state, self.store, {}, model)
+        results = await asyncio.gather(*(engine._ask('design', {'usage': usage})
+                                        for usage in [100, 200, None, 'error']), return_exceptions=True)
+        self.assertIsInstance(results[-1], RuntimeError)
+        self.assertEqual(self.state['tokens'], 300)
+        self.assertFalse(self.state['usageKnown'])
+        self.assertEqual(engine.reserved, 0)
+
     async def test_shallow_candidate_runs_and_pending_parent_is_rejected(self):
         engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
         shallow = node('1', 'ROOT', 'Shallow', 'candidate', 1)

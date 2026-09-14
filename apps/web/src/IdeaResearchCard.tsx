@@ -14,11 +14,10 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   const [confirmEnd, setConfirmEnd] = useState<string>();
   const [error, setError] = useState<string>();
   const load = useCallback(async () => {
-    try { const result = await client.listIdeaResearch(sessionId); setItems(result.items); setError(undefined); }
+    try { const result = await client.listIdeaResearch(sessionId); setItems(result.items); setError(undefined); onResearchAvailability?.(result.items.length > 0); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-  }, [client, sessionId]);
+  }, [client, sessionId, onResearchAvailability]);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => onResearchAvailability?.(items.length > 0), [items.length, onResearchAvailability]);
   const activeId = items.find(i => ["running", "pausing"].includes(i.research.status))?.research.id;
   const [reconnect, setReconnect] = useState(0);
   useEffect(() => {
@@ -53,7 +52,7 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     finally {setBusy(false);}
   }
   const view = items.find(i => i.research.id === selected) ?? items[0];
-  if (!view) return null;
+  if (!view) return error ? <p role="alert">{error} <button type="button" onClick={() => void load()}>重试</button></p> : null;
   const r = view.research;
   return <section ref={element} className="idea-research-panel" aria-label="Idea Tree 研究控制">
     {error && <p role="alert">{error} <button type="button" onClick={() => { void load(); setReconnect(n => n + 1); }}>重新连接</button></p>}
