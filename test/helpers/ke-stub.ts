@@ -308,6 +308,90 @@ export async function keAntiHallucinationAgentStub(state: KeAntiHullucinationStu
   };
 }
 // ---------------------------------------------------------------------------
+// J-KE9 stub: the drift_search chain. Reads the drift_search result out of
+// the request history and DERIVES the final answer from what the tool
+// actually returned (community title, first seed entity, first evidence
+// quote) — the journey asserts a real dependency, never a canned string.
+export interface KeDriftAgentStubState {
+  getKbId(): string | undefined;
+  getDriftQuery(): string;
+}
+
+export async function keDriftAgentStub(state: KeDriftAgentStubState): Promise<KePipelineStub> {
+  const model = "ke-journey-drift-model";
+  const apiToken = "ke-journey-drift-token";
+  let server: Server | undefined;
+  let turn = 0;
+  await new Promise<void>((ready) => {
+    server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (part: Buffer) => {
+        body += part.toString("utf8");
+      });
+      request.on("end", () => {
+        turn += 1;
+        const chunk = (delta: Record<string, unknown>, finishReason: string | null) =>
+          `data: ${JSON.stringify({
+            choices: [{ delta, finishReason, index: 0 }],
+            created: 1,
+            id: "chatcmpl-ke-drift",
+            model,
+            object: "chat.completion.chunk",
+          })}\n\n`;
+        const toolCall = (name: string, args: Record<string, unknown>, id: string) => {
+          response.write(chunk({
+            role: "assistant",
+            tool_calls: [{
+              function: { arguments: JSON.stringify(args), name },
+              id,
+              index: 0,
+              type: "function",
+            }],
+          }, null));
+          response.write(chunk({}, "tool_calls"));
+        };
+        response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        const kbId = state.getKbId() ?? "";
+        if (turn === 1) {
+          toolCall("list_knowledge_bases", {}, `call-ke-drift-${turn}`);
+        } else if (turn === 2) {
+          toolCall("drift_search", { kbId, query: state.getDriftQuery() }, `call-ke-drift-${turn}`);
+        } else {
+          const results = toolResultText(body);
+          const title = results.match(/"title"\s*:\s*"([^"]+)"/)?.[1];
+          const seed = results.match(/"seedEntities"\s*:\s*\[\s*\{\s*[^}]*?"name"\s*:\s*"([^"]+)"/)?.[1];
+          const quote = results.match(/"evidenceQuote"\s*:\s*"([^"]+)"/)?.[1];
+          if (!title || !seed || !quote) {
+            response.write(chunk({
+              content: "drift_search 结果未能解析（可能无社区报告或无命中）——按规则不给出主题定位结论。",
+              role: "assistant",
+            }, null));
+          } else {
+            response.write(chunk({
+              content: `主题定位：该主题位于社区「${title}」，入口实体 ${seed}，逐字证据："${quote}"。`,
+              role: "assistant",
+            }, null));
+          }
+          response.write(chunk({}, "stop"));
+        }
+        response.end("data: [DONE]\n\n");
+      });
+    });
+    server.listen(0, "127.0.0.1", () => ready());
+  });
+  const address = server!.address();
+  if (typeof address !== "object" || address === null) {
+    throw new Error("ke drift stub failed to bind");
+  }
+  return {
+    apiToken,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    model,
+    stop: () => new Promise<void>((stopped) => server!.close(() => stopped())),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // J-KE5 stub: the kb_search → kb_expand chain. Like the anti-hallucination
 // stub it READS the request body — the runtime sends the full message
 // history (tool results included), so turn 3 can lift the real anchorId the
