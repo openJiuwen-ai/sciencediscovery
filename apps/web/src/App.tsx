@@ -273,6 +273,8 @@ import {
   type ComposerRunAction,
 } from "./composer/model.js";
 import { ModelPicker } from "./composer/ModelPicker.js";
+import { KbScopePicker, type KbScopeUpdate } from "./composer/KbScopePicker.js";
+import type { KeKb } from "./api/knowledge-engine.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -1105,6 +1107,11 @@ export function App() {
   // re-fetches what the card already polled.
   const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
   const [knowledgeEngineOpen, setKnowledgeEngineOpen] = useState(false);
+  // V4-C1: conversation KB scope — the KB list for the composer picker and the
+  // active session's runtime settings details (kbScopeKbIds/kbScopeWebSearch
+  // live in the settings overrides, not on the Session record).
+  const [keKbs, setKeKbs] = useState<KeKb[]>([]);
+  const [sessionSettings, setSessionSettings] = useState<RuntimeSettingsDetails>();
   // A graph node a report chip asked to open; MemoryGraphView selects it on
   // change, then clears the pending state. Set by handleChipClick (paper chips).
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
@@ -1587,6 +1594,29 @@ export function App() {
     setSelectedWorkspaceFilePaths(new Set());
     setWorkspaceFileProvenanceTarget(undefined);
   }, [activeSessionId]);
+
+  // KB list for the conversation kb-scope picker. Best effort: an
+  // unconfigured knowledge engine just yields an empty list. Re-runs when the
+  // Knowledge Engine overlay closes so newly created KBs appear immediately.
+  useEffect(() => {
+    let cancelled = false;
+    client.listKeKbs()
+      .then((result) => { if (!cancelled) setKeKbs(result.kbs); })
+      .catch(() => { if (!cancelled) setKeKbs([]); });
+    return () => { cancelled = true; };
+  }, [client, knowledgeEngineOpen]);
+
+  // The picker badge and edit state come from the session's runtime settings
+  // (overrides + effective + sources); kbScope changes take effect next run.
+  useEffect(() => {
+    setSessionSettings(undefined);
+    if (!activeSessionId) return;
+    let cancelled = false;
+    client.getSessionSettings(activeSessionId)
+      .then((details) => { if (!cancelled) setSessionSettings(details); })
+      .catch(() => { if (!cancelled) setSessionSettings(undefined); });
+    return () => { cancelled = true; };
+  }, [activeSessionId, client]);
 
   useEffect(() => {
     const updateWorkspaceBounds = () => {
@@ -2559,6 +2589,38 @@ export function App() {
         setPermissionGrants(grants);
         setRemoteJobs(jobs);
       }
+      setError(undefined);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("error.updateSession"));
+    }
+  }
+
+  /** Composer kb-scope picker writes: read-modify-write the session settings
+   * overrides (PUT replaces the whole layer, so preserve every other field).
+   * A present-but-undefined value drops the override and inherits again. */
+  async function updateSessionKbScope(update: KbScopeUpdate): Promise<void> {
+    if (!activeSessionId) return;
+    try {
+      // Fresh read, not the cached sessionSettings: the composer model/
+      // connector pickers PATCH and the settings dialog PUTs the same
+      // overrides layer without refreshing our copy — a stale base would
+      // silently roll those edits back.
+      const latest = await client.getSessionSettings(activeSessionId);
+      const overrides: RuntimeSettingsOverrides = { ...latest.overrides };
+      if ("kbScopeKbIds" in update) {
+        if (update.kbScopeKbIds === undefined) delete overrides.kbScopeKbIds;
+        else overrides.kbScopeKbIds = update.kbScopeKbIds;
+      } else if ("kbScopeWebSearch" in update) {
+        if (update.kbScopeWebSearch === undefined) delete overrides.kbScopeWebSearch;
+        else overrides.kbScopeWebSearch = update.kbScopeWebSearch;
+      }
+      // Without a binding the web-only flag is inert; drop its residue so it
+      // does not silently resurrect the next time bases get bound.
+      if (!overrides.kbScopeKbIds?.length) delete overrides.kbScopeWebSearch;
+      const details = await client.replaceSessionSettings(activeSessionId, overrides);
+      setSessionSettings(details);
+      // Keep an open scoped-settings dialog on the same session in sync.
+      if (settingsTarget?.kind === "session" && settingsTarget.id === activeSessionId) setScopedSettings(details);
       setError(undefined);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("error.updateSession"));
@@ -4447,6 +4509,12 @@ export function App() {
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
                       />
+                      <KbScopePicker
+                        details={sessionSettings}
+                        disabled={isRunning || sessionArchived}
+                        kbs={keKbs}
+                        onChange={(update) => void updateSessionKbScope(update)}
+                      />
                       <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
                     <ApprovalModeToggle
@@ -4983,6 +5051,7 @@ export function App() {
               details={scopedSettings}
               disabled={settingsTarget.kind === "session" && session?.id === settingsTarget.id && sessionArchived}
               key={resourceTargetKey(settingsTarget)}
+              knowledgeBases={keKbs}
               models={models}
               onSave={saveScopedSettings}
               scopeLabel={settingsTarget.kind === "project" ? "Project" : "Session"}
