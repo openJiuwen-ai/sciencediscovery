@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "./store.js";
-import { manageRunnerEnvironment, runnerWorkspaceBindings } from "./runner-management.js";
+import { manageRunnerEnvironment, runnerWorkspaceBindings, runnerTarget } from "./runner-management.js";
 
 test("remote environment management forwards every operation without writing into the local catalog", async () => {
   const calls: Array<[string, unknown[]]> = [];
@@ -37,4 +37,62 @@ test("workspace management includes other Projects, archived Sessions and previo
   assert.deepEqual(items.map((item) => item.sessionId), ["s1", "s2"]);
   assert.equal(items[1]!.workspaceKey, "p2/s2/runners/target");
   assert.deepEqual(states, ["all", "all"]);
+});
+
+
+for (const id of ["local", "host"]) {
+  test(`${id} exposes the same connection and workspace contract`, async () => {
+    const resources = { workspaceDisk: { path: "/runner/workspaces" } };
+    const store = {
+      dataDir: "/app/data", getRemoteHost: () => ({ id: "host", alias: "node", workspaceNamespace: "target" }),
+      listProjects: () => [{ id: "p", name: "Project", runnerIds: [id], remoteRunnerHostIds: ["host"] }],
+      listSessions: () => [{ id: "s", title: "Session" }], listRemoteWorkspaceSyncs: () => [],
+      workspacePath: () => "/app/data/projects/p/s/workspace",
+    } as unknown as SessionStore;
+    const local = { health: async () => ({ runnerVersion: "v1" }), resources: async () => resources } as unknown as RunnerClient;
+    const remote = { runnerStatusWithResources: async () => ({ state: "ready", resources }) } as unknown as Parameters<typeof runnerTarget>[2];
+    const target = await runnerTarget(store, local, remote, id);
+    assert.equal(target.id, id);
+    assert.equal(target.runnerStatus?.state, "ready");
+    assert.equal(target.runnerStatus?.resources?.npu, undefined, "absent hardware stays absent");
+    const [binding] = await runnerWorkspaceBindings(store, id);
+    assert.equal(binding?.runnerId, id);
+    assert.equal(binding?.projectId, "p");
+    assert.equal(binding?.workspaceKey, id === "local" ? "/app/data/projects/p/s/workspace" : "p/s/runners/target");
+  });
+}
+
+test("built-in Runner reports connection and resource errors without claiming it is ready", async () => {
+  const store = { dataDir: "/app/data" } as SessionStore;
+  const local = { health: async () => { throw new Error("connection refused"); } } as unknown as RunnerClient;
+  const target = await runnerTarget(store, local, {} as Parameters<typeof runnerTarget>[2], "local");
+  assert.equal(target.runnerStatus?.state, "error");
+  assert.match(target.runnerStatus?.error ?? "", /connection refused/);
+  local.health = async () => ({ runnerVersion: "v1" }) as Awaited<ReturnType<RunnerClient["health"]>>;
+  local.resources = async () => { throw new Error("resources unavailable"); };
+  const reachable = await runnerTarget(store, local, {} as Parameters<typeof runnerTarget>[2], "local");
+  assert.equal(reachable.runnerStatus?.state, "ready");
+  assert.equal(reachable.runnerStatus?.resources, undefined);
+  assert.match(reachable.runnerStatus?.resourcesError ?? "", /resources unavailable/);
+});
+
+test("the unified catalog retains machine reachability when its Runner is disconnected", async () => {
+  const host = { id: "host", alias: "node" };
+  const store = { getRemoteHost: () => host } as unknown as SessionStore;
+  let probes = 0;
+  const remote = {
+    runnerStatusWithResources: async () => ({ state: "disconnected" }),
+    reachability: async (target: unknown) => {
+      assert.equal(target, host);
+      probes++;
+      return { state: "online", checkedAt: "2026-09-12T00:00:00.000Z" };
+    },
+  } as unknown as Parameters<typeof runnerTarget>[2];
+  const target = await runnerTarget(store, {} as RunnerClient, remote, "host");
+  assert.equal(target.reachability?.state, "online");
+  assert.equal(target.runnerStatus?.state, "disconnected");
+  remote.runnerStatusWithResources = async () => ({ hostId: "host", state: "ready" });
+  const connected = await runnerTarget(store, {} as RunnerClient, remote, "host");
+  assert.equal(connected.reachability, undefined);
+  assert.equal(probes, 1, "a connected Runner already proves the machine is online");
 });

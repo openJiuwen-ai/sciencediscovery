@@ -46,6 +46,7 @@ import {
   seccompVariantFor,
   sandboxCommandPath,
   spawnSandboxProcess,
+  killSandboxProcess,
   truncateToBudget,
   validatedWorkspace,
   workspaceBindArguments,
@@ -238,7 +239,7 @@ class ManagedKernel {
     this.session.memoryLostReason = reason;
     this.session.status = "stopped";
     this.failPending(new Error(reason));
-    this.child.kill("SIGKILL");
+    killSandboxProcess(this.child);
     await this.launch.cleanup?.().catch(() => undefined);
   }
 
@@ -581,7 +582,7 @@ export class KernelManager {
       seccompVariantFor(networkAccess),
     );
     if (!child.stdin || !child.stdout || !child.stderr) {
-      child.kill("SIGKILL");
+      killSandboxProcess(child);
       throw new Error("Runner failed to create persistent kernel streams");
     }
     const now = new Date();

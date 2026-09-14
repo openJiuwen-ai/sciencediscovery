@@ -21,29 +21,47 @@ import type {
   RevisePlanRequest,
   Subagent,
   SubagentStep,
-  SessionPlan,
   SkillDescriptor,
   Specialist,
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
-import { useLocale } from "./i18n/index.js";
-import { ChevronRightIcon } from "./icons.js";
+import { useLocale, type MessageKey } from "./i18n/index.js";
+import { CheckIcon, ChevronRightIcon, SpinnerIcon } from "./icons.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
+import { ProcessRecord } from "./ProcessRecord.js";
 import { activityCardId, type ActivityCardDisclosure } from "./session/run-activity.js";
+import type { RunPlanSnapshot } from "./session/run-activity.js";
 
 type VisibleReviewerLevel = ReviewerSpecialistLevel;
 
+type Translate = (key: MessageKey, variables?: Record<string, number | string>) => string;
+
 function visibleReviewerLevel(level: ReviewerSpecialistLevel): VisibleReviewerLevel { return level; }
 
-function planSummary(plan: SessionPlan): string {
+function planSummary(plan: RunPlanSnapshot, t: Translate, terminal = false): string {
+  const completed = plan.items.filter((item) => item.status === "completed").length;
+  const active = plan.items.filter((item) => item.status === "in_progress").length;
+  const summary = t("plan.summary", { completed, total: plan.items.length });
+  return active && !terminal ? `${summary} · ${t("plan.summaryActive", { active })}` : summary;
+}
+
+function PlanItemStatus({ status }: { status: RunPlanSnapshot["items"][number]["status"] }) {
+  const { t } = useLocale();
+  const label = status === "completed" ? t("plan.status.completed") : status === "in_progress" ? t("plan.status.inProgress") : t("plan.status.pending");
+  return <span aria-label={label} className={`plan-item-status ${status}`} role="img">
+    {status === "completed" ? <CheckIcon size={13} /> : status === "in_progress" ? <SpinnerIcon size={14} /> : null}
+  </span>;
+}
+
+function sessionPlanSummary(plan: SessionPlan): string {
   const feasibility = `${plan.feasibilityConfidence} feasibility`;
   const completed = plan.steps.filter((step) => step.status === "completed").length;
   const active = plan.steps.filter((step) => step.status === "in_progress").length;
   return `${completed}/${plan.steps.length} completed${active ? ` · ${active} active` : ""} · ${feasibility}`;
 }
 
-export function PlanCard({
+export function SessionPlanCard({
   busy,
   expanded,
   onDecide,
@@ -92,7 +110,7 @@ export function PlanCard({
     <article className={`plan-card ${plan.state}`}>
       <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
         <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span><strong>Plan · v{plan.version}</strong><small>{planSummary(plan)}</small></span>
+        <span><strong>Plan · v{plan.version}</strong><small>{sessionPlanSummary(plan)}</small></span>
         <i>{plan.state === "recorded" ? "active" : plan.state.replaceAll("_", " ")}</i>
       </button>
       {expanded ? <div className="plan-card-body">
@@ -147,6 +165,45 @@ export function PlanCard({
   );
 }
 
+
+export function PlanCard({
+  expanded,
+  onToggle,
+  plan,
+  terminal = false,
+}: {
+  expanded: boolean;
+  onToggle: (expanded: boolean) => void;
+  plan: RunPlanSnapshot;
+  terminal?: boolean;
+}) {
+  const { t } = useLocale();
+  const completed = plan.items.length > 0 && plan.items.every((item) => item.status === "completed");
+  const status = !plan.items.length ? t("plan.badge.cleared")
+    : completed ? t("plan.status.completed")
+    : terminal ? t("record.finished")
+    : plan.items.some((item) => item.status === "in_progress") ? t("plan.status.inProgress")
+    : t("plan.status.pending");
+  const title = t("plan.title", { agent: plan.agentId });
+  return (
+    <article className="plan-card recorded">
+      <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
+        <span className="card-chevron"><ChevronRightIcon size={15} /></span>
+        <span className="plan-card-label"><strong title={title}>{title}</strong><small>{planSummary(plan, t, terminal)}</small></span>
+        <i>{status}</i>
+      </button>
+      {expanded ? <div className="plan-card-body">
+        {plan.explanation ? <p>{plan.explanation}</p> : null}
+        <ol className="plan-item-list">{plan.items.map((item, index) => <li key={`${index}:${item.step}`} data-status={item.status}>
+          <PlanItemStatus status={item.status} />
+          <span>{item.step}</span>
+        </li>)}</ol>
+      </div> : null}
+    </article>
+  );
+}
+
+
 export function OrchestrationPanel({
   busy,
   expandedCards,
@@ -154,17 +211,24 @@ export function OrchestrationPanel({
   onRevisePlan,
   onToggleCard,
   plans,
+  sessionPlans,
+  terminalRunIds = new Set<string>(),
 }: ActivityCardDisclosure & {
   busy?: boolean;
   onDecidePlan?: (plan: SessionPlan, decision: "approve" | "reject", reason?: string) => void;
   onRevisePlan?: (plan: SessionPlan, body: RevisePlanRequest) => Promise<boolean>;
-  plans: SessionPlan[];
+  /** Model-declared snapshot plans (update_plan). */
+  plans: RunPlanSnapshot[];
+  /** Approval-gated session plans (V3-C2 lifecycle). */
+  sessionPlans?: SessionPlan[];
+  terminalRunIds?: ReadonlySet<string>;
 }) {
-  if (!plans.length) return null;
-  return <section className="orchestration-panel" aria-label="Plans">
-    {plans.map((plan) => {
+  const { t } = useLocale();
+  if (!plans.length && !(sessionPlans ?? []).length) return null;
+  return <section className="orchestration-panel" aria-label={t("plan.sectionAria")}>
+    {(sessionPlans ?? []).map((plan) => {
       const cardId = activityCardId("plan", plan.id);
-      return <PlanCard
+      return <SessionPlanCard
         busy={busy}
         expanded={Boolean(expandedCards[cardId])}
         key={plan.id}
@@ -174,55 +238,89 @@ export function OrchestrationPanel({
         plan={plan}
       />;
     })}
+    {plans.map((plan) => {
+      const cardId = activityCardId("plan", `${plan.runId}:${plan.agentId}`);
+      return <PlanCard
+        expanded={Boolean(expandedCards[cardId])}
+        key={`${plan.runId}:${plan.agentId}`}
+        onToggle={(expanded) => onToggleCard(cardId, expanded)}
+        plan={plan}
+        terminal={terminalRunIds.has(plan.runId)}
+      />;
+    })}
   </section>;
 }
 
-function subagentSummary(subagent: Subagent): string {
+function subagentSummary(subagent: Subagent, t: Translate): string {
   if (subagent.status === "running") {
     const step = subagent.steps.findLast((candidate) => candidate.status === "running") ?? subagent.steps.at(-1);
-    return step ? `Current: ${subagentStepLabel(step)} · ${subagentStepPreview(step)}` : "Starting…";
+    return step
+      ? t("subagent.current", { label: subagentStepLabel(step, t), preview: subagentStepPreview(step, t) })
+      : t("subagent.starting");
   }
-  const parts = [subagent.input.subagentType ?? "general-purpose", `${subagent.turnCount}/${subagent.maxTurns} turns`];
-  parts.push(subagent.usage ? `${subagent.usage.totalTokens.toLocaleString()} tokens` : "usage unavailable");
+  const parts = [subagent.input.subagentType ?? "general-purpose", t("subagent.turns", { count: subagent.turnCount, max: subagent.maxTurns })];
+  parts.push(subagent.usage ? t("subagent.tokens", { count: subagent.usage.totalTokens.toLocaleString() }) : t("subagent.summaryUsageUnavailable"));
   return parts.join(" · ");
 }
 
-function subagentStepLabel(step: SubagentStep): string {
-  if (step.kind === "tool") return step.toolName ?? "Tool";
-  if (step.kind === "thinking") return "Reasoning";
-  if (step.kind === "assistant") return "Response";
+function subagentStepLabel(step: SubagentStep, t: Translate): string {
+  if (step.kind === "tool") return step.toolName ?? t("subagent.step.tool");
+  if (step.kind === "thinking") return t("subagent.step.reasoning");
+  if (step.kind === "assistant") return t("subagent.step.response");
   const turn = /^Turn (\d+) started$/i.exec(step.content.trim());
-  return turn ? `Turn ${turn[1]}` : "Setup";
+  return turn ? t("subagent.step.turn", { turn: turn[1]! }) : t("subagent.step.setup");
 }
 
-function subagentStepPreview(step: SubagentStep): string {
+function subagentStepPreview(step: SubagentStep, t: Translate): string {
   const source = step.kind === "tool" ? step.input ?? step.content : step.content;
   const compact = source.replace(/\s+/g, " ").trim();
-  if (!compact) return "No details";
-  if (step.kind === "system" && /^Turn \d+ started$/i.test(compact)) return "Started";
+  if (!compact) return t("subagent.step.noDetails");
+  if (step.kind === "system" && /^Turn \d+ started$/i.test(compact)) return t("subagent.step.started");
   return compact;
+}
+
+const SUBAGENT_STATUS_KEYS: Record<Subagent["status"], MessageKey> = {
+  cancelled: "subagent.status.cancelled",
+  completed: "subagent.status.completed",
+  failed: "subagent.status.failed",
+  running: "subagent.status.running",
+  timed_out: "subagent.status.timed_out",
+};
+
+/** Map a SubAgent status enum to a label; unknown values render as-is. */
+export function subagentStatusLabel(t: Translate, status: string): string {
+  const key = SUBAGENT_STATUS_KEYS[status as Subagent["status"]];
+  return key ? t(key) : status;
 }
 
 export function SubagentCards({
   className,
-  heading = "Subagents",
+  hideHeading = false,
+  heading,
   onOpenSubagent,
   subagents,
 }: {
   className?: string;
+  hideHeading?: boolean;
   heading?: string;
   onOpenSubagent: (subagent: Subagent) => void;
   subagents: Subagent[];
 }) {
+  const { t } = useLocale();
   if (!subagents.length) return null;
 
-  return <section className={`subagent-list${className ? ` ${className}` : ""}`} aria-label="Subagent activity">
-    <div className="subagent-list-heading"><strong>{heading}</strong><span>{subagents.filter((subagent) => subagent.status === "running").length} running · {subagents.length} total</span></div>
+  return <section className={`subagent-list process-subagents${className ? ` ${className}` : ""}`} aria-label={t("subagent.sectionAria")}>
+    {!hideHeading && subagents.some((item) => item.status === "running") ? <div className="subagent-list-heading"><strong>{heading ?? t("subagent.headingPlural")}</strong><span>{t("subagent.listStats", { running: subagents.filter((subagent) => subagent.status === "running").length, total: subagents.length })}</span></div> : null}
     {subagents.map((subagent) => {
-      const summary = subagentSummary(subagent);
-      return <article className={`subagent-card ${subagent.status}`} key={subagent.id}>
-        <button aria-label={`Open SubAgent: ${subagent.input.description}`} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${subagent.status}\n${summary}`}><i /><span><strong>{subagent.input.description}</strong><small>{summary}</small></span><em>{subagent.status}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
-      </article>;
+      const summary = subagentSummary(subagent, t);
+      const statusLabel = subagentStatusLabel(t, subagent.status);
+      return <ProcessRecord active={subagent.status === "running"} className={`process-agent-record ${subagent.status}`}
+        failed={subagent.status === "failed" || subagent.status === "timed_out"}
+        key={subagent.id} label={`${subagent.input.description} · ${statusLabel}`}>
+        <article className={`subagent-card ${subagent.status}`}>
+        <button aria-label={t("subagent.openAria", { description: subagent.input.description })} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${statusLabel}\n${summary}`}><i /><span><strong>{subagent.input.description}{subagent.status !== "running" ? ` · ${statusLabel}` : ""}</strong><small>{summary}</small></span><em>{statusLabel}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
+        </article>
+      </ProcessRecord>;
     })}
   </section>;
 }
@@ -240,8 +338,10 @@ export function SpecialistManager({
   onError: (message: string) => void;
   skills: SkillDescriptor[];
 }) {
+  const { t } = useLocale();
   const [specialists, setSpecialists] = useState<Specialist[]>([]);
   const [editingId, setEditingId] = useState<string>();
+  const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -249,7 +349,6 @@ export function SpecialistManager({
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [reviewerEnabled, setReviewerEnabled] = useState(false);
-  const [reviewerLevel, setReviewerLevel] = useState<VisibleReviewerLevel>("quick");
   const [reviewerBusy, setReviewerBusy] = useState(true);
   const [builtinBusy, setBuiltinBusy] = useState(false);
   const [builtinExpanded, setBuiltinExpanded] = useState(false);
@@ -276,7 +375,7 @@ export function SpecialistManager({
       const updated = await client.updateSpecialist(id, { enabled: next });
       applySpecialist(updated);
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update built-in specialist");
+      onError(error instanceof Error ? error.message : t("specialist.updateBuiltinFailed"));
     } finally {
       setBuiltinBusy(false);
     }
@@ -288,7 +387,7 @@ export function SpecialistManager({
       await Promise.all(builtinSpecialists.map((specialist) => client.updateSpecialist(specialist.id, { enabled: next })));
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update built-in specialists");
+      onError(error instanceof Error ? error.message : t("specialist.updateAllBuiltinFailed"));
     } finally {
       setBuiltinBusy(false);
     }
@@ -297,7 +396,6 @@ export function SpecialistManager({
     void client.getReviewerSpecialistSettings()
       .then((settings) => {
         setReviewerEnabled(settings.enabled);
-        setReviewerLevel(visibleReviewerLevel(settings.level));
       })
       .catch((error: Error) => onError(error.message))
       .finally(() => setReviewerBusy(false));
@@ -308,25 +406,10 @@ export function SpecialistManager({
     try {
       const settings = await client.updateReviewerSpecialistSettings({
         enabled: !reviewerEnabled,
-        level: reviewerLevel,
       });
       setReviewerEnabled(settings.enabled);
-      setReviewerLevel(visibleReviewerLevel(settings.level));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update Reviewer Specialist");
-    } finally {
-      setReviewerBusy(false);
-    }
-  }
-
-  async function changeReviewerLevel(level: VisibleReviewerLevel): Promise<void> {
-    setReviewerBusy(true);
-    try {
-      const settings = await client.updateReviewerSpecialistSettings({ enabled: reviewerEnabled, level });
-      setReviewerEnabled(settings.enabled);
-      setReviewerLevel(visibleReviewerLevel(settings.level));
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not update Reviewer Specialist level");
+      onError(error instanceof Error ? error.message : t("specialist.updateReviewerFailed"));
     } finally {
       setReviewerBusy(false);
     }
@@ -339,6 +422,17 @@ export function SpecialistManager({
     setInstructions(specialist?.instructions ?? "");
     setSelectedSkills(specialist?.enabledSkillIds ?? []);
     setSelectedConnectors(specialist?.connectorIds ?? []);
+    setFormOpen(true);
+  }
+
+  function closeEditor(): void {
+    setEditingId(undefined);
+    setName("");
+    setDescription("");
+    setInstructions("");
+    setSelectedSkills([]);
+    setSelectedConnectors([]);
+    setFormOpen(false);
   }
 
   async function save(event: FormEvent): Promise<void> {
@@ -348,10 +442,24 @@ export function SpecialistManager({
       const body = { connectorIds: selectedConnectors as Specialist["connectorIds"], description, enabledSkillIds: selectedSkills, instructions, name };
       if (editingId) await client.updateSpecialist(editingId, body);
       else await client.createSpecialist(body);
-      edit();
+      closeEditor();
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not save specialist");
+      onError(error instanceof Error ? error.message : t("specialist.saveFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(specialist: Specialist): Promise<void> {
+    if (!window.confirm(t("specialist.confirmDelete", { name: specialist.name }))) return;
+    setBusy(true);
+    try {
+      await client.deleteSpecialist(specialist.id);
+      closeEditor();
+      await refresh();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : t("specialist.deleteFailed"));
     } finally {
       setBusy(false);
     }
@@ -361,27 +469,25 @@ export function SpecialistManager({
   const userSpecialists = specialists.filter((specialist) => !specialist.builtIn);
 
   return <div className="specialist-manager">
-    <div className="settings-detail-header"><span className="eyebrow">Subagent profiles</span><h3>User specialists</h3><p>Bundle instructions with optional skills and connectors, then attach the specialist to a Session or subagent.</p></div>
+    <div className="settings-detail-header"><span className="eyebrow">{t("specialist.eyebrow")}</span><h3>{t("specialist.title")}</h3><p>{t("specialist.description")}</p></div>
     <BuiltInReviewerSpecialist
       busy={reviewerBusy}
       enabled={reviewerEnabled}
-      level={reviewerLevel}
-      onLevelChange={(level) => void changeReviewerLevel(level)}
       onToggle={() => void toggleReviewer()}
     />
     {builtinSpecialists.length > 0 ? (() => {
       const enabledCount = builtinSpecialists.filter((s) => s.enabled !== false).length;
       const allOn = enabledCount === builtinSpecialists.length;
       const allOff = enabledCount === 0;
-      return <section aria-label="Built-in research specialists" className="built-in-specialists">
+      return <section aria-label={t("specialist.builtinAria")} className="built-in-specialists">
         <div className="builtin-research-header">
           <button className="builtin-research-toggle" type="button" onClick={() => setBuiltinExpanded((v) => !v)} aria-expanded={builtinExpanded}>
-            <strong>Built-in research specialists</strong>
-            <small>{enabledCount}/{builtinSpecialists.length} enabled</small>
+            <strong>{t("specialist.builtinTitle")}</strong>
+            <small>{t("connectors.enabled", { enabled: enabledCount, total: builtinSpecialists.length })}</small>
           </button>
           <div className="builtin-research-actions">
-            <button className="builtin-research-action" disabled={builtinBusy || allOn} type="button" onClick={() => void setAllBuiltin(true)}>Enable all</button>
-            <button className="builtin-research-action" disabled={builtinBusy || allOff} type="button" onClick={() => void setAllBuiltin(false)}>Disable all</button>
+            <button className="builtin-research-action" disabled={builtinBusy || allOn} type="button" onClick={() => void setAllBuiltin(true)}>{t("specialist.enableAll")}</button>
+            <button className="builtin-research-action" disabled={builtinBusy || allOff} type="button" onClick={() => void setAllBuiltin(false)}>{t("specialist.disableAll")}</button>
           </div>
         </div>
         {!builtinExpanded ? null : builtinSpecialists.map((specialist) => {
@@ -390,11 +496,11 @@ export function SpecialistManager({
             <div className="builtin-research-text">
               <span className="builtin-research-name">{specialist.name}</span>
               {specialist.description ? <span className="builtin-research-desc">{specialist.description}</span> : null}
-              <span className="builtin-research-meta">{specialist.enabledSkillIds.length} skills · {specialist.connectorIds.length} connectors</span>
+              <span className="builtin-research-meta">{t("specialist.counts", { connectors: specialist.connectorIds.length, skills: specialist.enabledSkillIds.length })}</span>
             </div>
             <button
               aria-checked={enabled}
-              aria-label={`Enable ${specialist.name}`}
+              aria-label={t("specialist.enableAria", { name: specialist.name })}
               className={enabled ? "specialist-switch on" : "specialist-switch"}
               disabled={builtinBusy}
               onClick={() => void toggleBuiltin(specialist.id, !enabled)}
@@ -405,15 +511,15 @@ export function SpecialistManager({
         })}
       </section>;
     })() : null}
-    <div className="specialist-layout"><div className="specialist-list"><button type="button" className={!editingId ? "active" : ""} onClick={() => edit()}>＋ New specialist</button>{userSpecialists.map((specialist) => <button className={editingId === specialist.id ? "active" : ""} key={specialist.id} title={`${specialist.name} · ${specialist.enabledSkillIds.length} skills · ${specialist.connectorIds.length} connectors`} type="button" onClick={() => edit(specialist)}><strong>{specialist.name}</strong><small>{specialist.enabledSkillIds.length} skills · {specialist.connectorIds.length} connectors</small></button>)}</div>
-      <form onSubmit={(event) => void save(event)}>
-        <section className="specialist-form-card"><label><span>Name</span><input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label></section>
-        <section className="specialist-form-card"><label><span>Description</span><textarea required rows={4} maxLength={500} value={description} onChange={(event) => setDescription(event.target.value)} /></label></section>
-        <section className="specialist-form-card"><label><span>Instructions</span><textarea required rows={9} maxLength={20_000} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label></section>
-        <fieldset><legend>Skills</legend>{skills.map((skill) => <label key={skill.id}><input type="checkbox" checked={selectedSkills.includes(skill.id)} onChange={() => setSelectedSkills((current) => current.includes(skill.id) ? current.filter((id) => id !== skill.id) : [...current, skill.id])} />{skill.name}</label>)}</fieldset>
-        <fieldset><legend>Connectors</legend>{connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={selectedConnectors.includes(connector.id)} onChange={() => setSelectedConnectors((current) => current.includes(connector.id) ? current.filter((id) => id !== connector.id) : [...current, connector.id])} />{connector.id}</label>)}</fieldset>
-        <div className="specialist-actions"><button className="primary-button" disabled={busy || !name.trim() || !description.trim() || !instructions.trim()} type="submit">{editingId ? "Save specialist" : "Create specialist"}</button>{editingId ? <button className="danger-button" disabled={busy} type="button" onClick={() => void (async () => { try { await client.deleteSpecialist(editingId); edit(); await refresh(); } catch (error) { onError(error instanceof Error ? error.message : "Could not delete specialist"); } })()}>Delete</button> : null}</div>
-      </form>
+    <div className={formOpen ? "specialist-layout" : "specialist-layout idle"}><div className="specialist-list"><button type="button" className={formOpen && !editingId ? "active" : ""} onClick={() => edit()}>{t("specialist.new")}</button>{userSpecialists.map((specialist) => <button className={formOpen && editingId === specialist.id ? "active" : ""} key={specialist.id} title={`${specialist.name} · ${t("specialist.counts", { connectors: specialist.connectorIds.length, skills: specialist.enabledSkillIds.length })}`} type="button" onClick={() => edit(specialist)}><strong>{specialist.name}</strong><small>{t("specialist.counts", { connectors: specialist.connectorIds.length, skills: specialist.enabledSkillIds.length })}</small></button>)}</div>
+      {formOpen ? <form onSubmit={(event) => void save(event)}>
+        <section className="specialist-form-card"><label><span>{t("specialist.fieldName")}</span><input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label></section>
+        <section className="specialist-form-card"><label><span>{t("specialist.fieldDescription")}</span><textarea required rows={4} maxLength={500} value={description} onChange={(event) => setDescription(event.target.value)} /></label></section>
+        <section className="specialist-form-card"><label><span>{t("specialist.fieldInstructions")}</span><textarea required rows={9} maxLength={20_000} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label></section>
+        <fieldset><legend>{t("specialist.fieldSkills")}</legend>{skills.map((skill) => <label key={skill.id}><input type="checkbox" checked={selectedSkills.includes(skill.id)} onChange={() => setSelectedSkills((current) => current.includes(skill.id) ? current.filter((id) => id !== skill.id) : [...current, skill.id])} />{skill.name}</label>)}</fieldset>
+        <fieldset><legend>{t("specialist.fieldConnectors")}</legend>{connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={selectedConnectors.includes(connector.id)} onChange={() => setSelectedConnectors((current) => current.includes(connector.id) ? current.filter((id) => id !== connector.id) : [...current, connector.id])} />{connector.id}</label>)}</fieldset>
+        <div className="specialist-actions"><button className="primary-button" disabled={busy || !name.trim() || !description.trim() || !instructions.trim()} type="submit">{t(editingId ? "specialist.save" : "specialist.create")}</button><span className="specialist-actions-secondary"><button className="secondary-button" disabled={busy} type="button" onClick={closeEditor}>{t("common.cancel")}</button>{editingId ? <button className="danger-button" disabled={busy} type="button" onClick={() => { const specialist = userSpecialists.find((item) => item.id === editingId); if (specialist) void remove(specialist); }}>{t("common.delete")}</button> : null}</span></div>
+      </form> : null}
     </div>
   </div>;
 }
@@ -421,44 +527,32 @@ export function SpecialistManager({
 export function BuiltInReviewerSpecialist({
   busy,
   enabled,
-  level,
-  onLevelChange,
   onToggle,
 }: {
   busy: boolean;
   enabled: boolean;
-  level: VisibleReviewerLevel;
-  onLevelChange: (level: VisibleReviewerLevel) => void;
   onToggle: () => void;
 }) {
-  return <section aria-label="Built-in specialists" className="built-in-specialists">
-    <strong>Built-in</strong>
+  const { t } = useLocale();
+  return <section aria-label={t("specialist.builtinSectionAria")} className="built-in-specialists">
+    <strong>{t("common.builtIn")}</strong>
     <div className="built-in-specialist-row">
       <ReviewerSpecialistAvatar />
       <span>
-        <strong>Reviewer Specialist</strong>
+        <strong>{t("specialist.reviewerName")}</strong>
       </span>
       <div className="reviewer-specialist-settings">
-        <select
-          aria-label="Reviewer Specialist level"
-          disabled={busy}
-          onChange={(event) => onLevelChange(event.target.value as VisibleReviewerLevel)}
-          title="Quick: local checks; Deep: Quick plus semantic verification"
-          value={level}
-        >
-          <option value="quick">Quick</option>
-          <option value="deep">Deep</option>
-        </select>
+        <small>{t("specialist.reviewerHint")}</small>
         <button
           aria-checked={enabled}
-          aria-label={enabled ? "Turn Reviewer Specialist off" : "Turn Reviewer Specialist on"}
+          aria-label={t(enabled ? "specialist.reviewerTurnOff" : "specialist.reviewerTurnOn")}
           className={enabled ? "specialist-switch on" : "specialist-switch"}
           disabled={busy}
           onClick={onToggle}
           role="switch"
-          title={enabled ? "Reviewer Specialist is On. Click to turn it Off." : "Reviewer Specialist is Off. Click to turn it On."}
+          title={t(enabled ? "specialist.reviewerOnTitle" : "specialist.reviewerOffTitle")}
           type="button"
-        ><i aria-hidden="true">{enabled ? "On" : "Off"}</i></button>
+        ><i aria-hidden="true" /></button>
       </div>
     </div>
   </section>;

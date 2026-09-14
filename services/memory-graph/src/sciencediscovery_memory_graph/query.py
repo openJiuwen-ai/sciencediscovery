@@ -113,7 +113,8 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
               // occupies) are not — same reason `supersedes` is filtered in the
               // frontend, and their endpoints are excluded above anyway.
               // `contains` is upstream's scope→child edge; both sides union.
-              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input', 'contains', 'searches']
+              // `feeds` is the upload→goal edge (SourceFile → ResearchGoal).
+              AND type(r) IN ['produces', 'next', 'extracts', 'supports', 'stated_in', 'supersedes', 'input', 'contains', 'searches', 'feeds']
             RETURN a AS src, b AS dst, labels(a)[0] AS src_label,
                    labels(b)[0] AS dst_label, type(r) AS edge_type, r AS rel
             """,
@@ -272,6 +273,44 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         }
 
 
+def get_web_page_content_hash(
+    session_id: str, web_page_id: str,
+) -> tuple[str | None, str | None]:
+    """Look up one WebPage's CAS content_hash by its node id (O(1) index hit).
+
+    Mirrors the id encoding ``_node_identity`` uses for WebPage:
+      - ``"url:<...>"`` prefix → the node is a url-only web_search result, keyed
+        on ``url`` (the prefix is stripped before the lookup);
+      - anything else → the node is an llm-wiki result, keyed on ``identifier``.
+
+    Returns ``(content_hash, reason)``. ``content_hash`` is None when the node
+    does not exist (or is soft-deleted) or carries no hash; ``reason`` is
+    ``"memory_graph_unreachable"`` when the driver is down — the caller maps the
+    two absences onto distinct HTTP codes (404 vs 502) instead of collapsing an
+    outage into a "page not found". This is the O(1) replacement for the old
+    pattern that pulled the whole ``get_subgraph`` just to read one node's hash.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        return None, "memory_graph_unreachable"
+    if web_page_id.startswith("url:"):
+        key = web_page_id[4:]
+        cypher = (
+            "MATCH (w:WebPage { session_id: $sid, url: $key }) "
+            "WHERE NOT coalesce(w.deleted_session, false) "
+            "RETURN w.content_hash AS hash"
+        )
+    else:
+        key = web_page_id
+        cypher = (
+            "MATCH (w:WebPage { session_id: $sid, identifier: $key }) "
+            "WHERE NOT coalesce(w.deleted_session, false) "
+            "RETURN w.content_hash AS hash"
+        )
+    rec = driver.session().run(cypher, sid=session_id, key=key).single()
+    return (rec["hash"] if rec else None), None
+
+
 # --- Cross-session read helpers -------------------------------------------
 #
 # These functions mirror `get_subgraph`'s contract: they never throw into the
@@ -352,9 +391,15 @@ def query_match(
                    + coalesce(toString(n.objective), '') + ' '
                    + coalesce(toString(n.summary), '') + ' '
                    + coalesce(toString(n.subagent_type), '') + ' '
+                   + coalesce(toString(n.tool_type), '') + ' '
                    + coalesce(toString(n.task_type), '') + ' '
                    + coalesce(toString(n.path), '') + ' '
-                   + coalesce(toString(n.tool), '')) AS haystack
+                   + coalesce(toString(n.name), '') + ' '
+                   + coalesce(toString(n.tool), '') + ' '
+                   + coalesce(toString(n.snippet), '') + ' '
+                   + coalesce(toString(n.source), '') + ' '
+                   + coalesce(toString(n.url), '') + ' '
+                   + coalesce(toString(n.identifier), '') + ' ') AS haystack
             UNWIND $tokens AS t
             WITH n, label, haystack, collect(CASE WHEN haystack CONTAINS t THEN 1 ELSE 0 END) AS hits
             WITH n, label, haystack, reduce(s = 0, x IN hits | s + x) AS matched
@@ -497,8 +542,12 @@ def get_artifact_provenance(
     all five fields' addressing info, or an empty-dependencies shape with a
     ``reason`` when Neo4j is down or the version is not in the graph (the Node
     reverse-proxy degrades on both). Dependencies are ordered by
-    ``logical_name`` so the frontend's `` · ``-joined multi-input line is
-    stable.
+    ``logical_name`` (Artifact) / ``name`` / ``file_id`` (SourceFile) so the
+    frontend's `` · ``-joined multi-input line is stable. Each dependency
+    carries a ``kind`` (``"artifact"`` or ``"source_file"``) so the frontend
+    can render a SourceFile input distinctly (SourceFile has no version, and
+    its endpoint key is ``file_id``) and link to the SourceFile node instead
+    of an Artifact version.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -516,10 +565,10 @@ def get_artifact_provenance(
             WHERE $sid IS NULL OR out.session_id = $sid
             OPTIONAL MATCH (out)<-[:produces]-(c:Code)
             OPTIONAL MATCH (st:ToolCall)-[:produces]->(c)
-            OPTIONAL MATCH (c)<-[:input]-(inA:Artifact)
+            OPTIONAL MATCH (c)<-[:input]-(inA)
             WHERE $sid IS NULL OR inA.session_id = $sid
             WITH out, c, st, inA
-            ORDER BY inA.logical_name
+            ORDER BY coalesce(inA.logical_name, inA.name, inA.file_id)
             RETURN out.turn_id        AS turn_id,
                    out.content_hash   AS content_hash,
                    out.logical_name   AS logical_name,
@@ -539,7 +588,15 @@ def get_artifact_provenance(
                    c.tool             AS tool,
                    st.turn_id         AS subtask_turn_id,
                    collect(DISTINCT CASE WHEN inA IS NULL THEN null
+                       WHEN 'SourceFile' IN labels(inA) THEN {
+                         kind:        'source_file',
+                         file_id:      inA.file_id,
+                         name:         inA.name,
+                         path:         inA.path,
+                         media_type:   inA.media_type
+                       }
                        ELSE {
+                         kind:         'artifact',
                          artifact_id:  inA.artifact_id,
                          version:      inA.version,
                          logical_name: inA.logical_name,
@@ -562,7 +619,13 @@ def get_artifact_provenance(
         return {"artifact_id": artifact_id, "version": version, "logical_name": None,
                 "dependencies": [], "reason": "node_not_found"}
 
-    deps = [d for d in (rec["dependencies"] or []) if d and d.get("artifact_id")]
+    # Keep both dependency shapes: Artifact inputs (carry artifact_id) and
+    # SourceFile inputs (carry file_id, no version). Dropping by ``artifact_id``
+    # alone would filter out every SourceFile input the run read.
+    deps = [
+        d for d in (rec["dependencies"] or [])
+        if d and (d.get("artifact_id") or d.get("file_id"))
+    ]
     return {
         "artifact_id": rec["artifact_id"],
         "version": rec["version"],
@@ -978,6 +1041,12 @@ def _resolve_source_node(
     ``"<artifact_id>#v<version>"`` (see ``_node_identity``), so peel the
     version suffix off the artifact_id and use it as the explicit version when
     the caller did not pass one separately.
+
+    WebPage carries the same special case ``_node_identity`` and
+    ``get_web_page_content_hash`` implement: a url-only web_search / web_fetch
+    result has NO ``identifier`` and is keyed on its ``url`` behind a
+    ``"url:"`` prefix. The identifier MATCH below can never find such a node,
+    so it falls back to a url lookup (see the comment at the fallback).
     """
     chain_id = node_id
     effective_version = version
@@ -1007,6 +1076,7 @@ def _resolve_source_node(
            OR n.goal_id     = $id
            OR n.evidence_id = $id
            OR n.claim_id    = $id
+           OR n.identifier  = $id
            OR (n:Artifact AND n.artifact_id = $id
                AND $v IS NOT NULL AND n.version = $v))
           AND ($sid IS NULL OR n.session_id = $sid)
@@ -1017,6 +1087,32 @@ def _resolve_source_node(
         v=effective_version,
     )
     src_rec = src_result.single()
+    if src_rec is None and node_id.startswith("url:"):
+        # WebPage fallback, mirroring ``_node_identity``'s encoding (and the
+        # same branch in ``get_web_page_content_hash``): a url-only
+        # web_search / web_fetch result is keyed on ``url`` and carries no
+        # ``identifier``, so the identifier MATCH above never finds it. Without
+        # this branch such a node resolves to nothing, and every chain endpoint
+        # degrades silently rather than erroring: ``get_chain`` answers
+        # ``node_not_found`` and ``chain_exists`` reports all-False, so clicking
+        # the node on the canvas shows NO buttons at all — even for a page that
+        # really has ``extracts``→Evidence edges and a producing ToolCall.
+        # Scoped to the ``"url:"`` prefix rather than a bare url on purpose: a
+        # bare url is also a Paper's ``link``, and the cross-label MATCH above
+        # would then bind whichever node it happened to see first.
+        url_rec = session.run(
+            """
+            MATCH (w:WebPage)
+            WHERE w.url = $url
+              AND ($sid IS NULL OR w.session_id = $sid)
+            RETURN elementId(w) AS src_eid, labels(w)[0] AS src_label LIMIT 1
+            """,
+            url=node_id[4:],
+            sid=session_id,
+        ).single()
+        if url_rec is None:
+            return None, None
+        return url_rec["src_eid"], url_rec["src_label"]
     if src_rec is None:
         return None, None
     return src_rec["src_eid"], src_rec["src_label"]
@@ -1035,16 +1131,34 @@ def _walk_hops(
     them into the Cypher string is safe; Neo4j does not accept relationship
     types as query parameters.
 
-    Each hop tuple is ``(edge_type, direction, target_label[, depth[, limit]])``.
-    ``target_label`` is carried for documentation/logging only — it is NOT
-    applied as a Cypher label filter (the walk matches any next node of the
-    edge type, same as the legacy behavior), so a ``next`` hop from a Task
-    reaches either a Task or a ToolCall indifferently. ``depth`` (default
-    ``"1"``) is the Cypher variable-length quantifier: ``"1"`` = exactly one
-    hop, ``"1.."`` = one or more. ``limit`` (optional int) caps how many newly
-    reached nodes a single hop contributes — used by the "first/previous/
-    next" buttons (e.g. ``viewPrevTask``) that must keep only the single
-    nearest neighbor rather than every reachable node along that edge type.
+    Each hop tuple is
+    ``(edge_type, direction, target_label[, depth[, limit[, strict]]])``.
+    By default ``target_label`` is carried for documentation/logging only — it
+    is NOT applied as a Cypher label filter (the walk matches any next node of
+    the edge type, same as the legacy behavior), so a ``next`` hop from a Task
+    reaches either a Task or a ToolCall indifferently. ``strict`` (optional
+    bool, default ``False``) opts a single hop into the label filter
+    (``AND next:<target_label>``). It is opt-in because most hops must stay
+    label-blind: ``viewSourcePaper`` walks ``extracts`` in and must reach a
+    Paper, a SourceFile AND a WebPage (one edge type, three source labels), and
+    the ``*1..`` hops (``viewGoal`` / ``viewRelatedTask``) return intermediate
+    nodes along the path, which a label filter would prune. Turn it on only
+    where the edge type genuinely has one legitimate endpoint label and the
+    button's promise names that label — a Claim's ``supports`` in is the
+    motivating case: Evidence, Artifact, SourceFile and DbRecord all cite a
+    Claim over ``supports``, so one button cannot honestly stand for all four,
+    and each gets its own strictly-filtered kind. ``target_label`` and
+    ``edge_type`` both come from the hop whitelist (not user input), so
+    interpolating them into the Cypher string is safe by the same argument as
+    ``rel``. ``depth`` (default ``"1"``) is the Cypher variable-length
+    quantifier: ``"1"`` = exactly one hop, ``"1.."`` = one or more. ``limit``
+    (optional int) caps how many newly reached nodes a single hop contributes —
+    used by the "first/previous/next" buttons (e.g. ``viewPrevTask``) that must
+    keep only the single nearest neighbor rather than every reachable node
+    along that edge type. Never pair ``limit`` with a "citing X" button: the
+    ``collect(DISTINCT ...)`` has no ``ORDER BY``, so slicing it keeps an
+    arbitrary node out of the several the hop reached (that is the bug the
+    strictly-filtered Claim kinds fixed — see ``_BUTTON_CHAIN_HOPS``).
 
     All-or-nothing semantics: a button's short chain is a single directed
     path, so if ANY hop matches nothing the whole chain is empty (return
@@ -1065,16 +1179,18 @@ def _walk_hops(
     """
     eids: list[str] = list(start_eids)
     for entry in hops:
-        edge_type, direction, _target_label = entry[0], entry[1], entry[2]
+        edge_type, direction, target_label = entry[0], entry[1], entry[2]
         depth = entry[3] if len(entry) > 3 else "1"
         limit = entry[4] if len(entry) > 4 else None
+        # Opt-in label filter; see the docstring for why it is off by default.
+        label_filter = f" AND next:{target_label}" if len(entry) > 5 and entry[5] else ""
         rel = f"`{edge_type}`*{depth}"
         pattern = f"<-[:{rel}]-" if direction == "in" else f"-[:{rel}]->"
         step = session.run(
             f"""
             MATCH (src){pattern}(next)
             WHERE elementId(src) IN $eids
-              AND ($sid IS NULL OR next.session_id = $sid OR next:Paper)
+              AND ($sid IS NULL OR next.session_id = $sid OR next:Paper){label_filter}
             RETURN collect(DISTINCT elementId(next)) AS new_eids
             """,
             eids=eids,
@@ -1817,14 +1933,33 @@ _BUTTON_CHAIN_HOPS: dict[str, list[tuple]] = {
     ],
 
     # --- Claim (source) ---
-    # "viewCitingEvidenceForClaim" = the Evidence/Artifact that backs this
-    # Claim (supports-in). Renamed from the colliding "viewCitingEvidence" —
-    # that kind string was also used by the Artifact source below, and since
-    # this table is keyed by kind alone the Artifact's 2-hop list overwrote
-    # the Claim's 1-hop list. The two are genuinely different traversals, so
-    # they get separate kinds (the i18n label "查看引用的证据"/"Citing
-    # evidence" is shared between them in CHAIN_BUTTONS).
-    "viewCitingEvidenceForClaim": [("supports", "in", "Evidence", "1", 1)],
+    # "viewCitingEvidenceForClaim" / "viewCitingDbRecordForClaim" /
+    # "viewCitingSourceFileForClaim" = the Evidence / DbRecord / SourceFile
+    # that backs this Claim (supports-in). All three are the SAME edge type
+    # walked in the SAME direction, which is exactly why they are three kinds:
+    # ``supports``-in reaches four labels (Evidence, Artifact, SourceFile,
+    # DbRecord — see the writers in persistence.py), so a single unfiltered
+    # button labelled "查看引用的证据" would light up whichever of the four the
+    # walk happened to collect first. These hops are therefore the ones that
+    # opt into ``strict`` (the label filter), and they carry no ``limit`` — a
+    # Claim backed by three Evidence nodes must light all three, not an
+    # arbitrary one. The Artifact cousin is NOT a button: an Artifact that
+    # cites a Claim is reached from the Artifact side ("viewContainingArtifact"
+    # / "viewContainedClaims").
+    #
+    # SourceFile got its own button last: without it a Claim whose only
+    # supporting source is a SourceFile showed NO citing button at all, which
+    # reads as "nothing supports this claim" rather than "this label has no
+    # button yet".
+    #
+    # Renamed from the colliding "viewCitingEvidence" — that kind string was
+    # also used by the Artifact source below, and since this table is keyed by
+    # kind alone the Artifact's 2-hop list overwrote the Claim's 1-hop list.
+    # The two are genuinely different traversals, so they get separate kinds
+    # ("…ForClaim" mirrors the existing "…ForDbRecord" / "…ForWebPage" naming).
+    "viewCitingEvidenceForClaim": [("supports", "in", "Evidence", "1", None, True)],
+    "viewCitingDbRecordForClaim": [("supports", "in", "DbRecord", "1", None, True)],
+    "viewCitingSourceFileForClaim": [("supports", "in", "SourceFile", "1", None, True)],
     "viewContainingArtifact": [("stated_in", "out", "Artifact", "1", 1)],
 
     # --- Artifact (source) ---
@@ -1860,6 +1995,51 @@ _BUTTON_CHAIN_HOPS: dict[str, list[tuple]] = {
         ("produces", "in", "ToolCall"),
         ("next", "in", "ResearchGoal", "1.."),
     ],
+
+    # --- DbRecord (source) ---
+    # DbRecord cites run direct (like Artifact's supports) but have no
+    # version/stated_in semantics of their own: "citing claim" = claims this
+    # record supports; "searching task" = the db_search ToolCall that produced
+    # this record (single nearest). There is deliberately NO "cited paper"
+    # button: a database record has no papers of its own, and the traversal
+    # that looked like one (supports→Claim←supports←Evidence←extracts←"Paper")
+    # actually leaves the record's own neighbourhood on its second hop — it
+    # walks into whichever *other* evidence happens to back the same Claim —
+    # and its terminal hop is not label-filtered (that hop predates the opt-in
+    # ``strict`` flag and never set it), so a db-backed session surfaced the
+    # source WebPage under a "cited paper" label. The claim's citations are
+    # reachable from the Claim node itself (viewCitingEvidenceForClaim /
+    # viewCitingDbRecordForClaim / viewCitingSourceFileForClaim /
+    # viewContainingArtifact).
+    "viewCitingClaimForDbRecord": [("supports", "out", "Claim")],
+    "viewSearchingTaskForDbRecord": [("produces", "in", "ToolCall", "1", 1)],
+
+    # --- WebPage (source) ---
+    # Mirrors the Paper citation chain (page → extracted evidence → claims
+    # it backs → reports stating those claims). The first three need
+    # ``WebPage -[:extracts]-> Evidence``, which ``persist_evidence`` writes
+    # once the page has content (its ``source_webpage_no_content`` gate) — a
+    # page the session only saw as a search snippet has no extracts edge, and
+    # the all-or-nothing walk then hides those three while the fourth — the
+    # search ToolCall that surfaced the page — still shows. Kind suffix
+    # "ForWebPage" follows the same collision-avoidance rule as the
+    # ForDbRecord / ForClaim / ForArtifact splits: each kind string in this
+    # table is unique.
+    #
+    # These kinds are only reachable when the source node RESOLVES, and a
+    # url-keyed WebPage is exactly the case that used not to — see the
+    # ``"url:"`` fallback in ``_resolve_source_node``.
+    "viewExtractedEvidenceForWebPage": [("extracts", "out", "Evidence")],
+    "viewCitingClaimForWebPage": [
+        ("extracts", "out", "Evidence"),
+        ("supports", "out", "Claim"),
+    ],
+    "viewCitingArtifactForWebPage": [
+        ("extracts", "out", "Evidence"),
+        ("supports", "out", "Claim"),
+        ("stated_in", "out", "Artifact"),
+    ],
+    "viewSearchingTaskForWebPage": [("produces", "in", "ToolCall", "1", 1)],
 }
 
 
@@ -1919,13 +2099,13 @@ _CHAIN_HOPS: dict[str, list[tuple]] = {
         ("supports", "in", "Claim"),
     ],
     "ToolCall": [
-        # The search this ToolCall ran, when it ran one (task_type
+        # The search this ToolCall ran, when it ran one (tool_type
         # program_evolution). Only the handle: the `expands` fan-out is
         # deliberately absent, so "view chain" on a search returns a subgraph
         # whose size is independent of how many candidates it produced.
         ("searches", "out", "SearchRun"),
         # Same shape as Task minus the scope-only ``contains`` drill-down — a
-        # ToolCall (code_execution/literature_search/…) carries its own
+        # ToolCall (execution/search/…) carries its own
         # produces subtree and joins the session main ``next`` chain.
         ("produces", "out", "Code"),
         ("produces", "out", "Artifact"),
@@ -2109,7 +2289,7 @@ def _to_trace_node(node: Any, label: str | None = None) -> dict[str, Any] | None
 _EXCERPT_FIELDS: dict[str, tuple[str, ...]] = {
     "ResearchGoal": ("core_objective", "domain"),
     "Task": ("task_type", "objective"),
-    "ToolCall": ("task_type", "source", "tool_type"),
+    "ToolCall": ("tool_type", "task_type", "source", "tool_name"),
     "Paper": ("title", "identifier", "abstract"),
     "Evidence": ("content", "locator"),
     "Claim": ("content", "locator"),
@@ -2153,6 +2333,15 @@ _ID_FIELDS: dict[str, str] = {
     "SearchRun": "search_id",
     "SearchNode": "search_id",
     "SearchCell": "search_id",
+    "SourceFile": "file_id",
+    # Search-result products. WebPage keys on url alone (identifier is an
+    # optional attribute, not a key), but the node still renders by whichever
+    # id it actually carries: identifier (preferred — llm-wiki records always
+    # carry a wiki path) or, when absent, the url (web_search records). The
+    # "url:" prefix in _node_identity keeps a url-only node's id distinct from
+    # an identifier-keyed node's id.
+    "WebPage": "identifier",
+    "DbRecord": "identifier",
 }
 
 # Per-label field holding the node's body-content CAS hash, so the trace can
@@ -2163,6 +2352,7 @@ _ID_FIELDS: dict[str, str] = {
 _CONTENT_HASH_FIELDS: dict[str, str] = {
     "Artifact": "content_hash",
     "Code": "code_hash",
+    "SourceFile": "content_hash",
 }
 
 
@@ -2203,6 +2393,15 @@ def _node_identity(label: str, node: dict[str, Any]) -> str | None:
 
     base = node.get(field)
     if base is None:
+        # WebPage: identifier is optional (llm-wiki records carry a wiki path,
+        # web_search records carry none). When absent, fall back to the url
+        # with a "url:" prefix so a url-only node still gets a distinct id
+        # rather than colliding with an identifier-keyed node's id.
+        if label == "WebPage":
+            url = node.get("url")
+            if url:
+                return f"url:{url}"
+            return None
         return None
     # Artifact: append the version so each version is a distinct node identity.
     if label == "Artifact":

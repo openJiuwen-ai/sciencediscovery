@@ -40,6 +40,10 @@ export class McpSourceRegistry {
     return this.sources.has(sourceId);
   }
 
+  remove(sourceId: McpSourceId): boolean {
+    return this.sources.delete(sourceId);
+  }
+
   get(sourceId: McpSourceId): McpSourceAdapter {
     const source = this.sources.get(sourceId);
     if (!source) throw new Error(`Unknown MCP source: ${sourceId}`);

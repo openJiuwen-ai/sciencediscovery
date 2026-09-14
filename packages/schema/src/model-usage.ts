@@ -136,6 +136,7 @@ export type ModelInvocationKind =
   | "task";
 
 export type ModelUsageStatus = "provider-not-reported" | "reported";
+export type ModelInvocationOutcome = "cancelled" | "completed" | "failed";
 
 export interface ModelInvocationUsage {
   attemptIndex: number;
@@ -150,6 +151,7 @@ export interface ModelInvocationUsage {
   model: string;
   modelProfileId: string;
   modelProfileName: string;
+  outcome?: ModelInvocationOutcome;
   outputTokens: number | null;
   projectId?: string;
   promptManifestId?: string;
@@ -215,6 +217,61 @@ export interface GlobalUsageModelGroup {
 export interface GlobalModelUsageSummary {
   byModel: GlobalUsageModelGroup[];
   totals: ModelUsageBucket;
+}
+
+export interface ModelUsageCost {
+  amount: number;
+  currency: "CNY" | "USD";
+}
+
+export interface ModelUsageExchangeRate {
+  baseCurrency: ModelUsageCost["currency"];
+  effectiveDate?: string;
+  provider: string;
+  quoteCurrency: ModelUsageCost["currency"];
+  rate: number;
+  retrievedAt: string;
+  sourceUrl?: string;
+  stale: boolean;
+}
+
+export interface DailyModelUsageSummary {
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  date: string;
+  estimatedCost?: ModelUsageCost;
+  estimatedCosts: ModelUsageCost[];
+  inputTokens: number;
+  model: string;
+  modelProfileId: string;
+  modelProfileName: string;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface ModelUsageAnalyticsFilters {
+  from?: string;
+  modelProfileId?: string;
+  projectId?: string;
+  timeZone?: string;
+  to?: string;
+}
+
+export interface ModelUsageAnalyticsOverview {
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  estimatedCosts: ModelUsageCost[];
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface ModelUsageAnalyticsSummary {
+  dailyByModel: DailyModelUsageSummary[];
+  exchangeRates?: ModelUsageExchangeRate[];
+  filters: ModelUsageAnalyticsFilters;
+  generatedAt: string;
+  overview: ModelUsageAnalyticsOverview;
 }
 
 export interface CreateModelProfileRequest {

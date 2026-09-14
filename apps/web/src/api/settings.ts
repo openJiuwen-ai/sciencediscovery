@@ -19,6 +19,7 @@ import type {
   CreateProxyServerRequest,
   CreateEnvironmentRequest,
   CreateSpecialistRequest,
+  NpuRunnerSelectionsResponse,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
@@ -37,9 +38,12 @@ import type {
   ModelConnectivityTestResult,
   MemoryGraphSettingsDetails,
   ModelCatalogDetails,
+  IdeaTreeSettingsDetails,
   UninstallEnvironmentRequest,
   RegisterRemoteHostRequest,
+  RemoteConnectLog,
   RemoteHostTarget,
+  RunnerTarget,
   SshConfigHostImport,
   SshKeyFileListing,
   TrustedRemoteHostKey,
@@ -52,6 +56,7 @@ import type {
   SystemQuotaSettings,
   SystemTimeoutSettings,
   UpdateMemoryGraphSettingsRequest,
+  UpdateIdeaTreeSettingsRequest,
   UpdateEnvironmentSourceSettingsRequest,
   UpdateModelProfileRequest,
   UpdateModelProviderRequest,
@@ -201,12 +206,48 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/probe`, { method: "POST" });
   }
 
+  /** Every Runner's NPU selection, plus the local machine's own cards. */
+  listRunnerNpuDevices(): Promise<NpuRunnerSelectionsResponse> {
+    return this.request("/api/runners/npu");
+  }
+
+  /**
+   * Choose which NPU cards one Runner may hand to its sandboxes; `local` is the
+   * machine ScienceDiscovery runs on. The API refuses cards the Runner's
+   * sandbox probe could not open, so a rejected selection comes back as an
+   * error naming the card rather than being stored and failing at execution.
+   */
+  setRunnerNpuDevices(runnerId: string, devices: number[]): Promise<{ devices: number[]; runnerId: string }> {
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/npu-devices`, {
+      body: JSON.stringify({ devices }),
+      method: "PUT",
+    });
+  }
+
   deleteRemoteHost(hostId: string): Promise<{ deleted: string }> {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}`, { method: "DELETE" });
   }
 
+  listRunners(): Promise<RunnerTarget[]> { return this.request("/api/runners"); }
+
+  connectRunner(id: string): Promise<RemoteRunnerStatus> {
+    return this.request(`/api/runners/${encodeURIComponent(id)}/connect`, { method: "POST" });
+  }
+
   connectRemoteRunner(hostId: string): Promise<RemoteRunnerStatus> {
     return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/runner/connect`, { method: "POST" });
+  }
+
+  runnerConnectLog(runnerId: string): Promise<RemoteConnectLog> {
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/connect-log`);
+  }
+
+  /**
+   * The in-flight connection story of one host. Polled while `connectRemoteRunner`
+   * is still waiting: the connect itself only answers when it is over.
+   */
+  remoteRunnerConnectLog(hostId: string): Promise<RemoteConnectLog> {
+    return this.request(`/api/remote-hosts/${encodeURIComponent(hostId)}/runner/connect-log`);
   }
 
   disconnectRemoteRunner(hostId: string): Promise<RemoteRunnerStatus> {
@@ -225,7 +266,9 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/reviewer-specialist/settings");
   }
 
-  updateReviewerSpecialistSettings(settings: ReviewerSpecialistSettings): Promise<ReviewerSpecialistSettings> {
+  updateReviewerSpecialistSettings(
+    settings: Pick<ReviewerSpecialistSettings, "enabled">,
+  ): Promise<ReviewerSpecialistSettings> {
     return this.request("/api/reviewer-specialist/settings", {
       body: JSON.stringify(settings),
       method: "PUT",
@@ -262,6 +305,14 @@ export class SettingsApiClient extends ArtifactsApiClient {
 
   updateMemoryGraphSettings(body: UpdateMemoryGraphSettingsRequest): Promise<MemoryGraphSettingsDetails> {
     return this.request("/api/memory/settings", { body: JSON.stringify(body), method: "PUT" });
+  }
+
+  getIdeaTreeSettings(): Promise<IdeaTreeSettingsDetails> {
+    return this.request("/api/settings/idea-tree");
+  }
+
+  updateIdeaTreeSettings(body: UpdateIdeaTreeSettingsRequest): Promise<IdeaTreeSettingsDetails> {
+    return this.request("/api/settings/idea-tree", { body: JSON.stringify(body), method: "PUT" });
   }
 
   listModels(): Promise<ModelProfile[]> {

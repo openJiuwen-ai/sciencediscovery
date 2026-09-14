@@ -81,6 +81,52 @@ test("cancelRun posts to the run-specific cancel endpoint", async () => {
   }
 });
 
+test("usage analytics requests preserve the browser time zone filter", async () => {
+  const previousFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = async (input) => {
+    requestedUrls.push(String(input));
+    if (String(input).includes("/export")) {
+      return new Response("date\n", { headers: { "content-type": "text/csv" } });
+    }
+    return Response.json({
+      dailyByModel: [],
+      filters: { timeZone: "Asia/Shanghai" },
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      overview: {
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        estimatedCosts: [],
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+    });
+  };
+  try {
+    const client = new ApiClient("test-token");
+    await client.getModelUsageAnalytics({
+      from: "2026-09-01",
+      modelProfileId: "model-a",
+      timeZone: "Asia/Shanghai",
+      to: "2026-09-08",
+    });
+    await client.exportModelUsageAnalytics("csv", {
+      displayCurrency: "CNY",
+      from: "2026-09-01",
+      modelProfileId: "model-a",
+      timeZone: "Asia/Shanghai",
+      to: "2026-09-08",
+    });
+    assert.deepEqual(requestedUrls, [
+      "/api/usage/analytics?from=2026-09-01&to=2026-09-08&modelProfileId=model-a&timeZone=Asia%2FShanghai",
+      "/api/usage/analytics/export?from=2026-09-01&to=2026-09-08&modelProfileId=model-a&timeZone=Asia%2FShanghai&format=csv&displayCurrency=CNY",
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("createSkillEvolutionRun posts to the run self-evolution endpoint", async () => {
   const previousFetch = globalThis.fetch;
   let requestedUrl = "";
@@ -194,6 +240,22 @@ test("skill library client methods target versioned library endpoints", async ()
       operations: [],
     }));
     assert.equal(requests[10]?.body, JSON.stringify({ proposalIds: ["proposal/a", "proposal/b"] }));
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("getIdeaTreeGraph uses the independent Session-scoped graph endpoint", async () => {
+  const previousFetch = globalThis.fetch;
+  let requestedUrl = "";
+  globalThis.fetch = async (input) => {
+    requestedUrl = String(input);
+    return Response.json({ graph: null, hasIdeaTreeRun: true, treeIds: ["tree/a"] });
+  };
+  try {
+    const result = await new ApiClient("test-token").getIdeaTreeGraph("session/a", "tree/a");
+    assert.deepEqual(result, { graph: null, hasIdeaTreeRun: true, treeIds: ["tree/a"] });
+    assert.equal(requestedUrl, "/api/sessions/session%2Fa/idea-tree/graph?tree_id=tree%2Fa");
   } finally {
     globalThis.fetch = previousFetch;
   }

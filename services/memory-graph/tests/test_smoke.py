@@ -204,23 +204,42 @@ def test_observe_execution_rejects_missing_token(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_observe_mcp_search_degrades_without_neo4j(client: TestClient) -> None:
+def test_observe_tool_call_degrades_without_neo4j(client: TestClient) -> None:
+    """The legacy /observe/mcp-search endpoint retired; the unified
+    /observe/tool-call ticket is the sole search/write entrypoint for MCP and
+    web searches. Same degraded-empty contract when Neo4j is unreachable."""
     payload = {
-        "invocation_id": "inv-1",
+        "task_id": "subtask:mcp:inv-1",
         "session_id": "sess-1",
         "turn_id": "turn-1",
-        "source": "europe-pmc",
+        "tool_name": "mcp__europe-pmc__search",
         "tool_type": "search",
-        "retrieved_at": "2026-07-26T00:00:00Z",
-        "records": [
-            {"url": "https://europepmc.org/article/MED/123", "title": "TP53 in lung cancer",
-             "identifier": "123", "identifierType": "PMID", "year": "2023", "source": "europe-pmc"},
-            {"url": "https://europepmc.org/article/MED/456", "title": "Another paper",
-             "identifier": "456", "identifierType": "PMID", "year": "2024", "source": "europe-pmc"},
+        "source": "europe-pmc",
+        "status": "completed",
+        "result_count": 2,
+        "products": [
+            {
+                "product_type": "paper",
+                "link": "https://europepmc.org/article/MED/123",
+                "title": "TP53 in lung cancer",
+                "identifier": "123",
+                "identifier_type": "PMID",
+                "year": "2023",
+                "source": "europe-pmc",
+            },
+            {
+                "product_type": "paper",
+                "link": "https://europepmc.org/article/MED/456",
+                "title": "Another paper",
+                "identifier": "456",
+                "identifier_type": "PMID",
+                "year": "2024",
+                "source": "europe-pmc",
+            },
         ],
     }
     response = client.post(
-        "/observe/mcp-search",
+        "/observe/tool-call",
         json=payload,
         headers={"authorization": "Bearer test-token"},
     )
@@ -230,17 +249,16 @@ def test_observe_mcp_search_degrades_without_neo4j(client: TestClient) -> None:
     assert body["written"] == 0
 
 
-def test_observe_mcp_search_rejects_missing_token(client: TestClient) -> None:
+def test_observe_tool_call_rejects_missing_token(client: TestClient) -> None:
     response = client.post(
-        "/observe/mcp-search",
+        "/observe/tool-call",
         json={
-            "invocation_id": "inv-2",
+            "task_id": "subtask:mcp:inv-2",
             "session_id": "sess-2",
             "turn_id": "turn-2",
-            "source_id": "europe-pmc",
-            "tool_id": "search",
-            "retrieved_at": "2026-07-26T00:00:00Z",
-            "records": [],
+            "tool_name": "mcp__europe-pmc__search",
+            "tool_type": "search",
+            "products": [],
         },
         # no auth header
     )
@@ -296,46 +314,6 @@ def test_observe_session_first_message_rejects_missing_token(client: TestClient)
             "goal_id": "goal:session:sess-goal-2",
             "core_objective": "analyze sales.csv",
             "created_at": "2026-07-27T00:00:00Z",
-        },
-        # no auth header
-    )
-    assert response.status_code == 401
-
-
-# --- observeSessionPlanProposed (ToolCall DAG mirror) ------------------------
-
-def test_observe_session_plan_degrades_without_neo4j(client: TestClient) -> None:
-    response = client.post(
-        "/observe/session-plan",
-        json={
-            "session_id": "sess-plan-1",
-            "goal_id": "goal:session:sess-plan-1",
-            "plan_id": "plan-1",
-            "scope": "TP53 突变频率研究",
-            "domain": "Biology",
-            "steps": [
-                {"id": "s1", "description": "检索 TP53 肺癌文献"},
-                {"id": "s2", "description": "整合为综合摘要"},
-            ],
-        },
-        headers={"authorization": "Bearer test-token"},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "degraded"
-    assert body["written"] == 0
-    assert body["goal_corrected"] is False
-
-
-def test_observe_session_plan_rejects_missing_token(client: TestClient) -> None:
-    response = client.post(
-        "/observe/session-plan",
-        json={
-            "session_id": "sess-plan-2",
-            "goal_id": "goal:session:sess-plan-2",
-            "plan_id": "plan-2",
-            "scope": "x",
-            "steps": [],
         },
         # no auth header
     )
@@ -596,6 +574,57 @@ def test_persist_claim_accepts_artifact_versions_and_report_version(client: Test
     assert body["claim_id"] is None
 
 
+def test_persist_claim_dbrecord_alone_passes_cite_guard(client: TestClient) -> None:
+    """A claim citing ONLY a DbRecord (no evidence/artifact/sourcefile) must
+    pass the no_cites_target guard and reach the degraded branch — the
+    db-search-record path is a first-class cite, not a no-op. Mirrors the
+    artifact-only test above."""
+    response = client.post(
+        "/persist/claim",
+        json={
+            "content": "BRCA1 binds RAD51",
+            "claim_type": "STATISTICAL",
+            "confidence": "HIGH",
+            "locator": "abstract",
+            "cites_evidence_aliases": {},
+            "cites_artifact_aliases": {},
+            "cites_dbrecord_aliases": {"db1": "uniprot:P38398"},
+            "session_id": "sess-cl-db",
+        },
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["claim_id"] is None
+
+
+def test_persist_claim_no_cites_target_message_mentions_dbrecord(client: TestClient) -> None:
+    """When ALL four cite maps are empty, the 422 instruction must list all
+    four options (including dbrecord) so the LLM learns the new path exists."""
+    response = client.post(
+        "/persist/claim",
+        json={
+            "content": "unsupported claim",
+            "claim_type": "STATISTICAL",
+            "confidence": "HIGH",
+            "locator": "abstract",
+            "cites_evidence_aliases": {},
+            "cites_artifact_aliases": {},
+            "cites_source_file_aliases": {},
+            "cites_dbrecord_aliases": {},
+            "session_id": "sess-cl-nct",
+        },
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "no_cites_target"
+    # Instruction mentions every cite option so the LLM can fix it.
+    assert "cites_dbrecord_aliases" in detail["instruction"]
+    assert "cites_source_file_aliases" in detail["instruction"]
+
+
 def test_persist_stated_in_requires_artifact_version(client: TestClient) -> None:
     # LinkClaimsRequest now requires artifact_version (composite key pins
     # stated_in to the report's exact version); omitting it is a 422, not a
@@ -725,6 +754,248 @@ def test_persist_claim_artifact_version_not_found_returns_422(live_client: TestC
     assert "list_artifacts" in detail["instruction"]
 
 
+@needs_neo4j
+def test_persist_claim_dbrecord_cite_lands_supports_edge(live_client: TestClient) -> None:
+    """dbrecord cite end-to-end: a DbRecord mirrored by /observe/tool-call is
+    cited via declares_dbrecord_aliases={"db1": "uniprot:P38398"}, the
+    DbRecord -[:supports]-> Claim edge lands, and the chip_map entry uses
+    kind=dbrecord with id = the bare identifier (matches _ID_FIELDS["DbRecord"]
+    in the sidecar so node.id === reference.id on click)."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-dbcite"
+    _wipe_session(sid)
+    # Seed one DbRecord via the unified /observe/tool-call ticket.
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:db:search-1", "session_id": sid, "turn_id": "turn-db",
+        "tool_name": "mcp__uniprot__search", "tool_type": "search",
+        "source": "uniprot", "status": "completed", "result_count": 1,
+        "products": [{
+            "product_type": "db_record",
+            "source": "uniprot",
+            "identifier": "P38398",
+            "title": "BRCA1 — human",
+        }],
+    }, headers=headers)
+    # Now declare a claim citing it as "source:identifier" (the dbrecord contract).
+    response = live_client.post("/persist/claim", json={
+        "content": "BRCA1 binds RAD51",
+        "claim_type": "STATISTICAL",
+        "confidence": "HIGH",
+        "locator": "abstract",
+        "cites_evidence_aliases": {},
+        "cites_artifact_aliases": {},
+        "cites_dbrecord_aliases": {"db1": "uniprot:P38398"},
+        "session_id": sid,
+    }, headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    # chip_map: kind=dbrecord, id=bare identifier, label=alias.
+    assert body["chip_map"]["db1"]["kind"] == "dbrecord"
+    assert body["chip_map"]["db1"]["id"] == "P38398"
+    assert body["chip_map"]["db1"]["label"] == "db1"
+    # supports: DbRecord → Claim.
+    recs = live_client.post("/query/match", json={"query": "BRCA1", "session_id": sid},
+                            headers=headers).json()
+    # Just sanity-check the subgraph shows the edge.
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    sup = [e for e in sub["edges"] if e["type"] == "supports"]
+    assert any(e["source"] == "P38398" for e in sup), \
+        "DbRecord (id=bare identifier) must be the supports source"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_persist_claim_dbrecord_bare_identifier_unambiguous(live_client: TestClient) -> None:
+    """A bare identifier (no source prefix) is accepted when exactly one
+    DbRecord with that identifier exists in the session — the resolution
+    disambiguates by uniqueness."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-dbbare"
+    _wipe_session(sid)
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:db:search-bare", "session_id": sid, "turn_id": "turn-bare",
+        "tool_name": "mcp__uniprot__search", "tool_type": "search",
+        "source": "uniprot", "status": "completed", "result_count": 1,
+        "products": [{
+            "product_type": "db_record",
+            "source": "uniprot",
+            "identifier": "P38398",
+            "title": "BRCA1",
+        }],
+    }, headers=headers)
+    response = live_client.post("/persist/claim", json={
+        "content": "x", "claim_type": "STATISTICAL",
+        "confidence": "HIGH", "locator": "a",
+        "cites_evidence_aliases": {}, "cites_artifact_aliases": {},
+        "cites_dbrecord_aliases": {"db1": "P38398"},
+        "session_id": sid,
+    }, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_persist_claim_dbrecord_not_found_returns_422(live_client: TestClient) -> None:
+    """0 hits and >1 (different-source) hits both 422 with db_record_not_found;
+    the >1 path's instruction asks the LLM to re-pass "<source>:<identifier>"."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-dbnf"
+    _wipe_session(sid)
+    # 0 hits
+    r0 = live_client.post("/persist/claim", json={
+        "content": "x", "claim_type": "STATISTICAL",
+        "confidence": "HIGH", "locator": "a",
+        "cites_evidence_aliases": {}, "cites_artifact_aliases": {},
+        "cites_dbrecord_aliases": {"db1": "uniprot:GHOST"},
+        "session_id": sid,
+    }, headers=headers)
+    assert r0.status_code == 422
+    detail = r0.json()["detail"]
+    assert detail["code"] == "db_record_not_found"
+    assert "<source>:<identifier>" in detail["instruction"]
+    # >1 hits: two DbRecords with the same identifier from different sources.
+    for source in ("uniprot", "chembl"):
+        live_client.post("/observe/tool-call", json={
+            "task_id": f"subtask:db:search-{source}", "session_id": sid,
+            "turn_id": f"turn-{source}", "tool_name": "mcp__x__search",
+            "tool_type": "search", "source": source, "status": "completed",
+            "result_count": 1,
+            "products": [{
+                "product_type": "db_record",
+                "source": source,
+                "identifier": "DUPID",
+                "title": f"dup {source}",
+            }],
+        }, headers=headers)
+    r2 = live_client.post("/persist/claim", json={
+        "content": "x", "claim_type": "STATISTICAL",
+        "confidence": "HIGH", "locator": "a",
+        "cites_evidence_aliases": {}, "cites_artifact_aliases": {},
+        "cites_dbrecord_aliases": {"db1": "DUPID"},
+        "session_id": sid,
+    }, headers=headers)
+    assert r2.status_code == 422
+    detail = r2.json()["detail"]
+    assert detail["code"] == "db_record_not_found"
+    assert "2" in detail["message"] or "different sources" in detail["message"]
+    assert "<source>:<identifier>" in detail["instruction"]
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_persist_claim_dbrecord_multi_alias_dedups_supports(live_client: TestClient) -> None:
+    """Two aliases pointing at the same DbRecord must produce ONE supports edge
+    (refs are de-duped on the (source, identifier) composite before the MERGE
+    batch) but TWO chip_map entries (one per alias, the LLM wrote two tokens)."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-dbdup"
+    _wipe_session(sid)
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:db:search-dup", "session_id": sid, "turn_id": "turn-dup",
+        "tool_name": "mcp__uniprot__search", "tool_type": "search",
+        "source": "uniprot", "status": "completed", "result_count": 1,
+        "products": [{
+            "product_type": "db_record",
+            "source": "uniprot",
+            "identifier": "P38398",
+            "title": "BRCA1",
+        }],
+    }, headers=headers)
+    response = live_client.post("/persist/claim", json={
+        "content": "x", "claim_type": "STATISTICAL",
+        "confidence": "HIGH", "locator": "a",
+        "cites_evidence_aliases": {}, "cites_artifact_aliases": {},
+        "cites_dbrecord_aliases": {
+            "db1": "uniprot:P38398",
+            "db2": "uniprot:P38398",  # same record, second alias
+        },
+        "session_id": sid,
+    }, headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    # Both aliases emit a chip (one chip per alias the LLM used in the body).
+    assert set(body["chip_map"].keys()) == {"db1", "db2"}
+    assert body["chip_map"]["db1"]["kind"] == "dbrecord"
+    assert body["chip_map"]["db2"]["kind"] == "dbrecord"
+    # But the supports edge is anchored on a single source node.
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    sup = [e for e in sub["edges"] if e["type"] == "supports" and e["source"] == "P38398"]
+    assert len(sup) == 1, "same record under multiple aliases → one supports edge"
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_dbrecord_chain_kinds_after_cite(live_client: TestClient) -> None:
+    """The ForDbRecord chain kinds after a real cite: citing-claim is live (the
+    supports edge just landed) and searching-task is live (the db_search
+    ToolCall produces← the record). There is no cited-paper kind — see the
+    assertion below for why it was removed rather than kept as an
+    always-empty button."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-dbr-chains"
+    _wipe_session(sid)
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:db:search-chains", "session_id": sid,
+        "turn_id": "turn-chains", "tool_name": "mcp__uniprot__search",
+        "tool_type": "search", "source": "uniprot", "status": "completed",
+        "result_count": 1,
+        "products": [{
+            "product_type": "db_record", "source": "uniprot",
+            "identifier": "P38398", "title": "BRCA1",
+        }],
+    }, headers=headers)
+    r = live_client.post("/persist/claim", json={
+        "content": "x", "claim_type": "STATISTICAL",
+        "confidence": "HIGH", "locator": "a",
+        "cites_evidence_aliases": {}, "cites_artifact_aliases": {},
+        "cites_dbrecord_aliases": {"db1": "uniprot:P38398"},
+        "session_id": sid,
+    }, headers=headers)
+    assert r.status_code == 200
+    # The chain source resolves by the DbRecord's single id field (bare
+    # identifier — _ID_FIELDS["DbRecord"]).
+    candidate = "P38398"
+    r = live_client.post("/query/chain-exists", json={
+        "node_id": candidate, "session_id": sid,
+        "kinds": ["viewCitingClaimForDbRecord", "viewSearchingTaskForDbRecord"],
+    }, headers=headers)
+    assert r.status_code == 200
+    exists = r.json()
+    assert exists["viewCitingClaimForDbRecord"] is True, "supports edge just landed"
+    assert exists["viewSearchingTaskForDbRecord"] is True, "db_search ToolCall produces the record"
+    # The cited-paper kind is gone, not merely empty. It was removed because a
+    # database record has no papers of its own: the walk left the record's
+    # neighbourhood on its second hop (Claim ←supports← Evidence, i.e. whichever
+    # OTHER evidence backs the same Claim) and its terminal hop carried a
+    # "Paper" label that _walk_hops does not filter on, so a db-backed session
+    # opened the source WebPage under a "cited paper" label. Both endpoints must
+    # now reject the kind outright — a stale frontend gets a 400, never a
+    # silently-empty chain.
+    r = live_client.post("/query/chain-exists", json={
+        "node_id": candidate, "session_id": sid,
+        "kinds": ["viewCitedPaperForDbRecord"],
+    }, headers=headers)
+    assert r.status_code == 400, "removed kind must not resolve a chain"
+    r = live_client.post("/query/chain", json={
+        "node_id": candidate, "session_id": sid,
+        "kind": "viewCitedPaperForDbRecord",
+    }, headers=headers)
+    assert r.status_code == 400, "removed kind must not be a valid chain kind"
+    # get_chain parity for the live kind: chain_exists == a non-empty chain.
+    r = live_client.post("/query/chain", json={
+        "node_id": candidate, "session_id": sid,
+        "kind": "viewCitingClaimForDbRecord",
+    }, headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] >= 1
+    assert any(n["label"] == "Claim" for n in body["nodes"])
+    _wipe_session(sid)
+
+
 # --- live-Neo4j integration (idempotency / orphan-chain linking) -----------
 
 @needs_neo4j
@@ -750,48 +1021,6 @@ def test_goal_id_deterministic_dedup(live_client: TestClient) -> None:
                           headers={"authorization": "Bearer test-token"}).json()
     goals = [n for n in sub["nodes"] if n["label"] == "ResearchGoal"]
     assert len(goals) == 1
-
-
-@needs_neo4j
-def test_plan_corrects_goal_and_writes_no_skeleton_subtasks(live_client: TestClient) -> None:
-    """A recorded plan corrects the ResearchGoal from plan.scope and does NOT
-    write a step-skeleton ToolCall chain (the framework doesn't advance step
-    status, so a skeleton would stay PENDING and clutter the graph)."""
-    headers = {"authorization": "Bearer test-token"}
-    # First seed the goal from a first-message fallback (wrong domain).
-    live_client.post("/observe/session-first-message", json={
-        "session_id": "sess-mirror",
-        "goal_id": "goal:session:sess-mirror",
-        "core_objective": "analyze sales.csv",
-        "domain": "DataAnalysis",
-        "topic_scope": [],
-        "created_at": "2026-07-28T00:00:00Z",
-    }, headers=headers)
-    payload = {
-        "session_id": "sess-mirror",
-        "goal_id": "goal:session:sess-mirror",
-        "plan_id": "plan-mirror-1",
-        "scope": "TP53 study",
-        "domain": "Biology",
-        "steps": [
-            {"id": "m1", "description": "search literature"},
-            {"id": "m2", "description": "summarize"},
-        ],
-    }
-    live_client.post("/observe/session-plan", json=payload, headers=headers)
-    live_client.post("/observe/session-plan", json=payload, headers=headers)
-    sub = live_client.get("/subgraph", params={"session_id": "sess-mirror"},
-                          headers=headers).json()
-    # No plan-derived ToolCall skeletons written.
-    subtasks = [n for n in sub["nodes"] if n["label"] == "ToolCall"]
-    assert subtasks == []
-    # Goal corrected: core_objective overwritten by plan.scope, domain by plan,
-    # method tagged corrected_by_plan (added once, not piled up by re-mirror).
-    goal = next(n for n in sub["nodes"] if n["label"] == "ResearchGoal")
-    extra = goal["extra"]
-    assert extra["core_objective"] == "TP53 study"
-    assert extra["domain"] == "Biology"
-    assert extra["method"].count("corrected_by_plan") == 1
 
 
 @needs_neo4j
@@ -1322,13 +1551,23 @@ def test_query_match_all_terms_vs_any_term_recall(live_client: TestClient) -> No
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-match-recall"
     _wipe_session(sid)
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": "search-recall", "session_id": sid, "turn_id": "turn-recall",
-        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-21T00:00:00Z",
-        "records": [
-            {"url": "https://x.test/paper-recall-a", "title": "A Survey on Multi-Agent Systems"},
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:mcp:search-recall", "session_id": sid, "turn_id": "turn-recall",
+        "source": "pubmed",
+        # Unified write ticket — paper products with snake_case fields.
+        "tool_name": "mcp__pubmed__search",
+        "tool_type": "search",
+        "status": "completed",
+        "result_count": 2,
+        "products": [
             {
-                "url": "https://x.test/paper-recall-b",
+                "product_type": "paper",
+                "link": "https://x.test/paper-recall-a",
+                "title": "A Survey on Multi-Agent Systems",
+            },
+            {
+                "product_type": "paper",
+                "link": "https://x.test/paper-recall-b",
                 "title": "Another Note on Surveys",
                 "abstract": "a brief on prior work",
             },
@@ -1367,12 +1606,12 @@ _HEADERS = {"authorization": "Bearer test-token"}
 
 # --- subagent write chain (scope + child + contains + produces→child) ------
 #
-# These exercise the PR1 write chain: a subagent becomes a scope Task
+# These exercise the subagent write chain: a subagent becomes a scope Task
 # (task_type=subagent) mirrored in two phases, and each internal toolcall
 # becomes a child ToolCall (real task_type) hung off the scope via contains,
 # with products hung off the CHILD (never the scope). contains is NOT in
-# get_subgraph's edge whitelist (it is a PR3/PR2 concern), so these assert
-# directly against Neo4j via the driver rather than via /subgraph.
+# get_subgraph's edge whitelist, so these assert directly against Neo4j via
+# the driver rather than via /subgraph.
 
 def _cypher(query: str, **params: Any) -> list[dict[str, Any]]:
     """Run a read Cypher against the live Neo4j and return records as dicts.
@@ -1390,13 +1629,13 @@ def _cypher(query: str, **params: Any) -> list[dict[str, Any]]:
 
 @needs_neo4j
 def test_subagent_scope_two_phase_and_child_execution_product(live_client: TestClient) -> None:
-    """PR1 core: a subagent's execution becomes a child ToolCall whose produces
+    """Core subagent contract: a subagent's execution becomes a child ToolCall whose produces
     edge points at the CHILD, not the scope; contains links scope→child.
 
     Topology:
         scope (subtask:subagent:<id>, task_type=subagent)
           -[:contains]-> child (subtask:subagent:<id>:exec:<execId>,
-                                task_type=code_execution)
+                                tool_type=execution)
           child -[:produces]-> Code -[:produces]-> Artifact
     The Artifact hangs off the Code (same as the main path), so the view-chain
     derivation (Artifact ←produces← Code ←produces← child) keeps the Code layer
@@ -1438,6 +1677,8 @@ def test_subagent_scope_two_phase_and_child_execution_product(live_client: TestC
     scope_tid = f"subtask:subagent:{sub_id}"
     child_tid = f"subtask:subagent:{sub_id}:exec:{exec_id}"
     # scope node: task_type=subagent, no parent_subtask_id, has a seq.
+    # (Task.label's task_type field is NOT renamed — only the
+    # ToolCall.label.task_type field becomes tool_type.)
     scope = _cypher("MATCH (s:Task {task_id: $t}) RETURN s", t=scope_tid)
     assert len(scope) == 1
     sprops = scope[0]["s"]
@@ -1447,11 +1688,14 @@ def test_subagent_scope_two_phase_and_child_execution_product(live_client: TestC
     assert sprops["objective"] == "produce a CSV"
     assert sprops["seq"] is not None
     assert sprops.get("parent_subtask_id") is None
-    # child node: real task_type=code_execution, parent_subtask_id→scope, seq.
+    # child node: the rename moved ToolCall's task_type → tool_type. The child also
+    # gains a tool_name (the run-tool identifier passed to ``/observe/execution``
+    # below).
     child = _cypher("MATCH (c:ToolCall {task_id: $t}) RETURN c", t=child_tid)
     assert len(child) == 1
     cprops = child[0]["c"]
-    assert cprops["task_type"] == "code_execution"
+    assert cprops["tool_type"] == "execution"
+    assert cprops.get("tool_name") == "run_python", "child mirrors the run-tool name"
     assert cprops["parent_subtask_id"] == scope_tid
     assert cprops["seq"] is not None
     # contains: scope → child (exactly one).
@@ -1504,8 +1748,8 @@ def test_subagent_scope_two_phase_and_child_execution_product(live_client: TestC
 
 @needs_neo4j
 def test_subagent_mcp_search_child_produces_paper(live_client: TestClient) -> None:
-    """PR1 MCP path: a subagent's mcp search becomes a child (task_type=
-    literature_search) hung off the scope; produces runs child→Paper."""
+    """MCP subagent path: a subagent's mcp search becomes a child (tool_type=
+    search) hung off the scope; produces runs child→Paper."""
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-sub-mcp"
     _wipe_session(sid)
@@ -1517,11 +1761,20 @@ def test_subagent_mcp_search_child_produces_paper(live_client: TestClient) -> No
         "subagent_type": "researcher", "created_at": "2026-08-24T00:00:00Z",
         "status": "running",
     }, headers=headers)
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": inv_id, "session_id": sid, "turn_id": "turn-mcp",
-        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-24T00:00:01Z",
+    live_client.post("/observe/tool-call", json={
+        "task_id": f"subtask:mcp:{inv_id}", "session_id": sid, "turn_id": "turn-mcp",
+        "source": "pubmed",
+        # Unified write ticket — paper product + subagent child routing.
+        "tool_name": "mcp__pubmed__search",
+        "tool_type": "search",
+        "status": "completed",
+        "result_count": 1,
         "parent_subagent_id": sub_id,
-        "records": [{"url": "https://x.test/paper-sub", "title": "sub paper"}],
+        "products": [{
+            "product_type": "paper",
+            "link": "https://x.test/paper-sub",
+            "title": "sub paper",
+        }],
     }, headers=headers)
     live_client.post("/observe/subagent", json={
         "subagent_id": sub_id, "session_id": sid, "turn_id": "turn-mcp",
@@ -1533,7 +1786,10 @@ def test_subagent_mcp_search_child_produces_paper(live_client: TestClient) -> No
     scope_tid = f"subtask:subagent:{sub_id}"
     child_tid = f"subtask:subagent:{sub_id}:exec:{inv_id}"
     child = _cypher("MATCH (c:ToolCall {task_id: $t}) RETURN c", t=child_tid)
-    assert child[0]["c"]["task_type"] == "literature_search"
+    # ToolCall's coarse-classification field was renamed to ``tool_type``.
+    assert child[0]["c"]["tool_type"] == "search"
+    # ``tool_name`` is the full MCP identifier the test just posted.
+    assert child[0]["c"]["tool_name"] == "mcp__pubmed__search"
     child_produces = _cypher(
         "MATCH (c:ToolCall {task_id: $t})-[:produces]->(p:Paper) RETURN count(p) AS n", t=child_tid)
     assert child_produces[0]["n"] == 1, "child produces the Paper"
@@ -1606,7 +1862,7 @@ def test_subagent_summary_nonempty_on_empty_success(live_client: TestClient) -> 
 @needs_neo4j
 def test_main_agent_execution_unchanged_no_parent(live_client: TestClient) -> None:
     """Main-agent executions (no parent_subagent_id) keep building
-    subtask:<execId> with NO contains edge and NO parent_subtask_id — the PR1
+    subtask:<execId> with NO contains edge and NO parent_subtask_id — the
     write chain must not perturb the main path."""
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-main-unchanged"
@@ -1627,7 +1883,11 @@ def test_main_agent_execution_unchanged_no_parent(live_client: TestClient) -> No
     st = _cypher("MATCH (s:ToolCall {task_id: $t}) RETURN s", t=f"subtask:{exec_id}")
     assert len(st) == 1
     props = st[0]["s"]
-    assert props["task_type"] == "code_execution"
+    # ToolCall's classification field is tool_type; tool_name mirrors the
+    # run tool (the request omitted tool_name → sidecar fell back to ``tool``).
+    assert props["tool_type"] == "execution"
+    assert props.get("task_type") is None, "the rename removed ToolCall.task_type"
+    assert props.get("tool_name") == "run_python"
     assert props.get("parent_subtask_id") is None, "main-agent ToolCall has no parent"
     # No contains edge incident on this ToolCall (it is not a child).
     contains = _cypher(
@@ -1635,7 +1895,7 @@ def test_main_agent_execution_unchanged_no_parent(live_client: TestClient) -> No
         t=f"subtask:{exec_id}")
     assert contains[0]["n"] == 0, "main-agent ToolCall is not a child (no contains out)"
     # produces still works on the main path: ToolCall → Code, and the Artifact
-    # hangs off the Code (Code → Artifact), exactly as before PR1.
+    # hangs off the Code (Code → Artifact), exactly as before the rename.
     produces = _cypher(
         "MATCH (s:ToolCall {task_id: $t})-[:produces]->(x) "
         "RETURN labels(x)[0] AS lbl, count(*) AS n", t=f"subtask:{exec_id}")
@@ -1884,13 +2144,14 @@ def test_get_chain_artifact_kind_centered_on_selected_node(live_client: TestClie
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-artchain"
     _wipe_session(sid)
-    # Seed two Papers (with URLs so the mirror keeps them) via one mcp-search.
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": "search-ac", "session_id": sid, "turn_id": "turn-ac",
-        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-09T00:00:00Z",
-        "records": [
-            {"url": "https://x.test/paper-A", "title": "paper A"},
-            {"url": "https://x.test/paper-B", "title": "paper B"},
+    # Seed two Papers (with URLs so the mirror keeps them) via one tool-call.
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:mcp:search-ac", "session_id": sid, "turn_id": "turn-ac",
+        "source": "pubmed", "tool_name": "mcp__pubmed__search",
+        "tool_type": "search", "status": "completed", "result_count": 2,
+        "products": [
+            {"product_type": "paper", "link": "https://x.test/paper-A", "title": "paper A"},
+            {"product_type": "paper", "link": "https://x.test/paper-B", "title": "paper B"},
         ],
     }, headers=headers)
     # Mirror the report artifact (two versions — v2 is the anchor as the max).
@@ -2026,12 +2287,13 @@ def test_get_chain_artifact_kind_no_report_anchor_walks_centered_chain(live_clie
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-noanchor"
     _wipe_session(sid)
-    # Seed one Paper via mcp-search but NO report artifact / no stated_in edge —
+    # Seed one Paper via tool-call but NO report artifact / no stated_in edge —
     # there is no report anchor in this session at all.
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": "search-na", "session_id": sid, "turn_id": "turn-na",
-        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-09T00:00:00Z",
-        "records": [{"url": "https://x.test/paper-na", "title": "paper NA"}],
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:mcp:search-na", "session_id": sid, "turn_id": "turn-na",
+        "source": "pubmed", "tool_name": "mcp__pubmed__search",
+        "tool_type": "search", "status": "completed", "result_count": 1,
+        "products": [{"product_type": "paper", "link": "https://x.test/paper-na", "title": "paper NA"}],
     }, headers=headers)
     sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
     paper = next(n for n in sub["nodes"] if n["label"] == "Paper")
@@ -2077,10 +2339,12 @@ def test_get_chain_artifact_kind_anchor_itself_walks_own_derivation(live_client:
                 "logical_name": "report.md", "version": v, "media_type": "text/markdown",
             }],
         }, headers=headers)
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": "search-anc", "session_id": sid, "turn_id": "turn-anc-s",
-        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-09T00:00:00Z",
-        "records": [{"url": "https://x.test/paper-anc", "title": "paper anc"}],
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:mcp:search-anc", "session_id": sid, "turn_id": "turn-anc-s",
+        "source": "pubmed", "tool_name": "mcp__pubmed__search",
+        "tool_type": "search", "status": "completed", "result_count": 1,
+        "products": [{"product_type": "paper", "link": "https://x.test/paper-anc",
+                      "title": "paper anc"}],
     }, headers=headers)
     ev = live_client.post("/persist/evidence", json={
         "content": "ev anc", "source_paper_link": "https://x.test/paper-anc",
@@ -2152,10 +2416,12 @@ def test_get_chain_artifact_kind_severed_paper_drops_orphan_anchor(live_client: 
         }],
     }, headers=headers)
     # A cited Paper the anchor's claim cites — distinct from the orphan Paper.
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": "search-cite", "session_id": sid, "turn_id": "turn-cite-s",
-        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-09T00:00:00Z",
-        "records": [{"url": "https://x.test/paper-cite", "title": "cite paper"}],
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:mcp:search-cite", "session_id": sid, "turn_id": "turn-cite-s",
+        "source": "pubmed", "tool_name": "mcp__pubmed__search",
+        "tool_type": "search", "status": "completed", "result_count": 1,
+        "products": [{"product_type": "paper", "link": "https://x.test/paper-cite",
+                      "title": "cite paper"}],
     }, headers=headers)
     ev = live_client.post("/persist/evidence", json={
         "content": "ev cite", "source_paper_link": "https://x.test/paper-cite",
@@ -2172,13 +2438,15 @@ def test_get_chain_artifact_kind_severed_paper_drops_orphan_anchor(live_client: 
         "artifact_id": ORP_REPORT, "artifact_version": 1,
         "claim_ids": [claim["claim_id"]], "session_id": sid,
     }, headers=headers)
-    # The ORPHAN Paper — produced by a ToolCall via mcp-search, but no Evidence
-    # extracts from it (Paper→Evidence) and no Claim cites it, so it has no path back to the
+    # The ORPHAN Paper — produced by a ToolCall via /observe/tool-call, but no
+    # Evidence extracts from it (Paper→Evidence) and no Claim cites it, so it has no path back to the
     # report anchor (it is severed).
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": "search-orp", "session_id": sid, "turn_id": "turn-orp-s",
-        "source": "pubmed", "tool_type": "search", "retrieved_at": "2026-08-09T00:00:00Z",
-        "records": [{"url": "https://x.test/paper-orp", "title": "paper orphan"}],
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:mcp:search-orp", "session_id": sid, "turn_id": "turn-orp-s",
+        "source": "pubmed", "tool_name": "mcp__pubmed__search",
+        "tool_type": "search", "status": "completed", "result_count": 1,
+        "products": [{"product_type": "paper", "link": "https://x.test/paper-orp",
+                      "title": "paper orphan"}],
     }, headers=headers)
     sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
     paper = next(n for n in sub["nodes"] if n["label"] == "Paper"
@@ -2502,15 +2770,27 @@ def test_get_chain_artifact_kind_no_input_code_still_reaches_goal(live_client: T
 
 
 @needs_neo4j
-def test_get_chain_claim_source_cited_artifact_reaches_goal(live_client: TestClient) -> None:
-    """A Claim's own buttons reach its citation relationships: ``viewCitingEvidence``
-    walks Claim <-[:supports]- (the cited Artifact / Evidence) and
+def test_get_chain_claim_cited_artifact_lights_neither_citing_button(live_client: TestClient) -> None:
+    """A Claim's own buttons reach its citation relationships *by label*:
+    ``viewCitingEvidenceForClaim`` walks Claim <-[:supports]- Evidence and
+    ``viewCitingDbRecordForClaim`` walks Claim <-[:supports]- DbRecord (both
+    strictly label-filtered — see the ``strict`` flag in ``_walk_hops``), while
     ``viewContainingArtifact`` walks Claim -[:stated_in]-> report.
+
+    An Artifact-backed Claim therefore lights NEITHER citing button: the
+    ``supports`` edge exists, but ``supports``-in reaches four labels
+    (Evidence / Artifact / SourceFile / DbRecord — see the writers in
+    persistence.py) and each Claim button names exactly one of them. This test
+    used to assert the opposite — that ``viewCitingEvidenceForClaim`` reached
+    the cited *Artifact* — which pinned the unfiltered walk that made one
+    button stand for all four labels and light up whichever the walk happened
+    to ``collect`` first. That is the bug where a Claim backed by both a
+    DbRecord and an Evidence showed only "查看引用的证据" and never a route to
+    the record.
 
     The old fat artifact chain additionally cross-walked the cited Artifact's
     produces/input derivation all the way to the ResearchGoal in one call; that
-    cross-domain join is gone (each relationship is its own button now), so this
-    test asserts the citation hops the Claim's buttons actually walk. The
+    cross-domain join is gone (each relationship is its own button now). The
     cited-Artifact→Code→ToolCall→goal reachability is covered separately by the
     ``viewRelatedTask`` test on the Artifact source.
 
@@ -2562,24 +2842,44 @@ def test_get_chain_claim_source_cited_artifact_reaches_goal(live_client: TestCli
         "claim_ids": [claim["claim_id"]], "session_id": sid,
     }, headers=headers)
     # Resolve the Claim's graph id. A Claim's own buttons:
-    # ``viewCitingEvidenceForClaim`` walks Claim <-[:supports]- (the
-    # Evidence/Artifact that cite this Claim), ``viewContainingArtifact`` walks
-    # Claim -[:stated_in]-> report Artifact.
+    # ``viewCitingEvidenceForClaim`` walks Claim <-[:supports]- Evidence,
+    # ``viewCitingDbRecordForClaim`` walks Claim <-[:supports]- DbRecord (both
+    # label-filtered), ``viewContainingArtifact`` walks Claim -[:stated_in]->
+    # report Artifact.
     # (The old fat artifact chain ALSO cross-walked the cited Artifact's
     # produces/input derivation down to the ResearchGoal in one call; that
     # cross-domain join is gone — each relationship is its own button now.)
     sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
     claim_node = next(n for n in sub["nodes"] if n["label"] == "Claim")
-    cite_chain = live_client.post("/query/chain", json={
-        "node_id": claim_node["id"], "session_id": sid, "kind": "viewCitingEvidenceForClaim",
-    }, headers=headers).json()
-    cite_ids = {n["id"] for n in cite_chain["nodes"]}
-    # The cited figure is reached by the supports-in hop (Artifact→supports→Claim
-    # is the citation edge from a cited figure to the Claim it backs).
+    # Guard against a vacuous pass: the cited figure Artifact must really exist
+    # and really cite this Claim. The empty chains below are about the label
+    # filter, not about a missing edge.
     fig = next(n for n in sub["nodes"] if n["label"] == "Artifact"
               and n["extra"]["artifact_id"] == CL_FIG)
-    assert fig["id"] in cite_ids, "the cited figure must be reached via supports-in"
-    assert claim_node["id"] in cite_ids, "the Claim (the chain's source) must be present"
+    assert any(e["type"] == "supports" and e["source"] == fig["id"]
+               and e["target"] == claim_node["id"] for e in sub["edges"]), \
+        "the cited figure Artifact must be the supports source of this Claim"
+    # An Artifact cites the Claim, but neither strictly-filtered Claim button
+    # names "Artifact" — and all-or-nothing hop semantics empty the whole chain
+    # (not even the source node comes back), which is what hides the button.
+    for kind in ("viewCitingEvidenceForClaim", "viewCitingDbRecordForClaim"):
+        chain = live_client.post("/query/chain", json={
+            "node_id": claim_node["id"], "session_id": sid, "kind": kind,
+        }, headers=headers).json()
+        assert chain["nodes"] == [], (
+            f"{kind} must not light up for an Artifact-backed Claim; "
+            f"got {[n['label'] for n in chain['nodes']]}"
+        )
+    # The batch endpoint the frontend actually calls must agree — it is what
+    # hides the buttons in the UI.
+    exists = live_client.post("/query/chain-exists", json={
+        "node_id": claim_node["id"], "session_id": sid,
+        "kinds": ["viewCitingEvidenceForClaim", "viewCitingDbRecordForClaim",
+                  "viewContainingArtifact"],
+    }, headers=headers).json()
+    assert exists["viewCitingEvidenceForClaim"] is False
+    assert exists["viewCitingDbRecordForClaim"] is False
+    assert exists["viewContainingArtifact"] is True
     # ``viewContainingArtifact`` reaches the report this Claim is stated_in.
     cont_chain = live_client.post("/query/chain", json={
         "node_id": claim_node["id"], "session_id": sid, "kind": "viewContainingArtifact",
@@ -2588,6 +2888,220 @@ def test_get_chain_claim_source_cited_artifact_reaches_goal(live_client: TestCli
     report = next(n for n in sub["nodes"] if n["label"] == "Artifact"
                  and n["extra"]["artifact_id"] == CL_REPORT)
     assert report["id"] in cont_ids, "the report Artifact (Claim stated_in it) must be reached"
+
+
+@needs_neo4j
+def test_claim_citing_evidence_and_dbrecord_are_their_own_buttons(live_client: TestClient) -> None:
+    """A Claim backed by BOTH an Evidence and a DbRecord lights BOTH buttons,
+    and each chain contains only its own label.
+
+    This is the regression test for the reported bug: on such a Claim only
+    "查看引用的证据" appeared and there was no route to the database record.
+    Both citation edges are `supports`-in, so before the hop table gave each
+    label its own strictly-filtered kind, the single unfiltered button walked
+    `supports`-in and kept an arbitrary one of the reached nodes
+    (``collect(DISTINCT ...)`` has no ``ORDER BY``, and the hop carried
+    ``limit=1``) — the record was reachable in the graph but not from any
+    button.
+
+    Topology: paper ─extracts→ Evidence ─supports→ Claim ←supports─ DbRecord,
+    with the same Claim citing both in one ``/persist/claim`` call (that is the
+    shape the tool layer produces when the report cites an evidence chip and a
+    dbrecord chip together).
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-claimbothecite"
+    _wipe_session(sid)
+    # The Paper must already be in the graph before it can be an Evidence
+    # source (persist_evidence resolves source_paper_link against a Paper node).
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:mcp:search-both", "session_id": sid, "turn_id": "turn-both-p",
+        "source": "pubmed", "tool_name": "mcp__pubmed__search",
+        "tool_type": "search", "status": "completed", "result_count": 1,
+        "products": [{"product_type": "paper", "link": "https://x.test/brca1-review",
+                      "title": "BRCA1 review"}],
+    }, headers=headers)
+    # An Evidence extracted from that Paper (Paper -[:extracts]-> Evidence).
+    ev = live_client.post("/persist/evidence", json={
+        "content": "BRCA1 is a RING-type E3 ligase",
+        "source_paper_link": "https://x.test/brca1-review",
+        "locator": "abstract", "evidence_type": "QUOTE",
+        "confidence": "HIGH", "strength": "MODERATE", "session_id": sid,
+    }, headers=headers).json()
+    assert ev["status"] == "ok", ev
+    # A DbRecord seeded by a db-search ToolCall.
+    live_client.post("/observe/tool-call", json={
+        "task_id": "subtask:db:search-both", "session_id": sid, "turn_id": "turn-both",
+        "tool_name": "mcp__uniprot__search", "tool_type": "search",
+        "source": "uniprot", "status": "completed", "result_count": 1,
+        "products": [{
+            "product_type": "db_record",
+            "source": "uniprot",
+            "identifier": "P38398",
+            "title": "BRCA1 — human",
+        }],
+    }, headers=headers)
+    # One Claim citing both: Evidence → supports → Claim ← supports ← DbRecord.
+    claim = live_client.post("/persist/claim", json={
+        "content": "BRCA1 binds RAD51 via its BRCT domain",
+        "claim_type": "STATISTICAL", "confidence": "HIGH", "locator": "abstract",
+        "cites_evidence_aliases": {"ev1": ev["evidence_id"]},
+        "cites_artifact_aliases": {},
+        "cites_dbrecord_aliases": {"db1": "uniprot:P38398"},
+        "session_id": sid,
+    }, headers=headers).json()
+    assert claim["status"] == "ok", claim
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    claim_node = next(n for n in sub["nodes"] if n["label"] == "Claim")
+
+    chains = {
+        kind: live_client.post("/query/chain", json={
+            "node_id": claim_node["id"], "session_id": sid, "kind": kind,
+        }, headers=headers).json()
+        for kind in ("viewCitingEvidenceForClaim", "viewCitingDbRecordForClaim")
+    }
+    labels = {
+        kind: sorted(n["label"] for n in chain["nodes"])
+        for kind, chain in chains.items()
+    }
+    # Exactly the source Claim + the one node of the label this button names —
+    # the other citation's label must NOT leak in.
+    assert labels["viewCitingEvidenceForClaim"] == ["Claim", "Evidence"], labels
+    assert labels["viewCitingDbRecordForClaim"] == ["Claim", "DbRecord"], labels
+    # And they really are the seeded nodes (Evidence keys on evidence_id,
+    # DbRecord on its bare identifier — see _ID_FIELDS).
+    ev_ids = {n["id"] for n in chains["viewCitingEvidenceForClaim"]["nodes"]}
+    assert ev["evidence_id"] in ev_ids, f"the seeded Evidence must be reached; got {ev_ids}"
+    db_ids = {n["id"] for n in chains["viewCitingDbRecordForClaim"]["nodes"]}
+    assert "P38398" in db_ids, f"the seeded DbRecord must be reached; got {db_ids}"
+    # Both buttons must report as existing — that is what the frontend needs to
+    # render them (a False hides the button).
+    exists = live_client.post("/query/chain-exists", json={
+        "node_id": claim_node["id"], "session_id": sid,
+        "kinds": ["viewCitingEvidenceForClaim", "viewCitingDbRecordForClaim"],
+    }, headers=headers).json()
+    assert exists == {
+        "viewCitingEvidenceForClaim": True,
+        "viewCitingDbRecordForClaim": True,
+    }, exists
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_claim_citing_sourcefile_is_its_own_button(live_client: TestClient) -> None:
+    """A Claim whose ONLY supporting source is a SourceFile still offers a
+    citing button.
+
+    `supports`-in reaches four labels (Evidence / Artifact / SourceFile /
+    DbRecord) and the Claim's citing buttons are one per label. SourceFile was
+    the last one added: while it was missing, a Claim backed only by an uploaded
+    data file lit NEITHER citing button — the card read as "nothing supports
+    this claim" even though the graph held a `SourceFile -[:supports]-> Claim`
+    edge. That is the same shape as the reported Evidence/DbRecord bug, one
+    label over.
+
+    Topology: SourceFile(csv) ─supports→ Claim, with the two other citing
+    labels deliberately absent so the assertion also proves the buttons do not
+    bleed into each other.
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-claimsf"
+    _wipe_session(sid)
+    csv_fid = f"source_file:session:{sid}:measurements.csv"
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="text/csv",
+                                          path="measurements.csv",
+                                          name="measurements.csv"),
+                     headers=headers)
+    claim = live_client.post("/persist/claim", json={
+        "content": "the assay's own table backs this number",
+        "claim_type": "STATISTICAL", "confidence": "HIGH", "locator": "table 1",
+        "cites_source_file_aliases": {"sourcefile1": csv_fid},
+        "cites_artifact_aliases": {},
+        "session_id": sid,
+    }, headers=headers).json()
+    assert claim["status"] == "ok", claim
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    claim_node = next(n for n in sub["nodes"] if n["label"] == "Claim")
+
+    chain = live_client.post("/query/chain", json={
+        "node_id": claim_node["id"], "session_id": sid,
+        "kind": "viewCitingSourceFileForClaim",
+    }, headers=headers).json()
+    # Exactly the source Claim + the SourceFile — no other citing label leaks in
+    # (strict label filtering, same as the Evidence / DbRecord hops).
+    assert sorted(n["label"] for n in chain["nodes"]) == ["Claim", "SourceFile"], chain
+    assert csv_fid in {n["id"] for n in chain["nodes"]}, (
+        f"the seeded SourceFile must be reached; got "
+        f"{[n['id'] for n in chain['nodes']]}"
+    )
+    # The button renders on True; the two other citing kinds stay False here
+    # because this Claim has no Evidence / DbRecord behind it.
+    exists = live_client.post("/query/chain-exists", json={
+        "node_id": claim_node["id"], "session_id": sid,
+        "kinds": ["viewCitingEvidenceForClaim", "viewCitingDbRecordForClaim",
+                  "viewCitingSourceFileForClaim"],
+    }, headers=headers).json()
+    assert exists == {
+        "viewCitingEvidenceForClaim": False,
+        "viewCitingDbRecordForClaim": False,
+        "viewCitingSourceFileForClaim": True,
+    }, exists
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_claim_citing_evidence_button_lights_every_evidence(live_client: TestClient) -> None:
+    """``viewCitingEvidenceForClaim`` must return EVERY Evidence backing the
+    Claim, not an arbitrary one.
+
+    The hop used to carry ``limit=1``, which slices the ``collect(DISTINCT ...)``
+    result — and that collection has no ``ORDER BY``, so with two Evidences the
+    button highlighted an arbitrary one of the two. Dropping the limit is part
+    of the same fix as the strictly-filtered kinds; without this test someone
+    can add it back and break nothing visible.
+    """
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-claimmultiev"
+    _wipe_session(sid)
+    evidence_ids: list[str] = []
+    for n in (1, 2):
+        live_client.post("/observe/tool-call", json={
+            "task_id": f"subtask:mcp:search-multi-{n}", "session_id": sid, "turn_id": "turn-multi",
+            "source": "pubmed", "tool_name": "mcp__pubmed__search",
+            "tool_type": "search", "status": "completed", "result_count": 1,
+            "products": [{"product_type": "paper", "link": f"https://x.test/multi-{n}",
+                          "title": f"paper {n}"}],
+        }, headers=headers)
+        ev = live_client.post("/persist/evidence", json={
+            "content": f"evidence {n}",
+            "source_paper_link": f"https://x.test/multi-{n}",
+            "locator": "abstract", "evidence_type": "QUOTE",
+            "confidence": "HIGH", "strength": "MODERATE", "session_id": sid,
+        }, headers=headers).json()
+        assert ev["status"] == "ok", ev
+        evidence_ids.append(ev["evidence_id"])
+    claim = live_client.post("/persist/claim", json={
+        "content": "two independent evidences back this",
+        "claim_type": "STATISTICAL", "confidence": "HIGH", "locator": "abstract",
+        "cites_evidence_aliases": {
+            f"ev{n}": evidence_id for n, evidence_id in enumerate(evidence_ids, start=1)
+        },
+        "cites_artifact_aliases": {},
+        "session_id": sid,
+    }, headers=headers).json()
+    assert claim["status"] == "ok", claim
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    claim_node = next(n for n in sub["nodes"] if n["label"] == "Claim")
+    chain = live_client.post("/query/chain", json={
+        "node_id": claim_node["id"], "session_id": sid, "kind": "viewCitingEvidenceForClaim",
+    }, headers=headers).json()
+    reached = {n["id"] for n in chain["nodes"] if n["label"] == "Evidence"}
+    assert reached == set(evidence_ids), (
+        f"every Evidence must be reached (no limit=1 slice); got {reached} "
+        f"of {set(evidence_ids)}"
+    )
+    _wipe_session(sid)
 
 
 # --- cleanup/session: soft-mark Artifact versions + physically delete private
@@ -2887,13 +3401,13 @@ def test_cleanup_project_falls_back_to_project_id_when_sessions_already_deleted(
     _wipe_session(sid)
 
 
-# --- PR2: subagent query layer (contains in subgraph, surrogate edges,
+# --- subagent query layer (contains in subgraph, surrogate edges,
 # scope expansion, search recall, soft-delete, degradation, schema) ---------
 #
-# These exercise PR2's read-side lighting-up of the PR1 write chain. A
+# These exercise the read-side lighting-up of the subagent write chain. A
 # subagent becomes a scope SubTask; each internal toolcall becomes a child
-# hung off the scope via ``contains`` with products hung off the CHILD. PR2
-# surfaces this read-side: ``get_subgraph`` returns contains + folded
+# hung off the scope via ``contains`` with products hung off the CHILD. The
+# read side surfaces this: ``get_subgraph`` returns contains + folded
 # surrogate scope→product edges (extra.surrogate + via_child), the scope
 # expansion endpoint returns the child + real edges, and search can recall a
 # scope by its objective/summary/subagent_type.
@@ -2909,9 +3423,9 @@ def _seed_subagent_session(live_client: TestClient, sid: str) -> tuple[str, str,
     Returns (scope_task_id, exec_child_task_id, artifact_id, paper_link).
     Topology:
         scope (task_type=subagent)
-          -[:contains]-> exec child (task_type=code_execution)
+          -[:contains]-> exec child (tool_type=execution)
             exec child -[:produces]-> Code -[:produces]-> Artifact (v1)
-          -[:contains]-> mcp child (task_type=literature_search)
+          -[:contains]-> mcp child (tool_type=search)
             mcp child -[:produces]-> Paper
     """
     sub_id = f"sub-{sid}"
@@ -2942,13 +3456,14 @@ def _seed_subagent_session(live_client: TestClient, sid: str) -> tuple[str, str,
         }],
     }, headers=_HEADERS)
     # MCP-search child → Paper (direct, no Code layer).
-    live_client.post("/observe/mcp-search", json={
-        "invocation_id": inv_id, "session_id": sid, "turn_id": f"turn-{sid}",
-        "source": "europe-pmc", "tool_type": "search",
-        "retrieved_at": "2026-08-24T00:00:03Z",
+    live_client.post("/observe/tool-call", json={
+        "task_id": inv_id, "session_id": sid,
+        "turn_id": f"turn-{sid}", "source": "europe-pmc",
+        "tool_name": "mcp__europe-pmc__search", "tool_type": "search",
+        "status": "completed", "result_count": 1,
         "parent_subagent_id": sub_id,
-        "records": [{
-            "url": paper_link, "title": "TP53 in lung cancer",
+        "products": [{
+            "product_type": "paper", "link": paper_link, "title": "TP53 in lung cancer",
             "identifier": "123", "identifierType": "PMID", "year": "2023",
             "source": "europe-pmc",
         }],
@@ -3040,8 +3555,8 @@ def test_surrogate_target_identity_matches_node_set(live_client: TestClient) -> 
 def test_scope_expansion_returns_children_and_real_edges(live_client: TestClient) -> None:
     """get_scope_expansion returns the scope's children + real produces/
     contains edges, with NO surrogate markers (the frontend drops surrogates
-    when the expansion is drawn). Child task_type is the real code_execution/
-    literature_search, not 'subagent'."""
+    when the expansion is drawn). Child tool_type is the real execution/
+    search, not 'subagent'."""
     sid = "sess-pr2-expand"
     _wipe_session(sid)
     scope_tid, exec_child_tid, art_id, paper_link = _seed_subagent_session(live_client, sid)
@@ -3052,13 +3567,17 @@ def test_scope_expansion_returns_children_and_real_edges(live_client: TestClient
     assert "reason" not in exp, "a seeded scope must expand, not degrade"
     child_ids = {n["id"] for n in exp["nodes"] if n["label"] == "ToolCall"}
     assert exec_child_tid in child_ids, "the exec child must be in the expansion"
-    # Child task_type is the real type, not 'subagent' (that's the scope's).
+    # Child tool_type is the real type, not 'subagent' (that's the scope's).
     children = [n for n in exp["nodes"] if n["label"] == "ToolCall"
                 and n["id"] != scope_tid]
     assert children, "expansion must contain child ToolCalls"
-    child_types = {n["extra"].get("task_type") for n in children}
-    assert child_types == {"code_execution", "literature_search"}, \
-        f"child task_types must be the real types, got {child_types}"
+    child_types = {n["extra"].get("tool_type") for n in children}
+    assert child_types == {"execution", "search"}, \
+        f"child tool_types must be the real types, got {child_types}"
+    # Children carry tool_name (run tool / full MCP identifier).
+    child_names = {n["extra"].get("tool_name") for n in children}
+    assert child_names == {"run_python", "mcp__europe-pmc__search"}, \
+        f"child tool_names must be the run/MCP identifiers, got {child_names}"
     # Real edges present: contains (scope→first child), next (scope-internal
     # child→child chain), produces (child→Code→Artifact, child→Paper). No
     # surrogate markers.
@@ -3077,8 +3596,9 @@ def test_scope_expansion_returns_children_and_real_edges(live_client: TestClient
 @needs_neo4j
 def test_query_match_recalls_scope_by_objective(live_client: TestClient) -> None:
     """query_match's haystack now spans objective/summary/subagent_type, so a
-    search for the scope's role/objective hits the scope node (pre-PR2 the scope
-    was invisible to search — only its children's task_type was searchable)."""
+    search for the scope's role/objective hits the scope node (the scope
+    was invisible to search before its search column was added — only its
+    children's tool_type was searchable)."""
     sid = "sess-pr2-search"
     _wipe_session(sid)
     scope_tid, _exec_child_tid, _art_id, _paper_link = _seed_subagent_session(live_client, sid)
@@ -3089,20 +3609,21 @@ def test_query_match_recalls_scope_by_objective(live_client: TestClient) -> None
     }, headers=_HEADERS).json()
     hit_ids = {h["id"] for h in hits["hits"]}
     assert scope_tid in hit_ids, "scope must be recallable by its objective/summary"
-    # Search the child's real task_type → hits the exec child (already worked
-    # pre-PR2, regression guard).
+    # Search the child's real tool_type → hits the exec child (already worked
+    # as task_type, regression guard for the field rename — the haystack
+    # now reads n.tool_type).
     code_hits = live_client.post("/query/match", json={
-        "query": "code_execution", "session_id": sid,
+        "query": "execution", "session_id": sid,
     }, headers=_HEADERS).json()
     code_hit_ids = {h["id"] for h in code_hits["hits"]}
     assert any(":exec:" in i for i in code_hit_ids), \
-        "child remains recallable by its real task_type"
+        "child remains recallable by its real tool_type"
     _wipe_session(sid)
 
 
 @needs_neo4j
 def test_soft_delete_hides_scope_child_and_surrogates(live_client: TestClient) -> None:
-    """All PR2 read paths carry the deleted_session filter: after a session is
+    """All read paths carry the deleted_session filter: after a session is
     soft-deleted, get_subgraph (nodes + surrogates) and scope-expansion return
     nothing for it."""
     sid = "sess-pr2-softdel"
@@ -3153,7 +3674,7 @@ def test_scope_expansion_validates_request(client: TestClient) -> None:
 
 
 def test_schema_enum_has_contains_and_server_whitelist_has_contains() -> None:
-    """The schema contract carries ``contains`` (PR3's frontend can compile:
+    """The schema contract carries ``contains`` (the frontend can compile:
     EDGE_COLORS / node.relation.contains resolve). The server's edge whitelist
     mirrors the schema so /query/by-edge-type accepts ``contains``."""
     from sciencediscovery_memory_graph import server
@@ -3167,3 +3688,262 @@ def test_schema_enum_has_contains_and_server_whitelist_has_contains() -> None:
     assert any(h[0] == "contains" and h[1] == "out" for h in query_mod._CHAIN_HOPS["Task"]), \
         "Task chain hops must include a contains out-hop to drill into children"
 
+
+# --- observeUploadFile (SourceFile + feeds) ----------------------------------
+
+def _upload_payload(sid: str, *, media_type: str | None, path: str = "data.csv",
+                    name: str = "data.csv", size: int | None = 100,
+                    content_hash: str | None = "hash-a") -> dict:
+    """A minimal /observe/upload-file body for session ``sid``."""
+    return {
+        "session_id": sid,
+        "file_id": f"source_file:session:{sid}:{path}",
+        "name": name,
+        "path": path,
+        "media_type": media_type,
+        "size": size,
+        "content_hash": content_hash,
+        "created_at": "2026-09-08T00:00:00Z",
+    }
+
+
+def test_observe_upload_file_degrades_without_neo4j(client: TestClient) -> None:
+    response = client.post(
+        "/observe/upload-file",
+        json=_upload_payload("sess-up-degraded", media_type="text/csv"),
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["written"] == 0
+
+
+def test_observe_upload_file_rejects_missing_token(client: TestClient) -> None:
+    response = client.post(
+        "/observe/upload-file",
+        json=_upload_payload("sess-up-token", media_type="text/csv"),
+        # no auth header
+    )
+    assert response.status_code == 401
+
+
+def test_persist_evidence_rejects_unknown_source_file(client: TestClient) -> None:
+    """Degraded graph or genuinely absent node: an evidence declare against a
+    SourceFile that does not exist 422s with source_file_not_found (the gate
+    needs a reachable graph to distinguish, so this asserts the degraded
+    branch first — the live counterpart asserts the real absence case)."""
+    # With no Neo4j the endpoint degrades before the gate runs, so the
+    # not-found path is only meaningful live; here we pin the degraded shape.
+    response = client.post(
+        "/persist/evidence",
+        json={
+            "content": "x",
+            "source_file_id": "source_file:session:s:none.pdf",
+            "locator": "p1",
+            "evidence_type": "statistic",
+            "confidence": "medium",
+            "strength": "moderate",
+            "session_id": "sess-sf-degraded",
+        },
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+
+
+@needs_neo4j
+def test_upload_before_first_message_dangles_then_feeds(live_client: TestClient) -> None:
+    """The block-1 core scenario: a file uploaded BEFORE the first message
+    creates a SourceFile node with NO feeds edge and NO placeholder
+    ResearchGoal; the first message then MERGEs the real goal and attaches
+    every still-dangling SourceFile of the session."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-early"
+    _wipe_session(sid)
+    # 1. Upload first — no ResearchGoal exists yet.
+    r = live_client.post("/observe/upload-file",
+                         json=_upload_payload(sid, media_type="text/csv"),
+                         headers=headers)
+    assert r.status_code == 200 and r.json()["status"] == "healthy"
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    # No placeholder goal was created, and no feeds edge exists yet.
+    assert [n for n in sub["nodes"] if n["label"] == "ResearchGoal"] == []
+    assert [e for e in sub["edges"] if e["type"] == "feeds"] == []
+    assert len([n for n in sub["nodes"] if n["label"] == "SourceFile"]) == 1
+    # 2. First message lands — the goal appears and the dangling file attaches.
+    live_client.post("/observe/session-first-message", json={
+        "session_id": sid,
+        "goal_id": f"goal:session:{sid}",
+        "core_objective": "analyze uploaded data",
+        "domain": "DataAnalysis",
+        "topic_scope": [],
+        "created_at": "2026-09-08T00:00:01Z",
+    }, headers=headers)
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    goals = [n for n in sub["nodes"] if n["label"] == "ResearchGoal"]
+    assert len(goals) == 1
+    # The goal carries the first message's fields (no empty placeholder shell).
+    assert goals[0]["extra"]["core_objective"] == "analyze uploaded data"
+    feeds = [e for e in sub["edges"] if e["type"] == "feeds"]
+    assert len(feeds) == 1
+    assert feeds[0]["source"] == f"source_file:session:{sid}:data.csv"
+    assert feeds[0]["target"] == f"goal:session:{sid}"
+
+
+@needs_neo4j
+def test_upload_reupsert_refreshes_metadata(live_client: TestClient) -> None:
+    """An overwrite re-upload of the same path must refresh size/content_hash
+    (ON MATCH SET) instead of leaving the graph stale — the graph is the
+    catalog, the CAS is the warehouse; a stale catalog entry lies about which
+    content the file_id names. The FIRST upload must also write size/
+    content_hash (ON CREATE — a regression once moved them to ON MATCH only,
+    leaving the very first upload hashless). media_type only fills forward
+    (coalesce): a re-upload that cannot infer a type must not erase one an
+    earlier upload set."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-reup"
+    _wipe_session(sid)
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="text/csv",
+                                          size=100, content_hash="hash-a"),
+                     headers=headers)
+    # First upload: ON CREATE must write size/content_hash (regression guard —
+    # the catalog must point at the right CAS blob from the very first write).
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    first = [n for n in sub["nodes"] if n["label"] == "SourceFile"]
+    assert len(first) == 1
+    assert first[0]["extra"]["size"] == 100
+    assert first[0]["extra"]["content_hash"] == "hash-a"
+    assert first[0]["extra"]["media_type"] == "text/csv"
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type=None,  # unknown ext re-upload
+                                          size=250, content_hash="hash-b"),
+                     headers=headers)
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    files = [n for n in sub["nodes"] if n["label"] == "SourceFile"]
+    assert len(files) == 1  # MERGE on file_id: no duplicate
+    extra = files[0]["extra"]
+    assert extra["size"] == 250
+    assert extra["content_hash"] == "hash-b"
+    assert extra["media_type"] == "text/csv"  # coalesce kept the earlier type
+
+
+@needs_neo4j
+def test_media_type_gates_evidence_and_claim_routes(live_client: TestClient) -> None:
+    """The block-3 cite gates, all four corners plus the unknown-type case:
+    PDF → Evidence source OK / non-PDF → source_file_not_pdf; non-PDF →
+    Claim cite OK / PDF → source_file_is_pdf; and a node whose media_type is
+    unset (inferMediaType returned undefined) must NOT be misreported as
+    source_file_not_found — it exists, it is just not a PDF, so the evidence
+    gate says not_pdf and the claim gate lets it through."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-gates"
+    _wipe_session(sid)
+    pdf_fid = f"source_file:session:{sid}:paper.pdf"
+    csv_fid = f"source_file:session:{sid}:data.csv"
+    npy_fid = f"source_file:session:{sid}:weights.npy"
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="application/pdf",
+                                          path="paper.pdf", name="paper.pdf"),
+                     headers=headers)
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="text/csv",
+                                          path="data.csv", name="data.csv"),
+                     headers=headers)
+    # Unknown extension: media_type stays null (the pre-fix bug treated this
+    # node as "not found" on both gates).
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type=None,
+                                          path="weights.npy", name="weights.npy"),
+                     headers=headers)
+    evidence_body = {
+        "locator": "p1", "evidence_type": "statistic",
+        "confidence": "medium", "strength": "moderate", "session_id": sid,
+    }
+    # PDF → valid Evidence source.
+    ok = live_client.post("/persist/evidence", json={
+        "content": "from the pdf", "source_file_id": pdf_fid, **evidence_body,
+    }, headers=headers)
+    assert ok.status_code == 200 and ok.json()["status"] == "ok"
+    # CSV → not a PDF.
+    r = live_client.post("/persist/evidence", json={
+        "content": "x", "source_file_id": csv_fid, **evidence_body,
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_pdf"
+    # Unknown-type node exists → not_pdf (NOT not_found).
+    r = live_client.post("/persist/evidence", json={
+        "content": "x", "source_file_id": npy_fid, **evidence_body,
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_pdf"
+    # Genuinely absent file_id → not_found.
+    r = live_client.post("/persist/evidence", json={
+        "content": "x", "source_file_id": f"source_file:session:{sid}:ghost.csv",
+        **evidence_body,
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_found"
+
+    claim_body = {
+        "content": "the data supports this", "claim_type": "finding",
+        "confidence": "high", "locator": "s1", "session_id": sid,
+    }
+    # Non-PDF (incl. unknown type) → valid direct Claim support.
+    for fid in (csv_fid, npy_fid):
+        ok = live_client.post("/persist/claim", json={
+            **claim_body, "cites_source_file_aliases": {"sourcefile1": fid},
+        }, headers=headers)
+        assert ok.status_code == 200, f"claim cite failed for {fid}: {ok.text}"
+    # PDF → rejected with guidance to declare_evidence first.
+    r = live_client.post("/persist/claim", json={
+        **claim_body, "cites_source_file_aliases": {"sourcefile1": pdf_fid},
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_is_pdf"
+    # Absent file_id → not_found.
+    r = live_client.post("/persist/claim", json={
+        **claim_body,
+        "cites_source_file_aliases": {"sourcefile1": f"source_file:session:{sid}:ghost.csv"},
+    }, headers=headers)
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "source_file_not_found"
+
+    # The claim cites built SourceFile -[:supports]-> Claim edges (and the
+    # PDF-source evidence built SourceFile -[:extracts]-> Evidence).
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    supports = [e for e in sub["edges"] if e["type"] == "supports"
+                and e["source"] in {csv_fid, npy_fid}]
+    assert len(supports) == 2
+    extracts = [e for e in sub["edges"] if e["type"] == "extracts"
+                and e["source"] == pdf_fid]
+    assert len(extracts) == 1
+
+
+@needs_neo4j
+def test_execution_input_source_file_builds_input_edge(live_client: TestClient) -> None:
+    """Code-read traceability: an execution whose code reads an uploaded file
+    builds ``SourceFile -[:input]-> Code`` (via input_source_files, the
+    recorder's inference payload), anchored on the Code node."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-sf-input"
+    _wipe_session(sid)
+    fid = f"source_file:session:{sid}:data.csv"
+    live_client.post("/observe/upload-file",
+                     json=_upload_payload(sid, media_type="text/csv"),
+                     headers=headers)
+    live_client.post("/observe/execution", json={
+        "execution_id": "exec-sf-read",
+        "session_id": sid,
+        "turn_id": "turn-sf-read",
+        "tool": "run_python",
+        "language": "python",
+        "code_hash": "hash-sf-read",
+        "exit_code": 0,
+        "status": "succeeded",
+        "started_at": "2026-09-08T00:00:00Z",
+        "finished_at": "2026-09-08T00:00:01Z",
+        "produced_artifacts": [],
+        "input_source_files": [{"file_id": fid}],
+    }, headers=headers)
+    sub = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    inputs = [e for e in sub["edges"] if e["type"] == "input"]
+    assert len(inputs) == 1
+    assert inputs[0]["source"] == fid
+    assert inputs[0]["target"] == "exec-sf-read"

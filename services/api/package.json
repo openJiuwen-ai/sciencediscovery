@@ -20,12 +20,13 @@
     "@sciencediscovery/executor": "workspace:*",
     "@sciencediscovery/governance": "workspace:*",
     "@sciencediscovery/knowledge-engine": "workspace:*",
+    "@sciencediscovery/idea-tree": "workspace:*",
     "@sciencediscovery/mcp-sources": "workspace:*",
     "@sciencediscovery/memory": "workspace:*",
     "@sciencediscovery/model": "workspace:*",
     "@sciencediscovery/operational-logging": "workspace:*",
     "@sciencediscovery/orchestration": "workspace:*",
-    "@sciencediscovery/plan-mode": "workspace:*",
+    "@sciencediscovery/plan": "workspace:*",
     "@sciencediscovery/provenance": "workspace:*",
     "@sciencediscovery/runner": "workspace:*",
     "@sciencediscovery/runtime-core": "workspace:*",
@@ -42,6 +43,7 @@
   "devDependencies": {
     "@types/node": "26.1.1",
     "tsx": "4.23.1",
+    "typebox": "1.1.38",
     "typescript": "7.0.2"
   }
 }

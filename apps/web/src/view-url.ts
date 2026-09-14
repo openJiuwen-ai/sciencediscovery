@@ -81,7 +81,7 @@ export function parseViewState(pathname: string, search: string): ViewState {
   const parts = segments(pathname);
   if (parts.length === 1 && parts[0] === "usage") {
     view.view = "usage";
-  } else if (parts.length === 2 && parts[0] === "settings" && parts[1] && GROUP_SEGMENT.test(parts[1])) {
+  } else if (parts.length === 2 && parts[0] === "settings" && parts[1] && (GROUP_SEGMENT.test(parts[1]) || parts[1].startsWith("runner:") && parts[1].length > 7)) {
     view.settingsKind = "system";
     view.settingsGroup = parts[1];
   } else if (parts.length >= 2 && parts[0] === "projects" && parts[1]) {
@@ -123,7 +123,7 @@ function encodeQueryValue(value: string): string {
 export function serializeViewState(view: ViewState): { pathname: string; search: string } {
   let pathname = "/";
   if (view.settingsKind === "system") {
-    pathname = `/settings/${view.settingsGroup ?? "global"}`;
+    pathname = `/settings/${encodeURIComponent(view.settingsGroup ?? "global")}`;
   } else if (view.settingsKind === "project" && (view.settingsTargetId ?? view.projectId)) {
     // The path names the settings *target*, which may differ from the active
     // Project when the dialog was opened from another Project's menu.

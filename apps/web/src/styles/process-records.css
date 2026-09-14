@@ -1,0 +1,133 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+
+.process-live, .process-live-body { display: contents; }
+.process-live > summary { display: none; }
+.message > .message-body { grid-column: 2; }
+.run-timeline > .assistant-continuation { margin-bottom: 12px; }
+.run-timeline > .run-identity { align-items: center; margin-bottom: 8px; }
+.run-identity .message-role { margin: 0; }
+
+/* Only collapsed terminal records lose their card surface. */
+.process-record { min-width: 0; margin: 4px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.process-record[open], .process-record:has(> button[aria-expanded="true"]) {
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle);
+  color: var(--text); overflow: hidden;
+}
+.process-record.thinking[open] { border-color: var(--accent-border-soft); background: var(--accent-soft); }
+.process-record.failed[open], .process-record.failed:has(> button[aria-expanded="true"]) {
+  border-color: var(--danger-border); background: var(--danger-soft);
+}
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) {
+  border: 0; border-radius: 0; box-shadow: none; background: transparent; padding: 0; color: var(--muted);
+}
+.process-record > :is(summary, button[aria-expanded]) {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; width: 100%;
+  padding: 10px 12px; border: 0; background: transparent; list-style: none;
+  text-align: left; cursor: pointer; font-size: 13px; letter-spacing: 0;
+}
+.process-record > summary::-webkit-details-marker,
+.workspace-folder > summary::-webkit-details-marker { display: none; }
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]) {
+  min-height: 28px; padding: 3px 0; color: var(--muted); background: transparent;
+  font-weight: 400; transition: color 180ms ease;
+}
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]):is(:hover, :focus-visible) {
+  color: var(--text-strong); background: transparent;
+}
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]) :is(strong, i, span) {
+  color: inherit; font-size: inherit; font-weight: inherit;
+}
+.process-record > :is(summary, button[aria-expanded]) > span:not(.record-failure-dot) { min-width: 0; }
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]) > span:not(.record-failure-dot) {
+  display: block; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]) strong {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]) :is(
+  svg, .timeline-chevron, .timeline-icon, .timeline-status, .card-chevron,
+  .reviewer-specialist-avatar, .reviewer-specialist-card-chevron, .reviewer-specialist-panel-chevron, small, em
+), .messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]) > i { display: none !important; }
+.record-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.process-record.failed > summary > .record-label,
+.messages .process-record.failed:not([open]):not(:has(> button[aria-expanded="true"])) > :is(summary, button[aria-expanded]) > span:not(.record-failure-dot) { flex: 0 1 auto; }
+.record-failure-dot,
+.messages .process-record:not([open]):not(:has(> button[aria-expanded="true"])).failed:not(:has(> summary > .record-failure-dot)) > :is(summary, button[aria-expanded])::after {
+  content: ""; display: block; flex: 0 0 6px; width: 6px; height: 6px;
+  margin-left: 0; border-radius: 50%; background: var(--danger-bright);
+}
+.record-chevron { flex: 0 0 auto; }
+details[open] > summary > .record-chevron { transform: rotate(90deg); }
+.process-record-body { padding: 0 12px 12px; }
+.process-record-body > :is(article, section, aside) {
+  width: 100%; max-width: none; margin: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent;
+}
+.process-record:has(> button[aria-expanded="true"]) { padding: 0; }
+.process-record > :is(.plan-card-body, .governed-downloads-body, .remote-job-body) { padding: 0 12px 12px; }
+.process-subagents { border: 0; background: transparent; padding: 0; box-shadow: none; }
+.process-subagents > .process-record { width: 100%; margin: 0; }
+.process-agent-record[open] .subagent-card > button {
+  grid-template-columns: minmax(0, 1fr) auto 16px; background: transparent; padding: 6px 0;
+}
+.process-agent-record[open] .subagent-card > button > i { display: none; }
+.process-agent-record[open] .subagent-card > button strong { display: none; }
+.process-agent-record[open] .subagent-card > button small { white-space: normal; overflow-wrap: anywhere; }
+.process-notice { border: 0; background: transparent; padding: 4px 0; color: var(--muted); font-size: 13px; }
+.process-notice > span { display: none; }
+.process-notice p { margin: 0; }
+.process-notice { transition: color 180ms ease; }
+.process-notice:hover { color: var(--text-strong); }
+.tool-authorization { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.timeline-disclosure.tool:has(> summary > .tool-authorization) > summary { grid-template-columns: 16px 28px minmax(0, 1fr) auto auto; }
+/* The prose grid and every process row share the same avatar gutter. */
+.run-timeline > .process-record, .messages > .process-record {
+  width: calc(100% - var(--timeline-gutter)); max-width: calc(820px - var(--timeline-gutter));
+  margin: 4px 0 11px var(--timeline-gutter);
+}
+.run-timeline > .process-record:not([open]):not(:has(> button[aria-expanded="true"])),
+.messages > .process-record:not([open]):not(:has(> button[aria-expanded="true"])) { margin-block: 0 4px; }
+.run-timeline > .timeline-subagents { margin-top: 0; margin-bottom: 4px; gap: 4px; }
+.run-timeline > .process-notice { margin-bottom: 6px; }
+.workspace-folder { border: 0; background: transparent; min-width: 0; margin-top: 12px; }
+/* Keep the activity poller mounted so newly arriving tasks can reveal the section. */
+.workspace-folder[data-folder="tasks"]:not(:has(.workspace-fold, .agent-activity > button, [role="alert"])) { display: none; }
+.workspace-folder > summary {
+  display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 6px; background: #fafbfc;
+  cursor: pointer; list-style: none; color: var(--text);
+}
+.workspace-folder > summary strong { font-size: 14px; }
+.workspace-folder-body { padding: 10px 0 12px 14px; min-width: 0; }
+.workspace-folder .artifact-session-group > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 34px; padding: 3px 6px 3px 10px; cursor: pointer;
+}
+.workspace-folder .artifact-session-group[open] > summary { border-bottom: 1px solid var(--border); }
+.workspace-folder .artifact-session-heading { min-width: 0; }
+.workspace-folder .agent-activity { margin: 0; }
+.workspace-folder .drop-zone { flex-wrap: wrap; }
+.workspace-folder .drop-zone small { white-space: normal; overflow: visible; }
+.workspace-file-heading-meta { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.process-record > summary:focus-visible, .process-record > button:focus-visible,
+.workspace-folder summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .process-record > :is(summary, button[aria-expanded]), .process-notice { transition: none; }
+}
+@media (max-width: 600px) {
+  .tool-authorization { white-space: normal; }
+  .workspace-folder-body { padding-left: 8px; }
+}

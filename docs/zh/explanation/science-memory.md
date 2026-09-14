@@ -29,20 +29,21 @@
 
 写图全部由 Node API 发起（执行镜像 + declare），浏览器只读、gateway 与 runner 不参与；Python 侧车只被 Node API 访问，是闭环单客户端。
 
-### 1.1 节点类型（8 类）
+### 1.1 节点类型（9 类）
 
 | 节点 label | 代表 | 唯一键 / 来源 |
 |------------|------|---------------|
 | `ResearchGoal` | 本会话的研究目标 | `goal_id`（Node 侧确定性生成，重发幂等） |
 | `Task` | subagent 的 scope（每个 subagent 运行一个节点，`task_type='subagent'`） | `task_id` |
-| `ToolCall` | 一步具体任务——一次代码执行或一次文献检索 | `task_id` |
+| `ToolCall` | 一步具体任务——一次代码执行或一次检索/抓取调用 | `task_id` |
 | `Code` | 一段执行的代码 | `code_id` |
 | `Artifact` | 产出文件版本（图、CSV、报告本身……） | `artifact_id` |
 | `Paper` | 文献记录 | 复合 `(session_id, link)`，`link` 经 `_normalize_link` 归一化 |
 | `Evidence` | 从 Paper 抽取的一条证据 | `evidence_id` |
 | `Claim` | 报告里一条带引用的断言 | `claim_id` |
+| `SourceFile` | 用户上传的输入文件（CSV/图片/JSON/PDF……） | `file_id`（确定性 `source_file:session:<sid>:<path>`，重传幂等） |
 
-### 1.2 边类型（8 类）
+### 1.2 边类型（9 类）
 
 | 边类型 | 方向 | 含义 | 属于 | 写入方 |
 |--------|------|------|------|--------|
@@ -52,8 +53,9 @@
 | `supports` | Evidence/Artifact→Claim | 断言的支撑来自什么 | 引用链 | `declare_claim` |
 | `stated_in` | Claim→报告 Artifact | 这条 claim 记录在哪份报告 Artifact 里 | 引用链（任务链↔引用链交汇） | `declare_claim`（传 artifact_id 时）/ `link_claims_to_report` |
 | `supersedes` | Artifact(新)→Artifact(旧) | 该版本取代其前驱 | 版本谱系（任务链） | `upsert_execution` |
-| `input` | Artifact(读取版本)→Code | 这次代码执行把该 artifact 版本作为输入读了 | 数据依赖（任务链） | `upsert_execution` |
+| `input` | Artifact(读取版本)/SourceFile→Code | 这次代码执行把该 artifact 版本或上传文件作为输入读了 | 数据依赖（任务链） | `upsert_execution` |
 | `contains` | Task(scope)→首个子 ToolCall | subagent 的 scope 把它的子任务步归组 | 任务链（subagent 作用域） | `_link_subtasks_by_finish_time` |
+| `feeds` | SourceFile→ResearchGoal | 该上传文件为本研究提供输入 | 上传镜像（任务链前置） | `upsert_source_file`（上传完成即 fire-and-forget） |
 
 ## 2. 主要流程
 
@@ -61,14 +63,16 @@
 
 任务链不需要 LLM 显式声明，由 Node API 在执行事件发生时 fire-and-forget 镜像到图：
 
-1. **首条用户消息** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → 写 `Session` + `ResearchGoal` + `has_goal`。
-2. **提出 plan** → `observeSessionPlan` → `POST /observe/session-plan` → 用 `plan.scope` **修正** `ResearchGoal` 的 `core_objective`/`domain`（不镜像 plan steps 成 ToolCall，避免 PENDING 骨架污染）。
+1. **上传文件** → `MemoryGraphSink.observeUploadFile` → sidecar `POST /observe/upload-file` → `upsert_source_file`：MERGE `SourceFile`（`file_id` 确定性）+ 建 `SourceFile -[:feeds]-> ResearchGoal`。上传完成即镜像，fire-and-forget（图谱不可达 = no-op，上传本身不受影响）。`ResearchGoal` 可能尚未存在（上传可能早于首条消息），此时**不建占位 goal 节点**——文件先悬空（有节点、无 `feeds` 边），等首条消息时由 `upsert_session_first_message` MERGE 真实 goal 后统一补挂本会话所有悬空 SourceFile。重传同名文件 MERGE 命中同一 `file_id`，不造重复节点。
+2. **首条用户消息** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → 写 `Session` + `ResearchGoal` + `has_goal`。
 3. **每次代码执行完成** → `observeExecution` → `POST /observe/execution` → `upsert_execution`：
-   - MERGE 一个 `ToolCall`（`task_type='code_execution'`）+ `Code`，建 `ToolCall -[:produces]-> Code`；
+   - MERGE 一个 `ToolCall`（`tool_type='execution'`）+ `Code`，建 `ToolCall -[:produces]-> Code`；
    - 执行 diff 只记录 Derivation 与 CAS，不把尚未声明的文件作为 `produced_artifacts` 写图；
    - 调 `_link_subtasks_by_finish_time` 重建本会话 `next` 时序链（先删本会话旧 `temporal_chain` 边再重连，`ResearchGoal → head → … → last`）。
 4. **每次文献检索（MCP）完成** → `observeMcpInvocation` → `POST /observe/mcp-search` → `upsert_mcp_search`：MERGE `ToolCall`（`task_id="subtask:mcp:<invocation_id>"`）+ 批量 MERGE `Paper`（按 `(session_id, normalized_link)` 去重，命中则 `retrieval_count+1`），建 `ToolCall -[:produces]-> Paper`。
 5. **subagent 运行** → `observeSubagent` → `POST /observe/subagent` → MERGE 一个 scope `Task`（`task_type='subagent'`）；subagent 内部的代码执行/文献检索镜像成子 `ToolCall` 节点，通过 `contains` + `next` 挂到 scope 下，`produces` 边走 `scope → 子的 Code/Artifact`（scope 拥有其子的产品，自身不产）。
+
+轻量 Plan 有意不作为 ResearchGoal 的权威来源，不会覆盖根据首条用户消息推断出的目标。未来如需修正研究目标，应提供独立的 Goal 生命周期，而不是让 Memory 与 Plan 进度快照重新耦合。
 
 任务链成型后，从前端"工作区面板"即可看到一张随执行增长的有向图：研究目标在顶，`ToolCall` 沿 `next` 排成时间线（subagent 的 scope 通过 `contains` 归组其子 `ToolCall`），每个 `ToolCall` 向下 `produces` 它的代码、文件、文献。
 
@@ -93,7 +97,7 @@ declare_claim(content, cites_evidence_aliases={"evidence1": evidence_id}, …)
 
 **路径 B — 代码产出（`[artifact1]`，无文献）**
 ```
-run_python → 写工作区文件并记录 Derivation/CAS
+run_shell → 写工作区文件并记录 Derivation/CAS
 declare_artifact(path) → 注册 Project 产物版本并返回 artifact_id
   → 将已声明的该版本镜像为 Code -produces-> Artifact
 declare_claim(content, cites_artifact_aliases={"artifact1": artifact_id}, …)
@@ -124,7 +128,7 @@ declare_claim(content, cites_artifact_aliases={"artifact1": artifact_id}, …)
 | `Paper` | `viewExtractedEvidence` / `viewCitingClaim` / `viewCitingArtifact` | 正向引用链：`extracts→Evidence`，再 `+supports→Claim`，再 `+stated_in→报告 Artifact` |
 | `Paper` | `viewSearchingTask` | 产出该 Paper 的 `ToolCall` |
 | `Evidence` | `viewSourcePaper` / `viewCitingClaimForEvidence` / `viewCitingArtifactForEvidence` | 上游 `extracts←Paper`；下游 `supports→Claim`、`+stated_in→Artifact` |
-| `Claim` | `viewCitingEvidenceForClaim` / `viewContainingArtifact` | 支撑该 Claim 的 Evidence/Artifact（`supports` in）；它 `stated_in` 的报告 Artifact |
+| `Claim` | `viewCitingEvidenceForClaim` / `viewCitingDbRecordForClaim` / `viewCitingSourceFileForClaim` / `viewContainingArtifact` | 支撑该 Claim 的 Evidence（`supports` in，按 `Evidence` 标签过滤）；支撑它的 DbRecord（`supports` in，按 `DbRecord` 标签过滤）；支撑它的 SourceFile（`supports` in，按 `SourceFile` 标签过滤）——`supports` in 还会命中 Artifact，它在 Claim 上没有按钮；它 `stated_in` 的报告 Artifact |
 | `Artifact` | `viewContainedClaims` / `viewCitingClaimForArtifact` / `viewProducingCode` / `viewCitingEvidenceForArtifact` / `viewCitedPaper` / `viewRelatedTask` | `stated_in` 该报告的 claims；该 Artifact `supports` 的 claims；产出它的 `Code`；多跳引用溯源 `stated_in→Claim→supports→Evidence`；再 `+extracts→Paper`；以及完整任务尾巴 `produces→Code→ToolCall→next→ResearchGoal` |
 
 定向逐跳行走让每条链短且只走一条有向路径（每跳到达的节点作为下一跳的种子，所以是"追踪"而非"扇出"）。某跳找不到边就把整条链清空（全或无），这正是前端先调 `chain_exists` 把会空的按钮置灰的原因。`ResearchGoal` 与 `ToolCall` 不暴露链路按钮（它们是上述走法的端点）。
@@ -168,7 +172,6 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 | `POST /observe/mcp-search` | 镜像一次文献检索 → ToolCall + Papers + produces |
 | `POST /observe/subagent` | 镜像 subagent 生命周期 → 一个 scope `Task`（`task_type='subagent'`）；其子执行/检索通过 `contains` + `next` 挂到 scope 下 |
 | `POST /observe/session-first-message` | 写 Session + ResearchGoal + has_goal |
-| `POST /observe/session-plan` | 用 plan.scope 修正 ResearchGoal |
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper（Paper 不存在 → 422 `source_paper_not_found`） |
 | `POST /persist/claim` | CREATE Claim + supports（Evidence/Artifact→Claim）+ 可选 produces + 可选 stated_in；返回 `chip_map`。无支撑目标 → 422 `no_cites_target`（在降级分支前触发，图挂了也报） |
 | `POST /persist/stated_in` | MERGE stated_in（Claim→报告 Artifact）；Artifact 可能尚未镜像，轮询等待最多 10×0.3s |

@@ -39,6 +39,10 @@ export interface Environment {
   language: ScientificLanguage;
   name: string;
   updatedAt: string;
+  /** Stable prefix identity; historical revisions describe state, not runnable copies. */
+  runtimeRevisionId?: string;
+  status?: "ready" | "updating" | "failed";
+  error?: string;
 }
 
 export interface EnvironmentRevision {
@@ -101,6 +105,14 @@ export interface ScientificExecutionRequest {
   maxOutputBytes?: number;
   /** Per-run workspace total quota; 0 disables the quota. */
   maxWorkspaceBytes?: number;
+  /**
+   * Host indices of the NPU cards this execution may use, as ticked by an
+   * operator against the Runner's probe. The Runner re-validates them against
+   * a current inventory before launching: on a shared machine a card can be
+   * claimed by someone else between the tick and the run, and failing then
+   * with a named card beats failing deep inside the framework.
+   */
+  npuDevices?: number[];
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
@@ -136,6 +148,8 @@ export const SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
 export const SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID = "system-python3-seatbelt-v1";
 
 export interface ScientificExecutionResult {
+  /** Immutable Workspace tree captured after execution and rooted before returning. */
+  workspaceSnapshot?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   /** Always `none`: sandbox isolation does not apply CPU or memory quotas. */
   cgroupMode: "none" | "direct-v2";
   createdFiles: string[];
@@ -186,6 +200,10 @@ export interface ShellExecutionRequest {
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */
   agentId: string;
   code: string;
+  /** Managed environment on this Runner; resolved to the latest revision under a read lease. */
+  environmentId?: string;
+  /** Relative directory inside the writable workspace. */
+  cwd?: string;
   /** Per-run product timeout snapshot; 0 disables the timeout. */
   executionTimeoutMs?: number;
   executionId: string;
@@ -197,6 +215,14 @@ export interface ShellExecutionRequest {
   maxOutputBytes?: number;
   /** Per-run workspace total quota; 0 disables the quota. */
   maxWorkspaceBytes?: number;
+  /**
+   * Host indices of the NPU cards this execution may use, as ticked by an
+   * operator against the Runner's probe. The Runner re-validates them against
+   * a current inventory before launching: on a shared machine a card can be
+   * claimed by someone else between the tick and the run, and failing then
+   * with a named card beats failing deep inside the framework.
+   */
+  npuDevices?: number[];
   permissionEpoch: PermissionEpoch;
   /** Optional parent workspace mounted read-only for isolated subagents. */
   readOnlyWorkspaceRoot?: string;
@@ -215,9 +241,9 @@ export interface ShellExecutionRequest {
 }
 
 export interface ShellExecutionResult extends Omit<ScientificExecutionResult, "environmentRevisionId" | "language"> {
-  environmentRevisionId:
-    | typeof SYSTEM_SHELL_ENVIRONMENT_REVISION_ID
-    | typeof SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID;
+  /** Rooted publication receipt; separate from the content tree. */
+  workspaceVersion?: ScientificExecutionResult["workspaceSnapshot"];
+  environmentRevisionId: string;
   language: "shell";
 }
 
@@ -420,9 +446,10 @@ export interface ScientificEnvsCapability {
 }
 
 /**
- * Runner-side readiness of sandbox network access. `domain-allowlist` needs an
- * egress bridge interpreter on the host; when it is missing the runner reports
- * why here and fails such executions instead of running them unfiltered.
+ * Runner-side readiness of sandbox network access. `domain-allowlist` and
+ * `open` need an egress bridge interpreter on the host; when it is missing the
+ * runner reports why here and fails such executions instead of running them
+ * unfiltered.
  */
 export interface SandboxNetworkCapability {
   available: boolean;
@@ -451,7 +478,7 @@ export interface RunnerHealth {
   maxWorkspaceBytes: number;
   /**
    * Default sandbox network mode: an execution only leaves this mode when its
-   * Permission Epoch carries a `domain-allowlist` policy snapshot.
+   * Permission Epoch carries a `domain-allowlist` or `open` policy snapshot.
    */
   networkPolicy: "none";
   /** Linux Bubblewrap sets no-new-privileges; Seatbelt reports false. */
@@ -461,7 +488,7 @@ export interface RunnerHealth {
   platform: string;
   runnerVersion: string;
   sandbox: SandboxKind;
-  /** Whether this runner can serve `domain-allowlist` executions at all. */
+  /** Whether this runner can serve network-enabled (`domain-allowlist` / `open`) executions at all. */
   sandboxNetwork: SandboxNetworkCapability;
   scientificEnvs: ScientificEnvsCapability;
   /** Linux syscall filter; not applicable to macOS Seatbelt. */

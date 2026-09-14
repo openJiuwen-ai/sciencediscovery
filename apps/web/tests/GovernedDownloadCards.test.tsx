@@ -68,9 +68,10 @@ test("renders an actionable candidate in one expanded timeline card", () => {
   assert.match(html, />Prepare download<\/button>/);
 });
 
-test("keeps a failed result and Retry inside the governed download card", () => {
+test("keeps a failed result and Retry inside the expanded governed download record", () => {
   const html = renderToStaticMarkup(createElement(GovernedDownloadCards, {
     ...common,
+    expandedCards: { "governed-downloads:run-1": true },
     candidates: [],
     jobs: [job("failed")],
     plans: [{ candidates: [], id: "plan-1", state: "approved" } as unknown as ArtifactPlan],

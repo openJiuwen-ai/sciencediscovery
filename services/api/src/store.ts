@@ -12,14 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { effectiveRunnerIds } from "@sciencediscovery/schema";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
+import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { AgentNotifications } from "./agent-notifications.js";
+import { ShellExecutions } from "./shell-executions.js";
+import { WorkspaceTransfers } from "./workspace-transfers.js";
 
 import type {
   ChatMessage,
   ArtifactReviewRun,
+  ReviewerAuditTask,
+  ReviewFeedback,
   ArtifactAnnotation,
   ArtifactDerivation,
   ArtifactOrigin,
@@ -43,15 +52,20 @@ import type {
   Environment,
   EnvironmentRevision,
   EnvironmentSourceSettings,
+  EffectiveRuntimeSettings,
   ExecutionRun,
   EvidenceLink,
   EvidenceItem,
   CreateProxyServerRequest,
+  IdeaTreeSettings,
+  IdeaTreeSettingsDetails,
   McpProxyPolicies,
   MemoryGraphSettings,
   MemoryGraphSettingsDetails,
   McpInvocation,
   ModelFactOverrides,
+  ModelUsageAnalyticsFilters,
+  ModelUsageAnalyticsSummary,
   ModelInvocationUsage,
   ModelRunInfo,
   ModelProfile,
@@ -70,10 +84,8 @@ import type {
   PermissionGrant,
   PermissionGrantScope,
   PermissionRequest,
-  PlanStep,
   PromptManifest,
   Project,
-  ProposePlanRequest,
   ProxyDefaultPolicy,
   ProxyPolicy,
   ProxyServer,
@@ -86,10 +98,9 @@ import type {
   RemoteJob,
   RemoteWorkspaceSyncRecord,
   ReviewRun,
+  SessionReviewerSpecialistSettings,
   ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
-  RevisePlanRequest,
-  EffectiveRuntimeSettings,
   ResolvedRuntimeSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsField,
@@ -97,10 +108,10 @@ import type {
   RuntimeSettingsSource,
   Session,
   SessionDetail,
-  SessionPlan,
   SessionRun,
   SessionRunEvent,
   SessionRunStatus,
+  IdeaTreeRunSettingsSnapshot,
   SessionUsageSummary,
   GlobalModelUsageSummary,
   ScientificArtifact,
@@ -116,6 +127,7 @@ import type {
   SystemQuotaSettings,
   SystemTimeoutSettings,
   TimeoutKind,
+  UpdateIdeaTreeSettingsRequest,
   UpdateMcpProxyPoliciesRequest,
   UpdateMemoryGraphSettingsRequest,
   UpdateEnvironmentSourceSettingsRequest,
@@ -133,16 +145,20 @@ import type {
   WorkspaceFileRecord,
   WorkspaceFileRevision,
   WorkspaceFileRevisionInput,
+  ResolvedModelPricing,
 } from "@sciencediscovery/schema";
 import {
+  LOCAL_RUNNER_ID,
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SKILL_SELECTION_MODE,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
   DEFAULT_REVIEWER_SPECIALIST_LEVEL,
+  DEFAULT_REVIEWER_FEEDBACK_POLICY,
   DEFAULT_SYSTEM_TIMEOUT_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
   DEFAULT_WEB_SETTINGS,
   REVIEWER_SPECIALIST_LEVELS,
+  REVIEWER_FEEDBACK_POLICIES,
   SKILL_SELECTION_FIELDS,
   epochSandboxNetworkAccess,
   UNTITLED_SESSION_TITLE,
@@ -166,6 +182,7 @@ import {
   getModelProviderPreset,
   lookupModelCatalog,
   MODEL_API_VARIANTS,
+  resolveModelFacts,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_ENVIRONMENT_REVISION_ID,
@@ -175,7 +192,7 @@ import {
 } from "@sciencediscovery/executor";
 import { toolOutputStoreRoot } from "@sciencediscovery/tools";
 import { normalizeWorkspaceRelativePath } from "@sciencediscovery/workspace";
-import { summarizeGlobalModelUsage, summarizeModelUsage } from "./model-usage.js";
+import { summarizeGlobalModelUsage, summarizeModelUsage, summarizeModelUsageAnalytics } from "./model-usage.js";
 import { normalizeEnvironmentSourceSettings } from "./environment-sources.js";
 import { BUNDLED_SKILL_IDS } from "@sciencediscovery/specialist";
 import { BUILTIN_SPECIALISTS } from "@sciencediscovery/specialist";
@@ -222,8 +239,10 @@ import { openSshPublicKey } from "@sciencediscovery/executor";
 import { planStandaloneProfileMigration, providerSecretKey, validateLiveProvider } from "./store/providers.js";
 import {
   knownConnectorIdSet,
+  normalizeIdeaTreeSettings,
   normalizeMcpProxyPolicies,
   normalizeMemoryGraphSettings,
+  normalizeNpuDeviceSelections,
   normalizeProxyDefaultPolicy,
   normalizeProxyPolicy,
   normalizeProxyUrl,
@@ -232,6 +251,7 @@ import {
   normalizeTimeoutSettings,
   normalizeWebSettings,
   PROXY_SERVER_KINDS,
+  resolveIdeaTreeSettings,
   resolveQuotaSettings,
   RUNTIME_SETTINGS_FIELDS,
   withoutSkillSelection,
@@ -243,11 +263,16 @@ import {
 import {
   assertValidStreamId,
   MAIN_RUN_STREAM,
-  parseStreamLines,
+  parseStreamLine,
   type RunStreamLine,
 } from "./store/run-streams.js";
 
 export { MAIN_RUN_STREAM } from "./store/run-streams.js";
+
+/** Bytes examined when repairing a torn stream tail; a partial record is the
+ *  last line, so a window this size is far larger than any single event. */
+const TORN_TAIL_SCAN_BYTES = 8 * 1024 * 1024;
+const NEWLINE_BYTE = 0x0a;
 
 const SESSION_DATA_CATEGORIES = [
   "messages",
@@ -262,6 +287,9 @@ interface StagedDeletion {
   entries: Array<{ source: string; staged: string }>;
   root: string;
   sessionIds: string[];
+  scopes?: string[];
+  projectId?: string;
+  committed?: boolean;
 }
 
 function withDefaultProjectSkillSettings(input: RuntimeSettingsOverrides): RuntimeSettingsOverrides {
@@ -307,6 +335,11 @@ function remotePath(value: unknown, field: string): string {
 function isReviewerSpecialistLevel(value: unknown): value is ReviewerSpecialistLevel {
   return typeof value === "string"
     && (REVIEWER_SPECIALIST_LEVELS as readonly string[]).includes(value);
+}
+
+function isReviewerFeedbackPolicy(value: unknown): value is import("@sciencediscovery/schema").ReviewerFeedbackPolicy {
+  return typeof value === "string"
+    && (REVIEWER_FEEDBACK_POLICIES as readonly string[]).includes(value);
 }
 
 const WORKSPACE_FILE_ORIGINS = new Set<WorkspaceFileRevision["origin"]>([
@@ -405,6 +438,11 @@ export class SessionStoreHttpError extends Error {
 
 export class SessionStore {
   readonly dataDir: string;
+
+  /** File publishers share the Runner's cross-process admission and commit boundary. */
+  async mutateWorkspace<T>(root: string, kind: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return withWorkspaceMutation(new VersionStore(this.dataDir), root, operation, { kind }, signal);
+  }
   private readonly arrayMutationQueues = new Map<string, Promise<void>>();
   private readonly streamAppendQueues = new Map<string, Promise<void>>();
   private readonly streamTailSequences = new Map<string, number>();
@@ -412,10 +450,14 @@ export class SessionStore {
   private readonly workspaceFileMutationQueues = new Map<string, Promise<void>>();
   private catalog: Catalog = emptyCatalog();
   private database?: DatabaseSync;
+  private notificationStore?: AgentNotifications;
+  private shellExecutionStore?: ShellExecutions;
+  private transferStore?: WorkspaceTransfers;
   private loaded = false;
   private saveQueue = Promise.resolve();
   private secretKey?: Buffer;
   private skillIds = new Set<string>(BUNDLED_SKILL_IDS);
+  private connectorIds = knownConnectorIdSet();
   private readonly initialTimeoutSettings: SystemTimeoutSettings;
   private readonly initialQuotaSettings: SystemQuotaSettings;
   /**
@@ -437,6 +479,21 @@ export class SessionStore {
     this.initialTimeoutSettings = initialTimeoutSettings;
     this.initialQuotaSettings = initialQuotaSettings;
     this.initialNeo4jPassword = initialNeo4jPassword?.trim() || undefined;
+  }
+
+  get notifications(): AgentNotifications {
+    if (!this.notificationStore) throw new Error("Notification storage is not initialized");
+    return this.notificationStore;
+  }
+
+  get shellExecutions(): ShellExecutions {
+    if (!this.shellExecutionStore) throw new Error("Shell Execution storage is not initialized");
+    return this.shellExecutionStore;
+  }
+
+  get transfers(): WorkspaceTransfers {
+    if (!this.transferStore) throw new Error("Transfer storage is not initialized");
+    return this.transferStore;
   }
 
   private normalizeReviewCriteria(values: string[] | undefined): string[] {
@@ -562,6 +619,12 @@ export class SessionStore {
         json TEXT NOT NULL
       );
     `);
+    this.notificationStore = new AgentNotifications(this.database, (sessionId) => {
+      const session = this.getSession(sessionId);
+      return !session || Boolean(session.archivedAt);
+    });
+    this.transferStore = new WorkspaceTransfers(this.database, new VersionStore(this.dataDir));
+    this.shellExecutionStore = new ShellExecutions(this.database, new VersionStore(this.dataDir), this.notificationStore);
     this.secretKey = await this.loadOrCreateSecretKey();
     this.migrateRemoteHostTokens();
     const modelIdsWithSecrets = new Set((this.database.prepare("SELECT model_id FROM model_secrets").all() as Array<{ model_id: string }>).map((row) => row.model_id));
@@ -722,12 +785,17 @@ export class SessionStore {
     const defaultGlobalSettings = emptyCatalog(this.initialTimeoutSettings, this.initialQuotaSettings).globalSettings;
     const normalizedGlobalSettings = saved.globalSettings === undefined
       ? undefined
-      : withoutSkillSelection(normalizeRuntimeSettings(saved.globalSettings, modelIds, this.skillIds, false));
+      : withoutSkillSelection(normalizeRuntimeSettings(saved.globalSettings, modelIds, this.skillIds, false, this.connectorIds));
     const globalSettings = normalizedGlobalSettings === undefined
       ? defaultGlobalSettings
       : normalizedGlobalSettings;
     const memoryGraphSettings = normalizeMemoryGraphSettings(saved.memoryGraphSettings);
+    // Per-Runner NPU selections. Unknown shapes are dropped rather than
+    // trusted: a malformed entry would otherwise reach a sandbox launch.
+    const npuDeviceSelections = normalizeNpuDeviceSelections(saved.npuDeviceSelections);
     const migratedMemoryGraphSettings = JSON.stringify(memoryGraphSettings) !== JSON.stringify(saved.memoryGraphSettings ?? null);
+    const ideaTreeSettings = resolveIdeaTreeSettings(saved.ideaTreeSettings);
+    const migratedIdeaTreeSettings = JSON.stringify(ideaTreeSettings) !== JSON.stringify(saved.ideaTreeSettings ?? null);
     // One-time backward-compat seed: if no password is stored yet but `.env`
     // still carries SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD (pre-frontend-
     // toggle users), seed the encrypted store from it. Subsequent loads ignore
@@ -742,7 +810,7 @@ export class SessionStore {
       remoteRunnerHostIds: Array.isArray(project.remoteRunnerHostIds)
         ? project.remoteRunnerHostIds.filter((id): id is string => typeof id === "string")
         : [],
-      settingsOverrides: normalizeRuntimeSettings(project.settingsOverrides, modelIds, this.skillIds, false),
+      settingsOverrides: normalizeRuntimeSettings(project.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds),
     }));
     const migratedHierarchicalSettings = saved.globalSettings === undefined
       || JSON.stringify(globalSettings) !== JSON.stringify(saved.globalSettings)
@@ -885,19 +953,25 @@ export class SessionStore {
         : modelId ?? fallbackModelId;
       if (modelId !== session.modelId || reviewModelId !== session.reviewModelId) migratedSessionAssignments = true;
       const enabledConnectorIds = Array.isArray(session.enabledConnectorIds)
-        ? session.enabledConnectorIds.filter((id): id is ConnectorId => knownConnectorIdSet().has(id))
+        ? session.enabledConnectorIds.filter((id): id is ConnectorId => this.connectorIds.has(id))
         : [];
       // Compatibility mirror only; syncSessionCompatibility recomputes it after load.
       const enabledSkillIds = Array.isArray(session.enabledSkillIds)
         ? session.enabledSkillIds.filter((id): id is string => this.skillIds.has(id))
         : [];
       const semanticReviewEnabled = session.semanticReviewEnabled ?? true;
+      const reviewerAutomaticReviewEnabled = typeof session.reviewerAutomaticReviewEnabled === "boolean"
+        ? session.reviewerAutomaticReviewEnabled
+        : true;
+      const reviewerSpecialistLevel = isReviewerSpecialistLevel(session.reviewerSpecialistLevel)
+        ? session.reviewerSpecialistLevel
+        : DEFAULT_REVIEWER_SPECIALIST_LEVEL;
       const reviewCriteria = Array.isArray(session.reviewCriteria)
         ? session.reviewCriteria.filter((criterion): criterion is string => typeof criterion === "string").slice(0, 20)
         : [];
       const reviewMode = session.reviewMode === "manual" ? "manual" as const : "auto" as const;
       const settingsOverrides = isRecord(session.settingsOverrides)
-        ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false)
+        ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds)
         : {
             enabledConnectorIds,
             ...(modelId ? { modelId } : {}),
@@ -924,6 +998,8 @@ export class SessionStore {
         reviewCriteria,
         reviewMode,
         ...normalizePersistedSessionRemoteRunners(session),
+        reviewerAutomaticReviewEnabled,
+        reviewerSpecialistLevel,
         semanticReviewEnabled,
         settingsOverrides,
         ...(session.specialistId && specialistIds.has(session.specialistId) ? { specialistId: session.specialistId } : { specialistId: undefined }),
@@ -1022,6 +1098,11 @@ export class SessionStore {
         ? savedReviewerSpecialistLevel
         : DEFAULT_REVIEWER_SPECIALIST_LEVEL;
     const migratedReviewerSpecialistLevel = saved.reviewerSpecialistLevel !== reviewerSpecialistLevel;
+    const savedReviewerFeedbackPolicy: unknown = saved.reviewerSpecialistFeedbackPolicy;
+    const reviewerSpecialistFeedbackPolicy = isReviewerFeedbackPolicy(savedReviewerFeedbackPolicy)
+      ? savedReviewerFeedbackPolicy
+      : DEFAULT_REVIEWER_FEEDBACK_POLICY;
+    const migratedReviewerFeedbackPolicy = saved.reviewerSpecialistFeedbackPolicy !== reviewerSpecialistFeedbackPolicy;
     this.catalog = {
       artifactAnnotations,
       artifactVersions,
@@ -1031,8 +1112,10 @@ export class SessionStore {
       environmentRevisions,
       environmentSourceSettings,
       globalSettings,
+      ideaTreeSettings,
       mcpProxyPolicies,
       memoryGraphSettings,
+      npuDeviceSelections,
       models,
       permissionEpochs,
       permissionGrants,
@@ -1044,6 +1127,7 @@ export class SessionStore {
       quotaSettings,
       sandboxNetworkSettings,
       reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled === true,
+      reviewerSpecialistFeedbackPolicy,
       reviewerSpecialistLevel,
       remoteHosts,
       remoteJobs,
@@ -1070,7 +1154,6 @@ export class SessionStore {
       || !Array.isArray(saved.permissionEpochs)
       || !Array.isArray(saved.permissionGrants)
       || !Array.isArray(saved.permissionRequests)
-      || !Array.isArray(saved.sessionPlans)
       || !Array.isArray(saved.subagents)
       || !Array.isArray(saved.remoteHosts)
       || !Array.isArray(saved.remoteJobs)
@@ -1086,15 +1169,16 @@ export class SessionStore {
       || migratedModels
       || migratedHierarchicalSettings
       || migratedMemoryGraphSettings
+      || migratedIdeaTreeSettings
       || migratedEnvironmentRevisions
       || migratedEpoch
       || migratedSessionSettings
       || migratedSessionAssignments
       || migratedSessionOverrides
       || migratedSubagents
-      || migratedSessionPlans
       || migratedPermissionGrants
       || migratedReviewerSpecialistLevel
+      || migratedReviewerFeedbackPolicy
       || migratedSpecialists
       || migratedArtifactCatalog
       || migratedWorkspaceFileProvenance
@@ -1105,6 +1189,13 @@ export class SessionStore {
     }
     await this.recoverTrashOperations();
     this.loaded = true;
+  }
+
+  close(): void {
+    this.database?.close();
+    this.database = undefined;
+    this.secretKey = undefined;
+    this.loaded = false;
   }
 
   private async saveCatalog(): Promise<void> {
@@ -1268,6 +1359,14 @@ export class SessionStore {
     return resolve(this.dataDir, "artifact-reviews", `${sessionId}.json`);
   }
 
+  private reviewerAuditTasksPath(sessionId: string): string {
+    return resolve(this.dataDir, "reviewer-audit-tasks", `${sessionId}.json`);
+  }
+
+  private reviewFeedbackPath(sessionId: string): string {
+    return resolve(this.dataDir, "review-feedback", `${sessionId}.json`);
+  }
+
   private paperAcquisitionsPath(sessionId: string): string {
     return resolve(this.dataDir, "paper-acquisitions", `${sessionId}.json`);
   }
@@ -1306,6 +1405,8 @@ export class SessionStore {
       this.modelUsagePath(session.id),
       this.reviewsPath(session.id),
       this.artifactReviewsPath(session.id),
+      this.reviewerAuditTasksPath(session.id),
+      this.reviewFeedbackPath(session.id),
       this.paperAcquisitionsPath(session.id),
       this.paperVisionRunsPath(session.id),
       this.claimsPath(session.id),
@@ -1342,34 +1443,71 @@ export class SessionStore {
       await mkdir(dirname(entry.source), { recursive: true });
       await rename(entry.staged, entry.source);
     }
-    await rm(operation.root, { force: true, recursive: true });
   }
 
-  private async stageDeletion(paths: string[], sessionIds: string[]): Promise<StagedDeletion> {
-    const root = resolve(this.dataDir, ".trash", randomUUID());
-    const entries: StagedDeletion["entries"] = [];
-    for (const source of [...new Set(paths)]) {
-      if (!await this.pathExists(source)) continue;
-      const relativePath = relative(this.dataDir, source);
-      if (!relativePath || relativePath.startsWith("..")) throw new Error("Deletion path escaped the data directory");
-      entries.push({ source, staged: resolve(root, "data", relativePath) });
+  private async deletionWorkspaceRoots(scopes: string[]): Promise<string[]> {
+    const roots: string[] = [];
+    for (const session of this.catalog.sessions) {
+      const root = this.workspacePath(session.id);
+      if (!scopes.some((scope) => root.startsWith(`${scope}/`) || root === scope)) continue;
+      if (await this.pathExists(root)) roots.push(root);
+      const children = resolve(root, "..", "agent-workspaces");
+      if (await this.pathExists(children)) {
+        for (const child of await readdir(children, { withFileTypes: true })) {
+          if (child.isDirectory()) roots.push(resolve(children, child.name));
+        }
+      }
     }
-    const operation: StagedDeletion = { entries, root, sessionIds: [...sessionIds] };
+    return roots;
+  }
+
+  private async withDeletionBoundary<T>(paths: () => string[], sessionIds: () => string[], scopes: string[],
+    action: (operation: StagedDeletion) => Promise<T>, projectId?: string): Promise<T> {
+    const root = resolve(this.dataDir, ".trash", randomUUID());
+    const operation: StagedDeletion = { entries: [], root, sessionIds: sessionIds(), scopes, projectId };
+    // The recovery journal must exist before admission closes, including a crash
+    // before the first rename. Coordination itself lives outside these paths.
+    await mkdir(root, { recursive: true });
+    await writeFile(resolve(root, "operation.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
+    let restored = false;
     try {
-      await mkdir(root, { recursive: true });
-      await writeFile(resolve(root, "operation.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
-      for (const entry of entries) {
-        await mkdir(dirname(entry.staged), { recursive: true });
-        await rename(entry.source, entry.staged);
-      }
-      return operation;
-    } catch (error) {
-      try {
-        await this.rollbackStagedDeletion(operation);
-      } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], "Deletion staging and rollback both failed");
-      }
-      throw error;
+      const versions = new VersionStore(this.dataDir);
+      return await withWorkspaceRetirement(versions, scopes, root, async (roots, reopen) => {
+        try {
+          // Creation admitted before the fence must finish before enumerating
+          // Session roots and catalog IDs; otherwise a new Session is orphaned.
+          const distinct = [...new Set(paths())];
+          operation.sessionIds = sessionIds();
+          for (const source of distinct.filter((path) => !distinct.some((parent) => parent !== path && path.startsWith(`${parent}/`)))) {
+            if (!await this.pathExists(source)) continue;
+            const relativePath = relative(this.dataDir, source);
+            if (!relativePath || relativePath.startsWith("..")) throw new Error("Deletion path escaped the data directory");
+            operation.entries.push({ source, staged: resolve(root, "data", relativePath) });
+          }
+          await writeFile(resolve(root, "operation.next.json"), `${JSON.stringify(operation, null, 2)}\n`, "utf8");
+          await rename(resolve(root, "operation.next.json"), resolve(root, "operation.json"));
+          for (const workspace of roots) {
+            if (await this.pathExists(workspace)) await this.mutateWorkspace(workspace, "pre-deletion", async () => {});
+          }
+          return await action(operation);
+        } catch (error) {
+          if (operation.committed) throw error;
+          try { await this.rollbackStagedDeletion(operation); }
+          catch (rollbackError) { throw new AggregateError([error, rollbackError], "Deletion and rollback both failed"); }
+          restored = true;
+          reopen();
+          throw error;
+        }
+      }, () => this.deletionWorkspaceRoots(scopes));
+    } finally {
+      if (restored) await this.finishStagedDeletion(operation);
+    }
+  }
+
+  private async stageDeletion(operation: StagedDeletion): Promise<void> {
+    for (const entry of operation.entries) {
+      await mkdir(dirname(entry.staged), { recursive: true });
+      await rename(entry.source, entry.staged);
     }
   }
 
@@ -1403,9 +1541,15 @@ export class SessionStore {
           });
         if (!valid) throw new Error("Invalid deletion operation manifest");
         operation.root = root;
-        const catalogStillReferencesData = operation.sessionIds.some((id) => Boolean(this.getSession(id)));
-        if (catalogStillReferencesData) await this.rollbackStagedDeletion(operation);
-        else await this.finishStagedDeletion(operation);
+        const scopes = operation.scopes ?? operation.entries.map((entry) => entry.source);
+        if (!scopes.every((scope) => resolve(scope).startsWith(`${this.dataDir}/`))) throw new Error("Invalid deletion scope");
+        await withWorkspaceRetirement(new VersionStore(this.dataDir), scopes, root, async (_roots, reopen) => {
+          const catalogStillReferencesData = operation.sessionIds.some((id) => Boolean(this.getSession(id)))
+            || Boolean(operation.projectId && this.getProject(operation.projectId));
+          if (catalogStillReferencesData) { await this.rollbackStagedDeletion(operation); reopen(); }
+          else await this.finishStagedDeletion(operation);
+        }, () => this.deletionWorkspaceRoots(scopes));
+        await this.finishStagedDeletion(operation);
       } catch (error) {
         console.warn(`Could not recover deletion staging directory ${root}:`, error);
       }
@@ -1454,7 +1598,21 @@ export class SessionStore {
   }
 
   private normalizeSettings(value: unknown): RuntimeSettingsOverrides {
-    return normalizeRuntimeSettings(value, new Set(this.catalog.models.map((model) => model.id)), this.skillIds, true);
+    return normalizeRuntimeSettings(value, new Set(this.catalog.models.map((model) => model.id)), this.skillIds, true, this.connectorIds);
+  }
+
+  setCustomConnectorIds(ids: Iterable<string>): void {
+    this.connectorIds = new Set([...knownConnectorIdSet(), ...ids]);
+  }
+
+  async removeCustomConnectorReferences(id: string): Promise<void> {
+    if (!/^custom-[a-f0-9]{12}$/.test(id)) throw new Error("Not a custom MCP connector");
+    for (const settings of [this.catalog.globalSettings, ...this.catalog.projects.map((item) => item.settingsOverrides), ...this.catalog.sessions.map((item) => item.settingsOverrides)]) {
+      if (settings.enabledConnectorIds) settings.enabledConnectorIds = settings.enabledConnectorIds.filter((value) => value !== id);
+    }
+    for (const specialist of this.catalog.specialists) specialist.connectorIds = specialist.connectorIds.filter((value) => value !== id);
+    this.syncSessionCompatibilityForProject();
+    await this.saveCatalog();
   }
 
   setAvailableSkillIds(ids: Iterable<string>): void {
@@ -1639,7 +1797,7 @@ export class SessionStore {
   getReviewerSpecialistSettings(): ReviewerSpecialistSettings {
     return {
       enabled: this.catalog.reviewerSpecialistEnabled,
-      level: this.catalog.reviewerSpecialistLevel,
+      feedbackPolicy: this.catalog.reviewerSpecialistFeedbackPolicy,
     };
   }
 
@@ -1647,13 +1805,40 @@ export class SessionStore {
     if (!isRecord(value) || typeof value.enabled !== "boolean") {
       throw new Error("Reviewer Specialist enabled must be a boolean");
     }
-    if (value.level !== undefined && !isReviewerSpecialistLevel(value.level)) {
-      throw new Error("Reviewer Specialist level must be quick or deep");
+    if (value.feedbackPolicy !== undefined && !isReviewerFeedbackPolicy(value.feedbackPolicy)) {
+      throw new Error("Reviewer Specialist feedback policy must be record, explain, suggest, or repair");
     }
     this.catalog.reviewerSpecialistEnabled = value.enabled;
-    if (value.level !== undefined) this.catalog.reviewerSpecialistLevel = value.level;
+    if (value.feedbackPolicy !== undefined) this.catalog.reviewerSpecialistFeedbackPolicy = value.feedbackPolicy;
     await this.saveCatalog();
     return this.getReviewerSpecialistSettings();
+  }
+
+  getSessionReviewerSpecialistSettings(sessionId: string): SessionReviewerSpecialistSettings {
+    const session = this.getSession(sessionId);
+    if (!session) throw new Error("Session not found");
+    return {
+      automaticReviewEnabled: session.reviewerAutomaticReviewEnabled,
+      level: session.reviewerSpecialistLevel,
+    };
+  }
+
+  async updateSessionReviewerSpecialistSettings(
+    sessionId: string,
+    value: unknown,
+  ): Promise<SessionReviewerSpecialistSettings> {
+    if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
+      throw new Error("Reviewer Specialist automatic review must be a boolean");
+    }
+    if (!isReviewerSpecialistLevel(value.level)) {
+      throw new Error("Reviewer Specialist level must be quick or deep");
+    }
+    const session = this.assertSessionWritable(sessionId);
+    session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
+    session.reviewerSpecialistLevel = value.level;
+    session.updatedAt = new Date().toISOString();
+    await this.saveCatalog();
+    return this.getSessionReviewerSpecialistSettings(sessionId);
   }
 
   getWebSettings(): WebSettingsDetails {
@@ -1741,13 +1926,15 @@ export class SessionStore {
    * from the current settings — the epoch is what was granted.
    *
    * Returns `undefined` for a sandbox with no network, so an unrelated proxy
-   * misconfiguration cannot fail an execution that never dials out. The result
-   * is resolved per execution and never written into the epoch: a custom proxy
-   * URL is stored encrypted and must not reach the persisted catalog.
+   * misconfiguration cannot fail an execution that never dials out. Both
+   * `domain-allowlist` and `open` route through the gateway, so both carry an
+   * outbound route. The result is resolved per execution and never written into
+   * the epoch: a custom proxy URL is stored encrypted and must not reach the
+   * persisted catalog.
    */
   resolveSandboxEgressProxy(epoch: PermissionEpoch): ResolvedProxy | undefined {
     const access = epochSandboxNetworkAccess(epoch);
-    if (access.mode !== "domain-allowlist") return undefined;
+    if (access.mode === "none") return undefined;
     return this.resolveProxy(access.egressProxyPolicy);
   }
 
@@ -1962,6 +2149,34 @@ export class SessionStore {
     this.catalog.memoryGraphSettings = next;
     await this.saveCatalog();
     return this.getMemoryGraphSettings();
+  }
+
+  /** Idea Tree system settings. Persisted in the catalog JSON (the settings
+   *  table) and filled from `DEFAULT_IDEA_TREE_SETTINGS` for any missing
+   *  field. The runtime reads these when a user triggers `/idea-tree-team` in a
+   *  Run — there is no per-Session override. */
+  getIdeaTreeSettings(): IdeaTreeSettings {
+    return structuredClone(this.catalog.ideaTreeSettings);
+  }
+
+  /** Idea Tree settings as returned to the UI. Currently identical to the
+   *  stored settings (no live status to merge, unlike the memory-graph
+   *  view), but exposed as `IdeaTreeSettingsDetails` so the HTTP layer can
+   *  return the documented view shape without the store leaking its internal
+   *  type. */
+  getIdeaTreeSettingsDetails(): IdeaTreeSettingsDetails {
+    return structuredClone(this.catalog.ideaTreeSettings);
+  }
+
+  /** Persist an Idea Tree settings update. Each field is independent — only
+   *  the keys present in the payload move. The normalizer validates numeric
+   *  ranges and the assessor weight sum (enforced only when all three weights
+   *  are provided together). */
+  async updateIdeaTreeSettings(input: UpdateIdeaTreeSettingsRequest): Promise<IdeaTreeSettings> {
+    const next = normalizeIdeaTreeSettings(input, this.catalog.ideaTreeSettings);
+    this.catalog.ideaTreeSettings = next;
+    await this.saveCatalog();
+    return this.getIdeaTreeSettings();
   }
 
   getProjectSettings(projectId: string): RuntimeSettingsDetails {
@@ -2355,14 +2570,17 @@ export class SessionStore {
     name: string,
     input: RuntimeSettingsOverrides = {},
     remoteRunnerHostIds: string[] = [],
+    runnerIds?: string[],
   ): Promise<Project> {
     const settingsOverrides = this.normalizeSettings(withDefaultProjectSkillSettings(input));
-    const allowedHosts = this.validateProjectRemoteRunnerHosts(remoteRunnerHostIds);
+    const allowedRunners = runnerIds === undefined ? undefined : this.validateRunnerIds(runnerIds);
+    const allowedHosts = this.validateProjectRemoteRunnerHosts(allowedRunners?.filter((id) => id !== "local") ?? remoteRunnerHostIds);
     const project: Project = {
       createdAt: new Date().toISOString(),
       id: randomUUID(),
       name: cleanLabel(name, "Untitled project"),
       remoteRunnerHostIds: allowedHosts,
+      ...(allowedRunners ? { runnerIds: allowedRunners } : {}),
       settingsOverrides,
     };
     this.catalog.projects.push(project);
@@ -2373,11 +2591,17 @@ export class SessionStore {
   async updateProject(projectId: string, changes: UpdateProjectRequest): Promise<Project> {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
-    if (changes.name !== undefined) project.name = requiredLabel(changes.name, "Project name");
-    if (changes.remoteRunnerHostIds !== undefined) {
-      // Project choices are defaults, not a ceiling on Session overrides.
-      project.remoteRunnerHostIds = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
+    const name = changes.name === undefined ? undefined : requiredLabel(changes.name, "Project name");
+    if (changes.runnerIds !== undefined) {
+      const ids = this.validateRunnerIds(changes.runnerIds);
+      project.runnerIds = ids;
+      project.remoteRunnerHostIds = ids.filter((id) => id !== "local");
+    } else if (changes.remoteRunnerHostIds !== undefined) {
+      const ids = this.validateProjectRemoteRunnerHosts(changes.remoteRunnerHostIds);
+      delete project.runnerIds;
+      project.remoteRunnerHostIds = ids;
     }
+    if (name !== undefined) project.name = name;
     await this.saveCatalog();
     return project;
   }
@@ -2394,6 +2618,28 @@ export class SessionStore {
     return normalized;
   }
 
+  private validateRunnerIds(ids: string[]): string[] {
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) throw new Error("Runner selection must be an array of IDs");
+    const selected = [...new Set(ids.map((id) => id.trim()))];
+    if (selected.some((id) => !id)) throw new Error("Runner IDs must not be empty");
+    this.validateProjectRemoteRunnerHosts(selected.filter((id) => id !== "local"));
+    return selected;
+  }
+
+  effectiveRunnerIds(sessionId: string): string[] {
+    const session = this.getSession(sessionId);
+    const project = session && this.getProject(session.projectId);
+    return project && session ? effectiveRunnerIds(project, session) : [];
+  }
+
+  assertSessionAllowsRunner(sessionId: string, runnerId: string): void {
+    this.assertSessionWritable(sessionId);
+    if (!this.effectiveRunnerIds(sessionId).includes(runnerId)) {
+      throw new Error(`Runner ${runnerId} is not allowed by this Session; select an allowed runner_id`);
+    }
+    if (runnerId !== "local") this.assertSessionAllowsRemoteRunner(sessionId, runnerId);
+  }
+
   /**
    * Session overrides select from the global usable catalog independently of
    * Project defaults. The same host existence/capability checks still apply.
@@ -2407,15 +2653,15 @@ export class SessionStore {
 
   /**
    * The machines this Session may use right now: its own override when it has
-   * one, otherwise the Project defaults, filtered by current host usability. Local execution is not part
-   * of this list because it is always available.
+   * one, otherwise the Project defaults, filtered by current host usability.
+   * The local entry is handled separately by assertSessionAllowsRunner.
    */
   effectiveRemoteRunnerHosts(sessionId: string): RemoteHostTarget[] {
     const session = this.getSession(sessionId);
     if (!session) return [];
     const project = this.getProject(session.projectId);
     if (!project) return [];
-    const selected = session.remoteRunnerHostIds ?? project.remoteRunnerHostIds;
+    const selected = effectiveRunnerIds(project, session);
     return selected
       .flatMap((hostId) => {
         const host = this.getRemoteHost(hostId);
@@ -2454,6 +2700,7 @@ export class SessionStore {
       reviewCriteria?: string[];
       reviewMode?: "auto" | "manual";
       remoteRunnerHostIds?: string[];
+      runnerIds?: string[];
       specialistId?: string;
     } = {},
     options: {
@@ -2479,9 +2726,9 @@ export class SessionStore {
     if (governance.specialistId && !this.getSpecialist(governance.specialistId)) {
       throw new Error("Specialist not found");
     }
-    const remoteRunnerHostIds = governance.remoteRunnerHostIds === undefined
-      ? undefined
-      : this.validateSessionRemoteRunnerHosts(projectId, governance.remoteRunnerHostIds);
+    const runnerIds = governance.runnerIds === undefined ? undefined : this.validateRunnerIds(governance.runnerIds);
+    const remoteRunnerHostIds = runnerIds ? runnerIds.filter((id) => id !== "local")
+      : governance.remoteRunnerHostIds === undefined ? undefined : this.validateSessionRemoteRunnerHosts(projectId, governance.remoteRunnerHostIds);
     const sessionId = randomUUID();
     const permissionEpoch = createPermissionEpoch(
       sessionId,
@@ -2503,14 +2750,19 @@ export class SessionStore {
       reviewCriteria: this.normalizeReviewCriteria(governance.reviewCriteria),
       reviewMode: governance.reviewMode === "manual" ? "manual" : "auto",
       ...(remoteRunnerHostIds ? { remoteRunnerHostIds } : {}),
+      ...(runnerIds ? { runnerIds } : {}),
+      reviewerAutomaticReviewEnabled: true,
+      reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
       semanticReviewEnabled: resolved.effective.semanticReviewEnabled,
       settingsOverrides,
       ...(governance.specialistId ? { specialistId: governance.specialistId } : {}),
       title: cleanLabel(title, UNTITLED_SESSION_TITLE),
       updatedAt: now,
     };
+    return withWorkspaceAdmission(new VersionStore(this.dataDir),
+      resolve(this.dataDir, "projects", projectId, "sessions", session.id, "workspace"), async () => {
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
-    await writeFile(this.messagesPath(session.id), "[]\n", "utf8");
+    await this.writeArray(this.messagesPath(session.id), []);
     await mkdir(resolve(this.dataDir, "session-runs"), { recursive: true });
     await writeFile(this.sessionRunsPath(session.id), "[]\n", "utf8");
     await mkdir(resolve(this.dataDir, "projects", projectId, "sessions", session.id, "workspace"), { recursive: true });
@@ -2518,6 +2770,7 @@ export class SessionStore {
     this.catalog.sessions.push(session);
     await this.saveCatalog();
     return session;
+    });
   }
 
   getSession(sessionId: string): Session | undefined {
@@ -2543,7 +2796,7 @@ export class SessionStore {
     const unavailableSkills = enabledSkillIds.filter((id) => !this.skillIds.has(id));
     if (unavailableSkills.length) throw new Error(`Specialist skills are unavailable: ${unavailableSkills.join(", ")}`);
     const connectorIds = [...new Set(input.connectorIds ?? [])];
-    const unavailableConnectors = connectorIds.filter((id) => !knownConnectorIdSet().has(id));
+    const unavailableConnectors = connectorIds.filter((id) => !this.connectorIds.has(id));
     if (unavailableConnectors.length) throw new Error(`Specialist connectors are unavailable: ${unavailableConnectors.join(", ")}`);
     return { connectorIds, description, enabledSkillIds, instructions, name };
   }
@@ -2816,7 +3069,12 @@ export class SessionStore {
     sessionId: string,
     parentTurnId: string,
     input: SubagentInput,
-    execution: { maxTurns?: number; model?: ModelRunInfo; timeoutSeconds?: number } = {},
+    execution: {
+      maxTurns?: number;
+      model?: ModelRunInfo;
+      specialistConfigHash?: string;
+      timeoutSeconds?: number;
+    } = {},
   ): Promise<Subagent> {
     this.assertSessionWritable(sessionId);
     const description = requiredLabel(input.description, "Subagent description");
@@ -2845,6 +3103,7 @@ export class SessionStore {
       ...(execution.model ? { model: structuredClone(execution.model) } : {}),
       parentTurnId,
       sessionId,
+      ...(execution.specialistConfigHash ? { specialistConfigHash: execution.specialistConfigHash } : {}),
       ...(validSpecialistId ? { specialistId: validSpecialistId } : {}),
       status: "running",
       steps: [{
@@ -3068,6 +3327,19 @@ export class SessionStore {
       }
       let catalogChanged = false;
       const revisions: WorkspaceFileRevision[] = [];
+      // Resolve order inside the same metadata barrier as the pointer update.
+      // An unreceipted writer observes the current head (and wins ties), so a
+      // prior execution cannot overwrite its projection while it commits.
+      const refs = await RefStore.open(new VersionStore(this.dataDir));
+      const publicationSequences = new Map<WorkspaceFileRevisionInput, number>();
+      try {
+        for (const { input, path } of prepared) {
+          const root = await realpath(this.workspaceLocation(sessionId, path).root);
+          const sequence = refs.publicationSequence(workspaceHeadName(root), input.publicationVersion);
+          if (input.publicationVersion && sequence === undefined) throw new Error("Workspace publication receipt is not rooted in this Workspace");
+          publicationSequences.set(input, sequence ?? 0);
+        }
+      } finally { refs.close(); }
       for (const { input, path } of prepared) {
         const parent = input.parentRevisionId
           ? this.catalog.workspaceFileRevisions.find((candidate) => candidate.id === input.parentRevisionId)
@@ -3103,6 +3375,7 @@ export class SessionStore {
         const fileId = record?.id ?? randomUUID();
         const contentHash = input.contentHash ?? parent?.contentHash;
         const revision: WorkspaceFileRevision = {
+          publicationSequence: publicationSequences.get(input)!,
           artifactVersionIds: input.artifactVersionId ? [input.artifactVersionId] : [],
           ...(contentHash ? { contentHash } : {}),
           createdAt: now,
@@ -3135,7 +3408,7 @@ export class SessionStore {
             updatedAt: now,
           };
           this.catalog.workspaceFileRecords.push(record);
-        } else {
+        } else if (!input.publicationVersion || !current || (publicationSequences.get(input)! > (current.publicationSequence ?? -1))) {
           record.currentRevisionId = revision.id;
           record.sessionTitle = session.title;
           record.updatedAt = now;
@@ -3353,7 +3626,7 @@ export class SessionStore {
     const message = messages.find((candidate) => candidate.id === messageId);
     if (!message || message.references?.length) return;
     message.references = structuredClone(references);
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
   }
 
   async createArtifactVersion(input: {
@@ -3395,6 +3668,9 @@ export class SessionStore {
     let artifact = this.catalog.artifacts.find((candidate) =>
       candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt);
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
+    if (artifact?.origin === "server_generated" && (input.origin ?? "llm_declared") !== "server_generated") {
+      throw new Error("Server-generated Artifacts accept new versions only from a server-generated writer");
+    }
     if (!artifact) {
       artifact = {
         createdAt: now,
@@ -3619,6 +3895,7 @@ export class SessionStore {
     passphrase?: string | null;
     trustHostKey?: { algorithm: string; fingerprint: string };
   }): Promise<RemoteHostTarget> {
+    if (input.id === "local") throw new Error("Runner ID local is reserved for the built-in Runner");
     const alias = input.alias.trim();
     if (!/^[A-Za-z0-9._-]{1,255}$/.test(alias)) {
       throw new Error("A machine name must be an alias, hostname, or IP address using only letters, numbers, dots, underscores, and hyphens");
@@ -3693,6 +3970,39 @@ export class SessionStore {
     }
     await this.saveCatalog();
     return this.describeRemoteHostSecrets(structuredClone(host));
+  }
+
+  /** Which NPU cards a Runner may hand to its sandboxes; empty when it uses none. */
+  npuDeviceSelection(runnerId: string): number[] {
+    return [...this.catalog.npuDeviceSelections[runnerId] ?? []];
+  }
+
+  /** Every Runner's NPU selection, for the settings surface. */
+  npuDeviceSelections(): Record<string, number[]> {
+    return structuredClone(this.catalog.npuDeviceSelections);
+  }
+
+  /**
+   * Record which NPU cards one Runner may hand to sandboxes. The caller has
+   * already checked them against that Runner's probe; storing host indices
+   * rather than a count keeps the mapping meaningful as cards come and go.
+   * Keyed by Runner id so the local Runner, which has no machine record, is
+   * stored exactly like a remote one.
+   */
+  async setNpuDeviceSelection(runnerId: string, devices: readonly number[]): Promise<number[]> {
+    const id = runnerId.trim();
+    if (!id) throw new Error("A Runner id is required to record an NPU selection");
+    if (id !== LOCAL_RUNNER_ID && !this.catalog.remoteHosts.some((host) => host.id === id)) {
+      throw new Error("Runner not found");
+    }
+    if (devices.some((index) => !Number.isSafeInteger(index) || index < 0 || index >= 1024)) {
+      throw new Error("An NPU card must be identified by its non-negative host index");
+    }
+    const selected = [...new Set(devices)].sort((left, right) => left - right);
+    if (selected.length === 0) delete this.catalog.npuDeviceSelections[id];
+    else this.catalog.npuDeviceSelections[id] = selected;
+    await this.saveCatalog();
+    return selected;
   }
 
   /**
@@ -3945,6 +4255,8 @@ export class SessionStore {
   async archiveSession(sessionId: string): Promise<Session> {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
+    // Close the wake gate before yielding to catalog persistence. Restore does not reopen it.
+    this.notifications.stop(sessionId);
     if (!session.archivedAt) {
       session.archivedAt = new Date().toISOString();
       session.updatedAt = session.archivedAt;
@@ -3997,12 +4309,13 @@ export class SessionStore {
     const session = this.getSession(sessionId);
     if (!session) throw new Error("Session not found");
     if (confirmationId !== session.id) throw new Error("Session deletion confirmation does not match the target");
-    const operation = await this.stageDeletion(this.knownSessionDataPaths(session), [session.id]);
+    return this.withDeletionBoundary(() => this.knownSessionDataPaths(session), () => [session.id],
+      [resolve(this.dataDir, "projects", session.projectId, "sessions", session.id)], async (operation) => {
+    await this.stageDeletion(operation);
     const previousSessions = this.catalog.sessions;
     const previousPermissionEpochs = this.catalog.permissionEpochs;
     const previousPermissionGrants = this.catalog.permissionGrants;
     const previousPermissionRequests = this.catalog.permissionRequests;
-    const previousPlans = this.catalog.sessionPlans;
     const previousSubagents = this.catalog.subagents;
     const previousRemoteJobs = this.catalog.remoteJobs;
     const previousWorkspaceFileRecords = this.catalog.workspaceFileRecords;
@@ -4014,19 +4327,18 @@ export class SessionStore {
       this.catalog.permissionRequests = this.catalog.permissionRequests.filter((request) => request.sessionId !== session.id);
       this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.sessionId !== session.id
         && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
-      this.catalog.sessionPlans = this.catalog.sessionPlans.filter((plan) => plan.sessionId !== session.id);
       this.catalog.subagents = this.catalog.subagents.filter((subagent) => subagent.sessionId !== session.id);
       this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => job.sessionId !== session.id);
       this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.map((record) =>
         record.sessionId === session.id ? { ...record, sessionTitle: session.title } : record);
       this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => record.sessionId !== session.id);
       await this.saveCatalog();
+      operation.committed = true;
     } catch (error) {
       this.catalog.sessions = previousSessions;
       this.catalog.permissionEpochs = previousPermissionEpochs;
       this.catalog.permissionGrants = previousPermissionGrants;
       this.catalog.permissionRequests = previousPermissionRequests;
-      this.catalog.sessionPlans = previousPlans;
       this.catalog.subagents = previousSubagents;
       this.catalog.remoteJobs = previousRemoteJobs;
       this.catalog.workspaceFileRecords = previousWorkspaceFileRecords;
@@ -4035,24 +4347,28 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE session_id = ?").run(session.id);
+    this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
+    });
   }
 
   async deleteProject(projectId: string, confirmationId: string): Promise<void> {
     const project = this.getProject(projectId);
     if (!project) throw new Error("Project not found");
     if (confirmationId !== project.id) throw new Error("Project deletion confirmation does not match the target");
-    const sessions = this.listSessions(projectId, "all");
-    const paths = sessions.flatMap((session) => this.knownSessionDataPaths(session));
-    if (!sessions.length) paths.push(resolve(this.dataDir, "projects", projectId));
-    const operation = await this.stageDeletion(paths, sessions.map((session) => session.id));
+    let sessions: Session[] = [];
+    return this.withDeletionBoundary(() => {
+      sessions = this.listSessions(projectId, "all");
+      return [...sessions.flatMap((session) => this.knownSessionDataPaths(session)), resolve(this.dataDir, "projects", projectId)];
+    }, () => sessions.map((session) => session.id),
+      [resolve(this.dataDir, "projects", projectId)], async (operation) => {
+    await this.stageDeletion(operation);
     const sessionIds = new Set(sessions.map((session) => session.id));
     const previousProjects = this.catalog.projects;
     const previousSessions = this.catalog.sessions;
     const previousPermissionEpochs = this.catalog.permissionEpochs;
     const previousPermissionGrants = this.catalog.permissionGrants;
     const previousPermissionRequests = this.catalog.permissionRequests;
-    const previousPlans = this.catalog.sessionPlans;
     const previousSubagents = this.catalog.subagents;
     const previousRemoteJobs = this.catalog.remoteJobs;
     const previousRemoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs;
@@ -4075,7 +4391,6 @@ export class SessionStore {
       this.catalog.permissionGrants = this.catalog.permissionGrants.filter((grant) => grant.projectId !== projectId
         && (!grant.sessionId || !sessionIds.has(grant.sessionId))
         && !(grant.action === "remote_job" && remoteJobIds.has(grant.resource)));
-      this.catalog.sessionPlans = this.catalog.sessionPlans.filter((plan) => !sessionIds.has(plan.sessionId));
       this.catalog.subagents = this.catalog.subagents.filter((subagent) => !sessionIds.has(subagent.sessionId));
       this.catalog.remoteJobs = this.catalog.remoteJobs.filter((job) => !sessionIds.has(job.sessionId));
       this.catalog.remoteWorkspaceSyncs = this.catalog.remoteWorkspaceSyncs.filter((record) => !sessionIds.has(record.sessionId));
@@ -4085,13 +4400,13 @@ export class SessionStore {
       this.catalog.workspaceFileRecords = this.catalog.workspaceFileRecords.filter((record) => record.projectId !== projectId);
       this.catalog.workspaceFileRevisions = this.catalog.workspaceFileRevisions.filter((revision) => revision.projectId !== projectId);
       await this.saveCatalog();
+      operation.committed = true;
     } catch (error) {
       this.catalog.projects = previousProjects;
       this.catalog.sessions = previousSessions;
       this.catalog.permissionEpochs = previousPermissionEpochs;
       this.catalog.permissionGrants = previousPermissionGrants;
       this.catalog.permissionRequests = previousPermissionRequests;
-      this.catalog.sessionPlans = previousPlans;
       this.catalog.subagents = previousSubagents;
       this.catalog.remoteJobs = previousRemoteJobs;
       this.catalog.remoteWorkspaceSyncs = previousRemoteWorkspaceSyncs;
@@ -4104,8 +4419,9 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE project_id = ?").run(projectId);
+    for (const session of sessions) this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
-    await rm(resolve(this.dataDir, "projects", projectId), { force: true, recursive: true });
+    }, projectId);
   }
 
   async updateSession(
@@ -4113,7 +4429,7 @@ export class SessionStore {
     changes: UpdateSessionRequest,
   ): Promise<Session> {
     const session = this.assertSessionWritable(sessionId);
-    const { approvalMode, remoteRunnerHostIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
+    const { approvalMode, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
     const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
     const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
     const nextModel = this.getModel(nextSettings.modelId);
@@ -4130,6 +4446,7 @@ export class SessionStore {
     if (approvalMode !== undefined) throw new Error("Use setApprovalMode to change approval policy");
     if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
     if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
+    const nextRunnerIds = runnerIds == null ? undefined : this.validateRunnerIds(runnerIds);
     const nextRemoteRunnerHostIds = remoteRunnerHostIds === undefined || remoteRunnerHostIds === null
       ? undefined
       : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
@@ -4140,9 +4457,18 @@ export class SessionStore {
     if (specialistId === null) delete session.specialistId;
     else if (specialistId !== undefined) session.specialistId = specialistId;
     // `null` drops the override so the Session follows the Project again; an
-    // empty array is a real answer meaning "no remote machine for this Session".
-    if (remoteRunnerHostIds === null) delete session.remoteRunnerHostIds;
-    else if (nextRemoteRunnerHostIds !== undefined) session.remoteRunnerHostIds = nextRemoteRunnerHostIds;
+    // empty runnerIds array disables all Runner execution for this Session.
+    if (runnerIds === null) {
+      delete session.runnerIds;
+      delete session.remoteRunnerHostIds;
+    } else if (nextRunnerIds !== undefined) {
+      session.runnerIds = nextRunnerIds;
+      session.remoteRunnerHostIds = nextRunnerIds.filter((id) => id !== "local");
+    } else if (remoteRunnerHostIds !== undefined) {
+      delete session.runnerIds;
+      if (remoteRunnerHostIds === null) delete session.remoteRunnerHostIds;
+      else session.remoteRunnerHostIds = nextRemoteRunnerHostIds;
+    }
     session.updatedAt = new Date().toISOString();
     this.syncSessionCompatibility(session);
     await this.saveCatalog();
@@ -4668,6 +4994,8 @@ export class SessionStore {
   }
 
   async createSessionRun(input: {
+    notificationDelivery?: SessionRun["notificationDelivery"];
+    automaticWake?: boolean;
     annotationIds?: string[];
     prompt: string;
     references?: ComposerReference[];
@@ -4686,6 +5014,8 @@ export class SessionStore {
     // latest array inside the barrier for the same reason.
     return await this.mutateArray<SessionRun, SessionRun>(this.sessionRunsPath(input.sessionId), (runs) => {
       const run: SessionRun = {
+        ...(input.notificationDelivery ? { notificationDelivery: structuredClone(input.notificationDelivery) } : {}),
+        ...(input.automaticWake ? { automaticWake: true } : {}),
         annotationIds: [...new Set(input.annotationIds ?? [])],
         createdAt: new Date().toISOString(),
         id: randomUUID(),
@@ -4694,7 +5024,10 @@ export class SessionStore {
         references: structuredClone(input.references ?? []),
         ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
         sessionId: input.sessionId,
-        settingsSnapshot: structuredClone(input.settingsSnapshot),
+        settingsSnapshot: {
+          ...structuredClone(input.settingsSnapshot),
+          ideaTreeEnabled: input.settingsSnapshot.ideaTreeEnabled === true,
+        },
         ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),
         status: "queued",
@@ -4828,18 +5161,13 @@ export class SessionStore {
   private async recoverStreamTail(sessionId: string, runId: string, streamId: string): Promise<number> {
     const path = this.runStreamPath(sessionId, runId, streamId);
     let last = 0;
-    let content = "";
-    try {
-      content = await readFile(path, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (content && !content.endsWith("\n")) {
-      const lastNewline = content.lastIndexOf("\n");
-      content = lastNewline >= 0 ? content.slice(0, lastNewline + 1) : "";
-      await writeFile(path, content, "utf8");
-    }
-    for (const record of parseStreamLines(content)) {
+    // A run's stream can reach hundreds of MB. Reading it whole to find the
+    // tail allocated the file twice (one string plus the split array) and
+    // could exhaust the heap before the process served a single request, so
+    // the torn tail is repaired from a bounded window and the sequence high
+    // water mark is computed by streaming one line at a time.
+    await this.repairTornStreamTail(path);
+    for await (const record of this.streamLines(path)) {
       last = Math.max(last, record.sequence);
     }
     if (streamId === MAIN_RUN_STREAM) {
@@ -4851,14 +5179,69 @@ export class SessionStore {
   }
 
   private async readStreamLines(path: string): Promise<RunStreamLine[]> {
-    let content = "";
+    const records: RunStreamLine[] = [];
+    for await (const record of this.streamLines(path)) records.push(record);
+    return records;
+  }
+
+  /**
+   * Yield the stream's records one line at a time. Only a single line is held
+   * besides the caller's own accumulation, so a large file no longer needs a
+   * whole second copy of itself on the heap just to be parsed.
+   */
+  private async *streamLines(path: string): AsyncGenerator<RunStreamLine> {
+    let handle;
     try {
-      content = await readFile(path, "utf8");
+      handle = await open(path, "r");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    return parseStreamLines(content);
+    try {
+      const reader = createInterface({
+        crlfDelay: Infinity,
+        input: handle.createReadStream({ autoClose: false, encoding: "utf8" }),
+      });
+      for await (const line of reader) {
+        const record = parseStreamLine(line);
+        if (record) yield record;
+      }
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /**
+   * Drop a partial line left by a crash mid-write. Only the file's tail is
+   * examined: a torn record is by definition the last one, so scanning the
+   * final window is enough and keeps the cost independent of file size.
+   */
+  private async repairTornStreamTail(path: string): Promise<void> {
+    let size: number;
+    try {
+      ({ size } = await stat(path));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (size === 0) return;
+    const windowSize = Math.min(size, TORN_TAIL_SCAN_BYTES);
+    const buffer = Buffer.alloc(windowSize);
+    const handle = await open(path, "r");
+    try {
+      await handle.read(buffer, 0, windowSize, size - windowSize);
+    } finally {
+      await handle.close();
+    }
+    if (buffer[windowSize - 1] === NEWLINE_BYTE) return;
+    const lastNewline = buffer.lastIndexOf(NEWLINE_BYTE);
+    if (lastNewline < 0) {
+      // No record boundary in the window: only safe to clear when the window
+      // covered the whole file, otherwise leave the bytes for a human.
+      if (windowSize === size) await truncate(path, 0);
+      return;
+    }
+    await truncate(path, size - (windowSize - 1 - lastNewline));
   }
 
   async listExecutionRuns(sessionId: string): Promise<ExecutionRun[]> {
@@ -4966,6 +5349,7 @@ export class SessionStore {
       ...usage,
       cacheReadTokens: usage.cacheReadTokens ?? null,
       cacheWriteTokens: usage.cacheWriteTokens ?? null,
+      outcome: usage.outcome ?? "completed",
       ...(usage.projectId || session?.projectId ? { projectId: usage.projectId ?? session?.projectId } : {}),
     };
   }
@@ -4982,6 +5366,13 @@ export class SessionStore {
       this.modelUsagePath(usage.sessionId),
       (records) => {
         this.assertSessionWritable(usage.sessionId);
+        if (records.some((record) =>
+          record.sessionId === usage.sessionId
+          && record.invocationId === usage.invocationId
+          && record.invocationKind === usage.invocationKind
+          && record.attemptIndex === usage.attemptIndex)) {
+          return;
+        }
         records.push(this.normalizeModelInvocationUsage(usage));
       },
     );
@@ -5010,6 +5401,29 @@ export class SessionStore {
     });
   }
 
+  private modelUsagePricingByProfileId(): Map<string, ResolvedModelPricing> {
+    const pricingByModelProfileId = new Map<string, ResolvedModelPricing>();
+    for (const model of this.catalog.models) {
+      const provider = this.getProvider(model.providerId);
+      const catalog = lookupModelCatalog(model.model, provider?.presetId);
+      const pricing = resolveModelFacts({ catalog, user: model.facts }).pricing;
+      if (pricing) pricingByModelProfileId.set(model.id, pricing);
+    }
+    return pricingByModelProfileId;
+  }
+
+  async getModelUsageAnalyticsSummary(filters: ModelUsageAnalyticsFilters = {}): Promise<ModelUsageAnalyticsSummary> {
+    const projectNameById = new Map(this.catalog.projects.map((project) => [project.id, project.name]));
+    const projectIdBySessionId = new Map(this.catalog.sessions.map((session) => [session.id, session.projectId]));
+    const sessionTitleById = new Map(this.catalog.sessions.map((session) => [session.id, session.title]));
+    return summarizeModelUsageAnalytics(await this.listAllModelInvocationUsage(), {
+      pricingByModelProfileId: this.modelUsagePricingByProfileId(),
+      projectIdBySessionId,
+      projectNameById,
+      sessionTitleById,
+    }, filters);
+  }
+
   async listReviews(sessionId: string): Promise<ReviewRun[]> {
     if (!this.getSession(sessionId)) throw new Error("Session not found");
     return await this.readArray<ReviewRun>(this.reviewsPath(sessionId));
@@ -5028,6 +5442,78 @@ export class SessionStore {
         throw new Error(`Artifact review already exists: ${review.id}`);
       }
       reviews.push(structuredClone(review));
+    });
+  }
+
+  async listReviewerAuditTasks(sessionId: string): Promise<ReviewerAuditTask[]> {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return await this.readArray<ReviewerAuditTask>(this.reviewerAuditTasksPath(sessionId));
+  }
+
+  async createReviewerAuditTask(task: ReviewerAuditTask): Promise<ReviewerAuditTask> {
+    this.assertSessionWritable(task.sessionId);
+    return await this.mutateArray<ReviewerAuditTask, ReviewerAuditTask>(
+      this.reviewerAuditTasksPath(task.sessionId),
+      (tasks) => {
+        this.assertSessionWritable(task.sessionId);
+        const existing = tasks.find((candidate) => candidate.id === task.id
+          || (candidate.inputFingerprint === task.inputFingerprint
+            && candidate.origin === task.origin
+            && candidate.status !== "cancelled"
+            && candidate.status !== "failed"
+            && candidate.status !== "superseded"));
+        if (existing) return structuredClone(existing);
+        tasks.push(structuredClone(task));
+        return structuredClone(task);
+      },
+    );
+  }
+
+  async updateReviewerAuditTask(
+    sessionId: string,
+    taskId: string,
+    update: Partial<Pick<ReviewerAuditTask,
+      "artifactVersionIds" | "checkpointPublishedAt" | "errorSummary" | "finishedAt" | "inputFingerprint"
+      | "notBefore" | "reviewIds" | "startedAt" | "status" | "supersededBy">>,
+  ): Promise<ReviewerAuditTask> {
+    this.assertSessionWritable(sessionId);
+    return await this.mutateArray<ReviewerAuditTask, ReviewerAuditTask>(
+      this.reviewerAuditTasksPath(sessionId),
+      (tasks) => {
+        const task = tasks.find((candidate) => candidate.id === taskId);
+        if (!task) throw new Error("Reviewer audit task not found");
+        // A terminal task cannot be revived by a late completion callback.
+        if (["cancelled", "completed", "failed", "superseded"].includes(task.status)
+          && update.status === "running") return structuredClone(task);
+        Object.assign(task, structuredClone(update));
+        return structuredClone(task);
+      },
+    );
+  }
+
+  async listReviewFeedback(sessionId: string): Promise<ReviewFeedback[]> {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return await this.readArray<ReviewFeedback>(this.reviewFeedbackPath(sessionId));
+  }
+
+  async appendReviewFeedback(feedback: ReviewFeedback): Promise<ReviewFeedback> {
+    this.assertSessionWritable(feedback.sessionId);
+    return await this.mutateArray<ReviewFeedback, ReviewFeedback>(this.reviewFeedbackPath(feedback.sessionId), (items) => {
+      const existing = items.find((candidate) => candidate.feedbackFingerprint === feedback.feedbackFingerprint);
+      if (existing) return structuredClone(existing);
+      items.push(structuredClone(feedback));
+      return structuredClone(feedback);
+    });
+  }
+
+  async consumeReviewFeedback(sessionId: string, feedbackId: string): Promise<ReviewFeedback | undefined> {
+    this.assertSessionWritable(sessionId);
+    return await this.mutateArray<ReviewFeedback, ReviewFeedback | undefined>(this.reviewFeedbackPath(sessionId), (items) => {
+      const feedback = items.find((candidate) => candidate.id === feedbackId && candidate.status === "ready");
+      if (!feedback) return undefined;
+      feedback.status = "consumed";
+      feedback.consumedAt = new Date().toISOString();
+      return structuredClone(feedback);
     });
   }
 
@@ -5133,6 +5619,7 @@ export class SessionStore {
     annotationIds?: string[],
     kind: ChatMessage["kind"] = "message",
     modelContext?: ChatMessage["modelContext"],
+    runtimeNotice?: ChatMessage["runtimeNotice"],
   ): Promise<ChatMessage> {
     const session = this.assertSessionWritable(sessionId);
     const message: ChatMessage = {
@@ -5144,6 +5631,7 @@ export class SessionStore {
       ...(modelContext?.length ? { modelContext: structuredClone(modelContext) } : {}),
       ...(references?.length ? { references: structuredClone(references) } : {}),
       role,
+      ...(runtimeNotice ? { runtimeNotice: structuredClone(runtimeNotice) } : {}),
     };
     if (role === "user" && annotationIds?.length) {
       message.annotations = await this.attachArtifactAnnotations(sessionId, annotationIds, message.id);
@@ -5151,7 +5639,7 @@ export class SessionStore {
     const messages = await this.readMessages(sessionId);
     messages.push(message);
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     session.updatedAt = message.createdAt;
     await this.saveCatalog();
     return message;
@@ -5181,7 +5669,7 @@ export class SessionStore {
     };
     messages.push(message);
     await mkdir(resolve(this.dataDir, "messages"), { recursive: true });
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     session.updatedAt = message.createdAt;
     await this.saveCatalog();
     return structuredClone(message);
@@ -5212,7 +5700,7 @@ export class SessionStore {
       ...(update.error ? { error: update.error } : {}),
     };
     message.content = update.content;
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     return structuredClone(message);
   }
 
@@ -5230,8 +5718,21 @@ export class SessionStore {
     }
     if (message.reviewerCheckpoint.status !== "running") return structuredClone(message);
     message.reviewerCheckpoint = { ...message.reviewerCheckpoint, ...(progress ? { progress } : {}) };
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     return structuredClone(message);
+  }
+
+  /** Remove a transient automatic-audit shell before it reaches the lead Agent. */
+  async deleteReviewerCheckpointMessage(sessionId: string, messageId: string): Promise<void> {
+    this.assertSessionWritable(sessionId);
+    const messages = await this.readMessages(sessionId);
+    const index = messages.findIndex((message) => message.id === messageId);
+    if (index < 0) return;
+    if (messages[index]!.kind !== "reviewer_checkpoint") {
+      throw new Error("Reviewer checkpoint message id is already in use");
+    }
+    messages.splice(index, 1);
+    await this.writeArray(this.messagesPath(sessionId), messages);
   }
 
   async appendTimeoutMessage(
@@ -5253,7 +5754,7 @@ export class SessionStore {
     const stored = messages.find((candidate) => candidate.id === message.id);
     if (!stored) throw new Error("Timeout message disappeared before metadata persistence");
     stored.timeout = structuredClone(timeout);
-    await writeFile(this.messagesPath(sessionId), `${JSON.stringify(messages, null, 2)}\n`, "utf8");
+    await this.writeArray(this.messagesPath(sessionId), messages);
     return structuredClone(stored);
   }
 
@@ -5468,6 +5969,42 @@ export class SessionStore {
       .run(id, JSON.stringify(value));
   }
 
+
+  /** Stable Agent-instance × Runner identity. Paths are never used as an authorization grant. */
+  workspaceIdentity(sessionId: string, agentId = "main", runnerId = "local") {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    if (!/^[A-Za-z0-9_:.-]{1,160}$/.test(agentId) || !/^[A-Za-z0-9_:.-]{1,160}$/.test(runnerId)) throw new Error("Invalid Workspace owner");
+    return { id: `ws_${createHash("sha256").update(JSON.stringify([sessionId, agentId, runnerId])).digest("hex")}`,
+      sessionId, agentId, runnerId };
+  }
+
+  agentWorkspacePath(sessionId: string, subagentId: string): string {
+    const main = this.workspacePath(sessionId);
+    const identity = this.workspaceIdentity(sessionId, `subagent:${subagentId}`);
+    return resolve(main, "..", "agent-workspaces", identity.id);
+  }
+
+  async createAgentWorkspace(sessionId: string, subagentId: string): Promise<void> {
+    const root = this.agentWorkspacePath(sessionId, subagentId);
+    await withWorkspaceAdmission(new VersionStore(this.dataDir), root, async () => {
+      this.assertSessionWritable(sessionId);
+      await mkdir(root, { recursive: true });
+    });
+  }
+
+  /** Resolve persisted logical audit paths without mounting child Workspaces inside the parent. */
+  workspaceLocation(sessionId: string, logicalPath: string): { root: string; path: string } {
+    const main = this.workspacePath(sessionId);
+    for (const child of this.listSubagents(sessionId)) {
+      const handoff = child.handoff;
+      if (!handoff?.workspaceId) continue;
+      const expected = this.workspaceIdentity(sessionId, `subagent:${child.id}`);
+      if (handoff.workspaceId !== expected.id) throw new Error("Stored Workspace identity does not match its Agent");
+      const prefix = `${handoff.privateWorkspacePath}/`;
+      if (logicalPath.startsWith(prefix)) return { root: this.agentWorkspacePath(sessionId, child.id), path: logicalPath.slice(prefix.length) };
+    }
+    return { root: main, path: logicalPath };
+  }
 
   /** Content-addressed root for one selected Skill set, shared by every run that selects it. */
   skillPackagesPath(sessionId: string, packageSetHash: string): string {

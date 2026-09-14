@@ -51,7 +51,7 @@ test("sandbox network settings are normalized and rejected when malformed", () =
       mode: "domain-allowlist",
     },
   );
-  assert.throws(() => normalizeSandboxNetworkSettings({ mode: "open" }), /none or domain-allowlist/);
+  assert.throws(() => normalizeSandboxNetworkSettings({ mode: "open", allowedDomains: ["a.example.org"] }), /does not use allowed domains/);
   assert.throws(() => normalizeSandboxNetworkSettings({ mode: "domain-allowlist" }), /at least one allowed domain/);
   assert.throws(
     () => normalizeSandboxNetworkSettings({ allowedDomains: ["10.0.0.1"], mode: "domain-allowlist" }),
@@ -224,6 +224,44 @@ test("the epoch's egress policy resolves per execution and pins the proxy it nam
   assert.deepEqual(inherited(), { mode: "direct" });
 });
 
+test("an open epoch resolves its egress proxy the same way an allowlist epoch does", async (context) => {
+  // `open` still routes through the gateway, so its outbound policy must be
+  // resolved too — silently dropping it would make the admin believe traffic
+  // leaves through the configured proxy while it actually connects directly.
+  const store = await scratchStore("sandbox-network-open-egress-proxy", context.after.bind(context));
+  const project = await store.createProject("Open egress");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+  const corporate = await store.createProxyServer({
+    kind: "custom_url",
+    name: "Corporate",
+    url: "http://user:secret@proxy.example.test:3128",
+  });
+
+  await store.replaceSandboxNetworkSettings({
+    egressProxyPolicy: `proxy:${corporate.id}`,
+    mode: "open",
+  });
+  const openEpoch = store.getSessionPermissionEpoch(session.id)!;
+  assert.equal(epochSandboxNetworkAccess(openEpoch).mode, "open");
+  assert.deepEqual(store.resolveSandboxEgressProxy(openEpoch), {
+    mode: "url",
+    url: "http://user:secret@proxy.example.test:3128/",
+  });
+
+  await store.replaceSandboxNetworkSettings({ egressProxyPolicy: "none", mode: "open" });
+  assert.deepEqual(store.resolveSandboxEgressProxy(store.getSessionPermissionEpoch(session.id)!), { mode: "direct" });
+
+  await store.replaceSandboxNetworkSettings({ egressProxyPolicy: "inherit", mode: "open" });
+  assert.deepEqual(
+    store.resolveSandboxEgressProxy(store.getSessionPermissionEpoch(session.id)!),
+    store.resolveProxy("inherit"),
+  );
+
+  // Back to none: nothing is resolved again.
+  await store.replaceSandboxNetworkSettings({ mode: "none" });
+  assert.equal(store.resolveSandboxEgressProxy(store.getSessionPermissionEpoch(session.id)!), undefined);
+});
+
 test("the saved policy survives a reload and reaches later epochs", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `sandbox-network-reload-${Date.now()}-${process.pid}`);
   await mkdir(root, { recursive: true });
@@ -250,4 +288,33 @@ test("the saved policy survives a reload and reaches later epochs", async (conte
   const epoch = reopened.getSessionPermissionEpoch(session.id)!;
   assert.equal(epoch.networkPolicy, "domain-allowlist");
   assert.equal(epochSandboxNetworkAccess(epoch).allowPrivateNetwork, true);
+});
+
+test("open mode snapshots into the epoch, keeps a stable revision and still routes egress", async (context) => {
+  // Open mode must reject an accidental allowed-domains list, must normalize
+  // like every other mode, and must persist into the Session's Permission
+  // Epoch so the runner keeps a single egress gateway for the same policy.
+  assert.deepEqual(normalizeSandboxNetworkSettings({ mode: "open" }), {
+    allowPrivateNetwork: false,
+    allowedDomains: [],
+    egressProxyPolicy: "inherit",
+    mode: "open",
+  });
+  const firstRevision = sandboxNetworkRevision(normalizeSandboxNetworkSettings({ mode: "open" }));
+  assert.notEqual(firstRevision, "none");
+  const sameRevision = sandboxNetworkRevision(normalizeSandboxNetworkSettings({ mode: "open" }));
+  assert.equal(firstRevision, sameRevision);
+  const differentRevision = sandboxNetworkRevision(
+    normalizeSandboxNetworkSettings({ allowPrivateNetwork: true, mode: "open" }),
+  );
+  assert.notEqual(firstRevision, differentRevision);
+
+  const store = await scratchStore("open-snapshot", context.after.bind(context));
+  await store.replaceSandboxNetworkSettings({ allowPrivateNetwork: true, allowedDomains: [], mode: "open" });
+  const project = await store.createProject("Open");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+  const epoch = store.getSessionPermissionEpoch(session.id)!;
+  assert.equal(epoch.networkPolicy, "open");
+  assert.equal(epochSandboxNetworkAccess(epoch).mode, "open");
+  assert.equal(epochSandboxNetworkAccess(epoch).revision, differentRevision);
 });

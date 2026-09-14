@@ -15,13 +15,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { test } from "node:test";
 
 import {
   EnvironmentStore,
+  describeFetchFailure,
   installManagedMicromamba,
+  managedMicromambaBaseUrl,
   managedMicromambaRelease,
+  ManagedProvisionerError,
   type ProvisionerExecutor,
 } from "./environment-store.js";
 
@@ -40,12 +43,25 @@ async function fixture(
   context.after(() => rm(root, { force: true, recursive: true }));
 
   const installed = new Map<string, string[]>();
+  const pipInstalled = new Map<string, Array<{ name: string; version: string; installer: string }>>();
   const commands: string[][] = [];
   const executions: Array<{ arguments: string[]; environment?: NodeJS.ProcessEnv; executable: string }> = [];
   const executor: ProvisionerExecutor = async (actualProvisionerPath, arguments_, _jobId, environment) => {
     executions.push({ arguments: arguments_, environment, executable: actualProvisionerPath });
     if (actualProvisionerPath !== provisionerPath) {
       assert.match(actualProvisionerPath, /[\\/]bin[\\/](?:python|R)$/);
+      const prefix = dirname(dirname(actualProvisionerPath));
+      if (arguments_.includes("import importlib.metadata as m,json; print(json.dumps(sorted([{'name':d.metadata['Name'],'version':d.version,'installer':(d.read_text('INSTALLER') or '').strip()} for d in m.distributions()],key=lambda d:d['name'] or '')))")) {
+        return JSON.stringify(pipInstalled.get(prefix) ?? []);
+      }
+      if (arguments_.includes("pip") && arguments_.includes("install")) {
+        const index = Math.max(arguments_.indexOf("--index-url"), arguments_.indexOf("--find-links"));
+        const packages = arguments_.slice(index + 2).map((value) => {
+          const [name, version = "1.0"] = value.endsWith(".whl") ? basename(value).split("-") : value.split("==");
+          return { name: name!, version, installer: "pip" };
+        });
+        pipInstalled.set(prefix, [...(pipInstalled.get(prefix) ?? []), ...packages]);
+      }
       return "";
     }
     commands.push(arguments_);
@@ -95,7 +111,7 @@ async function fixture(
     root: resolve(root, "envs"),
     runnerVersion: "test-runner",
   }, executor);
-  return { commands, executions, provisionerPath, root, store };
+  return { commands, executions, executor, provisionerPath, root, store };
 }
 
 test("scientific environment lifecycle advances immutable revisions only after success", async (context) => {
@@ -138,6 +154,9 @@ test("scientific environment lifecycle advances immutable revisions only after s
 
   await store.deleteTask(task.id);
   assert.equal(store.list().some((environment) => environment.id === task.id), false);
+  assert.ok(store.getRevision(installed.id), "deleting runtime retains past revision metadata");
+  assert.deepEqual(await store.snapshotBytes(installed.id), snapshot);
+  await assert.rejects(store.withRuntime(task.id, async () => undefined), /Unknown scientific environment/);
 });
 
 test("scientific environments accept micromamba's package-list envelope", async (context) => {
@@ -150,6 +169,76 @@ test("scientific environments accept micromamba's package-list envelope", async 
   assert.ok(starter);
   const revision = store.getRevision(starter.currentRevisionId);
   assert.ok(revision?.packages.some((item) => item.startsWith("python=3.12")));
+});
+
+test("updates retain one runtime prefix, preserve untracked files, and reject historical runtime selection", async (context) => {
+  const { store, commands } = await fixture(context);
+  await store.initialize(); await store.setupManagedEnvironments();
+  const task = await store.createTask("in-place", "python");
+  const original = store.resolveRuntime(task.currentRevisionId, "python");
+  const extra = resolve(original.prefixPath, "pip-installed-marker");
+  await writeFile(extra, "non-conda dependency");
+  const start = commands.length;
+  const installed = await store.install(task.id, ["new-package=1"]);
+  await store.uninstall(task.id, ["new-package"]);
+  assert.equal(commands.slice(start).some((args) => args.includes("--clone")), false);
+  await store.withRuntime(task.id, async (runtime) => {
+    assert.equal(runtime.prefixPath, original.prefixPath);
+    assert.notEqual(runtime.revision.id, original.revision.id);
+  });
+  assert.equal(await readFile(extra, "utf8"), "non-conda dependency");
+  assert.throws(() => store.resolveRuntime(installed.id, "python"), /audit-only/);
+  assert.ok(await store.snapshotBytes(task.currentRevisionId));
+  assert.ok(await store.snapshotBytes(installed.id));
+});
+
+test("failed in-place update never deletes runtime or presents the previous revision as executable", async (context) => {
+  const { store } = await fixture(context);
+  await store.initialize(); await store.setupManagedEnvironments();
+  const task = await store.createTask("repair", "python");
+  const prefix = store.resolveRuntime(task.currentRevisionId, "python").prefixPath;
+  await assert.rejects(store.install(task.id, ["conflict=1"]), /dependency conflict/);
+  assert.ok((await stat(prefix)).isDirectory());
+  assert.equal(store.list().find((env) => env.id === task.id)?.status, "failed");
+  await assert.rejects(store.withRuntime(task.id, async () => undefined), /is failed/);
+  await store.install(task.id, ["repaired=1"]);
+  await store.withRuntime(task.id, async (runtime) => assert.equal(runtime.environment.status, "ready"));
+});
+
+test("environment update waits for active execution and later execution resolves the new revision", async (context) => {
+  const { store } = await fixture(context);
+  await store.initialize(); await store.setupManagedEnvironments();
+  const task = await store.createTask("leased", "python");
+  const started = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const running = store.withRuntime(task.id, async (runtime) => {
+    assert.equal(runtime.revision.id, task.currentRevisionId);
+    started.resolve(); await finish.promise;
+  });
+  await started.promise;
+  const updating = store.install(task.id, ["new-package=1"]);
+  const later = store.withRuntime(task.id, async (runtime) => runtime.revision.id);
+  assert.equal(store.list().find((env) => env.id === task.id)?.currentRevisionId, task.currentRevisionId);
+  finish.resolve(); await running;
+  assert.equal(await later, (await updating).id);
+});
+
+test("restart after interrupted in-place mutation blocks execution without deleting historical snapshots", async (context) => {
+  const { store, root, provisionerPath, executor } = await fixture(context);
+  await store.initialize(); await store.setupManagedEnvironments();
+  const task = await store.createTask("interrupted", "python");
+  const catalogPath = resolve(root, "envs", "catalog.json");
+  const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
+  catalog.environments.find((env: { id: string }) => env.id === task.id).status = "updating";
+  await writeFile(catalogPath, JSON.stringify(catalog));
+  const reloaded = new EnvironmentStore({
+    allowedChannels: ["conda-forge"], enabled: true, provisionerPath,
+    root: resolve(root, "envs"), runnerVersion: "test-runner",
+  }, executor);
+  await reloaded.initialize();
+  assert.equal(reloaded.list().find((env) => env.id === task.id)?.status, "failed");
+  await assert.rejects(reloaded.withRuntime(task.id, async () => undefined), /is failed/);
+  assert.ok(await reloaded.snapshotBytes(task.currentRevisionId));
 });
 
 test("trusted provisioning uses fixed channels while agent runtimes remain a separate no-network path", async (context) => {
@@ -192,10 +281,10 @@ test("task environments support structured pip sources, CRAN, and Bioconductor w
     undefined,
     "https://download.pytorch.org/whl/cpu",
   );
-  assert.ok(pipRevision.packages.includes("pip:torch"));
-  assert.ok(pipRevision.packages.includes("pip:torchvision"));
+  assert.ok(pipRevision.packages.includes("python:torch==1.0"));
+  assert.ok(pipRevision.packages.includes("python:torchvision==1.0"));
   assert.deepEqual(pipRevision.channels, ["https://download.pytorch.org/whl/cpu"]);
-  const pip = executions.find((execution) => /[\\/]bin[\\/]python$/.test(execution.executable));
+  const pip = executions.find((execution) => execution.arguments.includes("pip"));
   assert.equal(pip?.environment?.PYTHONHOME, undefined);
   assert.equal(pip?.environment?.PYTHONPATH, undefined);
   assert.equal(pip?.environment?.PYTHONUSERBASE, undefined);
@@ -217,10 +306,10 @@ test("task environments support structured pip sources, CRAN, and Bioconductor w
   const r = await store.createTask("r-packages", "r");
   assert.equal(store.list().some((environment) => environment.id === "starter-r"), true);
   const cranRevision = await store.install(r.id, ["survival"], undefined, "cran");
-  assert.ok(cranRevision.packages.includes("cran:survival"));
+  assert.deepEqual(JSON.parse((await store.snapshotBytes(cranRevision.id)).toString()).requestedChanges, ["cran:survival"]);
   const biocRevision = await store.install(r.id, ["DESeq2"], undefined, "bioconductor");
-  assert.ok(biocRevision.packages.includes("bioconductor:DESeq2"));
-  const rExecutions = executions.filter((execution) => /[\\/]bin[\\/]R$/.test(execution.executable));
+  assert.deepEqual(JSON.parse((await store.snapshotBytes(biocRevision.id)).toString()).requestedChanges, ["bioconductor:DESeq2"]);
+  const rExecutions = executions.filter((execution) => /[\\/]bin[\\/]R$/.test(execution.executable) && !execution.arguments.at(-1)?.includes("installed.packages"));
   assert.match(rExecutions[0]?.arguments.at(-1) ?? "", /cloud\.r-project\.org/);
   assert.match(rExecutions[1]?.arguments.at(-1) ?? "", /BiocManager::install/);
   assert.equal(executions.some((execution) => execution.executable === "/usr/bin/apt" || execution.arguments.includes("sudo")), false);
@@ -255,7 +344,7 @@ test("pip installs PyPI specs and retains local wheels by content hash in the re
 
   const pypiRevision = await store.install(environment.id, ["mindspore==2.7.0"], undefined, "pip");
   assert.notEqual(pypiRevision.id, initialRevisionId);
-  assert.ok(pypiRevision.packages.includes("pip:mindspore==2.7.0"));
+  assert.ok(pypiRevision.packages.includes("python:mindspore==2.7.0"));
 
   const workspaceRoot = resolve(root, "workspace");
   const relativeWheel = "wheels/example_pkg-1.2.3-py3-none-any.whl";
@@ -274,8 +363,7 @@ test("pip installs PyPI specs and retains local wheels by content hash in the re
     sourcePath: relativeWheel,
     version: "1.2.3",
   });
-  assert.ok(wheelRevision.packages.some((item) => item.includes(`\"path\":\"${relativeWheel}\"`)
-    && item.includes(`\"sha256\":\"${wheel.content.hash}\"`)));
+  assert.ok(wheelRevision.packages.includes("python:example_pkg==1.2.3"));
 
   const persistedWheel = resolve(root, "envs", "wheels", wheel.content.hash, wheel.filename);
   await rm(workspaceRoot, { force: true, recursive: true });
@@ -285,7 +373,7 @@ test("pip installs PyPI specs and retains local wheels by content hash in the re
     packages: string[];
   };
   assert.deepEqual(snapshot.localWheels, wheelRevision.localWheels);
-  assert.ok(snapshot.packages.some((item) => item.includes(wheel.content.hash)));
+  assert.ok(snapshot.packages.includes("python:example_pkg==1.2.3"));
   const laterRevision = await store.install(environment.id, ["audit-helper=1.0"]);
   assert.deepEqual(laterRevision.localWheels, wheelRevision.localWheels);
 
@@ -299,7 +387,7 @@ test("pip installs PyPI specs and retains local wheels by content hash in the re
   await reloaded.initialize();
   assert.deepEqual(reloaded.getRevision(laterRevision.id)?.localWheels, wheelRevision.localWheels);
 
-  const pipExecutions = executions.filter((execution) => /[\\/]bin[\\/]python$/.test(execution.executable));
+  const pipExecutions = executions.filter((execution) => execution.arguments.includes("pip"));
   assert.ok(pipExecutions.some((execution) => execution.arguments.includes("mindspore==2.7.0")));
   assert.ok(pipExecutions.some((execution) => execution.arguments.includes(persistedWheel)));
   assert.equal(pipExecutions.some((execution) => execution.arguments.includes(resolve(workspaceRoot, relativeWheel))), false);
@@ -474,7 +562,8 @@ test("micromamba bootstrap failure remains distinct and can be retried", async (
   await assert.rejects(store.setupManagedEnvironments(), /provisioner is unavailable/);
   assert.equal(store.setup.components.micromamba.state, "failed");
   assert.match(store.setup.components.micromamba.error ?? "", /provisioner is unavailable/);
-  assert.match(store.setup.components.micromamba.action ?? "", /configured micromamba executable path/);
+  assert.match(store.setup.components.micromamba.action ?? "", /Verify that .*micromamba.* is executable by the Runner user/u);
+  assert.match(store.setup.components.micromamba.action ?? "", new RegExp(provisionerPath.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   assert.equal(store.setup.components.conda.state, "not-configured");
 
   await writeFile(provisionerPath, "#!/bin/sh\nexit 0\n");
@@ -512,7 +601,112 @@ test("managed provisioner installation rejects bytes that do not match the pinne
   const destination = resolve(root, "managed", "micromamba");
   await assert.rejects(
     installManagedMicromamba(destination, async () => new Response("not micromamba", { status: 200 }), "x64", "linux"),
-    /SHA-256 verification/,
+    /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u,
+  );
+});
+
+test("a managed provisioner that is not the pinned release is replaced, not refused forever", async (context) => {
+  // A half-finished transfer, a copy seeded for another architecture, or a
+  // version this build no longer pins all leave the wrong bytes at the managed
+  // path. Refusing to start until a human deletes the file left a machine that
+  // could recover itself stuck on "verification failed".
+  const { root } = await fixture(context);
+  const managedRoot = resolve(root, "managed-envs");
+  const managedPath = resolve(managedRoot, "bin", "micromamba");
+  await mkdir(resolve(managedRoot, "bin"), { recursive: true });
+  await writeFile(managedPath, "an interrupted transfer");
+  await chmod(managedPath, 0o700);
+
+  const installs: string[] = [];
+  const store = new EnvironmentStore({
+    allowedChannels: ["conda-forge"],
+    enabled: true,
+    root: managedRoot,
+    runnerVersion: "test-runner",
+  }, async () => "", async (destination) => {
+    installs.push(destination);
+    await writeFile(destination, "#!/bin/sh\nexit 0\n");
+    await chmod(destination, 0o700);
+  });
+  await store.initialize();
+  await store.setupManagedEnvironments().catch(() => undefined);
+
+  assert.deepEqual(installs, [managedPath], "the wrong file is replaced by a fresh install");
+  assert.equal(await readFile(managedPath, "utf8"), "#!/bin/sh\nexit 0\n");
+  assert.equal(store.setup.components.micromamba.state, "ready");
+});
+
+test("a provisioner install says which step failed and why", async (context) => {
+  const { root } = await fixture(context);
+  const destination = resolve(root, "diagnosable", "micromamba");
+
+  // An isolated machine: the release host does not resolve. Node reports every
+  // transport failure as "fetch failed" and hides the reason in `cause`, which
+  // is what made an unreachable host indistinguishable from a broken proxy.
+  const unreachable = Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("getaddrinfo ENOTFOUND example.invalid"), { code: "ENOTFOUND" }),
+  });
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => { throw unreachable; }, "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "download");
+      assert.match(error.message, /Could not download the micromamba provisioner from https:\/\/[^ ]+micromamba-linux-64/u);
+      assert.match(error.message, /ENOTFOUND/u);
+      assert.equal(error.cause, unreachable, "the original error stays reachable for logs");
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => new Response("nope", { status: 502 }), "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "download");
+      assert.match(error.message, /HTTP 502/u);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => new Response("not micromamba", { status: 200 }), "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "verify", "a mirror serving the wrong bytes is not a network problem");
+      assert.match(error.message, /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u);
+      return true;
+    },
+  );
+});
+
+test("a fetch failure is described by its cause, not by the word it always prints", () => {
+  assert.match(describeFetchFailure(Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), { code: "ECONNREFUSED" }),
+  })), /ECONNREFUSED/u);
+  // A timeout is the one case where the chain has no code worth printing.
+  assert.match(describeFetchFailure(Object.assign(new Error("aborted"), { name: "AbortError" })), /timed out after 120s/u);
+  // Self-referencing causes must not spin.
+  const looping = new Error("looping") as Error & { cause?: unknown };
+  looping.cause = looping;
+  assert.equal(describeFetchFailure(looping), "looping");
+  assert.equal(describeFetchFailure(new TypeError("fetch failed")), "the connection failed");
+});
+
+test("an installation behind a mirror can move the release host without losing the checksum", async (context) => {
+  const { root } = await fixture(context);
+  assert.equal(
+    managedMicromambaRelease("x64", "linux", { SCIENCE_AGENT_MICROMAMBA_BASE_URL: "https://mirror.internal/micromamba/2.8.1-0/" }).url,
+    "https://mirror.internal/micromamba/2.8.1-0/micromamba-linux-64",
+  );
+  assert.equal(managedMicromambaBaseUrl({}), "https://github.com/mamba-org/micromamba-releases/releases/download/2.8.1-0");
+  assert.equal(managedMicromambaBaseUrl({ SCIENCE_AGENT_MICROMAMBA_BASE_URL: "  " }), managedMicromambaBaseUrl({}));
+  // The mirror decides where the bytes come from, never what they may be.
+  const pinned = managedMicromambaRelease("x64", "linux");
+  await assert.rejects(
+    installManagedMicromamba(resolve(root, "mirrored", "micromamba"),
+      async () => new Response("mirror served something else", { status: 200 }), "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "verify");
+      assert.match(error.message, new RegExp(pinned.sha256, "u"));
+      return true;
+    },
   );
 });
 
@@ -556,7 +750,7 @@ test("managed provisioner selects pinned Linux and macOS releases", async (conte
       "arm64",
       "linux",
     ),
-    /SHA-256 verification/,
+    /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u,
   );
   assert.deepEqual(requestedUrls, [arm64.url]);
 });

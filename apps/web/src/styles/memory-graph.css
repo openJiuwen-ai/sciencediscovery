@@ -326,6 +326,10 @@
 
 .node-detail-body { display: flex; flex-direction: column; gap: 12px; }
 .node-detail-title { margin: 0; font-size: 13px; color: var(--text-strong); line-height: 1.4; }
+/* A title that is itself the link (WebPage): .node-link's 11px is the field
+   strip's size, so the header keeps its own. The accent colour + underline
+   the shared rule already applies are the click affordance. */
+.node-detail-title .node-link { font-size: inherit; line-height: inherit; }
 .node-detail-year { color: var(--muted); font-weight: 400; }
 .node-detail-section { display: flex; flex-direction: column; gap: 4px; }
 .node-detail-section-label { margin: 0; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
@@ -483,3 +487,74 @@
   /* Narrow: the tour card uses more of the width; bubble stays clamped. */
   .memory-tour-card { max-width: min(440px, calc(100% - 24px)); }
 }
+
+/* --- PR4: WebPage / DbRecord detail surface ------------------------------- */
+
+/* Identifier badge: a small inline pill that pairs the accession/source with
+   a copy button. The plain variant (no copy button) is used for WebPage's
+   wiki path, where the URL link below is the natural follow; the default
+   variant pairs the identifier with the shared CopyButton (the same copy
+   affordance chat messages and code blocks already use). The badge sits
+   inline with the title row, so wrap gracefully on long identifiers. */
+.node-identifier-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  align-self: flex-start;
+  padding: 2px 6px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.node-identifier-badge-plain { padding-right: 8px; }
+.node-identifier-badge-text { word-break: break-all; }
+/* Button variant: the whole pill is the click target — no trailing icon and
+   no unexplained blank gap, just a "复制标识符 / Copy identifier" prefix that
+   names the affordance and rewrites itself to "已复制 / Copied" for 1.5s after
+   a successful copy. Hover/active feedback keeps the rest of the style surface
+   visually quiet (a darker border alone, no new colour). */
+.node-identifier-badge-button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+  /* The badge lives inside a flex row that vertically centers its children
+   — strip the default button vertical-align so the inline-flex metrics line
+   up with neighbouring .node-detail-row items. */
+  vertical-align: middle;
+}
+.node-identifier-badge-button:hover {
+  border-color: var(--text-secondary);
+  background: var(--surface);
+}
+.node-identifier-badge-button:active {
+  background: var(--surface);
+  border-color: var(--text);
+}
+.node-identifier-badge-button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+.node-identifier-badge-prefix {
+  font-weight: 500;
+  color: var(--muted);
+}
+.node-identifier-badge-button.copied .node-identifier-badge-prefix {
+  color: var(--text);
+}
+.node-identifier-badge-button.copied {
+  border-color: var(--text);
+}
+
+/* Inline row used between the title and the snippet section. Keeps the
+   WebPage URL link, the identifier badge, or other one-line chips aligned
+   in the same flow without re-introducing a Field grid (which would impose
+   the 90px label column they don't need). */
+.node-detail-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* Original-references list for llm-wiki hits: plain text bullets, no link
+   styling — the refs are short provenance strings (URLs, paper titles),
+   not clickable themselves. Indented slightly so the bullets line up with
+   the section label. */
+.node-source-refs { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text); }
+.node-source-refs li::marker { color: var(--muted); }

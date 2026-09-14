@@ -26,7 +26,6 @@ export function versioningAuthorities(store: SessionStore, sessionId: string, ru
     return {
       session: session ? { id: session.id, projectId: session.projectId } : null,
       permission: store.getSessionPermissionEpoch(sessionId) ?? null,
-      plans: store.listSessionPlans(sessionId),
       artifacts: await Promise.all(store.listArtifacts(sessionId).map(async (artifact) => ({
         ...artifact, versions: await Promise.all(store.listArtifactVersions(sessionId, artifact.id).map(async (version) => ({
           ...version, content: await retain(version.content, "data"),
@@ -35,6 +34,9 @@ export function versioningAuthorities(store: SessionStore, sessionId: string, ru
       environments: store.listEnvironments(),
       environmentRevisions: store.listEnvironmentRevisions(),
       children: store.listSubagents(sessionId),
+      notifications: store.notifications.snapshot(sessionId),
+      transfers: store.transfers.snapshot(sessionId),
+      shellExecutions: store.shellExecutions.snapshot(sessionId),
       reviews: await store.listReviews(sessionId),
       artifactReviews: await store.listArtifactReviews(sessionId),
       executions,

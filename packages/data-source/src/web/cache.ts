@@ -47,6 +47,10 @@ export class WebCache {
     `);
   }
 
+  close(): void {
+    this.database.close();
+  }
+
   get(key: string): WebCacheEntry | undefined {
     const row = this.database.prepare(
       "SELECT expires_at, content, snapshot_hash, snapshot_size FROM web_cache WHERE cache_key = ?",

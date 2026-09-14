@@ -13,13 +13,82 @@
 // limitations under the License.
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
-import { SKILL_EXTENSIONS_WORKSPACE_PATH } from "@sciencediscovery/schema";
+import {
+  SKILL_EXTENSIONS_WORKSPACE_PATH,
+  type SkillPackageBundle,
+  type SkillPackageManifest,
+} from "@sciencediscovery/schema";
 import { hashSkillPackageFiles, type RuntimeSkillSnapshot } from "@sciencediscovery/specialist";
 
 export const SKILL_SNAPSHOT_MANIFEST = ".sciencediscovery-snapshot.json";
+
+async function readSnapshotManifest(root: string): Promise<SkillSnapshotManifest> {
+  const rootInfo = await lstat(root);
+  if (!rootInfo.isDirectory()) throw new Error("Unsafe frozen Skill root");
+  const manifestInfo = await lstat(resolve(root, SKILL_SNAPSHOT_MANIFEST));
+  if (!manifestInfo.isFile()) throw new Error("Unsafe frozen Skill manifest");
+  const manifest = JSON.parse(await readFile(resolve(root, SKILL_SNAPSHOT_MANIFEST), "utf8")) as SkillSnapshotManifest;
+  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.skills)) throw new Error("Invalid frozen Skill manifest");
+  for (const skill of manifest.skills) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.id)) throw new Error("Unsafe frozen Skill id");
+  }
+  return manifest;
+}
+
+/**
+ * What this run selected, without its bytes. Each `hash` already covers that
+ * package's files, so a Runner can be asked whether it holds this exact set
+ * before anything is read off disk or put on the wire.
+ */
+export async function readPreparedSkillManifest(root: string): Promise<SkillPackageManifest> {
+  const manifest = await readSnapshotManifest(root);
+  return {
+    skills: manifest.skills.map((skill) => ({
+      hash: skill.hash,
+      id: skill.id,
+      revision: skill.revision,
+      version: skill.version,
+    })),
+  };
+}
+
+/**
+ * Transport only selected frozen bytes, never a control-plane mount path. Each
+ * package is re-hashed from what is on disk before it leaves this machine, so a
+ * snapshot damaged after staging fails the execution here rather than being
+ * shipped to a Runner as if it were still the frozen package.
+ */
+export async function readPreparedSkillBundle(root: string): Promise<SkillPackageBundle> {
+  const manifest = await readSnapshotManifest(root);
+  const bundle: SkillPackageBundle = { skills: [] };
+  for (const skill of manifest.skills) {
+    const files: SkillPackageBundle["skills"][number]["files"] = [];
+    const packageFiles = new Map<string, Uint8Array>();
+    const walk = async (dir: string, prefix = ""): Promise<void> => {
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const path = safePackagePath(prefix + entry.name);
+        if (entry.isSymbolicLink()) throw new Error("Unsafe frozen Skill file");
+        if (entry.isDirectory()) {
+          await walk(resolve(dir, entry.name), `${path}/`);
+          continue;
+        }
+        if (!entry.isFile()) throw new Error("Unsafe frozen Skill file");
+        const bytes = await readFile(resolve(dir, entry.name));
+        packageFiles.set(path, bytes);
+        files.push({ path, size: bytes.length, hash: createHash("sha256").update(bytes).digest("hex"), content: bytes.toString("base64") });
+      }
+    };
+    await walk(resolve(root, skill.id));
+    if (hashSkillPackageFiles(packageFiles) !== skill.hash) {
+      throw new Error(`Frozen Skill package integrity mismatch: ${skill.id}`);
+    }
+    bundle.skills.push({ id: skill.id, revision: skill.revision, version: skill.version, hash: skill.hash, files });
+  }
+  return bundle;
+}
 
 export interface SkillSnapshotManifest {
   schemaVersion: 1;

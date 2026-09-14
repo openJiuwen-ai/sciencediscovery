@@ -41,6 +41,7 @@ import {
   resolveQuotaBytes,
   seccompVariantFor,
   spawnSandboxProcess,
+  killSandboxProcess,
   truncateToBudget,
   validatedWorkspace,
   workspaceBindArguments,
@@ -272,7 +273,7 @@ class ManagedShellSession {
   async stop(reason: string): Promise<void> {
     if (this.stopped) return;
     this.markStopped(reason);
-    this.child.kill("SIGKILL");
+    killSandboxProcess(this.child);
     await this.launch.cleanup?.().catch(() => undefined);
   }
 
@@ -587,7 +588,7 @@ export class ShellSessionManager {
       seccompVariantFor(networkAccess),
     );
     if (!child.stdin || !child.stdout || !child.stderr) {
-      child.kill("SIGKILL");
+      killSandboxProcess(child);
       throw new Error("Runner failed to create persistent shell streams");
     }
     const now = new Date();

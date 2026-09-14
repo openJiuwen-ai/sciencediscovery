@@ -208,9 +208,11 @@ test("environment policy reaches the provider and still drives the audited proxy
     singleEngine({ resolved: { mode: "environment" } }),
     providerWithCapture,
     {
-      HTTP_PROXY: "http://ignored-upper.test:1",
-      HTTPS_PROXY: "http://effective-upper.test:2",
-      http_proxy: " ",
+      proxyEnvironment: {
+        HTTP_PROXY: "http://ignored-upper.test:1",
+        HTTPS_PROXY: "http://effective-upper.test:2",
+        http_proxy: " ",
+      },
     },
   );
 
@@ -280,4 +282,162 @@ test("fetch requests host permission and never switch provider", async (contextT
   );
   assert.deepEqual(calls, ["jina"]);
   assert.deepEqual(resources, ["host:example.test"]);
+});
+
+/** A memory-graph sink that records every observeToolCall emission. */
+function recordingSink(): {
+  sink: { observeToolCall: (payload: unknown) => void };
+  emissions: unknown[];
+} {
+  const emissions: unknown[] = [];
+  return {
+    emissions,
+    sink: {
+      observeToolCall(payload) {
+        emissions.push(payload);
+      },
+    },
+  };
+}
+
+const SEARCH_DOCUMENT = JSON.stringify({
+  query: "TP53",
+  total_results: 2,
+  results: [
+    { content: "p53 summary", title: "TP53 - Wikipedia", url: "https://en.wikipedia.org/wiki/TP53" },
+    { content: "", url: "https://example.test/p53" },
+  ],
+});
+
+test("successful search mirrors web_page products to the memory graph on live and cache paths", async (contextTest) => {
+  const root = resolve(process.cwd(), ".tmp", `web-broker-graph-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  contextTest.after(() => rm(root, { force: true, recursive: true }));
+  const { sink, emissions } = recordingSink();
+  const broker = new WebBroker(root, singleEngine(), gateway([], {
+    duckduckgo: { content: SEARCH_DOCUMENT, durationMs: 2, isError: false },
+  }), { memoryGraphSink: sink });
+
+  // Live path.
+  const first = await broker.search("TP53", context, permission([]));
+  assert.equal((first as { invocation: { status: string } }).invocation.status, "succeeded");
+  assert.equal(emissions.length, 1, "live success must emit one observeToolCall");
+  const emission = emissions[0] as {
+    taskId: string; sessionId: string; turnId: string;
+    toolName: string; toolType: string; resultCount: number;
+    products: Array<{ productType: string; url: string; title?: string; snippet?: string }>;
+  };
+  assert.equal(emission.toolName, "web_search");
+  // The tool's *type* is the coarse class, never the tool's own name.
+  assert.equal(emission.toolType, "search");
+  assert.equal(emission.sessionId, context.sessionId);
+  assert.equal(emission.turnId, context.turnId);
+  assert.match(emission.taskId, /^subtask:web:/);
+  assert.equal(emission.resultCount, 2);
+  assert.deepEqual(emission.products, [
+    {
+      productType: "web_page",
+      snippet: "p53 summary",
+      title: "TP53 - Wikipedia",
+      url: "https://en.wikipedia.org/wiki/TP53",
+    },
+    { productType: "web_page", url: "https://example.test/p53" },
+  ]);
+
+  // Cache path: a re-run of the same query must emit again (the WebPages the
+  // LLM will cite must exist on the graph or downstream declare_* calls 422).
+  const second = await broker.search("TP53", { ...context, toolCallId: "call-2" }, permission([]));
+  assert.equal((second as { invocation: { cacheHit: boolean } }).invocation.cacheHit, true);
+  assert.equal(emissions.length, 2, "cache-hit path must emit as well");
+  assert.deepEqual(
+    (emissions[1] as { products: unknown[] }).products,
+    emission.products,
+  );
+});
+
+test("malformed search content never throws and never emits", async (contextTest) => {
+  const root = resolve(process.cwd(), ".tmp", `web-broker-graph-bad-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  contextTest.after(() => rm(root, { force: true, recursive: true }));
+  const { sink, emissions } = recordingSink();
+  const broker = new WebBroker(root, singleEngine(), gateway([], {
+    // Not JSON at all — this must not surface an error on the search or emit
+    // to the graph (fire-and-forget mirroring contract).
+    duckduckgo: { content: "<html>not json</html>", durationMs: 2, isError: false },
+  }), { memoryGraphSink: sink });
+
+  const result = await broker.search("TP53", context, permission([]));
+  assert.equal((result as { invocation: { status: string } }).invocation.status, "succeeded");
+  assert.equal(emissions.length, 0, "unparseable content must not emit");
+
+  // A JSON document whose results rows all lack URLs parses to zero products
+  // → no emission, and the search still succeeds.
+  const brokerNoUrls = new WebBroker(root, singleEngine(), gateway([], {
+    duckduckgo: { content: '{"results":[{"title":"no url"}]}', durationMs: 2, isError: false },
+  }), { memoryGraphSink: sink });
+  const noUrl = await brokerNoUrls.search("p53 gene", { ...context, toolCallId: "call-3" }, permission([]));
+  assert.equal((noUrl as { invocation: { status: string } }).invocation.status, "succeeded");
+  assert.equal(emissions.length, 0, "zero valid rows must not emit");
+});
+
+test("successful web_fetch mirrors a WebPage with contentHash to the memory graph", async (contextTest) => {
+  // The fetched body must land in the CAS data pool (same pool as the
+  // recorder + MCP broker), and the mirror must carry the resulting hash —
+  // this is the chain that lets declare_evidence with source_webpage_link
+  // resolve once a fetch tool populated the body.
+  const { createHash } = await import("node:crypto");
+  const { stat } = await import("node:fs/promises");
+  const root = resolve(process.cwd(), ".tmp", `web-broker-pr9-fetch-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  contextTest.after(() => rm(root, { force: true, recursive: true }));
+  const { sink, emissions } = recordingSink();
+  const body = "BRCA1 is a tumor suppressor gene on chromosome 17.";
+  const expectedHash = createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
+  const broker = new WebBroker(root, store({ fetchProvider: "jina" }), gateway([], {
+    jina: { content: body, durationMs: 2, isError: false },
+  }), { memoryGraphSink: sink });
+
+  const first = await broker.fetch("https://en.wikipedia.org/wiki/BRCA1", context, permission([]));
+  assert.equal((first as { invocation: { status: string } }).invocation.status, "succeeded");
+  // Fire-and-forget — wait for the async mirror task to drain. The mirror
+  // awaits a CAS write before calling the sink, so we wait on setTimeout
+  // ticks rather than just setImmediate.
+  for (let i = 0; i < 100 && emissions.length === 0; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(emissions.length, 1, "fetch success must emit one observeToolCall");
+  const emission = emissions[0] as {
+    taskId: string;
+    toolName: string;
+    toolType: string;
+    resultCount: number;
+    products: Array<{ productType: string; url: string; contentHash?: string }>;
+  };
+  assert.equal(emission.toolName, "web_fetch");
+  // Regression guard: this used to read "web_search" — the fetch tool's type
+  // was the search tool's name, which is unreadable on the card and was the
+  // reason the vocabulary was collapsed.
+  assert.equal(emission.toolType, "search");
+  assert.equal(emission.resultCount, 1);
+  assert.match(emission.taskId, /^subtask:web-fetch:/);
+  assert.deepEqual(emission.products, [{
+    productType: "web_page",
+    url: "https://en.wikipedia.org/wiki/BRCA1",
+    contentHash: expectedHash,
+  }]);
+  // The body lives under data/ (CAS data pool), not agent-state/.
+  const blobPath = resolve(root, "versioning", "data", "blobs", "sha256", expectedHash);
+  const st = await stat(blobPath);
+  assert.equal(st.size, Buffer.byteLength(body, "utf8"));
+
+  // Cache hit must re-emit with the same hash — content-addressed re-put is
+  // a no-op so the blob still resolves.
+  const second = await broker.fetch("https://en.wikipedia.org/wiki/BRCA1", { ...context, toolCallId: "call-2" }, permission([]));
+  assert.equal((second as { invocation: { cacheHit: boolean } }).invocation.cacheHit, true);
+  for (let i = 0; i < 100 && emissions.length < 2; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(emissions.length, 2);
+  const cachedProduct = (emissions[1] as { products: Array<{ contentHash?: string }> }).products[0]!;
+  assert.equal(cachedProduct.contentHash, expectedHash);
 });

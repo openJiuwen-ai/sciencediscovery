@@ -19,6 +19,7 @@ import {
   type McpError,
   type McpInvocation,
   type McpRawResult,
+  type McpRecord,
   type McpRetryPolicy,
   type McpToolResult,
   type PermissionAction,
@@ -27,11 +28,16 @@ import {
   type ResolvedProxy,
   type ResolvedRuntimeSettings,
   type ResultCachePolicy,
+  type ToolGraphProduct,
+  toolGraphSpec,
 } from "@sciencediscovery/schema";
 import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { CasStore } from "@sciencediscovery/cas";
 
-import type { MemoryGraphSink } from "@sciencediscovery/memory";
+import type {
+  MemoryGraphSink,
+  MemoryGraphToolCallProduct,
+} from "@sciencediscovery/memory";
 import {
   ResourceRateLimiter,
   ResourceRateLimitQueueFullError,
@@ -172,8 +178,178 @@ function upstreamError(response: {
   };
 }
 
+/** Pull a tool's page body out of the raw MCP response.
+ *
+ *  llm-wiki get_page returns a single-page payload ``{ content: "..." }``;
+ *  get_pages returns a multi-page payload ``{ pages: [{content: "..."}, ...] }``.
+ *  The body never enters ``normalizeResult``'s ``McpRecord`` shape, so the
+ *  mirror re-reads it here — one extraction shared by the cached and live
+ *  paths. Returns one text per record so multi-page calls don't smear the
+ *  first page's body across every record (a per-record array is the only
+ *  shape that keeps the page-to-CAS mapping correct).
+ *  Search tools have no body → ``undefined`` (their WebPage products stay
+ *  snippet-only). ``JSON.parse`` failures / non-string content also yield
+ *  ``undefined``: a malformed body must degrade to a hash-less page, never
+ *  break the call. ``recordsCount`` lets the test (and future callers)
+ *  pin the alignment contract: when the upstream wiki drops empty pages
+ *  between extract and normalize, records[] can outnumber pages[] — the
+ *  returned array pads with "" past its end so the per-record text is
+ *  always index-aligned, never smeared from an earlier slot.
+ *  Known limit: this assumes prefix-alignment (the wiki may only drop
+ *  pages from the tail, not the middle). If a future upstream drops a
+ *  page from the middle of pages[], record indices would shift and
+ *  page-(i+1)'s body would still land on record-i+1; a stable identifier
+ *  join would be the next move if that case is observed. */
+export function extractRawTexts(
+  raw: { content?: Array<{ type: string; text?: string }>; structuredContent?: unknown },
+  toolId: string,
+  recordsCount: number = 0,
+): string[] | undefined {
+  if (toolId !== "get_page" && toolId !== "get_pages") return undefined;
+  let payload: unknown = raw.structuredContent;
+  if (payload === undefined) {
+    const text = raw.content?.find((block) => block.type === "text");
+    if (text?.text === undefined) return undefined;
+    try {
+      payload = JSON.parse(text.text);
+    } catch {
+      return undefined;
+    }
+  }
+  if (payload === null || typeof payload !== "object") return undefined;
+  const obj = payload as Record<string, unknown>;
+  // get_pages: { pages: [{content: "..."}, ...] } — one text per record, in
+  // order. Pages without a string content contribute an empty slot, not a
+  // skipped entry, so the indices still line up with records. If records
+  // outnumber pages (the upstream wiki dropped empty pages), pad with ""
+  // so the tail records land hash-less instead of smearing an earlier slot.
+  if (Array.isArray(obj.pages)) {
+    const slots = obj.pages.map((p) => {
+      const c = p !== null && typeof p === "object" ? (p as Record<string, unknown>).content : undefined;
+      return typeof c === "string" && c.length > 0 ? c : "";
+    });
+    while (slots.length < recordsCount) slots.push("");
+    return slots;
+  }
+  // get_page (single page): { content: "..." } — share that one text across
+  // every record. Multi-record responses on this shape are uncommon (each
+  // tool call usually has one page), but the mirror must not drop pages.
+  if (typeof obj.content === "string" && obj.content.length > 0) {
+    return [obj.content];
+  }
+  return undefined;
+}
+
+/** Map one normalized ``McpRecord`` onto the memory-graph product shape that
+ *  the sidecar's ``/observe/tool-call`` expects, driven by the registry's
+ *  ``product`` for the tool (paper / web_page / db_record; ``code`` never
+ *  reaches the MCP mirror path).
+ *
+ *  The dispatch is exhaustive on purpose. It used to branch on the graph
+ *  *type* with a bare fallthrough to db_record, so any newly registered tool
+ *  whose type was not spelled out above silently landed as a DbRecord. The
+ *  shapes below are the only ones this path can build, so anything else
+ *  throws and the caller's catch drops the mirror (a wrong-typed node is
+ *  worse than a missing one: it surfaces later as a 422 from declare_evidence
+ *  against a product that does not exist).
+ *
+ *  Notes:
+ *  - ``paper`` carries ``link`` (not ``url``) — the Paper label dedups on
+ *    normalized ``link``, and ``upsert_tool_call``'s paper branch reads
+ *    ``rec.get("url") or rec.get("link")`` for back-compat, but the TS payload
+ *    contract puts the canonical name on ``link``.
+ *  - ``web_page`` projects ``record.crossReferences[*].identifier`` into
+ *    ``sourceRefs`` so a wiki page's references land on the WebPage node
+ *    (the detail card renders them). ``crossReferences`` may be undefined on
+ *    non-wiki sources; ``?.map`` keeps the field absent then.
+ *  - ``web_page`` + a non-empty ``rawText`` first lands the body in the CAS
+ *    data pool (same pool as recorder ``dataCas`` — the node stores only the
+ *    hash, mirroring SourceFile.content_hash) and carries ``contentHash``.
+ *    A CAS write failure leaves ``contentHash`` unset: the page degrades to
+ *    its snippet-only state (searchable but not usable as a declare_evidence
+ *    source) instead of failing the whole mirror.
+ *  - ``code`` never reaches here (the MCP broker only mirrors registered
+ *    search/fetch tools; recorder-mirror is its own path).
+ *
+ *  Exported for tests (same reason as ``extractRawTexts``): the dispatch is
+ *  the part worth pinning down, and building a whole broker to reach it would
+ *  test less for more.
+ */
+export async function mcpRecordToProduct(
+  record: McpRecord,
+  product: ToolGraphProduct,
+  rawText: string | undefined,
+  dataCas: CasStore,
+): Promise<MemoryGraphToolCallProduct> {
+  switch (product) {
+    case "paper":
+      return {
+        productType: "paper",
+        link: record.url,
+        title: record.title,
+        identifier: record.identifier,
+        identifierType: record.identifierType,
+        year: record.year,
+        authors: record.authors,
+        abstract: record.abstract,
+        source: record.source,
+      };
+    case "web_page": {
+      let contentHash: string | undefined;
+      if (rawText && rawText.length > 0) {
+        try {
+          contentHash = (await dataCas.put(rawText)).hash;
+        } catch (error) {
+          // Never fail the mirror over a CAS write: the page lands hash-less
+          // (search-snippet-only state) and the tool call itself is unaffected.
+          console.warn("mcpRecordToProduct: dataCas.put failed: %s",
+            error instanceof Error ? error.message : String(error));
+        }
+      }
+      return {
+        productType: "web_page",
+        url: record.url,
+        identifier: record.identifier,
+        identifierType: record.identifierType,
+        title: record.title,
+        snippet: record.abstract,
+        sourceRefs: record.crossReferences?.map((ref) => ref.identifier),
+        ...(contentHash ? { contentHash } : {}),
+      };
+    }
+    case "db_record":
+      return {
+        productType: "db_record",
+        source: record.source,
+        identifier: record.identifier,
+        identifierType: record.identifierType,
+        url: record.url,
+        title: record.title,
+        snippet: record.abstract,
+      };
+    case "code":
+      throw new Error(
+        "mcpRecordToProduct: a code-producing tool is registered on the MCP mirror path "
+        + `(tool emitted product "code" for record ${record.identifier ?? "<no identifier>"}); `
+        + "executions reach the graph through the provenance recorder, not here.",
+      );
+    default:
+      return assertNeverProduct(product);
+  }
+}
+
+/** Exhaustiveness guard: a new ``ToolGraphProduct`` must be routed above, or
+ *  TypeScript rejects this call and the build stops here rather than at
+ *  runtime. */
+function assertNeverProduct(product: never): never {
+  throw new Error(`mcpRecordToProduct: unhandled product ${String(product)}`);
+}
+
 export class McpGovernanceBroker {
   readonly cas: CasStore;
+  /** CAS data pool for page bodies — same pool as the provenance recorder's
+   *  ``dataCas``; the graph node stores only the hash. */
+  private readonly dataCas: CasStore;
   private readonly cache: McpResultCache;
   private readonly limiter: ResourceRateLimiter;
   private readonly memoryGraphSink: MemoryGraphSink | null;
@@ -191,9 +367,14 @@ export class McpGovernanceBroker {
     } = {},
   ) {
     this.cas = new CasStore(dataDir);
+    this.dataCas = new CasStore(dataDir, "data");
     this.cache = options.cache ?? new McpResultCache(dataDir);
     this.limiter = options.limiter ?? new ResourceRateLimiter();
     this.memoryGraphSink = options.memoryGraphSink ?? null;
+  }
+
+  close(): void {
+    this.cache.close();
   }
 
   private async appendFailure(options: {
@@ -321,30 +502,45 @@ export class McpGovernanceBroker {
           turnId: request.turnId,
         };
         await this.store.appendMcpInvocation(invocation);
-        // A cache hit still returns Papers the LLM will cite, so mirror it to
-        // the memory graph exactly like the uncached path below — otherwise a
-        // re-run of the same search produces no Paper nodes, declare_evidence
-        // then 422s on source_paper_not_found, and claims lose their evidence.
-        if (tool.kind === "search" && !request.suppressMemoryGraphMirror) {
-          this.memoryGraphSink?.observeMcpInvocation({
-            invocationId: invocation.id,
-            sessionId: request.sessionId,
-            turnId: request.turnId,
-            source: request.sourceId,
-            toolType: request.toolId,
-            retrievedAt: invocation.finishedAt,
-            records: cached.result.records.map((record) => ({
-              url: record.url,
-              title: record.title,
-              identifier: record.identifier,
-              identifierType: record.identifierType,
-              year: record.year,
-              authors: record.authors,
-              abstract: record.abstract,
-              source: record.source,
-            })),
-            parentSubagentId: request.parentSubagentId,
-          });
+        // A cache hit still returns records the LLM will cite, so mirror it
+        // to the memory graph exactly like the uncached path below — otherwise
+        // a re-run of the same search produces no Paper/WebPage/DbRecord nodes
+        // and downstream declare_* calls 422 on missing nodes. Gating is
+        // driven by the registry (``toolGraphSpec(fullName)``), not by
+        // ``tool.kind === "search"`` — the registry is the single source of
+        // truth for which MCP tools enter the graph. A cached get_page /
+        // get_pages also re-lands its page body (the raw response JSON comes
+        // back from CAS; content addressing makes the re-put a no-op).
+        const fullName = `mcp__${request.sourceId.replace(/[^A-Za-z0-9_-]/g, "_")}__${request.toolId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+        const spec = toolGraphSpec(fullName);
+        if (spec !== undefined && !request.suppressMemoryGraphMirror) {
+          try {
+            let raw: Parameters<typeof extractRawTexts>[0] | undefined;
+            if (request.toolId === "get_page" || request.toolId === "get_pages") {
+              try {
+                raw = JSON.parse((await this.cas.read(cached.rawResponse.hash)).toString("utf8"));
+              } catch {
+                // Raw response unreadable → mirror without a page body.
+              }
+            }
+            const products = await this.buildMirrorProducts(
+              cached.result.records, spec.product, raw, request.toolId,
+            );
+            this.memoryGraphSink?.observeToolCall({
+              taskId: `subtask:mcp:${invocation.id}`,
+              sessionId: request.sessionId,
+              turnId: request.turnId,
+              toolName: fullName,
+              toolType: spec.type,
+              source: request.sourceId,
+              resultCount: cached.result.records.length,
+              products,
+              parentSubagentId: request.parentSubagentId,
+            });
+          } catch (error) {
+            console.warn("memory-graph mirror (cached) failed: %s",
+              error instanceof Error ? error.message : String(error));
+          }
         }
         return { invocation, result: structuredClone(cached.result) };
       }
@@ -397,6 +593,7 @@ export class McpGovernanceBroker {
     let result: McpToolResult;
     let attempts: McpInvocation["attempts"] = [];
     let rawResponse: McpInvocation["rawResponse"];
+    let rawResult: McpRawResult | undefined;
     let mcpCatalogRevision: string | undefined;
 
     try {
@@ -457,6 +654,10 @@ export class McpGovernanceBroker {
         isError: false,
         ...(response.structuredContent !== undefined ? { structuredContent: response.structuredContent } : {}),
       };
+      // Kept for the graph mirror below: a get_page/get_pages body lives only
+      // in this raw response (normalizeResult's McpRecord drops it), so the
+      // mirror re-reads it to land the text in the CAS data pool.
+      rawResult = raw;
       result = await source.normalizeResult({
         retrievedAt: new Date().toISOString(),
         source: source.manifest,
@@ -527,35 +728,71 @@ export class McpGovernanceBroker {
     };
     await this.store.appendMcpInvocation(invocation);
     // Mirror the search to the memory graph (fire-and-forget): one auto-inferred
-    // SubTask per search + Paper nodes deduped by normalized URL + produces
-    // edges. Only `search`-kind tools produce Papers — `lookup`/`prepare_*`
-    // (fetch-a-single-record) and `artifact-plan`/`analysis` tools are not
-    // literature searches and must not spawn a SubTask + Paper nodes. Disabled/
-    // unreachable memory-graph never breaks the search (the sink no-ops).
-    if (tool.kind === "search" && !request.suppressMemoryGraphMirror) {
-      this.memoryGraphSink?.observeMcpInvocation({
-        invocationId: invocation.id,
-        sessionId: request.sessionId,
-        turnId: request.turnId,
-        source: request.sourceId,
-        toolType: request.toolId,
-        retrievedAt: result.retrievedAt,
-        records: result.records.map((record) => ({
-          url: record.url,
-          title: record.title,
-          identifier: record.identifier,
-          identifierType: record.identifierType,
-          year: record.year,
-          authors: record.authors,
-          abstract: record.abstract,
-          source: record.source,
-        })),
-        parentSubagentId: request.parentSubagentId,
-      });
+    // ToolCall per search + product nodes deduped + produces edges. Gating
+    // is driven by the registry (``toolGraphSpec(fullName)``), not by
+    // ``tool.kind === "search"`` — the registry is the single source of truth
+    // for which MCP tools enter the graph. get_page / get_pages products
+    // additionally carry content_hash (body → CAS data pool). Disabled/
+    // unreachable memory-graph never breaks the search (the sink no-ops); the
+    // try/catch keeps a mirror failure off the tool call too.
+    const fullName = `mcp__${request.sourceId.replace(/[^A-Za-z0-9_-]/g, "_")}__${request.toolId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+    const spec = toolGraphSpec(fullName);
+    if (spec !== undefined && !request.suppressMemoryGraphMirror) {
+      try {
+        const products = await this.buildMirrorProducts(
+          result.records, spec.product, rawResult, request.toolId,
+        );
+        this.memoryGraphSink?.observeToolCall({
+          taskId: `subtask:mcp:${invocation.id}`,
+          sessionId: request.sessionId,
+          turnId: request.turnId,
+          toolName: fullName,
+          toolType: spec.type,
+          source: request.sourceId,
+          resultCount: result.records.length,
+          products,
+          parentSubagentId: request.parentSubagentId,
+        });
+      } catch (error) {
+        console.warn("memory-graph mirror failed: %s",
+          error instanceof Error ? error.message : String(error));
+      }
     }
     return {
       invocation,
       result: structuredClone(result),
     };
+  }
+
+  /** Build the mirrored products for one tool call. Shared by the cached
+   *  and live paths so both land a get_page/get_pages body in the CAS
+   *  data pool identically; never re-reads CAS for tools without a body.
+   *  Each record's text is taken by its index in the per-record array
+   *  extractRawTexts returns — get_pages emits one slot per page so the
+   *  page-i body lands on record-i, not the page-0 body on every record.
+   * When records.length > rawTexts.length (the upstream wiki sometimes
+   * dedups or drops empty pages between extract and normalize) the tail
+   * records land hash-less instead of smearing an earlier body. */
+  async buildMirrorProducts(
+    records: McpRecord[],
+    product: ToolGraphProduct,
+    raw: Parameters<typeof extractRawTexts>[0] | undefined,
+    toolId: string,
+  ): Promise<MemoryGraphToolCallProduct[]> {
+    const rawTexts = raw === undefined
+      ? undefined
+      : extractRawTexts(raw, toolId, records.length);
+    // get_page (single text) shares its one body across every record; other
+    // tools (search / db-record sources) leave rawTexts undefined and every
+    // record gets an empty slot, so the per-record text is "" — never carry a
+    // stale body across record boundaries. With recordsCount padded, per-index
+    // access here is always safe for the records the call actually has.
+    const sharedText = rawTexts && rawTexts.length === 1 ? rawTexts[0] : undefined;
+    return Promise.all(records.map((record, index) => {
+      const text = sharedText !== undefined
+        ? sharedText
+        : (rawTexts?.[index] ?? "");
+      return mcpRecordToProduct(record, product, text, this.dataCas);
+    }));
   }
 }

@@ -16,7 +16,30 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const EXECUTION_SIGNATURE_HEADER = "x-science-execution-signature";
 export const EXECUTION_TIMESTAMP_HEADER = "x-science-execution-timestamp";
-export const EXECUTION_SIGNATURE_MAX_AGE_MS = 30_000;
+/**
+ * How far a request's timestamp may be from the Runner's clock. It is the
+ * replay window, so it stays as small as correct clocks allow.
+ */
+export const DEFAULT_EXECUTION_SIGNATURE_MAX_AGE_MS = 30_000;
+
+/**
+ * A machine whose clock cannot be disciplined (no NTP client reachable, which
+ * happens on isolated compute hosts) rejects every execution once it drifts
+ * past the window. Widening is therefore possible, but only when an operator
+ * asks for it by name: a larger window is a larger replay window for every
+ * Runner, so it is never inferred from a failure.
+ */
+export function executionSignatureMaxAgeMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.SCIENCE_AGENT_EXECUTION_SIGNATURE_MAX_AGE_MS?.trim();
+  if (!raw) return DEFAULT_EXECUTION_SIGNATURE_MAX_AGE_MS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("SCIENCE_AGENT_EXECUTION_SIGNATURE_MAX_AGE_MS must be a positive integer number of milliseconds");
+  }
+  return value;
+}
+
+export const EXECUTION_SIGNATURE_MAX_AGE_MS = executionSignatureMaxAgeMs();
 
 export function createExecutionSignature(token: string, timestamp: string, body: string): string {
   const bodyHash = createHash("sha256").update(body).digest("hex");

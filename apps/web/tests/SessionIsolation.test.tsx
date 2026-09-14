@@ -17,7 +17,13 @@ import test from "node:test";
 
 import type { SessionRun } from "@sciencediscovery/schema";
 
-import { isSessionRunning, runsRequiringEventReplay, shouldApplySessionScopedUpdate } from "../src/App.js";
+import {
+  hasAutomaticReviewerTaskForArtifactVersions,
+  isSessionRunning,
+  mergeReviewerCheckpointMessages,
+  runsRequiringEventReplay,
+  shouldApplySessionScopedUpdate,
+} from "../src/App.js";
 
 test("applies stream updates only to the currently visible Session", () => {
   assert.equal(shouldApplySessionScopedUpdate("session-a", "session-a"), true);
@@ -68,4 +74,46 @@ test("reconnects replay streams for queued, running, and blocked runs after refr
     ]).map((item) => item.id),
     ["running", "blocked", "queued"],
   );
+});
+
+test("discovers an asynchronously scheduled automatic review from its Artifact version", () => {
+  assert.equal(hasAutomaticReviewerTaskForArtifactVersions([
+    { artifactVersionIds: ["version-1"], origin: "manual" },
+    { artifactVersionIds: ["version-2", "version-3"], origin: "artifact_registered" },
+  ], ["version-3"]), true);
+  assert.equal(hasAutomaticReviewerTaskForArtifactVersions([
+    { artifactVersionIds: ["version-1"], origin: "artifact_registered" },
+  ], ["version-2"]), false);
+});
+
+test("adds a newly published automatic reviewer card while preserving local messages", () => {
+  const current = [{
+    content: "Research report",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    id: "assistant-message",
+    role: "assistant" as const,
+  }, {
+    content: "Reviewer Specialist review",
+    createdAt: "2026-01-01T00:00:01.000Z",
+    id: "manual-checkpoint",
+    kind: "reviewer_checkpoint" as const,
+    reviewerCheckpoint: { status: "running" as const, toolCallId: "manual-review" },
+    role: "assistant" as const,
+  }];
+  const remote = [{
+    ...current[1]!,
+    content: "Review completed",
+    reviewerCheckpoint: { status: "completed" as const, toolCallId: "manual-review" },
+  }, {
+    content: "Automatic review completed",
+    createdAt: "2026-01-01T00:00:02.000Z",
+    id: "automatic-checkpoint",
+    kind: "reviewer_checkpoint" as const,
+    reviewerCheckpoint: { status: "completed" as const, toolCallId: "automatic-review" },
+    role: "assistant" as const,
+  }];
+
+  const merged = mergeReviewerCheckpointMessages(current, remote);
+  assert.deepEqual(merged.map((message) => message.id), ["assistant-message", "manual-checkpoint", "automatic-checkpoint"]);
+  assert.equal(merged.find((message) => message.id === "manual-checkpoint")?.content, "Review completed");
 });

@@ -17,6 +17,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { Check } from "typebox/value";
 
 import {
   SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
@@ -39,6 +40,8 @@ import {
   MAX_SUBAGENT_MAX_TURNS,
   MAX_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
+import type { AgentTool } from "@sciencediscovery/tools";
+import { Type } from "typebox";
 
 test("normalizeWorkspaceRelativePath preserves nested names within each agent writable root", () => {
   const sessionRoot = resolve(process.cwd(), ".tmp", "session-root");
@@ -49,7 +52,35 @@ test("normalizeWorkspaceRelativePath preserves nested names within each agent wr
   assert.throws(() => normalizeWorkspaceRelativePath(subagentRoot, "../escape.csv"), /escapes the workspace/);
 });
 
-test("run_python executes code and reports output without resource selection", async (context) => {
+test("run-scoped extra tools are injected before the established allow/deny policy", async () => {
+  const parameters = Type.Object({});
+  const extraTool: AgentTool<typeof parameters> = {
+    description: "Run-scoped fixture capability",
+    execute: async () => ({ content: [{ type: "text", text: "ok" }], details: { ok: true } }),
+    label: "Fixture tree view",
+    name: "tree_view",
+    parameters,
+  };
+  const options = {
+    enabledConnectorIds: [],
+    executePython: async () => ({}) as PythonExecutionResult,
+    extraTools: [extraTool],
+  };
+  const allowed = createWorkspaceTools(process.cwd(), {
+    ...options,
+    toolPolicy: { allowed: ["tree_view"] },
+  });
+  assert.deepEqual(allowed.map((tool) => tool.name), ["tree_view"]);
+  assert.deepEqual((await allowed[0]!.execute("extra-tool", {})).details, { ok: true });
+
+  const denied = createWorkspaceTools(process.cwd(), {
+    ...options,
+    toolPolicy: { disallowed: ["tree_view"] },
+  });
+  assert.equal(denied.some((tool) => tool.name === "tree_view"), false);
+});
+
+test("run_shell selects the latest environment by ID and preserves its execution parameters", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `workspace-tool-${process.pid}-${Date.now()}`);
   await mkdir(root, { recursive: true });
   context.after(() => rm(root, { force: true, recursive: true }));
@@ -57,7 +88,11 @@ test("run_python executes code and reports output without resource selection", a
   let executedToolCallId = "";
   const tools = createWorkspaceTools(root, {
     enabledConnectorIds: [],
-    executePython: async (code, _signal, toolCallId): Promise<PythonExecutionResult> => {
+    executePython: async () => { throw new Error("legacy tool must not run"); },
+    executeShell: async (code, mode, _signal, toolCallId, runnerId, environment): Promise<ShellExecutionResult> => {
+      assert.equal(mode, "ephemeral");
+      assert.equal(runnerId, "runner-test");
+      assert.deepEqual(environment, { environmentId: "env-test", cwd: "analysis" });
       executedCode = code;
       executedToolCallId = toolCallId ?? "";
       return {
@@ -70,7 +105,7 @@ test("run_python executes code and reports output without resource selection", a
         finishedAt: new Date().toISOString(),
         kernelId: "ephemeral:execution",
         kernelMode: "ephemeral",
-        language: "python",
+        language: "shell",
         modifiedFiles: [],
         networkPolicy: "none",
         runnerVersion: "test",
@@ -82,16 +117,76 @@ test("run_python executes code and reports output without resource selection", a
       };
     },
   });
-  const tool = tools.find((candidate) => candidate.name === "run_python");
+  const tool = tools.find((candidate) => candidate.name === "run_shell");
   assert.ok(tool);
   const schema = tool.parameters as { properties?: Record<string, unknown> };
   assert.equal(schema.properties?.resourceProfileId, undefined);
 
-  const result = await tool.execute("tool-call", { code: "print('ok')" });
-  assert.equal(executedCode, "print('ok')");
+  const result = await tool.execute("tool-call", { command: "python -m sample", runner_id: "runner-test", environment_id: "env-test", cwd: "analysis" });
+  assert.equal(executedCode, "python -m sample");
   assert.equal(executedToolCallId, "tool-call");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
 });
+
+for (const selection of [
+  { name: "legacy local default", localRunnerAllowed: undefined, ids: [] },
+  { name: "local and remote", localRunnerAllowed: true, ids: ["runner-1"] },
+  { name: "one remote only", localRunnerAllowed: false, ids: ["runner-1"] },
+  { name: "multiple remotes", localRunnerAllowed: false, ids: ["runner-1", "runner-2"] },
+  { name: "no Runner", localRunnerAllowed: false, ids: [] },
+]) {
+  test(`Runner tool schemas respect selection: ${selection.name}`, async () => {
+    const calls: Array<string | undefined> = [];
+    const unused = async (): Promise<never> => { throw new Error("not used"); };
+    const tools = createWorkspaceTools(process.cwd(), {
+      enabledConnectorIds: [], environments: [],
+      localRunnerAllowed: selection.localRunnerAllowed,
+      remoteRunners: selection.ids.map((runnerId) => ({ runnerId, hostAlias: runnerId, list: unused, sync: unused })),
+      executePython: unused, executeShell: unused,
+      environmentManagement: {
+        list: async (_signal, runnerId) => { calls.push(runnerId); return []; },
+        setup: unused, create: unused, delete: unused, install: unused, uninstall: unused,
+      },
+    });
+    const inputs = {
+      run_shell: { command: "echo ok" },
+      environment_list: {},
+      environment_setup: {},
+      environment_create: { name: "analysis", language: "python" },
+      environment_delete: { environmentId: "analysis" },
+      environment_install: { environmentId: "analysis", packages: ["numpy"], manager: "conda" },
+      environment_uninstall: { environmentId: "analysis", packages: ["numpy"] },
+    };
+    const localAllowed = selection.localRunnerAllowed !== false;
+    for (const [name, input] of Object.entries(inputs)) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      assert.ok(tool, name);
+      const schema = tool.parameters as { properties: { runner_id: { description: string } } };
+      const description = schema.properties.runner_id.description;
+      assert.equal(Check(tool.parameters, input), localAllowed, `${name}: omission follows local selection`);
+      assert.equal(Check(tool.parameters, { ...input, runner_id: "" }), false, `${name}: blank ID is invalid`);
+      if (localAllowed) assert.match(description, /default: local/);
+      else assert.doesNotMatch(description, /default: local/);
+      for (const id of selection.ids) {
+        assert.ok(description.includes(id), `${name}: allowed ID is visible`);
+        assert.ok(Check(tool.parameters, { ...input, runner_id: id }), `${name}: explicit selection is valid`);
+      }
+      if (!localAllowed && selection.ids.length === 1) {
+        assert.match(description, /Pass runner_id="runner-1"; it is the only allowed Runner/);
+      } else if (!localAllowed && selection.ids.length === 0) {
+        assert.match(description, /No Runner is allowed/);
+      }
+    }
+    const list = tools.find((candidate) => candidate.name === "environment_list")!;
+    if (localAllowed) {
+      await list.execute("default", {});
+      assert.deepEqual(calls, [undefined], "omission preserves the local-default callback contract");
+    } else if (selection.ids.length) {
+      await list.execute("selected", { runner_id: selection.ids[0] });
+      assert.deepEqual(calls, [selection.ids[0]], "explicit Runner is forwarded unchanged");
+    }
+  });
+}
 
 test("get_file_provenance returns the backend record without inferring fields", async () => {
   const timestamp = "2026-08-01T10:00:00.000Z";
@@ -331,30 +426,32 @@ test("run_npu_job submits only allowlisted workloads with workspace-scoped input
   const tool = tools.find((candidate) => candidate.name === "run_npu_job");
   assert.ok(tool);
   assert.match(tool.name, /^[a-zA-Z0-9_-]+$/);
+  assert.equal(JSON.stringify(tool.parameters).includes("environment_revision_id"), false);
+  await assert.rejects(tool.execute("legacy-revision", { operation: "submit", environment_revision_id: "old" } as never), /use environment_id/);
 
   const workloads = await tool.execute("npu-list", { operation: "list_workloads" });
   assert.doesNotMatch(workloads.content[0]?.type === "text" ? workloads.content[0].text : "", /antibody\.pipeline\.v1/);
   assert.match(workloads.content[0]?.type === "text" ? workloads.content[0].text : "", /antibody\.protenix\.v1/);
   await tool.execute("npu-submit", {
     config_path: "/workspace/antibody_pipeline/config.json",
-    environment_revision_id: "rev-antibody",
+    environment_id: "env-antibody",
     operation: "submit",
     workload_id: "antibody.protenix.v1",
   });
   assert.deepEqual(submitted, [{
-    environmentRevisionId: "rev-antibody",
+    environmentId: "env-antibody",
     inputs: { configPath: "antibody_pipeline/config.json" },
     workloadId: "antibody.protenix.v1",
   }]);
   submitted.length = 0;
   await tool.execute("npu-submit-protenix", {
     config_path: "/workspace/antibody_pipeline/config.json",
-    environment_revision_id: "rev-protenix",
+    environment_id: "env-protenix",
     operation: "submit",
     workload_id: "antibody.protenix.v1",
   });
   assert.deepEqual(submitted, [{
-    environmentRevisionId: "rev-protenix",
+    environmentId: "env-protenix",
     inputs: { configPath: "antibody_pipeline/config.json" },
     workloadId: "antibody.protenix.v1",
   }]);
@@ -385,6 +482,116 @@ test("run_npu_job submits only allowlisted workloads with workspace-scoped input
   assert.match(resultText, /createdFiles/);
   assert.match(resultText, /artifacts/);
   assert.deepEqual(declaredArtifacts, ["antibody_pipeline/runs/run-1/01_rfdiffusion/output_000000.pdb"]);
+});
+
+test("run_npu_job result branch forwards declared artifacts to observeNpuJob, omitting failed declarations", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `workspace-npu-observe-${process.pid}-${Date.now()}`);
+  await mkdir(resolve(root, "antibody_pipeline"), { recursive: true });
+  await writeFile(resolve(root, "antibody_pipeline", "config.json"), "{}\n");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const observed: Array<{ jobId: string; artifacts: Array<{ artifact_id: string; path: string; version: number }> }> = [];
+  const job: NpuJob = {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    createdFiles: ["outputs/predictions.csv", "outputs/broken.bin"],
+    id: "npu-job-1",
+    inputs: { configPath: "antibody_pipeline/config.json" },
+    logs: { stderr: "", stdout: "", truncated: false },
+    sessionId: "session-1",
+    state: "succeeded",
+    updatedAt: "2026-01-01T00:01:00.000Z",
+    workloadId: "antibody.protenix.v1",
+    workspaceRoot: root,
+  };
+  const tools = createWorkspaceTools(root, {
+    declareArtifact: async (input: { path: string }) => ({
+      artifact: {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        createdInSessionId: "session-1",
+        createdInSessionTitle: "test",
+        currentVersion: 1,
+        id: input.path === "outputs/predictions.csv" ? "art-ok" : "art-broken",
+        kind: "dataset",
+        logicalName: input.path,
+        name: input.path,
+        origin: "llm_declared",
+        projectId: "project-1",
+        sessionId: "session-1",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      version: {
+        artifactId: input.path === "outputs/predictions.csv" ? "art-ok" : "art-broken",
+        content: { hash: "hash", size: 1 },
+        createdAt: "2026-01-01T00:00:00.000Z",
+        executionRunIds: [],
+        id: "version-1",
+        inputArtifactVersionIds: [],
+        mediaType: "text/csv",
+        projectId: "project-1",
+        sessionId: "session-1",
+        sourcePath: input.path,
+        version: 1,
+      },
+    }),
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    npuBroker: {
+      cancel: async () => job,
+      get: async () => job,
+      listWorkloads: async () => [
+        { description: "protenix", id: "antibody.protenix.v1", label: "Protenix", phase: "builtin", requiredInputs: ["configPath"] },
+      ],
+      logs: async () => job.logs,
+      // Force the broken file's declaration to fail so the result branch
+      // produces a mixed ok / not-ok artifacts array. The success artifact
+      // alone must reach observeNpuJob.
+      result: async () => ({ job: { ...job, createdFiles: ["outputs/predictions.csv", "outputs/missing.bin"] } }),
+      submit: async () => job,
+    },
+    observeNpuJob: (job: NpuJob, artifacts: Array<{ artifact_id: string; path: string; version: number }>) => {
+      observed.push({
+        artifacts: artifacts.map((artifact) => ({ artifact_id: artifact.artifact_id, path: artifact.path, version: artifact.version })),
+        jobId: job.id,
+      });
+    },
+  } as unknown as Parameters<typeof createWorkspaceTools>[1]);
+  const tool = tools.find((candidate) => candidate.name === "run_npu_job");
+  assert.ok(tool);
+  // First: both files declare successfully → both forwarded.
+  await tool.execute("npu-result", { job_id: "npu-job-1", operation: "result" });
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0]!.jobId, "npu-job-1");
+  assert.deepEqual(observed[0]!.artifacts, [
+    { artifact_id: "art-ok", path: "outputs/predictions.csv", version: 1 },
+    { artifact_id: "art-broken", path: "outputs/missing.bin", version: 1 },
+  ]);
+  // Second call: drop declareArtifact entirely → still fires with empty list
+  // (the recorder is what decides whether to mirror; the workspace must not
+  // crash on the absent option).
+  const noDeclare = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    npuBroker: {
+      cancel: async () => job,
+      get: async () => job,
+      listWorkloads: async () => [
+        { description: "protenix", id: "antibody.protenix.v1", label: "Protenix", phase: "builtin", requiredInputs: ["configPath"] },
+      ],
+      logs: async () => job.logs,
+      result: async () => ({ job }),
+      submit: async () => job,
+    },
+    observeNpuJob: (job: NpuJob, artifacts: Array<{ artifact_id: string; path: string; version: number }>) => {
+      observed.push({
+        artifacts: artifacts.map((artifact) => ({ artifact_id: artifact.artifact_id, path: artifact.path, version: artifact.version })),
+        jobId: job.id,
+      });
+    },
+  } as unknown as Parameters<typeof createWorkspaceTools>[1]);
+  const noDeclareTool = noDeclare.find((candidate) => candidate.name === "run_npu_job");
+  assert.ok(noDeclareTool);
+  await noDeclareTool.execute("npu-result-2", { job_id: "npu-job-1", operation: "result" });
+  assert.equal(observed.length, 2);
+  assert.equal(observed[1]!.artifacts.length, 0);
 });
 
 test("read_file pages a large file instead of returning it whole", async (context) => {
@@ -657,6 +864,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   assert.deepEqual(calls, [{ path: "outputs/result" }]);
   const declaredPayload = JSON.parse(declared.content[0]?.type === "text" ? declared.content[0].text : "{}") as Record<string, unknown>;
   assert.equal(declaredPayload.artifact_id, "artifact-1");
+  assert.equal(declaredPayload.version_id, "version-1");
   assert.equal("artifacts" in declaredPayload, false, "single-path response retains its original top-level shape");
 
   const batch = await declare.execute("declare-batch", {
@@ -675,9 +883,9 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     artifacts: Array<Record<string, unknown>>;
   };
   assert.deepEqual(batchPayload.artifacts, [
-    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/first", version: 1 },
+    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/first", version: 1, version_id: "version-1" },
     { error: "missing file", ok: false, path: "outputs/missing" },
-    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/last", version: 1 },
+    { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/last", version: 1, version_id: "version-1" },
   ]);
   await assert.rejects(declare.execute("declare-empty", {}), /path or paths is required/);
   await assert.rejects(declare.execute("declare-empty-paths", { paths: [] }), /at least one path/);
@@ -725,6 +933,33 @@ test("declare_claim surfaces an instruction reminder to write alias tokens inlin
   assert.match(payload.instruction as string, /\[evidence1\]/);
   assert.match(payload.instruction as string, /\[artifact1\]/);
   assert.match(payload.instruction as string, /evidence\+number .* or artifact\+number/i);
+  assert.match(payload.instruction as string, /sourcefile\+number .* or dbrecord\+number/i);
+  assert.match(payload.instruction as string, /<source>:<identifier>/);
+});
+
+test("declare_claim forwards cites_dbrecord_aliases and renders a dbrecord chip in the reminder", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    declareClaim: async () => ({
+      status: "ok",
+      claimId: "claim-db",
+      chipMap: { dbrecord1: { id: "P38398", kind: "dbrecord", label: "dbrecord1" } },
+    }),
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const declareClaim = tools.find((candidate) => candidate.name === "declare_claim")!;
+  const result = await declareClaim!.execute("declare-claim-db", {
+    cites_artifact_aliases: {}, cites_evidence_aliases: {},
+    cites_dbrecord_aliases: { dbrecord1: "uniprot:P38398" },
+    claim_type: "result_synthesis", confidence: "high", content: "BRCA1 binds …", locator: "report.md",
+  });
+  const payload = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "{}") as Record<string, unknown>;
+  assert.equal(payload.status, "ok");
+  // Reminder must list the dbrecord alias and explain the value format.
+  assert.ok(typeof payload.instruction === "string");
+  assert.match(payload.instruction as string, /\[dbrecord1\]/);
+  assert.match(payload.instruction as string, /dbrecord\+number/);
+  assert.match(payload.instruction as string, /<source>:<identifier>/);
 });
 
 test("declare_claim omits the instruction reminder when the chip map is empty; forwards instruction on business errors", async () => {
@@ -884,7 +1119,7 @@ test("managed environments expose governed create, delete, install, and uninstal
     executeScientific: async () => { throw new Error("not used"); },
   });
   assert.ok(tools.some((candidate) => candidate.name === ENVIRONMENT_TOOL_NAMES.list));
-  assert.ok(tools.some((candidate) => candidate.name === "run_r"));
+  assert.equal(tools.some((candidate) => candidate.name === "run_r" || candidate.name === "run_python"), false);
   for (const name of Object.values(ENVIRONMENT_TOOL_NAMES)) {
     assert.ok(tools.some((candidate) => candidate.name === name));
   }
@@ -1570,10 +1805,65 @@ test("filterTools denylist wins when a tool also appears in the allowlist", () =
 test("independent SSH/SLURM jobs are not offered to the model", () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [], executePython: async () => { throw new Error("not used"); },
+    executeShell: async () => { throw new Error("not used"); },
   });
   assert.equal(tools.some((tool) => tool.name === "propose_remote_job"), false);
-  const python = tools.find((tool) => tool.name === "run_python")!;
-  assert.match(JSON.stringify(python.parameters), /runner_id.*local/);
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  assert.match(JSON.stringify(shell.parameters), /runner_id.*local/);
+  assert.equal(tools.some((tool) => tool.name === "run_python" || tool.name === "run_r"), false);
+  assert.equal(JSON.stringify(shell.parameters).includes("environmentRevisionId"), false);
+  assert.equal(JSON.stringify(shell.parameters).includes("kernelMode"), false);
+});
+
+test("workspace_transfer exposes explicit mappings and independent management operations", async () => {
+  const calls: string[] = [];
+  const record = { id: "transfer", state: "queued" } as import("@sciencediscovery/schema").WorkspaceTransfer;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    workspaceTransfers: {
+      workspaces: () => [{ id: "own", runnerId: "local", description: "Local" }],
+      start: async (input) => { calls.push(JSON.stringify(input)); return record; },
+      get: (id) => { calls.push(`status:${id}`); return record; },
+      list: () => [record], cancel: async (id) => { calls.push(`cancel:${id}`); return record; },
+    },
+  });
+  const tool = tools.find((tool) => tool.name === "workspace_transfer")!;
+  assert.ok(tool);
+  const listed = await tool.execute("list", { operation: "workspaces" });
+  assert.match((listed.content[0] as { text: string }).text, /own/);
+  await tool.execute("copy", { operation: "start", source_workspace_id: "own", target_workspace_id: "remote", files: [{ source_path: "in", target_path: "out" }] });
+  assert.deepEqual(JSON.parse(calls[0]!), { sourceWorkspaceId: "own", targetWorkspaceId: "remote", files: [{ sourcePath: "in", targetPath: "out" }], conflict: "reject" });
+  await tool.execute("status", { operation: "status", transfer_id: "transfer" });
+  await tool.execute("cancel", { operation: "cancel", transfer_id: "transfer" });
+  assert.deepEqual(calls.slice(1), ["status:transfer", "cancel:transfer"]);
+  await assert.rejects(tool.execute("missing", { operation: "start" }), /explicit file mappings/);
+});
+
+test("Shell background mode and management tools do not start additional Shells", async () => {
+  const calls: string[] = [];
+  const job = { id: "job", state: "running", runnerId: "remote" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("legacy endpoint must not run"); },
+    shellExecutions: {
+      start: async (code, input, _signal, call, runner) => { calls.push(JSON.stringify({ code, input, call, runner })); return job; },
+      wait: async (id, ms) => { calls.push(`wait:${id}:${ms}`); return job; },
+      get: async () => job, list: () => [job],
+      logs: async (id, cursor) => { calls.push(`logs:${id}:${cursor}`); return { chunks: [], nextCursor: 0, retentionTruncated: false, truncated: false }; },
+      cancel: async (id) => { calls.push(`cancel:${id}`); return job; },
+    },
+  });
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  const background = await shell.execute("background", { command: "python -m sample", background: true, runner_id: "remote", environment_id: "env", cwd: "input" });
+  assert.equal(calls.length, 1, "background returns on acceptance without waiting");
+  assert.deepEqual(JSON.parse(calls[0]!), { code: "python -m sample", input: { environmentId: "env", cwd: "input" }, call: "background", runner: "remote" });
+  assert.match((background.content[0] as { text: string }).text, /still running/);
+  await shell.execute("foreground", { command: "echo next", wait_ms: 5 });
+  assert.equal(calls.at(-1), "wait:job:5");
+  await tools.find((tool) => tool.name === "execution_status")!.execute("status", { execution_id: "job", wait_ms: 0 });
+  await tools.find((tool) => tool.name === "execution_logs")!.execute("logs", { execution_id: "job", cursor: 3 });
+  await tools.find((tool) => tool.name === "execution_cancel")!.execute("cancel", { execution_id: "job" });
+  assert.deepEqual(calls.slice(-3), ["wait:job:0", "logs:job:3", "cancel:job"]);
 });
 
 test("sync_remote_workspace exposes only explicit list, push, and pull operations", async () => {

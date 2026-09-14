@@ -48,6 +48,7 @@ import { ChartConfigPanel } from "./components/ChartConfigPanel.js";
 import { InspectorPanel } from "./components/InspectorPanel.js";
 import { VirtualDataTable } from "./components/VirtualDataTable.js";
 import { formatBytes, parseCsvText } from "./csv/inferCsv.js";
+import { translateActive, useLocale } from "../i18n/index.js";
 import {
   DEFAULT_CHART_DRAG_MODE,
   type ChartDragMode,
@@ -101,7 +102,7 @@ function parsedArtifact(
     return { specs, table };
   } catch (error) {
     return {
-      error: error instanceof Error ? error.message : "Unable to parse this CSV Artifact.",
+      error: error instanceof Error ? error.message : translateActive("csv.parseArtifactFailed"),
       specs: [],
       table: undefined,
     };
@@ -115,6 +116,7 @@ export default function CsvArtifactWindow({
   provenance,
   version,
 }: CsvArtifactWindowProps) {
+  const { t } = useLocale();
   const parsed = useMemo(
     () => parsedArtifact(content, fileName, version),
     [content, fileName, version],
@@ -138,7 +140,7 @@ export default function CsvArtifactWindow({
   const baselineSpecs = useRef(new Map([
     ...parsed.specs.map((item) => [item.id, cloneSpec(item)] as const),
     ...initialWorkspace.specs
-      .filter((item) => item.preset === "Custom chart")
+      .filter((item) => item.id.startsWith("custom-chart-"))
       .map((item) => [item.id, cloneSpec(item)] as const),
   ]));
   const nextCustomChartSequence = useRef(nextCustomSequence(initialWorkspace.specs));
@@ -207,8 +209,8 @@ export default function CsvArtifactWindow({
 
   function deleteChart(): void {
     if (!spec || specs.length <= 1) return;
-    const displayName = spec.displayName.trim() || "Untitled chart";
-    if (!window.confirm(`Delete "${displayName}"?`)) return;
+    const displayName = spec.displayName.trim() || t("csv.untitledChart");
+    if (!window.confirm(t("csv.confirmDeleteChart", { name: displayName }))) return;
     const next = removeChartFromWorkspace({ activeSpecId, specs }, spec.id);
     baselineSpecs.current.delete(spec.id);
     setSpecs(next.specs);
@@ -233,7 +235,7 @@ export default function CsvArtifactWindow({
     try {
       await chart.current?.exportImage(format, format === "png" ? 2 : 1);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Unable to export ${format.toUpperCase()}`);
+      setError(reason instanceof Error ? reason.message : t("csv.exportFailed", { format: format.toUpperCase() }));
     }
   }
 
@@ -241,7 +243,7 @@ export default function CsvArtifactWindow({
     if (event.target === event.currentTarget) onClose();
   }} role="presentation">
     <section
-      aria-label={`CSV Visualization Workspace: ${fileName}`}
+      aria-label={t("csv.dialogLabel", { fileName })}
       aria-modal="true"
       className="csva-window"
       role="dialog"
@@ -250,13 +252,13 @@ export default function CsvArtifactWindow({
         <header className="csva-header">
           <div className="csva-identity">
             <span>CSV</span>
-            <div><strong>CSV Visualization Workspace</strong><small>Interactive Scientific Artifact view</small></div>
+            <div><strong>{t("csv.workspaceTitle")}</strong><small>{t("csv.workspaceSubtitle")}</small></div>
           </div>
           <div className="csva-file-heading" title={fileName}>
             <strong>{fileName}</strong>
             <span>v{version.version}</span>
           </div>
-          <button aria-label="Close CSV Visualization Workspace" onClick={onClose} ref={closeButton} title="Close" type="button"><X size={18} /></button>
+          <button aria-label={t("csv.closeWorkspace")} onClick={onClose} ref={closeButton} title={t("csv.close")} type="button"><X size={18} /></button>
         </header>
 
         {table && spec ? <>
@@ -264,15 +266,15 @@ export default function CsvArtifactWindow({
             <span className="csva-source-kind">CSV</span>
             <strong>{table.source.fileName}</strong>
             <span>{formatBytes(table.source.fileSize)}</span>
-            <span>{table.rows.length.toLocaleString()} rows</span>
-            <span>{table.columns.length} fields</span>
+            <span>{t("csv.rowsCount", { count: table.rows.length.toLocaleString() })}</span>
+            <span>{t("csv.fieldsCount", { count: table.columns.length })}</span>
             <code title={table.source.sourceArtifactVersionId}>{compactVersion(table.source.sourceArtifactVersionId)}</code>
-            <i><Check size={13} /> Input version pinned</i>
-            <button aria-label={leftOpen ? "Hide chart settings" : "Show chart settings"} onClick={() => setLeftOpen((current) => !current)} title={leftOpen ? "Hide chart settings" : "Show chart settings"} type="button"><PanelLeftClose size={16} /></button>
-            <button aria-label={rightOpen ? "Hide inspector" : "Show inspector"} onClick={() => setRightOpen((current) => !current)} title={rightOpen ? "Hide inspector" : "Show inspector"} type="button"><PanelRightClose size={16} /></button>
+            <i><Check size={13} /> {t("csv.inputVersionPinned")}</i>
+            <button aria-label={t(leftOpen ? "csv.hideChartSettings" : "csv.showChartSettings")} onClick={() => setLeftOpen((current) => !current)} title={t(leftOpen ? "csv.hideChartSettings" : "csv.showChartSettings")} type="button"><PanelLeftClose size={16} /></button>
+            <button aria-label={t(rightOpen ? "csv.hideInspector" : "csv.showInspector")} onClick={() => setRightOpen((current) => !current)} title={t(rightOpen ? "csv.hideInspector" : "csv.showInspector")} type="button"><PanelRightClose size={16} /></button>
           </div>
 
-          {error ? <div className="csva-message" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError(undefined)} title="Dismiss error" type="button"><X size={15} /></button></div> : null}
+          {error ? <div className="csva-message" role="alert"><span>{error}</span><button aria-label={t("error.dismiss")} onClick={() => setError(undefined)} title={t("error.dismiss")} type="button"><X size={15} /></button></div> : null}
 
           <div className="csva-workspace-grid">
             <ChartConfigPanel
@@ -285,22 +287,22 @@ export default function CsvArtifactWindow({
             />
 
             <main className="csva-visual-workspace">
-              <nav aria-label="Chart views" className="csva-view-tabs">
+              <nav aria-label={t("csv.chartViews")} className="csva-view-tabs">
                 {specs.map((item) => <button
                   className={item.id === spec.id ? "active" : ""}
                   key={item.id}
                   onClick={() => setActiveSpecId(item.id)}
-                  title={item.displayName.trim() || "Untitled chart"}
+                  title={item.displayName.trim() || t("csv.untitledChart")}
                   type="button"
                 >
                   {item.type === "table" ? <Table2 size={14} /> : item.type === "volcano" ? <FlaskConical size={14} /> : <Image size={14} />}
-                  <span>{item.displayName.trim() || "Untitled chart"}</span>
+                  <span>{item.displayName.trim() || t("csv.untitledChart")}</span>
                 </button>)}
                 <button
-                  aria-label="Create chart"
+                  aria-label={t("csv.createChart")}
                   className="csva-add-view"
                   onClick={addChart}
-                  title="Create chart"
+                  title={t("csv.createChart")}
                   type="button"
                 >
                   <Plus size={16} />
@@ -310,31 +312,31 @@ export default function CsvArtifactWindow({
               <div className="csva-chart-toolbar">
                 <div className="csva-chart-meta">
                   <span>{spec.type}</span>
-                  <strong>{visibleRows.length.toLocaleString()} visible records</strong>
-                  {spec.mappings.facetBy ? <i>Facet: {spec.mappings.facetBy}</i> : null}
+                  <strong>{t("csv.visibleRecords", { count: visibleRows.length.toLocaleString() })}</strong>
+                  {spec.mappings.facetBy ? <i>{t("csv.facetField", { field: spec.mappings.facetBy })}</i> : null}
                 </div>
                 <div className="csva-chart-tools">
                   {spec.type !== "table" ? <>
-                    <span aria-label="Chart drag mode" className="csva-mode-switch">
-                      <button aria-pressed={dragMode === "pan" || heatmapActive} className={dragMode === "pan" || heatmapActive ? "active" : ""} onClick={() => setDragMode("pan")} title="Drag to pan" type="button"><Move size={15} /></button>
-                      <button aria-pressed={dragMode === "lasso" && !heatmapActive} className={dragMode === "lasso" && !heatmapActive ? "active" : ""} disabled={heatmapActive} onClick={() => setDragMode("lasso")} title={heatmapActive ? "Click a heatmap cell to select its source records" : "Lasso-select records; hold Ctrl to add or remove"} type="button"><LassoSelect size={15} /></button>
+                    <span aria-label={t("csv.chartDragMode")} className="csva-mode-switch">
+                      <button aria-pressed={dragMode === "pan" || heatmapActive} className={dragMode === "pan" || heatmapActive ? "active" : ""} onClick={() => setDragMode("pan")} title={t("csv.dragToPan")} type="button"><Move size={15} /></button>
+                      <button aria-pressed={dragMode === "lasso" && !heatmapActive} className={dragMode === "lasso" && !heatmapActive ? "active" : ""} disabled={heatmapActive} onClick={() => setDragMode("lasso")} title={t(heatmapActive ? "csv.heatmapSelectHint" : "csv.lassoSelectHint")} type="button"><LassoSelect size={15} /></button>
                     </span>
                     <span className="csva-toolbar-divider" />
-                    <button aria-label="Zoom in" onClick={() => void chart.current?.zoom(.78)} title="Zoom in" type="button"><ZoomIn size={16} /></button>
-                    <button aria-label="Zoom out" onClick={() => void chart.current?.zoom(1.28)} title="Zoom out" type="button"><ZoomOut size={16} /></button>
-                    <button aria-label="Reset view" onClick={() => void chart.current?.reset()} title="Reset view" type="button"><RotateCcw size={16} /></button>
+                    <button aria-label={t("csv.zoomIn")} onClick={() => void chart.current?.zoom(.78)} title={t("csv.zoomIn")} type="button"><ZoomIn size={16} /></button>
+                    <button aria-label={t("csv.zoomOut")} onClick={() => void chart.current?.zoom(1.28)} title={t("csv.zoomOut")} type="button"><ZoomOut size={16} /></button>
+                    <button aria-label={t("csv.resetView")} onClick={() => void chart.current?.reset()} title={t("csv.resetView")} type="button"><RotateCcw size={16} /></button>
                     <span className="csva-toolbar-divider" />
-                    <button onClick={() => void exportImage("png")} title="Export the current view as a 2x PNG" type="button"><FileImage size={15} /> PNG</button>
-                    <button onClick={() => void exportImage("svg")} title="Export the current view as SVG" type="button"><Image size={15} /> SVG</button>
+                    <button onClick={() => void exportImage("png")} title={t("csv.exportPng")} type="button"><FileImage size={15} /> PNG</button>
+                    <button onClick={() => void exportImage("svg")} title={t("csv.exportSvg")} type="button"><Image size={15} /> SVG</button>
                   </> : null}
-                  <button onClick={() => exportRows(visibleRows)} title="Export visible rows" type="button"><Download size={15} /> CSV</button>
-                  <button onClick={exportSpec} title="Export current ChartSpec" type="button"><Braces size={15} /> Spec</button>
+                  <button onClick={() => exportRows(visibleRows)} title={t("csv.exportVisibleRows")} type="button"><Download size={15} /> CSV</button>
+                  <button onClick={exportSpec} title={t("csv.exportSpec")} type="button"><Braces size={15} /> Spec</button>
                 </div>
               </div>
 
               {missingMappings.length ? <div className="csva-mapping-error">
-                <strong>Incomplete chart mappings</strong>
-                <span>Select {missingMappings.join(", ")} in the chart settings panel.</span>
+                <strong>{t("csv.incompleteMappings")}</strong>
+                <span>{t("csv.selectMappings", { mappings: missingMappings.join(", ") })}</span>
               </div> : spec.type === "table"
                 ? <VirtualDataTable
                     onExport={exportRows}
@@ -353,7 +355,7 @@ export default function CsvArtifactWindow({
                       spec={spec}
                       table={table}
                     />
-                    <div className="csva-interaction-hint">Mouse wheel to zoom / {heatmapActive ? "click a cell to select its records" : dragMode === "pan" ? "drag to pan" : "drag to lasso-select"} / double-click to reset</div>
+                    <div className="csva-interaction-hint">{t(heatmapActive ? "csv.hintHeatmap" : dragMode === "pan" ? "csv.hintPan" : "csv.hintLasso")}</div>
                   </div>}
             </main>
 
@@ -367,14 +369,14 @@ export default function CsvArtifactWindow({
           </div>
 
           <footer className="csva-status-bar">
-            <span>{selectedRowIds.length.toLocaleString()} selected</span>
-            <span>{spec.displayFilters.length} display filters</span>
+            <span>{t("app.selectedArtifacts", { count: selectedRowIds.length.toLocaleString() })}</span>
+            <span>{t("csv.displayFiltersCount", { count: spec.displayFilters.length })}</span>
             <span>ChartSpec v{spec.schemaVersion}</span>
-            <strong>Browser interactions affect only this view; the source Artifact remains unchanged</strong>
+            <strong>{t("csv.browserOnlyNote")}</strong>
           </footer>
         </> : <div className="csva-parse-error">
-          <strong>Unable to open CSV visualization</strong>
-          <p>{parsed.error ?? "This Artifact does not contain parsable tabular records."}</p>
+          <strong>{t("csv.openFailed")}</strong>
+          <p>{parsed.error ?? t("csv.noTabularRecords")}</p>
         </div>}
       </div>
     </section>

@@ -10,17 +10,19 @@ On the verified Ascend 910B3 host, MindSpore can use the NPU directly on the hos
 Container ID verify failed (session ct_id=0; device ct_id=...)
 ```
 
-This is not just Unix permission on `/dev/davinci*`. The Ascend runtime also checks driver/container identity, so `--dev-bind` device passthrough into bwrap is not enough to guarantee NPU access.
+That measurement was taken with the host's whole `/dev` visible, and it is what the driver does in that situation rather than a limit on device passthrough: inside a mount namespace the driver enumerates the cards visible under the caller's `/dev`, all-or-nothing, so a single card claimed by another tenant fails the call for every card.
 
-The current design therefore does not keep pushing NPU devices into bwrap. Normal tools keep their sandbox isolation, and long jobs that need Ascend initialization run through a Runner-managed host Broker.
+Chips selected by an operator are therefore handed to the sandbox after all — a fresh `/dev` carrying only those chips, renumbered from 0 — and `npu-smi info` and MindSpore both run inside it on this host. See [Sandbox execution](sandbox-execution.md) §3.2 for how that launch is built and how a chip is judged usable.
+
+The Broker below is a separate, opt-in path that remains for allowlisted host workloads which are not ordinary Agent executions.
 
 ## 2. Design boundary
 
-- `run_python`, `run_r`, `run_shell`, and persistent kernels still run inside Bubblewrap and seccomp.
+- Normal execution uses `run_shell` in a fresh sandbox (Bubblewrap and seccomp on Linux), including `python -m`, Python files, and `Rscript`; interpreter state does not persist between calls.
 - NPU model jobs do not use the persistent kernel REPL.
 - Host NPU Broker is disabled by default; only `SCIENCE_AGENT_NPU_BROKER=1` exposes `run_npu_job` to the Agent.
 - The Broker runs only fixed entry points from the workload allowlist and does not provide arbitrary host shell.
-- Built-in NPU workloads, including the smoke test, require a verified ScienceDiscovery managed scientific environment revision. Submit rejects these workloads before enqueue when `environment_revision_id` is missing or cannot resolve to a Python runtime.
+- Built-in NPU workloads, including the smoke test, require a managed Python environment. The Agent selects `environment_id`; the API resolves its latest Revision for the Broker's internal receipt. The Broker rejects missing or unusable Python runtimes before enqueue. Historical Revision selection is not exposed to the Agent.
 - Workload children run in the host namespace to access CANN, MindSpore, and Ascend devices; Runner still validates paths, Session ownership, and job lifecycle.
 - Agent-writable `config.json` files describe only workspace inputs, presets, and run parameters. Python, helper scripts, CANN, HMMER, MindScience, model weights, and database directories come only from administrator environment variables or the workload manifest. They may live under `/home`, a shared filesystem, or another deployment path, but the Agent cannot rewrite them through `config.json`.
 - The antibody adapter does not execute helper scripts from the Session workspace. If a manager emits a `<workspace>/helpers/...` script path or a `--scripts-dir <workspace>/helpers` directory argument, the adapter rewrites it to the host skill/bundle `scripts/` directory and rejects any remaining workspace-helper execution path.
@@ -32,7 +34,8 @@ The current design therefore does not keep pushing NPU devices into bwrap. Norma
 |---|---|
 | Enable/disable Broker and `.env` variables | [Configuration reference](../reference/configuration.md#environment-variables-local-mode) |
 | Model-visible NPU tool and parameters | [Built-in tools](../reference/builtin-tools.md#other-conditional-tools) |
-| Why NPU is a sandbox exception and how it is constrained | [Sandbox execution](sandbox-execution.md#32-ascend-npu-broker-optional-host-execution) |
+| How selected chips reach the sandbox and how usability is judged | [Sandbox execution](sandbox-execution.md#32-ascend-npu-inside-the-sandbox) |
+| Why the Broker is a sandbox exception and how it is constrained | [Sandbox execution](sandbox-execution.md#33-ascend-npu-broker-optional-host-execution) |
 | Broker placement in the runtime model | [Runtime architecture](architecture.md#25-responsibility-split) |
 | Default workload allowlist | `services/runner/workloads/npu-workloads.default.json` |
 
@@ -42,7 +45,7 @@ Broker extensibility comes from registering workload manifests, not from opening
 
 - fixed entry point;
 - `shell: false`;
-- default Python resolution through the ScienceDiscovery scientific environment revision carried by `run_npu_job`; `SCIENCE_AGENT_NPU_PYTHON` is only read by custom manifests that explicitly use `${python}`;
+- default Python resolution from the latest managed environment selected by `run_npu_job(environment_id=...)`, with the resolved Revision retained internally for audit; `SCIENCE_AGENT_NPU_PYTHON` is only read by custom manifests that explicitly use `${python}`;
 - `realpath` boundary checks for workspace and repository paths;
 - explicit environment variables or site asset references;
 - Session-scoped status, logs, result, and cancel;

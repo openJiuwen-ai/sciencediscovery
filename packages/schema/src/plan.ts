@@ -1,18 +1,36 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
-//
 // Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 export type ApprovalMode = "always_allow" | "ask_for_dangerous";
+
+// --- Model-declared whole-snapshot plan (update_plan tool) ---
+
+export type PlanItemStatus = "completed" | "in_progress" | "pending";
+
+export interface PlanItem {
+  status: PlanItemStatus;
+  step: string;
+}
+
+/** Latest committed plan projection for one Agent inside one Run. */
+export interface PlanSnapshot {
+  agentId: string;
+  explanation?: string;
+  items: PlanItem[];
+  toolCallId: string;
+  turn: number;
+  updatedAt: string;
+}
+
+/** Model-facing whole-snapshot replacement. */
+export interface UpdatePlanRequest {
+  explanation?: string;
+  plan: PlanItem[];
+}
+
+// --- Approval-gated session plan lifecycle (propose_plan / revise_plan +
+// human decision log). Coexists with the snapshot plan above: the snapshot
+// tracks model-declared progress, the lifecycle gates execution. ---
 
 export type PlanConfidence = "high" | "low" | "medium";
 

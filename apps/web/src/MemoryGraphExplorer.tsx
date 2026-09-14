@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ArtifactAnnotation, ComposerReference, MemoryGraphEdgeType, MemoryGraphNode, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
@@ -54,7 +54,7 @@ interface ChainButton {
  * returned nodes/edges ARE the highlight — ``chainEdgeKeys`` just reads them
  * off, it does not re-slice.
  */
-const CHAIN_BUTTONS: Partial<Record<MemoryGraphNodeLabel, ChainButton[]>> = {
+export const CHAIN_BUTTONS: Partial<Record<MemoryGraphNodeLabel, ChainButton[]>> = {
   ResearchGoal: [],
   ToolCall: [],
   Task: [
@@ -78,8 +78,17 @@ const CHAIN_BUTTONS: Partial<Record<MemoryGraphNodeLabel, ChainButton[]>> = {
     { key: "chain.viewCitingClaimForEvidence", kind: "viewCitingClaimForEvidence" },
     { key: "chain.viewCitingArtifactForEvidence", kind: "viewCitingArtifactForEvidence" },
   ],
+  // ``supports``-in reaches four labels (Evidence / Artifact / SourceFile /
+  // DbRecord), so the three citing buttons here are strictly label-filtered
+  // server-side and each carries its OWN i18n key: the batch ``chain_exists``
+  // call is all-or-nothing on unknown kinds (one bad kind 400s the batch and
+  // the BFF catch turns every kind in it false, hiding all of this label's
+  // buttons), so sharing the Artifact section's "chain.viewCitingEvidence" key
+  // would tie this button's fate to an unrelated traversal.
   Claim: [
-    { key: "chain.viewCitingEvidence", kind: "viewCitingEvidenceForClaim" },
+    { key: "chain.viewCitingEvidenceForClaim", kind: "viewCitingEvidenceForClaim" },
+    { key: "chain.viewCitingDbRecordForClaim", kind: "viewCitingDbRecordForClaim" },
+    { key: "chain.viewCitingSourceFileForClaim", kind: "viewCitingSourceFileForClaim" },
     { key: "chain.viewContainingArtifact", kind: "viewContainingArtifact" },
   ],
   Artifact: [
@@ -90,21 +99,38 @@ const CHAIN_BUTTONS: Partial<Record<MemoryGraphNodeLabel, ChainButton[]>> = {
     { key: "chain.viewCitedPaper", kind: "viewCitedPaper" },
     { key: "chain.viewRelatedTask", kind: "viewRelatedTask" },
   ],
+  // No "cited paper" button: a database record has no papers of its own (the
+  // old traversal left the record's neighbourhood on its second hop and landed
+  // on whichever evidence backed the same Claim — see _BUTTON_CHAIN_HOPS in the
+  // sidecar). The claim's own citations are one click further, from the Claim
+  // that viewCitingClaimForDbRecord reaches.
+  DbRecord: [
+    { key: "chain.viewCitingClaimForDbRecord", kind: "viewCitingClaimForDbRecord" },
+    { key: "chain.viewSearchingTaskForDbRecord", kind: "viewSearchingTaskForDbRecord" },
+  ],
+  WebPage: [
+    { key: "chain.viewExtractedEvidenceForWebPage", kind: "viewExtractedEvidenceForWebPage" },
+    { key: "chain.viewCitingClaimForWebPage", kind: "viewCitingClaimForWebPage" },
+    { key: "chain.viewCitingArtifactForWebPage", kind: "viewCitingArtifactForWebPage" },
+    { key: "chain.viewSearchingTaskForWebPage", kind: "viewSearchingTaskForWebPage" },
+  ],
 };
 
-const NODE_LABELS: MemoryGraphNodeLabel[] = ["ResearchGoal", "Task", "ToolCall", "Paper", "Evidence", "Claim", "Code", "Artifact"];
+export const NODE_LABELS: MemoryGraphNodeLabel[] = ["ResearchGoal", "Task", "ToolCall", "Paper", "Evidence", "Claim", "Code", "Artifact", "SourceFile", "DbRecord", "WebPage"];
 // Edge types shown as Relationship filter chips. MUST stay in sync with
 // MemoryGraphEdgeType (packages/schema) + EDGE_COLORS (MemoryGraphCanvas) —
 // a type listed here but missing from EDGE_COLORS renders a grey chip, and a
 // a type in the schema but missing here silently disappears from the filter
 // (the count is computed from graph.edges, then filtered by this list). Keep
 // the order aligned with EDGE_COLORS so chip colors read top-to-bottom.
-// ``contains`` is the subagent scope→child spine (PR1); it surfaces as a
+// ``contains`` is the subagent scope→child spine; it surfaces as a
 // chip so the user can isolate the scope subtree when a scope is expanded.
+// ``feeds`` links an uploaded SourceFile to its ResearchGoal (upload mirror);
+// it surfaces as a chip so the user can isolate the uploaded-files subtree.
 // ``supersedes`` (Artifact version→previous version) is intentionally
 // omitted — version history is out of scope for the canvas/chain view, and
 // the Canvas drops those edges before layout anyway.
-const EDGE_TYPES: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "input", "contains"];
+const EDGE_TYPES: MemoryGraphEdgeType[] = ["produces", "next", "extracts", "supports", "stated_in", "input", "contains", "feeds"];
 // Module-level so the embedded artifact panel keeps a stable prop identity
 // across the explorer's poll-driven re-renders.
 const NOOP = () => undefined;
@@ -150,6 +176,32 @@ export function findArtifactNodeInGraph(
     (typeof right.extra?.version === "number" ? right.extra.version : -1) -
     (typeof left.extra?.version === "number" ? left.extra.version : -1),
   )[0];
+}
+
+/**
+ * Resolve an uploaded-file `name` (the SourceFile node's ``extra.path`` /
+ * ``extra.name``) onto its graph SourceFile node. Used by the embedded
+ * provenance panel's "← derived from" link when the dependency is a
+ * ``source_file`` (an uploaded file the run read) — those have no version and
+ * no Artifact node, so ``findArtifactNodeInGraph`` cannot match them. The
+ * SourceFile node is keyed by ``file_id`` and carries the uploaded name/path
+ * in ``extra``; match by ``path`` first (the workspace-relative basename) and
+ * fall back to ``name`` (``originalName`` may differ from ``path`` on a rename
+ * conflict). Accepts a path-tail match, mirroring the artifact helper.
+ */
+export function findSourceFileNodeInGraph(
+  nodes: readonly MemoryGraphNode[],
+  name: string,
+): MemoryGraphNode | undefined {
+  return nodes.find((node) => {
+    if (node.label !== "SourceFile") return false;
+    const path = typeof node.extra?.path === "string" ? node.extra.path : "";
+    const labelName = typeof node.extra?.name === "string" ? node.extra.name : "";
+    if (!path && !labelName) return false;
+    return path === name || labelName === name
+      || (path && name.endsWith(`/${path}`))
+      || (labelName && name.endsWith(`/${labelName}`));
+  });
 }
 
 /**
@@ -579,7 +631,7 @@ export function mergeChainScopeExpansions(
 }
 
 /**
- * A child's task_id embeds its scope's id via PR1's ``:exec:`` shape
+ * A child's task_id embeds its scope's id via the ``:exec:`` shape
  * ``subtask:subagent:<scopeId>:exec:<execId>``. Recover the scope id (the
  * prefix before ``:exec:``) so a child node whose ``parent_subtask_id`` is
  * absent can still be attributed to its owning scope for the fold. Returns
@@ -591,11 +643,12 @@ function childScopeFromId(id: string): string | undefined {
 }
 
 /**
- * The owning scope id of a child node — ``extra.parent_subtask_id`` when PR1
- * wrote it, otherwise recovered from the ``:exec:`` task_id shape. Used both
- * to attribute a child to its scope for the fold (mergeExpansions) and to
- * group children per scope for the synthesised ``next`` chain. Returns
- * ``undefined`` when the node is not a scope child (no parent, no marker).
+ * The owning scope id of a child node — ``extra.parent_subtask_id`` when
+ * present, otherwise recovered from the ``:exec:`` task_id shape. Used
+ * both to attribute a child to its scope for the fold (mergeExpansions)
+ * and to group children per scope for the synthesised ``next`` chain.
+ * Returns ``undefined`` when the node is not a scope child (no parent, no
+ * marker).
  */
 function childParentScope(node: { id: string; extra?: Record<string, unknown> }): string | undefined {
   const explicit = node.extra?.parent_subtask_id;
@@ -639,6 +692,31 @@ export function buildScopeChildCounts(nodes: readonly MemoryGraphNode[]): Map<st
 }
 
 /**
+ * Whether the entry-focus effect should run: there is a node the caller asked
+ * the explorer to land on (``initialNodeId``) and it has not been focused yet.
+ *
+ * ``autoChain`` is deliberately NOT part of this decision. It used to gate the
+ * focus, so a caller that named an entry node without also setting autoChain
+ * got ``selectedId = <node>`` on a canvas where ``projectToCanvas`` had folded
+ * that node away — the node was not in ``graph.nodes``, so the detail card
+ * (``graph.nodes.find(id === selectedId)``) never rendered and the click read
+ * as "nothing happened". That is exactly what a report chip jump
+ * ([dbrecord1]/[evidence1] → App.tsx's handleChipClick) does: it passes
+ * ``initialNodeId`` alone. A named entry node is now self-sufficient — the
+ * focus effect keeps it alive via ``extraKeepIds`` (see projectToCanvas)
+ * whatever else the caller passed.
+ *
+ * ``autoChainDone`` is the re-fire guard: the effect marks itself done on every
+ * decision (including "node not in the subgraph → abort"), so a graph poll
+ * cannot re-enter it. The prop-change effect clears it when the caller names a
+ * different entry node while the explorer is open, which is what makes a second
+ * chip click focus the new node.
+ */
+export function shouldFocusEntryNode(initialNodeId: string | undefined, autoChainDone: boolean): boolean {
+  return Boolean(initialNodeId) && !autoChainDone;
+}
+
+/**
  * Full-screen memory-graph explorer.
  *
  * Left column: the product of the selected node. For Artifact nodes this is
@@ -670,6 +748,10 @@ export function MemoryGraphExplorer({
    * just focuses the selected node; the user picks the chain button manually).
    * Accepted but ignored. */
   initialChainKind?: "full" | "task" | "artifact";
+  /** Marker for the modal entry path, used only by the first-open tour (step-1
+   * copy + "wait until the entry has settled before overlaying the canvas").
+   * The entry NODE focus is driven by ``initialNodeId`` alone — see
+   * ``shouldFocusEntryNode``. */
   autoChain?: boolean;
   onClose: () => void;
   onError: (message: string) => void;
@@ -678,6 +760,33 @@ export function MemoryGraphExplorer({
   subgraph: MemorySubgraph;
 }) {
   const [selectedId, setSelectedId] = useState<string | undefined>(initialNodeId);
+  // React to a chip-jump re-focus while the explorer is already open: a second
+  // [sourcefile2] chip clicked from a chained modal shouldn't land back on
+  // [sourcefile1]'s selection. useState only honors the initial value, so an
+  // effect catches subsequent prop changes. Tracking the previous prop via
+  // ref skips the mount-time fire (the useState initializer already picked
+  // it up — re-setting would be a no-op but is wasted work and would race
+  // with the auto-chain effect above).
+  const previousInitialNodeIdRef = useRef<string | undefined>(initialNodeId);
+  useEffect(() => {
+    const previous = previousInitialNodeIdRef.current;
+    previousInitialNodeIdRef.current = initialNodeId;
+    if (previous === initialNodeId) return;
+    if (!initialNodeId) return; // parent cleared the focus; explorer keeps current selection
+    setSelectedId(initialNodeId);
+    // A chip jump is a fresh navigation: drop any active search or chain
+    // overlay so the new focus is unambiguous (chain in particular is "focus
+    // on this node's neighbourhood" — two focuses don't compose). Clear the
+    // entry focus too — it would otherwise pin the previous Artifact /
+    // Evidence node, defeating the new selection.
+    setQuery("");
+    setMatchIds(undefined);
+    setSearchNote(undefined);
+    setChain(undefined);
+    setChainSlice(undefined);
+    setAutoChainDone(false);
+    setFocusNodeId(undefined);
+  }, [initialNodeId]);
   const [activeLabels, setActiveLabels] = useState<ReadonlySet<MemoryGraphNodeLabel>>(new Set());
   const [activeEdges, setActiveEdges] = useState<ReadonlySet<MemoryGraphEdgeType>>(new Set());
   // Search narrows the graph to matching nodes; chain replaces it with one
@@ -919,8 +1028,9 @@ export function MemoryGraphExplorer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Entry focus (autoChain path): when opened from the artifact/evidence modals
-  // the explorer mounts with ``selectedId = initialNodeId`` (the entry node is
+  // Entry focus: when opened from the artifact/evidence modals OR from a
+  // report chip jump (App.tsx's handleChipClick → pendingMemoryNode) the
+  // explorer mounts with ``selectedId = initialNodeId`` (the entry node is
   // pre-selected and visible in the skeleton). Rather than fetching a chain —
   // which landed a narrow single-edge highlight that read as "just a ring" —
   // the entry now simply highlights the selected node and dims everything else
@@ -929,7 +1039,7 @@ export function MemoryGraphExplorer({
   // picks the chain themselves by clicking a per-node button (clearing the
   // focus first), so the full-graph → chain-overlay transition is explicit.
   useEffect(() => {
-    if (!autoChain || !initialNodeId || autoChainDone) return;
+    if (!shouldFocusEntryNode(initialNodeId, autoChainDone)) return;
     // Mark done the moment we've decided what to do, whether the entry node is
     // in the folded view (focus it) or not (abort). Aborting without marking
     // done would re-fire this on every graph change.
@@ -945,7 +1055,7 @@ export function MemoryGraphExplorer({
     if (!node) return;
     setFocusNodeId(initialNodeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoChain, initialNodeId, autoChainDone, subgraph]);
+  }, [initialNodeId, autoChainDone, subgraph]);
 
   // Only offer categories that actually occur, with their counts.
   const labelCounts = useMemo(() => {
@@ -1016,9 +1126,12 @@ export function MemoryGraphExplorer({
   const storage = typeof window !== "undefined" ? window.localStorage : undefined;
 
   const [tourOpen, setTourOpen] = useState(false);
-  // The entry path decides step-1 copy: card (right-rail, no autoChain) lands
-  // on the spine; chain (product/evidence modal, autoChain) lands on a chain.
-  const tourEntry: "card" | "chain" = autoChain ? "chain" : "card";
+  // The entry path decides step-1 copy: card (right-rail, no entry node) lands
+  // on the spine; chain (product/evidence modal or report chip jump) lands on a
+  // single node in focus+fog. Keyed on "did the caller name an entry node"
+  // rather than on autoChain alone, so a chip jump — which passes initialNodeId
+  // without autoChain — gets the copy that matches what is on screen.
+  const tourEntry: "card" | "chain" = autoChain || initialNodeId ? "chain" : "card";
 
   // Pop the tour on first open only (no localStorage flag), but for the chain
   // entry wait until autoChain has settled (the chain fetch landed / found
@@ -1059,12 +1172,23 @@ export function MemoryGraphExplorer({
   const navigateArtifactInGraph = useCallback((logicalName: string, version?: number) => {
     const target = findArtifactNodeInGraph(graph.nodes, logicalName, version);
     if (target) { setSelectedId(target.id); return; }
+    // version undefined = a source_file (uploaded file) dependency, or an
+    // unpinned artifact. SourceFile nodes are keyed by file_id and carry the
+    // uploaded name/path in extra; match by those so a click on an uploaded
+    // input file selects its SourceFile node. Artifact nodes are handled by
+    // findArtifactNodeInGraph above (and the subgraph fallback below), so this
+    // only fires when no Artifact node matched.
+    if (version == null) {
+      const sourceTarget = findSourceFileNodeInGraph(graph.nodes, logicalName);
+      if (sourceTarget) { setSelectedId(sourceTarget.id); return; }
+    }
     if (!chain) return;
     const fullTarget = findArtifactNodeInGraph(subgraph.nodes, logicalName, version);
-    if (!fullTarget) return;
-    setChain(undefined);
-    clearSearch();
-    setSelectedId(fullTarget.id);
+    if (fullTarget) { setChain(undefined); clearSearch(); setSelectedId(fullTarget.id); return; }
+    if (version == null) {
+      const fullSourceTarget = findSourceFileNodeInGraph(subgraph.nodes, logicalName);
+      if (fullSourceTarget) { setChain(undefined); clearSearch(); setSelectedId(fullSourceTarget.id); }
+    }
   }, [chain, graph.nodes, subgraph.nodes]);
 
   // A code-header click in the embedded provenance panel selects the Code
@@ -1086,21 +1210,26 @@ export function MemoryGraphExplorer({
   }, [chain, graph.nodes, subgraph.nodes]);
 
   // A citation chip click in the embedded artifact panel (the report's
-  // [artifactN]/[evidenceN] tokens) selects the cited node in the canvas.
-  // Artifact chips carry the catalog artifact_id + version as the reference;
-  // resolve it to a graph Artifact node by matching ``extra.artifact_id``
-  // (composite-keyed on version when the chip pins one). Without this the
-  // MarkdownRenderer renders the chips as disabled buttons — the reference
-  // resolves, so they are not plain text, but ArtifactModal's onChipClick is
-  // undefined in the chain view so the button stays disabled and unclickable.
-  // Evidence/Artifact chips reference those labels directly by id.
+  // [artifactN]/[evidenceN]/[sourcefileN] tokens) selects the cited node in
+  // the canvas. Artifact chips carry the catalog artifact_id + version as the
+  // reference; resolve it to a graph Artifact node by matching
+  // ``extra.artifact_id`` (composite-keyed on version when the chip pins one).
+  // Without this the MarkdownRenderer renders the chips as disabled buttons —
+  // the reference resolves, so they are not plain text, but ArtifactModal's
+  // onChipClick is undefined in the chain view so the button stays disabled and
+  // unclickable. Evidence/SourceFile chips reference those labels directly by
+  // id: Evidence's node identity is its evidence_id, SourceFile's is its
+  // file_id (what the sourcefile chip carries as ``reference.id``), so both
+  // match on ``node.id === reference.id``.
   const navigateChipInGraph = useCallback((reference: ComposerReference) => {
     // ComposerReferenceKind is lowercase ("artifact"); MemoryGraphNodeLabel is
     // PascalCase ("Artifact"). Map the chip kind to its graph label so the
     // label comparison is meaningful; "session"/"skill" are composer-context
     // references, not chips, so they never reach this handler.
     const label = reference.kind === "artifact" ? "Artifact"
-      : reference.kind === "evidence" ? "Evidence" : null;
+      : reference.kind === "evidence" ? "Evidence"
+      : reference.kind === "sourcefile" ? "SourceFile"
+      : reference.kind === "dbrecord" ? "DbRecord" : null;
     if (!label) return;
     const matchNode = (nodes: readonly MemoryGraphNode[]) => nodes.find((node) => {
       if (node.label !== label) return false;
@@ -1110,6 +1239,9 @@ export function MemoryGraphExplorer({
         return reference.version == null
           || node.extra?.version === reference.version;
       }
+      // Evidence (id=evidence_id), SourceFile (id=file_id) and DbRecord
+      // (id=identifier — _ID_FIELDS["DbRecord"] in the sidecar) all key
+      // their node identity on the chip's reference.id directly.
       return node.id === reference.id;
     });
     const target = matchNode(graph.nodes);
@@ -1143,10 +1275,11 @@ export function MemoryGraphExplorer({
       // The read layer caps results server-side; say so rather than silently
       // showing a partial answer when the server truncates its result set.
       setSearchNote(result.hits.length
-        ? `${onScreen} of ${result.hits.length}${result.truncated ? "+ (truncated)" : ""} match(es) in view`
-        : "No matches");
+        ? t(result.truncated ? "memory.search.matchesTruncated" : "memory.search.matches",
+          { shown: onScreen, total: result.hits.length })
+        : t("memory.search.noMatches"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Search failed");
+      onError(error instanceof Error ? error.message : t("memory.search.failed"));
     } finally {
       setSearching(false);
     }
@@ -1184,7 +1317,7 @@ export function MemoryGraphExplorer({
     setChainLoading(true);
     try {
       const result = await client.getMemoryChain(source.id, sessionId, version, button.kind);
-      if (!result.nodes.length) { onError("No chain was found for this node."); return; }
+      if (!result.nodes.length) { onError(t("chain.empty")); return; }
       setChain({
         graph: { edges: result.edges, nodes: result.nodes, total: result.total, truncated: result.truncated },
         sourceName: graphNodeName(source),
@@ -1204,7 +1337,7 @@ export function MemoryGraphExplorer({
       setActiveLabels(new Set());
       setActiveEdges(new Set());
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not load the chain");
+      onError(error instanceof Error ? error.message : t("chain.loadFailed"));
     } finally {
       setChainLoading(false);
     }
@@ -1460,28 +1593,28 @@ export function MemoryGraphExplorer({
     }
     if (event.target === event.currentTarget) onClose();
   }}>
-    <section aria-label="ScienceMemory explorer" aria-modal="true" className="memory-explorer-panel" role="dialog">
+    <section aria-label={t("memory.explorer.aria")} aria-modal="true" className="memory-explorer-panel" role="dialog">
       <header className="memory-explorer-header">
         <div>
-          <span className="eyebrow">Session knowledge</span>
+          <span className="eyebrow">{t("memory.explorer.eyebrow")}</span>
           <h2>ScienceMemory</h2>
         </div>
         <div className="memory-explorer-stats">
           <form className="memory-explorer-search" onSubmit={(event) => void runSearch(event)} role="search">
             <input
-              aria-label="Search the ScienceMemory"
+              aria-label={t("memory.explorer.searchAria")}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search nodes…"
+              placeholder={t("memory.explorer.searchPlaceholder")}
               value={query}
             />
-            <button disabled={searching} type="submit">{searching ? "…" : "Search"}</button>
-            {matchIds ? <button onClick={clearSearch} type="button">Clear</button> : null}
+            <button disabled={searching} type="submit">{searching ? "…" : t("app.search")}</button>
+            {matchIds ? <button onClick={clearSearch} type="button">{t("memory.search.clear")}</button> : null}
           </form>
           {searchNote ? <span className="memory-search-note">{searchNote}</span> : null}
-          <span>{graph.nodes.length} nodes</span>
-          <span>{graph.edges.length} edges</span>
-          {graph.truncated ? <span className="memory-truncated" title="The read layer caps results; this view is partial.">truncated</span> : null}
-          <button aria-label="Close ScienceMemory" className="icon-button" onClick={onClose} title="Close ScienceMemory" type="button"><CloseIcon size={20} /></button>
+          <span>{graph.nodes.length} {t("memory.stats.nodes")}</span>
+          <span>{graph.edges.length} {t("memory.stats.edges")}</span>
+          {graph.truncated ? <span className="memory-truncated" title={t("memory.truncated.title")}>{t("memory.truncated.badge")}</span> : null}
+          <button aria-label={t("memory.explorer.close")} className="icon-button" onClick={onClose} title={t("memory.explorer.close")} type="button"><CloseIcon size={20} /></button>
         </div>
       </header>
 
@@ -1492,7 +1625,10 @@ export function MemoryGraphExplorer({
 
       <div className="memory-explorer-body">
         <div className="memory-explorer-product">
-          {selected && selected.label === "Artifact" && artifactName ? <ArtifactModal
+          {/* SourceFile nodes also resolve to a catalog entry (origin="user_upload",
+              see block 1) so the shared artifact panel can preview the uploaded
+              file with the same surface as a declared Artifact. */}
+          {selected && (selected.label === "Artifact" || selected.label === "SourceFile") && artifactName ? <ArtifactModal
             client={client}
             embedded
             // Key on (logicalName, version) so clicking v1 vs v2 remounts the
@@ -1526,7 +1662,7 @@ export function MemoryGraphExplorer({
               and were easy to miss entirely. */}
           <div className="memory-explorer-filters">
             <div className="memory-filter-block">
-              <span className="memory-filter-title">Nodes ({graph.nodes.length})</span>
+              <span className="memory-filter-title">{t("memory.filter.nodes", { count: graph.nodes.length })}</span>
               <div className="memory-filter-chips">
                 {/* Node-label chips render as pill/capsule tags: a single
                     rounded button whose border-radius is exactly half its
@@ -1550,7 +1686,7 @@ export function MemoryGraphExplorer({
               </div>
             </div>
             <div className="memory-filter-block">
-              <span className="memory-filter-title">Relationships ({graph.edges.length})</span>
+              <span className="memory-filter-title">{t("memory.filter.relationships", { count: graph.edges.length })}</span>
               <div className="memory-filter-chips">
                 {/* Relationship chips render as double-pointed hexagon tags:
                     a flat body flanked by left/right SVG point caps. The same
@@ -1571,7 +1707,7 @@ export function MemoryGraphExplorer({
                   style={{ ["--chip-bg" as string]: "#e2e3e5", color: "#1a1b1d" }}
                   type="button"
                 ><span className="rel-chip-cap" aria-hidden="true"><svg width="9" height="24" viewBox="0 0 9 24" preserveAspectRatio="none"><path d="M5.73024 1.03676C6.08165 0.397331 6.75338 0 7.48301 0H9V24H7.483C6.75338 24 6.08165 23.6027 5.73024 22.9632L0.315027 13.1094C-0.105009 12.4376 -0.105009 11.5624 0.315026 10.8906L5.73024 1.03676Z" /></svg></span><span className="rel-chip-body">{type}</span><span className="rel-chip-cap rel-chip-cap-right" aria-hidden="true"><svg width="9" height="24" viewBox="0 0 9 24" preserveAspectRatio="none"><path d="M5.73024 1.03676C6.08165 0.397331 6.75338 0 7.48301 0H9V24H7.483C6.75338 24 6.08165 23.6027 5.73024 22.9632L0.315027 13.1094C-0.105009 12.4376 -0.105009 11.5624 0.315026 10.8906L5.73024 1.03676Z" /></svg></span></button></span>)}
-                {filtered ? <button className="memory-chip reset" onClick={() => { setActiveLabels(new Set()); setActiveEdges(new Set()); }} type="button">Clear filters</button> : null}
+                {filtered ? <button className="memory-chip reset" onClick={() => { setActiveLabels(new Set()); setActiveEdges(new Set()); }} type="button">{t("memory.filter.clear")}</button> : null}
               </div>
             </div>
           </div>
@@ -1655,7 +1791,9 @@ export function MemoryGraphExplorer({
               </>
             ) : null}
             <p className="memory-explorer-hint">
-              {selected ? `Selected: ${displayNames.get(selected.id) ?? graphNodeName(selected)}` : "Click a node to inspect its product"} · drag to pan · scroll to zoom
+              {selected
+                ? t("memory.hint.selected", { name: displayNames.get(selected.id) ?? graphNodeName(selected) })
+                : t("memory.hint.inspect")} · {t("memory.hint.panZoom")}
             </p>
           </div>
 

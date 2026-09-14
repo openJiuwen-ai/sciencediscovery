@@ -20,6 +20,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   FREE_SEARCH_ORDER,
   PAID_SEARCH_ORDER,
+  toolGraphType,
 } from "@sciencediscovery/schema";
 import type {
   WebAttemptStatus,
@@ -36,6 +37,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { CasStore } from "@sciencediscovery/cas";
 
+import type { MemoryGraphSink } from "@sciencediscovery/memory";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { proxyEnvOverlay, type ProxyEnvironment } from "../proxy/index.js";
 import { WebCache, webCacheKey } from "./cache.js";
@@ -114,16 +116,34 @@ function invocationError(attempt: WebInvocationAttempt): WebError {
 export class WebBroker {
   private readonly cache: WebCache;
   private readonly cas: CasStore;
+  /** CAS data pool for fetched page bodies — same pool as the provenance
+   *  recorder's ``dataCas`` and the MCP broker's; the WebPage node stores
+   *  only the hash. */
+  private readonly dataCas: CasStore;
   private readonly database: DatabaseSync;
+  private readonly memoryGraphSink: Pick<MemoryGraphSink, "observeToolCall"> | undefined;
+  private readonly proxyEnvironment: ProxyEnvironment;
 
   constructor(
     dataDir: string,
     private readonly store: WebBrokerStore,
     private readonly providers: NativeWebProviderClient,
-    private readonly proxyEnvironment: ProxyEnvironment = process.env,
+    options: {
+      /** Optional memory-graph sink: emits one ``observeToolCall`` per
+       *  successful web_search, so the WebPage products land on the graph.
+       *  Tests/legacy callers omit it; a missing sink leaves the search itself
+       *  unaffected (the sink no-ops, see ``mirrorSearchToGraph``). The shape
+       *  is the minimal subset of ``MemoryGraphSink`` used here. */
+      memoryGraphSink?: Pick<MemoryGraphSink, "observeToolCall">;
+      proxyEnvironment?: ProxyEnvironment;
+    } = {},
   ) {
+    const { memoryGraphSink, proxyEnvironment = process.env } = options;
+    this.proxyEnvironment = proxyEnvironment;
+    this.memoryGraphSink = memoryGraphSink;
     this.cache = new WebCache(dataDir);
     this.cas = new CasStore(dataDir);
+    this.dataCas = new CasStore(dataDir, "data");
     const path = resolve(dataDir, "web-audit.sqlite");
     mkdirSync(dirname(path), { recursive: true });
     this.database = new DatabaseSync(path);
@@ -139,10 +159,147 @@ export class WebBroker {
     `);
   }
 
+  close(): void {
+    this.cache.close();
+    this.database.close();
+  }
+
   private save(invocation: WebInvocation): void {
     this.database.prepare(
       "INSERT INTO web_invocations (id, session_id, created_at, record_json) VALUES (?, ?, ?, ?)",
     ).run(invocation.id, invocation.sessionId, invocation.createdAt, JSON.stringify(invocation));
+  }
+
+  /** Fire-and-forget: mirror one successful web search to the memory graph.
+   *
+   *  Parses the provider JSON document — shape ``{ query, total_results,
+   *  results: Array<{ title?, url?, content? }> }`` (see
+   *  ``packages/data-source/src/web/native/index.ts:127``) — into web_page
+   *  products keyed by URL. ``URL`` is the dedup key for WebPage, so two rows
+   *  with the same URL produce one product.
+   *
+   *  Gated by the registry (``toolGraphType("web_search")``) so renaming the
+   *  tool only edits the registry. The gate only asks "is this tool in the
+   *  graph at all" (``undefined`` → no-op, defensive: the registry is
+   *  currently the single source of truth, but if web_search ever gets dropped
+   *  the search keeps working without graph entries) — the product shape is
+   *  this function's own business, not the registry's, because a web search
+   *  always yields WebPage nodes.
+   *
+   *  Never throws — the search itself has already succeeded, and a graph
+   *  failure must not surface as an error on the run. JSON.parse failures /
+   *  non-array results are logged and silently dropped.
+   */
+  private mirrorSearchToGraph(invocation: WebInvocation, context: WebCallContext, content: string): void {
+    if (!this.memoryGraphSink) return;
+    try {
+      const graphType = toolGraphType("web_search");
+      if (graphType === undefined) return;
+      const products = this.parseSearchDocument(content).map((row) => ({
+        productType: "web_page" as const,
+        url: row.url,
+        ...(row.title ? { title: row.title } : {}),
+        ...(row.snippet ? { snippet: row.snippet } : {}),
+      }));
+      if (!products.length) return;
+      this.memoryGraphSink.observeToolCall({
+        taskId: `subtask:web:${invocation.id}`,
+        sessionId: context.sessionId,
+        turnId: context.turnId,
+        toolName: "web_search",
+        toolType: graphType,
+        resultCount: products.length,
+        products,
+      });
+    } catch (error) {
+      // Never throw into the search path. Swallow + log via the sink's own
+      // mgLog (the sink also catches its own errors).
+      console.warn("mirrorSearchToGraph failed: %s", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** Fire-and-forget: mirror one successful web_fetch to the memory graph.
+   *
+   *  Pulls the fetcher's full-text content (HTML/text) into the CAS data pool
+   *  (same pool as the MCP broker's page bodies), then mirrors one WebPage
+   *  product keyed by the URL with ``contentHash`` — the sidecar's ON MATCH
+   *  COALESCE upgrades a previously snippet-only node (search hit) without
+   *  ever dropping an existing hash. The body itself never lands on the node
+   *  (graph = directory, CAS = warehouse), mirroring SourceFile.content_hash.
+   *
+   *  Gated by the registry (``toolGraphType("web_fetch")``); ``undefined`` →
+   *  no-op (defensive, same contract as ``mirrorSearchToGraph`` — the gate
+   *  again only says whether the tool is in the graph, the product is built
+   *  here). Never
+   *  throws — the fetch itself has already succeeded, and a graph/CAS failure
+   *  must not surface as an error on the run. A CAS write failure downgrades
+   *  to a hash-less product (snippet-only state) rather than aborting the
+   *  mirror.
+   */
+  private async mirrorFetchToGraph(
+    url: string,
+    content: string,
+    invocation: WebInvocation,
+    context: WebCallContext,
+  ): Promise<void> {
+    if (!this.memoryGraphSink) return;
+    try {
+      const graphType = toolGraphType("web_fetch");
+      if (graphType === undefined) return;
+      let contentHash: string | undefined;
+      if (content.length > 0) {
+        try {
+          contentHash = (await this.dataCas.put(content)).hash;
+        } catch (error) {
+          // Degrade to a hash-less product instead of losing the whole mirror.
+          console.warn("mirrorFetchToGraph: dataCas.put failed: %s",
+            error instanceof Error ? error.message : String(error));
+        }
+      }
+      this.memoryGraphSink.observeToolCall({
+        taskId: `subtask:web-fetch:${invocation.id}`,
+        sessionId: context.sessionId,
+        turnId: context.turnId,
+        toolName: "web_fetch",
+        toolType: graphType,
+        resultCount: 1,
+        products: [{
+          productType: "web_page",
+          url,
+          ...(contentHash ? { contentHash } : {}),
+        }],
+      });
+    } catch (error) {
+      // Never throw into the fetch path. Swallow + log via the sink's own
+      // mgLog (the sink also catches its own errors).
+      console.warn("mirrorFetchToGraph failed: %s", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** Parse one provider JSON document into ``{ url, title?, snippet? }`` rows.
+   *  Filters rows missing a URL (the dedup key) and tolerates any malformed
+   *  input (returns an empty array). */
+  private parseSearchDocument(content: string): Array<{ url: string; title?: string; snippet?: string }> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return [];
+    }
+    const rows = (parsed as { results?: unknown } | null)?.results;
+    if (!Array.isArray(rows)) return [];
+    const out: Array<{ url: string; title?: string; snippet?: string }> = [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const obj = row as { url?: unknown; title?: unknown; content?: unknown };
+      if (typeof obj.url !== "string" || !obj.url) continue;
+      out.push({
+        url: obj.url,
+        ...(typeof obj.title === "string" ? { title: obj.title } : {}),
+        ...(typeof obj.content === "string" ? { snippet: obj.content } : {}),
+      });
+    }
+    return out;
   }
 
   usage(): WebUsageSummary {
@@ -337,6 +494,12 @@ export class WebBroker {
           tier: isPaidSearchProvider(engine) ? "paid" : "free",
         });
         this.save(invocation);
+        // Cache hits still produce WebPages the LLM will cite — mirror to
+        // the graph (fire-and-forget) so a re-run doesn't blank out the
+        // nodes downstream declare_* calls rely on. web_search is the only
+        // workspace tool mirrored here (run_shell / run_npu_job go through
+        // the recorder path, not the broker).
+        this.mirrorSearchToGraph(invocation, context, cached.content);
         return { content: cached.content, invocation };
       }
     }
@@ -368,6 +531,7 @@ export class WebBroker {
       settings.searchCacheTtlSeconds,
     );
     this.save(invocation);
+    this.mirrorSearchToGraph(invocation, context, success.content);
     return { content: success.content, invocation };
   }
 
@@ -433,6 +597,11 @@ export class WebBroker {
           status: "cache-hit",
         });
         this.save(invocation);
+        // Cache hits still mirror (same rationale as search): the WebPage and
+        // its content_hash must exist in THIS session for a downstream
+        // declare_evidence to resolve — the body re-put is content-addressed,
+        // so it lands on the same CAS blob.
+        void this.mirrorFetchToGraph(url, cached.content, invocation, context);
         return { content: cached.content, invocation };
       }
     }
@@ -449,6 +618,9 @@ export class WebBroker {
     invocation.status = "succeeded";
     this.cache.put(key, result.content, snapshot, settings.fetchCacheTtlSeconds);
     this.save(invocation);
+    // Mirror the fetched page (fire-and-forget): body → CAS data pool, then a
+    // WebPage product with content_hash.
+    void this.mirrorFetchToGraph(url, result.content, invocation, context);
     return { content: result.content, invocation };
   }
 }

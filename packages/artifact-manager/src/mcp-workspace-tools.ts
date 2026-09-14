@@ -223,6 +223,11 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
         options.sessionId,
         artifactJobId,
       );
+      const path = artifact.job.finalPath ?? "";
+      const prefix = options.workspacePathPrefix?.replace(/^\/+|\/+$/g, "");
+      if (prefix ? !path.startsWith(`${prefix}/`) : path.startsWith("subagents/")) {
+        throw new Error("Paper input belongs to another Agent Workspace; request explicit file delivery");
+      }
       if (artifact.candidate.kind !== "paper" || artifact.candidate.format.toLowerCase() !== "pdf") {
         throw new Error("paper_extract_pdf accepts only completed PDF paper artifacts");
       }

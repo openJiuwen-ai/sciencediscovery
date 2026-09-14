@@ -14,6 +14,7 @@
 
 import Papa from "papaparse";
 
+import { translateActive } from "../../i18n/index.js";
 import type {
   ColumnKind,
   ColumnProfile,
@@ -136,7 +137,7 @@ export function profileRows(
     return parsed;
   });
 
-  if (duplicateIds) warnings.push(`Found ${duplicateIds} duplicate identifiers; source row numbers were appended to disambiguate them.`);
+  if (duplicateIds) warnings.push(translateActive("csv.importDuplicateIds", { count: duplicateIds }));
 
   const columns: ColumnProfile[] = fields.map((field) => {
     const values = parsedRows.map((row) => row[field]);
@@ -200,7 +201,7 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     transformHeader: (header) => header.replace(/^\uFEFF/, "").trim(),
   });
   const fields = result.meta.fields ?? [];
-  if (!fields.length || !result.data.length) throw new Error("CSV must contain a header and at least one data row");
+  if (!fields.length || !result.data.length) throw new Error(translateActive("csv.parseHeaderRequired"));
   return profileRows(
     result.data,
     `artifact:${source.sourceArtifactVersionId}`,
@@ -208,7 +209,7 @@ export function parseCsvText(content: string, source: DataSourceRecord): DataTab
     inferTableKind(fields),
     source,
     result.errors.slice(0, 8).map((error) =>
-      `Row ${(error.row ?? 0) + 2}: ${error.message}`),
+      translateActive("csv.parseRowError", { message: error.message, row: (error.row ?? 0) + 2 })),
   );
 }
 

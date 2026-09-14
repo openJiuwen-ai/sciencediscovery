@@ -34,6 +34,31 @@ import { KernelManager } from "./kernel-manager.js";
 const execFileAsync = promisify(execFile);
 const BWRAP_PATH = process.env.SCIENCE_AGENT_BWRAP_PATH?.trim() || "bwrap";
 
+test("managed Shell runs Python modules/files with a fresh process, relative cwd, and read-only prefix", async (context) => {
+  const { dataDir, store, workspaceRoot, prefix } = await fixture(context);
+  await mkdir(resolve(workspaceRoot, "analysis"));
+  await writeFile(resolve(workspaceRoot, "analysis", "sample.py"), "print('module-ok')\n");
+  const runtime = store.resolveRuntime("rev-python", "python");
+  const config = { bwrapPath: BWRAP_PATH, dataDir, execTimeoutMs: 60_000, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 0 };
+  const request = {
+    agentId: "main", code: "python -m sample; python sample.py; export TEMP_VALUE=previous; cd /tmp",
+    cwd: "analysis", environmentId: "starter-python", executionId: "shell-env-first",
+    permissionEpoch: epoch(), workspaceRoot,
+  };
+  const result = await executeShell(config, request, undefined, undefined, undefined, runtime);
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(result.stdout, "module-ok\nmodule-ok\n");
+  assert.equal(result.environmentRevisionId, "rev-python");
+  const second = await executeShell(config, { ...request, executionId: "shell-env-second", code:
+    `printf '%s\\n' "\${TEMP_VALUE-unset}"; pwd; python -c 'from pathlib import Path; Path("ok.txt").write_text("yes")'; touch /opt/science-env/blocked`,
+  }, undefined, undefined, undefined, runtime);
+  assert.match(second.stdout, /^unset\n\/workspace\/analysis/);
+  assert.notEqual(second.exitCode, 0);
+  assert.match(second.stderr, /Read-only file system/);
+  await assert.rejects(import("node:fs/promises").then((fs) => fs.stat(resolve(prefix, "blocked"))), { code: "ENOENT" });
+  await assert.rejects(executeShell(config, { ...request, cwd: "../../.." }, undefined, undefined, undefined, runtime), /cwd must remain/);
+});
+
 function epoch(id = "epoch-test"): PermissionEpoch {
   return {
     createdAt: new Date().toISOString(),

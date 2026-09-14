@@ -127,7 +127,8 @@ export class PaperService {
       throw new Error("Only PDF paper artifacts can be imported into the Paper reader");
     }
     this.store.assertSessionWritable(input.sessionId);
-    const target = resolveWorkspaceFile(this.store.workspacePath(input.sessionId), input.path);
+    const location = this.store.workspaceLocation(input.sessionId, input.path);
+    const target = resolveWorkspaceFile(location.root, location.path);
     const bytes = await readFile(target);
     return await this.storePaper({
       bytes,
@@ -234,12 +235,11 @@ export class PaperService {
       .map((path) => `${analysisRoot}/${path}`);
     if (!inputPaths.length) throw new Error("The paper parser produced no images for vision analysis");
 
-    const workspace = this.store.workspacePath(input.sessionId);
     const inputs: Array<{ bytes: Buffer; mime: string; path: string }> = [];
     let totalBytes = 0;
     for (const path of inputPaths) {
-      const target = resolve(workspace, path);
-      if (target !== workspace && !target.startsWith(`${workspace}/`)) throw new Error("Vision input escaped the session workspace");
+      const location = this.store.workspaceLocation(input.sessionId, path);
+      const target = resolveWorkspaceFile(location.root, location.path);
       const extension = extname(target).toLowerCase();
       const mime = extension === ".png" ? "image/png" : extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : undefined;
       if (!mime) throw new Error("Vision inputs must be PNG or JPEG images");
@@ -291,64 +291,69 @@ export class PaperService {
     const modelUsage = extractOpenAiUsage(responseBody.usage);
 
     const id = randomUUID();
-    const resultPath = `papers/${acquisition.id}/vision/${id}.md`;
-    await mkdir(resolve(workspace, dirname(resultPath)), { recursive: true });
-    const resultTarget = resolve(workspace, resultPath);
-    const resultBytes = Buffer.from(`# Vision analysis\n\n${content}\n`, "utf8");
-    await writeFile(resultTarget, resultBytes);
-    const run: PaperVisionRun = {
-      completedAt: new Date().toISOString(),
-      id,
-      inputPaths,
-      modelId: model.id,
-      ...(modelUsage ? { modelUsage } : {}),
-      modelName: model.name,
-      paperId: acquisition.id,
-      prompt,
-      request: requestRecord,
-      response: await this.cas.put(responseBytes),
-      resultPath,
-      sessionId: input.sessionId,
-      status: "succeeded",
-    };
-    const [resultStat, resultRef] = await Promise.all([stat(resultTarget), this.dataCas.put(resultBytes)]);
-    const sourceRevisionId = this.store
-      .getWorkspaceFileProvenance(input.sessionId, acquisition.pdfPath)
-      ?.currentRevision.id;
-    await this.store.recordWorkspaceFileRevision(input.sessionId, {
-      contentHash: resultRef.hash,
-      mode: "write",
-      modifiedAt: resultStat.mtime.toISOString(),
-      origin: "system",
-      originMeta: { kind: "paper-vision-analysis", paperId: acquisition.id },
-      ...(sourceRevisionId ? { parentRevisionId: sourceRevisionId } : {}),
-      path: resultPath,
-      runId: id,
-      size: resultStat.size,
+    const resultPath = `${dirname(acquisition.pdfPath)}/vision/${id}.md`;
+    const resultLocation = this.store.workspaceLocation(input.sessionId, resultPath);
+    const resultTarget = resolveWorkspaceFile(resultLocation.root, resultLocation.path);
+    return this.store.mutateWorkspace(resultLocation.root, "paper-vision", async () => {
+      await mkdir(dirname(resultTarget), { recursive: true });
+      const resultBytes = Buffer.from(`# Vision analysis\n\n${content}\n`, "utf8");
+      await writeFile(resultTarget, resultBytes);
+      const run: PaperVisionRun = {
+        completedAt: new Date().toISOString(),
+        id,
+        inputPaths,
+        modelId: model.id,
+        ...(modelUsage ? { modelUsage } : {}),
+        modelName: model.name,
+        paperId: acquisition.id,
+        prompt,
+        request: requestRecord,
+        response: await this.cas.put(responseBytes),
+        resultPath,
+        sessionId: input.sessionId,
+        status: "succeeded",
+      };
+      const [resultStat, resultRef] = await Promise.all([stat(resultTarget), this.dataCas.put(resultBytes)]);
+      const sourceRevisionId = this.store
+        .getWorkspaceFileProvenance(input.sessionId, acquisition.pdfPath)
+        ?.currentRevision.id;
+      await this.store.recordWorkspaceFileRevision(input.sessionId, {
+        contentHash: resultRef.hash,
+        mode: "write",
+        modifiedAt: resultStat.mtime.toISOString(),
+        origin: "system",
+        originMeta: { kind: "paper-vision-analysis", paperId: acquisition.id },
+        ...(sourceRevisionId ? { parentRevisionId: sourceRevisionId } : {}),
+        path: resultPath,
+        runId: id,
+        size: resultStat.size,
     });
     await this.store.appendPaperVisionRun(run);
     return run;
+    });
   }
 
   private async storePaper(options: StorePaperOptions): Promise<PaperAcquisition> {
     validatePdf(options.bytes);
-    const workspace = this.store.workspacePath(options.sessionId);
     const id = randomUUID();
     const cleanedPrefix = options.outputPathPrefix?.replace(/^\/+|\/+$/g, "");
     const relativeRoot = cleanedPrefix ? `${cleanedPrefix}/papers/${id}` : `papers/${id}`;
-    const targetRoot = resolve(workspace, relativeRoot);
+    const location = this.store.workspaceLocation(options.sessionId, relativeRoot);
+    const workspace = location.root;
+    const targetRoot = resolveWorkspaceFile(workspace, location.path);
     const stagingRoot = resolve(workspace, `.paper-${id}.tmp`);
     const pdfPath = resolve(stagingRoot, "source.pdf");
     const analysisPath = resolve(stagingRoot, "analysis");
-    try {
-      await mkdir(stagingRoot, { recursive: false });
-      await writeFile(pdfPath, options.bytes);
-      const { stdout } = await execFileAsync(this.pythonPath, [this.workerPath, pdfPath, analysisPath], {
-        encoding: "utf8",
-        maxBuffer: 10 * 1024 * 1024,
-        signal: options.signal,
-        timeout: 120_000,
-      });
+    return this.store.mutateWorkspace(workspace, "paper-extraction", async () => {
+      try {
+        await mkdir(stagingRoot, { recursive: false });
+        await writeFile(pdfPath, options.bytes);
+        const { stdout } = await execFileAsync(this.pythonPath, [this.workerPath, pdfPath, analysisPath], {
+          encoding: "utf8",
+          maxBuffer: 10 * 1024 * 1024,
+          signal: options.signal,
+          timeout: 120_000,
+        });
       const manifest = JSON.parse(stdout.trim()) as PaperExtractionManifest;
       if (manifest.inputSha256 !== this.cas.hash(options.bytes)) {
         throw new Error("PDF parser manifest hash does not match the downloaded PDF");
@@ -418,5 +423,6 @@ export class PaperService {
       await rm(targetRoot, { force: true, recursive: true });
       throw error;
     }
+    });
   }
 }

@@ -15,7 +15,7 @@
 /**
  * `/evolve` as a capability package: the two LLM tools and nothing else.
  *
- * Registered the way `plan-mode` is — the composition root builds the runtime
+ * Registered the way `plan` is — the composition root builds the runtime
  * and hands it over once; a deployment that does not build one simply gets no
  * tools. Before this, `WorkspaceAgentOptions` declared the two callbacks,
  * `createWorkspaceTools` constructed the tools, `buildTools` forwarded the two
@@ -47,6 +47,8 @@ export interface EvolveToolRuntime {
   createEvolveRun(input: EvolveRunProposal, signal?: AbortSignal): Promise<EvolveRunProposalResult>;
   /** Read one finished or running search back into the conversation. */
   getEvolveRun(runId?: string): Promise<EvolveRunSummary>;
+  getIdeaResearch?(researchId?: string): Promise<unknown>;
+  createIdeaResearch?(input: {objective: string; materials: string}): Promise<unknown>;
 }
 
 /**
@@ -225,10 +227,10 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       + "and keep what scores better on a held-out split. "
       + `${runtime.approvalMode === "always_allow" ? "Starts immediately." : "Creates an approval card the user confirms."} `
       + "You design the whole run — read the workspace and the conversation, then run your evaluator "
-      + "**once** with run_python, against the starting point, to confirm it executes and emits a "
+      + "**once** with run_shell, against the starting point, to confirm it executes and emits a "
       + "number. Do NOT also score a deliberately broken copy: this call runs a discrimination probe "
-      + "that does exactly that on the real shards in the real sandbox, and returns both numbers. Your "
-      + "run_python environment and the candidate sandbox are different places with different shard "
+      + "that does exactly that on the real shards in the real sandbox, and returns both numbers. The "
+      + "sandbox run_shell gives you and the candidate sandbox are different places with different shard "
       + "indices, so a local second opinion can disagree with the probe and send the turn into "
       + "reconciling them instead of into the search. When they disagree, the probe is right. "
       + "What you verify is the SCORING, never the answer: do not go "
@@ -275,5 +277,32 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     parameters: evolveParameters,
   };
   tools.push(createEvolveRun);
+  if (runtime.createIdeaResearch) {
+    const parameters = Type.Object({
+      objective: Type.String({minLength: 1, maxLength: 16000, description: "Research task and all user constraints."}),
+      materials: Type.String({maxLength: 32000, description: "Prepared evidence with source references, uncertainties and relevant supplied material. Empty only when the user explicitly skips retrieval and has supplied no evidence."}),
+    });
+    const create: AgentTool<typeof parameters> = {
+      name: "create_idea_research", label: "Start Idea Tree research", parameters,
+      description: "Start the Python Idea Tree engine when the user requests idea-tree or idea-tree-team research. First search and read relevant literature and prepare evidence, unless the user explicitly skips retrieval or supplied evidence is sufficient. Pass the prepared material here. Do not replace the engine with a plan or design/assessment Subagents. After success, report the handoff and end this turn; the existing tree card streams progress. Do not poll or start another research to wait for completion.",
+      execute: async (_id, params) => {
+        const result = await runtime.createIdeaResearch!(params);
+        return {content: [{type: "text", text: JSON.stringify(result)}], details: result};
+      },
+    };
+    tools.push(create);
+  }
+  if (runtime.getIdeaResearch) {
+    const parameters = Type.Object({researchId: Type.Optional(Type.String({maxLength: 200}))});
+    const getIdeaResearch: AgentTool<typeof parameters> = {
+      name: "get_idea_research", label: "Read Idea Tree research", parameters,
+      description: "Read this session's Idea Tree research status, stage progress and candidate findings. Omit researchId for the latest research. Use before explaining results. Python runs the iterations independently; do not poll this tool to wait, create a replacement plan, or claim these are Subagent executions.",
+      execute: async (_id, params) => {
+        const summary = await runtime.getIdeaResearch!(params.researchId);
+        return {content: [{type: "text", text: JSON.stringify(summary)}], details: summary};
+      },
+    };
+    tools.push(getIdeaResearch);
+  }
   return tools;
 }

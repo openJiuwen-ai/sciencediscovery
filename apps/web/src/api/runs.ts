@@ -16,9 +16,13 @@ import type {
   CancelRunResult,
   CreateSkillEvolutionRunRequest,
   ExecutionRun,
+  AgentShellExecution,
+  WorkspaceTransfer,
   RunStreamEvent,
   SessionUsageSummary,
   GlobalModelUsageSummary,
+  ModelUsageAnalyticsFilters,
+  ModelUsageAnalyticsSummary,
   SessionRun,
   SessionRunEvent,
   RuntimeStatus,
@@ -26,9 +30,44 @@ import type {
   PromptManifest,
 } from "@sciencediscovery/schema";
 
+import { translateActive } from "../i18n/index.js";
 import { SessionsApiClient } from "./sessions.js";
 
+export interface AgentActivity {
+  executions: AgentShellExecution[];
+  transfers: WorkspaceTransfer[];
+  timers: Array<{ id: string; agentId: string; dueAt: number; message: string; state: "pending" | "fired" | "cancelled" }>;
+  agents: Array<{ agentId: string; stopped: boolean }>;
+}
+
+type UsageAnalyticsQueryFilters = ModelUsageAnalyticsFilters & {
+  displayCurrency?: "CNY" | "USD";
+  format?: string;
+};
+
+function usageAnalyticsQuery(filters: UsageAnalyticsQueryFilters): string {
+  const params = new URLSearchParams();
+  for (const key of ["from", "to", "projectId", "modelProfileId", "timeZone", "format", "displayCurrency"] as const) {
+    const value = filters[key];
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 export class RunsApiClient extends SessionsApiClient {
+  getAgentActivity(sessionId: string): Promise<AgentActivity> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/agent-activity`);
+  }
+  executionLogs(sessionId: string, id: string): Promise<{ chunks: Array<{ text: string }> }> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/agent-activity/executions/${encodeURIComponent(id)}/logs`);
+  }
+  cancelActivity(sessionId: string, kind: "executions" | "transfers" | "timers", id: string): Promise<unknown> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/agent-activity/${kind}/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+  resumeSubagent(sessionId: string, id: string): Promise<unknown> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(id)}/resume`, { method: "POST" });
+  }
   getRuntimeStatus(): Promise<RuntimeStatus> {
     return this.request("/api/runtime-status");
   }
@@ -59,6 +98,25 @@ export class RunsApiClient extends SessionsApiClient {
 
   getGlobalModelUsage(): Promise<GlobalModelUsageSummary> {
     return this.request("/api/usage/models");
+  }
+
+  getModelUsageAnalytics(filters: ModelUsageAnalyticsFilters = {}): Promise<ModelUsageAnalyticsSummary> {
+    return this.request(`/api/usage/analytics${usageAnalyticsQuery(filters)}`);
+  }
+
+  async exportModelUsageAnalytics(
+    format: "csv" | "json",
+    filters: UsageAnalyticsQueryFilters = {},
+  ): Promise<Blob> {
+    const response = await fetch(`/api/usage/analytics/export${usageAnalyticsQuery({ ...filters, format })}`, {
+      headers: { authorization: `Bearer ${this.token}` },
+    });
+    if (!response.ok) {
+      this.reportAuthStatus(response.status);
+      const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
+      throw new Error(error.error || translateActive("error.usageExportFailed", { status: response.status }));
+    }
+    return await response.blob();
   }
 
   listRuns(sessionId: string): Promise<SessionRun[]> {
@@ -114,9 +172,9 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || `Event stream failed (${response.status})`);
+      throw new Error(error.error || translateActive("error.eventStreamFailed", { status: response.status }));
     }
-    if (!response.body) throw new Error("Event stream has no body");
+    if (!response.body) throw new Error(translateActive("error.eventStreamNoBody"));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -174,9 +232,9 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || `Run failed (${response.status})`);
+      throw new Error(error.error || translateActive("error.runFailedStatus", { status: response.status }));
     }
-    if (!response.body) throw new Error("Streaming response has no body");
+    if (!response.body) throw new Error(translateActive("error.streamNoBody"));
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

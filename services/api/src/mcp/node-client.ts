@@ -37,6 +37,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+import { shortErrorMessage, type LogFields, type OperationalLogger } from "@sciencediscovery/operational-logging";
 import type {
   JsonValue,
   McpAttempt,
@@ -50,12 +51,55 @@ import type {
 } from "@sciencediscovery/schema";
 
 import { effectiveRouting, loadExtensionsConfig, type ExtensionsConfigFile, type McpServerEntry } from "./extensions-config.js";
+import type { McpOAuthManager } from "./oauth.js";
+import { apiLog } from "../logging.js";
 
 const PROXY_ENV_VARS = [
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
   "http_proxy", "https_proxy", "all_proxy", "no_proxy",
 ] as const;
 const URL_PROXY_ENV_VARS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] as const;
+const STDERR_TAIL_LIMIT = 4_000;
+
+function endpointFields(raw: string | undefined, prefix = "endpoint"): LogFields {
+  if (!raw) return {};
+  try {
+    const url = new URL(raw);
+    return {
+      [`${prefix}Host`]: url.host,
+      [`${prefix}Protocol`]: url.protocol.replace(/:$/, ""),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function proxyFields(proxy: ResolvedProxy | undefined): LogFields {
+  if (!proxy) return { proxyMode: "unconfigured" };
+  return {
+    proxyMode: proxy.mode,
+    ...(proxy.mode === "url" ? endpointFields(proxy.url, "proxy") : {}),
+  };
+}
+
+function proxyApplied(server: McpServerEntry, proxy: ResolvedProxy | undefined): boolean {
+  if (server.transport !== "stdio" || !proxy || proxy.mode === "direct") return false;
+  if (proxy.mode === "url") return true;
+  return URL_PROXY_ENV_VARS.some((name) => Boolean(process.env[name]));
+}
+
+class StderrTail {
+  private value = "";
+
+  append(chunk: unknown): void {
+    this.value = `${this.value}${String(chunk)}`.slice(-STDERR_TAIL_LIMIT);
+  }
+
+  read(): string | undefined {
+    const lines = this.value.trim().split(/\r?\n/).filter(Boolean).slice(-4);
+    return lines.length ? shortErrorMessage(lines.join(" | "), 1_000) : undefined;
+  }
+}
 
 /** Environment variables that make a stdio subprocess honour a resolved proxy. */
 export function proxyEnvOverlay(proxy: ResolvedProxy | undefined): Record<string, string> {
@@ -152,80 +196,141 @@ function contentBlocks(result: Record<string, unknown>): { blocks: McpInvokeResp
 interface ServerSession {
   client: Client;
   proxySignature: string;
+  configSignature: string;
+  stderrTail?: StderrTail;
 }
 
 export class McpNodeClient {
   private readonly sessions = new Map<string, ServerSession>();
   private proxies: Record<string, ResolvedProxy> = {};
-  private configSignature: string | undefined;
 
-  constructor(private readonly loadConfig: () => ExtensionsConfigFile = loadExtensionsConfig) {}
+  constructor(
+    private readonly loadConfig: () => ExtensionsConfigFile = loadExtensionsConfig,
+    private readonly oauth?: McpOAuthManager,
+    private readonly logger: OperationalLogger = apiLog,
+  ) {}
 
   private currentConfig(): ExtensionsConfigFile {
-    const config = this.loadConfig();
-    if (this.configSignature !== undefined && config.signature !== this.configSignature) {
-      // Config content changed: rebuild every session on next use.
-      void this.closeAll();
-    }
-    this.configSignature = config.signature;
-    return config;
+    return this.loadConfig();
   }
 
   private proxySignature(serverId: string): string {
     return JSON.stringify(this.proxies[serverId] ?? null);
   }
 
-  private async closeAll(): Promise<void> {
-    const sessions = [...this.sessions.values()];
-    this.sessions.clear();
-    await Promise.allSettled(sessions.map((session) => session.client.close()));
+  private async closeAll(reason: string): Promise<void> {
+    await Promise.allSettled([...this.sessions.keys()].map((serverId) => this.closeSession(serverId, reason)));
   }
 
-  private async closeSession(serverId: string): Promise<void> {
+  private async closeSession(serverId: string, reason: string): Promise<void> {
     const session = this.sessions.get(serverId);
     if (!session) return;
     this.sessions.delete(serverId);
-    await session.client.close().catch(() => undefined);
+    try {
+      await session.client.close();
+      this.logger.info("mcp_connection_closed", { reason, serverId });
+    } catch (error) {
+      this.logger.warn("mcp_connection_close_failed", {
+        errorMessage: shortErrorMessage(error),
+        reason,
+        serverId,
+        ...(session.stderrTail?.read() ? { stderrTail: session.stderrTail.read() } : {}),
+      });
+    }
   }
 
   private async session(serverId: string, server: McpServerEntry): Promise<Client> {
     const proxySignature = this.proxySignature(serverId);
+    const configSignature = JSON.stringify(server);
     const existing = this.sessions.get(serverId);
-    if (existing && existing.proxySignature === proxySignature) return existing.client;
-    if (existing) await this.closeSession(serverId);
+    if (existing && existing.proxySignature === proxySignature && existing.configSignature === configSignature) return existing.client;
+    const reason = !existing
+      ? "initial"
+      : existing.proxySignature !== proxySignature
+        ? "proxy_changed"
+        : "configuration_changed";
+    if (existing) await this.closeSession(serverId, reason);
 
+    const started = Date.now();
+    const connectionFields = {
+      reason,
+      serverId,
+      transport: server.transport,
+      ...proxyFields(this.proxies[serverId]),
+      proxyApplied: proxyApplied(server, this.proxies[serverId]),
+      ...(server.transport === "stdio"
+        ? { command: server.command ? resolve(server.command).split(/[\\/]/).at(-1) : "" }
+        : endpointFields(server.url)),
+    };
+    this.logger.info("mcp_connection_started", connectionFields);
     const client = new Client({ name: "sciencediscovery-api", version: "1.0.0" });
-    if (server.transport === "stdio") {
-      if (!server.command) throw new Error(`MCP server '${serverId}' with stdio transport requires 'command'`);
-      const command = server.command === "python" || server.command === "python3"
-        ? resolveMcpPython()
-        : server.command;
-      const overlay = proxyEnvOverlay(this.proxies[serverId]);
-      const env: Record<string, string> = { ...getDefaultEnvironment() };
-      for (const [key, value] of Object.entries(server.env)) {
-        if (!PROXY_ENV_VARS.includes(key as (typeof PROXY_ENV_VARS)[number])) env[key] = value;
+    const options = { timeout: Math.min(10_000, (server.toolCallTimeoutSeconds ?? 60) * 1_000) };
+    let stderrTail: StderrTail | undefined;
+    const connect = async (transport: Parameters<Client["connect"]>[0]): Promise<void> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          client.connect(transport, options),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("MCP connection timeout")), options.timeout);
+          }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+    };
+    try {
+      await this.oauth?.prepare(serverId);
+      const authorizedFetch = this.oauth?.fetchFor(serverId);
+      if (server.transport === "stdio") {
+        if (!server.command) throw new Error(`MCP server '${serverId}' with stdio transport requires 'command'`);
+        const bundledPython = (server.command === "python" || server.command === "python3")
+          && server.args.some((arg) => arg.startsWith("sciencediscovery_gateway."));
+        const command = bundledPython
+          ? resolveMcpPython()
+          : server.command;
+        const overlay = proxyEnvOverlay(this.proxies[serverId]);
+        const env: Record<string, string> = { ...getDefaultEnvironment() };
+        for (const [key, value] of Object.entries(server.env)) {
+          if (!PROXY_ENV_VARS.includes(key as (typeof PROXY_ENV_VARS)[number])) env[key] = value;
+        }
+        Object.assign(env, overlay);
+        const transport = new StdioClientTransport({
+          args: server.args,
+          command,
+          ...(server.cwd ? { cwd: server.cwd } : {}),
+          env,
+          stderr: "pipe",
+        });
+        stderrTail = new StderrTail();
+        transport.stderr?.on("data", (chunk) => stderrTail?.append(chunk));
+        await connect(transport);
+      } else if (server.transport === "sse") {
+        if (!server.url) throw new Error(`MCP server '${serverId}' with sse transport requires 'url'`);
+        await connect(new SSEClientTransport(new URL(server.url), {
+          requestInit: { headers: server.headers },
+          ...(authorizedFetch ? { fetch: authorizedFetch } : {}),
+        }));
+      } else {
+        if (!server.url) throw new Error(`MCP server '${serverId}' with http transport requires 'url'`);
+        await connect(new StreamableHTTPClientTransport(new URL(server.url), {
+          requestInit: { headers: server.headers },
+          ...(authorizedFetch ? { fetch: authorizedFetch } : {}),
+        }));
       }
-      Object.assign(env, overlay);
-      const transport = new StdioClientTransport({
-        args: server.args,
-        command,
-        ...(server.cwd ? { cwd: server.cwd } : {}),
-        env,
-        stderr: "ignore",
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      this.logger.error("mcp_connection_failed", {
+        ...connectionFields,
+        durationMs: Date.now() - started,
+        errorMessage: shortErrorMessage(error),
+        ...(stderrTail?.read() ? { stderrTail: stderrTail.read() } : {}),
       });
-      await client.connect(transport);
-    } else if (server.transport === "sse") {
-      if (!server.url) throw new Error(`MCP server '${serverId}' with sse transport requires 'url'`);
-      await client.connect(new SSEClientTransport(new URL(server.url), {
-        requestInit: { headers: server.headers },
-      }));
-    } else {
-      if (!server.url) throw new Error(`MCP server '${serverId}' with http transport requires 'url'`);
-      await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
-        requestInit: { headers: server.headers },
-      }));
+      throw error;
     }
-    this.sessions.set(serverId, { client, proxySignature });
+    this.sessions.set(serverId, { client, configSignature, proxySignature, ...(stderrTail ? { stderrTail } : {}) });
+    this.logger.info("mcp_connection_succeeded", {
+      ...connectionFields,
+      durationMs: Date.now() - started,
+    });
     return client;
   }
 
@@ -233,8 +338,9 @@ export class McpNodeClient {
     const client = await this.session(serverId, server);
     const tools: McpCatalogTool[] = [];
     let cursor: string | undefined;
+    const seen = new Set<string>();
     do {
-      const page = await client.listTools(cursor ? { cursor } : {});
+      const page = await client.listTools(cursor ? { cursor } : {}, { timeout: 10_000 });
       for (const tool of page.tools) {
         const inputSchema = (tool.inputSchema ?? { properties: {}, type: "object" }) as Record<string, unknown>;
         const routing = effectiveRouting(server, tool.name);
@@ -247,25 +353,41 @@ export class McpNodeClient {
         });
       }
       cursor = page.nextCursor ?? undefined;
+      if (tools.length > 1_000 || (cursor && seen.has(cursor))) throw new Error("MCP tool catalog pagination limit exceeded");
+      if (cursor) seen.add(cursor);
     } while (cursor);
     tools.sort((a, b) => a.name.localeCompare(b.name));
     return tools;
   }
 
   async catalog(): Promise<McpCatalog> {
+    const started = Date.now();
     const config = this.currentConfig();
+    for (const id of this.sessions.keys()) {
+      if (!config.servers[id]?.enabled) await this.closeSession(id, "disabled_or_removed");
+    }
     const servers: McpCatalogServer[] = [];
     for (const [serverId, server] of Object.entries(config.servers).sort(([a], [b]) => a.localeCompare(b))) {
       if (!server.enabled) continue;
       let tools: McpCatalogTool[] = [];
+      let error: string | undefined;
       try {
         tools = await this.serverTools(serverId, server);
-      } catch {
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : "MCP connection failed";
+        const stderrTail = this.sessions.get(serverId)?.stderrTail?.read();
+        this.logger.warn("mcp_catalog_server_failed", {
+          errorMessage: shortErrorMessage(cause),
+          serverId,
+          ...(stderrTail ? { stderrTail } : {}),
+          transport: server.transport,
+        });
         // One broken server must not prevent healthy servers from
         // contributing; drop its session so the next catalog reconnects.
-        await this.closeSession(serverId);
+        await this.closeSession(serverId, "catalog_failed");
       }
       servers.push({
+        ...(error ? { error } : {}),
         ...(server.description ? { description: server.description } : {}),
         enabled: true,
         id: serverId,
@@ -274,13 +396,26 @@ export class McpNodeClient {
       });
     }
     const revision = createHash("sha256").update(JSON.stringify(servers)).digest("hex");
+    this.logger.info("mcp_catalog_loaded", {
+      durationMs: Date.now() - started,
+      failedServerCount: servers.filter((server) => Boolean(server.error)).length,
+      serverCount: servers.length,
+      toolCount: servers.reduce((count, server) => count + server.tools.length, 0),
+    });
     return { loadedAt: new Date().toISOString(), revision, servers };
   }
 
   async reload(proxies?: Record<string, ResolvedProxy>): Promise<McpCatalog> {
-    if (proxies) this.proxies = { ...proxies };
-    await this.closeAll();
-    this.configSignature = undefined;
+    if (proxies) {
+      this.proxies = { ...proxies };
+      this.logger.info("mcp_proxy_configuration_loaded", {
+        directCount: Object.values(proxies).filter((proxy) => proxy.mode === "direct").length,
+        environmentCount: Object.values(proxies).filter((proxy) => proxy.mode === "environment").length,
+        serverCount: Object.keys(proxies).length,
+        urlCount: Object.values(proxies).filter((proxy) => proxy.mode === "url").length,
+      });
+    }
+    await this.closeAll("catalog_reload");
     return this.catalog();
   }
 
@@ -292,7 +427,12 @@ export class McpNodeClient {
       const next = JSON.stringify(request.proxy);
       if (JSON.stringify(this.proxies[request.serverId] ?? null) !== next) {
         this.proxies = { ...this.proxies, [request.serverId]: request.proxy };
-        await this.closeSession(request.serverId);
+        this.logger.info("mcp_proxy_changed", {
+          requestId: request.requestId,
+          serverId: request.serverId,
+          ...proxyFields(request.proxy),
+        });
+        await this.closeSession(request.serverId, "proxy_changed");
       }
     }
     const config = this.currentConfig();
@@ -359,9 +499,21 @@ export class McpNodeClient {
           const classified = classifyError(finalError);
           finalStatus = classified.status;
           retryAfterMs = classified.retryAfterMs;
+          const stderrTail = this.sessions.get(request.serverId)?.stderrTail?.read();
+          const level = finalStatus === "semantic-error" ? "debug" : "warn";
+          this.logger[level]("mcp_invocation_attempt_failed", {
+            attempt: attemptNumber,
+            errorCode: errorCodeFor(finalStatus, finalError),
+            errorMessage: shortErrorMessage(error),
+            requestId: request.requestId,
+            serverId: request.serverId,
+            status: finalStatus,
+            ...(stderrTail ? { stderrTail } : {}),
+            toolName: request.toolName,
+          });
           if (finalStatus === "transport-error") {
             // A dead stdio subprocess or dropped connection: reconnect on retry.
-            await this.closeSession(request.serverId);
+            await this.closeSession(request.serverId, "transport_error");
           }
         }
       }
@@ -383,6 +535,14 @@ export class McpNodeClient {
       delayMs *= 1 + (Math.random() * 2 - 1) * policy.jitterRatio;
       const remainingMs = Math.max(0, deadline - Date.now());
       if (delayMs <= 0 || delayMs >= remainingMs) break;
+      this.logger.info("mcp_invocation_retry_scheduled", {
+        attempt: attemptNumber,
+        delayMs: Math.round(delayMs),
+        requestId: request.requestId,
+        serverId: request.serverId,
+        status: finalStatus,
+        toolName: request.toolName,
+      });
       await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
     }
 
@@ -404,7 +564,7 @@ export class McpNodeClient {
    * "close"; sessions rebuild lazily if the client is reused afterwards.
    */
   async close(): Promise<void> {
-    await this.closeAll();
+    await this.closeAll("shutdown");
     this.configSignature = undefined;
   }
 }

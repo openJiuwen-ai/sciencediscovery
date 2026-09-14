@@ -493,7 +493,9 @@
 .skill-library-create label, .skill-library-section label { display: grid; gap: 5px; color: var(--text-heading); font-size: 12px; font-weight: 700; }
 .skill-library-create input, .skill-library-section textarea, .skill-library-diff-controls select { width: 100%; min-height: 38px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text-heading); padding: 8px 10px; }
 .skill-library-create button, .skill-library-section button { min-height: 38px; border-radius: 8px; padding: 7px 11px; font-weight: 700; }
-.skill-library-create > button, .skill-library-section .dialog-actions button, .skill-library-proposal-toolbar > button, .skill-library-diff-controls > button { width: auto; }
+.skill-library-create-actions { display: flex; align-items: center; gap: 8px; }
+.skill-library-create-toggle { width: auto; margin-bottom: 12px; }
+.skill-library-create > button, .skill-library-create-actions > button, .skill-library-section .dialog-actions button, .skill-library-proposal-toolbar > button, .skill-library-diff-controls > button { width: auto; }
 .skill-library-grid { display: grid; min-height: 500px; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: 0 10px 30px rgba(15, 23, 42, .055); }
 .skill-library-catalog { min-width: 0; overflow-y: auto; border-right: 1px solid var(--border); background: var(--surface-subtle); padding: 10px; }
 .skill-library-catalog > header { display: flex; align-items: center; justify-content: space-between; padding: 3px 5px 10px; color: var(--muted); }
@@ -589,7 +591,9 @@
 .settings-choice-empty { grid-column: 1 / -1; margin: 0; color: var(--text-faint); font-size: 11px; }
 .danger-button { border: 1px solid var(--danger-border); background: var(--danger-soft); color: var(--danger); padding: 9px 13px; }
 .danger-button:hover { background: var(--danger-soft); }
-.credential-remove { width: 100%; min-height: 38px; margin: -8px 0 18px; border: 1px solid var(--danger-border); border-radius: 8px; background: var(--surface); color: var(--danger); padding: 8px 11px; cursor: pointer; font-size: 13px; font-weight: 650; }
+/* Destructive credential removal stays a compact, secondary action next to the
+ * field it belongs to — never a full-row primary-looking button. */
+.credential-remove { width: fit-content; min-height: 34px; margin: -8px 0 18px; border: 1px solid var(--danger-border); border-radius: 8px; background: var(--surface); color: var(--danger); padding: 6px 11px; cursor: pointer; font-size: 12px; font-weight: 650; }
 .credential-remove:hover, .credential-remove.pending { background: var(--danger-soft); }
 
 .provider-settings { display: grid; gap: 22px; min-width: 0; }
@@ -698,7 +702,12 @@
 .settings-library-list { display: grid; gap: 8px; margin-top: 9px; }
 .settings-library-row { display: grid; gap: 10px; align-items: center; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 10px; }
 .settings-library-row.selected { border-color: var(--border-strong); background: var(--surface-subtle); }
-.settings-library-picker { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--text-secondary); cursor: pointer; }
+/* Scoped settings live inside .config-panel, whose blanket `label { display:
+ * block }` would otherwise stack the checkbox above the library name. The
+ * doubled class wins that specificity race so control and label share one
+ * reading line. */
+.config-panel .settings-library-picker, .settings-library-picker.settings-library-picker { display: flex; align-items: center; gap: 10px; min-width: 0; margin-bottom: 0; color: var(--text-secondary); cursor: pointer; }
+.config-panel .settings-library-picker > .settings-library-main { margin-bottom: 0; }
 .settings-library-picker input { flex: 0 0 24px; width: 24px; min-width: 24px; height: 24px; min-height: 24px; margin: 0; accent-color: var(--accent); }
 .settings-library-picker input:disabled { cursor: not-allowed; opacity: .75; }
 .settings-library-main { min-width: 0; }
@@ -714,6 +723,7 @@
 .timeout-grid legend { padding: 0 5px; color: var(--text-heading); font-size: 13px; font-weight: 750; }
 .timeout-grid fieldset > p { min-height: 34px; margin: 0 0 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .timeout-grid fieldset > small { display: block; margin-top: 9px; color: var(--text-faint); font-size: 10px; }
+.timeout-grid fieldset > small[role="alert"].open-warning { margin-top: 10px; padding: 8px 10px; border-left: 3px solid var(--warning-accent); background: var(--warning-soft); color: var(--warning); font-size: 11px; line-height: 1.45; border-radius: 4px; }
 .timeout-value { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; color: var(--text-secondary); font-size: 12px; }
 .timeout-value input { min-width: 0; min-height: 38px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 7px 9px; }
 .timeout-value input:disabled { background: var(--surface-hover); color: var(--text-faint); }
@@ -738,7 +748,7 @@
 .runner-management-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 .runner-management-tabs > button { flex: 1; }
 .runner-environment-settings .remote-workspace-host header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
-.runner-environment-settings .remote-workspace-host header > div { display: grid; gap: 4px; min-width: 0; }
+.runner-environment-settings .remote-workspace-host header > div:not(.remote-host-actions) { display: grid; gap: 4px; min-width: 0; }
 .runner-environment-settings .remote-workspace-host code,
 .runner-environment-settings .remote-workspace-host small { overflow-wrap: anywhere; }
 .runner-environment-settings .remote-workspace-panel > .editor-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
@@ -783,7 +793,8 @@
 .environment-starter-plan > div { border: 1px solid var(--border); border-radius: 9px; padding: 13px; }
 .environment-starter-plan strong, .environment-starter-plan small { display: block; }
 .environment-starter-plan small { margin-top: 6px; color: var(--muted); line-height: 1.5; }
-.environment-create { display: grid; grid-template-columns: minmax(180px, 1fr) 110px minmax(150px, 1fr) auto; align-items: end; gap: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); padding: 14px; }
+.environment-create { display: grid; grid-template-columns: minmax(180px, 1fr) max-content minmax(150px, 1fr) auto; align-items: end; gap: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-subtle); padding: 14px; }
+.environment-create-actions { display: flex; align-items: center; gap: 8px; }
 .environment-create div strong, .environment-create div small { display: block; }
 .environment-create div small { margin-top: 4px; color: var(--muted); line-height: 1.4; }
 .environment-create input, .environment-create select, .environment-install input, .environment-install select { min-height: 39px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 8px 10px; }
@@ -830,10 +841,9 @@
 .builtin-research-actions { display: flex; gap: 6px; flex: 0 0 auto; }
 .builtin-research-action { border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); cursor: pointer; font-size: 11px; font-weight: 700; padding: 4px 10px; }
 .builtin-research-action:disabled { cursor: wait; opacity: .5; }
-.reviewer-specialist-settings { display: flex; align-items: center; gap: 10px; }
-.reviewer-specialist-settings select { min-width: 84px; height: 32px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); padding: 4px 28px 4px 10px; color: var(--text-heading); cursor: pointer; font-size: 12px; font-weight: 700; }
-.reviewer-specialist-settings select:disabled { cursor: wait; opacity: .6; }
-.specialist-switch { position: relative; width: 60px; height: 28px; border: 0; border-radius: 999px; background: var(--surface-track); padding: 2px; cursor: pointer; transition: background var(--motion-fast); }
+.reviewer-specialist-settings { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; min-width: 0; }
+.reviewer-specialist-settings small { max-width: 250px; color: var(--muted); font-size: 11px; line-height: 1.4; text-align: right; }
+.specialist-switch { position: relative; flex: 0 0 60px; width: 60px; height: 28px; overflow: hidden; border: 0; border-radius: 999px; background: var(--surface-track); padding: 2px; cursor: pointer; transition: background var(--motion-fast); }
 .specialist-switch i { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); color: var(--muted); font-size: 9px; font-style: normal; font-weight: 800; line-height: 1; transition: transform var(--motion-fast), color var(--motion-fast); }
 .specialist-switch.on { background: linear-gradient(90deg, #286de0, #53cfe0); }
 .specialist-switch.on i { transform: translateX(32px); color: #1f66bb; }
@@ -868,3 +878,12 @@
 .memory-graph-connection { display: grid; gap: 12px; }
 .memory-graph-connection label { display: grid; gap: 6px; }
 .provider-row-source { color: var(--text-faint); font-size: 10px; }
+
+.runner-workspace-files { display: grid; gap: 6px; padding-left: 20px; }
+.runner-workspace-files li { display: flex; align-items: baseline; gap: 12px; }
+.runner-workspace-files code { min-width: 0; overflow-wrap: anywhere; }
+.runner-workspace-files small { flex-shrink: 0; white-space: nowrap; }
+
+.runner-environment-settings > .runner-management-tabs { margin-bottom: 20px; }
+.runner-management-tabs > button { width: auto; min-width: 0; overflow-wrap: anywhere; }
+.runner-environment-settings [role="tabpanel"] { min-width: 0; }

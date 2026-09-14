@@ -17,7 +17,7 @@ import test from "node:test";
 
 import type { RunStreamEvent } from "@sciencediscovery/schema";
 
-import { requestRunStop, routeRunStreamEvent } from "../src/App.js";
+import { requestRunStop, routeRunStreamEvent, shouldRefreshUsageForEvent } from "../src/App.js";
 import { reduceRunTimeline, type RunTimelineEntry } from "../src/RunTimeline.js";
 
 /** Collect the grace-period callback instead of waiting five real seconds. */
@@ -89,6 +89,66 @@ test("a failed cancel call aborts the local stream immediately", async () => {
 
   assert.equal(controller.signal.aborted, true);
   assert.equal(schedule.scheduled(), 0, "there is nothing left to wait for once the stream was dropped");
+});
+
+test("usage view refreshes usage analytics when a run reaches a terminal status", () => {
+  assert.equal(shouldRefreshUsageForEvent("usage", {
+    run: {
+      annotationIds: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      id: "run-a",
+      prompt: "done",
+      references: [],
+      sessionId: "session-a",
+      settingsSnapshot: {
+        enabledConnectorIds: [],
+        enabledSkillIds: [],
+        modelId: "model-a",
+        semanticReviewEnabled: false,
+      },
+      status: "completed",
+    },
+    status: "completed",
+    type: "run.status",
+  }), true);
+  assert.equal(shouldRefreshUsageForEvent("session", {
+    run: {
+      annotationIds: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      id: "run-a",
+      prompt: "done",
+      references: [],
+      sessionId: "session-a",
+      settingsSnapshot: {
+        enabledConnectorIds: [],
+        enabledSkillIds: [],
+        modelId: "model-a",
+        semanticReviewEnabled: false,
+      },
+      status: "completed",
+    },
+    status: "completed",
+    type: "run.status",
+  }), false);
+  assert.equal(shouldRefreshUsageForEvent("usage", {
+    run: {
+      annotationIds: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      id: "run-a",
+      prompt: "running",
+      references: [],
+      sessionId: "session-a",
+      settingsSnapshot: {
+        enabledConnectorIds: [],
+        enabledSkillIds: [],
+        modelId: "model-a",
+        semanticReviewEnabled: false,
+      },
+      status: "running",
+    },
+    status: "running",
+    type: "run.status",
+  }), false);
 });
 
 const cancelled: RunStreamEvent = { reason: "Run cancelled by the user", type: "run.cancelled" };

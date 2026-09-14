@@ -82,15 +82,26 @@ export interface ModelClient<TMessage extends RuntimeMessage, TModelInput, TUsag
 export interface ToolDispatchResult<TMessage extends RuntimeMessage> {
   /** Domain/UI-facing tool result payload. */
   content: string;
+  /** Full structured tool result payload, when the concrete tool provides one. */
+  details?: unknown;
   isError: boolean;
   /** Canonical message appended to the model history. */
   message: TMessage;
 }
 
-export interface ToolDispatcher<TMessage extends RuntimeMessage> {
+export interface PreparedToolBatch<TMessage extends RuntimeMessage> {
   /** Fail-closed scheduling classification; only an explicit parallel result overlaps. */
   executionMode?(call: RuntimeToolCall): ToolExecutionMode;
   execute(call: RuntimeToolCall, signal: AbortSignal): Promise<ToolDispatchResult<TMessage>>;
+}
+
+export interface ToolDispatcher<TMessage extends RuntimeMessage> extends PreparedToolBatch<TMessage> {
+  /**
+   * Optional per-model-step policy seam. It may replace individual calls with
+   * deterministic no-op results, but the Runtime still owns bounded scheduling,
+   * ordering, cancellation, and durable Step boundaries.
+   */
+  prepareBatch?(calls: readonly RuntimeToolCall[]): PreparedToolBatch<TMessage>;
 }
 
 export type AgentLoopPhase =
@@ -115,6 +126,7 @@ export interface RunTransition {
 }
 
 const TERMINAL_PHASES: ReadonlySet<AgentLoopPhase> = new Set(["completed", "cancelled", "failed"]);
+
 const phaseSet = (...phases: AgentLoopPhase[]): ReadonlySet<AgentLoopPhase> => new Set(phases);
 const NEXT_PHASES: Readonly<Record<AgentLoopPhase, ReadonlySet<AgentLoopPhase>>> = Object.freeze({
   idle: phaseSet("assembling_context", "cancelled", "failed"),
@@ -142,9 +154,17 @@ export function reduceRunState<TMessage extends RuntimeMessage>(
 export type RunEvent<TUsage> =
   | { state: AgentLoopPhase; turn: number; type: "state_changed" }
   | { type: "turn_start"; turn: number }
-  | { delta: string; kind: "text" | "thinking"; type: "model_delta" }
+  /** One actual model invoke attempt begins. All text/thinking deltas of the
+   *  attempt share `responseId`; a retry (e.g. input-overflow recovery) or a
+   *  new turn starts a fresh identity. */
+  | { responseId: string; turn: number; type: "response_start" }
+  | { delta: string; kind: "text" | "thinking"; responseId: string; type: "model_delta" }
+  /** The model invoke attempt settled (completed, failed, or aborted mid-invoke).
+   *  Terminal for the responseId only — a run continues with the next attempt. */
+  | { responseId: string; turn: number; type: "response_settled" }
   | { call: RuntimeToolCall; type: "tool_execution_start" }
-  | { call: RuntimeToolCall; content: string; isError: boolean; type: "tool_execution_end" }
+  | { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; type: "tool_execution_end" }
+  | { type: "model_usage"; usage: TUsage }
   | { attempt: 1; reason: "model-input-overflow"; turn: number; type: "context_recovery" }
   | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
   | { kick: number; turn: number; type: "stall_kick" }
@@ -355,22 +375,20 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
 
         this.transition("calling_model", turn);
         this.emit({ type: "turn_start", turn });
-        const observer: ModelClientObserver = {
-          onProgress: () => { armStallTimer(); onProgress(); },
-          onTextDelta: (delta) => { armStallTimer(); this.emit({ type: "model_delta", kind: "text", delta }); },
-          onThinkingDelta: (delta) => { armStallTimer(); this.emit({ type: "model_delta", kind: "thinking", delta }); },
-        };
         let modelTurn: ModelTurn<TMessage, TUsage>;
-        const invokeOnce = async (modelInput: TModelInput): Promise<ModelTurn<TMessage, TUsage>> => {
+        // Stall-guard wrapper around the shared invokeModel path: the attempt
+        // gets its own abort controller (a kick aborts the attempt, not the
+        // run) and every streamed chunk re-arms the idle timer via onProgress.
+        const invokeWithStall = async (modelInput: TModelInput): Promise<ModelTurn<TMessage, TUsage>> => {
           armStallTimer();
           try {
-            return await this.options.modelClient.invoke(modelInput, attemptSignal(), observer);
+            return await this.invokeModel(modelInput, attemptSignal(), turn, () => { armStallTimer(); onProgress(); });
           } finally {
             clearStallTimer();
           }
         };
         try {
-          modelTurn = await invokeOnce(assembly.modelInput);
+          modelTurn = await invokeWithStall(assembly.modelInput);
         } catch (error) {
           if (stallKicked(error)) continue;
           if (!this.options.modelClient.isInputTooLargeError?.(error) || signal.aborted) throw error;
@@ -388,15 +406,18 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
           this.raiseForAbort(signal);
           this.transition("calling_model", turn);
           try {
-            modelTurn = await invokeOnce(assembly.modelInput);
+            modelTurn = await invokeWithStall(assembly.modelInput);
           } catch (error) {
             if (stallKicked(error)) continue;
             throw error;
           }
         }
+        if (modelTurn.usage !== undefined) {
+          usage = modelTurn.usage;
+          this.emit({ type: "model_usage", usage });
+        }
         this.raiseForAbort(signal);
         onProgress();
-        if (modelTurn.usage !== undefined) usage = modelTurn.usage;
         this.state.history.push(modelTurn.assistantMessage);
         if (modelTurn.toolCalls.length === 0) {
           if (this.options.turnLifecycle) await this.options.turnLifecycle.afterTurn({ turn, history: structuredClone(this.state.history), modelTurn, results: [] });
@@ -429,15 +450,21 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
         this.transition("executing_tools", turn);
         // The scheduler drains every started writer on failure/cancellation.
         // Only a successfully settled batch may reach the durable Step boundary.
+        const batch = this.options.toolDispatcher.prepareBatch?.(modelTurn.toolCalls)
+          ?? this.options.toolDispatcher;
         const results = await scheduleToolCalls({
           calls: modelTurn.toolCalls,
-          classify: (call) => this.options.toolDispatcher.executionMode?.(call) ?? "exclusive",
-          execute: (call) => this.options.toolDispatcher.execute(call, signal),
+          classify: (call) => batch.executionMode?.(call) ?? "exclusive",
+          execute: (call) => batch.execute(call, signal),
           maxParallelToolCalls: this.options.maxParallelToolCalls ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS,
           onResult: (call, result) => {
             this.state.history.push(result.message);
             this.emit({
-              type: "tool_execution_end", call, content: result.content, isError: result.isError,
+              type: "tool_execution_end",
+              call,
+              content: result.content,
+              ...(result.details !== undefined ? { details: result.details } : {}),
+              isError: result.isError,
             });
             onProgress();
           },
@@ -464,6 +491,22 @@ export class AgentLoop<TMessage extends RuntimeMessage, TModelInput, TUsage> {
       throw error;
     } finally {
       unsubscribeWait?.();
+    }
+  }
+
+  /** Each attempt owns its identity, including a recovery attempt that fails. */
+  private async invokeModel(modelInput: TModelInput, signal: AbortSignal, turn: number, onProgress: () => void): Promise<ModelTurn<TMessage, TUsage>> {
+    const responseId = globalThis.crypto.randomUUID();
+    this.emit({ responseId, turn, type: "response_start" });
+    const observer: ModelClientObserver = {
+      onProgress,
+      onTextDelta: (delta) => this.emit({ type: "model_delta", kind: "text", delta, responseId }),
+      onThinkingDelta: (delta) => this.emit({ type: "model_delta", kind: "thinking", delta, responseId }),
+    };
+    try {
+      return await this.options.modelClient.invoke(modelInput, signal, observer);
+    } finally {
+      this.emit({ responseId, turn, type: "response_settled" });
     }
   }
 

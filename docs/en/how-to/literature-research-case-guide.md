@@ -78,7 +78,7 @@ Under **System configuration → Quotas** or the corresponding environment varia
 
 ### 3.4 Prepare the Python/R environment
 
-This module hosts the Python and R runtimes the Agent uses inside the sandbox. After the Runner starts, it pulls the managed micromamba in the background and prepares a read-only base; users can clone named environments from the base and install packages as needed, and each change produces an immutable revision for traceability.
+This module hosts the Python and R runtimes the Agent uses through `run_shell` inside the sandbox (`python -m`, Python files, or `Rscript`). After the Runner starts, it pulls the managed micromamba in the background and prepares a read-only base; users can create named environments from the base and install packages as needed. Later updates happen in place without cloning; each change records a Revision for traceability. The Agent selects an environment ID, and execution uses its latest state.
 
 Go to **System configuration → Environments**. On first start the Runner downloads and verifies micromamba in the background, with status changing from `provisioning` to `ready`; this takes a few minutes. On failure the page shows the reason and offers a retry.
 ![Environment settings](../../images/python.png)
@@ -122,7 +122,7 @@ Enable and use it as follows:
 
 1. **Prepare Neo4j**: the memory graph requires an external Neo4j service (not packaged in the image). Under **System configuration → Memory graph**, fill in the HTTP address (default `http://127.0.0.1:7474`), username, and password.
 2. **Enable the service**: turn on the memory-graph feature in system settings. Once enabled, the Python sidecar `services/memory-graph` (loopback `:17674` only) is started and self-checks its health with the Runner on startup.
-3. **Agent-side auto-mirroring**: once enabled, execution events (MCP search, `run_python`) are mirrored automatically into the graph to form a "task chain"; the Agent builds a "citation chain" through `declare_evidence` and `declare_claim` (plus the Node-internal `declare_artifact`) when writing the final report.
+3. **Agent-side auto-mirroring**: once enabled, execution events (MCP search, `run_shell`) are mirrored automatically into the graph to form a "task chain"; the Agent builds a "citation chain" through `declare_evidence` and `declare_claim` (plus the Node-internal `declare_artifact`) when writing the final report.
 4. **Query and view**: the Agent can call the `query_graph` tool for a case-insensitive substring search; the frontend renders `[alias]` in the report as a clickable chip that jumps to the corresponding evidence or artifact.
 
 When Neo4j is unreachable, this module degrades silently and does not affect the web or conversation main path.
@@ -167,13 +167,12 @@ While a task runs, the Agent pauses before high-risk operations and pops a permi
 
 | Approval type | Meaning |
 |---|---|
-| code | The Agent calls `run_python` or `run_shell` to execute code in the sandbox |
+| code | The Agent calls `run_shell` to execute code in the sandbox |
 | connector | The Agent calls an MCP tool (e.g. `mcp__pubmed__search`, `mcp__biorxiv__search`) to access an external research database |
 | download | The Agent calls `artifact_download` to download candidate files into the workspace |
 | extraction | The Agent calls `paper_extract_pdf` to extract text and tables from a downloaded PDF |
-| scientific-environments | The Agent calls `environment.install` and other managed-environment change APIs |
+| scientific-environments | The Agent calls `environment_install` and other managed-environment change tools |
 | web | The Agent calls `web_search` or `web_fetch` to make a public-network request |
-| remote-job | The Agent submits an immutable job card on a remote SSH / SLURM host (each job approved separately) |
 
 Authorization applies to the current Session by default. To persist it at the Project or Global scope, go to **System configuration → Permissions** to adjust or revoke it.
 

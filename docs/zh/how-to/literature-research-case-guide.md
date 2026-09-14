@@ -79,7 +79,7 @@
 
 ### 3.4 准备 Python/R 环境
 
-该模块用于托管 Agent 在沙箱中使用的 Python 与 R 运行环境。Runner 启动后会后台拉取自管 micromamba 并准备只读 base；用户可在 base 之上克隆命名环境、按需安装包，每次变更都会生成不可变 revision，便于追溯。
+该模块用于托管 Agent 通过 `run_shell` 在沙箱中使用的 Python 与 R（`python -m`、Python 文件或 `Rscript`）。Runner 启动后会后台拉取自管 micromamba 并准备只读 base；用户可从 base 创建命名环境、按需安装包。后续更新在原环境中完成，不再 clone；每次变更记录 Revision 用于追溯。Agent 按环境 ID 选择，执行使用其最新版。
 
 进入 **系统配置 → Environments**，Runner 首次启动会在后台下载并校验 micromamba，状态从 `provisioning` 变为 `ready`，约需数分钟。失败时页面会显示原因，可点击重试。
 ![环境设置](../../images/python.png)
@@ -123,7 +123,7 @@
 
 1. **准备 Neo4j**：记忆图谱需要外部 Neo4j 服务（不在镜像中打包）。在 **系统配置 → Memory graph** 中填写 HTTP 地址（默认 `http://127.0.0.1:7474`）、用户名与密码。
 2. **启用服务**：在系统设置中开启记忆图谱功能。启用后，Python 侧车 `services/memory-graph`（仅回环 `:17674`）会被启动，并随 Runner 启动而自检健康状态。
-3. **Agent 侧自动镜像**：启用后，执行事件（MCP 检索、`run_python`）会被自动镜像到图中，形成"任务链"；Agent 在写最终报告时通过 `declare_evidence`、`declare_claim`（外加 Node 内部的 `declare_artifact`）建立"引用链"。
+3. **Agent 侧自动镜像**：启用后，执行事件（MCP 检索、`run_shell`）会被自动镜像到图中，形成"任务链"；Agent 在写最终报告时通过 `declare_evidence`、`declare_claim`（外加 Node 内部的 `declare_artifact`）建立"引用链"。
 4. **查询与查看**：Agent 可调用 `query_graph` 工具对图做大小写不敏感子串检索；前端会在报告里把 `[alias]` 渲染为可点击 chip，点击后跳转到对应证据或产物。
 
 Neo4j 不可达时该模块静默降级，不影响 Web 与对话主路径。
@@ -168,13 +168,12 @@ contradictory findings across studies.
 
 | 审批类型 | 含义 |
 |---|---|
-| code | Agent 调用 `run_python` 或 `run_shell` 在沙箱中执行代码 |
+| code | Agent 调用 `run_shell` 在沙箱中执行代码 |
 | connector | Agent 调用 MCP 工具（如 `mcp__pubmed__search`、`mcp__biorxiv__search`）访问外部科研数据库 |
 | download | Agent 调用 `artifact_download` 下载候选文件到工作区 |
 | extraction | Agent 调用 `paper_extract_pdf` 抽取已下载 PDF 的文本与表格 |
-| scientific-environments | Agent 调用 `environment.install` 等托管环境变更接口 |
+| scientific-environments | Agent 调用 `environment_install` 等托管环境变更工具 |
 | web | Agent 调用 `web_search` 或 `web_fetch` 发起公网请求 |
-| remote-job | Agent 在远程 SSH / SLURM 主机提交不可变作业卡（每个作业单独审批） |
 
 授权默认仅作用于当前 Session。如需在 Project 或 Global 范围内持久化，可前往 **系统配置 → Permissions** 进行调整或撤销。
 

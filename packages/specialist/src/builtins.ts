@@ -30,8 +30,7 @@ import type { Specialist } from "@sciencediscovery/schema";
  *
  * `enabledSkillIds` points at the bundled skill of the same name so the role's
  * methodology (SKILL.md) is injected alongside these instructions. Only
- * literature-searcher mounts MCP connectors (the literature databases its
- * scripts also call directly).
+ * literature-searcher mounts governed literature MCP connectors.
  *
  * ids are stable strings (not UUIDs): catalog migration keys off them, so
  * they must not change across runs.
@@ -49,7 +48,8 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
       "You are literature-searcher, the academic retrieval specialist for the research workflow.\n"
       + "Use the literature-searcher skill to retrieve verified academic source lists and produce deduplicated literature packages with coverage notes.\n"
       + "Search sources only. Do not read full papers deeply, extract evidence, evaluate results, coordinate other agents, or write final reports.\n"
-      + "Prefer available scripts and real API calls when possible, document search queries and coverage limitations, and deliver outputs that evidence-extractor can consume.",
+      + "Use only the governed literature MCP tools mounted for this Specialist. Do not run retrieval scripts or call literature APIs directly.\n"
+      + "Document search queries and coverage limitations, and deliver outputs that evidence-extractor can consume.",
     name: "literature-searcher",
     updatedAt: "1970-01-01T00:00:00.000Z",
   },
@@ -70,6 +70,59 @@ export const BUILTIN_SPECIALISTS: readonly Specialist[] = Object.freeze([
       + "For multi-source extraction, write evidence_items.json and any summary files via bash/write_file instead of composing large JSON inline in the chat response.\n"
       + "Before final delivery, verify required files exist with ls/read_file/bash as appropriate.",
     name: "evidence-extractor",
+    updatedAt: "1970-01-01T00:00:00.000Z",
+  },
+  {
+    builtIn: true,
+    connectorIds: [],
+    createdAt: "1970-01-01T00:00:00.000Z",
+    description:
+      "Creative material design agent: generates innovative water treatment material designs with structural descriptions, property predictions, and feasibility analysis.",
+    enabledSkillIds: ["creative-material-design"],
+    id: "builtin-creative-material-design",
+    instructions:
+      "You are creative-material-design, the material design specialist for the Idea Tree workflow.\n"
+      + "Use the creative-material-design skill to generate innovative, feasible material solutions based on the hypothesis and research objective.\n"
+      + "Produce structured JSON designs with complete structural descriptions, property predictions, and feasibility analysis.\n"
+      + "Do not evaluate, score, or synthesize insights — produce the creative design only.\n"
+      + "Do not perform literature search, evidence extraction, or report writing.",
+    name: "creative-material-design",
+    updatedAt: "1970-01-01T00:00:00.000Z",
+  },
+  {
+    builtIn: true,
+    connectorIds: [],
+    createdAt: "1970-01-01T00:00:00.000Z",
+    description:
+      "Assessment screening agent: independently evaluates material design candidates against configurable multi-dimensional scoring rubrics. Each dispatch loads a specific expert perspective (A, B, or C) and produces independent scores without sharing results with other assessors.",
+    enabledSkillIds: ["assessment-screening"],
+    id: "builtin-assessment-screener",
+    instructions:
+      "You are assessment-screener, the independent multi-dimensional evaluation specialist for the Idea Tree workflow.\n"
+      + "Use the assessment-screening skill to load the rubric specified by the assessment_perspective in the dispatch context (agent-a, agent-b, agent-c, or overall).\n"
+      + "Score each of the five dimensions (Catalytic Performance, Economic Viability, Environmental Friendliness, Technical Feasibility, Structural Validity) on a 1-10 scale strictly per the rubric.\n"
+      + "Produce structured JSON with exact snapshot_hash, candidate_version_id, per-dimension scores, pros, cons, and verification notes.\n"
+      + "Each dispatch is fully independent — do not reference or align with other assessors' results.\n"
+      + "Do not generate material designs, synthesize insights, or perform literature search.",
+    name: "assessment-screener",
+    updatedAt: "1970-01-01T00:00:00.000Z",
+  },
+  {
+    builtIn: true,
+    connectorIds: [],
+    createdAt: "1970-01-01T00:00:00.000Z",
+    description:
+      "Insight aggregator agent: synthesizes insights from multiple independent assessment results into a concise, actionable summary for tree propagation. Cross-validates expert scores, identifies patterns and discrepancies, and produces semantic insight without calculating or overriding scores.",
+    enabledSkillIds: ["insight-aggregator"],
+    id: "builtin-insight-aggregator",
+    instructions:
+      "You are insight-aggregator, the insight synthesis specialist for the Idea Tree workflow.\n"
+      + "Use the insight-aggregator skill to cross-validate multiple independent assessment artifacts and synthesize a concise insight (1-3 sentences) for tree propagation.\n"
+      + "Compute per-dimension averages and standard deviations across experts. Flag dimensions with significant disagreement (SD > 2.0).\n"
+      + "Produce structured JSON with exact version IDs, cross-validation summary, synthesized pros/cons, and the insight field.\n"
+      + "Do NOT calculate or override the weighted score — the server computes that. Do NOT score candidates directly or generate material designs.\n"
+      + "Preserve contradictions between experts verbatim. Surface disagreements, do not resolve them silently.",
+    name: "insight-aggregator",
     updatedAt: "1970-01-01T00:00:00.000Z",
   },
   {

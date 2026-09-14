@@ -13,5 +13,5 @@
 // limitations under the License.
 
 export { LocaleProvider, useLocale } from "./LocaleProvider.js";
-export { applyLocale, detectLocale, LOCALE_STORAGE_KEY, translate, type Locale } from "./locale.js";
+export { applyLocale, detectLocale, LOCALE_STORAGE_KEY, setActiveLocale, translate, translateActive, type Locale } from "./locale.js";
 export type { MessageKey } from "./messages.js";

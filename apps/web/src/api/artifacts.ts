@@ -14,6 +14,7 @@
 
 import type {
   AnalyzePaperVisionRequest,
+  CancelRunResult,
   Claim,
   ArtifactDerivation,
   ArtifactJob,
@@ -21,8 +22,8 @@ import type {
   ArtifactCandidate,
   ArtifactAnnotation,
   ArtifactReviewRun,
-  ChatMessage,
-  ReviewCheckpoint,
+  ReviewerAuditTask,
+  ReviewFeedback,
   ArtifactVersionProvenance,
   MemoryGraphByEdgeResult,
   MemoryGraphChainResult,
@@ -34,6 +35,7 @@ import type {
   CreateArtifactAnnotationRequest,
   CreateArtifactPlanRequest,
   EvidenceLink,
+  IdeaTreeGraph,
   McpInvocation,
   PermissionRequest,
   PaperAcquisition,
@@ -49,15 +51,11 @@ import type {
   WorkspaceUploadResult,
 } from "@sciencediscovery/schema";
 import type { ArtifactDashboard, ArtifactPreviewPayload } from "../artifact-dashboard.js";
+import { translateActive } from "../i18n/index.js";
 
 import { RunsApiClient } from "./runs.js";
 
-export interface ManualReviewerSpecialistResult {
-  checkpoint?: ReviewCheckpoint;
-  error?: string;
-  message: ChatMessage;
-  reviews: ArtifactReviewRun[];
-}
+export interface ManualReviewerSpecialistResult { task: ReviewerAuditTask; }
 
 export class ArtifactsApiClient extends RunsApiClient {
   listArtifactDerivations(sessionId: string): Promise<ArtifactDerivation[]> {
@@ -135,7 +133,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error("Could not load artifact version");
+      throw new Error(translateActive("error.loadArtifactVersion"));
     }
     return await response.blob();
   }
@@ -144,6 +142,50 @@ export class ArtifactsApiClient extends RunsApiClient {
 
   getArtifactDashboard(sessionId: string): Promise<ArtifactDashboard> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifact-dashboard`);
+  }
+
+  listIdeaResearch(sessionId: string): Promise<{items: import("@sciencediscovery/schema").IdeaResearchView[]}> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`);
+  }
+
+  ideaResearchCommand(sessionId: string, body: Record<string, unknown>): Promise<import("@sciencediscovery/schema").IdeaResearchView> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {method: "POST", body: JSON.stringify(body)});
+  }
+
+  async subscribeIdeaResearch(sessionId: string, researchId: string, onView: (view: import("@sciencediscovery/schema").IdeaResearchView) => void, signal: AbortSignal): Promise<void> {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research/${encodeURIComponent(researchId)}/events`, {
+      headers: {accept: "text/event-stream", authorization: `Bearer ${this.token}`}, signal,
+    });
+    if (!response.ok || !response.body) throw new Error(`Idea Tree stream failed: HTTP ${response.status}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const {done, value} = await reader.read();
+        buffer += decoder.decode(value, {stream: !done});
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const data = frame.split("\n").filter(line => line.startsWith("data: ")).map(line => line.slice(6)).join("\n");
+          if (data) onView(JSON.parse(data));
+        }
+        if (done) break;
+      }
+    } finally { reader.releaseLock(); }
+  }
+
+  ideaResearchDefaults(sessionId: string): Promise<{prompts: Record<string, string>; criteria: Record<string, string>}> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`, {method: "POST", body: JSON.stringify({operation: "defaults"})});
+  }
+
+  getIdeaTreeGraph(sessionId: string, treeId?: string): Promise<{
+    graph: IdeaTreeGraph | null;
+    hasIdeaTreeRun: boolean;
+    treeIds: string[];
+  }> {
+    const query = treeId ? `?tree_id=${encodeURIComponent(treeId)}` : "";
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/graph${query}`);
   }
 
   /** Per-version structured preview payload routed by `kind`. */
@@ -257,25 +299,68 @@ export class ArtifactsApiClient extends RunsApiClient {
     artifactId: string,
     version: number,
     sessionId?: string,
-  ): Promise<{ dependencies: Array<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }>; reason?: string }> {
+  ): Promise<{ dependencies: Array<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; kind?: "artifact" | "source_file" }>; reason?: string }> {
     const params = new URLSearchParams({ artifact_id: artifactId, version: String(version) });
     if (sessionId) params.set("session_id", sessionId);
     const body = await this.request<{
       dependencies?: Array<{
+        kind?: string | null;
         artifact_id?: string;
         version?: number;
         logical_name?: string | null;
         media_type?: string | null;
         path?: string | null;
+        // source_file deps: fileId/name instead of artifact_id/version.
+        file_id?: string;
+        name?: string | null;
       }>;
       reason?: string;
     }>(`/api/memory/query/artifact-provenance?${params}`);
     const dependencies = (body.dependencies ?? []).map((dependency) => {
-      const logicalName = dependency.logical_name ?? dependency.path ?? dependency.artifact_id ?? "";
       const mediaType = dependency.media_type ?? "application/octet-stream";
+      // A source_file dependency (an uploaded file the run read) has no
+      // version and links to a SourceFile node, not an Artifact version. Map
+      // it onto the {artifact, version} shape the provenance panel renders,
+      // tagged with kind:"source_file" + origin:"user_upload" so the panel
+      // shows the bare name (no "v0") and navigates to the SourceFile node.
+      if (dependency.kind === "source_file") {
+        const fileId = dependency.file_id ?? "";
+        const sourceName = dependency.name ?? dependency.path ?? fileId;
+        return {
+          kind: "source_file" as const,
+          artifact: {
+            createdAt: "",
+            createdInSessionId: sessionId ?? "",
+            createdInSessionTitle: "",
+            currentVersion: 0,
+            id: fileId,
+            kind: "dataset" as const,
+            logicalName: sourceName,
+            name: sourceName,
+            origin: "user_upload" as const,
+            projectId: "",
+            sessionId: sessionId ?? "",
+            updatedAt: "",
+          },
+          version: {
+            artifactId: fileId,
+            content: { hash: "", size: 0 },
+            createdAt: "",
+            executionRunIds: [],
+            id: `${fileId}#v0`,
+            inputArtifactVersionIds: [],
+            mediaType,
+            projectId: "",
+            sessionId: sessionId ?? "",
+            version: 0,
+          },
+        };
+      }
+      const logicalName = dependency.logical_name ?? dependency.path ?? dependency.artifact_id ?? "";
       const dependencyArtifactId = dependency.artifact_id ?? "";
       const dependencyVersion = dependency.version ?? 0;
       return {
+        kind: "artifact" as const,
         artifact: {
           createdAt: "",
           createdInSessionId: sessionId ?? "",
@@ -311,9 +396,23 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifact-reviews`);
   }
 
+  listReviewerAuditTasks(sessionId: string): Promise<ReviewerAuditTask[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-audit-tasks`);
+  }
+
+  listReviewFeedback(sessionId: string): Promise<ReviewFeedback[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/review-feedback`);
+  }
+
   runReviewerSpecialist(sessionId: string, messageId: string): Promise<ManualReviewerSpecialistResult> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-specialist/review`, {
       body: JSON.stringify({ messageId }),
+      method: "POST",
+    });
+  }
+
+  cancelReviewerSpecialist(sessionId: string): Promise<CancelRunResult> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-specialist/cancel`, {
       method: "POST",
     });
   }
@@ -340,9 +439,34 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error("Could not load artifact version");
+      throw new Error(translateActive("error.loadArtifactVersion"));
     }
     return await response.blob();
+  }
+
+  /**
+   * Fetch the raw body of a WebPage node from the CAS data pool. The broker
+   * stored only the SHA-256 on the WebPage node and landed the body in CAS;
+   * this
+   * reverse-proxy call is what makes the WebPageDetail card show its "Full
+   * Text" section. The endpoint is session-scoped on the server side, so a
+   * foreign session's WebPage id is rejected before the CAS lookup. The
+   * response is text/plain (HTML or text — the card's stripHtml helper does
+   * the cleanup); we read it as a string so the MarkdownSection can render
+   * it directly. 404 is a normal outcome for WebPages that were never fetched
+   * (snippet-only); the card distinguishes that from a real failure.
+   */
+  async readWebPageContent(sessionId: string, webPageId: string, signal?: AbortSignal): Promise<string> {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/web-pages/${encodeURIComponent(webPageId)}/content`,
+      { headers: { authorization: `Bearer ${this.token}` }, signal },
+    );
+    if (!response.ok) {
+      this.reportAuthStatus(response.status);
+      const reason = response.status === 404 ? "WebPage content not available" : "Could not load WebPage content";
+      throw new Error(reason);
+    }
+    return await response.text();
   }
 
   listPapers(sessionId: string): Promise<PaperAcquisition[]> {
@@ -425,7 +549,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error(`Could not load ${path}`);
+      throw new Error(translateActive("error.loadFile", { path }));
     }
     return await response.blob();
   }

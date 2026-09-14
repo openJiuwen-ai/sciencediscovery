@@ -36,6 +36,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import micromambaManifest from "./micromamba-releases.json" with { type: "json" };
+import { EnvironmentAccess } from "./environment-access.js";
 
 const execFileAsync = promisify(execFile);
 const CATALOG_VERSION = 1;
@@ -44,6 +45,8 @@ const MANAGED_MICROMAMBA_BASE_URL = `${micromambaManifest.baseUrl}/${MANAGED_MIC
 const MANAGED_MICROMAMBA_RELEASES = micromambaManifest.releases;
 const MANAGED_MICROMAMBA_DARWIN_RELEASES = micromambaManifest.darwinReleases;
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
+/** One provisioner download; long enough for a slow mirror, short enough to fail. */
+const MANAGED_PROVISIONER_TIMEOUT_MS = 120_000;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
 );
@@ -62,6 +65,10 @@ interface ProvisionedPackage {
   build_string?: string;
   name?: string;
   version?: string;
+  channel?: string;
+  url?: string;
+  sha256?: string;
+  md5?: string;
 }
 
 interface ProvisionedPackageListEnvelope {
@@ -93,9 +100,27 @@ export interface EnvironmentRuntime {
   revision: EnvironmentRevision;
 }
 
+/**
+ * Where the pinned micromamba release is fetched from.
+ *
+ * An installation whose machines cannot reach the upstream release host points
+ * this at a mirror serving the same file names. The pinned SHA-256 is still
+ * enforced, so a mirror can host the release but cannot change it.
+ */
+export function managedMicromambaBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.SCIENCE_AGENT_MICROMAMBA_BASE_URL?.trim().replace(/\/+$/, "");
+  return configured || MANAGED_MICROMAMBA_BASE_URL;
+}
+
+/** Where a Runner keeps the managed provisioner inside its data directory. */
+export function managedProvisionerPath(dataDir: string): string {
+  return resolve(dataDir, "scientific-envs", "bin", "micromamba");
+}
+
 export function managedMicromambaRelease(
   architecture: string = process.arch,
   platform: string = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ) {
   const releases = platform === "linux"
     ? MANAGED_MICROMAMBA_RELEASES
@@ -107,9 +132,64 @@ export function managedMicromambaRelease(
   }
   return {
     ...release,
-    url: `${MANAGED_MICROMAMBA_BASE_URL}/${release.filename}`,
+    url: `${managedMicromambaBaseUrl(env)}/${release.filename}`,
     version: MANAGED_MICROMAMBA_VERSION,
   };
+}
+
+/**
+ * Which step of the provisioner install failed. The three have nothing in
+ * common for whoever has to fix them — an unreachable host, a mirror serving
+ * something else, and a data directory the Runner cannot write are different
+ * problems — so the guidance differs and the caller must be able to tell them
+ * apart without parsing a message.
+ */
+export type ManagedProvisionerFailure = "download" | "verify" | "write";
+
+export class ManagedProvisionerError extends Error {
+  readonly failure: ManagedProvisionerFailure;
+  /** The release the Runner tried to install, so the message can name it. */
+  readonly url: string;
+
+  constructor(failure: ManagedProvisionerFailure, url: string, detail: string, cause?: unknown) {
+    super(failure === "download"
+      ? `Could not download the micromamba provisioner from ${url}: ${detail}`
+      : failure === "verify"
+        ? `The micromamba provisioner downloaded from ${url} is not the pinned release: ${detail}`
+        : `Could not install the micromamba provisioner: ${detail}`, cause === undefined ? undefined : { cause });
+    this.name = "ManagedProvisionerError";
+    this.failure = failure;
+    this.url = url;
+  }
+}
+
+/**
+ * What actually went wrong underneath a failed `fetch`.
+ *
+ * Node reports every transport failure as `TypeError: fetch failed` and keeps
+ * the real reason — DNS, refused connection, TLS, timeout — in `cause`, often
+ * nested a level deeper. Reporting only the top-level message is what made an
+ * unreachable release host indistinguishable from a broken proxy or an expired
+ * certificate, so the chain is walked and the first thing with substance wins.
+ */
+export function describeFetchFailure(error: unknown): string {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  const parts: string[] = [];
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; errno?: unknown; message?: unknown; name?: unknown; cause?: unknown };
+    if (candidate.name === "AbortError" || candidate.name === "TimeoutError") {
+      return `the download timed out after ${MANAGED_PROVISIONER_TIMEOUT_MS / 1000}s`;
+    }
+    if (typeof candidate.code === "string") parts.push(candidate.code);
+    if (typeof candidate.message === "string" && candidate.message && candidate.message !== "fetch failed") {
+      parts.push(candidate.message);
+    }
+    current = candidate.cause;
+  }
+  // Keep the first concrete reason; the rest of the chain repeats it.
+  return parts.find((part) => part !== "fetch failed") ?? "the connection failed";
 }
 
 export async function installManagedMicromamba(
@@ -120,28 +200,46 @@ export async function installManagedMicromamba(
 ): Promise<void> {
   const release = managedMicromambaRelease(architecture, platform);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const timeout = setTimeout(() => controller.abort(), MANAGED_PROVISIONER_TIMEOUT_MS);
   const temporary = `${destination}.${process.pid}.${randomUUID()}.download`;
   try {
-    const response = await fetcher(release.url, {
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`Managed provisioner download failed (${response.status})`);
+    let response: Response;
+    try {
+      response = await fetcher(release.url, { redirect: "follow", signal: controller.signal });
+    } catch (error) {
+      throw new ManagedProvisionerError("download", release.url, describeFetchFailure(error), error);
+    }
+    if (!response.ok) {
+      throw new ManagedProvisionerError("download", release.url, `the server answered HTTP ${response.status}`);
+    }
     const declaredLength = Number(response.headers.get("content-length") ?? "0");
-    if (declaredLength > MAX_PROVISIONER_BYTES) throw new Error("Managed provisioner download exceeds size limit");
-    const bytes = Buffer.from(await response.arrayBuffer());
+    if (declaredLength > MAX_PROVISIONER_BYTES) {
+      throw new ManagedProvisionerError("verify", release.url,
+        `the release is larger than the ${MAX_PROVISIONER_BYTES} byte limit`);
+    }
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      throw new ManagedProvisionerError("download", release.url, describeFetchFailure(error), error);
+    }
     if (!bytes.length || bytes.length > MAX_PROVISIONER_BYTES) {
-      throw new Error("Managed provisioner download has an invalid size");
+      throw new ManagedProvisionerError("verify", release.url, `the download is ${bytes.length} bytes`);
     }
     const hash = createHash("sha256").update(bytes).digest("hex");
     if (hash !== release.sha256) {
-      throw new Error("Managed provisioner download failed SHA-256 verification");
+      throw new ManagedProvisionerError("verify", release.url,
+        `expected SHA-256 ${release.sha256}, got ${hash}`);
     }
-    await mkdir(resolve(destination, ".."), { recursive: true });
-    await writeFile(temporary, bytes, { flag: "wx", mode: 0o700 });
-    await chmod(temporary, 0o700);
-    await rename(temporary, destination);
+    try {
+      await mkdir(resolve(destination, ".."), { recursive: true });
+      await writeFile(temporary, bytes, { flag: "wx", mode: 0o700 });
+      await chmod(temporary, 0o700);
+      await rename(temporary, destination);
+    } catch (error) {
+      throw new ManagedProvisionerError("write", release.url,
+        `${destination} could not be written: ${(error as NodeJS.ErrnoException).code ?? String(error)}`, error);
+    }
   } finally {
     clearTimeout(timeout);
     await rm(temporary, { force: true });
@@ -172,15 +270,6 @@ function wheelDistribution(filename: string): Pick<EnvironmentLocalWheel, "distr
   const fields = filename.slice(0, -4).split("-");
   if (fields.length < 5 || !fields[0] || !fields[1]) return {};
   return { distribution: fields[0].replaceAll("_", "-"), version: fields[1] };
-}
-
-function wheelPackageRecord(wheel: EnvironmentLocalWheel): string {
-  return `pip:wheel:${JSON.stringify({
-    distribution: wheel.distribution,
-    path: wheel.sourcePath,
-    sha256: wheel.content.hash,
-    version: wheel.version,
-  })}`;
 }
 
 function parseProvisionedPackageList(listOutput: string): ProvisionedPackage[] {
@@ -235,6 +324,7 @@ export class EnvironmentStore {
   private setupComponents: ScientificEnvironmentSetup["components"];
   private setupPromise?: Promise<ScientificEnvironmentSetup>;
   private mutationTail: Promise<void> = Promise.resolve();
+  private readonly runtimeAccess = new EnvironmentAccess();
   private lastSetupError?: string;
 
   constructor(
@@ -449,6 +539,15 @@ export class EnvironmentStore {
     return this.resolveRuntimeUnchecked(revisionId, language);
   }
 
+  /** Resolve the latest state after obtaining the lease, never before a queued update. */
+  async withRuntime<T>(environmentId: string, operation: (runtime: EnvironmentRuntime) => Promise<T>): Promise<T> {
+    return this.runtimeAccess.run(environmentId, false, async () => {
+      this.assertAvailable();
+      const environment = this.requiredEnvironment(environmentId);
+      return operation(this.resolveRuntimeUnchecked(environment.currentRevisionId, environment.language));
+    });
+  }
+
   private resolveRuntimeUnchecked(revisionId: string | undefined, language: ScientificLanguage): EnvironmentRuntime {
     const revision = revisionId
       ? this.requiredRevision(revisionId)
@@ -457,7 +556,13 @@ export class EnvironmentStore {
       throw new Error(`Environment revision ${revision.id} is ${revision.language}, not ${language}`);
     }
     const environment = this.requiredEnvironment(revision.environmentId);
-    const prefixPath = this.revisionPath(environment.id, revision.id);
+    if (environment.currentRevisionId !== revision.id) {
+      throw new Error("Historical environment revisions are audit-only; select an environment ID to use its latest state");
+    }
+    if (environment.status && environment.status !== "ready") {
+      throw new Error(`Environment ${environment.id} is ${environment.status}; repair it with environment management before execution`);
+    }
+    const prefixPath = this.revisionPath(environment.id, environment.runtimeRevisionId ?? revision.id);
     return {
       environment: { ...environment },
       interpreterPath: resolve(prefixPath, "bin", language === "python" ? "python" : "R"),
@@ -491,7 +596,7 @@ export class EnvironmentStore {
     await mkdir(resolve(prefix, ".."), { recursive: true });
     try {
       await this.runProvisioner([
-        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(base.id, base.currentRevisionId), "--prefix", prefix,
+        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(base.id, base.runtimeRevisionId ?? base.currentRevisionId), "--prefix", prefix,
       ], `create-${id}`);
       const baseRevision = this.currentRevision(base.id);
       const revision = await this.recordRevision(
@@ -523,7 +628,7 @@ export class EnvironmentStore {
   }
 
   async deleteTask(id: string): Promise<void> {
-    await this.enqueueMutation(() => this.deleteTaskUnlocked(id));
+    await this.runtimeAccess.run(id, true, () => this.enqueueMutation(() => this.deleteTaskUnlocked(id)));
   }
 
   private async deleteTaskUnlocked(id: string): Promise<void> {
@@ -532,7 +637,8 @@ export class EnvironmentStore {
     if (environment.kind === "starter") throw new Error("Starter environments cannot be deleted");
     const previousCatalog = structuredClone(this.catalog);
     this.catalog.environments = this.catalog.environments.filter((candidate) => candidate.id !== id);
-    this.catalog.revisions = this.catalog.revisions.filter((revision) => revision.environmentId !== id);
+    // Removing an executable prefix must not erase the revisions used by past runs.
+    // Snapshots and available source artifacts remain audit-only records.
     try {
       await this.saveCatalog();
       await rm(resolve(this.revisionsRoot, id), { force: true, recursive: true });
@@ -550,9 +656,9 @@ export class EnvironmentStore {
     workspaceRoot?: string,
     indexUrl?: string,
   ): Promise<EnvironmentRevision> {
-    return await this.enqueueMutation(
+    return await this.runtimeAccess.run(id, true, () => this.enqueueMutation(
       () => this.installUnlocked(id, packages, requestedChannels, manager, workspaceRoot, indexUrl),
-    );
+    ));
   }
 
   private async installUnlocked(
@@ -569,7 +675,6 @@ export class EnvironmentStore {
     if (!["bioconductor", "conda", "cran", "pip"].includes(manager)) {
       throw new Error(`Unsupported environment package manager: ${String(manager)}`);
     }
-    if (manager === "pip" && environment.language !== "python") throw new Error("pip installs require a Python environment");
     if (manager === "pip" && requestedChannels?.length) {
       throw new Error("channels can only be used with manager=conda");
     }
@@ -577,8 +682,10 @@ export class EnvironmentStore {
     const normalizedIndexUrl = manager === "pip" && indexUrl !== undefined
       ? normalizePipIndexUrl(indexUrl)
       : externalUrl("package_indexes.pypi_simple");
-    if ((manager === "cran" || manager === "bioconductor") && environment.language !== "r") {
-      throw new Error(`${manager} installs require an R environment`);
+    if (manager !== "conda") {
+      const executable = manager === "pip" ? "python" : "R";
+      await access(resolve(this.revisionPath(id, environment.runtimeRevisionId ?? environment.currentRevisionId), "bin", executable), constants.X_OK)
+        .catch(() => { throw new Error(`Environment lacks ${executable}; install it with manager=conda first`); });
     }
     if (this.config.packageCacheDir && (manager === "cran" || manager === "bioconductor")) {
       throw new Error(`${manager} installs are unavailable in offline-cache mode; use conda packages from the seeded cache`);
@@ -606,14 +713,10 @@ export class EnvironmentStore {
     );
     if (disallowed.length) throw new Error(`Package channels are not allowed: ${disallowed.join(", ")}`);
     const previousRevision = this.currentRevision(id);
-    const previousCatalog = structuredClone(this.catalog);
     const revisionId = `rev-${randomUUID()}`;
-    const prefix = this.revisionPath(id, revisionId);
-    await mkdir(resolve(prefix, ".."), { recursive: true });
+    const prefix = this.revisionPath(id, environment.runtimeRevisionId ?? previousRevision.id);
+    await this.beginUpdate(environment);
     try {
-      await this.runProvisioner([
-        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(id, previousRevision.id), "--prefix", prefix,
-      ], `clone-${revisionId}`);
       let revisionChannels = channels;
       if (manager === "conda") {
         await this.runProvisioner([
@@ -655,18 +758,19 @@ export class EnvironmentStore {
         revisionLocalWheels,
       );
       environment.currentRevisionId = revision.id;
+      environment.status = "ready";
+      delete environment.error;
       environment.updatedAt = new Date().toISOString();
       await this.saveCatalog();
       return { ...revision };
     } catch (error) {
-      this.catalog = previousCatalog;
-      await rm(prefix, { force: true, recursive: true });
+      await this.failUpdate(environment, previousRevision.id);
       throw error;
     }
   }
 
   async uninstall(id: string, packages: string[]): Promise<EnvironmentRevision> {
-    return await this.enqueueMutation(() => this.uninstallUnlocked(id, packages));
+    return await this.runtimeAccess.run(id, true, () => this.enqueueMutation(() => this.uninstallUnlocked(id, packages)));
   }
 
   private async uninstallUnlocked(id: string, packages: string[]): Promise<EnvironmentRevision> {
@@ -676,14 +780,10 @@ export class EnvironmentStore {
     const normalizedPackages = uniqueSorted(packages.map(safePackage));
     if (!normalizedPackages.length) throw new Error("At least one package is required");
     const previousRevision = this.currentRevision(id);
-    const previousCatalog = structuredClone(this.catalog);
     const revisionId = `rev-${randomUUID()}`;
-    const prefix = this.revisionPath(id, revisionId);
-    await mkdir(resolve(prefix, ".."), { recursive: true });
+    const prefix = this.revisionPath(id, environment.runtimeRevisionId ?? previousRevision.id);
+    await this.beginUpdate(environment);
     try {
-      await this.runProvisioner([
-        "create", "--yes", ...this.offlineArguments(), "--clone", this.revisionPath(id, previousRevision.id), "--prefix", prefix,
-      ], `clone-${revisionId}`);
       await this.runProvisioner([
         "remove", "--yes", ...this.offlineArguments(), "--prefix", prefix, ...normalizedPackages,
       ], `uninstall-${revisionId}`);
@@ -693,16 +793,17 @@ export class EnvironmentStore {
         environment.language,
         prefix,
         previousRevision.channels,
-        [],
+        normalizedPackages.map((name) => `conda:remove:${name}`),
         previousRevision.localWheels,
       );
       environment.currentRevisionId = revision.id;
+      environment.status = "ready";
+      delete environment.error;
       environment.updatedAt = new Date().toISOString();
       await this.saveCatalog();
       return { ...revision };
     } catch (error) {
-      this.catalog = previousCatalog;
-      await rm(prefix, { force: true, recursive: true });
+      await this.failUpdate(environment, previousRevision.id);
       throw error;
     }
   }
@@ -711,6 +812,22 @@ export class EnvironmentStore {
     if (!this.config.enabled || !this.initialized || !this.capability.available) {
       throw new Error(this.capability.unavailableReason ?? "Scientific environments are unavailable");
     }
+  }
+
+  private async beginUpdate(environment: Environment): Promise<void> {
+    environment.runtimeRevisionId ??= environment.currentRevisionId;
+    environment.status = "updating";
+    delete environment.error;
+    // Persist the marker before any package-manager side effect. Restart is fail-closed.
+    await this.saveCatalog();
+  }
+
+  private async failUpdate(environment: Environment, previousRevisionId: string): Promise<void> {
+    environment.currentRevisionId = previousRevisionId;
+    environment.status = "failed";
+    environment.error = "In-place update failed; installed files may differ from the last successful revision. Retry through environment management.";
+    environment.updatedAt = new Date().toISOString();
+    await this.saveCatalog();
   }
 
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -812,6 +929,12 @@ export class EnvironmentStore {
         throw new Error("Scientific environment catalog has an unsupported format");
       }
       this.catalog = parsed;
+      for (const environment of this.catalog.environments) {
+        if (environment.status === "updating") {
+          environment.status = "failed";
+          environment.error = "Environment update was interrupted; repair through environment management before execution.";
+        }
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       this.catalog = emptyCatalog();
@@ -829,9 +952,25 @@ export class EnvironmentStore {
   ): Promise<EnvironmentRevision> {
     const listOutput = await this.runProvisioner(["list", "--json", "--prefix", prefix], `snapshot-${revisionId}`);
     const listed = parseProvisionedPackageList(listOutput);
+    const pythonPath = resolve(prefix, "bin", "python");
+    const rPath = resolve(prefix, "bin", "R");
+    const pythonInstalled = await access(pythonPath, constants.X_OK).then(() => true, () => false);
+    const rInstalled = await access(rPath, constants.X_OK).then(() => true, () => false);
+    const python = pythonInstalled ? JSON.parse(await this.runManagedCommand(pythonPath, ["-I", "-c",
+      "import importlib.metadata as m,json; print(json.dumps(sorted([{'name':d.metadata['Name'],'version':d.version,'installer':(d.read_text('INSTALLER') or '').strip()} for d in m.distributions()],key=lambda d:d['name'] or '')))"
+    ], `python-inventory-${revisionId}`)) as Array<{ name: string; version: string; installer: string }> : [];
+    if (!Array.isArray(python) || python.some((p) => !p.name || !p.version)) throw new Error("Invalid Python package inventory");
+    const rOutput = rInstalled ? await this.runManagedCommand(rPath, ["--vanilla", "--slave", "-e",
+      'p <- installed.packages(fields="Repository"); write.table(p[,c("Package","Version","Repository"),drop=FALSE],stdout(),sep="\\t",row.names=FALSE,col.names=FALSE,quote=FALSE)'
+    ], `r-inventory-${revisionId}`) : "";
+    const r = rOutput.trim() ? rOutput.trim().split("\n").map((line) => {
+      const [name, version, repository] = line.split("\t");
+      if (!name || !version) throw new Error("Invalid R package inventory");
+      return { name, version, repository };
+    }) : [];
     const packages = uniqueSorted([...listed.flatMap((item) => item.name && item.version
       ? [`${item.name}=${item.version}${item.build_string ? `=${item.build_string}` : ""}`]
-      : []), ...additionalPackages, ...localWheels.map(wheelPackageRecord)]);
+      : []), ...python.map((p) => `python:${p.name}==${p.version}`), ...r.map((p) => `r:${p.name}==${p.version}`)]);
     const languagePackage = packages.find((item) => item.startsWith(language === "python" ? "python=" : "r-base="));
     const languageVersion = languagePackage?.split("=")[1] ?? "unknown";
     const createdAt = new Date().toISOString();
@@ -839,7 +978,10 @@ export class EnvironmentStore {
       channels: uniqueSorted(channels),
       createdAt,
       environmentId,
-      format: "sciencediscovery-environment-revision-v1",
+      format: "sciencediscovery-environment-revision-v2",
+      installed: { conda: listed, python, r },
+      requestedChanges: additionalPackages,
+      reconstruction: { status: "reference-only", reason: "Package inventory is retained; remote installation artifacts are not guaranteed to remain available." },
       language,
       ...(localWheels.length ? { localWheels } : {}),
       packages,
@@ -905,14 +1047,25 @@ export class EnvironmentStore {
   }
 
   private async ensureManagedProvisioner(): Promise<void> {
+    const release = managedMicromambaRelease();
+    let installed: string | undefined;
     try {
       const bytes = await readFile(this.provisionerPath);
-      const release = managedMicromambaRelease();
       const hash = createHash("sha256").update(bytes).digest("hex");
-      if (hash !== release.sha256) throw new Error("Managed provisioner failed SHA-256 verification");
-      await access(this.provisionerPath, constants.X_OK);
+      // A file that is not the pinned release is replaced, not raised. It is a
+      // managed path the Runner owns: a half-finished transfer, a version this
+      // build no longer pins, or a copy seeded for another architecture all
+      // leave something here that only reinstalling can fix, and stopping with
+      // "verification failed" left the machine stuck on it forever.
+      if (hash !== release.sha256) installed = `replaced a file that was not the pinned ${release.version} release`;
+      else await access(this.provisionerPath, constants.X_OK);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") installed = "installed";
+      else if ((error as NodeJS.ErrnoException).code === "EACCES") installed = "replaced a file the Runner could not execute";
+      else throw error;
+    }
+    if (installed) {
+      await rm(this.provisionerPath, { force: true }).catch(() => undefined);
       await this.provisionerInstaller(this.provisionerPath);
     }
     await this.validateProvisioner();
@@ -987,9 +1140,7 @@ export class EnvironmentStore {
     const micromambaFailure = component === "micromamba";
     const message = micromambaFailure ? "micromamba setup failed" : "Conda environment setup failed";
     const action = micromambaFailure
-      ? this.config.provisionerPath
-        ? "Verify the configured micromamba executable path and execute permissions, then retry setup."
-        : "Retry setup. If it fails again, verify access to the pinned micromamba release and write access to the application data directory."
+      ? this.provisionerAction(error)
       : "Check free disk space and write permissions in the Runner data directory, then the configured Conda channels or offline cache, and retry setup. Existing system Conda and shell settings are not modified.";
     this.updateSetupComponent(component, "failed", "failed", message, {
       action,
@@ -997,6 +1148,29 @@ export class EnvironmentStore {
       error: this.lastSetupError,
     });
     this.updateSetup("failed", "failed", message, { completed: true });
+  }
+
+  /**
+   * What the operator can actually do next. "Retry" was the only advice this
+   * gave, which is useless on a machine that has no route to the release host:
+   * retrying fails identically forever, and nothing said that a mirror, a
+   * pre-placed executable or the control plane's own copy would fix it.
+   */
+  private provisionerAction(error: unknown): string {
+    if (this.config.provisionerPath) {
+      return `Verify that ${this.config.provisionerPath} exists on this machine, is executable by the Runner user, and is the pinned micromamba release, then retry setup.`;
+    }
+    const failure = error instanceof ManagedProvisionerError ? error.failure : undefined;
+    if (failure === "download") {
+      return `This machine could not reach the release. Either give it a route, point SCIENCE_AGENT_MICROMAMBA_BASE_URL at a mirror it can reach, or place the pinned micromamba at ${this.provisionerPath} (a Runner deployed over SSH is seeded with it automatically when the control plane can reach the release). Then retry setup.`;
+    }
+    if (failure === "verify") {
+      return "The downloaded file is not the pinned release. If SCIENCE_AGENT_MICROMAMBA_BASE_URL points at a mirror, check that the mirror serves the pinned version unmodified, then retry setup.";
+    }
+    if (failure === "write") {
+      return `The Runner user could not write ${this.provisionerPath}. Check ownership, permissions and free space on the Runner data directory, then retry setup.`;
+    }
+    return "Retry setup. If it fails again, verify access to the pinned micromamba release and write access to the application data directory.";
   }
 
   private async runProvisioner(arguments_: string[], jobId: string): Promise<string> {

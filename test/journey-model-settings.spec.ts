@@ -75,9 +75,13 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     if (!await dialog.isVisible()) {
       await page.getByRole("button", { name: /^系统设置/ }).click();
     }
-    await dialog.getByRole("navigation", { name: "设置分组" })
-      .getByRole("button", { name: /^模型注册表/ })
-      .click();
+    await expect(dialog).toBeVisible();
+    // Below 900px the settings tree is display:none and collapses behind the
+    // directory button, which takes every group button out of the accessibility
+    // tree with it. Above it the directory button is the one that is hidden.
+    const navigation = dialog.getByRole("navigation", { name: "设置分组" });
+    if (!await navigation.isVisible()) await dialog.getByRole("button", { name: /^设置目录/ }).click();
+    await navigation.getByRole("button", { name: /^模型注册表/ }).click();
     return dialog;
   };
 
@@ -435,6 +439,11 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
             status: 409,
           });
         });
+        // Deleting a model asks for confirmation through window.confirm, and
+        // Playwright dismisses a dialog nobody listens for. Without this the
+        // request is never sent and the step waits for an error that the
+        // product had no reason to raise.
+        page.once("dialog", (confirmation) => void confirmation.accept());
         await modelRow.getByRole("button", { name: "删除" }).click();
         await expect(dialog.getByText(/无法删除模型.*fixture model is still referenced/)).toBeVisible();
         await expect(modelRow).toBeVisible();
@@ -461,6 +470,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
 
         const responsePromise = page.waitForResponse((response) => response.request().method() === "DELETE"
           && new URL(response.url()).pathname === modelPath);
+        page.once("dialog", (confirmation) => void confirmation.accept());
         await modelRow.getByRole("button", { name: "删除" }).click();
         expect((await responsePromise).ok()).toBe(true);
         await expect(modelRow).toHaveCount(0);

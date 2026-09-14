@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { NpuInventory } from "./npu-device.js";
 import type { PermissionDecision } from "./permission.js";
 
 /** Shared by capability presentation, authorization and SSH deployment. */
@@ -77,6 +78,20 @@ export interface RemoteHostKeyChallenge {
   fingerprint: string;
 }
 
+/**
+ * Whether the machine itself answers, independently of whether a Runner is
+ * connected to it. A disconnected Runner says nothing about the machine: it may
+ * be powered off, unreachable on the network, or perfectly fine and simply not
+ * connected yet, and those need different actions from whoever is looking.
+ */
+export interface RemoteHostReachability {
+  checkedAt: string;
+  /** Why the machine did not answer. Present only when `state` is `offline`. */
+  error?: string;
+  /** `unknown` when this installation has no way to ask (no stored credentials). */
+  state: "checking" | "offline" | "online" | "unknown";
+}
+
 export interface RemoteHostEndpoint {
   /** IP address or hostname of a self-deployed runner. */
   host: string;
@@ -136,6 +151,12 @@ export interface RemoteHostTarget {
   username?: string;
   /** Pre-installed executable or absolute executable path; never a shell expression. */
   runnerCommand: string;
+  /**
+   * Whether the machine answered just now. Response-only, never persisted, and
+   * only filled in while no Runner is connected — a connected Runner is proof
+   * enough that the machine is up.
+   */
+  reachability?: RemoteHostReachability;
   /** Ephemeral connection state supplied by the API; never persisted. */
   runnerStatus?: RemoteRunnerStatus;
   status: "error" | "ready";
@@ -254,6 +275,11 @@ export interface RunnerResources {
   loadAverage1m: number;
   memoryTotalBytes: number;
   memoryFreeBytes: number;
+  /**
+   * Ascend NPU cards on this machine, including whether each one can actually
+   * be opened inside the sandbox. Absent on machines without Ascend tooling.
+   */
+  npu?: NpuInventory;
   uptimeSeconds: number;
   workspaceDisk: {
     path: string;
@@ -264,6 +290,15 @@ export interface RunnerResources {
 }
 
 export interface RemoteRunnerStatus {
+  /**
+   * How far the machine's clock is from this installation's, in milliseconds;
+   * positive means the machine is ahead. Measured from the Runner's own answers
+   * and applied only to the timestamps this product signs for it — everything
+   * recorded here keeps this machine's clock, so a large offset never reorders
+   * a timeline. Surfaced so an operator can see a machine whose clock nobody
+   * disciplines.
+   */
+  clockOffsetMs?: number;
   resources?: RunnerResources;
   resourcesError?: string;
   connectedAt?: string;
@@ -277,6 +312,27 @@ export interface RemoteRunnerStatus {
   remoteVersion?: string;
   state: RemoteRunnerConnectionState;
   versionMismatch?: boolean;
+}
+
+/**
+ * One line of the connection story a Runner connect attempt tells.
+ *
+ * A connect can take minutes (deploying the Runner bundle, seeding the
+ * provisioner), and for all that time the settings page would otherwise show
+ * nothing but a disabled button. Each step appends a line here so the page
+ * can show what is happening — and, on failure, what the remote side last
+ * said. Lines are operator-facing diagnostics in English, like the error
+ * messages above them; only the panel around them is translated.
+ */
+export interface RemoteConnectLogEntry {
+  at: string;
+  line: string;
+}
+
+/** The connection log of one host, as the settings page polls it. */
+export interface RemoteConnectLog {
+  entries: RemoteConnectLogEntry[];
+  hostId: string;
 }
 
 export type RemoteWorkspaceSyncDirection = "pull" | "push";
@@ -309,6 +365,14 @@ export interface RemoteWorkspaceFile {
   size: number;
 }
 
+/** A Runner-owned immutable export, scoped to the requested Workspace and paths. */
+export interface RemoteWorkspaceSnapshot {
+  id: string;
+  workspace: string;
+  capturedAt: string;
+  files: Array<{ path: string; size: number; sha256: string; executable: number }>;
+}
+
 export interface CreateRemoteJobRequest {
   command: string;
   hostId: string;
@@ -322,4 +386,10 @@ export interface CreateRemoteJobRequest {
 export interface DecideRemoteJobRequest {
   decision: PermissionDecision;
   expectedVersion: number;
+}
+
+/** A Runner's connection details; location does not change its execution contract. */
+export interface RunnerTarget extends RemoteHostTarget {
+  location: "local" | "remote";
+  workspaceRoot?: string;
 }

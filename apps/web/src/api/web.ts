@@ -14,6 +14,11 @@
 
 import type {
   ConnectorManifest,
+  CustomMcpServerDetails,
+  CustomMcpServerInput,
+  McpInspectorRequest,
+  McpInspectorResult,
+  McpAuthorizationStart,
   McpSourceManifest,
   McpSourceStatus,
   UpdateWebSettingsRequest,
@@ -24,7 +29,45 @@ import type {
 
 import { KnowledgeEngineApiClient } from "./knowledge-engine.js";
 
+
 export class WebApiClient extends KnowledgeEngineApiClient {
+
+export class WebApiClient extends EvolveApiClient {
+  startMcpAuthorization(id: string, redirectUrl: string): Promise<McpAuthorizationStart> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify({ redirectUrl }) });
+  }
+
+  cancelMcpAuthorization(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/cancel`, { method: "POST" });
+  }
+
+  clearMcpAuthorization(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/clear`, { method: "POST" });
+  }
+  inspectMcpTool(id: string, body: McpInspectorRequest, signal?: AbortSignal): Promise<McpInspectorResult> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/inspect`, { method: "POST", body: JSON.stringify(body), signal });
+  }
+  listMcpServers(): Promise<CustomMcpServerDetails[]> {
+    return this.request("/api/mcp/servers");
+  }
+
+  saveMcpServer(body: CustomMcpServerInput, id?: string): Promise<CustomMcpServerDetails> {
+    return this.request(`/api/mcp/servers${id ? `/${encodeURIComponent(id)}` : ""}`, { method: id ? "PUT" : "POST", body: JSON.stringify(body) });
+  }
+
+  testMcpServer(id: string): Promise<CustomMcpServerDetails> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/test`, { method: "POST" });
+  }
+
+  deleteMcpServer(id: string): Promise<{ deleted: boolean }> {
+    return this.request(`/api/mcp/servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  importMcpServers(body: unknown): Promise<CustomMcpServerDetails[]> {
+    return this.request("/api/mcp/servers/import", { method: "POST", body: JSON.stringify(body) });
+  }
+
+
   listMcpSources(): Promise<Array<{ manifest: McpSourceManifest; status: McpSourceStatus }>> {
     return this.request("/api/mcp/sources");
   }

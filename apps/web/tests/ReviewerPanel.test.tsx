@@ -48,14 +48,14 @@ test("ReviewerPanel shows the built-in Quick review identity", () => {
   }));
 
   assert.match(html, /Reviewer Specialist/);
-  assert.match(html, /Built-in Specialist/);
+  assert.match(html, /1 artifact/);
   assert.match(html, /Version version- · Quick/);
   assert.match(html, /Quick review passed/);
   assert.match(html, /Artifact provenance checks passed/);
-  assert.match(html, /<details class="reviewer-specialist-card passed">/);
+  assert.match(html, /<details class="reviewer-specialist-card process-record passed">/);
   assert.match(html, /<summary class="reviewer-specialist-card-heading">/);
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
-  assert.doesNotMatch(html, /<details class="reviewer-specialist-card passed"[^>]*\sopen(?:=|\s|>)/);
+  assert.doesNotMatch(html, /<details class="reviewer-specialist-card process-record passed"[^>]*\sopen(?:=|\s|>)/);
   assert.doesNotMatch(html, /Citation verified/);
 });
 
@@ -75,8 +75,26 @@ test("ReviewerPanel shows missing citation identifiers", () => {
 
   assert.match(html, /Warnings found/);
   assert.match(html, /Citation identifier missing/);
-  assert.match(html, /reviewer-specialist-card warning/);
+  assert.match(html, /reviewer-specialist-card process-record warning/);
   assert.match(html, /class="warning"/);
+});
+
+test("ReviewerPanel calls a missing academic citation a standard citation", () => {
+  const finding = {
+    code: "CITATION_MARKER_MISSING",
+    evidenceRefs: ["artifact:version-1"],
+    id: "finding-1",
+    message: "Add [1] next to the claim and match it to the reference list.",
+    severity: "warning" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    reviews: [review({ decision: "REVISE_AND_RETRY", findings: [finding] })],
+    toolCallId: "review-call",
+  }));
+
+  assert.match(html, /Standard citation missing/);
+  assert.doesNotMatch(html, /Citation marker missing/);
 });
 
 test("ReviewerPanel keeps only actionable findings and hides Deep operational incompleteness", () => {
@@ -122,7 +140,7 @@ test("ReviewerPanel reserves red for critical findings", () => {
   }));
 
   assert.match(html, /Revision required/);
-  assert.match(html, /reviewer-specialist-card critical/);
+  assert.match(html, /reviewer-specialist-card process-record critical/);
   assert.match(html, /class="critical"/);
 });
 
@@ -162,6 +180,7 @@ test("ReviewerPanel shows persisted stage and queue progress while Deep review r
 
   assert.match(html, /Deep Citation queue · 2\/5 references processed/);
   assert.match(html, /1\/3 Artifacts reviewed/);
+  assert.match(html, /Reviewing 3 artifacts/);
   assert.match(html, /PMCID: PMC13210248/);
   assert.match(html, /Reviewing/);
 });
@@ -181,10 +200,11 @@ test("ReviewerPanel collapses a completed multi-Artifact group by default", () =
     toolCallId: "review-call",
   }));
 
-  assert.match(html, /class="reviewer-specialist-panel"/);
+  assert.match(html, /class="reviewer-specialist-panel process-record"/);
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
   assert.match(html, /report\.md/);
   assert.match(html, /chart\.png/);
+  assert.match(html, /2 artifacts · 2 passed/);
 });
 
 test("ReviewerPanel retains a failed manual review with its error", () => {
@@ -201,15 +221,25 @@ test("ReviewerPanel retains a failed manual review with its error", () => {
   assert.doesNotMatch(html, /class="reviewer-specialist-panel" open/);
 });
 
-test("ReviewerPanel retains a completed manual review without findings", () => {
+test("ReviewerPanel hides a failed automatic checkpoint with no Artifact results", () => {
+  const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+    checkpointError: "Artifact version not found in this Session",
+    checkpointStatus: "failed",
+    reviews: [],
+    toolCallId: "automatic-review:stale-task",
+  }));
+
+  assert.equal(html, "");
+});
+
+test("ReviewerPanel hides an empty completed checkpoint from legacy non-report reviews", () => {
   const html = renderToStaticMarkup(createElement(ReviewerPanel, {
     checkpointStatus: "completed",
     reviews: [],
     toolCallId: "manual-review:1",
   }));
 
-  assert.match(html, /Reviewer Specialist/);
-  assert.match(html, /No applicable checks/);
+  assert.equal(html, "");
 });
 
 test("ReviewerPanel keeps a checkpoint failure beside partial Artifact results", () => {

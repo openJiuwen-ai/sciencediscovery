@@ -42,8 +42,13 @@ interface MemoryGraphViewProps {
   onOpenExplorer: () => void;
 }
 
+/** Keep container visibility consistent with the feature's own empty/disabled rules. */
+export function isMemoryGraphVisible(subgraph: MemorySubgraph | null, health: string): boolean {
+  return health !== "disabled" && subgraph !== null && subgraph.reason !== "memory_graph_disabled";
+}
+
 /**
- * A node that ended by cancellation (status === "cancelled", PR1's
+ * A node that ended by cancellation (status === "cancelled",
  * failure_reason="aborted"). Counted separately from completed so the
  * done-badge can split `✓ N done · ⊘ M cancelled` (doc16 §2.5) — cancelled
  * work is terminal-but-failed, neither pending nor succeeded.
@@ -111,28 +116,26 @@ export function MemoryGraphView({ subgraph, health, onOpenExplorer }: MemoryGrap
   const { t } = useLocale();
 
   // A default-off feature should leave no footprint in the UI.
-  if (health === "disabled") return null;
-  if (!subgraph) return null;
-  if (subgraph.reason === "memory_graph_disabled") return null;
+  if (!subgraph || !isMemoryGraphVisible(subgraph, health)) return null;
 
   if (subgraph.reason === "memory_graph_unreachable" && !subgraph.nodes.length) {
     return <section className="memory-graph-view memory-graph-empty">
       <h3>ScienceMemory</h3>
       <p className="memory-graph-hint">
-        ScienceMemory is enabled but Neo4j is not reachable. Start Neo4j, then open System Settings → ScienceMemory and set the Neo4j password.
+        {t("memory.view.neo4jUnreachable")}
       </p>
     </section>;
   }
   if (subgraph.reason && !subgraph.nodes.length) {
     return <section className="memory-graph-view memory-graph-empty">
       <h3>ScienceMemory</h3>
-      <p className="memory-graph-hint">ScienceMemory is not available right now.</p>
+      <p className="memory-graph-hint">{t("memory.view.unavailable")}</p>
     </section>;
   }
   if (!subgraph.nodes.length) {
     return <section className="memory-graph-view memory-graph-empty">
       <h3>ScienceMemory</h3>
-      <p className="memory-graph-hint">No nodes yet. Run a task that produces an artifact to populate the graph.</p>
+      <p className="memory-graph-hint">{t("memory.view.empty")}</p>
     </section>;
   }
 
@@ -157,4 +160,3 @@ export function MemoryGraphView({ subgraph, health, onOpenExplorer }: MemoryGrap
     </p>
   </section>;
 }
-

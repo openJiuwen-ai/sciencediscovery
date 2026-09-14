@@ -104,7 +104,7 @@ Click Save (or "Save and close") at the bottom. On save the backend pushes the H
 
 ### 2.4 Confirm it connected
 
-Back in the session workspace, the ScienceMemory thumbnail card reflects the live connection status (sourced from `/health`):
+Back in the session workspace, expand Memory > ScienceMemory in the right rail. The thumbnail reflects the live connection status (sourced from `/health`). Disabled memory has no entry; enabled but unreachable memory retains status feedback:
 
 | Status | Meaning | Action |
 |---|---|---|
@@ -123,7 +123,7 @@ With the toggle on and status `healthy`, a session's task chain, artifacts, and 
 
 Two entry points:
 
-- Session workspace thumbnail: a "ScienceMemory" card appears in the session right rail, showing current node/edge counts and task completion. Click the card to open this session's full-screen graph view.
+- Session workspace thumbnail: when enabled, expand ScienceMemory within the right-rail Memory folder to see node/edge counts and task completion. Click the thumbnail to open the session's full-screen graph view. The top-level folder starts open; its ScienceMemory details start closed.
 - From a specific artifact (the recommended entry for chain viewing): open an artifact preview → click View this product in ScienceMemory; the graph opens already positioned on that artifact's chain view.
 
 ### 3.2 Default view: the research spine

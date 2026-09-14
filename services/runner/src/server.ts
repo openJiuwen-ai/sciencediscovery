@@ -14,13 +14,15 @@
 
 import { execFile } from "node:child_process";
 import { createReadStream, rmSync } from "node:fs";
-import { chmod, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { userInfo } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
 import {
@@ -42,6 +44,7 @@ import type {
   RunnerHealth,
   RunnerRuntimeStatus,
   RemoteWorkspaceFile,
+  RemoteWorkspaceSnapshot,
   SandboxNetworkCapability,
   ScientificEnvsCapability,
   SetupScientificEnvironmentsRequest,
@@ -59,9 +62,11 @@ import {
   MAX_RUNNER_FILE_BYTES,
   RESOURCE_LIMIT_MODE,
   RUNNER_VERSION,
+  sandboxLaunchProfile,
   validatedWorkspace,
   type ExecutorConfig,
 } from "./executor.js";
+import { collectNpuInventory, NpuInventoryCache } from "./npu-devices.js";
 import {
   EXECUTION_SIGNATURE_HEADER,
   EXECUTION_TIMESTAMP_HEADER,
@@ -76,6 +81,9 @@ import { KernelManager } from "./kernel-manager.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
 import { ShellSessionManager } from "./shell-session-manager.js";
 import { agentExecutionKey, KeyedTaskQueue, requestAgentExecutionKey } from "./agent-execution.js";
+import { ExecutionManager } from "./execution-manager.js";
+import { committedWorkspaceSnapshot, publishWorkspaceFile, RefStore, streamSnapshotFile, VersionStore, withWorkspaceMutation,
+  workspaceSnapshotFiles, type AgentStateRef, type SnapshotFile } from "@sciencediscovery/cas";
 import { HostNpuJobBroker } from "./npu-broker.js";
 
 const execFileAsync = promisify(execFile);
@@ -113,6 +121,12 @@ export interface RunnerConfig extends ExecutorConfig {
 }
 
 const MAX_BODY_BYTES = 2_000_000;
+/**
+ * A whole selected Skill set arrives in one body, so it gets its own budget
+ * rather than the command limit — but still a budget: Skills are documents and
+ * scripts, and 64 MiB of base64 is far past anything a Session should select.
+ */
+const MAX_SKILL_BUNDLE_BYTES = 67_108_864;
 type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string };
 interface NpuJobSessionRequest {
   sessionId?: string;
@@ -163,6 +177,15 @@ async function readBytes(request: IncomingMessage, maxBytes: number): Promise<Bu
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+function requireEphemeralExecution(request: PythonExecutionRequest | ShellExecutionRequest): void {
+  // A persistent worker can keep writing after its call returns and releases
+  // the Workspace lease. Background lifetime belongs to managed Executions.
+  if (request.kernelMode !== undefined && request.kernelMode !== "ephemeral") {
+    throw new Error("Runner executions must be ephemeral; persistent runtimes are no longer supported. Use managed Shell Execution for background tasks");
+  }
+  request.kernelMode = "ephemeral";
 }
 
 function validateRunnerWorkspaceKey(value: string): string {
@@ -291,9 +314,11 @@ async function resolveExecutionWorkspace(
   config: RunnerConfig,
   execution: PythonExecutionRequest | ShellExecutionRequest,
 ): Promise<void> {
-  if (!execution.runnerWorkspaceKey) return;
-  execution.workspaceRoot = await remoteWorkspaceRoot(config.dataDir, execution.runnerWorkspaceKey);
-  delete execution.readOnlyWorkspaceRoot;
+  if (execution.runnerWorkspaceKey) {
+    execution.workspaceRoot = await remoteWorkspaceRoot(config.dataDir, execution.runnerWorkspaceKey);
+    delete execution.readOnlyWorkspaceRoot;
+  }
+  execution.workspaceRoot = await validatedWorkspace(config.dataDir, execution.workspaceRoot);
 }
 
 function currentExecutionUser(): string {
@@ -405,6 +430,7 @@ export function createRunnerServer(
   }),
   egressGateways?: EgressGatewayRegistry,
 ): Server {
+  const skillPackages = new RunnerSkillPackages(config.dataDir);
   const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
   const profiles = envProfiles ?? new SessionEnvProfileStore();
   const gateways = egressGateways ?? new EgressGatewayRegistry(config.dataDir, (event, detail) => {
@@ -420,7 +446,25 @@ export function createRunnerServer(
     maxOutputBytes: config.maxOutputBytes,
     maxWorkspaceBytes: config.maxWorkspaceBytes,
   }, profiles, gateways);
+  // Probing NPUs costs one throwaway sandbox per card, so the inventory is
+  // cached: a status poll must not re-probe the whole machine every few seconds.
+  const npuInventory = new NpuInventoryCache();
+  const readNpuInventory = async () => await npuInventory.get(async () => await collectNpuInventory({
+    bwrapPath: config.bwrapPath,
+    ...await sandboxLaunchProfile(config.bwrapPath),
+  }));
+  // An execution does not share that cache: it re-probes the cards it named,
+  // and only those, so a card claimed by another tenant since the last status
+  // poll fails the execution by name instead of failing inside the framework.
+  const probeRequestedNpuDevices = async (requested: readonly number[]) => await collectNpuInventory({
+    bwrapPath: config.bwrapPath,
+    only: requested,
+    ...await sandboxLaunchProfile(config.bwrapPath),
+  });
+  const executorConfig: RunnerConfig = { ...config, npuDeviceProbe: probeRequestedNpuDevices };
   const executionQueues = new KeyedTaskQueue();
+  const managedExecutions = new ExecutionManager(config.dataDir);
+  const workspaceVersions = new VersionStore(config.dataDir);
   const seenExecutions = new Map<string, number>();
   const activeExecutions = new Map<string, RunnerExecutionStatus>();
   const executionUser = currentExecutionUser();
@@ -446,16 +490,29 @@ export function createRunnerServer(
     };
     signal.addEventListener("abort", removeCancelledQueueEntry, { once: true });
     try {
-      return await executionQueues.run(requestAgentExecutionKey(execution), async () => {
+      let workspaceSnapshot: AgentStateRef | undefined;
+      const result = await executionQueues.run(requestAgentExecutionKey(execution), () => withWorkspaceMutation(workspaceVersions, execution.workspaceRoot, async () => {
         if (signal.aborted) throw new Error("Runner execution aborted before start");
         status.startedAt = new Date().toISOString();
         status.status = "running";
-        try {
-          return await operation();
-        } finally {
-          activeExecutions.delete(status.executionId);
+        if (language !== "shell" && environmentStore?.capability.available) {
+          const request = execution as PythonExecutionRequest;
+          const environmentId = request.environmentRevisionId
+            ? environmentStore.getRevision(request.environmentRevisionId)?.environmentId
+            : `starter-${request.language ?? "python"}`;
+          if (!environmentId) throw new Error("Unknown environment revision; select a current environment");
+          return await environmentStore.withRuntime(environmentId, async (runtime) => {
+            if (signal.aborted) throw new Error("Runner execution aborted before start");
+            if (request.environmentRevisionId && runtime.revision.id !== request.environmentRevisionId) {
+              throw new Error("Historical environment revisions are audit-only; select the latest environment");
+            }
+            return operation();
+          });
         }
-      }, execution.permissionEpoch.sessionId);
+        return await operation();
+      }, { kind: "legacy-execution", id: execution.executionId, onCommitted: (tree) => { workspaceSnapshot = tree; } }, signal), execution.permissionEpoch.sessionId);
+      if (result && typeof result === "object") Object.assign(result, { workspaceSnapshot });
+      return result;
     } catch (error) {
       const errorMessage = shortErrorMessage(error);
       const interrupted = signal.aborted;
@@ -521,7 +578,26 @@ export function createRunnerServer(
         return;
       }
       if (request.method === "GET" && url.pathname === "/resources") {
-        sendJson(response, 200, await collectRunnerResources(config.dataDir));
+        sendJson(response, 200, await collectRunnerResources(config.dataDir, {
+          npuInventory: readNpuInventory,
+        }));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/npu/devices") {
+        // Same inventory the status surface shows, exposed on its own so the
+        // selection UI can force a refresh without waiting for a status poll.
+        if (url.searchParams.get("refresh") === "1") npuInventory.invalidate();
+        sendJson(response, 200, await readNpuInventory());
+        return;
+      }
+      const skillMatch = /^\/skill-packages\/([a-f0-9]{64})$/.exec(url.pathname);
+      if (request.method === "GET" && skillMatch) {
+        sendJson(response, 200, await skillPackages.get(skillMatch[1]!));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/skill-packages") {
+        const bundle = JSON.parse((await readBytes(request, MAX_SKILL_BUNDLE_BYTES)).toString("utf8"));
+        sendJson(response, 200, await abortOnDisconnect(response, (signal) => skillPackages.put(bundle, signal)));
         return;
       }
       if (request.method === "GET" && url.pathname === "/status") {
@@ -534,6 +610,39 @@ export function createRunnerServer(
           runnerVersion: RUNNER_VERSION,
           status: "ok",
         } satisfies RunnerRuntimeStatus);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/remote-workspace/snapshots") {
+        const input = JSON.parse(await readBody(request)) as { workspace: string; paths?: string[] };
+        const workspace = validateRunnerWorkspaceKey(input.workspace);
+        if (input.paths && (!Array.isArray(input.paths) || input.paths.length > 50)) throw new Error("Snapshot accepts at most 50 paths");
+        const root = await remoteWorkspaceRoot(config.dataDir, workspace);
+        const tree = await committedWorkspaceSnapshot(workspaceVersions, root);
+        const files = await workspaceSnapshotFiles(workspaceVersions, tree, input.paths);
+        const id = randomUUID();
+        const capturedAt = new Date().toISOString();
+        const record = await workspaceVersions.putRecord("WorkspaceExport", { workspace, tree, files, capturedAt });
+        const refs = await RefStore.open(workspaceVersions);
+        try { await refs.commit(workspaceVersions, `workspace-exports/${id}`, null, record); } finally { refs.close(); }
+        sendJson(response, 201, { id, workspace, capturedAt,
+          files: files.map((file) => ({ path: file.path, size: file.content.size, sha256: file.content.digest.slice(7), executable: file.executable })),
+        } satisfies RemoteWorkspaceSnapshot);
+        return;
+      }
+      const snapshotFileMatch = url.pathname.match(/^\/remote-workspace\/snapshots\/([a-f0-9-]{36})\/file$/);
+      if (request.method === "GET" && snapshotFileMatch) {
+        const workspace = validateRunnerWorkspaceKey(url.searchParams.get("workspace") ?? "");
+        const refs = await RefStore.open(workspaceVersions);
+        let exported: AgentStateRef | null;
+        try { exported = refs.head(`workspace-exports/${snapshotFileMatch[1]}`); } finally { refs.close(); }
+        if (!exported) throw new Error("Workspace snapshot not found");
+        const record = await workspaceVersions.readRecord<{ workspace: string; files: SnapshotFile[] }>(exported, "WorkspaceExport");
+        if (record.value.workspace !== workspace) throw new Error("Workspace snapshot belongs to another Workspace");
+        const path = validateRelativeWorkspacePath(url.searchParams.get("path") ?? "");
+        const file = record.value.files.find((entry) => entry.path === path);
+        if (!file) throw new Error("File was not selected in this Workspace snapshot");
+        response.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store" });
+        await pipeline(streamSnapshotFile(workspaceVersions, file.content), response);
         return;
       }
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/remote-workspace/files") {
@@ -552,7 +661,10 @@ export function createRunnerServer(
       }
       if (request.method === "DELETE" && url.pathname === "/remote-workspace") {
         const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
-        await rm(root, { force: true, recursive: true });
+        await withWorkspaceMutation(workspaceVersions, root, async () => {
+          // Keep the identity/root stable while clearing files and committing its empty version.
+          for (const name of await readdir(root)) await rm(resolve(root, name), { force: true, recursive: true });
+        }, { kind: "workspace-clear" });
         sendJson(response, 200, { deleted: true });
         return;
       }
@@ -569,37 +681,70 @@ export function createRunnerServer(
         createReadStream(file).pipe(response);
         return;
       }
+      if (request.method === "PUT" && url.pathname === "/remote-workspace/transfer-file") {
+        const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
+        const path = validateRelativeWorkspacePath(url.searchParams.get("path") ?? "");
+        const conflict = url.searchParams.get("conflict") ?? "reject";
+        const size = Number(request.headers["x-workspace-size"]);
+        const sha256 = request.headers["x-workspace-sha256"];
+        const executable = Number(request.headers["x-workspace-executable"] ?? 0);
+        if (!Number.isSafeInteger(size) || size < 0 || typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)
+          || !Number.isInteger(executable) || executable < 0 || (executable & ~0o111) !== 0
+          || !["reject", "overwrite"].includes(conflict)) throw new Error("Invalid verified upload metadata");
+        const result = await abortOnDisconnect(response, (signal) => withWorkspaceMutation(workspaceVersions, root, async () => {
+          if (config.maxWorkspaceBytes > 0) {
+            const files = await listRemoteWorkspaceFiles(root);
+            const existing = files.find((file) => file.path === path)?.size ?? 0;
+            if (files.reduce((total, file) => total + file.size, 0) - existing + size > config.maxWorkspaceBytes) throw new Error("Remote workspace exceeds its execution quota");
+          }
+          // Publish under the outer mutation; CAS/refs commit before the HTTP success receipt.
+          return publishWorkspaceFile({ root, path, chunks: request, signal, expectedBytes: size, expectedHash: sha256,
+            maxBytes: size || 1, executable, conflict: conflict as "reject" | "overwrite" });
+        }, { kind: "workspace-transfer" }, signal));
+        sendJson(response, 201, { path, size: result.bytes, sha256: result.sha256 });
+        return;
+      }
       if (request.method === "PUT" && url.pathname === "/remote-workspace/file") {
         const root = await remoteWorkspaceRoot(config.dataDir, url.searchParams.get("workspace") ?? "");
-        const file = await writableWorkspaceFile(root, url.searchParams.get("path") ?? "");
         const conflict = url.searchParams.get("conflict") ?? "reject";
         if (conflict !== "reject" && conflict !== "overwrite") throw new Error("Invalid workspace conflict policy");
-        if (conflict === "reject") {
-          try {
-            await lstat(file);
-            sendJson(response, 409, { error: "Remote workspace file already exists" } satisfies ApiError);
-            return;
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          }
-        }
         const bytes = await readBytes(request, config.maxWorkspaceBytes);
-        if (config.maxWorkspaceBytes > 0) {
-          const currentBytes = (await listRemoteWorkspaceFiles(root)).reduce((total, entry) => total + entry.size, 0);
-          let replacedBytes = 0;
-          try { replacedBytes = (await stat(file)).size; } catch { /* New file. */ }
-          if (currentBytes - replacedBytes + bytes.length > config.maxWorkspaceBytes) {
-            throw new Error("Remote workspace exceeds its execution quota");
+        const result = await withWorkspaceMutation(workspaceVersions, root, async () => {
+          const file = await writableWorkspaceFile(root, url.searchParams.get("path") ?? "");
+          if (conflict === "reject") {
+            try {
+              await lstat(file);
+              return { conflict: true as const };
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            }
           }
-        }
-        const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
-        try {
-          await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
-          await rename(temporary, file);
-        } finally {
-          await rm(temporary, { force: true }).catch(() => undefined);
-        }
-        sendJson(response, 201, { path: relative(root, file).split(sep).join("/"), size: bytes.length });
+          if (config.maxWorkspaceBytes > 0) {
+            const currentBytes = (await listRemoteWorkspaceFiles(root)).reduce((total, entry) => total + entry.size, 0);
+            let replacedBytes = 0;
+            try { replacedBytes = (await stat(file)).size; } catch { /* New file. */ }
+            if (currentBytes - replacedBytes + bytes.length > config.maxWorkspaceBytes) {
+              throw new Error("Remote workspace exceeds its execution quota");
+            }
+          }
+          const temporary = `${file}.sync-${process.pid}-${Date.now()}`;
+          try {
+            await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+            if (conflict === "overwrite") await rename(temporary, file);
+            else {
+              try { await link(temporary, file); }
+              catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "EEXIST") return { conflict: true as const };
+                throw error;
+              }
+            }
+          } finally {
+            await rm(temporary, { force: true }).catch(() => undefined);
+          }
+          return { path: relative(root, file).split(sep).join("/"), size: bytes.length };
+        }, { kind: "workspace-upload" });
+        if ("conflict" in result) sendJson(response, 409, { error: "Remote workspace file already exists" } satisfies ApiError);
+        else sendJson(response, 201, result);
         return;
       }
       if (request.method === "GET" && url.pathname === "/npu/workloads") {
@@ -795,6 +940,44 @@ export function createRunnerServer(
         sendJson(response, 201, revision);
         return;
       }
+      const managedMatch = url.pathname.match(/^\/shell-executions\/([^/]+)(?:\/(logs|cancel))?$/);
+      if (managedMatch) {
+        const id = decodeURIComponent(managedMatch[1]!);
+        const owner = { sessionId: url.searchParams.get("sessionId") ?? "", agentId: url.searchParams.get("agentId") ?? "" };
+        if (request.method === "GET" && managedMatch[2] === "logs") {
+          sendJson(response, 200, managedExecutions.logs(id, owner, Number(url.searchParams.get("cursor") ?? "0")));
+          return;
+        }
+        if (request.method === "GET" && !managedMatch[2]) {
+          sendJson(response, 200, managedExecutions.get(id, owner));
+          return;
+        }
+        if (request.method === "POST" && managedMatch[2] === "cancel") {
+          sendJson(response, 202, managedExecutions.cancel(id, owner));
+          return;
+        }
+      }
+      if (request.method === "POST" && url.pathname === "/shell-executions") {
+        const body = await readBody(request);
+        if (!verifyExecutionSignature(config.authToken, request.headers[EXECUTION_TIMESTAMP_HEADER] as string | undefined,
+          body, request.headers[EXECUTION_SIGNATURE_HEADER] as string | undefined)) {
+          sendJson(response, 401, { error: "Invalid or expired execution signature" });
+          return;
+        }
+        const execution = JSON.parse(body) as ShellExecutionRequest;
+        requireEphemeralExecution(execution);
+        await resolveExecutionWorkspace(config, execution);
+        execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
+        execution.maxOutputBytes ??= config.maxOutputBytes;
+        const accepted = managedExecutions.start(execution, (signal, log) => execution.environmentId
+          ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
+              if (signal.aborted) throw new Error("Execution cancelled before environment admission");
+              return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log);
+            }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
+          : executeShell(executorConfig, execution, signal, undefined, gateways, undefined, log));
+        sendJson(response, 202, accepted);
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/execute-shell") {
         const body = await readBody(request);
         const timestamp = request.headers[EXECUTION_TIMESTAMP_HEADER] as string | undefined;
@@ -804,8 +987,8 @@ export function createRunnerServer(
           return;
         }
         const execution = JSON.parse(body) as ShellExecutionRequest;
+        requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
-        if (execution.permissionEpoch.executeGrantScope === "once") execution.kernelMode = "ephemeral";
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);
@@ -820,11 +1003,12 @@ export function createRunnerServer(
           "shell",
           execution.kernelMode ?? "ephemeral",
           signal,
-          () => execution.kernelMode === "persistent"
-            ? shellSessions.execute(execution, signal)
-            : executeShell(config, execution, signal,
-                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id),
-                gateways),
+          () => execution.environmentId
+            ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
+                if (signal.aborted) throw new Error("Runner execution aborted before start");
+                return executeShell(executorConfig, execution, signal, undefined, gateways, runtime);
+              }) ?? Promise.reject(new Error("Scientific environments are unavailable"))
+            : executeShell(executorConfig, execution, signal, undefined, gateways),
         )));
         return;
       }
@@ -837,8 +1021,8 @@ export function createRunnerServer(
           return;
         }
         const execution = JSON.parse(body) as PythonExecutionRequest;
+        requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
-        if (execution.permissionEpoch.executeGrantScope === "once") execution.kernelMode = "ephemeral";
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);
@@ -848,19 +1032,12 @@ export function createRunnerServer(
           return;
         }
         seenExecutions.set(execution.executionId, now);
-        // Activity keeps only this Agent's persistent shell alive.
-        shellSessions.touchAgent(execution.permissionEpoch.sessionId, execution.agentId);
         sendJson(response, 200, await abortOnDisconnect(response, (signal) => executeQueued(
           execution,
           execution.language ?? "python",
           execution.kernelMode ?? "ephemeral",
           signal,
-          () => execution.kernelMode === "persistent"
-            ? kernelManager?.execute(execution, signal)
-              ?? Promise.reject(new Error("Persistent kernels are unavailable"))
-            : executePython(config, execution, signal, environmentStore,
-                profiles.get(execution.permissionEpoch.sessionId, execution.agentId, execution.permissionEpoch.id),
-                gateways),
+          () => executePython(executorConfig, execution, signal, environmentStore, undefined, gateways),
         )));
         return;
       }
@@ -871,10 +1048,12 @@ export function createRunnerServer(
         method: request.method ?? "UNKNOWN",
         path: (request.url ?? "/").split("?", 1)[0] || "/",
       });
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "Runner request failed" } satisfies ApiError);
+      if (response.headersSent) response.destroy();
+      else sendJson(response, 400, { error: error instanceof Error ? error.message : "Runner request failed" } satisfies ApiError);
     }
   });
   server.once("close", () => {
+    void managedExecutions.close();
     void shellSessions.close();
     void gateways.close();
   });
@@ -882,19 +1061,19 @@ export function createRunnerServer(
 }
 
 /**
- * `domain-allowlist` needs a host interpreter for the in-sandbox egress
- * bridge. Report it so the API can tell an admin why the mode is unavailable
- * instead of letting every execution fail with the same error.
+ * `domain-allowlist` and `open` need a host interpreter for the in-sandbox
+ * egress bridge. Report it so the API can tell an admin why the mode is
+ * unavailable instead of letting every execution fail with the same error.
  *
  * Every agent run reads runner health before it starts, so this only consults
  * the process-wide interpreter probe: no subprocess per request, and no data
  * directory writes. Staging the bridge script stays on the launch path.
  */
 async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt"): Promise<SandboxNetworkCapability> {
-  if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist"] };
+  if (sandbox === "seatbelt") return { available: true, modes: ["none", "domain-allowlist", "open"] };
   try {
     await resolveEgressInterpreter();
-    return { available: true, modes: ["none", "domain-allowlist"] };
+    return { available: true, modes: ["none", "domain-allowlist", "open"] };
   } catch (error) {
     return {
       available: false,
@@ -1052,7 +1231,7 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const sandboxNetwork = await sandboxNetworkCapability(sandbox);
   console.log(
     `Sandbox: ${sandbox} (${RUNNER_VERSION}); sandbox network access: default none`
-    + `${sandboxNetwork.available ? ", domain-allowlist available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
+    + `${sandboxNetwork.available ? ", domain-allowlist and open available" : ` (domain-allowlist unavailable: ${sandboxNetwork.unavailableReason})`}`
     + "; no CPU/memory quotas; "
     + `workspace quota: ${workspaceLabel}; output budget: ${outputLabel}; `
     + `execution timeout: ${config.execTimeoutMs === 0 ? "unlimited" : `${config.execTimeoutMs / 1000}s`}`,

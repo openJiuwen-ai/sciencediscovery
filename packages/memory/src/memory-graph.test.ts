@@ -18,11 +18,11 @@ import http from "node:http";
 import test from "node:test";
 
 import { MemoryGraphClient, MemoryGraphSink } from "./memory-graph.js";
-import type { ObserveMcpInvocationPayload } from "./memory-graph.js";
+import type { ObserveToolCallPayload } from "./memory-graph.js";
 
 /**
  * A tiny loopback server impersonating the Python memory-graph sidecar, used
- * to assert the API-side client/sink posts the right shape to /observe/mcp-search
+ * to assert the API-side client/sink posts the right shape to /observe/tool-call
  * and that the sink's fire-and-forget contract never throws into the caller.
  */
 function startFakeMemoryGraph(handler: (path: string, body: unknown) => { status: number; json: unknown }): Promise<http.Server> {
@@ -49,72 +49,6 @@ function portOf(server: http.Server): number {
 function close(server: http.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
-
-test("MemoryGraphSink.observeMcpInvocation posts the right shape and never throws when the service errors", async () => {
-  let captured: { path: string; body: unknown } | null = null;
-  const server = await startFakeMemoryGraph((_path, body) => {
-    captured = { path: _path, body };
-    return { status: 500, json: { detail: "boom" } };
-  });
-  const url = `http://127.0.0.1:${portOf(server)}`;
-  try {
-    const client = new MemoryGraphClient({ url, token: "test-token" });
-    const sink = new MemoryGraphSink(client, () => true);
-    const payload: ObserveMcpInvocationPayload = {
-      invocationId: "inv-1",
-      sessionId: "sess-1",
-      turnId: "turn-1",
-      source: "europe-pmc",
-      toolType: "search",
-      retrievedAt: "2026-07-26T00:00:00Z",
-      records: [
-        { url: "https://europepmc.org/article/MED/123", title: "TP53 in lung cancer", identifier: "123", identifierType: "PMID", year: "2023", source: "europe-pmc" },
-      ],
-    };
-    // Fire-and-forget: must NOT throw even though the sidecar returned 500.
-    sink.observeMcpInvocation(payload);
-    // Wait for the async post to land on the fake sidecar (network round-trip).
-    for (let attempt = 0; attempt < 50 && !captured; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.ok(captured, "the sink should have posted to the sidecar");
-    const capturedNow = captured as { path: string; body: unknown } | null;
-    assert.equal(capturedNow?.path, "/observe/mcp-search");
-    const body = capturedNow?.body as Record<string, unknown>;
-    assert.equal(body.invocation_id, "inv-1");
-    assert.equal(body.session_id, "sess-1");
-    assert.equal(body.source, "europe-pmc");
-    assert.equal(body.tool_type, "search");
-    const records = body.records as Array<Record<string, unknown>>;
-    assert.equal(records.length, 1);
-    assert.equal(records[0]?.url, "https://europepmc.org/article/MED/123");
-    assert.equal(records[0]?.identifier_type, "PMID");
-  } finally {
-    await close(server);
-  }
-});
-
-test("MemoryGraphSink is a no-op when disabled (no network call)", async () => {
-  let calls = 0;
-  const server = await startFakeMemoryGraph(() => { calls += 1; return { status: 200, json: { status: "healthy" } }; });
-  const url = `http://127.0.0.1:${portOf(server)}`;
-  try {
-    const sink = new MemoryGraphSink(null, () => false);
-    sink.observeMcpInvocation({
-      invocationId: "inv-2",
-      sessionId: "sess-2",
-      turnId: "turn-2",
-      source: "europe-pmc",
-      toolType: "search",
-      retrievedAt: "2026-07-26T00:00:00Z",
-      records: [],
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls, 0, "a disabled sink must not touch the network");
-  } finally {
-    await close(server);
-  }
-});
 
 // --- Read endpoints --------------------------------------------------------
 
@@ -345,6 +279,36 @@ test("declareEvidence surfaces the 422 business code instead of degrading", asyn
   }
 });
 
+test("declareEvidence sends source_webpage_link in snake_case (WebPage source)", async () => {
+  // The WebPage source adds a third form alongside Paper / SourceFile. The
+  // Node client must serialise sourceWebpageLink → source_webpage_link and
+  // only include the field when
+  // set, so an undefined on the other source fields never shadows it.
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured = { path, body };
+    return { status: 200, json: { status: "ok", evidence_id: "ev-w1" } };
+  });
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.declareEvidence({
+      content: "from the page",
+      sourceWebpageLink: "https://example.com/article",
+      locator: "p1", evidenceType: "QUOTE", confidence: "HIGH", strength: "MODERATE",
+    }, "s1");
+    const body = captured!.body as Record<string, unknown>;
+    assert.equal(captured!.path, "/persist/evidence");
+    assert.equal(body.source_webpage_link, "https://example.com/article");
+    // The other two source fields must NOT be sent (caller chose one of
+    // three; the sidecar 422's on multi-set).
+    assert.equal("source_paper_link" in body, false);
+    assert.equal("source_file_id" in body, false);
+    assert.equal(result.status, "ok");
+  } finally {
+    await close(server);
+  }
+});
+
 test("declareClaim posts the alias map + artifact_id and returns the chip_map", async () => {
   let captured: { path: string; body: unknown } | null = null;
   const server = await startFakeMemoryGraph((path, body) => {
@@ -420,6 +384,88 @@ test("declareClaim surfaces artifact_version_not_found + instruction from the 42
   }
 });
 
+test("declareClaim forwards cites_dbrecord_aliases and surfaces the dbrecord chip", async () => {
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured = { path, body };
+    return {
+      status: 200,
+      json: {
+        status: "ok",
+        claim_id: "cl-db",
+        // dbrecord chip: id is the bare identifier (the chip's reference.id
+        // hits node.id === reference.id directly — _ID_FIELDS["DbRecord"] in
+        // the sidecar — like the Evidence/SourceFile paths).
+        chip_map: { db1: { kind: "dbrecord", id: "P38398", label: "db1" } },
+        cited_targets: [],
+      },
+    };
+  });
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.declareClaim({
+      content: "BRCA1 binds ...", claimType: "STATISTICAL", confidence: "HIGH", locator: "abstract",
+      citesEvidenceAliases: {},
+      citesArtifactAliases: {},
+      citesDbrecordAliases: { db1: "uniprot:P38398" },
+    }, "s1");
+    assert.equal(captured!.path, "/persist/claim");
+    const body = captured!.body as Record<string, unknown>;
+    assert.deepEqual(body.cites_dbrecord_aliases, { db1: "uniprot:P38398" });
+    // Other cite maps absent (the conditional spread — never undefined/null).
+    assert.equal("cites_evidence_aliases" in body, true);
+    assert.equal(body.cites_dbrecord_aliases, body.cites_dbrecord_aliases);
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") throw new Error("unreachable");
+    assert.equal(result.chipMap["db1"]!.kind, "dbrecord");
+    assert.equal(result.chipMap["db1"]!.id, "P38398");
+    assert.equal(result.chipMap["db1"]!.label, "db1");
+  } finally {
+    await close(server);
+  }
+});
+
+test("declareClaim omits cites_dbrecord_aliases when the alias map is absent", async () => {
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured = { path, body };
+    return { status: 200, json: { status: "ok", claim_id: "cl-x", chip_map: {}, cited_targets: [] } };
+  });
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    await client.declareClaim({
+      content: "x", claimType: "STATISTICAL", confidence: "HIGH", locator: "a",
+      citesEvidenceAliases: { ev1: "ev-1" }, citesArtifactAliases: {},
+    }, "s1");
+    const body = captured!.body as Record<string, unknown>;
+    // Field absent — never undefined/null (the conditional spread).
+    assert.equal("cites_dbrecord_aliases" in body, false);
+  } finally {
+    await close(server);
+  }
+});
+
+test("declareClaim surfaces db_record_not_found + instruction from the 422 body", async () => {
+  const server = await startFakeMemoryGraph(() => ({
+    status: 422,
+    json: { detail: { code: "db_record_not_found", message: "no DbRecord for uniprot:GHOST", instruction: "pass the value as \"<source>:<identifier>\"" } },
+  }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.declareClaim({
+      content: "x", claimType: "STATISTICAL", confidence: "HIGH", locator: "a",
+      citesEvidenceAliases: {}, citesArtifactAliases: {},
+      citesDbrecordAliases: { db1: "uniprot:GHOST" },
+    }, "s1");
+    assert.equal(result.status, "error");
+    if (result.status !== "error") throw new Error("unreachable");
+    assert.equal(result.code, "db_record_not_found");
+    assert.ok(result.instruction && result.instruction.includes("<source>:<identifier>"));
+  } finally {
+    await close(server);
+  }
+});
+
 test("declare methods report memory_graph_disabled when the sidecar is unreachable", async () => {
   // Point at a port that nothing listens on → fetch throws.
   const client = new MemoryGraphClient({ url: "http://127.0.0.1:1", token: "t" });
@@ -449,7 +495,7 @@ test("observeExecution forwards logical_name on each produced artifact", async (
       executionId: "exec-1", sessionId: "s1", turnId: "t1", tool: "run_python",
       language: "python", codeHash: "h", exitCode: 0, status: "succeeded",
       startedAt: "2026-07-31T00:00:00Z", finishedAt: "2026-07-31T00:00:01Z",
-      taskType: "code_execution",
+      toolType: "execution",
       producedArtifacts: [{
         artifactId: "art-1", path: "squares.csv", projectId: "project-1", version: 1,
         mediaType: "text/csv", logicalName: "squares.csv",
@@ -478,7 +524,7 @@ test("observeExecution forwards input_artifact_versions composite-key pairs on e
       executionId: "exec-2", sessionId: "s1", turnId: "t1", tool: "run_python",
       language: "python", codeHash: "h", exitCode: 0, status: "succeeded",
       startedAt: "2026-07-31T00:00:00Z", finishedAt: "2026-07-31T00:00:01Z",
-      taskType: "code_execution",
+      toolType: "execution",
       producedArtifacts: [{
         artifactId: "art-2", path: "plot.svg", projectId: "project-1", version: 1,
         mediaType: "image/svg+xml", logicalName: "plot.svg",
@@ -506,7 +552,7 @@ test("observeExecution omits input_artifact_versions entries when none were read
       executionId: "exec-3", sessionId: "s1", turnId: "t1", tool: "run_python",
       language: "python", codeHash: "h", exitCode: 0, status: "succeeded",
       startedAt: "2026-07-31T00:00:00Z", finishedAt: "2026-07-31T00:00:01Z",
-      taskType: "code_execution",
+      toolType: "execution",
       producedArtifacts: [{
         artifactId: "art-3", path: "squares.csv", projectId: "project-1", version: 1,
         mediaType: "text/csv", logicalName: "squares.csv",
@@ -535,7 +581,7 @@ test("observeExecution forwards provenance addressing fields (hashes/turnId/cont
       executionId: "exec-1", sessionId: "s1", turnId: "t1", tool: "run_python",
       language: "python", codeHash: "ch", exitCode: 0, status: "succeeded",
       startedAt: "2026-07-31T00:00:00Z", finishedAt: "2026-07-31T00:00:01Z",
-      taskType: "code_execution",
+      toolType: "execution",
       stdoutHash: "sh", stderrHash: "eh", envHash: "envh",
       producedArtifacts: [{
         artifactId: "art-1", path: "squares.csv", projectId: "project-1", version: 1,
@@ -587,7 +633,8 @@ test("getArtifactProvenance issues GET with query params and shapes the full res
     assert.equal(result!.turnId, "t1");
     assert.equal(result!.codeHash, "ch");
     assert.equal(result!.messagesTurnId, "t1");
-    assert.equal(result!.dependencies![0]!.artifactId, "art-0");
+    assert.equal(result!.dependencies![0]!.kind, "artifact");
+    assert.equal(result!.dependencies![0]!.kind === "artifact" ? result!.dependencies![0]!.artifactId : "", "art-0");
     assert.equal(result!.dependencies![0]!.mediaType, "text/csv");
     assert.equal(result!.dependencies![0]!.path, "input.csv");
     assert.equal(result!.reason, undefined);
@@ -607,6 +654,37 @@ test("getArtifactProvenance returns empty dependencies (no reason) when no input
     const result = await client.getArtifactProvenance("art-2", 1, "s1");
     assert.deepEqual(result!.dependencies, []);
     assert.equal(result!.reason, undefined);
+  } finally {
+    await close(server);
+  }
+});
+
+test("getArtifactProvenance shapes a source_file dependency (uploaded input, no version)", async () => {
+  // A Code run that read an uploaded file produces a SourceFile -[:input]-> Code
+  // edge; the provenance endpoint surfaces it as a dependency with kind
+  // "source_file" (fileId/name instead of artifactId/version). The shaper must
+  // route it onto the source_file arm of the discriminated union.
+  const server = await startFakeMemoryGraph(() => ({
+    status: 200,
+    json: {
+      artifact_id: "art-3", version: 1, logical_name: "plot.svg",
+      dependencies: [
+        { kind: "source_file", file_id: "source_file:session:s1:data.csv",
+          name: "data.csv", path: "data.csv", media_type: "text/csv" },
+      ],
+    },
+  }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.getArtifactProvenance("art-3", 1, "s1");
+    assert.equal(result!.dependencies!.length, 1);
+    const dep = result!.dependencies![0]!;
+    assert.equal(dep.kind, "source_file");
+    if (dep.kind !== "source_file") throw new Error("narrow");
+    assert.equal(dep.fileId, "source_file:session:s1:data.csv");
+    assert.equal(dep.name, "data.csv");
+    assert.equal(dep.mediaType, "text/csv");
+    assert.equal(dep.path, "data.csv");
   } finally {
     await close(server);
   }
@@ -746,6 +824,169 @@ test("MemoryGraphSink.cleanup* is a no-op when disabled (no network call)", asyn
     sink.cleanupProject("proj-x", ["s1"]);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls, 0, "a disabled sink must not touch the network");
+  } finally {
+    await close(server);
+  }
+});
+
+// --- unified tool-call ticket ------------------------------------------
+
+test("MemoryGraphSink.observeToolCall posts snake_case products and never throws when the service errors", async () => {
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured = { path, body };
+    return { status: 500, json: { detail: "boom" } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const client = new MemoryGraphClient({ url, token: "test-token" });
+    const sink = new MemoryGraphSink(client, () => true);
+    const payload: ObserveToolCallPayload = {
+      taskId: "subtask:mcp:tc-1",
+      sessionId: "sess-tc-1",
+      turnId: "turn-tc-1",
+      toolName: "mcp__llm-wiki__search",
+      toolType: "search",
+      source: "llm-wiki",
+      resultCount: 2,
+      products: [
+        {
+          productType: "web_page",
+          identifier: "wiki/BRCA1",
+          identifierType: "wiki-path",
+          url: "http://wiki.local/BRCA1",
+          title: "BRCA1",
+          snippet: "tumor suppressor",
+          sourceRefs: ["ref1", "ref2"],
+        },
+        {
+          productType: "db_record",
+          source: "uniprot",
+          identifier: "P38398",
+          identifierType: "uniprot-id",
+          title: "BRCA1_HUMAN",
+        },
+      ],
+    };
+    // Fire-and-forget: must NOT throw even though the sidecar returned 500.
+    sink.observeToolCall(payload);
+    for (let attempt = 0; attempt < 50 && !captured; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(captured, "the sink should have posted to the sidecar");
+    const c = captured as { path: string; body: unknown };
+    assert.equal(c.path, "/observe/tool-call");
+    const body = c.body as Record<string, unknown>;
+    assert.equal(body.task_id, "subtask:mcp:tc-1");
+    assert.equal(body.session_id, "sess-tc-1");
+    assert.equal(body.tool_name, "mcp__llm-wiki__search");
+    assert.equal(body.tool_type, "search");
+    assert.equal(body.source, "llm-wiki");
+    assert.equal(body.result_count, 2);
+    const products = body.products as Array<Record<string, unknown>>;
+    assert.equal(products.length, 2);
+    assert.equal(products[0]?.product_type, "web_page");
+    assert.equal(products[0]?.identifier, "wiki/BRCA1");
+    assert.equal(products[0]?.identifier_type, "wiki-path");
+    assert.equal(products[0]?.url, "http://wiki.local/BRCA1");
+    assert.deepEqual(products[0]?.source_refs, ["ref1", "ref2"]);
+    // A snippet-only page carries no body hash → explicit null (the
+    // sidecar's COALESCE keeps an existing content_hash when null arrives).
+    assert.equal(products[0]?.content_hash, null);
+    assert.equal(products[1]?.product_type, "db_record");
+    assert.equal(products[1]?.source, "uniprot");
+    assert.equal(products[1]?.identifier, "P38398");
+    // db_record products never carry a content hash either.
+    assert.equal(products[1]?.content_hash, null);
+  } finally {
+    await close(server);
+  }
+});
+
+test("MemoryGraphSink.observeToolCall forwards contentHash on fetched web_page products", async () => {
+  // A page-fetch product (web_fetch / llm-wiki get_page) carries the CAS
+  // data-pool hash of the page body; the wire name is content_hash.
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured = { path, body };
+    return { status: 200, json: { status: "healthy", written: 2 } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const client = new MemoryGraphClient({ url, token: "test-token" });
+    const sink = new MemoryGraphSink(client, () => true);
+    sink.observeToolCall({
+      taskId: "subtask:web-fetch:tc-9",
+      sessionId: "sess-tc-9",
+      turnId: "turn-tc-9",
+      toolName: "web_fetch",
+      toolType: "search",
+      resultCount: 1,
+      products: [{
+        productType: "web_page",
+        url: "https://en.wikipedia.org/wiki/BRCA1",
+        contentHash: "a".repeat(64),
+      }],
+    });
+    for (let attempt = 0; attempt < 50 && !captured; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(captured, "the sink should have posted to the sidecar");
+    const c = captured as { path: string; body: unknown };
+    assert.equal(c.path, "/observe/tool-call");
+    const body = c.body as Record<string, unknown>;
+    const products = body.products as Array<Record<string, unknown>>;
+    assert.equal(products[0]?.content_hash, "a".repeat(64));
+    assert.equal(body.tool_name, "web_fetch");
+  } finally {
+    await close(server);
+  }
+});
+
+test("MemoryGraphSink.observeToolCall forwards parentSubagentId and skips when disabled", async () => {
+  let calls = 0;
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    calls += 1;
+    captured = { path, body };
+    return { status: 200, json: { status: "healthy", written: 1 } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const client = new MemoryGraphClient({ url, token: "test-token" });
+    const enabledSink = new MemoryGraphSink(client, () => true);
+    enabledSink.observeToolCall({
+      taskId: "subtask:mcp:tc-2",
+      sessionId: "sess-tc-2",
+      turnId: "turn-tc-2",
+      toolName: "web_search",
+      toolType: "search",
+      parentSubagentId: "sub-1",
+      products: [],
+    });
+    for (let attempt = 0; attempt < 50 && !captured; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(captured);
+    const capturedSub = captured as { path: string; body: unknown };
+    assert.equal(capturedSub.path, "/observe/tool-call");
+    const body = capturedSub.body as Record<string, unknown>;
+    assert.equal(body.parent_subagent_id, "sub-1");
+
+    calls = 0;
+    captured = null;
+    const disabledSink = new MemoryGraphSink(null, () => false);
+    disabledSink.observeToolCall({
+      taskId: "subtask:mcp:tc-3",
+      sessionId: "sess-tc-3",
+      turnId: "turn-tc-3",
+      toolName: "x",
+      toolType: "y",
+      products: [],
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 0, "a disabled sink must not touch the network");
+    assert.equal(captured, null);
   } finally {
     await close(server);
   }

@@ -120,8 +120,12 @@ export function normalizePersistedRemoteHost(saved: RemoteHostTarget): RemoteHos
  * out of local execution.
  */
 export function normalizePersistedSessionRemoteRunners(
-  saved: { remoteRunnerHostId?: unknown; remoteRunnerHostIds?: unknown },
-): { remoteRunnerHostIds?: string[] } {
+  saved: { runnerIds?: unknown; remoteRunnerHostId?: unknown; remoteRunnerHostIds?: unknown },
+): { runnerIds?: string[]; remoteRunnerHostIds?: string[] } {
+  if (Array.isArray(saved.runnerIds)) {
+    const runnerIds = saved.runnerIds.filter((id): id is string => typeof id === "string");
+    return { runnerIds, remoteRunnerHostIds: runnerIds.filter((id) => id !== "local") };
+  }
   if (Array.isArray(saved.remoteRunnerHostIds)) {
     return { remoteRunnerHostIds: saved.remoteRunnerHostIds.filter((id): id is string => typeof id === "string") };
   }

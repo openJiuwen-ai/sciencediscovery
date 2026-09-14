@@ -37,6 +37,7 @@ import {
   type SandboxKind,
   type ScientificLanguage,
   type ShellExecutionRequest,
+  type NpuInventory,
   type ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
@@ -49,10 +50,12 @@ import {
   resolveEgressBridge,
 } from "./egress-bridge.js";
 import type { EgressGatewayRegistry } from "./egress-gateway.js";
+import { resolveExecutionNpu, type SandboxNpu } from "./npu-devices.js";
 import { ensureSeccompFilter, type SeccompVariant } from "./seccomp.js";
 import { profileKeyAllowed, sedimentableCwd, type SessionEnvProfile } from "./session-env-profile.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import { buildSeatbeltProfile, seatbeltWorkspaceMapping } from "./seatbelt.js";
+import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { RUNNER_VERSION } from "./version.js";
 export { RUNNER_VERSION } from "./version.js";
@@ -103,6 +106,13 @@ export interface SandboxRuntimeConfig {
 }
 
 export interface ExecutorConfig extends SandboxRuntimeConfig {
+  /**
+   * Reads the current state of exactly the cards an execution asked for. The
+   * caller supplies it so the check is a fresh probe rather than the cached
+   * inventory the status surface reads. Absent on hosts without Ascend tooling
+   * and in tests, where an execution that asks for no card never calls it.
+   */
+  npuDeviceProbe?: (requested: readonly number[]) => Promise<NpuInventory>;
   /** Packaged Python interpreter used when no managed environment is selected. */
   pythonPath?: string;
   /** Wall-clock limit for a single execution. */
@@ -286,6 +296,14 @@ export async function resolveSandboxSkillRoots(
 ): Promise<SandboxSkillRoots | undefined> {
   if (!requestedPackagesRoot) return undefined;
   const packagesRoot = await validatedWorkspace(dataDir, requestedPackagesRoot);
+  // A snapshot this Runner published for a remote execution is only mountable
+  // while it still matches the manifest it was published under, so a damaged or
+  // half-written tree fails the execution instead of being mounted.
+  const managedParent = resolve(dataDir, "projects", ".skill-packages");
+  if (packagesRoot === managedParent || packagesRoot.startsWith(managedParent + sep)) {
+    const snapshot = await new RunnerSkillPackages(dataDir).get(relative(managedParent, packagesRoot));
+    if (snapshot.root !== packagesRoot) throw new Error("Unpublished Skill snapshot");
+  }
   if (!(await stat(packagesRoot)).isDirectory()) throw new Error("Runner Skill packages root must be a directory");
   const extensionsRoot = resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH);
   await mkdir(extensionsRoot, { recursive: true });
@@ -483,6 +501,7 @@ async function runSandboxed(
   maxWorkspaceBytes: number,
   maxOutputBytes: number,
   seccompVariant: SeccompVariant = "baseline",
+  onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
 ): Promise<{ exitCode: number; stderr: string; stdout: string }> {
   try {
     return await new Promise<{ exitCode: number; stderr: string; stdout: string }>((resolveRun, reject) => {
@@ -491,6 +510,7 @@ async function runSandboxed(
       let stderr = "";
       let settled = false;
       let checkingQuota = false;
+      let stopError: Error | undefined;
 
       const finish = (error?: Error, exitCode = 1) => {
         if (settled) return;
@@ -501,14 +521,15 @@ async function runSandboxed(
         if (error) reject(error);
         else resolveRun({ exitCode, stderr, stdout });
       };
-      const abort = () => {
-        child?.kill("SIGKILL");
-        finish(new Error(`${timeoutLabel} aborted`));
+      const stop = (error: Error) => {
+        stopError ??= error;
+        if (child) killSandboxProcess(child);
       };
+      // Do not release a writer or clean up its mounts until the process has exited.
+      const abort = () => stop(new Error(`${timeoutLabel} aborted`));
       const timeout = timeoutMs > 0
         ? setTimeout(() => {
-            child?.kill("SIGKILL");
-            finish(new Error(`${timeoutLabel} timed out after ${timeoutMs} ms`));
+            stop(new Error(`${timeoutLabel} timed out after ${timeoutMs} ms`));
           }, timeoutMs)
         : undefined;
       const quotaTimer = maxWorkspaceBytes > 0
@@ -518,14 +539,12 @@ async function runSandboxed(
             void workspaceUsageBytes(workspaceRoot)
               .then((bytes) => {
                 if (bytes > maxWorkspaceBytes && !settled) {
-                  child?.kill("SIGKILL");
-                  finish(new Error(workspaceQuotaExceededMessage(maxWorkspaceBytes)));
+                  stop(new Error(workspaceQuotaExceededMessage(maxWorkspaceBytes)));
                 }
               })
               .catch((error: Error) => {
                 if (!settled) {
-                  child?.kill("SIGKILL");
-                  finish(error);
+                  stop(error);
                 }
               })
               .finally(() => { checkingQuota = false; });
@@ -534,23 +553,26 @@ async function runSandboxed(
 
       void spawnSandboxProcess(config, launch, commandArguments, seccompVariant).then((started) => {
         child = started;
+        if (stopError) killSandboxProcess(child);
         if (!child.stdin || !child.stdout || !child.stderr) {
-          child.kill("SIGKILL");
+          killSandboxProcess(child);
           finish(new Error("Runner failed to create isolated process streams"));
           return;
         }
         signal?.addEventListener("abort", abort, { once: true });
         if (signal?.aborted) abort();
         child.stdout.on("data", (chunk: Buffer) => {
+          try { onOutput?.("stdout", chunk); } catch (error) { stop(error instanceof Error ? error : new Error(String(error))); }
           const next = appendBounded(stdout, chunk, maxOutputBytes, Buffer.byteLength(stderr));
           stdout = next.text;
         });
         child.stderr.on("data", (chunk: Buffer) => {
+          try { onOutput?.("stderr", chunk); } catch (error) { stop(error instanceof Error ? error : new Error(String(error))); }
           const next = appendBounded(stderr, chunk, maxOutputBytes, Buffer.byteLength(stdout));
           stderr = next.text;
         });
         child.once("error", (error) => finish(error));
-        child.once("close", (code) => finish(undefined, code ?? 1));
+        child.once("close", (code) => finish(stopError, code ?? 1));
         // The sandbox can already be gone by the time its payload is written —
         // that is what an aborted or crashed execution looks like from here.
         // A stream error with no listener becomes an uncaught exception, so a
@@ -558,7 +580,7 @@ async function runSandboxed(
         // outcome the process's own events already carry.
         child.stdin.on("error", (error: NodeJS.ErrnoException) => {
           if (error.code === "EPIPE") return;
-          finish(error);
+          stop(error);
         });
         child.stdin.end(stdin);
       }).catch((error: Error) => finish(error));
@@ -685,6 +707,8 @@ export function buildSandboxLaunch(options: {
   hostInterpreterMasks: string[];
   hostRuntimeSupport: HostRuntimeSupport;
   language: "python" | "r" | "shell";
+  /** Selected NPU cards, already renumbered from 0; absent keeps the sandbox without NPUs. */
+  npu?: SandboxNpu;
   pathEnv: string;
   procMode: SandboxProcMode;
   pythonPathEnv?: string;
@@ -693,8 +717,20 @@ export function buildSandboxLaunch(options: {
 }): SandboxLaunch {
   // Runner-owned baseline first; profile variables never override it
   // (profileKeyAllowed re-checks the reserved/blocked policy defensively).
-  const env: Record<string, string> = { HOME: "/tmp", PATH: options.pathEnv };
-  if (options.pythonPathEnv) env.PYTHONPATH = options.pythonPathEnv;
+  // Ascend host tools such as npu-smi ship in /usr/local/bin, which `/usr` is
+  // bound into the sandbox but the ordinary PATH omits; expose it only when
+  // the launch carries NPUs so non-NPU sandboxes stay byte-for-byte unchanged.
+  const env: Record<string, string> = {
+    HOME: "/tmp",
+    PATH: options.npu ? `/usr/local/bin:${options.pathEnv}` : options.pathEnv,
+  };
+  // CANN's operator compiler is imported as ordinary Python, so its search path
+  // has to join PYTHONPATH rather than replace whatever the environment set.
+  const pythonPathEntries = [
+    ...(options.pythonPathEnv ? [options.pythonPathEnv] : []),
+    ...(options.npu?.pythonPath ?? []),
+  ];
+  if (pythonPathEntries.length > 0) env.PYTHONPATH = pythonPathEntries.join(":");
   if (options.language === "python" || options.pythonPathEnv) env.PYTHONNOUSERSITE = "1";
   if (options.language === "r") env.R_ENVIRON_USER = "/dev/null";
   if (options.skillRoots) {
@@ -702,6 +738,7 @@ export function buildSandboxLaunch(options: {
     env[SKILL_EXTENSIONS_ENVIRONMENT_VARIABLE] = SANDBOX_SKILL_EXTENSIONS_ROOT;
   }
   Object.assign(env, options.hostRuntimeSupport.env);
+  Object.assign(env, options.npu?.env ?? {});
   Object.assign(env, options.egress?.env ?? {});
   for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
     if (profileKeyAllowed(name)) env[name] = value;
@@ -720,7 +757,11 @@ export function buildSandboxLaunch(options: {
       "--symlink", "usr/lib", "/lib",
       "--symlink", "usr/lib64", "/lib64",
       ...procMountArguments(options.procMode),
+      // A fresh /dev, then only the selected cards. Binding the host's /dev
+      // instead would offer every card at once, and the Ascend driver fails the
+      // whole enumeration when any visible card cannot be claimed.
       "--dev", "/dev",
+      ...(options.npu?.bindArgs ?? []),
       ...options.hostInterpreterMasks,
       "--tmpfs", "/tmp",
       ...options.environmentBinds,
@@ -835,6 +876,8 @@ export interface PreparedSandboxOptions {
   hostInterpreterMasks: string[];
   hostRuntimeSupport: HostRuntimeSupport;
   language: "python" | "r" | "shell";
+  /** Selected NPU cards for this execution; absent keeps the sandbox without NPUs. */
+  npu?: SandboxNpu;
   pathEnv: string;
   pythonPathEnv?: string;
   readOnlyWorkspaceRoot?: string;
@@ -864,6 +907,20 @@ export function sandboxCommandPath(launch: SandboxLaunch, linuxPath: string, hos
   return launch.sandbox === "seatbelt" ? hostPath : linuxPath;
 }
 
+const sandboxProcessGroups = new WeakSet<ChildProcessWithoutNullStreams>();
+
+/** Kill the namespace init as well as the monitor, including during bwrap setup. */
+export function killSandboxProcess(child: ChildProcessWithoutNullStreams): boolean {
+  if (!sandboxProcessGroups.has(child) || !child.pid) return child.kill("SIGKILL");
+  try {
+    process.kill(-child.pid, "SIGKILL");
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 /** Spawn through the selected sandbox and attach Linux seccomp when applicable. */
 export async function spawnSandboxProcess(
   config: SandboxRuntimeConfig,
@@ -876,15 +933,23 @@ export async function spawnSandboxProcess(
     if ((launch.sandbox ?? executorSandboxKind(config)) === "bubblewrap") {
       filter = await open(await ensureSeccompFilter(config.dataDir, seccompVariant), "r");
     }
+    const processGroup = (launch.sandbox ?? executorSandboxKind(config)) === "bubblewrap";
     const child = spawn(launch.executable ?? config.bwrapPath, [
-      ...launch.args,
+      // Node establishes a new session before exec. Keep bwrap's namespace init
+      // in that group: --new-session would move it out of reach of group kill.
+      ...launch.args.filter((arg) => !processGroup || arg !== "--new-session"),
       ...launch.commandPrefix,
       ...commandArguments,
     ], {
+      detached: processGroup,
       ...(launch.hostCwd ? { cwd: launch.hostCwd } : {}),
       env: launch.sandbox === "seatbelt" ? launch.env : undefined,
       stdio: filter ? ["pipe", "pipe", "pipe", filter.fd] : ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
+    if (processGroup) {
+      sandboxProcessGroups.add(child);
+      child.once("close", () => sandboxProcessGroups.delete(child));
+    }
     await filter?.close();
     return child;
   } catch (error) {
@@ -946,7 +1011,10 @@ export async function executePython(
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const sandbox = executorSandboxKind(config);
   const hostPython = !runtime && language === "python" ? await nativePythonPath(config, sandbox) : undefined;
+  const npu = await resolveExecutionNpu(config, request.npuDevices,
+    async () => await sandboxLaunchProfile(config.bwrapPath));
   const launch = await prepareSandboxLaunch(config, {
+    npu,
     chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
     egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox, request.sandboxEgressProxy),
     environmentBinds: runtime
@@ -1035,6 +1103,8 @@ export async function executeShell(
   signal?: AbortSignal,
   envProfile?: SessionEnvProfile,
   gateways?: EgressGatewayRegistry,
+  runtime?: import("./environment-store.js").EnvironmentRuntime,
+  onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
 ): Promise<ShellExecutionResult> {
   if (!request.code.trim()) throw new Error("Shell code is required");
   if (!request.executionId?.trim()) throw new Error("Execution ID is required");
@@ -1059,17 +1129,36 @@ export async function executeShell(
   const localPythonPackages = await localPythonPackagePath(config);
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const sandbox = executorSandboxKind(config);
+  if (request.environmentId && runtime?.environment.id !== request.environmentId) {
+    throw new Error("Selected environment requires an active Runner environment lease");
+  }
+  let chdir = await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot);
+  if (request.cwd !== undefined) {
+    if (isAbsolute(request.cwd)) throw new Error("cwd must be workspace-relative");
+    const directory = await realpath(resolve(workspaceRoot, request.cwd));
+    const relativePath = relative(workspaceRoot, directory);
+    if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+      throw new Error("cwd must remain inside the writable workspace");
+    }
+    if (!(await stat(directory)).isDirectory()) throw new Error("cwd must be a directory");
+    chdir = sandbox === "seatbelt" ? directory : `${workspaceBinds.chdir}/${relativePath}`;
+  }
+  const npu = await resolveExecutionNpu(config, request.npuDevices,
+    async () => await sandboxLaunchProfile(config.bwrapPath));
   const launch = await prepareSandboxLaunch(config, {
-    chdir: await resolveProfileChdir(envProfile, workspaceBinds, workspaceRoot, readOnlyWorkspaceRoot),
+    npu,
+    chdir,
     egress: await prepareSandboxEgress(config.dataDir, networkAccess, gateways, sandbox, request.sandboxEgressProxy),
-    environmentBinds: localPythonPackageBindArguments(localPythonPackages),
-    environmentPaths: localPythonPackages ? [localPythonPackages] : [],
+    environmentBinds: runtime ? environmentPrefixBindArguments(runtime.prefixPath) : localPythonPackageBindArguments(localPythonPackages),
+    environmentPaths: runtime ? [runtime.prefixPath] : localPythonPackages ? [localPythonPackages] : [],
     envProfile,
     hostInterpreterMasks: [],
     hostRuntimeSupport,
     language: "shell",
-    pathEnv: "/usr/bin:/bin",
-    pythonPathEnv: localPythonPackages
+    pathEnv: runtime
+      ? `${sandbox === "seatbelt" ? resolve(runtime.prefixPath, "bin") : "/opt/science-env/bin"}:/usr/bin:/bin`
+      : "/usr/bin:/bin",
+    pythonPathEnv: !runtime && localPythonPackages
       ? (sandbox === "seatbelt" ? localPythonPackages : LOCAL_PYTHON_PACKAGES_MOUNT)
       : undefined,
     readOnlyWorkspaceRoot,
@@ -1098,6 +1187,7 @@ export async function executeShell(
     maxWorkspaceBytes,
     maxOutputBytes,
     seccompVariantFor(networkAccess),
+    onOutput,
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
@@ -1110,9 +1200,9 @@ export async function executeShell(
     ...processResult,
     cgroupMode: RESOURCE_LIMIT_MODE,
     createdFiles: shellCreatedFiles,
-    environmentRevisionId: sandbox === "seatbelt"
+    environmentRevisionId: runtime?.revision.id ?? (sandbox === "seatbelt"
       ? SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID
-      : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID,
+      : SYSTEM_SHELL_ENVIRONMENT_REVISION_ID),
     environmentVariables: launch.env,
     executionId: request.executionId,
     finishedAt: new Date().toISOString(),

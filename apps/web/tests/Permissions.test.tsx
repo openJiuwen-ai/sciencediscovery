@@ -46,7 +46,7 @@ test("allow-matching UI groups the same permission resources as the backend", ()
   );
 });
 
-test("permission cards collapse to a summary and fold the decision buttons away", () => {
+test("pending permission details fold without hiding the decision buttons", () => {
   const request: PermissionRequest = {
     action: "code",
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -68,9 +68,9 @@ test("permission cards collapse to a summary and fold the decision buttons away"
   assert.match(html, /Run local code/);
   assert.match(html, /Run Python code in the Session workspace/);
   assert.match(html, /aria-expanded="false"/);
-  // The resource and decision buttons stay folded away until expanded.
+  // Resource details fold, while pending decisions remain directly actionable.
   assert.doesNotMatch(html, /workspace-code/);
-  assert.doesNotMatch(html, /Allow once/);
+  assert.match(html, /Allow once/);
 });
 
 test("expanded permission card exposes the independent decisions", () => {
@@ -120,6 +120,23 @@ test("permission cards hide decided requests", () => {
     requests: [request],
   }));
   assert.equal(html, "");
+});
+
+test("pending download approvals keep all actions while cancelled ones have no approval entry", () => {
+  const request: PermissionRequest = {
+    action: "artifact_download", createdAt: "2026-09-11T00:00:00.000Z",
+    id: "download-approval", projectId: "project-1", sessionId: "session-1",
+    resource: "arxiv:download:paper.pdf", summary: "Download paper.pdf", state: "pending",
+  };
+  const render = (state: PermissionRequest["state"]) => renderToStaticMarkup(createElement(PermissionCards, {
+    expandedCards: {}, onDecision: async () => undefined, onToggleCard: noopToggle,
+    requests: [{ ...request, state }],
+  }));
+  const pending = render("pending");
+  assert.match(pending, />Allow once<\/button>/);
+  assert.match(pending, />Allow same type<\/button>/);
+  assert.match(pending, />Deny<\/button>/);
+  assert.equal(render("cancelled"), "");
 });
 
 test("standing grants are listable and revocable", () => {

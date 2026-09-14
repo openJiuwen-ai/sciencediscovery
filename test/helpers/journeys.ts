@@ -15,7 +15,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, request, type Locator, type Page } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 
@@ -68,12 +68,15 @@ export interface ToolProcess {
 }
 
 export interface ScriptedToolStep {
+  text?: string;
+  reasoning?: string;
   arguments: Record<string, unknown>;
   delayMs?: number;
   tool: string;
 }
 
 export interface ScriptedTextStep {
+  reasoning?: string;
   delayMs?: number;
   text: string;
 }
@@ -119,7 +122,7 @@ const TERMINAL_RUN_STATUSES = new Set<JourneyRunStatus>([
 ]);
 
 async function apiJson<T>(
-  page: Page,
+  page: Pick<Page, "request">,
   path: string,
   options: { data?: unknown; method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT" } = {},
 ): Promise<T> {
@@ -178,6 +181,7 @@ export function scriptedModel(
   let mainStepIndex = 0;
   let mainTurn = 0;
   let subagentStepIndex = 0;
+  const lastAnswer: Partial<Record<"main" | "subagent", string>> = {};
   const server: Server = createServer((request, response) => {
     const bodyChunks: Buffer[] = [];
     request.on("data", (chunk) => bodyChunks.push(Buffer.from(chunk)));
@@ -206,6 +210,23 @@ export function scriptedModel(
         const systemPrompt = String(messages.find((message) => message.role === "system")?.content ?? "");
         const isSubagent = systemPrompt.includes(SUBAGENT_PRESET_MARKER);
         const route = isSubagent ? "subagent" : "main";
+        // Runtime observations are appended as data-only user messages. They
+        // must not hide the actual user request or completion notification.
+        const latestUser = [...messages].reverse().find((message) => message.role === "user"
+          && !(typeof message.content === "string" && message.content.startsWith("<runtime_context_data ")))?.content;
+        if (typeof latestUser === "string" && latestUser.startsWith("[Execution notifications]")) {
+          // Completion is a notification turn, not the next scripted user task.
+          // Acknowledge the prior answer without replaying commands or consuming
+          // the next user turn's fixture (including a child's reset sequence).
+          const answer = lastAnswer[route];
+          if (!answer) throw new Error("Completion notification arrived before a scripted answer");
+          const id = `chatcmpl-journey-notice-${++sequence}`;
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.write(`data: ${JSON.stringify(completionChunk(id, model, { content: answer, role: "assistant" }, null))}\n\n`);
+          response.write(`data: ${JSON.stringify(completionChunk(id, model, {}, "stop"))}\n\n`);
+          response.end("data: [DONE]\n\n");
+          return;
+        }
         const turn = isSubagent ? 0 : mainTurn;
         const scripts = isSubagent ? subagentSteps : mainSteps;
         if (!scripts) throw new Error("The product made an unexpected subagent model request");
@@ -222,10 +243,14 @@ export function scriptedModel(
           step: stepIndex,
           turn,
         });
-        if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
         response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+        if (step.reasoning) response.write(`data: ${JSON.stringify(completionChunk(id, model, {
+          role: "assistant", reasoning_content: step.reasoning,
+        }, null))}\n\n`);
+        if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
         if ("tool" in step) {
           response.write(`data: ${JSON.stringify(completionChunk(id, model, {
+            ...(step.text ? { content: step.text } : {}),
             role: "assistant",
             tool_calls: [{
               function: { arguments: JSON.stringify(step.arguments), name: step.tool },
@@ -249,6 +274,7 @@ export function scriptedModel(
           })}\n\n`);
         }
         response.end("data: [DONE]\n\n");
+        if (!("tool" in step)) lastAnswer[route] = step.text;
         if (isSubagent) {
           if ("tool" in step) subagentStepIndex += 1;
           else subagentStepIndex = 0;
@@ -285,12 +311,12 @@ export function scriptedModel(
 /** Register either a spec-owned local stub or an explicitly gated real model. */
 export function registerModel(
   page: Page,
-  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean },
+  input: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" },
 ): Promise<JourneyModel> {
   return apiJson(page, "/api/models", { data: { vision: false, ...input }, method: "POST" });
 }
 
-async function deleteJourneyModel(page: Page, model: JourneyModel): Promise<void> {
+async function deleteJourneyModel(page: Pick<Page, "request">, model: JourneyModel): Promise<void> {
   const settings = await apiJson<{ overrides?: Record<string, unknown> }>(page, "/api/settings").catch(() => undefined);
   if (settings?.overrides) {
     const overrides = { ...settings.overrides };
@@ -323,7 +349,7 @@ export async function createProjectAndSession(
   page: Page,
   input: {
     approvalMode?: "always_allow" | "ask_for_dangerous";
-    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean };
+    model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" };
     modelId?: string;
     projectName: string;
     sessionTitle: string;
@@ -511,26 +537,64 @@ export async function expandToolStep(page: Page, options: { contains: string | R
   return card;
 }
 
-/** Open the user-visible scientific environment settings page. */
+/**
+ * Open the user-visible scientific environment page of the built-in Runner.
+ *
+ * Scientific environments belong to a machine, so settings reach them through
+ * the Runner tree — pick the Runner, then its environment tab — instead of a
+ * standalone group.
+ */
 export async function openEnvironmentPage(page: Page): Promise<Locator> {
   await page.getByRole("button", { name: /^(System configuration|系统设置)/ }).click();
   const dialog = page.getByRole("dialog", { name: /^(System configuration|系统设置)$/ });
+  // Narrow widths collapse the settings tree behind a directory button.
+  const directory = dialog.getByRole("button", { name: /^(Settings directory|设置目录)/ });
+  if (await directory.isVisible().catch(() => false)) await directory.click();
   await dialog.getByRole("navigation", { name: /^(Setting groups|设置分组)$/ })
-    .getByRole("button", { name: /^(Environments|环境)/ })
+    .getByRole("button", { name: /^(Local Runner|本地 Runner)$/ })
     .click();
+  await dialog.getByRole("tab", { name: /^(Scientific environments|科学环境)$/ }).click();
   const manager = dialog.locator(".environment-manager");
   await expect(manager).toBeVisible();
   return manager;
 }
 
-/** Expand and return the Project-level artifact catalog in the workspace rail. */
-export async function openArtifactPanel(page: Page): Promise<Locator> {
+/** Open one of the Runner environment page's disclosures, which start closed. */
+export async function openEnvironmentDisclosure(manager: Locator, content: string): Promise<Locator> {
+  const disclosure = manager.locator("details").filter({ has: manager.page().locator(content) });
+  await expect(disclosure).toHaveCount(1);
+  if (await disclosure.getAttribute("open") === null) await disclosure.locator(":scope > summary").click();
+  return disclosure;
+}
+
+/** Reveal the workspace rail and open its files folder, both of which can start closed. */
+async function openWorkspaceFiles(page: Page): Promise<void> {
   const showWorkspace = page.getByRole("button", { name: /^(Show workspace|显示工作区)$/ });
   if (await showWorkspace.isVisible().catch(() => false)) await showWorkspace.click();
+  const files = page.locator('aside.workspace-panel [data-folder="files"]');
+  if (await files.getAttribute("open") === null) await files.locator(":scope > summary").click();
+}
+
+/** Expand and return the Project-level artifact catalog in the workspace rail. */
+export async function openArtifactPanel(page: Page): Promise<Locator> {
+  await openWorkspaceFiles(page);
   const catalog = page.locator("aside.workspace-panel details.artifact-catalog-section");
   await expect(catalog).toBeVisible();
   if (await catalog.getAttribute("open") === null) await catalog.locator(":scope > summary").click();
   return catalog;
+}
+
+/**
+ * Assert the workspace rail carries no artifact catalog at all.
+ *
+ * The catalog section is rendered only once the Session has at least one
+ * declared Artifact, so "nothing delivered yet" is the section being absent
+ * rather than a section reading zero. `openArtifactPanel` waits for it to be
+ * visible and so cannot express this state.
+ */
+export async function expectNoArtifactCatalog(page: Page): Promise<void> {
+  await openWorkspaceFiles(page);
+  await expect(page.locator("aside.workspace-panel details.artifact-catalog-section")).toHaveCount(0);
 }
 
 /**
@@ -548,7 +612,7 @@ export async function artifactTree(page: Page): Promise<{
   sessionGroups: Locator;
 }> {
   const catalog = await openArtifactPanel(page);
-  const folders = catalog.locator("details.artifact-tree-folder");
+  const folders = catalog.locator("details.artifact-session-group, details.artifact-tree-directory");
   for (let index = 0; index < await folders.count(); index += 1) {
     const folder = folders.nth(index);
     if (await folder.getAttribute("open") === null) await folder.locator(":scope > summary").click();
@@ -568,18 +632,22 @@ export async function artifactTree(page: Page): Promise<{
       return menu.getByRole("option");
     },
     openPhysicalFiles: async () => {
-      const toggle = workspace.getByRole("button", { name: /^(View workspace files|查看工作区文件)$/ });
-      if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
       const tree = workspace.locator("details.physical-files");
+      if (await tree.getAttribute("open") === null) await tree.locator(":scope > summary").click();
+      const directories = tree.locator("details.artifact-tree-directory");
+      for (let index = 0; index < await directories.count(); index += 1) {
+        const directory = directories.nth(index);
+        if (await directory.getAttribute("open") === null) await directory.locator(":scope > summary").click();
+      }
       await expect(tree).toBeVisible();
       return tree;
     },
     physicalFiles,
-    sessionGroups: catalog.locator("section.artifact-session-group"),
+    sessionGroups: catalog.locator("details.artifact-session-group"),
   };
 }
 
-/** Read environment state after UI creation so only the stub receives its immutable revision id. */
+/** Read the selectable environment ID and its audit revision after UI creation. */
 export async function currentEnvironmentRevision(
   page: Page,
   name: string,
@@ -593,6 +661,16 @@ export async function currentEnvironmentRevision(
   return { environment, revision };
 }
 
+/** The executions a Session recorded, with the environment revision each one ran on. */
+export function sessionExecutionRuns(page: Page, sessionId: string): Promise<Array<{
+  environmentRevisionId: string | null;
+  exitCode: number | null;
+  status: string;
+  tool: string;
+}>> {
+  return apiJson(page, `/api/sessions/${encodeURIComponent(sessionId)}/execution-runs`);
+}
+
 /** Query the setup state without triggering installation or other environment changes. */
 export function environmentSetup(page: Page): Promise<{ message: string; state: string }> {
   return apiJson(page, "/api/environment-setup");
@@ -600,11 +678,14 @@ export function environmentSetup(page: Page): Promise<{ message: string; state: 
 
 /** Best-effort cleanup for data created in an isolated E2E run. */
 export async function cleanupJourney(page: Page, fixture: JourneyFixture): Promise<void> {
-  await apiJson(page, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
-    data: { confirmationId: fixture.project.id },
-    method: "DELETE",
-  }).catch(() => undefined);
-  if (fixture.model) {
-    await deleteJourneyModel(page, fixture.model).catch(() => undefined);
-  }
+  // Failure teardown may already have closed the page's request context.
+  const api = await request.newContext();
+  try {
+    const client = { request: api };
+    await apiJson(client, `/api/projects/${encodeURIComponent(fixture.project.id)}`, {
+      data: { confirmationId: fixture.project.id },
+      method: "DELETE",
+    }).catch(() => undefined);
+    if (fixture.model) await deleteJourneyModel(client, fixture.model).catch(() => undefined);
+  } finally { await api.dispose(); }
 }

@@ -12,25 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ReviewerSpecialistSettings } from "@sciencediscovery/schema";
+import type { ReviewerSpecialistLevel, ReviewerSpecialistSettings } from "@sciencediscovery/schema";
 import React from "react";
 
+import { useLocale } from "./i18n/index.js";
 import { ReviewerSpecialistAvatar } from "./ReviewerPanel.js";
 
 export function ReviewerControlCard({
   busy,
+  configBusy = false,
   disabled = false,
+  automaticReviewEnabled,
+  level,
+  onAutomaticReviewChange,
+  onLevelChange,
   onRun,
+  onStop,
   settings,
+  stopping = false,
 }: {
   busy: boolean;
+  configBusy?: boolean;
   disabled?: boolean;
+  automaticReviewEnabled: boolean;
+  level: ReviewerSpecialistLevel;
+  onAutomaticReviewChange: (enabled: boolean) => void;
+  onLevelChange: (level: ReviewerSpecialistLevel) => void;
   onRun: () => void;
+  onStop: () => void;
   settings?: ReviewerSpecialistSettings;
+  stopping?: boolean;
 }) {
+  const { t } = useLocale();
   const enabled = settings?.enabled ?? false;
-  const level = settings?.level ?? "quick";
-  const levelLabel = level[0]!.toUpperCase() + level.slice(1);
 
   // The System configuration page remains the single place to turn this
   // built-in Specialist back on. Do not leave a disabled, non-actionable
@@ -38,25 +52,45 @@ export function ReviewerControlCard({
   if (!enabled) return null;
 
   return (
-    <section aria-label="Reviewer Specialist controls" className="reviewer-control-card">
+    <section aria-label={t("reviewer.controlsAria")} className="reviewer-control-card">
       <header>
         <ReviewerSpecialistAvatar />
         <span>
-          <strong>Reviewer Specialist</strong>
-          <small>Built-in Specialist</small>
+          <strong>{t("specialist.reviewerName")}</strong>
+          <small>{t("reviewer.builtInSpecialist")}</small>
         </span>
-        <i className="on">On</i>
+        <i className="on">{t("common.on")}</i>
       </header>
-      <div className="reviewer-control-level">
-        <span>Level</span>
-        <strong>{levelLabel}</strong>
+      <div className="reviewer-control-setting">
+        <span><strong>{t("reviewer.automaticReview")}</strong></span>
+        <button
+          aria-checked={automaticReviewEnabled}
+          aria-label={t(automaticReviewEnabled ? "reviewer.automaticOff" : "reviewer.automaticOn")}
+          className={automaticReviewEnabled ? "specialist-switch on" : "specialist-switch"}
+          disabled={disabled || configBusy}
+          onClick={() => onAutomaticReviewChange(!automaticReviewEnabled)}
+          role="switch"
+          type="button"
+        ><i aria-hidden="true" /></button>
       </div>
+      <label className="reviewer-control-level">
+        <span>{t("reviewer.level")}</span>
+        <select
+          aria-label={t("reviewer.levelAria")}
+          disabled={disabled || configBusy}
+          onChange={(event) => onLevelChange(event.target.value as ReviewerSpecialistLevel)}
+          value={level}
+        >
+          <option value="quick">{t("reviewer.levelQuick")}</option>
+          <option value="deep">{t("reviewer.levelDeep")}</option>
+        </select>
+      </label>
       <button
-        className="primary-button"
-        disabled={busy || disabled || !settings}
-        onClick={onRun}
+        className={busy ? "danger-button" : "primary-button"}
+        disabled={busy ? stopping : disabled || !settings}
+        onClick={busy ? onStop : onRun}
         type="button"
-      >{busy ? "Reviewing…" : "Run review"}</button>
+      >{busy ? (stopping ? t("reviewer.stopping") : t("reviewer.stop")) : t("reviewer.run")}</button>
     </section>
   );
 }

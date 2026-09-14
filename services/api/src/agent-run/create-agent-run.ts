@@ -21,7 +21,7 @@ import type {
 } from "@sciencediscovery/orchestration";
 import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
-import type { PlanRepository } from "@sciencediscovery/plan-mode";
+import type { PlanStore } from "@sciencediscovery/plan";
 
 import {
   createNativeAgent,
@@ -34,7 +34,7 @@ export interface AgentRunBindings {
   createAgent?: (options: NativeAgentOptions) => NativeAgentHandle;
   contextContributorFactories?: readonly ContextContributorFactory<AgentHistoryMessage>[];
   observer?: (event: AgentEvent) => void;
-  planRepository?: PlanRepository;
+  planStore?: PlanStore;
   runIdleTimeoutMs?: number;
   readVersioningAuthorities?: () => Promise<unknown>;
   workspace: WorkspaceAgentOptions;
@@ -59,14 +59,14 @@ export function createAgentRun(
       trajectoryId: input.agentRunId,
       requestExecutionId: input.requestExecutionId,
       readAuthorities: async () => ({
-        plan: await bindings.planRepository?.latest() ?? null,
+        plan: await bindings.planStore?.latest() ?? null,
         resources: profile.resources,
         toolPolicy: profile.toolPolicy,
         budget: profile.budget,
         external: await bindings.readVersioningAuthorities?.() ?? null,
       }),
     },
-    ...(bindings.planRepository ? { planRepository: bindings.planRepository } : {}),
+    ...(bindings.planStore ? { planStore: bindings.planStore } : {}),
     ...(bindings.contextContributorFactories?.length
       ? { contextContributorFactories: bindings.contextContributorFactories }
       : {}),

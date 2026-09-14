@@ -265,9 +265,9 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
         return textChunks("chatcmpl-permission-final", "agent-run-e2e-model", "Code executed successfully after approval.");
       }
       return toolCallChunks("chatcmpl-permission-code", "agent-run-e2e-model", [{
-        args: { code: "print('hello from sandbox')" },
+        args: { command: "python -c \"print('hello from sandbox')\"" },
         callId: "call-run-python-1",
-        name: "run_python",
+        name: "run_shell",
       }]);
     });
     const model = await createTestModel(baseUrl, "AgentRun permission model");
@@ -323,9 +323,9 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
           return textChunks("chatcmpl-subagent-perm-final", "agent-run-e2e-model", "Subagent ran the approved code.");
         }
         return toolCallChunks("chatcmpl-subagent-perm-code", "agent-run-e2e-model", [{
-          args: { code: "print('subagent sandbox')" },
+          args: { command: "python -c \"print('subagent sandbox')\"" },
           callId: "call-subagent-run-python",
-          name: "run_python",
+          name: "run_shell",
         }]);
       }
       if (ctx.hasToolResult) {
@@ -383,7 +383,7 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
     }
   });
 
-  test("S3 检视缺口①:同轮并发两个 run_python,同键 once 权限的用户可见行为", async ({ page }) => {
+  test("S3 检视缺口①:同轮并发两个 run_shell,同键 once 权限的用户可见行为", async ({ page }) => {
     test.setTimeout(240000);
     const logs: string[] = [];
     attachLogCollector(page, logs);
@@ -393,8 +393,8 @@ test.describe("AgentRun/RequestExecution 组件化用户场景 E2E", () => {
         return textChunks("chatcmpl-concurrent-final", "agent-run-e2e-model", "Both concurrent code executions finished.");
       }
       return toolCallChunks("chatcmpl-concurrent-code", "agent-run-e2e-model", [
-        { args: { code: "print('first')" }, callId: "call-run-python-a", name: "run_python" },
-        { args: { code: "print('second')" }, callId: "call-run-python-b", name: "run_python" },
+        { args: { command: "python -c \"print('first')\"" }, callId: "call-run-shell-a", name: "run_shell" },
+        { args: { command: "python -c \"print('second')\"" }, callId: "call-run-shell-b", name: "run_shell" },
       ]);
     });
     const model = await createTestModel(baseUrl, "AgentRun concurrent-permission model");

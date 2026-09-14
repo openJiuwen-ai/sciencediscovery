@@ -15,10 +15,16 @@
 import { createMcpSourceRegistry, type McpSourceRegistry } from "./registry.js";
 import { uniprotMcpSource } from "./uniprot.js";
 import { createPublicBiomedSources } from "./public-biomed.js";
+import { createLlmWikiSource } from "./llm-wiki.js";
 
 export function createBuiltinMcpSourceRegistry(): McpSourceRegistry {
   const registry = createMcpSourceRegistry();
   registry.register(uniprotMcpSource);
+  try {
+    registry.register(createLlmWikiSource());
+  } catch {
+    // An optional connector must not become a registry single point of failure.
+  }
   for (const source of createPublicBiomedSources()) registry.register(source);
   return registry;
 }

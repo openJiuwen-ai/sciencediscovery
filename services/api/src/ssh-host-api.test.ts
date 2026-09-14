@@ -22,14 +22,16 @@ test("SSH settings preserve credentials and destination through persistence and 
   const authenticationError = "SSH authentication failed for operator@auth-host:2222.\nServer offered: publickey, password.\nActually tried: none, password (none is method discovery).\nStored credentials: password yes; key no.";
   const challenge = { algorithm: "ssh-ed25519", fingerprint: `SHA256:${"a".repeat(43)}`, changed: false };
   const remoteCompute = new RemoteComputeClient(resolve(root, "ssh-config"), async () => { throw new Error("Explicit access required"); }, {
-    open: async () => { throw new Error("No real SSH in this test"); },
-    run: async (target) => {
-      targets.push(structuredClone(target));
-      if (target.destination === "auth-host") throw new Error(authenticationError);
-      if (target.destination === "generated-host" && !target.trustedHostKey) {
-        throw new SshHostKeyUntrustedError(challenge, target.destination);
-      }
-      return { exitCode: 0, stderr: "", stdout: "platform=Linux\ncpu=8\nmemory_kib=65536\nrunner=1\nnode=v22.19.0\n" };
+    transport: {
+      open: async () => { throw new Error("No real SSH in this test"); },
+      run: async (target) => {
+        targets.push(structuredClone(target));
+        if (target.destination === "auth-host") throw new Error(authenticationError);
+        if (target.destination === "generated-host" && !target.trustedHostKey) {
+          throw new SshHostKeyUntrustedError(challenge, target.destination);
+        }
+        return { exitCode: 0, stderr: "", stdout: "platform=Linux\ncpu=8\nmemory_kib=65536\nrunner=1\nnode=v22.19.0\n" };
+      },
     },
   });
   const config: ServerConfig = {

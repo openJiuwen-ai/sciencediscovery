@@ -16,6 +16,7 @@ import { ArrowDownAZ, ArrowUpAZ, Download, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { resolveSelectedRowIds } from "../charts/selection.js";
+import { useLocale } from "../../i18n/index.js";
 import type { DataRow, DataTable, DataValue } from "../types.js";
 
 const ROW_HEIGHT = 36;
@@ -43,6 +44,7 @@ export function VirtualDataTable({
   selectedRowIds,
   table,
 }: VirtualDataTableProps) {
+  const { t } = useLocale();
   const [query, setQuery] = useState("");
   const [scrollTop, setScrollTop] = useState(0);
   const [sort, setSort] = useState<{ direction: "asc" | "desc"; field: string }>({
@@ -77,11 +79,11 @@ export function VirtualDataTable({
       : { direction: "asc", field });
   }
 
-  return <section className="csva-table-view" aria-label={`${table.label} data table`}>
+  return <section className="csva-table-view" aria-label={t("csv.dataTableAria", { label: table.label })}>
     <div className="csva-table-toolbar">
-      <label><Search size={15} /><input aria-label="Search data table" onChange={(event) => setQuery(event.target.value)} placeholder="Search this data table" value={query} /></label>
-      <span>{visible.length.toLocaleString()} / {rows.length.toLocaleString()} rows</span>
-      <button onClick={() => onExport(visible)} type="button"><Download size={14} /> Export visible rows</button>
+      <label><Search size={15} /><input aria-label={t("csv.searchTableAria")} onChange={(event) => setQuery(event.target.value)} placeholder={t("csv.searchTablePlaceholder")} value={query} /></label>
+      <span>{t("csv.rowCountOf", { total: rows.length.toLocaleString(), visible: visible.length.toLocaleString() })}</span>
+      <button onClick={() => onExport(visible)} type="button"><Download size={14} /> {t("csv.exportVisibleRows")}</button>
     </div>
     <div
       className="csva-virtual-grid"
@@ -90,7 +92,7 @@ export function VirtualDataTable({
       <div className="csva-virtual-grid-inner" style={{ minWidth }}>
         <div className="csva-virtual-grid-header" role="row" style={{ gridTemplateColumns }}>
           <span>#</span>
-          {columns.map((column) => <button key={column.id} onClick={() => changeSort(column.id)} title={`Sort by ${column.id}`} type="button">
+          {columns.map((column) => <button key={column.id} onClick={() => changeSort(column.id)} title={t("csv.sortBy", { column: column.id })} type="button">
             <span>{column.id}</span>
             {sort.field === column.id ? sort.direction === "asc" ? <ArrowDownAZ size={13} /> : <ArrowUpAZ size={13} /> : null}
           </button>)}

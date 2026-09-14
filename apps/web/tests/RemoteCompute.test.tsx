@@ -23,7 +23,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { ApiRequestError } from "../src/api/auth.js";
 import { hostKeyFromError } from "../src/api/settings.js";
-import { RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
+import { ConnectLogPanel, NpuDeviceSelector, RemoteHostManager, RemoteJobsPanel, RunnerResourceSummary } from "../src/RemoteCompute.js";
 import { activityCardId } from "../src/session/run-activity.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
@@ -40,6 +40,14 @@ test("resource cards distinguish available workspace disk, low space, and unavai
   assert.doesNotMatch(render(), /Low workspace disk/);
   assert.match(render(), /aria-label="Disk used"[^>]*aria-valuenow="33.3"/);
   assert.match(render(), /aria-label="Memory used"[^>]*aria-valuenow="50"/);
+  // Hundreds of GiB free on a multi-TiB disk is not low: the warning is an
+  // absolute estimate (Runner + two base conda envs), not a percentage.
+  host.runnerStatus!.resources!.workspaceDisk = { path: "/data/remote-workspaces", availableBytes: 599 * 1024 ** 3, totalBytes: 6003 * 1024 ** 3 };
+  assert.doesNotMatch(render(), /Low workspace disk/);
+  host.runnerStatus!.resources!.workspaceDisk = { path: "/data/remote-workspaces", availableBytes: 3 * 1024 ** 3, totalBytes: 6003 * 1024 ** 3 };
+  const low = render();
+  assert.match(low, /Low workspace disk space: 3\.0 GiB free, about 5\.0 GiB needed/);
+  host.runnerStatus!.resources!.workspaceDisk = { path: "/data/remote-workspaces", availableBytes: 20 * 1024 ** 3, totalBytes: 30 * 1024 ** 3 };
   host.runnerStatus!.resources!.workspaceDisk!.availableBytes = 30 * 1024 ** 3;
   host.runnerStatus!.resources!.memoryFreeBytes = 4 * 1024 ** 3;
   assert.match(render(), /aria-label="Disk used"[^>]*aria-valuenow="0"/);
@@ -101,9 +109,8 @@ test("the machine catalog shows the list first and keeps add forms behind button
     onError: () => undefined,
   }));
 
-  assert.match(html, /No remote machines registered yet/);
-  assert.match(html, /class="secondary-button"[^>]*>Add SSH machine</);
-  assert.match(html, /class="secondary-button"[^>]*>Add self-deployed runner</);
+  assert.doesNotMatch(html, /Add Runner|Manage Runner/);
+  assert.doesNotMatch(html, /<form/);
   // No blank form competes with the list until the user asks for one.
   assert.doesNotMatch(html, /Probe and add/);
   assert.doesNotMatch(html, /Connect and add/);
@@ -122,15 +129,20 @@ function buildHost(overrides: Partial<RemoteHostTarget> = {}): RemoteHostTarget 
   };
 }
 
+/** A machine with no Ascend cards, which is what most of these tests are about. */
+const noNpu = async () => ({ local: null, selections: {} });
+
 async function renderHost(
   host: RemoteHostTarget,
   onCredentialEditStateChange?: (editing: boolean) => void,
+  addMode = false,
 ): Promise<{ output: string; renderer: ReactTestRenderer }> {
   let renderer: ReactTestRenderer | undefined;
   await act(async () => {
     renderer = create(createElement(RemoteHostManager, {
-      client: { listRemoteHosts: async () => [host] } as ApiClient,
+      client: { listRunners: async () => [host], listRunnerNpuDevices: noNpu } as ApiClient,
       onCredentialEditStateChange,
+      addMode,
       onError: () => undefined,
     }));
   });
@@ -138,13 +150,12 @@ async function renderHost(
 }
 
 test("SSH add form groups connection login and runner details without hiding username", async () => {
-  const { renderer } = await renderHost(buildHost());
+  const { renderer } = await renderHost(buildHost(), undefined, true);
   const click = async (name: string) => {
     const button = renderer.root.findAllByType("button").find((node) => node.children.join("") === name);
     assert.ok(button);
     await act(async () => button.props.onClick());
   };
-  await click("Add SSH machine");
   const form = renderer.root.findByType("form");
   assert.deepEqual(form.findAllByType("legend").map((node) => node.children.join("")), ["1. Connection", "2. Login", "3. Runner details"]);
   const user = form.findByProps({ "aria-describedby": "ssh-add-username-help" });
@@ -157,8 +168,6 @@ test("SSH add form groups connection login and runner details without hiding use
   assert.equal(form.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "scientist");
   await click("Cancel");
   assert.equal(renderer.root.findAllByType("form").length, 0);
-  await click("Add SSH machine");
-  assert.equal(renderer.root.findByProps({ "aria-describedby": "ssh-add-username-help" }).props.value, "");
   await act(async () => renderer.unmount());
 });
 
@@ -178,6 +187,49 @@ test("machine identity and actions lead the card, with metadata and public key b
   assert.ok(details.findByProps({ "aria-label": "Runner resources" }));
   assert.equal(details.findByType("details").props.open, undefined);
   await act(async () => renderer.unmount());
+});
+
+test("a machine whose clock is far off says so, without pretending executions broke", async () => {
+  // The product signs on the machine's clock, so runs keep working; what the
+  // operator still needs to know is that the machine's own times are wrong.
+  const { output } = await renderHost(buildHost({
+    runnerStatus: { clockOffsetMs: -108_000, hostId: "host-1", remoteVersion: "runner-v1", state: "ready" },
+  }));
+  assert.match(output, /clock off by 108s/);
+
+  // A second or two is normal on any network and not worth a badge.
+  const fine = await renderHost(buildHost({
+    runnerStatus: { clockOffsetMs: -1_500, hostId: "host-1", remoteVersion: "runner-v1", state: "ready" },
+  }));
+  assert.doesNotMatch(fine.output, /clock off by/);
+});
+
+test("a machine with no Runner connected says whether the machine itself answers", async () => {
+  // Without this the card says "disconnected" for a powered-off machine and for
+  // a healthy one nobody has connected yet, which are different problems.
+  const { output } = await renderHost(buildHost({
+    reachability: { checkedAt: timestamp, state: "online" },
+    runnerStatus: { hostId: "host-1", state: "disconnected" },
+  }));
+  assert.match(output, /machine online/);
+
+  const offline = await renderHost(buildHost({
+    reachability: { checkedAt: timestamp, error: "ssh: connect to host research-node port 22: No route to host", state: "offline" },
+    runnerStatus: { hostId: "host-1", state: "disconnected" },
+  }));
+  assert.match(offline.output, /machine unreachable/);
+  // The machine's own words are the tooltip, not a translated paraphrase.
+  assert.match(offline.output, /No route to host/);
+
+  const unknown = await renderHost(buildHost({ reachability: { checkedAt: timestamp, state: "unknown" } }));
+  assert.match(unknown.output, /machine not checked/);
+
+  // A connected Runner is proof enough; the badge would be noise.
+  const connected = await renderHost(buildHost({
+    reachability: { checkedAt: timestamp, state: "online" },
+    runnerStatus: { hostId: "host-1", state: "ready" },
+  }));
+  assert.doesNotMatch(connected.output, /machine online/);
 });
 
 test("direct runner identity uses endpoint and token authentication, never an SSH username", async () => {
@@ -268,7 +320,8 @@ test("generated-key registration resumes trust by host id without resubmitting t
   const key = { algorithm: "ssh-ed25519", fingerprint: "SHA256:test" };
   let renderer: ReactTestRenderer;
   const client = {
-    listRemoteHosts: async () => [],
+    listRunners: async () => [],
+    listRunnerNpuDevices: noNpu,
     generateRemoteHostKey: async () => ({ privateKeyPath: "generated-once.key", publicKey: "ssh-ed25519 public-fixture" }),
     registerRemoteHost: async (body: RegisterRemoteHostRequest) => {
       registered.push(body);
@@ -276,13 +329,12 @@ test("generated-key registration resumes trust by host id without resubmitting t
     },
     trustRemoteHostKey: async (id: string) => { trusted.push(id); return buildHost({ id, hasPrivateKey: true }); },
   } as unknown as ApiClient;
-  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, onError: (error) => errors.push(error) })); });
+  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, addMode: true, onError: (error) => errors.push(error) })); });
   const click = async (label: string) => {
     const button = renderer!.root.findAllByType("button").find((candidate) => candidate.children.join("") === label);
     assert.ok(button, label);
     await act(async () => button.props.onClick());
   };
-  await click("Add SSH machine");
   await click("SSH key (optional)");
   await click("Generate a key pair");
   assert.match(JSON.stringify(renderer!.toJSON()), /public-fixture/);
@@ -302,8 +354,10 @@ test("connect runner presents a changed host key and resumes from the settings t
   const host = buildHost();
   let renderer: ReactTestRenderer;
   const client = {
-    listRemoteHosts: async () => [host],
-    connectRemoteRunner: async () => {
+    listRunners: async () => [host],
+    listRunnerNpuDevices: noNpu,
+    runnerConnectLog: async () => ({ entries: [], hostId: host.id }),
+    connectRunner: async () => {
       if (++connects === 1) throw new ApiRequestError("Host key changed", 409, "SSH_HOST_KEY_CHANGED", {
         hostId: host.id, hostKey: { algorithm: "ssh-ed25519", fingerprint: "SHA256:new" },
       });
@@ -398,4 +452,227 @@ test("historical SLURM jobs have no active refresh action", () => {
   const html = renderPanel(job, { [activityCardId("remote-job", job.id)]: true });
 
   assert.doesNotMatch(html, /Refresh SLURM status/);
+});
+
+/** One usable card and one the sandbox probe refused, as the 910B host reports. */
+const NPU_INVENTORY = {
+  capturedAt: timestamp,
+  supported: true,
+  devices: [
+    { chipName: "910B3", health: "OK", hostIndex: 0, hbmUsedMb: 3445, hbmTotalMb: 65_536,
+      aiCorePercent: 0, temperatureCelsius: 45, sandboxUsable: false,
+      sandboxUnusableReason: "NPU 0 cannot be opened inside the sandbox: dcmi model initialized failed, because the device is used. ret is -8020" },
+    { chipName: "910B3", health: "OK", hostIndex: 4, hbmUsedMb: 3418, hbmTotalMb: 65_536,
+      aiCorePercent: 12, temperatureCelsius: 49, powerWatts: 68.4, sandboxUsable: true },
+  ],
+};
+
+const npuClient = (calls: Array<{ devices: number[]; runnerId: string }> = []): ApiClient => ({
+  setRunnerNpuDevices: async (runnerId: string, devices: number[]) => {
+    calls.push({ devices, runnerId });
+    return { devices, runnerId };
+  },
+} as unknown as ApiClient);
+
+const renderNpu = (overrides: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(NpuDeviceSelector, {
+  client: npuClient(), inventory: NPU_INVENTORY, onError: () => {}, onSelected: () => {},
+  runnerId: "host-1", selected: [4], ...overrides,
+} as never));
+
+test("NPU cards list every card with its status and usage, including unusable ones", () => {
+  const markup = renderNpu();
+  // Both cards are listed: hiding the unusable one would leave the operator
+  // wondering where NPU 0 went.
+  assert.match(markup, /NPU 0 · 910B3/);
+  assert.match(markup, /NPU 4 · 910B3/);
+  assert.match(markup, /3\.4 \/ 64\.0 GiB/);
+  assert.match(markup, /12% AI core/);
+  assert.match(markup, /49 °C/);
+  assert.match(markup, /68 W/);
+  assert.match(markup, /2 on this machine · 1 usable in the sandbox/);
+});
+
+test("a card the sandbox probe refused cannot be ticked and says why on the row", () => {
+  const markup = renderNpu();
+  const unusableRow = /<li class="unusable">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
+  assert.match(unusableRow, /disabled=""/);
+  assert.match(unusableRow, /because the device is used/);
+  const usableRow = /<li class="">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
+  assert.doesNotMatch(usableRow, /disabled/);
+  assert.match(usableRow, /checked=""/);
+});
+
+test("the checkbox and its card name stay on one reading line", () => {
+  // One label wraps both, so the control can never wrap away from its name.
+  assert.match(renderNpu(), /<label class="remote-npu-pick"><input type="checkbox"[^>]*\/><span class="remote-npu-name">NPU 0/);
+});
+
+test("the connect log panel lists every step with its timestamp", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectLogPanel, {
+    entries: [
+      { at: "2026-09-11T05:00:00.000Z", line: "Connecting to lab over SSH…" },
+      { at: "2026-09-11T05:00:03.000Z", line: "Runner is ready (version 1.2.3)." },
+    ],
+    live: true,
+  }));
+  assert.match(markup, /role="log"/);
+  assert.match(markup, /Connection progress/);
+  assert.match(markup, /updating live/);
+  assert.match(markup, /Connecting to lab over SSH/);
+  assert.match(markup, /Runner is ready \(version 1\.2\.3\)\./);
+  assert.match(markup, /remote-connect-log live/);
+});
+
+test("an idle connect log panel says it is waiting rather than showing nothing", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectLogPanel, { entries: [], live: true }));
+  assert.match(markup, /Waiting for the first step/);
+  assert.doesNotMatch(markup, /remote-connect-log-line/);
+});
+
+const clickButton = async (renderer: ReactTestRenderer, label: string) => {
+  const button = renderer.root.findAllByType("button").find((node) => node.children.join("") === label);
+  assert.ok(button, `no button labelled ${label}`);
+  await act(async () => button.props.onClick());
+};
+
+test("ticking a card saves the selection against the Runner it belongs to", async () => {
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  let saved: number[] = [];
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: npuClient(calls), inventory: NPU_INVENTORY, onError: () => {},
+      onSelected: (devices: number[]) => { saved = devices; }, runnerId: "host-1", selected: [],
+    } as never));
+  });
+  const boxes = renderer!.root.findAllByType("input");
+  await act(async () => { boxes[1]!.props.onChange({ target: { checked: true } }); });
+  // Ticking is a draft: nothing is written until the operator says so, so a
+  // four-card plan costs one write instead of four.
+  assert.deepEqual(calls, []);
+  assert.equal(renderer!.root.findAllByType("input")[1]!.props.checked, true, "the tick shows immediately");
+  await clickButton(renderer!, "Save selection");
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "host-1" }]);
+  assert.deepEqual(saved, [4]);
+  // Saved: the actions disappear until something changes again.
+  assert.equal(renderer!.root.findAllByType("button").length, 0);
+});
+
+test("a draft can be discarded and a rejected save keeps what was picked", async () => {
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  const errors: string[] = [];
+  let renderer: ReactTestRenderer | undefined;
+  const failing = {
+    setRunnerNpuDevices: async (runnerId: string, devices: number[]) => {
+      calls.push({ devices, runnerId });
+      throw new Error("NPU 4 cannot be opened inside the sandbox");
+    },
+  } as unknown as ApiClient;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: failing, inventory: NPU_INVENTORY, onError: (message: string) => errors.push(message),
+      onSelected: () => {}, runnerId: "host-1", selected: [],
+    } as never));
+  });
+  await act(async () => { renderer!.root.findAllByType("input")[1]!.props.onChange({ target: { checked: true } }); });
+  await clickButton(renderer!, "Save selection");
+  assert.deepEqual(errors, ["NPU 4 cannot be opened inside the sandbox"]);
+  // The Runner refusing one card must not throw away what was picked.
+  assert.equal(renderer!.root.findAllByType("input")[1]!.props.checked, true);
+  await clickButton(renderer!, "Discard");
+  assert.equal(renderer!.root.findAllByType("input")[1]!.props.checked, false);
+  assert.equal(renderer!.root.findAllByType("button").length, 0, "a discarded draft leaves nothing to save");
+  assert.equal(calls.length, 1);
+});
+
+test("the same control saves against the local Runner when that is the machine", async () => {
+  // Local and remote must behave identically; only the Runner id differs.
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: npuClient(calls), inventory: NPU_INVENTORY, onError: () => {},
+      onSelected: () => {}, runnerId: "local", selected: [],
+    } as never));
+  });
+  await act(async () => { renderer!.root.findAllByType("input")[1]!.props.onChange({ target: { checked: true } }); });
+  await clickButton(renderer!, "Save selection");
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "local" }]);
+});
+
+test("a card that became unusable while ticked can still be unticked", async () => {
+  // The card was usable when the operator ticked it and has since been claimed
+  // by another tenant. Disabling its checkbox would leave the selection stuck
+  // with a card every execution refuses.
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(NpuDeviceSelector, {
+      client: npuClient(calls), inventory: NPU_INVENTORY, onError: () => {},
+      onSelected: () => {}, runnerId: "host-1", selected: [0, 4],
+    } as never));
+  });
+  const unusable = renderer!.root.findAllByType("input")[0]!;
+  assert.equal(unusable.props.checked, true);
+  assert.equal(unusable.props.disabled, false, "a ticked card is always removable");
+  await act(async () => { unusable.props.onChange({ target: { checked: false } }); });
+  await clickButton(renderer!, "Save selection");
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "host-1" }]);
+  // It says why it is unusable and what unticking it achieves.
+  assert.match(JSON.stringify(renderer!.toJSON()), /untick it to run without it/);
+});
+
+test("an unusable card that is not ticked still cannot be ticked", () => {
+  const markup = renderNpu({ selected: [] });
+  const unusableRow = /<li class="unusable">([\s\S]*?)<\/li>/.exec(markup)?.[1] ?? "";
+  assert.match(unusableRow, /disabled=""/);
+});
+
+test("a card with two dies names each die, because that is what a rank runs on", () => {
+  // 910C puts two compute dies on one board with two device nodes. Naming them
+  // both "NPU 0" would hide which one a tick actually binds.
+  const dual = {
+    ...NPU_INVENTORY,
+    devices: [
+      { cardId: 0, chipId: 0, chipName: "910C", health: "OK", hostIndex: 0, hbmPercent: 12, sandboxUsable: true },
+      { cardId: 0, chipId: 1, chipName: "910C", health: "OK", hostIndex: 1, hbmPercent: 80, sandboxUsable: true },
+    ],
+  };
+  const markup = renderNpu({ inventory: dual, selected: [1] });
+  assert.match(markup, /NPU 0 · die 0 · 910C \(device 0\)/);
+  assert.match(markup, /NPU 0 · die 1 · 910C \(device 1\)/);
+  // The driver reports a ratio where npu-smi reports absolute figures; the bar
+  // works either way.
+  assert.match(markup, /80%/);
+});
+
+test("a machine whose cards are all unusable says so instead of offering an empty tick list", () => {
+  const inventory = { ...NPU_INVENTORY, devices: NPU_INVENTORY.devices.map((device) => ({ ...device, sandboxUsable: false })) };
+  assert.match(renderNpu({ inventory }), /No card on this machine can currently be opened inside a sandbox/);
+});
+
+test("a machine without Ascend cards shows no NPU section at all", () => {
+  assert.equal(renderNpu({ inventory: null }), "");
+});
+
+test("the Local Runner card offers this machine's own cards and saves them under `local`", async () => {
+  // The 910B can be the machine the product runs on, so ticking its cards must
+  // not require registering this machine as a remote one first.
+  const calls: Array<{ devices: number[]; runnerId: string }> = [];
+  const client = {
+    listRunners: async () => [buildHost({ id: "local", alias: "local", connectionKind: "direct", runnerStatus: { hostId: "local", state: "ready" } })],
+    listRunnerNpuDevices: async () => ({ local: NPU_INVENTORY, selections: { local: [] } }),
+    setRunnerNpuDevices: async (runnerId: string, devices: number[]) => { calls.push({ devices, runnerId }); return { devices, runnerId }; },
+  } as unknown as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => { renderer = create(createElement(RemoteHostManager, { client, onError: () => {} })); });
+  const localCard = renderer!.root.findAllByProps({ className: "remote-host-card ready" })[0]!;
+  assert.ok(localCard.findAllByProps({ className: "remote-npu-name" }).some((node) => node.children.join("").includes("NPU 4 · 910B3")));
+  const boxes = localCard.findAllByType("input");
+  await act(async () => { boxes[1]!.props.onChange({ target: { checked: true } }); });
+  await clickButton(renderer!, "Save selection");
+  assert.deepEqual(calls, [{ devices: [4], runnerId: "local" }]);
+  // The tick sticks after the save round-trip, so the operator sees what is stored.
+  assert.equal(localCard.findAllByType("input")[1]!.props.checked, true);
+  await act(async () => renderer!.unmount());
 });

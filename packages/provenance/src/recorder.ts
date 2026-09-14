@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -21,7 +21,7 @@ import {
   type ArtifactVersionInput,
 } from "@sciencediscovery/artifact-manager";
 import { normalizeWorkspaceRelativePath, resolveWorkspaceFile } from "@sciencediscovery/workspace";
-import { CasStore } from "@sciencediscovery/cas";
+import { CasStore, VersionStore, workspaceSnapshotFiles, type AgentStateRef } from "@sciencediscovery/cas";
 import type {
   ArtifactDerivation,
   ArtifactOrigin,
@@ -32,6 +32,8 @@ import type {
   EnvironmentRevision,
   ExecutionRun,
   KernelMode,
+  NpuJob,
+  NpuJobState,
   PermissionEpoch,
   PythonExecutionResult,
   ResolvedProxy,
@@ -128,6 +130,13 @@ export interface RecordExecutionOptions {
   skillPackagesRoot?: string;
   /** Alias of the remote machine this execution runs on; absent means the local machine. */
   remoteHostAlias?: string;
+  /**
+   * NPU cards this Runner may hand to the sandbox, as ticked by an operator
+   * against that Runner's probe. Absent or empty keeps the sandbox without
+   * NPUs; the Runner re-validates the set before it launches, so a card that
+   * has since been claimed elsewhere fails the execution by name.
+   */
+  npuDevices?: number[];
   runnerId?: string;
   /** Logical runner-local workspace. When set, generated files remain remote until explicit pull. */
   runnerWorkspaceKey?: string;
@@ -145,12 +154,25 @@ export interface RecordExecutionOptions {
   parentSubagentId?: string;
 }
 
-export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language">;
+export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environmentRevisionId" | "language"> & {
+  environmentId?: string;
+  cwd?: string;
+  /** Trusted coordinator supplies a durable identity and joins the Runner result. */
+  executionId?: string;
+  dispatch?: RunnerClient["executeShell"];
+  completionStatus?: () => "succeeded" | "failed" | "cancelled";
+};
 
 export class ProvenanceRecorder {
   readonly cas: CasStore;
+  private readonly versions: VersionStore;
   private readonly dataCas: CasStore;
   private readonly artifactRegistry: ArtifactRegistry;
+  private artifactRegisteredHandler?: (registered: {
+    mediaType: string;
+    sessionId: string;
+    version: ScientificArtifactVersion;
+  }) => Promise<void>;
   private readonly memoryGraphSink: MemoryGraphSink | null;
 
   constructor(
@@ -159,6 +181,7 @@ export class ProvenanceRecorder {
     memoryGraphSink?: MemoryGraphSink,
   ) {
     this.cas = new CasStore(dataDir);
+    this.versions = new VersionStore(dataDir);
     this.dataCas = new CasStore(dataDir, "data");
     this.memoryGraphSink = memoryGraphSink ?? null;
     this.artifactRegistry = new ArtifactRegistry(
@@ -168,6 +191,32 @@ export class ProvenanceRecorder {
       },
       { createVersion: async (input) => await this.store.createArtifactVersion(input) },
     );
+  }
+
+  /**
+   * Optional post-registration observer. It runs only after the version and
+   * workspace revision are durable; its failure is intentionally non-fatal so
+   * an optional audit can never make an Artifact upload or delivery fail.
+   */
+  setArtifactRegisteredHandler(handler: (registered: {
+    mediaType: string;
+    sessionId: string;
+    version: ScientificArtifactVersion;
+  }) => Promise<void>): void {
+    this.artifactRegisteredHandler = handler;
+  }
+
+  notifyArtifactRegistered(registered: {
+    mediaType: string;
+    sessionId: string;
+    version: ScientificArtifactVersion;
+  }): void {
+    // The handler persists its own task, but its I/O must never sit on the
+    // Artifact delivery path. A completed Artifact is useful even when the
+    // optional Reviewer worker is restarting or its storage is unavailable.
+    void this.artifactRegisteredHandler?.(registered).catch((error) => {
+      console.warn("[reviewer-specialist] could not schedule automatic audit", error);
+    });
   }
 
   /**
@@ -249,6 +298,11 @@ export class ProvenanceRecorder {
       size: fileStat.size,
       ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
     });
+    this.notifyArtifactRegistered({
+      mediaType: registered.version.mediaType,
+      sessionId: options.sessionId,
+      version: registered.version,
+    });
     return registered;
   }
 
@@ -294,6 +348,7 @@ export class ProvenanceRecorder {
       : undefined;
     const code = run ? (await this.cas.read(run.code.hash)).toString("utf8") : "";
     const inputs = this.inferredArtifactInputs(options.sessionId, options.name, code, run?.id);
+    const sourceFileInputs = this.inferredSourceFileInputs(options.sessionId, options.name, code);
     const kind = this.artifactKind(options.path);
     const isReportKind = kind === "markdown" || kind === "latex" || kind === "report";
     // Register FIRST, drain AFTER. registerWorkspaceArtifact reads the file
@@ -363,10 +418,18 @@ export class ProvenanceRecorder {
         status: run.status,
         stderrHash: run.stderr.hash,
         stdoutHash: run.stdout.hash,
-        taskType: "auto_inferred_from_execution",
+        // The executeShell / executeScientific paths go through the wrapper
+        // and inherit ``toolType: "execution"`` from there. This direct
+        // sink call (artifact-manager style: declareWorkspaceArtifact) writes
+        // a fresh ToolCall with the same classification; ``toolName`` is the
+        // raw tool identifier (run_shell / run_python / run_r) so the canvas
+        // can render it without joining the Code node.
+        toolType: "execution",
+        toolName: run.tool,
         tool: run.tool,
         turnId: run.turnId,
         parentSubagentId: options.parentSubagentId,
+        inputSourceFiles: sourceFileInputs,
       });
     }
     return { artifact, version };
@@ -403,6 +466,61 @@ export class ProvenanceRecorder {
     return { versionIds, compositeKeys };
   }
 
+  /** Infer the uploaded SourceFile inputs a piece of code read by scanning the
+   * code text for uploaded files' names. Symmetric to ``inferredArtifactInputs``
+   * but for SourceFile (uploaded files) instead of Artifact (produced files).
+   * Returns the deterministic ``file_id`` keys
+   * (``source_file:session:<sessionId>:<path>`` — the same key
+   * ``upsert_source_file`` uses, so re-runs merge into the same edge) for the
+   * ``input_source_files`` payload field. SourceFile has no version, so unlike
+   * ``inferredArtifactInputs`` there is no version/composite-key form.
+   *
+   * Why this is a separate path and not folded into ``inferredArtifactInputs``:
+   * uploaded files live in the catalog as ``ScientificArtifact`` with
+   * ``origin === "user_upload"``, but in the graph they are ``SourceFile`` nodes
+   * (block 1), NOT ``Artifact`` nodes — ``registerWorkspaceArtifact`` writes
+   * only the catalog, not the graph; the graph's Artifact nodes come solely from
+   * ``declareWorkspaceArtifact`` / ``observeExecution``. So
+   * ``inferredArtifactInputs``'s ``MATCH (inA:Artifact {artifact_id, version})``
+   * can never hit an uploaded file (no such Artifact node exists). This method
+   * scans the same catalog but emits ``file_id`` keys for the distinct
+   * ``SourceFile -[:input]-> Code`` edge path. Same grain as
+   * ``inferredArtifactInputs`` (``code.includes(name)``, no AST parsing — the
+   * "zero store reads" design, see the comment on
+   * ``inferredArtifactInputs`` line 329), by intent: the upload path/basename
+   * appearing in the code is the same heuristic artifact logical names use.
+   *
+   * The upload handler (``registerWorkspaceArtifact`` with ``origin:
+   * "user_upload"``) sets ``logicalName = path`` (the workspace-relative
+   * basename; uploads are sanitized to a single-segment basename, so
+   * ``logicalName`` IS the basename and also the full path). Both the basename
+   * and the full path are matched so ``pd.read_csv("data.csv")`` and
+   * ``pd.read_csv("uploads/data.csv")`` both hit (the latter only if a future
+   * caller relaxes the single-segment sanitizer; today the two are equal). */
+  private inferredSourceFileInputs(
+    sessionId: string,
+    outputPath: string | undefined,
+    code: string,
+  ): Array<{ fileId: string }> {
+    const out: Array<{ fileId: string }> = [];
+    for (const artifact of this.store.listArtifacts(sessionId)) {
+      if (artifact.origin !== "user_upload") continue;
+      // logicalName == the uploaded basename (== the full workspace-relative
+      // path today, since uploads are sanitized to a single segment). Match
+      // both the basename and the full path so either form the code wrote hits.
+      const path = artifact.logicalName;
+      if (!path) continue;
+      // Exclude self-output: if this uploaded file's name equals the artifact
+      // currently being declared (outputPath), it is not an input. Mirrors
+      // inferredArtifactInputs's ``artifact.logicalName === outputPath`` guard.
+      if (outputPath && path === outputPath) continue;
+      const base = path.includes("/") ? (path.split("/").pop() ?? path) : path;
+      if (!code.includes(base) && !code.includes(path)) continue;
+      out.push({ fileId: `source_file:session:${sessionId}:${path}` });
+    }
+    return out;
+  }
+
   private async recordGeneratedFiles(options: {
     artifactPathPrefix?: string;
     code: string;
@@ -415,16 +533,20 @@ export class ProvenanceRecorder {
     toolName: "run_python" | "run_r" | "run_shell";
     turnId: string;
     workspaceRoot: string;
+    workspaceSnapshot?: AgentStateRef;
+    workspaceVersion?: AgentStateRef;
   }): Promise<void> {
     const derivations: ArtifactDerivation[] = [];
     const workspaceRevisions: WorkspaceFileRevisionInput[] = [];
+    if (!options.paths.length) return;
+    if (!options.workspaceSnapshot) throw new Error("Runner did not return a committed Workspace snapshot; file provenance was not inferred from mutable files");
+    const manifest = await workspaceSnapshotFiles(this.versions, options.workspaceSnapshot, options.paths);
     for (const path of options.paths) {
       const logicalPath = options.artifactPathPrefix ? `${options.artifactPathPrefix}/${path}` : path;
-      const target = resolveWorkspaceFile(options.workspaceRoot, path);
-      const [content, fileStat] = await Promise.all([
-        this.dataCas.putFile(target),
-        stat(target),
-      ]);
+      const file = manifest.find((entry) => entry.path === path);
+      if (!file) throw new Error(`Execution output is absent from its committed snapshot: ${path}`);
+      await this.versions.verifyRef(file.content);
+      const content = { hash: file.content.digest.slice(7), size: file.content.size };
       derivations.push({
         content,
         createdAt: options.finishedAt,
@@ -436,14 +558,15 @@ export class ProvenanceRecorder {
         turnId: options.turnId,
       });
       workspaceRevisions.push({
+        ...(options.workspaceVersion ? { publicationVersion: options.workspaceVersion } : {}),
         contentHash: content.hash,
         executionRunId: options.executionId,
         mode: "write",
-        modifiedAt: fileStat.mtime.toISOString(),
+        modifiedAt: options.finishedAt,
         origin: options.parentSubagentId ? "subagent" : "tool",
         path: logicalPath,
         runId: options.turnId,
-        size: fileStat.size,
+        size: file.content.size,
         ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
         toolName: options.toolName,
@@ -456,15 +579,149 @@ export class ProvenanceRecorder {
   }
 
   /** Fire-and-forget mirror of one execution to the memory graph. Never throws. */
-  private observeExecution(payload: Omit<ObserveExecutionPayload, "taskType"> & { taskType?: string }): void {
+  private observeExecution(payload: Omit<ObserveExecutionPayload, "toolType"> & { toolType?: string }): void {
     this.memoryGraphSink?.observeExecution({
-      taskType: "code_execution",
+      toolType: "execution",
       ...payload,
     } as ObserveExecutionPayload);
   }
 
+  /**
+   * Hash a "job definition" (workload id + sorted JSON inputs) so the Code
+   * node for an NPU job has a stable, content-derived ``code_hash`` that the
+   * Neo4j MERGE can index. NPU jobs have no source code text (the workload
+   * binary lives on the host runner), so the hash is over "what was asked
+   * for" — same workload + same inputs ⇒ same hash ⇒ same Code node.
+   * Deterministic JSON.stringify with sorted keys keeps the input order from
+   * leaking into the digest.
+   */
+  private npuJobDefinitionHash(job: NpuJob): string {
+    const canonical = JSON.stringify(job.inputs ?? {}, Object.keys(job.inputs ?? {}).sort());
+    return createHash("sha256").update(`${job.workloadId}\n${canonical}`).digest("hex");
+  }
+
+  /** Map an NpuJobState onto the graph's status vocabulary. Non-terminal states
+   *  are returned as undefined so the caller can short-circuit (the agent's
+   *  result polling will eventually reach a terminal state and re-mirror). */
+  private static npuStateToStatus(state: NpuJobState): "succeeded" | "failed" | "cancelled" | undefined {
+    switch (state) {
+      case "succeeded":
+        return "succeeded";
+      case "failed":
+        return "failed";
+      case "cancelled":
+        return "cancelled";
+      case "interrupted":
+        return "failed";
+      case "queued":
+      case "running":
+        return undefined;
+    }
+  }
+
+  /**
+   * Fire-and-forget mirror of one terminal NPU job's state to the memory
+   * graph. Never throws. Called from the workspace layer after the job's
+   * created files were declared as artifacts — only mirrors the ToolCall +
+   * Code and links it to the already-mirrored Artifact versions. Jobs that
+   * haven't reached a terminal state are skipped (no empty ToolCall stub).
+   *
+   * ``artifacts`` carries the subset of ``declareNpuJobArtifacts`` outputs
+   * that landed successfully (``ok: true`` only — failed declarations have
+   * no artifact_id to hang a ``produces`` edge off). The workspace layer
+   * shapes them into the lightweight ``{artifactId, path, version}`` form;
+   * the recorder enriches each entry with the catalog's logicalName /
+   * mediaType / projectId / contentHash so the sink payload satisfies
+   * ``MemoryGraphProducedArtifact``.
+   */
+  observeNpuJob(
+    job: NpuJob,
+    options: {
+      artifacts: Array<{ artifact_id: string; path: string; version: number }>;
+      parentSubagentId?: string;
+      sessionId: string;
+      turnId: string;
+    },
+  ): void {
+    try {
+      const status = ProvenanceRecorder.npuStateToStatus(job.state);
+      if (!status) {
+        // Non-terminal (queued/running). Result was polled before the job
+        // finished; the agent will re-poll and we'll get another shot then.
+        return;
+      }
+      const producedArtifacts = this.enrichNpuArtifacts(options.sessionId, options.artifacts);
+      this.observeExecution({
+        executionId: job.id,
+        sessionId: options.sessionId,
+        turnId: options.turnId,
+        tool: "run_npu_job",
+        toolName: "run_npu_job",
+        language: null,
+        codeHash: this.npuJobDefinitionHash(job),
+        exitCode: job.exitCode ?? null,
+        status,
+        startedAt: job.startedAt ?? job.createdAt,
+        finishedAt: job.finishedAt ?? job.updatedAt,
+        producedArtifacts,
+        stdoutHash: null,
+        stderrHash: null,
+        envHash: job.environmentRevisionId
+          ? this.store.listEnvironmentRevisions().find((revision) => revision.id === job.environmentRevisionId)?.snapshot.hash ?? null
+          : null,
+        parentSubagentId: options.parentSubagentId,
+      });
+    } catch (error) {
+      // Memory-graph mirror must never bubble up into the agent loop. Swallow
+      // and log via the sink's own warn path (it catches its own errors
+      // independently) — this guard only catches errors thrown before the
+      // sink call (e.g. when listEnvironmentRevisions throws on a corrupt
+      // catalog), which would otherwise tear down the result binding.
+      void error;
+    }
+  }
+
+  /** Look up each lightweight artifact in the catalog and return the full
+   *  ``MemoryGraphProducedArtifact`` shape. Versions that have already been
+   *  pruned (no match) are skipped with an empty entry so the produces edge
+   *  doesn't dangle on a missing Artifact node — but the artifact_id / path /
+   *  version still gets through so the sink can attach a partial edge. The
+   *  sink call itself is no-op when its target Neo4j nodes are absent, so a
+   *  missing version record is silent (matches ``recordGeneratedFiles``'s
+   *  fire-and-forget contract). */
+  private enrichNpuArtifacts(
+    sessionId: string,
+    artifacts: Array<{ artifact_id: string; path: string; version: number }>,
+  ): Array<{ artifactId: string; path: string; version: number; logicalName: string; mediaType: string; projectId: string; contentHash?: string; turnId?: string }> {
+    if (!artifacts.length) return [];
+    const artifactsById = new Map(this.store.listArtifacts(sessionId).map((entry) => [entry.id, entry]));
+    const out: Array<{ artifactId: string; path: string; version: number; logicalName: string; mediaType: string; projectId: string; contentHash?: string; turnId?: string }> = [];
+    for (const item of artifacts) {
+      const artifact = artifactsById.get(item.artifact_id);
+      const versions = this.store.listArtifactVersions(sessionId, item.artifact_id);
+      const version = versions.find((entry) => entry.version === item.version) ?? versions.at(-1);
+      if (!version || !artifact) {
+        // Catalog miss — still emit a minimal entry so the agent's view of
+        // produced files keeps its row count, but skip the rich fields. The
+        // sink tolerates missing nodes (MERGE skips absent targets).
+        continue;
+      }
+      out.push({
+        artifactId: item.artifact_id,
+        contentHash: version.content.hash,
+        logicalName: artifact.name,
+        mediaType: version.mediaType,
+        path: item.path,
+        projectId: version.projectId,
+        turnId: version.turnId,
+        version: item.version,
+      });
+    }
+    return out;
+  }
+
   async executeShell(options: RecordShellExecutionOptions): Promise<ShellExecutionResult> {
-    const executionId = randomUUID();
+    const executionId = options.executionId ?? randomUUID();
     const sandbox = await runnerSandboxKind(options.runnerClient);
     const shellSpec = await this.cas.put(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC);
     if (shellSpec.hash !== DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC_HASH) {
@@ -473,9 +730,11 @@ export class ProvenanceRecorder {
     const code = await this.cas.put(options.code);
     let result: ShellExecutionResult;
     try {
-      result = await options.runnerClient.executeShell({
+      result = await (options.dispatch ?? options.runnerClient.executeShell.bind(options.runnerClient))({
         agentId: options.agentId,
         code: options.code,
+        ...(options.environmentId ? { environmentId: options.environmentId } : {}),
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
         ...(options.executionTimeoutMs !== undefined ? { executionTimeoutMs: options.executionTimeoutMs } : {}),
         ...(options.kernelIdleTimeoutMs !== undefined ? { kernelIdleTimeoutMs: options.kernelIdleTimeoutMs } : {}),
         ...(options.kernelMode !== undefined ? { kernelMode: options.kernelMode } : {}),
@@ -487,6 +746,7 @@ export class ProvenanceRecorder {
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
+        ...(options.npuDevices?.length ? { npuDevices: options.npuDevices } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -513,7 +773,7 @@ export class ProvenanceRecorder {
         sandbox,
         sessionId: options.sessionId,
         startedAt: timestamp,
-        status: interruptedExecutionStatus(options.signal),
+        status: options.completionStatus?.() ?? interruptedExecutionStatus(options.signal),
         stderr: await this.cas.put(error instanceof Error ? error.message : "Runner shell execution failed"),
         stdout: await this.cas.put(""),
         tool: "run_shell",
@@ -527,6 +787,21 @@ export class ProvenanceRecorder {
 
     const stdout = await this.cas.put(result.stdout);
     const stderr = await this.cas.put(result.stderr);
+    let environmentSyncError: unknown;
+    if (options.environmentId) {
+      try {
+        const [environments, revisions] = await Promise.all([
+          options.runnerClient.listEnvironments(), options.runnerClient.listEnvironmentRevisions(),
+        ]);
+        const revision = revisions.find((candidate) => candidate.id === result.environmentRevisionId);
+        if (!revision || revision.environmentId !== options.environmentId) throw new Error("Runner environment identity mismatch");
+        const reference = await this.cas.put(await options.runnerClient.environmentSnapshot(revision.id));
+        if (reference.hash !== revision.snapshot.hash || reference.size !== revision.snapshot.size) {
+          throw new Error("Environment revision snapshot mismatch");
+        }
+        await this.store.replaceScientificEnvironmentCatalog(environments, revisions, options.runnerId);
+      } catch (error) { environmentSyncError = error; }
+    }
     await this.store.appendExecutionRun({
       cgroupMode: result.cgroupMode,
       code,
@@ -549,7 +824,7 @@ export class ProvenanceRecorder {
       sandbox: result.sandbox,
       sessionId: options.sessionId,
       startedAt: result.startedAt,
-      status: result.exitCode === 0 ? "succeeded" : "failed",
+      status: options.completionStatus?.() ?? (result.exitCode === 0 ? "succeeded" : "failed"),
       stderr,
       stdout,
       tool: "run_shell",
@@ -574,25 +849,33 @@ export class ProvenanceRecorder {
         toolName: "run_shell",
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
+        workspaceSnapshot: result.workspaceSnapshot,
+        workspaceVersion: result.workspaceVersion,
       });
     }
+    const shellSourceFileInputs = this.inferredSourceFileInputs(options.sessionId, undefined, options.code);
     this.observeExecution({
       executionId,
       sessionId: options.sessionId,
       turnId: options.turnId,
       tool: "run_shell",
+      toolName: "run_shell",
       language: null,
       codeHash: code.hash,
       exitCode: result.exitCode,
-      status: result.exitCode === 0 ? "succeeded" : "failed",
+      status: options.completionStatus?.() ?? (result.exitCode === 0 ? "succeeded" : "failed"),
       startedAt: result.startedAt,
       finishedAt: result.finishedAt,
       producedArtifacts: [],
       stdoutHash: stdout.hash,
       stderrHash: stderr.hash,
-      envHash: null,
+      envHash: options.environmentId
+        ? this.store.listEnvironmentRevisions().find((revision) => revision.id === result.environmentRevisionId)?.snapshot.hash ?? null
+        : null,
       parentSubagentId: options.parentSubagentId,
+      inputSourceFiles: shellSourceFileInputs,
     });
+    if (environmentSyncError) throw environmentSyncError;
     return result;
   }
 
@@ -627,6 +910,7 @@ export class ProvenanceRecorder {
         ...(options.skillPackagesRoot ? { skillPackagesRoot: options.skillPackagesRoot } : {}),
         ...(options.sandboxEgressProxy ? { sandboxEgressProxy: options.sandboxEgressProxy } : {}),
         ...(options.runnerWorkspaceKey ? { runnerWorkspaceKey: options.runnerWorkspaceKey } : {}),
+        ...(options.npuDevices?.length ? { npuDevices: options.npuDevices } : {}),
         workspaceRoot: options.workspaceRoot,
       }, options.signal);
     } catch (error) {
@@ -734,6 +1018,7 @@ export class ProvenanceRecorder {
         toolName: result.language === "python" ? "run_python" : "run_r",
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
+        workspaceSnapshot: result.workspaceSnapshot,
       });
     }
     // env snapshot hash for the provenance mirror: the revision's snapshot.hash
@@ -743,11 +1028,13 @@ export class ProvenanceRecorder {
     const envRevision = result.environmentRevisionId
       ? this.store.listEnvironmentRevisions().find((candidate) => candidate.id === result.environmentRevisionId)
       : undefined;
+    const sourceFileInputs = this.inferredSourceFileInputs(options.sessionId, undefined, options.code);
     this.observeExecution({
       executionId,
       sessionId: options.sessionId,
       turnId: options.turnId,
       tool: result.language === "python" ? "run_python" : "run_r",
+      toolName: result.language === "python" ? "run_python" : "run_r",
       language: result.language,
       codeHash: code.hash,
       exitCode: result.exitCode,
@@ -759,6 +1046,7 @@ export class ProvenanceRecorder {
       stderrHash: stderr.hash,
       envHash: envRevision?.snapshot.hash ?? null,
       parentSubagentId: options.parentSubagentId,
+      inputSourceFiles: sourceFileInputs,
     });
     if (environmentSyncError) throw environmentSyncError;
     return result;

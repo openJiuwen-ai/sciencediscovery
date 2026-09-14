@@ -49,6 +49,8 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_PERMISSION_WAIT_TIMEOUT_MS` | `0` | Initial permission-decision timeout (`0` is unlimited) |
 | `SCIENTIFIC_ENVS` | `1` | Expose managed Python/R and persistent kernels; runner can start before setup completes |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator provisioner override |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | Optional mirror directory URL serving the pinned micromamba release under the same file names; empty uses the upstream release host. The pinned SHA-256 is enforced wherever the file comes from |
+| `SCIENCE_AGENT_NPU_PYTHON_PATH` | auto-detected | Host Python used to read NPU state through the driver's DCMI interface; empty tries `/usr/bin/python3` then `/usr/local/bin/python3`, and falls back to `npu-smi` when neither works |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache; source safety checks still apply |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated allowed channels; built-in TUNA/USTC presets are always recognized |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | Initial persistent-kernel idle timeout (`0` is unlimited) |
@@ -67,7 +69,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_KE_OPENALEX_API_KEY` | unset | OpenAlex API key for the knowledge-engine source chain |
 | `SCIENCE_AGENT_KE_UNPAYWALL_EMAIL` | unset | Unpaywall contact email (enables the connector) |
 
-The Ascend NPU Broker is for deployments that need host Ascend devices, and administrators must enable it explicitly. Keep `SCIENCE_AGENT_NPU_BROKER=0` when the host has no Ascend NPU, lacks CANN/MindSpore, or should not expose NPU jobs to the Agent; then `run_npu_job` is absent from the tool table. Enabling it does not change the normal local-mode startup command. Before enabling the Broker, create and verify at least one ScienceDiscovery managed Python scientific environment revision that can import the required CANN/MindSpore stack. Built-in NPU workloads, including `npu.smoke_test`, require `environment_revision_id`; when the Agent does not pass one explicitly, the API uses the current Session revision. When `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` is empty, the built-in allowlist currently contains `npu.smoke_test` and `antibody.protenix.v1`. Add models through a custom JSON allowlist with fixed entry points, not arbitrary Agent-supplied commands. `SCIENCE_AGENT_NPU_PYTHON` is kept only for custom allowlists that explicitly use `${python}`; the built-in allowlist uses `${managedPython}` and ignores it. Changing the allowlist is equivalent to changing executable host-code entry points and should be reviewed as a deployment change. Model weights, databases, HMMER, CANN, MindScience checkouts, and similar site assets stay outside the repository and are normally referenced through the environment variables or workload configuration above.
+The Ascend NPU Broker is for deployments that need host Ascend devices, and administrators must enable it explicitly. Keep `SCIENCE_AGENT_NPU_BROKER=0` when the host has no Ascend NPU, lacks CANN/MindSpore, or should not expose NPU jobs to the Agent; then `run_npu_job` is absent from the tool table. Enabling it does not change the normal local-mode startup command. Before enabling the Broker, create and verify at least one ScienceDiscovery managed scientific environment with Python that can import the required CANN/MindSpore stack. For built-in NPU workloads, including `npu.smoke_test`, select `environment_id` from `environment_list`; when omitted, the API resolves the Session-selected environment. The API selects that environment's latest Revision for the Broker's internal execution/audit receipt. The Agent cannot select a historical revision: `environment_revision_id` is rejected. When `SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` is empty, the built-in allowlist currently contains `npu.smoke_test` and `antibody.protenix.v1`. Add models through a custom JSON allowlist with fixed entry points, not arbitrary Agent-supplied commands. `SCIENCE_AGENT_NPU_PYTHON` is kept only for custom allowlists that explicitly use `${python}`; the built-in allowlist uses `${managedPython}` and ignores it. Changing the allowlist is equivalent to changing executable host-code entry points and should be reviewed as a deployment change. Model weights, databases, HMMER, CANN, MindScience checkouts, and similar site assets stay outside the repository and are normally referenced through the environment variables or workload configuration above.
 
 The browser stores only the API token in local storage. Model credentials stay in backend storage.
 
@@ -102,8 +104,13 @@ Compose reads the root `.env` and interpolates these keys into `docker-compose.y
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | Persistent-kernel idle timeout (minimum 1000 ms) |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated channel allowlist |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator micromamba path |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | Optional mirror directory URL for installations that cannot reach the upstream release host; the pinned SHA-256 still applies |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | Bubblewrap in the image |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | Enables usage-dashboard display currency conversion; disabled keeps each model's original estimate currency |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | USD/CNY source for the usage dashboard; default is no-key Frankfurter; custom URLs are labeled by their host |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | Usage-dashboard exchange-rate cache TTL; defaults to 6 hours |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | Usage-dashboard exchange-rate request timeout |
 
 The API explicitly listens on `0.0.0.0:4310` **inside the container**, while runner `4311` remains on container loopback. Only the API port is published, and its host-side default is `127.0.0.1`. See [Docker deployment](../how-to/deployment.md#docker-deployment).
 
@@ -118,6 +125,7 @@ Unless overridden, persistent application data is kept in the repository:
 | `.sciencediscovery-data/mcp-result-cache.sqlite` | MCP result cache |
 | `.sciencediscovery-data/web-cache.sqlite`, `.sciencediscovery-data/web-audit.sqlite` | Web cache and `WebInvocation` audit |
 | `.sciencediscovery-data/model-secrets.key` | Owner-readable AES-256-GCM key for provider tokens |
+| `.sciencediscovery-data/exchange-rates/usage-display-rates.json` | Display exchange-rate cache for the usage dashboard; refresh failures can fall back to stale cache and the page labels stale-cache use |
 | `.sciencediscovery-data/projects/<project-id>/sessions/<session-id>/workspace/` | Per-session uploaded/generated files and `papers/<paper-id>/` extraction results |
 | `.sciencediscovery-data/cas/`, `execution-runs/`, `prompt-manifests/`, `reviews/`, `messages/` | Content-addressed blobs, execution records, prompt manifests, reviews, and chat |
 | `.sciencediscovery-data/claims/`, `evidence-items/`, `evidence-links/`, `mcp-invocations/`, `artifact-derivations/` | Claim/evidence provenance and MCP audit |

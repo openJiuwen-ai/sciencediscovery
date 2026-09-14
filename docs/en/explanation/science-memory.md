@@ -29,20 +29,21 @@ bypass: agent-runtime defines LLM tools, schema defines cross-package types (con
 
 All graph writes originate from the Node API (execution mirroring + declare); the browser is read-only, gateway and runner do not participate; the Python sidecar is only accessed by the Node API — a closed single-client loop.
 
-### 1.1 Node types (8)
+### 1.1 Node types (9)
 
 | Node label | Represents | Unique key / source |
 |------------|------|---------------|
 | `ResearchGoal` | This Session's research goal | `goal_id` (deterministically generated on the Node side, idempotent on resend) |
 | `Task` | A subagent's scope (one node per subagent run, `task_type='subagent'`) | `task_id` |
-| `ToolCall` | One concrete task step — a code execution or a literature search | `task_id` |
+| `ToolCall` | One concrete task step — a code execution or a search/fetch call | `task_id` |
 | `Code` | A piece of executed code | `code_id` |
 | `Artifact` | A produced file version (chart, CSV, the report itself…) | `artifact_id` |
 | `Paper` | A literature record | composite `(session_id, link)`, `link` normalized via `_normalize_link` |
 | `Evidence` | A piece of evidence extracted from a Paper | `evidence_id` |
 | `Claim` | A cited assertion in the report | `claim_id` |
+| `SourceFile` | A user-uploaded input file (CSV/image/JSON/PDF…) | `file_id` (deterministic `source_file:session:<sid>:<path>`, idempotent on re-upload) |
 
-### 1.2 Edge types (8)
+### 1.2 Edge types (9)
 
 | Edge | Direction | Meaning | Belongs to | Writer |
 |--------|------|------|------|--------|
@@ -52,8 +53,9 @@ All graph writes originate from the Node API (execution mirroring + declare); th
 | `supports` | Evidence/Artifact→Claim | What backs the assertion | Citation chain | `declare_claim` |
 | `stated_in` | Claim→report Artifact | The claim is recorded in this report Artifact | Citation chain (task↔citation intersection) | `declare_claim` (when `artifact_id` passed) / `link_claims_to_report` |
 | `supersedes` | Artifact(new)→Artifact(old) | This version replaces its predecessor | Version lineage (task chain) | `upsert_execution` |
-| `input` | Artifact(read version)→Code | The code run read this artifact version as an input | Data-dependency (task chain) | `upsert_execution` |
+| `input` | Artifact(read version)/SourceFile→Code | The code run read this artifact version or uploaded file as an input | Data-dependency (task chain) | `upsert_execution` |
 | `contains` | Task(scope)→first child ToolCall | A subagent's scope groups its child task steps | Task chain (subagent scoping) | `_link_subtasks_by_finish_time` |
+| `feeds` | SourceFile→ResearchGoal | This uploaded file feeds into this research goal | Upload mirror (task-chain prelude) | `upsert_source_file` (fire-and-forget on upload completion) |
 
 ## 2. Main flows
 
@@ -61,14 +63,16 @@ All graph writes originate from the Node API (execution mirroring + declare); th
 
 The task chain needs no explicit LLM declaration; the Node API mirrors it fire-and-forget to the graph on execution events:
 
-1. **First user message** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → writes `Session` + `ResearchGoal` + `has_goal`.
-2. **Plan proposed** → `observeSessionPlan` → `POST /observe/session-plan` → uses `plan.scope` to **refine** the `ResearchGoal`'s `core_objective`/`domain` (does not mirror plan steps as ToolCalls, to avoid PENDING skeleton pollution).
+1. **File upload** → `MemoryGraphSink.observeUploadFile` → sidecar `POST /observe/upload-file` → `upsert_source_file`: MERGE `SourceFile` (deterministic `file_id`) + build `SourceFile -[:feeds]-> ResearchGoal`. Mirrored the moment upload completes, fire-and-forget (an unreachable graph = no-op; the upload itself is unaffected). The `ResearchGoal` may not exist yet (a file can be uploaded before the first message); in that case **no placeholder goal node is created** — the file stays dangling (node present, no `feeds` edge) until `upsert_session_first_message` MERGEs the real goal and then attaches every still-dangling SourceFile of the session. Re-uploading the same file hits the same `file_id` and creates no duplicate node.
+2. **First user message** → `MemoryGraphSink.observeSessionFirstMessage` → sidecar `POST /observe/session-first-message` → writes `Session` + `ResearchGoal` + `has_goal`.
 3. **Each code execution completes** → `observeExecution` → `POST /observe/execution` → `upsert_execution`:
-   - MERGE a `ToolCall` (`task_type='code_execution'`) + `Code`, build `ToolCall -[:produces]-> Code`;
+   - MERGE a `ToolCall` (`tool_type='execution'`) + `Code`, build `ToolCall -[:produces]-> Code`;
    - execution diff only records Derivation and CAS; not-yet-declared files are not written to the graph as `produced_artifacts`;
    - call `_link_subtasks_by_finish_time` to rebuild this Session's `next` temporal chain (delete this Session's old `temporal_chain` edges first, then relink: `ResearchGoal → head → … → last`).
 4. **Each literature search (MCP) completes** → `observeMcpInvocation` → `POST /observe/mcp-search` → `upsert_mcp_search`: MERGE `ToolCall` (`task_id="subtask:mcp:<invocation_id>"`) + batch MERGE `Paper` (deduped by `(session_id, normalized_link)`, `retrieval_count+1` on hit), build `ToolCall -[:produces]-> Paper`.
 5. **A subagent runs** → `observeSubagent` → `POST /observe/subagent` → MERGE a scope `Task` (`task_type='subagent'`); when the subagent performs code executions or MCP searches they are mirrored as child `ToolCall` nodes hung off the scope via `contains` + `next`, with `produces` edges running `scope → child's Code/Artifact` (the scope owns its children's products, never its own).
+
+The lightweight Plan is deliberately not a ResearchGoal authority. It does not rewrite the goal inferred from the first user message; a future goal-correction feature should use a dedicated goal lifecycle instead of coupling Memory to Plan progress snapshots.
 
 Once the task chain forms, the frontend "workspace panel" shows a directed graph that grows with execution: the research goal on top, `ToolCall`s lined up along `next` as a timeline (subagent scopes grouping their child `ToolCall`s via `contains`), each `ToolCall` pointing down via `produces` to its code, files, and literature.
 
@@ -93,7 +97,7 @@ report body writes [evidence1]
 
 **Path B — code output (`[artifact1]`, no literature)**
 ```
-run_python → writes a workspace file and records Derivation/CAS
+run_shell → writes a workspace file and records Derivation/CAS
 declare_artifact(path) → registers a Project artifact version and returns artifact_id
   → mirrors the declared version as Code -produces-> Artifact
 declare_claim(content, cites_artifact_aliases={"artifact1": artifact_id}, …)
@@ -124,7 +128,7 @@ When a report opens (`MarkdownRenderer` + `version.references`), the `remarkGrap
 | `Paper` | `viewExtractedEvidence` / `viewCitingClaim` / `viewCitingArtifact` | forward citation chain: `extracts→Evidence`, then `+supports→Claim`, then `+stated_in→report Artifact` |
 | `Paper` | `viewSearchingTask` | the `ToolCall` that produced this Paper |
 | `Evidence` | `viewSourcePaper` / `viewCitingClaimForEvidence` / `viewCitingArtifactForEvidence` | upstream `extracts←Paper`; downstream `supports→Claim`, `+stated_in→Artifact` |
-| `Claim` | `viewCitingEvidenceForClaim` / `viewContainingArtifact` | the Evidence/Artifact backing this Claim (`supports` in); the report Artifact it is `stated_in` |
+| `Claim` | `viewCitingEvidenceForClaim` / `viewCitingDbRecordForClaim` / `viewCitingSourceFileForClaim` / `viewContainingArtifact` | the Evidence backing this Claim (`supports` in, label-filtered to `Evidence`); the DbRecord backing it (`supports` in, label-filtered to `DbRecord`); the SourceFile backing it (`supports` in, label-filtered to `SourceFile`) — `supports`-in also reaches Artifact, which has no button here; the report Artifact it is `stated_in` |
 | `Artifact` | `viewContainedClaims` / `viewCitingClaimForArtifact` / `viewProducingCode` / `viewCitingEvidenceForArtifact` / `viewCitedPaper` / `viewRelatedTask` | claims `stated_in` this report; claims this Artifact `supports`; the producing `Code`; the multi-hop citation ancestry `stated_in→Claim→supports→Evidence`; the same `+extracts→Paper`; and the full task tail `produces→Code→ToolCall→next→ResearchGoal` |
 
 Directional, hop-by-hop walking keeps each chain short and on one directed path (the nodes each hop reaches seed the next hop, so it traces rather than fans out). A hop that finds nothing empties the whole chain (all-or-nothing), which is why the frontend calls `chain_exists` first to grey out buttons whose chain would be empty. `ResearchGoal` and `ToolCall` expose no chain buttons (they are endpoints of the walks above).
@@ -168,7 +172,6 @@ ScienceMemory adds three kinds of HTTP interfaces: **sidecar native routes** (Py
 | `POST /observe/mcp-search` | Mirrors a literature search → ToolCall + Papers + produces |
 | `POST /observe/subagent` | Mirrors a subagent's lifecycle → a scope `Task` (`task_type='subagent'`); its child executions/searches hang off the scope via `contains` + `next` |
 | `POST /observe/session-first-message` | Writes Session + ResearchGoal + has_goal |
-| `POST /observe/session-plan` | Refines ResearchGoal with plan.scope |
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper (Paper missing → 422 `source_paper_not_found`) |
 | `POST /persist/claim` | CREATE Claim + supports (Evidence/Artifact→Claim) + optional produces + optional stated_in; returns `chip_map`. No supporting target → 422 `no_cites_target` (triggered before the degrade branch, reported even if the graph is down) |
 | `POST /persist/stated_in` | MERGE stated_in (Claim→report Artifact); the Artifact may not be mirrored yet, polls and waits up to 10×0.3s |

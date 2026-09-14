@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   ModelInvocationKind,
+  ModelInvocationOutcome,
   ModelInvocationUsage,
   ModelUsageStatus,
   PromptManifest,
@@ -71,6 +72,7 @@ export async function appendModelUsageForManifest(
     invocationId: string;
     invocationKind: ModelInvocationKind;
     manifest: PromptManifest;
+    outcome?: ModelInvocationOutcome;
     runId?: string;
     usage: CapturedModelUsage;
   },
@@ -89,6 +91,7 @@ export async function appendModelUsageForManifest(
     model: options.manifest.model,
     modelProfileId: options.manifest.modelProfileId,
     modelProfileName: options.manifest.modelProfileName,
+    outcome: options.outcome ?? "completed",
     outputTokens: options.usage.outputTokens,
     promptManifestId: options.manifest.id,
     ...(session?.projectId ? { projectId: session.projectId } : {}),

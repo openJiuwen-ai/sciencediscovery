@@ -45,11 +45,17 @@ const EDGE_TYPES: MemoryGraphEdgeType[] = [
   "next", "produces", "extracts", "supports", "stated_in", "supersedes", "input", "contains",
   // /evolve search graph.
   "searches", "root", "expands", "inspires", "elected", "occupies",
+  // upload → goal.
+  "feeds",
 ];
 const NODE_LABELS: MemoryGraphNodeLabel[] = [
   "ResearchGoal", "Task", "ToolCall", "Paper", "Evidence", "Claim", "Code", "Artifact",
   // /evolve search graph.
   "SearchRun", "SearchNode", "SearchCell",
+  // uploaded file.
+  "SourceFile",
+  // web/wiki/db search results.
+  "WebPage", "DbRecord",
 ];
 
 test("EDGE_COLORS has exactly the schema edge types as keys", () => {
@@ -77,7 +83,7 @@ test("NODE_COLORS has exactly the schema node labels as keys", () => {
 
 test("graphNodeName truncates names longer than 30 characters with an ellipsis", () => {
   const long = "x".repeat(40);
-  const name = graphNodeName({ label: "ToolCall", id: "t1", extra: { task_type: long } });
+  const name = graphNodeName({ label: "ToolCall", id: "t1", extra: { tool_name: long } });
   assert.equal(name.length, 30);
   assert.ok(name.endsWith("…"));
 });
@@ -118,9 +124,13 @@ test("graphNodeName picks label-specific fields in priority order", () => {
     graphNodeName({ label: "Code", id: "c1", extra: { code_id: "cid", tool: "run_python" } }),
     "run_python",
   );
-  // ToolCall prefers `task_type` over `tool_type` over `task_id`.
+  // ToolCall prefers `tool_name` over `tool_type` over `task_id`.
   assert.equal(
-    graphNodeName({ label: "ToolCall", id: "s1", extra: { task_id: "tid", task_type: "analyze" } }),
+    graphNodeName({ label: "ToolCall", id: "s1", extra: { task_id: "tid", tool_type: "analyze", tool_name: "mcp__arxiv__search" } }),
+    "mcp__arxiv__search",
+  );
+  assert.equal(
+    graphNodeName({ label: "ToolCall", id: "s1b", extra: { task_id: "tid", tool_type: "analyze" } }),
     "analyze",
   );
   // Task (subagent scope) prefers `objective` over `task_type` over `task_id`.
@@ -156,9 +166,49 @@ test("graphNodeName ignores non-string or blank extra fields", () => {
   assert.equal(name, "p1");
 });
 
+// WebPage and DbRecord display-name contracts. WebPage mirrors Paper
+// (title first, then identifier, then url); DbRecord paints the
+// `source:identifier` composite so two databases' same accession don't read
+// identically on a dense canvas.
+test("graphNodeName picks WebPage title → identifier → url", () => {
+  assert.equal(
+    graphNodeName({ label: "WebPage", id: "w1", extra: { title: "BRCA1", identifier: "wiki/BRCA1", url: "http://wiki.local/BRCA1" } }),
+    "BRCA1",
+  );
+  // No title: identifier (wiki path) wins over url.
+  assert.equal(
+    graphNodeName({ label: "WebPage", id: "w2", extra: { identifier: "wiki/BRCA1", url: "http://wiki.local/BRCA1" } }),
+    "wiki/BRCA1",
+  );
+  // Only url: the last-resort fallback.
+  assert.equal(
+    graphNodeName({ label: "WebPage", id: "w3", extra: { url: "http://wiki.local/BRCA1" } }),
+    "http://wiki.local/BRCA1",
+  );
+});
+
+test("graphNodeName picks DbRecord source:identifier → identifier → title → url", () => {
+  // Both source + identifier: the prefixed form is what disambiguates two
+  // databases' same accession at a glance on a dense canvas.
+  assert.equal(
+    graphNodeName({ label: "DbRecord", id: "d1", extra: { source: "uniprot", identifier: "P38398", title: "BRCA1_HUMAN" } }),
+    "uniprot:P38398",
+  );
+  // Identifier alone (no source) — still rendered, just not prefixed.
+  assert.equal(
+    graphNodeName({ label: "DbRecord", id: "d2", extra: { identifier: "P38398" } }),
+    "P38398",
+  );
+  // No identifier: fall back to title, then url.
+  assert.equal(
+    graphNodeName({ label: "DbRecord", id: "d3", extra: { title: "BRCA1_HUMAN", url: "https://uniprot.org/P38398" } }),
+    "BRCA1_HUMAN",
+  );
+});
+
 test("graphNodeDisplayNames leaves unique names unchanged", () => {
   const nodes = [
-    { label: "ToolCall" as const, id: "s1", extra: { task_type: "analyze" } },
+    { label: "ToolCall" as const, id: "s1", extra: { tool_type: "analyze" } },
     { label: "Paper" as const, id: "p1", extra: { title: "My Paper" } },
   ];
   const display = graphNodeDisplayNames(nodes);
@@ -195,7 +245,7 @@ test("the graph's evolve node shows what the search did and links to the evolve 
   // string: the run's substance lives one edge away on the SearchRun, and the
   // panel that could explain it was unreachable from the graph.
   const subtask = {
-    extra: { status: "completed", task_type: "program_evolution" },
+    extra: { status: "completed", tool_type: "program_evolution" },
     id: "subtask:evolve:23601271-4db3-4774-bf69-b2c8bb9b81e5",
     label: "ToolCall" as const,
   };
@@ -226,7 +276,7 @@ test("the graph's evolve node shows what the search did and links to the evolve 
     }),
   ));
 
-  assert.match(html, /程序演进/, "task_type needs its translated name, not the bare string");
+  assert.match(html, /程序演进/, "tool_type needs its translated name, not the bare string");
   assert.match(html, /0\.6626/, "the task detail must surface the SearchRun's baseline");
   assert.match(html, /0\.7666/, "and the held-out test score");
   assert.match(html, /打开演进面板/, "and the button that goes to the panel");
@@ -268,7 +318,7 @@ test("the titles of evolve-related nodes have to be readable", () => {
   );
 });
 
-// --- subagent surrogate edges, scope/child/cancelled classification (PR3) ---
+// --- subagent surrogate edges, scope/child/cancelled classification -----
 
 test("isSurrogateEdge keys on extra.surrogate === true only", () => {
   // A folded surrogate edge carries the marker + the via_child hop. The
@@ -292,7 +342,7 @@ test("isScopeNode keys on extra.task_type === 'subagent'", () => {
 });
 
 test("isChildNode keys on parent_subtask_id or an :exec: task_id", () => {
-  // PR1's child task_id shape is `subtask:subagent:<id>:exec:<execId>`; the
+  // The child task_id shape is `subtask:subagent:<id>:exec:<execId>`; the
   // child also carries parent_subtask_id pointing back at the scope. Either
   // marks a node as a child of an expanded scope.
   assert.equal(isChildNode({ id: "subtask:subagent:sub1:exec:e1", extra: {} }), true);
@@ -303,7 +353,7 @@ test("isChildNode keys on parent_subtask_id or an :exec: task_id", () => {
 
 test("isCancelledNode keys on status === 'cancelled' (case-insensitive)", () => {
   // cancelled is terminal-but-failed — distinct from pending (unfinished)
-  // and completed (succeeded/…). PR1 writes it on aborted subagents.
+  // and completed (succeeded/…). The sidecar writes it on aborted subagents.
   assert.equal(isCancelledNode({ extra: { status: "cancelled" } }), true);
   assert.equal(isCancelledNode({ extra: { status: "Cancelled" } }), true);
   assert.equal(isCancelledNode({ extra: { status: "succeeded" } }), false);

@@ -16,7 +16,7 @@ function stableJsonValue(value: unknown, seen = new WeakSet<object>()): unknown 
 
 export type ToolLoopDecision =
   | { action: "allow"; count: number }
-  | { action: "warn" | "stop"; content: string; count: number };
+  | { action: "warn" | "stop"; content: string; count: number; details: unknown };
 
 /** Run-scoped policy; intentionally separate from the universal Agent Loop. */
 export class ToolLoopGuard {
@@ -31,16 +31,18 @@ export class ToolLoopGuard {
     const count = (this.counts.get(key) ?? 0) + 1;
     this.counts.set(key, count);
     if (count >= this.stopAt) {
-      return { action: "stop", count, content: JSON.stringify({ ok: false, error: {
+      const details = { ok: false, error: {
         attempts: count, code: "TOOL_LOOP_DETECTED", retryable: false,
         message: `Stopped repeated ${name} call with identical arguments after ${count} attempts. Do not call this same tool with the same arguments again; synthesize from existing results or choose a different action.`,
-      } }) };
+      } };
+      return { action: "stop", count, content: JSON.stringify(details), details };
     }
     if (count >= this.warnAt) {
-      return { action: "warn", count, content: JSON.stringify({ ok: false, warning: {
+      const details = { ok: false, warning: {
         code: "REPEATED_TOOL_CALL", count, retryable: true,
         message: `Repeated ${name} call with identical arguments detected ${count} times. Reconsider your approach, use the previous result if available, or change arguments meaningfully before retrying.`,
-      } }) };
+      } };
+      return { action: "warn", count, content: JSON.stringify(details), details };
     }
     return { action: "allow", count };
   }

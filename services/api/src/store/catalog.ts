@@ -17,6 +17,7 @@ import type {
   Environment,
   EnvironmentRevision,
   EnvironmentSourceSettings,
+  IdeaTreeSettings,
   McpProxyPolicies,
   MemoryGraphSettings,
   ModelProfile,
@@ -50,6 +51,7 @@ import {
   DEFAULT_SANDBOX_NETWORK_SETTINGS,
   DEFAULT_SYSTEM_QUOTA_SETTINGS,
   DEFAULT_ENVIRONMENT_SOURCE_SETTINGS,
+  DEFAULT_IDEA_TREE_SETTINGS,
   DEFAULT_REVIEWER_SPECIALIST_LEVEL,
   DEFAULT_SYSTEM_TIMEOUT_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
@@ -68,8 +70,11 @@ export interface Catalog {
   environmentRevisions: EnvironmentRevision[];
   environmentSourceSettings: EnvironmentSourceSettings;
   globalSettings: RuntimeSettingsOverrides;
+  ideaTreeSettings: IdeaTreeSettings;
   mcpProxyPolicies: McpProxyPolicies;
   memoryGraphSettings: MemoryGraphSettings;
+  /** Which NPU cards each Runner may hand to its sandboxes, keyed by Runner id. */
+  npuDeviceSelections: Record<string, number[]>;
   models: ModelProfile[];
   permissionEpochs: PermissionEpoch[];
   providers: ModelProvider[];
@@ -81,6 +86,8 @@ export interface Catalog {
   quotaSettings: SystemQuotaSettings;
   sandboxNetworkSettings: SandboxNetworkSettings;
   reviewerSpecialistEnabled: boolean;
+  reviewerSpecialistFeedbackPolicy: import("@sciencediscovery/schema").ReviewerFeedbackPolicy;
+  /** Legacy persisted value retained only while older catalogs are migrated; runtime uses Session settings. */
   reviewerSpecialistLevel: ReviewerSpecialistLevel;
   remoteHosts: RemoteHostTarget[];
   remoteJobs: RemoteJob[];
@@ -113,8 +120,10 @@ export function emptyCatalog(
       enabledConnectorIds: [],
       semanticReviewEnabled: true,
     },
+    ideaTreeSettings: structuredClone(DEFAULT_IDEA_TREE_SETTINGS),
     mcpProxyPolicies: {},
     memoryGraphSettings: structuredClone(DEFAULT_MEMORY_GRAPH_SETTINGS),
+    npuDeviceSelections: {},
     models: [],
     permissionEpochs: [],
     providers: [],
@@ -126,6 +135,7 @@ export function emptyCatalog(
     quotaSettings: structuredClone(initialQuotaSettings),
     sandboxNetworkSettings: structuredClone(DEFAULT_SANDBOX_NETWORK_SETTINGS),
     reviewerSpecialistEnabled: false,
+    reviewerSpecialistFeedbackPolicy: "record",
     reviewerSpecialistLevel: DEFAULT_REVIEWER_SPECIALIST_LEVEL,
     remoteHosts: [],
     remoteJobs: [],

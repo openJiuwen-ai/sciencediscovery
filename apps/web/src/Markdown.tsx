@@ -168,10 +168,16 @@ function remarkGraphChips(options: { index: Map<string, ComposerReference> }) {
 /** The graph label for a ComposerReferenceKind, for the detail endpoint.
  * `session`/`skill` are composer-context references, not chips, so they have
  * no graph node. `paper` is never a chip kind — a Paper is reached indirectly
- * via the Evidence node extracted from it. */
+ * via the Evidence node extracted from it. `sourcefile` is an uploaded file
+ * cited directly by a Claim's chip_map (SourceFile -[:supports]-> Claim).
+ * `dbrecord` is a database record this session retrieved via db_search and
+ * cited directly by a Claim's chip_map (DbRecord -[:supports]-> Claim) —
+ * falls through to the graph explorer (no dedicated modal). */
 export const KIND_TO_LABEL: Record<ComposerReference["kind"], MemoryGraphNodeLabel | undefined> = {
   evidence: "Evidence",
   artifact: "Artifact",
+  sourcefile: "SourceFile",
+  dbrecord: "DbRecord",
   session: undefined,
   skill: undefined,
 };
@@ -260,10 +266,10 @@ export function findMarkdownFigureArtifact(
   return basenameMatches.length === 1 ? basenameMatches[0] : undefined;
 }
 
-function imageLabel(alt: string | undefined, source: string | undefined): string {
+function imageLabel(alt: string | undefined, source: string | undefined, fallback: string): string {
   if (alt?.trim()) return alt.trim();
   const path = source?.split(/[?#]/, 1)[0]?.replaceAll("\\", "/");
-  return path?.split("/").filter(Boolean).at(-1) || "image";
+  return path?.split("/").filter(Boolean).at(-1) || fallback;
 }
 
 function MarkdownImageFailure({ alt, onOpenArtifacts, source }: {
@@ -271,8 +277,8 @@ function MarkdownImageFailure({ alt, onOpenArtifacts, source }: {
   onOpenArtifacts?: () => void;
   source?: string;
 }) {
-  const label = imageLabel(alt, source);
   const { t } = useLocale();
+  const label = imageLabel(alt, source, t("markdown.imageFallback"));
   return (
     <span aria-label={t("markdown.imageUnavailableLabel", { label })} className="markdown-image-state error" role="img">
       <strong>{t("markdown.imageUnavailable")}</strong>
@@ -338,8 +344,8 @@ function MarkdownImage({
     return <MarkdownImageFailure alt={alt} onOpenArtifacts={onOpenArtifacts} source={src} />;
   }
   return (
-    <span aria-label={t("markdown.loadingImage", { label: imageLabel(alt, src) })} className="markdown-image-state loading" role="status">
-      {t("markdown.loadingImage", { label: imageLabel(alt, src) })}
+    <span aria-label={t("markdown.loadingImage", { label: imageLabel(alt, src, t("markdown.imageFallback")) })} className="markdown-image-state loading" role="status">
+      {t("markdown.loadingImage", { label: imageLabel(alt, src, t("markdown.imageFallback")) })}
     </span>
   );
 }
@@ -355,6 +361,7 @@ export function MarkdownRenderer({
   workspaceSessionId,
   wrapChip,
 }: MarkdownRendererProps) {
+  const { t } = useLocale();
   const chipIndex = useMemo(() => buildChipIndex(references), [references]);
   const components = useMemo<Components>(() => ({
     a: ({ href, node: _node, ...props }) => {
@@ -391,7 +398,7 @@ export function MarkdownRenderer({
       return (
         <div className="markdown-code">
           <pre {...props} ref={preRef}>{children}</pre>
-          <CopyButton className="code-copy" getText={() => preRef.current?.textContent ?? ""} label="Copy code" />
+          <CopyButton className="code-copy" getText={() => preRef.current?.textContent ?? ""} label={t("markdown.copyCode")} />
         </div>
       );
     },
@@ -400,7 +407,9 @@ export function MarkdownRenderer({
         <table {...props}>{children}</table>
       </div>
     ),
-  }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, workspaceSessionId, wrapChip]);
+
+  }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, t, workspaceSessionId, wrapChip]);
+
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
       <Markdown

@@ -25,10 +25,11 @@ import type { SessionStore } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
+import { readPreparedSkillBundle, readPreparedSkillManifest } from "../skill-sandbox.js";
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
-  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker"
+  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "observeNpuJob" | "workspaceTransfers" | "shellExecutions" | "timers"
 >;
 
 /**
@@ -59,7 +60,7 @@ export interface WorkspaceExecutionBindingOptions {
   provenanceRecorder: ProvenanceRecorder;
   readOnlyWorkspaceRoot?: string;
   skillPackagesRoot?: string;
-  /** The local runner: always available, and the default for every execution. */
+  /** The built-in Runner, used by default only when selected for this Session. */
   runnerClient: RunnerClient;
   remoteTargets?: RemoteExecutionTarget[];
   scientificEnvironments?: Environment[];
@@ -100,6 +101,17 @@ export function createWorkspaceExecutionBindings(
     return resolved ? { sandboxEgressProxy: resolved } : {};
   };
   /**
+   * The NPU cards the operator ticked for whichever Runner this execution
+   * lands on. Resolved per execution rather than per Session: the selection is
+   * a property of the machine, and a Session that switches machines must get
+   * that machine's cards. Spread so an empty selection leaves the field absent
+   * and the sandbox stays exactly as it is without NPUs.
+   */
+  const npuDevices = (runnerId: string): { npuDevices?: number[] } => {
+    const selected = options.store.npuDeviceSelection(runnerId);
+    return selected.length > 0 ? { npuDevices: selected } : {};
+  };
+  /**
    * Where one execution runs. Anything but the local machine has to be named
    * explicitly, and only names on this Session's allowlist resolve: being
    * allowed to use a remote machine never moves the default off this one.
@@ -112,6 +124,7 @@ export function createWorkspaceExecutionBindings(
     skillPackagesRoot?: string;
   } => {
     const requested = machine?.trim();
+    options.store.assertSessionAllowsRunner(options.sessionId, requested || "local");
     if (!requested || requested === "local") {
       return {
         runnerId: "local",
@@ -126,8 +139,6 @@ export function createWorkspaceExecutionBindings(
         ? `This Session may not run on ${requested}; allowed machines: local, ${allowed.join(", ")}`
         : `This Session may only run on the local machine`);
     }
-    // Skill packages are staged on this machine, so a remote execution reads
-    // its Skill resources through the tool instead of a mounted package.
     return {
       runnerId: target.runnerId,
       remoteHostAlias: target.hostAlias,
@@ -135,12 +146,140 @@ export function createWorkspaceExecutionBindings(
       runnerWorkspaceKey: target.workspaceKey,
     };
   };
+  /**
+   * The execution's machine, with this run's frozen Skill packages already on
+   * it. A remote Runner cannot mount this machine's staging root, so the
+   * selected packages are synced to that Runner and it reports back its own
+   * mount path; a failed sync fails the execution rather than running without
+   * the Skills the Session selected.
+   */
+  const prepareExecutionTarget = async (machine: string | undefined, signal?: AbortSignal) => {
+    let target = resolveExecutionTarget(machine);
+    if (target.runnerId !== "local" && options.skillPackagesRoot) {
+      const root = options.skillPackagesRoot;
+      const mounted = await target.runnerClient.prepareSkillPackages(
+        await readPreparedSkillManifest(root),
+        () => readPreparedSkillBundle(root),
+        signal,
+      );
+      // A transfer takes time, so the machine is resolved again: a Session that
+      // lost this machine meanwhile must not still run on it.
+      target = { ...resolveExecutionTarget(machine), skillPackagesRoot: mounted };
+    }
+    options.store.assertSessionWritable(options.sessionId);
+    signal?.throwIfAborted();
+    return target;
+  };
+  const prepareShell = async (
+      code: string,
+      kernelMode: KernelMode,
+      signal?: AbortSignal,
+      toolCallId?: string,
+      machine?: string,
+      environment?: { environmentId?: string; cwd?: string },
+    ) => {
+      options.store.assertSessionWritable(options.sessionId);
+      let target = resolveExecutionTarget(machine);
+      await options.permission.requirePrivilege({
+        action: "code",
+        executionId: options.executionId,
+        resource: "workspace-code",
+        signal,
+        ...(toolCallId ? { toolCallId } : {}),
+        summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
+      });
+      target = await prepareExecutionTarget(machine, signal);
+      return {
+        agentId: options.agentId,
+        code,
+        ...(environment?.environmentId ? { environmentId: environment.environmentId } : {}),
+        ...(environment?.cwd !== undefined ? { cwd: environment.cwd } : {}),
+        artifactPathPrefix: options.artifactPathPrefix,
+        executionTimeoutMs: options.executionTimeoutMs,
+        kernelIdleTimeoutMs: options.kernelIdleTimeoutMs,
+        kernelMode,
+        maxOutputBytes: options.maxOutputBytes,
+        maxWorkspaceBytes: options.maxWorkspaceBytes,
+        permissionEpoch: options.permission.getEpoch(),
+        ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
+        ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
+        runnerId: target.runnerId,
+        runnerClient: target.runnerClient,
+        ...npuDevices(target.runnerId),
+        ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+        ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
+        ...sandboxEgressProxy(),
+        sessionId: options.sessionId,
+        signal,
+        ...(toolCallId ? { toolCallId } : {}),
+        turnId: options.executionId,
+        workspaceRoot: options.workspaceRoot,
+        parentSubagentId: options.parentSubagentId,
+      };
+  };
   const readSessionNpuJob = async (jobId: string) => {
     const job = await options.runnerClient.getNpuJob(jobId, options.sessionId);
     if (job.sessionId !== options.sessionId) throw new Error("NPU job not found in this Session");
     return job;
   };
-  const common = {
+  const common: ExecutionBindings = {
+    timers: {
+      create: async (input) => {
+        options.store.assertSessionWritable(options.sessionId);
+        if ((input.afterMs === undefined) === (input.at === undefined)) throw new Error("Provide exactly one of after_ms or at");
+        if (input.afterMs !== undefined && (!Number.isSafeInteger(input.afterMs) || input.afterMs <= 0)) throw new Error("after_ms must be a positive integer");
+        if (input.at !== undefined && !/(Z|[+-]\d{2}:\d{2})$/.test(input.at)) throw new Error("at requires an ISO timestamp with timezone");
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        if (input.executionId) await options.store.shellExecutions.get(input.executionId, owner);
+        return options.store.notifications.createTimer(owner, { dueAt: input.at !== undefined ? Date.parse(input.at) : Date.now() + input.afterMs!,
+          message: input.message, executionId: input.executionId });
+      },
+      list: () => options.store.notifications.timers({ sessionId: options.sessionId, agentId: options.agentId }),
+      cancel: (id) => {
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        options.store.notifications.cancelTimer(owner, id);
+        return options.store.notifications.timers(owner).find((timer) => timer.id === id);
+      },
+    },
+    workspaceTransfers: {
+      workspaces: () => {
+        const candidates = [{ runnerId: "local", description: "Local Workspace" }, ...(options.remoteTargets ?? []).map((target) => ({ runnerId: target.runnerId, description: target.hostAlias }))];
+        return candidates.filter((candidate) => {
+          try { if (candidate.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, candidate.runnerId); return true; } catch { return false; }
+        }).map((candidate) => ({ ...candidate, id: options.store.workspaceIdentity(options.sessionId, options.agentId, candidate.runnerId).id }));
+      },
+      list: () => options.store.transfers.list({ sessionId: options.sessionId, agentId: options.agentId }),
+      get: (id: string) => options.store.transfers.get(id, { sessionId: options.sessionId, agentId: options.agentId }),
+      cancel: (id: string) => options.store.transfers.cancel(id, { sessionId: options.sessionId, agentId: options.agentId }),
+      start: async (input: import("@sciencediscovery/schema").WorkspaceTransferInput, signal?: AbortSignal) => {
+        const resolve = (id: string): import("../workspace-transfers.js").TransferEndpoint => {
+          options.store.assertSessionWritable(options.sessionId);
+          if (id === options.store.workspaceIdentity(options.sessionId, options.agentId).id) return { id, root: options.workspaceRoot };
+          const target = options.remoteTargets?.find((target) => options.store.workspaceIdentity(options.sessionId, options.agentId, target.runnerId).id === id);
+          if (!target) throw new Error("Workspace is not owned by this Agent or its allowed Runners");
+          options.store.assertSessionAllowsRemoteRunner(options.sessionId, target.runnerId);
+          return { id, runner: target.runnerClient(), workspaceKey: target.workspaceKey };
+        };
+        resolve(input.sourceWorkspaceId); resolve(input.targetWorkspaceId);
+        await options.permission.requirePrivilege({ action: "host", executionId: options.executionId,
+          resource: `workspace-transfer:${input.sourceWorkspaceId}:${input.targetWorkspaceId}`, signal,
+          summary: `Copy ${input.files.length} selected files between authorized Workspaces` });
+        signal?.throwIfAborted();
+        resolve(input.sourceWorkspaceId); resolve(input.targetWorkspaceId);
+        return options.store.transfers.start({ sessionId: options.sessionId, agentId: options.agentId }, input, { resolve,
+          committed: async (file, transfer) => {
+            if (transfer.targetWorkspaceId !== options.store.workspaceIdentity(options.sessionId, options.agentId).id) return;
+            await options.store.recordWorkspaceFileRevision(options.sessionId, {
+              path: options.artifactPathPrefix ? `${options.artifactPathPrefix}/${file.targetPath}` : file.targetPath,
+              mode: "write", origin: "system", size: file.size, contentHash: file.sha256, modifiedAt: new Date().toISOString(),
+              ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}),
+              originMeta: { transferId: transfer.id, sourceSnapshotId: transfer.sourceSnapshotId!,
+                sourceWorkspaceId: transfer.sourceWorkspaceId, workspaceId: transfer.targetWorkspaceId },
+            });
+          },
+        });
+      },
+    },
     ...(options.npuBrokerEnabled ? { npuBroker: {
       cancel: async (jobId: string, signal?: AbortSignal) => {
         options.store.assertSessionWritable(options.sessionId);
@@ -165,7 +304,7 @@ export function createWorkspaceExecutionBindings(
         return await options.runnerClient.npuJobResult(jobId, options.sessionId);
       },
       submit: async (input: Parameters<NonNullable<WorkspaceAgentOptions["npuBroker"]>["submit"]>[0], signal?: AbortSignal) => {
-        options.store.assertSessionWritable(options.sessionId);
+        resolveExecutionTarget("local");
         await options.permission.requirePrivilege({
           action: "code",
           executionId: options.executionId,
@@ -173,18 +312,45 @@ export function createWorkspaceExecutionBindings(
           signal,
           summary: `Run host NPU workload ${input.workloadId} ${options.permissionScopeLabel}`,
         });
+        resolveExecutionTarget("local");
+        const { environmentId: selectedId, ...request } = input;
+        let environmentId = selectedId;
+        const epochRevision = options.permission.getEpoch().environmentRevisionId;
+        if (!environmentId && epochRevision) {
+          // An epoch freezes audit context, not the executable environment version.
+          const revisions = await options.runnerClient.listEnvironmentRevisions();
+          environmentId = revisions.find((revision) => revision.id === epochRevision)?.environmentId;
+        }
+        const environment = environmentId
+          ? (await options.runnerClient.listEnvironments()).find((entry) => entry.id === environmentId) : undefined;
+        if (environmentId && (!environment || environment.status !== "ready")) throw new Error("Managed environment is missing or not ready");
         return await options.runnerClient.submitNpuJob({
-          ...input,
-          environmentRevisionId: input.environmentRevisionId
-            ?? options.permission.getEpoch().environmentRevisionId,
+          ...request,
+          ...(environment ? { environmentRevisionId: environment.currentRevisionId } : {}),
           sessionId: options.sessionId,
           workspaceRoot: options.workspaceRoot,
         });
       },
+    }, observeNpuJob: (job: import("@sciencediscovery/schema").NpuJob, artifacts: Array<{ artifact_id: string; path: string; version: number }>) => {
+      // Fire-and-forget mirror: the recorder swallows its own failures (it
+      // skips non-terminal jobs and the sink catches its own errors). Wrap in
+      // a try/catch here too so a synchronous throw inside the recorder never
+      // surfaces to the surrounding ``result`` binding, which would otherwise
+      // tear down the agent's view of its own result.
+      try {
+        options.provenanceRecorder.observeNpuJob(job, {
+          artifacts,
+          parentSubagentId: options.parentSubagentId,
+          sessionId: options.sessionId,
+          turnId: options.executionId,
+        });
+      } catch {
+        // Intentional: memory-graph mirror is fire-and-forget.
+      }
     } } : {}),
     executePython: async (code: string, signal?: AbortSignal, toolCallId?: string, machine?: string) => {
       options.store.assertSessionWritable(options.sessionId);
-      const target = resolveExecutionTarget(machine);
+      let target = resolveExecutionTarget(machine);
       await options.permission.requirePrivilege({
         action: "code",
         executionId: options.executionId,
@@ -193,6 +359,7 @@ export function createWorkspaceExecutionBindings(
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run Python code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
+      target = await prepareExecutionTarget(machine, signal);
       return options.provenanceRecorder.executePython({
         agentId: options.agentId,
         code,
@@ -206,6 +373,7 @@ export function createWorkspaceExecutionBindings(
         ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
         runnerId: target.runnerId,
         runnerClient: target.runnerClient,
+        ...npuDevices(target.runnerId),
         ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
         ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
         ...sandboxEgressProxy(),
@@ -217,47 +385,33 @@ export function createWorkspaceExecutionBindings(
         parentSubagentId: options.parentSubagentId,
       });
     },
-    executeShell: async (
-      code: string,
-      kernelMode: KernelMode,
-      signal?: AbortSignal,
-      toolCallId?: string,
-      machine?: string,
-    ) => {
-      options.store.assertSessionWritable(options.sessionId);
-      const target = resolveExecutionTarget(machine);
-      await options.permission.requirePrivilege({
-        action: "code",
-        executionId: options.executionId,
-        resource: "workspace-code",
-        signal,
-        ...(toolCallId ? { toolCallId } : {}),
-        summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
-      });
-      return options.provenanceRecorder.executeShell({
-        agentId: options.agentId,
-        code,
-        artifactPathPrefix: options.artifactPathPrefix,
-        executionTimeoutMs: options.executionTimeoutMs,
-        kernelIdleTimeoutMs: options.kernelIdleTimeoutMs,
-        kernelMode,
-        maxOutputBytes: options.maxOutputBytes,
-        maxWorkspaceBytes: options.maxWorkspaceBytes,
-        permissionEpoch: options.permission.getEpoch(),
-        ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
-        ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
-        runnerId: target.runnerId,
-        runnerClient: target.runnerClient,
-        ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
-        ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
-        ...sandboxEgressProxy(),
-        sessionId: options.sessionId,
-        signal,
-        ...(toolCallId ? { toolCallId } : {}),
-        turnId: options.executionId,
-        workspaceRoot: options.workspaceRoot,
-        parentSubagentId: options.parentSubagentId,
-      });
+    executeShell: async (...args) => options.provenanceRecorder.executeShell(await prepareShell(...args)),
+    shellExecutions: {
+      start: async (code, environment, signal, toolCallId, runnerId) => {
+        const prepared = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        return options.store.shellExecutions.start(owner, {
+          runnerId: prepared.runnerId!, turnId: options.executionId,
+          workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id,
+        }, () => resolveExecutionTarget(runnerId).runnerClient,
+        (id, dispatch, completionStatus) => options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }));
+      },
+      wait: async (id, waitMs, signal) => {
+        const owner = { sessionId: options.sessionId, agentId: options.agentId };
+        const record = await options.store.shellExecutions.get(id, owner);
+        if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
+        return options.store.shellExecutions.wait(id, owner, waitMs, signal);
+      },
+      list: () => options.store.shellExecutions.list({ sessionId: options.sessionId, agentId: options.agentId }).filter((record) => {
+        try { if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId); return true; } catch { return false; }
+      }),
+      get: async (id) => {
+        const record = await options.store.shellExecutions.get(id, { sessionId: options.sessionId, agentId: options.agentId });
+        if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
+        return record;
+      },
+      logs: (id, cursor) => options.store.shellExecutions.logs(id, { sessionId: options.sessionId, agentId: options.agentId }, (runnerId) => resolveExecutionTarget(runnerId).runnerClient, cursor),
+      cancel: (id) => options.store.shellExecutions.cancel(id, { sessionId: options.sessionId, agentId: options.agentId }, (runnerId) => resolveExecutionTarget(runnerId).runnerClient),
     },
     ...(options.scientificEnvironments || options.remoteTargets?.length ? {
       environmentManagement: {
@@ -335,7 +489,7 @@ export function createWorkspaceExecutionBindings(
         machine?: string,
       ) => {
         options.store.assertSessionWritable(options.sessionId);
-        const target = resolveExecutionTarget(machine);
+        let target = resolveExecutionTarget(machine);
         await options.permission.requirePrivilege({
           action: "code",
           executionId: options.executionId,
@@ -344,6 +498,7 @@ export function createWorkspaceExecutionBindings(
           ...(toolCallId ? { toolCallId } : {}),
           summary: `Run ${language} code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
         });
+        target = await prepareExecutionTarget(machine, signal);
         return options.provenanceRecorder.executeScientific({
           agentId: options.agentId,
           code,
@@ -360,6 +515,7 @@ export function createWorkspaceExecutionBindings(
           ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
           runnerId: target.runnerId,
           runnerClient: target.runnerClient,
+          ...npuDevices(target.runnerId),
           ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
           ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
           ...sandboxEgressProxy(),

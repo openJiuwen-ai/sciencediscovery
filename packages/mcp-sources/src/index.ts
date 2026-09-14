@@ -14,5 +14,6 @@
 
 export { createMcpSourceRegistry, McpSourceRegistry } from "./registry.js";
 export { createBuiltinMcpSourceRegistry } from "./builtins.js";
+export { createLlmWikiSource } from "./llm-wiki.js";
 export { UNIPROT_MCP_MANIFEST, uniprotMcpSource } from "./uniprot.js";
 export { createPublicBiomedSources, PUBLIC_BIOMED_SOURCE_DEFINITIONS } from "./public-biomed.js";

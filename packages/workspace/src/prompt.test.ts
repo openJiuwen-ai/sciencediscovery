@@ -40,8 +40,8 @@ test("managed environment prompt directs mutations through governed tools", () =
   const prompt = buildWorkspaceSystemPrompt([], true);
   assert.match(prompt, /environment_list\/environment_create\/environment_delete\/environment_install\/environment_uninstall/);
   assert.match(prompt, /shared base is read-only/i);
-  assert.match(prompt, /pip PyPI specs or current-workspace relative wheel files/i);
-  assert.match(prompt, /never run conda, mamba, micromamba, or pip directly/i);
+  assert.match(prompt, /pip supports package specs or explicitly staged local wheel files/i);
+  assert.match(prompt, /managed prefixes are read-only in the sandbox; use environment_create\/install\/uninstall\/delete/i);
   assert.doesNotMatch(prompt, /only the user can create, install, delete/);
 });
 
@@ -221,11 +221,17 @@ test("memory graph prompt lays out the citation-chain flow in order", () => {
   assert.match(prompt, /cites_evidence_aliases as/i);
   assert.match(prompt, /cites_artifact_aliases as/i);
   assert.match(prompt, /from step 3/i);
-  assert.match(prompt, /Every \[evidenceN\]\/\[artifactN\] token in the body MUST have a matching entry in the same declare_claim's alias params/i);
-  // Alias format is fixed to evidence+number / artifact+number, no other formats.
+  assert.match(prompt, /Every \[evidenceN\]\/\[artifactN\]\/\[sourcefileN\]\/\[dbrecordN\] token in the body MUST have a matching entry in the same declare_claim's alias params/i);
+  // Alias format is fixed to evidence+number / artifact+number /
+  // sourcefile+number, no other formats.
   assert.match(prompt, /evidence\+number for evidence \(e\.g\. \[evidence1\]\)/i);
   assert.match(prompt, /artifact\+number for artifacts \(e\.g\. \[artifact1\]\)/i);
+  assert.match(prompt, /sourcefile\+number for uploaded data files \(e\.g\. \[sourcefile1\]\)/i);
   assert.match(prompt, /no other formats/i);
+  // Provenance chips remain distinct from standard scholarly citations.
+  assert.match(prompt, /Academic citations are separate from provenance chips/i);
+  assert.match(prompt, /standard marker such as \[1\]/i);
+  assert.match(prompt, /never treat it as a substitute for \[1\]/i);
   // Silence rule: do not narrate declare/query steps to the user.
   assert.match(prompt, /Do NOT narrate these steps to the user/i);
   assert.match(prompt, /never say .*I will declare these files as artifacts/i);

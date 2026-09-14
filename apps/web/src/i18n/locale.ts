@@ -41,8 +41,25 @@ export function detectLocale(environment?: LocaleEnvironment): Locale {
 export function applyLocale(locale: Locale, target?: LocaleTarget): void {
   const storage = target?.storage ?? (typeof window !== "undefined" ? window.localStorage : undefined);
   const documentElement = target?.documentElement ?? (typeof document !== "undefined" ? document.documentElement : undefined);
+  activeLocale = locale;
   storage?.setItem(LOCALE_STORAGE_KEY, locale);
   if (documentElement) documentElement.lang = locale;
+}
+
+// Locale used by non-React modules (usage formatting, run-stream toasts, api
+// fallbacks) that cannot call useLocale(). LocaleProvider keeps it in sync via
+// applyLocale; it only affects chrome produced outside the React tree.
+let activeLocale: Locale = "en";
+
+export function setActiveLocale(locale: Locale): void {
+  activeLocale = locale;
+}
+
+export function translateActive(
+  key: MessageKey,
+  variables: Record<string, string | number> = {},
+): string {
+  return translate(activeLocale, key, variables);
 }
 
 export function translate(

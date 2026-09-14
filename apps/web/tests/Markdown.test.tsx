@@ -262,3 +262,18 @@ test("evidence and artifact chips render together from message-level references"
   assert.match(html, /\[evidence9\]/);
   assert.doesNotMatch(html, /<button[^>]*>\[evidence9\]<\/button>/);
 });
+
+// dbrecord chips are an alias the LLM writes for a database record this
+// session retrieved via db_search. The chip's url is `graph://dbrecord/<id>`
+// (id = the bare identifier — _ID_FIELDS["DbRecord"] in the sidecar) so a
+// click matches node.id === reference.id directly, like evidence/sourcefile.
+// KIND_TO_LABEL must map "dbrecord" → "DbRecord" so App.tsx's handleChipClick
+// fallthrough opens the graph explorer on the real node (a missing label
+// would silently drop the click — the chip renders, but onClick no-ops).
+test("dbrecord chip renders as a button when a reference matches the alias", () => {
+  const references: ComposerReference[] = [
+    { id: "P38398", kind: "dbrecord", label: "dbrecord1" },
+  ];
+  const html = render("BRCA1 binds RAD51 [dbrecord1].", references, () => undefined);
+  assert.match(html, /<button[^>]*class="graph-chip"[^>]*>\[dbrecord1\]<\/button>/);
+});

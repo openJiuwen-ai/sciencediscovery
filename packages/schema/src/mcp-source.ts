@@ -25,6 +25,7 @@ export type McpSourceKind =
   | "variation"
   | "pathway"
   | "chemistry"
+  | "knowledge-base"
   | "dataset";
 
 export type McpToolKind =
@@ -193,6 +194,7 @@ export interface McpCatalogTool {
 }
 
 export interface McpCatalogServer {
+  error?: string;
   description?: string;
   enabled: boolean;
   id: string;

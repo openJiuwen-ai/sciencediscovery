@@ -536,3 +536,81 @@ test("a data directory one byte too long fails before libuv can truncate the pat
     await registry.close();
   }
 });
+
+test("acquire rejects a no-network policy", async () => {
+  const registry = new EgressGatewayRegistry(await scratchDirectory());
+  try {
+    await assert.rejects(registry.acquire({ ...access(), mode: "none" }), /domain-allowlist or open/);
+  } finally {
+    await registry.close();
+  }
+});
+
+test("open mode allows any domain, keeps blocking private addresses and accepts a private override", async () => {
+  const directory = await scratchDirectory();
+  const publicAddress = { resolveAddresses: async () => [{ address: "93.184.216.34", family: 4 }] };
+  const gateway = new EgressGateway(access({ mode: "open" }), join(directory, "egress.sock"), publicAddress);
+  await gateway.listen();
+  try {
+    // Any host passes the allowlist step; the private-address filter still
+    // applies unless explicitly turned on.
+    const decision = await gateway.decide("anywhere.test", 443);
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.address, "93.184.216.34");
+  } finally {
+    await gateway.close();
+  }
+
+  const privateBlocked = new EgressGateway(
+    access({ mode: "open" }),
+    join(directory, "private-blocked.sock"),
+    { resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }] },
+  );
+  await privateBlocked.listen();
+  try {
+    const blocked = await privateBlocked.decide("anywhere.test", 80);
+    assert.equal(blocked.allowed, false);
+    assert.match(blocked.reason ?? "", /private or loopback/);
+  } finally {
+    await privateBlocked.close();
+  }
+
+  const privateAllowed = new EgressGateway(
+    access({ mode: "open", allowPrivateNetwork: true }),
+    join(directory, "private-allowed.sock"),
+    { resolveAddresses: async () => [{ address: "127.0.0.1", family: 4 }] },
+  );
+  await privateAllowed.listen();
+  try {
+    const allowed = await privateAllowed.decide("anywhere.test", 80);
+    assert.equal(allowed.allowed, true);
+    assert.equal(allowed.address, "127.0.0.1");
+  } finally {
+    await privateAllowed.close();
+  }
+});
+
+test("open mode passes IP literal targets through the private-address filter", async () => {
+  const directory = await scratchDirectory();
+  const blocked = new EgressGateway(access({ mode: "open" }), join(directory, "blocked.sock"));
+  await blocked.listen();
+  try {
+    const decision = await blocked.decide("127.0.0.1", 4310);
+    assert.equal(decision.allowed, false);
+    assert.match(decision.reason ?? "", /private address/);
+  } finally {
+    await blocked.close();
+  }
+
+  const allowed = new EgressGateway(
+    access({ mode: "open", allowPrivateNetwork: true }),
+    join(directory, "allowed.sock"),
+  );
+  await allowed.listen();
+  try {
+    const decision = await allowed.decide("127.0.0.1", 4310);
+    assert.deepEqual(decision, { address: "127.0.0.1", allowed: true });
+  } finally {
+    await allowed.close();
+  }
+});

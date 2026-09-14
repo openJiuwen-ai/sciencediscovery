@@ -25,6 +25,32 @@ import type { McpGovernanceBroker } from "@sciencediscovery/data-source";
 import type { McpSourceCatalog } from "@sciencediscovery/data-source";
 import { createMcpWorkspaceTools } from "@sciencediscovery/artifact-manager";
 
+test("paper extraction stays in the owning Workspace even when another job ID is known", async () => {
+  for (const [prefix, path, allowed] of [
+    [undefined, "downloads/paper.pdf", true],
+    [undefined, "subagents/child/downloads/paper.pdf", false],
+    ["subagents/child", "subagents/child/downloads/paper.pdf", true],
+    ["subagents/child", "downloads/paper.pdf", false],
+    ["subagents/child", "subagents/sibling/downloads/paper.pdf", false],
+  ] as const) {
+    let extracted = false;
+    const tools = createMcpWorkspaceTools({
+      artifactManager: { getCompletedArtifact: async () => ({ job: { finalPath: path }, candidate: { kind: "paper", format: "pdf" } }) } as unknown as GovernedDownloadManager,
+      broker: {} as McpGovernanceBroker, catalog: {} as McpSourceCatalog, enabledSourceIds: [],
+      emitPermissionRequest() {}, pauseExternalWait: () => () => undefined,
+      paperService: { extractArtifact: async () => {
+        extracted = true;
+        return { acquisition: { manifestPath: "papers/one/analysis/manifest.json", extraction: { textPath: "text.md" } }, job: { id: "extraction" } };
+      } } as unknown as PaperService,
+      permission: {} as AgentPermissionRuntime, projectId: "project", sessionId: "session", turnId: "turn",
+      registry: createBuiltinMcpSourceRegistry(), store: {} as SessionStore, workspacePathPrefix: prefix,
+    });
+    if (allowed) await tools.paperExtractPdf!({ artifactJobId: "known-job" });
+    else await assert.rejects(tools.paperExtractPdf!({ artifactJobId: "known-job" }), /another Agent Workspace/);
+    assert.equal(extracted, allowed);
+  }
+});
+
 test("Reviewer MCP tools suppress Memory Graph mirroring", async () => {
   const requests: Array<{ suppressMemoryGraphMirror?: boolean }> = [];
   const tools = createMcpWorkspaceTools({

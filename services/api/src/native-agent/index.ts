@@ -38,7 +38,6 @@ import {
   DefaultContextAssembler,
   DurableContextStore,
   DurableSkillStateContributor,
-  DurableTaskStateContributor,
   DynamicContextAssembler,
   HistoryCompactor,
   resolveContextBudget,
@@ -61,10 +60,11 @@ import {
 } from "@sciencediscovery/model";
 import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 import {
+  createPlanBatchPolicy,
   createPlanContextFactory,
-  createPlanLifecycleTools,
-  type PlanRepository,
-} from "@sciencediscovery/plan-mode";
+  createPlanTool,
+  type PlanStore,
+} from "@sciencediscovery/plan";
 import { createEvolveTools, type EvolveToolRuntime } from "@sciencediscovery/evolve";
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
@@ -144,12 +144,12 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
   contextScope?: AgentScope;
   /** Capability-package extension seam; factories are instantiated and frozen per AgentRun. */
   contextContributorFactories?: readonly ContextContributorFactory<WireMessage>[];
-  /** Application persistence adapter; when present, registers optional Plan lifecycle capabilities. */
+  /** Run-scoped Plan snapshot projection; when present, registers update_plan and context injection. */
   /** The `/evolve` capability for this turn, or absent when the deployment has
    *  none. One object instead of two forwarded callbacks and a deps bundle
    *  threaded through three run-loop entry points. */
   evolve?: EvolveToolRuntime;
-  planRepository?: PlanRepository;
+  planStore?: PlanStore;
 }
 
 export interface NativeAgentRunResult {
@@ -255,12 +255,18 @@ class NativeAgent implements NativeAgentHandle {
         return result;
       },
     } : {}) });
-    const planTools = options.planRepository
-      ? createPlanLifecycleTools({
-          approvalMayBlock: options.approvalMode === "ask_for_dangerous",
-          repository: options.planRepository,
-        })
-      : [];
+    // Two plan capabilities coexist: the approval-gated lifecycle
+    // (propose_plan/revise_plan, planRepository) and the model-declared
+    // snapshot tool (update_plan, planStore).
+    const planTools = [
+      ...(options.planRepository
+        ? createPlanLifecycleTools({
+            approvalMayBlock: options.approvalMode === "ask_for_dangerous",
+            repository: options.planRepository,
+          })
+        : []),
+      ...(options.planStore ? [createPlanTool({ store: options.planStore })] : []),
+    ];
     // Same shape as the plan capability: the composition root either built a
     // runtime for this turn or it did not, and that single fact decides
     // whether the tools exist. Nothing downstream forwards anything.
@@ -278,6 +284,7 @@ class NativeAgent implements NativeAgentHandle {
         tracker: new ToolOutputReadTracker(toolOutputSettings.readPolicy),
       }),
     ], {
+      ...(options.planStore ? { batchPolicies: [createPlanBatchPolicy()] } : {}),
       createResultMessage: (call, content, output) => ({
         role: "tool", tool_call_id: call.id, name: call.name, content,
         ...(output ? { additional_kwargs: { tool_output: output } } : {}),
@@ -318,10 +325,12 @@ class NativeAgent implements NativeAgentHandle {
       });
     }
     const governance = {
+      localRunnerAllowed: options.localRunnerAllowed,
       ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
       ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
       ...(options.remoteRunners?.length ? { remoteRunners: options.remoteRunners.map((runner) => `${runner.runnerId}: ${runner.description || runner.hostAlias}`) } : {}),
       ...(options.specialist ? { specialist: options.specialist } : {}),
+      ...(options.workflowInstructions ? { workflowInstructions: options.workflowInstructions } : {}),
       ...(options.specialists?.filter((specialist) => specialist.builtIn).length
         ? { builtinSpecialists: options.specialists!.filter((specialist) => specialist.builtIn).map((specialist) => ({ description: specialist.description, name: specialist.name })) }
         : {}),
@@ -543,6 +552,8 @@ class NativeAgent implements NativeAgentHandle {
           contextId: this.contextId,
           mode: contextMode,
           onTrace: async (trace) => {
+            const planProgress = trace.admitted?.diagnostics
+              .find((diagnostic) => diagnostic.code === "PLAN_PROGRESS_OBSERVATION")?.details;
             runLog.info("context.assembled", {
               attachmentCount: trace.admitted?.attachments.length ?? 0,
               contextId: this.contextId,
@@ -555,6 +566,7 @@ class NativeAgent implements NativeAgentHandle {
               sectionCount: trace.admitted?.sections.length ?? 0,
               turn: trace.turn,
               used: trace.used,
+              ...(planProgress ? { planProgress } : {}),
               ...(trace.rendered ? {
                 compactionAfterTokens: trace.rendered.compaction.afterTokens,
                 compactionBeforeTokens: trace.rendered.compaction.beforeTokens,
@@ -577,6 +589,7 @@ class NativeAgent implements NativeAgentHandle {
               contextConfig: { budget: contextBudget, mode: trace.mode, scope: contextScope },
               ...(trace.error ? { error: trace.error } : {}),
               llmInput: trace.modelInput,
+              ...(planProgress ? { planProgress } : {}),
               renderedContext: trace.rendered,
               ...(trace.recovery ? { recovery: trace.recovery } : {}),
               selectedPath: trace.used,
@@ -608,13 +621,18 @@ class NativeAgent implements NativeAgentHandle {
         reviewCheckpointAvailable: this.toolRegistry.values().some((tool) => tool.name === FINISH_GATE_REVIEW_TOOL),
         skills: this.promptSkills,
       });
+      let reportedModelUsage = false;
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,
         maxParallelToolCalls: configuredMaxParallelToolCalls(),
         contextAssembler,
         modelClient,
         toolDispatcher: this.toolRegistry,
-        eventSink: (event) => { this.versionRecorder?.event(event); this.emitRuntimeEvent(event); },
+        eventSink: (event) => {
+          this.versionRecorder?.event(event);
+          this.emitRuntimeEvent(event);
+          if (event.type === "model_usage") reportedModelUsage = true;
+        },
         // Stall guard (V2-C6): a model call with no progress for the idle
         // window gets its attempt kicked (run history/budget survive); three
         // kicks bound the failure. The outer idle watchdog (runIdleTimeoutMs)
@@ -638,7 +656,7 @@ class NativeAgent implements NativeAgentHandle {
         .catch((error: unknown) => raiseForAbort(error));
       this.history = result.history;
       const usage = result.usage;
-      this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
+      if (!reportedModelUsage) this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
       if (usage) this.emit({ type: "usage", usage });
       return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")) };
     } finally {
@@ -710,7 +728,6 @@ class NativeAgent implements NativeAgentHandle {
         return content ? { systemSections: [{ content, id: "tools.capabilities", order: 100, slot: "capabilities" }] } : {};
       },
     }));
-    registry.register(new DurableTaskStateContributor<WireMessage>(this.durableContext, [scope]));
     for (const contributor of createDurableDomainContributors<WireMessage>(this.durableContext, [scope])) {
       registry.register(contributor);
     }
@@ -718,8 +735,8 @@ class NativeAgent implements NativeAgentHandle {
     registerContextContributorFactories(
       registry,
       [
-        ...(this.options.planRepository
-          ? [createPlanContextFactory<WireMessage>(this.options.planRepository, [scope])]
+        ...(this.options.planStore
+          ? [createPlanContextFactory<WireMessage>(this.options.planStore, [scope])]
           : []),
         ...(this.options.contextContributorFactories ?? []),
       ],
@@ -737,13 +754,19 @@ class NativeAgent implements NativeAgentHandle {
       case "turn_start":
         this.emit({ type: "turn_start" });
         break;
+      case "response_start":
+        this.emit({ responseId: event.responseId, turn: event.turn, type: "response_start" });
+        break;
       case "model_delta":
         this.emit({
           type: "message_update",
           assistantMessageEvent: event.kind === "text"
-            ? { type: "text_delta", delta: event.delta }
-            : { type: "thinking_delta", delta: event.delta },
+            ? { type: "text_delta", delta: event.delta, responseId: event.responseId }
+            : { type: "thinking_delta", delta: event.delta, responseId: event.responseId },
         });
+        break;
+      case "response_settled":
+        this.emit({ responseId: event.responseId, turn: event.turn, type: "response_settled" });
         break;
       case "tool_execution_start":
         this.emit({
@@ -758,9 +781,15 @@ class NativeAgent implements NativeAgentHandle {
           type: "tool_execution_end",
           toolCallId: event.call.id,
           toolName: event.call.name,
-          result: { content: [{ type: "text", text: event.content }], details: {} },
+          result: {
+            content: [{ type: "text", text: event.content }],
+            ...(event.details !== undefined ? { details: event.details } : {}),
+          },
           isError: event.isError,
         });
+        break;
+      case "model_usage":
+        this.emit({ type: "model_usage", usage: event.usage, usageReported: true });
         break;
       case "completed":
         if (event.truncated) this.emit({ type: "turn_truncated" });
@@ -787,6 +816,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
   return createWorkspaceTools(options.workspaceRoot, {
     ...(options.createSkill ? { createSkill: options.createSkill } : {}),
     enabledConnectorIds: options.enabledConnectorIds,
+    ...(options.extraTools?.length ? { extraTools: options.extraTools } : {}),
     ...(options.environments ? { environments: options.environments } : {}),
     ...(options.environmentManagement ? { environmentManagement: options.environmentManagement } : {}),
     ...(options.runSubagent ? { runSubagent: options.runSubagent } : {}),
@@ -815,7 +845,11 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),
     ...(options.proposeSkillLibraryUpdate ? { proposeSkillLibraryUpdate: options.proposeSkillLibraryUpdate } : {}),
     ...(options.publishSkillLibraryUpdate ? { publishSkillLibraryUpdate: options.publishSkillLibraryUpdate } : {}),
+    localRunnerAllowed: options.localRunnerAllowed,
     ...(options.remoteRunners ? { remoteRunners: options.remoteRunners } : {}),
+    ...(options.workspaceTransfers ? { workspaceTransfers: options.workspaceTransfers } : {}),
+    ...(options.shellExecutions ? { shellExecutions: options.shellExecutions } : {}),
+    ...(options.timers ? { timers: options.timers } : {}),
     skills: options.skills ?? [],
     specialists: options.specialists ?? [],
     toolPolicy: options.toolPolicy,

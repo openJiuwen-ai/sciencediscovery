@@ -156,7 +156,7 @@ export function ComposerReferenceMenu({
           <button className={suggestion.command ? "composer-command-suggestion" : undefined} key={suggestion.command ?? `${suggestion.reference.kind}:${suggestion.reference.id}`} title={`${label} · ${suggestion.detail}`} type="button" role="option" onClick={() => onSelect(suggestion)}>
             {suggestion.command ? <i aria-hidden="true"><SparkleIcon size={16} /></i> : null}
             <span className="composer-suggestion-copy"><strong>{label}</strong><small>{suggestion.detail}</small></span>
-            {suggestion.command ? <em>Authoring</em> : null}
+            {suggestion.command ? <em>{t("composer.authoring")}</em> : null}
           </button>
         );
       })}
@@ -171,13 +171,14 @@ export function ComposerCommandChips({
   commands: ComposerCommandSuggestion[];
   onRemove: (command: ComposerCommandSuggestion) => void;
 }) {
+  const { t } = useLocale();
   if (!commands.length) return null;
   return (
-    <div className="composer-command-chips" aria-label="Selected Skill authoring commands">
+    <div className="composer-command-chips" aria-label={t("composer.selectedAuthoringCommands")}>
       {commands.map((command) => (
-        <button aria-label={`Remove ${command.command} from the prompt`} key={command.command} title={`${command.command} · ${command.detail}`} type="button" onClick={() => onRemove(command)}>
+        <button aria-label={t("composer.removeCommand", { command: command.command })} key={command.command} title={`${command.command} · ${command.detail}`} type="button" onClick={() => onRemove(command)}>
           <i aria-hidden="true"><SparkleIcon size={13} /></i>
-          <span><strong>{command.command}</strong><small>Skill authoring</small></span>
+          <span><strong>{command.command}</strong><small>{t("composer.skillAuthoring")}</small></span>
           <CloseIcon aria-hidden="true" size={12} />
         </button>
       ))}

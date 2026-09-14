@@ -226,7 +226,7 @@ def test_chain_hops_never_walk_expands_downwards() -> None:
 
 def test_a_subtask_chain_reaches_the_search_handle_only() -> None:
     # ToolCall since upstream's Task/ToolCall split: an evolve search is a
-    # ToolCall (task_type=program_evolution), and its chain entry carries the
+    # ToolCall (tool_type=program_evolution), and its chain entry carries the
     # `searches` handle.
     hops = query._CHAIN_HOPS["ToolCall"]
     assert ("searches", "out", "SearchRun") in hops

@@ -45,7 +45,7 @@ Both sides understand the variable form. Shells and Python expand it normally; t
 | Tool | Location | Responsibility |
 |---|---|---|
 | `read_file` | Node workspace tool | Page through any staged package file under the packages root, exactly as for a workspace file |
-| `run_shell` / `run_python` / `run_r` | Runner sandbox | Execute a bundled script in place from its package path with explicit argv |
+| `run_shell` | Runner sandbox | Execute a bundled script in place from its package path with explicit argv |
 | `read_skill` | Node workspace tool | Compatibility channel returning the same frozen instructions and the package path |
 | `read_skill_resource` | Node workspace tool | Bounded UTF-8 read of one snapshot resource; never executes scripts or installs dependencies |
 

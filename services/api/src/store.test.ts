@@ -14,10 +14,11 @@
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation } from "@sciencediscovery/cas";
 
 import type { ArtifactJob, ComposerReference, Environment, EnvironmentRevision, ExecutionRun, ModelInvocationUsage, Subagent } from "@sciencediscovery/schema";
 import {
@@ -49,12 +50,15 @@ interface PersistedCatalog {
   projects: Array<{ id: string; name: string; settingsOverrides: Record<string, unknown> }>;
   providers?: Array<Record<string, unknown>>;
   reviewerSpecialistEnabled?: boolean;
+  reviewerSpecialistFeedbackPolicy?: string;
   reviewerSpecialistLevel?: string;
   sessions: Array<{
     approvalMode: "always_allow" | "ask_for_dangerous";
     id: string;
     modelId?: string;
     permissionEpochId: string;
+    reviewerAutomaticReviewEnabled?: boolean;
+    reviewerSpecialistLevel?: string;
     reviewModelId?: string;
     settingsOverrides: Record<string, unknown>;
     title: string;
@@ -77,6 +81,56 @@ test("remote environment audit revisions never replace the local catalog or disa
   for (const id of ["rev-local", "rev-local-next", "rev-remote"]) {
     assert.ok(store.listEnvironmentRevisions().some((entry) => entry.id === id));
   }
+});
+
+test("server-generated Artifacts reject non-server versions with the same logical name", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `server-artifact-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const project = await store.createProject("Server Artifact boundary");
+  const session = await store.createSession(
+    project.id,
+    "Protected score",
+    {},
+    {},
+    { allowUnconfiguredModel: true },
+  );
+  const logicalName = "idea-tree/tree-1/1.1/execution/server-score/pms-score.json";
+  const authoritative = await store.createArtifactVersion({
+    content: { hash: "a".repeat(64), size: 10 },
+    kind: "json",
+    logicalName,
+    mediaType: "application/json",
+    origin: "server_generated",
+    sessionId: session.id,
+  });
+
+  await assert.rejects(
+    store.createArtifactVersion({
+      content: { hash: "b".repeat(64), size: 11 },
+      kind: "json",
+      logicalName,
+      mediaType: "application/json",
+      origin: "llm_declared",
+      sessionId: session.id,
+    }),
+    /Server-generated Artifacts accept new versions only from a server-generated writer/u,
+  );
+  assert.equal(store.getArtifact(session.id, authoritative.artifact.id)?.currentVersion, 1);
+  assert.equal(store.listArtifactVersions(session.id, authoritative.artifact.id).length, 1);
+
+  const serverUpdate = await store.createArtifactVersion({
+    content: { hash: "c".repeat(64), size: 12 },
+    kind: "json",
+    logicalName,
+    mediaType: "application/json",
+    origin: "server_generated",
+    sessionId: session.id,
+  });
+  assert.equal(serverUpdate.version.version, 2);
 });
 
 test("SessionStore persists global package sources and migrates old catalogs to upstream", async (context) => {
@@ -132,6 +186,31 @@ async function readPersistedCatalog(tempRoot: string): Promise<PersistedCatalog>
   database.close();
   return JSON.parse(row.json) as PersistedCatalog;
 }
+
+test("late execution provenance retains history without rolling back the latest business revision", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `publication-order-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Ordering");
+  const session = await store.createSession(project.id, "Ordering", {}, {}, { allowUnconfiguredModel: true });
+  const workspace = store.workspacePath(session.id); const versions = new VersionStore(root);
+  const publish = async (text: string) => {
+    await withWorkspaceMutation(versions, workspace, () => writeFile(resolve(workspace, "file.txt"), text), { kind: "test" });
+    const refs = await RefStore.open(versions);
+    try { return refs.head(workspaceHeadName(workspace))!; } finally { refs.close(); }
+  };
+  const older = await publish("old"); const newer = await publish("new");
+  const input = { path: "file.txt", mode: "write" as const, origin: "tool" as const, size: 3, modifiedAt: "2030-01-01T00:00:00Z" };
+  const latest = await store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: newer, executionRunId: "new" });
+  const late = await store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: older, executionRunId: "old", modifiedAt: "2040-01-01T00:00:00Z" });
+  assert.notEqual(late.id, latest.id); assert.ok(late.publicationSequence! < latest.publicationSequence!);
+  assert.equal(store.getWorkspaceFileProvenance(session.id, input.path)!.currentRevision.id, latest.id);
+  const edit = await store.recordWorkspaceFileRevision(session.id, { ...input, origin: "upload" });
+  await store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: newer, executionRunId: "duplicate-late" });
+  assert.equal(store.getWorkspaceFileProvenance(session.id, input.path)!.currentRevision.id, edit.id, "unreceipted newer writer wins ties with its baseline publication");
+  const unrooted = await versions.putRecord("WorkspaceExecution", { executionId: "not-published" });
+  await assert.rejects(store.recordWorkspaceFileRevision(session.id, { ...input, publicationVersion: unrooted }), /not rooted/);
+});
 
 test("Reviewer Specialist levels are cumulative", () => {
   assert.equal(reviewerSpecialistSupportsLevel("quick", "quick"), true);
@@ -380,32 +459,57 @@ test("SessionStore persists a Reviewer Specialist conversation checkpoint", asyn
   assert.deepEqual(lateProgress, completed);
 });
 
-test("SessionStore persists the Reviewer Specialist switch and cumulative review level", async (context) => {
+test("SessionStore persists the global Reviewer switch and per-Session automatic review settings", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-settings-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
 
   const store = new SessionStore(tempRoot);
   await store.load();
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, level: "quick" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "record" });
 
-  await store.updateReviewerSpecialistSettings({ enabled: true, level: "deep" });
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, level: "deep" });
+  await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest" });
   assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistEnabled, true);
-  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistLevel, "deep");
+  assert.equal((await readPersistedCatalog(tempRoot)).reviewerSpecialistFeedbackPolicy, "suggest");
+  const project = await store.createProject("Reviewer settings");
+  const session = await store.createSession(project.id, "Quick by default", {}, {}, { allowUnconfiguredModel: true });
+  assert.deepEqual(store.getSessionReviewerSpecialistSettings(session.id), {
+    automaticReviewEnabled: true,
+    level: "quick",
+  });
+  await store.updateSessionReviewerSpecialistSettings(session.id, {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+  assert.deepEqual(store.getSessionReviewerSpecialistSettings(session.id), {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
+  const persistedSession = (await readPersistedCatalog(tempRoot)).sessions.find((item) => item.id === session.id);
+  assert.equal(persistedSession?.reviewerAutomaticReviewEnabled, false);
+  assert.equal(persistedSession?.reviewerSpecialistLevel, "deep");
 
   const reopened = new SessionStore(tempRoot);
   await reopened.load();
-  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: true, level: "deep" });
+  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest" });
+  assert.deepEqual(reopened.getSessionReviewerSpecialistSettings(session.id), {
+    automaticReviewEnabled: false,
+    level: "deep",
+  });
   await reopened.updateReviewerSpecialistSettings({ enabled: false });
-  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, level: "deep" });
+  assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "suggest" });
   await assert.rejects(
     store.updateReviewerSpecialistSettings({ enabled: "yes" }),
     /enabled must be a boolean/,
   );
   await assert.rejects(
-    store.updateReviewerSpecialistSettings({ enabled: true, level: "extreme" }),
+    store.updateSessionReviewerSpecialistSettings(session.id, { automaticReviewEnabled: true, level: "extreme" }),
     /level must be quick or deep/,
+  );
+  await assert.rejects(
+    store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "unsafe" }),
+    /feedback policy must be record, explain, suggest, or repair/,
   );
 });
 
@@ -440,11 +544,24 @@ test("SessionStore appends run events losslessly and survives reload", async (co
     turn: 1,
     type: "assistant.thinking.delta",
   });
+  const plan = await store.appendSessionRunEvent(session.id, run.id, {
+    plan: {
+      agentId: "main",
+      explanation: "Persist this snapshot",
+      items: [{ status: "in_progress", step: "Inspect data" }],
+      toolCallId: "call-plan",
+      turn: 1,
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    },
+    type: "plan.updated",
+  });
   assert.equal(first.sequence, 1);
   assert.equal(second.sequence, 2);
+  assert.equal(plan.sequence, 3);
   assert.deepEqual((await store.listSessionRunEvents(session.id, run.id)).map((record) => record.event), [
     { delta: "Inspect ", turn: 1, type: "assistant.thinking.delta" },
     { delta: "the data.", turn: 1, type: "assistant.thinking.delta" },
+    plan.event,
   ], "deltas persist exactly as they were emitted");
   assert.equal((await store.listSessionRunEvents(session.id, run.id, 1))[0]?.sequence, 2);
 
@@ -457,7 +574,7 @@ test("SessionStore appends run events losslessly and survives reload", async (co
     await store.appendSessionRunEvent(session.id, run.id, { phase: "thinking", turn, type: "agent.phase" });
   }
   const retained = await store.listSessionRunEvents(session.id, run.id);
-  assert.equal(retained.length, 1_203, "no record cap drops history");
+  assert.equal(retained.length, 1_204, "no record cap drops history");
   assert.ok(retained.every((record) => record.event.type !== "run.history.truncated"));
 
   const reopened = new SessionStore(tempRoot);
@@ -472,9 +589,9 @@ test("SessionStore appends run events losslessly and survives reload", async (co
 test("SessionStore serializes concurrent model usage writes without losing records", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `model-usage-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
 
   const store = new SessionStore(tempRoot);
+  context.after(() => store.close());
   await store.load();
   const model = await store.createModel({
     apiToken: "token",
@@ -513,8 +630,57 @@ test("SessionStore serializes concurrent model usage writes without losing recor
   );
 
   const reopened = new SessionStore(tempRoot);
+  context.after(() => reopened.close());
   await reopened.load();
   assert.equal((await reopened.listModelInvocationUsage(session.id)).length, records.length);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+});
+
+test("SessionStore ignores duplicate model usage attempts but keeps retries", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `model-usage-idempotent-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+
+  const store = new SessionStore(tempRoot);
+  context.after(() => store.close());
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const project = await store.createProject("Usage idempotency");
+  const session = await store.createSession(project.id, "Idempotent usage", model.id);
+  const now = new Date().toISOString();
+  const record: ModelInvocationUsage = {
+    attemptIndex: 0,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    costUsd: null,
+    finishedAt: now,
+    id: "usage-0",
+    inputTokens: 1,
+    invocationId: "logical-call",
+    invocationKind: "task",
+    model: model.model,
+    modelProfileId: model.id,
+    modelProfileName: model.name,
+    outputTokens: 2,
+    projectId: project.id,
+    sessionId: session.id,
+    startedAt: now,
+    totalTokens: 3,
+    usageStatus: "reported",
+  };
+
+  await store.appendModelInvocationUsage(record);
+  await store.appendModelInvocationUsage({ ...record, id: "usage-duplicate", totalTokens: 30 });
+  await store.appendModelInvocationUsage({ ...record, attemptIndex: 1, id: "usage-retry", totalTokens: 4 });
+
+  const records = await store.listModelInvocationUsage(session.id);
+  assert.deepEqual(records.map((usage) => usage.id).toSorted(), ["usage-0", "usage-retry"]);
+  assert.deepEqual(records.map((usage) => usage.attemptIndex).toSorted(), [0, 1]);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
 });
 
 test("SessionStore serializes concurrent Session run creation and updates", async (context) => {
@@ -785,6 +951,60 @@ test("proxy settings project supported authenticated URLs while catalog and SQLi
       && !error.message.includes("leak-user")
       && !error.message.includes("leak-password"),
   );
+});
+
+test("recovering a large run stream does not load the whole file into the heap", { timeout: 120_000 }, async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `run-events-large-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const project = await store.createProject("Large stream");
+  const session = await store.createSession(project.id, "Replay", model.id);
+  const run = await store.createSessionRun({
+    prompt: "Big stream",
+    sessionId: session.id,
+    settingsSnapshot: store.resolveRuntimeSettings(session.id).effective,
+  });
+  await store.appendSessionRunEvent(session.id, run.id, { phase: "thinking", turn: 1, type: "agent.phase" });
+
+  // Grow the stream well past what a single heap-resident copy would cost.
+  // Reading it whole (readFile + split) allocated the file twice, which is how
+  // a 236 MB subagent stream took the API down at startup.
+  const streamPath = resolve(tempRoot, "run-events", session.id, run.id, "main.jsonl");
+  const filler = "x".repeat(64 * 1024);
+  const lines: string[] = [];
+  for (let sequence = 2; sequence <= 1_600; sequence += 1) {
+    lines.push(JSON.stringify({
+      createdAt: new Date().toISOString(),
+      event: { content: filler, phase: "thinking", turn: sequence, type: "agent.phase" },
+      sequence,
+    }));
+  }
+  await appendFile(streamPath, `${lines.join("\n")}\n`, "utf8");
+  const { size } = await stat(streamPath);
+  assert.ok(size > 100 * 1024 * 1024, `stream should exceed 100 MB, saw ${size}`);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  global.gc?.();
+  const before = process.memoryUsage().heapUsed;
+  // Appending forces tail recovery, the path that used to read the file whole.
+  const appended = await reopened.appendSessionRunEvent(session.id, run.id, {
+    phase: "thinking",
+    turn: 1_601,
+    type: "agent.phase",
+  });
+  const grew = process.memoryUsage().heapUsed - before;
+  assert.equal(appended.sequence, 1_601, "recovery resumes after the highest sequence on disk");
+  assert.ok(grew < size / 4, `tail recovery should not hold the file on the heap: grew ${grew} for a ${size} byte stream`);
 });
 
 test("run event streams repair a torn tail and keep sequences monotonic", async (context) => {
@@ -2211,81 +2431,6 @@ test("SessionStore recovers uncommitted trash and removes committed orphan trash
   assert.equal(reopened.getSession("missing-session"), undefined);
 });
 
-test("SessionStore records plans without coupling them to approval policy", async (context) => {
-  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-plans-${Date.now()}-${process.pid}`);
-  await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
-
-  const store = new SessionStore(tempRoot);
-  await store.load();
-  const model = await store.createModel({
-    apiToken: "plan-test-token",
-    baseUrl: "https://models.example.test/v1",
-    model: "science-model",
-    name: "Plan test model",
-  });
-  const project = await store.createProject("Planning", { modelId: model.id, reviewModelId: model.id });
-  const manual = await store.createSession(project.id, "Manual planning", {}, { approvalMode: "ask_for_dangerous" });
-  const proposed = await store.proposeSessionPlan(manual.id, {
-    caveats: ["Dataset coverage must be checked"],
-    feasibilityConfidence: "medium",
-    scope: "Analyze the study in two phases",
-    steps: ["Inspect inputs", "Run analysis"],
-  });
-  assert.equal(proposed.state, "recorded");
-  assert.doesNotThrow(() => store.assertSessionWritable(manual.id));
-
-  const revised = await store.reviseSessionPlan(manual.id, proposed.id, {
-    caveats: [],
-    expectedVersion: proposed.version,
-    feasibilityConfidence: "high",
-    scope: "Analyze the study with an explicit validation phase",
-    steps: ["Inspect inputs", "Run analysis", "Validate findings"],
-  });
-  assert.equal(revised.version, 2);
-  const started = await store.updateSessionPlanStep(manual.id, {
-    expectedVersion: revised.version,
-    planId: revised.id,
-    status: "in_progress",
-    stepId: revised.steps[0]!.id,
-  });
-  assert.equal(started.steps[0]?.status, "in_progress");
-  let progressing = started;
-  for (const step of started.steps) {
-    progressing = await store.updateSessionPlanStep(manual.id, {
-      expectedVersion: progressing.version,
-      planId: progressing.id,
-      status: "completed",
-      stepId: step.id,
-    });
-  }
-  assert.equal(progressing.state, "completed");
-  await assert.rejects(
-    store.updateSessionPlanStep(manual.id, {
-      expectedVersion: progressing.version,
-      planId: progressing.id,
-      status: "pending",
-      stepId: progressing.steps[0]!.id,
-    }),
-    /Only a recorded plan/u,
-  );
-  const automatic = await store.createSession(project.id, "Automatic planning", {}, { approvalMode: "always_allow" });
-  const autoPlan = await store.proposeSessionPlan(automatic.id, {
-    feasibilityConfidence: "high",
-    scope: "Run a bounded descriptive analysis",
-    steps: ["Summarize inputs", "Write results"],
-  });
-  assert.equal(autoPlan.state, "recorded");
-  const abandoned = await store.abandonSessionPlan(automatic.id, {
-    expectedVersion: autoPlan.version,
-    planId: autoPlan.id,
-    reason: "The user changed the objective",
-  });
-  assert.equal(abandoned.state, "abandoned");
-  assert.equal(abandoned.abandonmentReason, "The user changed the objective");
-  assert.doesNotThrow(() => store.assertSessionWritable(automatic.id));
-});
-
 test("SessionStore persists specialists and isolated subagents", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-specialists-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -3015,11 +3160,6 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
   await assert.rejects(store.updateRemoteJob(changedCard), /approval card is immutable/);
 
   await store.setApprovalMode(session.id, "ask_for_dangerous");
-  const pendingPlan = await store.proposeSessionPlan(session.id, {
-    feasibilityConfidence: "medium",
-    scope: "Switch to manual governance before another remote run",
-    steps: ["Inspect remote data", "Run batch job"],
-  });
   const blocked = await store.createRemoteJob(session.id, {
     command: "hostname",
     hostId: host.id,
@@ -3034,7 +3174,6 @@ test("SessionStore auto-submits remote jobs and keeps manual jobs independently 
   );
   assert.equal(approved.state, "approved");
   assert.ok(approved.permissionAuthorizationId);
-  assert.equal(pendingPlan.state, "recorded");
 });
 
 // Regression coverage: [evidence1]/[artifact1] alias tokens in a final assistant
@@ -4116,4 +4255,42 @@ test("a runner token stored before SSH credentials existed keeps working", async
   });
   assert.equal(restored.hasToken, true);
   assert.equal(legacy.remoteHostToken(host.id), "runner-connection-token");
+});
+
+
+test("Runner selections treat local and remote alike and preserve legacy defaults across reload", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `runner-selection-${Date.now()}-${process.pid}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root);
+  await store.load();
+  const host = await store.registerRemoteHost({ alias: "selection-runner", connectionKind: "direct",
+    endpoint: { host: "127.0.0.1", port: 44444, protocol: "http" }, token: "test-only",
+    capabilities: { conda: false, containerRuntimes: [], cpuCores: 1, cuda: null, gpu: null,
+      memoryBytes: 1024, modules: false, nodeVersion: null, platform: "Linux", probedAt: new Date().toISOString(),
+      runnerCommandAvailable: true, scratchPaths: [], slurm: false } });
+  const project = await store.createProject("Runner contract", undefined, [host.id]);
+  const session = await store.createSession(project.id, "Selection", {}, {}, { allowUnconfiguredModel: true });
+  assert.deepEqual(store.effectiveRunnerIds(session.id), ["local", host.id]);
+  for (const id of ["local", host.id]) {
+    await store.updateProject(project.id, { runnerIds: [id] });
+    assert.deepEqual(store.effectiveRunnerIds(session.id), [id]);
+    assert.doesNotThrow(() => store.assertSessionAllowsRunner(session.id, id));
+    assert.throws(() => store.assertSessionAllowsRunner(session.id, id === "local" ? host.id : "local"), /not allowed/);
+  }
+  await store.updateSession(session.id, { runnerIds: ["local"] });
+  assert.deepEqual(store.effectiveRunnerIds(session.id), ["local"], "Session override is independent of Project default");
+  await store.updateSession(session.id, { runnerIds: [] });
+  assert.deepEqual(store.effectiveRunnerIds(session.id), []);
+  assert.throws(() => store.assertSessionAllowsRunner(session.id, "local"), /not allowed/);
+  const reloaded = new SessionStore(root);
+  await reloaded.load();
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), [], "empty override survives persistence");
+  await reloaded.updateSession(session.id, { runnerIds: null });
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), [host.id]);
+  await assert.rejects(reloaded.updateProject(project.id, { remoteRunnerHostIds: ["missing"] }), /not found/);
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), [host.id], "invalid legacy write cannot discard current selection");
+  await reloaded.updateSession(session.id, { remoteRunnerHostIds: [] });
+  assert.deepEqual(reloaded.effectiveRunnerIds(session.id), ["local"], "legacy empty array still means local only");
+  await assert.rejects(reloaded.updateSession(session.id, { runnerIds: [" "] }), /must not be empty/);
+  await assert.rejects(reloaded.registerRemoteHost({ id: "local", alias: "reserved" }), /reserved/);
 });

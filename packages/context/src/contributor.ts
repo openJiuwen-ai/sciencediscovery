@@ -32,6 +32,8 @@ export interface ContextAttachment {
 
 export interface ContextDiagnostic {
   code: string;
+  /** Structured, trace-only evidence behind the diagnostic. Never rendered into the model prompt. */
+  details?: Record<string, unknown>;
   message: string;
   severity: "info" | "warning";
 }

@@ -43,7 +43,7 @@ import type { ModelApiVariant, ModelThinkingEffort } from "./model-usage.js";
 
 /** The subset of a models.dev model entry this product reads. */
 export interface ModelsDevModel {
-  cost?: { cache_read?: number; input?: number; output?: number };
+  cost?: { cache_read?: number; cache_write?: number; input?: number; input_cache_write?: number; output?: number };
   id?: string;
   limit?: { context?: number; output?: number };
   modalities?: { input?: string[]; output?: string[] };
@@ -248,7 +248,9 @@ function mapPricing(
   const output = nonNegative(model.cost.output);
   if (input === undefined || output === undefined) return undefined;
   const cachedInput = nonNegative(model.cost.cache_read);
+  const cacheWriteInput = nonNegative(model.cost.cache_write ?? model.cost.input_cache_write);
   return {
+    ...(cacheWriteInput !== undefined ? { cacheWriteInput } : {}),
     ...(cachedInput !== undefined ? { cachedInput } : {}),
     currency: "USD",
     input,

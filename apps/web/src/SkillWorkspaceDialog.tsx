@@ -19,8 +19,9 @@ import type {
 import { BUILT_IN_SKILL_LIBRARY_ID, DEFAULT_WRITABLE_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { useLocale } from "./i18n/index.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, ProjectIcon, TrashIcon } from "./icons.js";
-import { SkillLineDiff, skillFileDiffStatus, type EditableSkillFile } from "./SkillReviewDialog.js";
+import { SkillLineDiff, skillFileDiffStatus, skillFileDiffStatusLabel, type EditableSkillFile, type SkillFileTranslate } from "./SkillReviewDialog.js";
 
 function comparePaths(left: string, right: string): number {
   if (left === "SKILL.md") return right === "SKILL.md" ? 0 : -1;
@@ -84,16 +85,16 @@ function versionTone(version: SkillVersionSummary): string {
   return "revision";
 }
 
-function versionSource(version: SkillVersionSummary): string {
+function versionSource(version: SkillVersionSummary, t: SkillFileTranslate): string {
   const provenance = version.provenance;
   switch (provenance?.source) {
-    case "agent": return "Agent generated";
-    case "built-in": return "Built in";
-    case "git": return provenance.git ? `Git · ${provenance.git.commit.slice(0, 12)}` : "Git import";
-    case "local-import": return "Local import";
-    case "manual": return "Human edit";
-    case "session-distill": return "Session distillation";
-    default: return version.kind === "agent-proposal" ? "Agent proposal" : "Legacy version";
+    case "agent": return t("skillExplorer.source.agentGenerated");
+    case "built-in": return t("skillExplorer.source.builtIn");
+    case "git": return provenance.git ? t("skillExplorer.source.gitCommit", { commit: provenance.git.commit.slice(0, 12) }) : t("skillExplorer.source.gitImport");
+    case "local-import": return t("skillExplorer.source.localImport");
+    case "manual": return t("skillExplorer.source.humanEdit");
+    case "session-distill": return t("skillExplorer.source.sessionDistill");
+    default: return version.kind === "agent-proposal" ? t("skillExplorer.source.agentProposal") : t("skillExplorer.source.legacy");
   }
 }
 
@@ -124,6 +125,7 @@ export function SkillWorkspaceDialog({
   sessionId?: string;
   skills: SkillDescriptor[];
 }) {
+  const { t } = useLocale();
   const catalog = useMemo(() => [...new Set([...skills.map((skill) => skill.id), ...drafts.map((draft) => draft.name)])]
     .toSorted(), [drafts, skills]);
   const [query, setQuery] = useState("");
@@ -342,7 +344,7 @@ export function SkillWorkspaceDialog({
         </div>;
       }
       const status = skillFileDiffStatus(leftByPath.get(node.path), visibleRightByPath.get(node.path) as EditableSkillFile | undefined);
-      return <button className={`skill-file-tree-file${node.path === activePath ? " active" : ""}`} key={node.path} onClick={() => setActivePath(node.path)} style={{ paddingInlineStart: 10 + depth * 14 }} title={node.path} type="button"><span className="skill-file-tree-copy"><FileIcon size={12} /><strong>{node.name}</strong></span><small className={status}>{status}</small></button>;
+      return <button className={`skill-file-tree-file${node.path === activePath ? " active" : ""}`} key={node.path} onClick={() => setActivePath(node.path)} style={{ paddingInlineStart: 10 + depth * 14 }} title={node.path} type="button"><span className="skill-file-tree-copy"><FileIcon size={12} /><strong>{node.name}</strong></span><small className={status}>{skillFileDiffStatusLabel(status, t)}</small></button>;
     });
   }
 
@@ -442,7 +444,7 @@ export function SkillWorkspaceDialog({
       setReviewFilesVersionId(undefined);
       setRefreshKey((current) => current + 1);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not confirm Skill proposal";
+      const message = reason instanceof Error ? reason.message : t("skillExplorer.errorConfirmProposal");
       setLoadError(message);
       onError(message);
     } finally {
@@ -486,7 +488,7 @@ export function SkillWorkspaceDialog({
       setMergeOpen(false);
       setRefreshKey((current) => current + 1);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not combine Skill drafts");
+      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorCombineDrafts"));
     } finally {
       setBusy(false);
     }
@@ -504,7 +506,7 @@ export function SkillWorkspaceDialog({
       onCatalogChange(await client.listSkills());
       setRefreshKey((current) => current + 1);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not save Skill file");
+      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorSaveFile"));
     } finally {
       setBusy(false);
     }
@@ -522,10 +524,10 @@ export function SkillWorkspaceDialog({
       });
       const candidate = inspection.candidates.find((item) => item.subdirectory === installedGit.subdirectory)
         ?? inspection.candidates.find((item) => item.name === selectedSkillId);
-      if (!candidate) throw new Error("The installed Skill path no longer exists in this repository");
+      if (!candidate) throw new Error(t("skillExplorer.errorSkillPathGone"));
       setGitUpdate({ candidate, inspection });
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not check the Git Skill for updates");
+      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorCheckGitUpdate"));
     } finally {
       setBusy(false);
     }
@@ -545,7 +547,7 @@ export function SkillWorkspaceDialog({
       setGitUpdate(undefined);
       setRefreshKey((current) => current + 1);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not prepare the Git Skill update");
+      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorPrepareGitUpdate"));
     } finally {
       setBusy(false);
     }
@@ -565,7 +567,7 @@ export function SkillWorkspaceDialog({
       setDeleteConfirmation("");
       setDeleteTarget({ id: selectedSkill.id, impact, kind: "skill" });
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "Could not inspect Skill references");
+      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorInspectReferences"));
     } finally {
       setBusy(false);
     }
@@ -593,81 +595,81 @@ export function SkillWorkspaceDialog({
         setRefreshKey((current) => current + 1);
       }
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : deleteTarget.kind === "draft" ? "Could not discard Skill draft" : "Could not delete Skill");
+      onError(reason instanceof Error ? reason.message : deleteTarget.kind === "draft" ? t("skillExplorer.errorDiscardDraft") : t("skillExplorer.errorDeleteSkill"));
     } finally {
       setBusy(false);
     }
   }
 
   return <div className="dialog-backdrop">
-    <section aria-label="Skill resource explorer" aria-modal="true" className="skill-workspace-dialog" role="dialog">
+    <section aria-label={t("skillExplorer.dialogAria")} aria-modal="true" className="skill-workspace-dialog" role="dialog">
       <header className="skill-workspace-header">
-        <div><span className="eyebrow">Skill workspace</span><h2>Skills Explorer</h2><p>Browse every package file, edit managed Skills, or compare any two saved versions.</p></div>
-        <div className="skill-workspace-header-actions"><span><strong>{catalog.length}</strong> Skills</span><span className={drafts.length ? "has-drafts" : undefined}><strong>{drafts.length}</strong> Drafts</span><button aria-label="Close Skills Explorer" className="icon-button" onClick={onClose} type="button"><CloseIcon size={19} /></button></div>
+        <div><span className="eyebrow">{t("skillExplorer.eyebrow")}</span><h2>{t("skillExplorer.title")}</h2><p>{t("skillExplorer.intro")}</p></div>
+        <div className="skill-workspace-header-actions"><span><strong>{catalog.length}</strong> {t("skillExplorer.statsSkillsLabel")}</span><span className={drafts.length ? "has-drafts" : undefined}><strong>{drafts.length}</strong> {t("skillExplorer.statsDraftsLabel")}</span><button aria-label={t("skillExplorer.closeAria")} className="icon-button" onClick={onClose} type="button"><CloseIcon size={19} /></button></div>
       </header>
       <div className={`skill-workspace-layout${catalogCollapsed ? " catalog-collapsed" : ""}${filesCollapsed ? " files-collapsed" : ""}${historyCollapsed ? " history-collapsed" : ""}`}>
         <aside className={`skill-workspace-catalog${catalogCollapsed ? " collapsed" : ""}`}>
-          <div className="skill-workspace-pane-title"><strong>Skills</strong><span>{visibleCatalog.length}</span><button aria-expanded={!catalogCollapsed} aria-label={catalogCollapsed ? "Expand Skills sidebar" : "Collapse Skills sidebar"} onClick={() => setCatalogCollapsed((current) => !current)} title={catalogCollapsed ? "Expand Skills" : "Collapse Skills"} type="button"><ChevronRightIcon className={!catalogCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
-          {!catalogCollapsed ? <><label><input aria-label="Search Skill workspace" onChange={(event) => setQuery(event.target.value)} placeholder="Filter skills…" type="search" value={query} /></label>
-          <div aria-label="Filter Skills" className="skill-workspace-filters" role="group"><button aria-pressed={catalogFilter === "all"} className={catalogFilter === "all" ? "active" : ""} onClick={() => setCatalogFilter("all")} type="button">All <span>{catalog.length}</span></button><button aria-pressed={catalogFilter === "drafts"} className={catalogFilter === "drafts" ? "active" : ""} onClick={() => setCatalogFilter("drafts")} type="button">Drafts <span>{draftNames.size}</span></button></div>
-          {drafts.length > 1 ? <button className="skill-workspace-merge-trigger" onClick={openMergeDrafts} type="button">Combine drafts as versions</button> : null}
+          <div className="skill-workspace-pane-title"><strong>{t("settings.skills")}</strong><span>{visibleCatalog.length}</span><button aria-expanded={!catalogCollapsed} aria-label={catalogCollapsed ? t("skillExplorer.expandSidebarAria") : t("skillExplorer.collapseSidebarAria")} onClick={() => setCatalogCollapsed((current) => !current)} title={catalogCollapsed ? t("skillExplorer.expandSidebarTitle") : t("skillExplorer.collapseSidebarTitle")} type="button"><ChevronRightIcon className={!catalogCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
+          {!catalogCollapsed ? <><label><input aria-label={t("skillExplorer.searchAria")} onChange={(event) => setQuery(event.target.value)} placeholder={t("skillExplorer.searchPlaceholder")} type="search" value={query} /></label>
+          <div aria-label={t("skillExplorer.filterAria")} className="skill-workspace-filters" role="group"><button aria-pressed={catalogFilter === "all"} className={catalogFilter === "all" ? "active" : ""} onClick={() => setCatalogFilter("all")} type="button">{t("skillExplorer.filterAll")} <span>{catalog.length}</span></button><button aria-pressed={catalogFilter === "drafts"} className={catalogFilter === "drafts" ? "active" : ""} onClick={() => setCatalogFilter("drafts")} type="button">{t("skillExplorer.filterDrafts")} <span>{draftNames.size}</span></button></div>
+          {drafts.length > 1 ? <button className="skill-workspace-merge-trigger" onClick={openMergeDrafts} type="button">{t("skillExplorer.combineButton")}</button> : null}
           <div className="skill-workspace-skill-list">{visibleCatalog.map((id) => {
             const descriptor = skills.find((skill) => skill.id === id);
             const pending = drafts.some((draft) => draft.name === id);
-            return <button className={id === selectedSkillId ? "active" : ""} key={id} onClick={() => setSelectedSkillId(id)} type="button"><b aria-hidden="true" className={`skill-workspace-skill-icon ${descriptor?.source ?? "pending"}`}>{descriptor?.source === "built-in" ? "B" : pending && !descriptor ? "D" : "S"}</b><span><strong>{id}</strong><small>{descriptor?.source === "built-in" ? "Built-in · read-only" : descriptor ? `Managed · r${descriptor.currentRevision}` : "Pending Skill"}</small></span>{pending ? <i>Draft</i> : null}</button>;
+            return <button className={id === selectedSkillId ? "active" : ""} key={id} onClick={() => setSelectedSkillId(id)} type="button"><b aria-hidden="true" className={`skill-workspace-skill-icon ${descriptor?.source ?? "pending"}`}>{descriptor?.source === "built-in" ? "B" : pending && !descriptor ? "D" : "S"}</b><span><strong>{id}</strong><small>{descriptor?.source === "built-in" ? t("skills.builtInReadOnly") : descriptor ? t("skills.managedRevision", { revision: descriptor.currentRevision }) : t("skillExplorer.pendingSkill")}</small></span>{pending ? <i>{t("skillExplorer.draftBadge")}</i> : null}</button>;
           })}</div></> : null}
         </aside>
         <aside className={`skill-workspace-files${filesCollapsed ? " collapsed" : ""}`}>
-          <div><strong>Package files</strong><span>{paths.length}</span><button aria-expanded={!filesCollapsed} aria-label={filesCollapsed ? "Expand package files sidebar" : "Collapse package files sidebar"} onClick={() => setFilesCollapsed((current) => !current)} title={filesCollapsed ? "Expand package files" : "Collapse package files"} type="button"><ChevronRightIcon className={!filesCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
-          {!filesCollapsed ? <><nav aria-label="Skill package file tree" className="skill-file-tree">{renderFileNodes(fileTree)}</nav>{editingDraft ? <form className="skill-workspace-file-create" onSubmit={(event) => { event.preventDefault(); addReviewFile(); }}><input aria-label="New draft file path" onChange={(event) => setNewDraftPath(event.target.value)} placeholder="references/guide.md" spellCheck={false} value={newDraftPath} /><button aria-label="Add file to draft" disabled={!newDraftPath.trim() || reviewFiles.some((file) => file.path === newDraftPath.trim())} title="Add file" type="submit"><PlusIcon size={14} /></button></form> : null}</> : null}
+          <div><strong>{t("skillReview.packageFiles")}</strong><span>{paths.length}</span><button aria-expanded={!filesCollapsed} aria-label={filesCollapsed ? t("skillExplorer.expandFilesAria") : t("skillExplorer.collapseFilesAria")} onClick={() => setFilesCollapsed((current) => !current)} title={filesCollapsed ? t("skillExplorer.expandFilesTitle") : t("skillExplorer.collapseFilesTitle")} type="button"><ChevronRightIcon className={!filesCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
+          {!filesCollapsed ? <><nav aria-label={t("skillExplorer.fileTreeAria")} className="skill-file-tree">{renderFileNodes(fileTree)}</nav>{editingDraft ? <form className="skill-workspace-file-create" onSubmit={(event) => { event.preventDefault(); addReviewFile(); }}><input aria-label={t("skillExplorer.newDraftPathAria")} onChange={(event) => setNewDraftPath(event.target.value)} placeholder="references/guide.md" spellCheck={false} value={newDraftPath} /><button aria-label={t("skillExplorer.addFileToDraftAria")} disabled={!newDraftPath.trim() || reviewFiles.some((file) => file.path === newDraftPath.trim())} title={t("skillReview.addFile")} type="submit"><PlusIcon size={14} /></button></form> : null}</> : null}
         </aside>
         <main className="skill-workspace-main">
           <div className="skill-workspace-modebar">
-            <div className="skill-workspace-mode-controls"><button className={mode === "compare" ? "active" : ""} disabled={activeVersions.length < 2} onClick={() => setMode("compare")} type="button">Compare</button><button className={mode === "edit" ? "active" : ""} disabled={!installedCurrent && !pendingDraft} onClick={openEditMode} type="button">{pendingDraft ? "Edit draft" : installedCurrent ? "Edit" : "Read-only"}</button></div>
-            <strong title={`${selectedSkillId ?? ""}/${activePath}`}><span>{selectedSkillId}</span><b>/</b>{activePath || "Select a file"}</strong>
+            <div className="skill-workspace-mode-controls"><button className={mode === "compare" ? "active" : ""} disabled={activeVersions.length < 2} onClick={() => setMode("compare")} type="button">{t("skillExplorer.modeCompare")}</button><button className={mode === "edit" ? "active" : ""} disabled={!installedCurrent && !pendingDraft} onClick={openEditMode} type="button">{pendingDraft ? t("skillExplorer.modeEditDraft") : installedCurrent ? t("skillExplorer.modeEdit") : t("skillExplorer.modeReadOnly")}</button></div>
+            <strong title={`${selectedSkillId ?? ""}/${activePath}`}><span>{selectedSkillId}</span><b>/</b>{activePath || t("skillExplorer.selectFileFallback")}</strong>
             <div className="skill-workspace-item-actions">
-              {pendingDraft ? <button className="skill-workspace-focus-action" onClick={() => { const focused = catalogCollapsed && historyCollapsed; setCatalogCollapsed(!focused); setHistoryCollapsed(!focused); }} type="button">{catalogCollapsed && historyCollapsed ? "Show sidebars" : "Focus editor"}</button> : null}
-              {installedGit ? <button disabled={busy} onClick={() => void checkGitUpdate()} title={`Check ${installedGit.repositoryUrl} at ${installedGit.ref ?? "the default branch"}`} type="button">{busy ? "Checking…" : "Check Git update"}</button> : null}
-              {pendingDraft ? <button className="skill-workspace-delete-action" disabled={busy} onClick={inspectDraftDeletion} type="button">Discard draft</button> : null}
-              {selectedSkill?.source === "managed" ? <button className="skill-workspace-delete-action" disabled={busy || Boolean(pendingDraft)} onClick={() => void inspectSkillDeletion()} title={pendingDraft ? "Discard the pending draft before deleting this Skill" : "Delete this managed Skill"} type="button">Delete Skill</button> : null}
-              {selectedSkill?.source === "built-in" ? <span className="skill-workspace-protected">Protected</span> : null}
+              {pendingDraft ? <button className="skill-workspace-focus-action" onClick={() => { const focused = catalogCollapsed && historyCollapsed; setCatalogCollapsed(!focused); setHistoryCollapsed(!focused); }} type="button">{catalogCollapsed && historyCollapsed ? t("skillExplorer.showSidebars") : t("skillExplorer.focusEditor")}</button> : null}
+              {installedGit ? <button disabled={busy} onClick={() => void checkGitUpdate()} title={t("skillExplorer.checkGitTitle", { ref: installedGit.ref ?? t("skillExplorer.defaultBranch"), url: installedGit.repositoryUrl })} type="button">{busy ? t("skillExplorer.checking") : t("skillExplorer.checkGitUpdate")}</button> : null}
+              {pendingDraft ? <button className="skill-workspace-delete-action" disabled={busy} onClick={inspectDraftDeletion} type="button">{t("skillReview.discardDraft")}</button> : null}
+              {selectedSkill?.source === "managed" ? <button className="skill-workspace-delete-action" disabled={busy || Boolean(pendingDraft)} onClick={() => void inspectSkillDeletion()} title={pendingDraft ? t("skillExplorer.discardBeforeDeleteTitle") : t("skillExplorer.deleteSkillTitle")} type="button">{t("skillExplorer.deleteSkill")}</button> : null}
+              {selectedSkill?.source === "built-in" ? <span className="skill-workspace-protected">{t("skillExplorer.protectedBadge")}</span> : null}
             </div>
           </div>
           <div className="skill-workspace-editor">
-            {gitUpdate ? <div className={`skill-git-update-result ${gitUpdate.candidate.status}`}><div><strong>{gitUpdate.candidate.status === "update" ? "Update available" : gitUpdate.candidate.status === "unchanged" ? "Already up to date" : "Git source needs attention"}</strong><p><code>{gitUpdate.inspection.commit.slice(0, 12)}</code> · {gitUpdate.candidate.subdirectory}{gitUpdate.candidate.diagnostics.length ? ` · ${gitUpdate.candidate.diagnostics.join(" · ")}` : ""}</p></div><div><button onClick={() => setGitUpdate(undefined)} type="button">Dismiss</button>{gitUpdate.candidate.status === "update" ? <button className="primary-button" disabled={busy} onClick={() => void prepareGitUpdate()} type="button">Prepare review diff</button> : null}</div></div> : null}
-            {loadError ? <div className="skill-workspace-load-error" role="alert"><strong>Could not load this Skill</strong><p>{loadError}</p><button onClick={() => setRefreshKey((current) => current + 1)} type="button">Retry</button></div> : !activeRightSnapshot ? <p className="skill-workspace-empty">Loading version…</p> : mode === "compare" ? leftFile?.binary || rightFile?.binary ? <div className="skill-workspace-empty"><strong>Binary comparison</strong><p>{leftFile?.size ?? 0} bytes → {rightByPath.get(activePath)?.size ?? 0} bytes</p></div> : <SkillLineDiff after={rightFile?.content} before={leftFile?.content} leftLabel={activeLeftSnapshot?.label ?? "Version A"} rightLabel={activeRightSnapshot.label} status={activeStatus} /> : pendingDraft ? !reviewReady ? <p className="skill-workspace-empty">Preparing the selected proposal…</p> : <div className="skill-workspace-draft-editor">
-              <div className="skill-workspace-draft-path"><label><span>Package path</span><input defaultValue={activePath} disabled={activePath === "SKILL.md" || busy} key={activePath} onBlur={(event) => renameReviewFile(event.target.value.trim())} spellCheck={false} /></label>{activePath !== "SKILL.md" ? <button aria-label={`Remove ${activePath} from draft`} disabled={busy} onClick={removeReviewFile} title="Remove file" type="button"><TrashIcon size={15} /> Remove</button> : <span>Required entry file</span>}</div>
-              {rightFile?.binary ? <div className="skill-binary-editor-note"><strong>Binary resource</strong><p>This file is preserved byte-for-byte. You can rename or remove it, but it cannot be edited as text.</p></div> : <textarea aria-label={`Edit draft file ${activePath}`} disabled={busy || !rightFile} onChange={(event) => updateReviewFile(event.target.value)} spellCheck={false} value={rightFile?.content ?? ""} />}
-              <div className="skill-workspace-review-bar"><div><span><CheckIcon size={14} /> Review target</span><strong>{reviewVersion?.label}</strong><small>{versionSource(reviewVersion!)} · publishes an immutable library version</small></div><label className="skill-workspace-review-destination"><span>Publish to</span><select aria-label="Publish Skill draft to library" disabled={busy} onChange={(event) => setTargetLibraryId(event.target.value)} value={targetLibraryId}>{!writableLibraries.some((library) => library.id === DEFAULT_WRITABLE_SKILL_LIBRARY_ID) ? <option value={DEFAULT_WRITABLE_SKILL_LIBRARY_ID}>Project Skills · create on publish</option> : null}{writableLibraries.map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}</select></label><button className="primary-button" disabled={busy || !confirmableReview} onClick={() => void confirmReviewVersion()} title={`Publish to ${targetLibrary?.name ?? "Project Skills"}`} type="button">{busy ? "Publishing…" : "Publish Skill"}</button></div>
+            {gitUpdate ? <div className={`skill-git-update-result ${gitUpdate.candidate.status}`}><div><strong>{gitUpdate.candidate.status === "update" ? t("skillExplorer.updateAvailable") : gitUpdate.candidate.status === "unchanged" ? t("skillExplorer.upToDate") : t("skillExplorer.gitNeedsAttention")}</strong><p><code>{gitUpdate.inspection.commit.slice(0, 12)}</code> · {gitUpdate.candidate.subdirectory}{gitUpdate.candidate.diagnostics.length ? ` · ${gitUpdate.candidate.diagnostics.join(" · ")}` : ""}</p></div><div><button onClick={() => setGitUpdate(undefined)} type="button">{t("skillExplorer.dismiss")}</button>{gitUpdate.candidate.status === "update" ? <button className="primary-button" disabled={busy} onClick={() => void prepareGitUpdate()} type="button">{t("skillExplorer.prepareReviewDiff")}</button> : null}</div></div> : null}
+            {loadError ? <div className="skill-workspace-load-error" role="alert"><strong>{t("skillExplorer.loadErrorTitle")}</strong><p>{loadError}</p><button onClick={() => setRefreshKey((current) => current + 1)} type="button">{t("skillExplorer.retry")}</button></div> : !activeRightSnapshot ? <p className="skill-workspace-empty">{t("skillExplorer.loadingVersion")}</p> : mode === "compare" ? leftFile?.binary || rightFile?.binary ? <div className="skill-workspace-empty"><strong>{t("skillExplorer.binaryComparison")}</strong><p>{t("skillExplorer.binaryBytes", { left: leftFile?.size ?? 0, right: rightByPath.get(activePath)?.size ?? 0 })}</p></div> : <SkillLineDiff after={rightFile?.content} before={leftFile?.content} leftLabel={activeLeftSnapshot?.label ?? t("skillExplorer.versionAFallback")} rightLabel={activeRightSnapshot.label} status={activeStatus} /> : pendingDraft ? !reviewReady ? <p className="skill-workspace-empty">{t("skillExplorer.preparingProposal")}</p> : <div className="skill-workspace-draft-editor">
+              <div className="skill-workspace-draft-path"><label><span>{t("skillExplorer.packagePathLabel")}</span><input defaultValue={activePath} disabled={activePath === "SKILL.md" || busy} key={activePath} onBlur={(event) => renameReviewFile(event.target.value.trim())} spellCheck={false} /></label>{activePath !== "SKILL.md" ? <button aria-label={t("skillExplorer.removeFromDraftAria", { path: activePath })} disabled={busy} onClick={removeReviewFile} title={t("skillExplorer.removeFileTitle")} type="button"><TrashIcon size={15} /> {t("skillReview.removeFile")}</button> : <span>{t("skillExplorer.requiredEntry")}</span>}</div>
+              {rightFile?.binary ? <div className="skill-binary-editor-note"><strong>{t("skillExplorer.binaryResource")}</strong><p>{t("skillExplorer.binaryResourceHint")}</p></div> : <textarea aria-label={t("skillExplorer.editDraftFileAria", { path: activePath })} disabled={busy || !rightFile} onChange={(event) => updateReviewFile(event.target.value)} spellCheck={false} value={rightFile?.content ?? ""} />}
+              <div className="skill-workspace-review-bar"><div><span><CheckIcon size={14} /> {t("skillExplorer.reviewTarget")}</span><strong>{reviewVersion?.label}</strong><small>{t("skillExplorer.publishesImmutable", { source: versionSource(reviewVersion!, t) })}</small></div><label className="skill-workspace-review-destination"><span>{t("skillExplorer.publishTo")}</span><select aria-label={t("skillExplorer.publishAria")} disabled={busy} onChange={(event) => setTargetLibraryId(event.target.value)} value={targetLibraryId}>{!writableLibraries.some((library) => library.id === DEFAULT_WRITABLE_SKILL_LIBRARY_ID) ? <option value={DEFAULT_WRITABLE_SKILL_LIBRARY_ID}>{t("skillExplorer.projectSkillsOption")}</option> : null}{writableLibraries.map((library) => <option key={library.id} value={library.id}>{library.name}</option>)}</select></label><button className="primary-button" disabled={busy || !confirmableReview} onClick={() => void confirmReviewVersion()} title={t("skillExplorer.publishToTitle", { name: targetLibrary?.name ?? "Project Skills" })} type="button">{busy ? t("skillReview.publishing") : t("skillReview.publishSkill")}</button></div>
             </div> : <>
-              <textarea aria-label={`Edit Skill file ${activePath}`} disabled={!editable || busy} onChange={(event) => setEditContent(event.target.value)} spellCheck={false} value={editContent} />
-              <div className="skill-workspace-save"><span>{selectedSkill?.source === "built-in" ? "Built-in Skills are read-only." : editable ? "Saving creates a new immutable revision." : "Choose the latest installed revision to edit."}</span><button className="primary-button" disabled={!editable || busy || editContent === rightFile?.content} onClick={() => void saveFile()} type="button">{busy ? "Saving…" : "Save new revision"}</button></div>
+              <textarea aria-label={t("skillExplorer.editSkillFileAria", { path: activePath })} disabled={!editable || busy} onChange={(event) => setEditContent(event.target.value)} spellCheck={false} value={editContent} />
+              <div className="skill-workspace-save"><span>{selectedSkill?.source === "built-in" ? t("skillExplorer.builtInReadOnlyNote") : editable ? t("skillExplorer.saveNewRevisionNote") : t("skillExplorer.chooseLatestNote")}</span><button className="primary-button" disabled={!editable || busy || editContent === rightFile?.content} onClick={() => void saveFile()} type="button">{busy ? t("common.saving") : t("skillExplorer.saveNewRevision")}</button></div>
             </>}
           </div>
         </main>
         <aside className={`skill-workspace-history${historyCollapsed ? " collapsed" : ""}`}>
-          <div className="skill-workspace-history-heading"><span><strong>Version history</strong><small>Choose A/B to compare · Review to publish</small></span><b>{activeVersions.length}</b><button aria-expanded={!historyCollapsed} aria-label={historyCollapsed ? "Expand version history sidebar" : "Collapse version history sidebar"} onClick={() => setHistoryCollapsed((current) => !current)} title={historyCollapsed ? "Expand version history" : "Collapse version history"} type="button"><ChevronRightIcon className={historyCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
-          {!historyCollapsed ? <><ol>{activeVersions.map((version) => <li className={`${versionTone(version)}${leftVersionId === version.id || rightVersionId === version.id ? " selected-version" : ""}${reviewVersionId === version.id ? " review-target" : ""}`} key={version.id}><div><i /><span><strong>{version.label}</strong><small>{version.createdAt ? new Date(version.createdAt).toLocaleString() : "Packaged with this app"}</small><small className="skill-version-source">{versionSource(version)}</small>{version.provenance?.git ? <small className="skill-version-git-path" title={`${version.provenance.git.repositoryUrl}#${version.provenance.git.commit}`}>{version.provenance.git.subdirectory}</small> : null}{version.provenance?.sessionId && onOpenSession ? <button className="skill-version-session" onClick={() => onOpenSession(version.provenance!.sessionId!)} type="button">Open source Session ↗</button> : null}</span></div><div className="skill-version-actions"><span><button aria-label={`Select ${version.label} as version A`} className={leftVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("left", version.id)} type="button">A</button><button aria-label={`Select ${version.label} as version B`} className={rightVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("right", version.id)} type="button">B</button></span>{version.kind === "agent-proposal" ? <button aria-label={`Select ${version.label} as review target`} className={`skill-version-review-target${reviewVersionId === version.id ? " selected" : ""}`} onClick={() => selectReviewVersion(version.id)} type="button">{reviewVersionId === version.id ? <><CheckIcon size={12} /> Review target</> : "Review this version"}</button> : null}</div></li>)}</ol></> : null}
+          <div className="skill-workspace-history-heading"><span><strong>{t("skillExplorer.historyHeading")}</strong><small>{t("skillExplorer.historyHint")}</small></span><b>{activeVersions.length}</b><button aria-expanded={!historyCollapsed} aria-label={historyCollapsed ? t("skillExplorer.expandHistoryAria") : t("skillExplorer.collapseHistoryAria")} onClick={() => setHistoryCollapsed((current) => !current)} title={historyCollapsed ? t("skillExplorer.expandHistoryTitle") : t("skillExplorer.collapseHistoryTitle")} type="button"><ChevronRightIcon className={historyCollapsed ? "skill-pane-chevron point-left" : "skill-pane-chevron"} size={14} /></button></div>
+          {!historyCollapsed ? <><ol>{activeVersions.map((version) => <li className={`${versionTone(version)}${leftVersionId === version.id || rightVersionId === version.id ? " selected-version" : ""}${reviewVersionId === version.id ? " review-target" : ""}`} key={version.id}><div><i /><span><strong>{version.label}</strong><small>{version.createdAt ? new Date(version.createdAt).toLocaleString() : t("skillExplorer.packagedWithApp")}</small><small className="skill-version-source">{versionSource(version, t)}</small>{version.provenance?.git ? <small className="skill-version-git-path" title={`${version.provenance.git.repositoryUrl}#${version.provenance.git.commit}`}>{version.provenance.git.subdirectory}</small> : null}{version.provenance?.sessionId && onOpenSession ? <button className="skill-version-session" onClick={() => onOpenSession(version.provenance!.sessionId!)} type="button">{t("skillExplorer.openSourceSession")} ↗</button> : null}</span></div><div className="skill-version-actions"><span><button aria-label={t("skillExplorer.selectVersionAAria", { label: version.label })} className={leftVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("left", version.id)} type="button">A</button><button aria-label={t("skillExplorer.selectVersionBAria", { label: version.label })} className={rightVersionId === version.id ? "selected" : ""} onClick={() => selectVersion("right", version.id)} type="button">B</button></span>{version.kind === "agent-proposal" ? <button aria-label={t("skillExplorer.selectReviewTargetAria", { label: version.label })} className={`skill-version-review-target${reviewVersionId === version.id ? " selected" : ""}`} onClick={() => selectReviewVersion(version.id)} type="button">{reviewVersionId === version.id ? <><CheckIcon size={12} /> {t("skillExplorer.reviewTarget")}</> : t("skillExplorer.reviewThisVersion")}</button> : null}</div></li>)}</ol></> : null}
         </aside>
       </div>
       {mergeOpen ? <div className="skill-merge-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setMergeOpen(false); }}>
-        <section aria-label="Combine Skill drafts as versions" aria-modal="true" className="skill-merge-dialog" role="dialog">
-          <header><div><span className="eyebrow">Version management</span><h3>Combine drafts as versions</h3><p>Select related drafts and choose the stable Skill name. Their proposals will be ordered into one version history.</p></div><button aria-label="Close combine drafts dialog" className="icon-button" disabled={busy} onClick={() => setMergeOpen(false)} type="button"><CloseIcon size={17} /></button></header>
+        <section aria-label={t("skillExplorer.mergeDialogAria")} aria-modal="true" className="skill-merge-dialog" role="dialog">
+          <header><div><span className="eyebrow">{t("skillExplorer.mergeEyebrow")}</span><h3>{t("skillExplorer.combineButton")}</h3><p>{t("skillExplorer.mergeIntro")}</p></div><button aria-label={t("skillExplorer.mergeCloseAria")} className="icon-button" disabled={busy} onClick={() => setMergeOpen(false)} type="button"><CloseIcon size={17} /></button></header>
           <div className="skill-merge-list">{drafts.map((draft) => {
             const selected = mergeSelectedIds.includes(draft.draftId);
-            return <div className={selected ? "selected" : ""} key={draft.draftId}><label><input checked={selected} onChange={() => toggleMergeDraft(draft.draftId)} type="checkbox" /><span><strong>{draft.name}</strong><small>{draft.comparisonSource === "previous-agent-draft" ? "Contains proposal history" : "Pending Skill draft"}</small></span></label><label className="skill-merge-primary"><input checked={mergeTargetId === draft.draftId} disabled={!selected} name="primary-skill-draft" onChange={() => setMergeTargetId(draft.draftId)} type="radio" />Primary name</label></div>;
+            return <div className={selected ? "selected" : ""} key={draft.draftId}><label><input checked={selected} onChange={() => toggleMergeDraft(draft.draftId)} type="checkbox" /><span><strong>{draft.name}</strong><small>{draft.comparisonSource === "previous-agent-draft" ? t("skillExplorer.mergeHasHistory") : t("skillExplorer.mergePendingDraft")}</small></span></label><label className="skill-merge-primary"><input checked={mergeTargetId === draft.draftId} disabled={!selected} name="primary-skill-draft" onChange={() => setMergeTargetId(draft.draftId)} type="radio" />{t("skillExplorer.mergePrimaryName")}</label></div>;
           })}</div>
-          <p className="skill-merge-note">Only uninstalled drafts can be combined. The selected primary name becomes the stable identity; variant names are rewritten inside each proposal.</p>
-          <footer><button className="secondary-button" disabled={busy} onClick={() => setMergeOpen(false)} type="button">Cancel</button><button className="primary-button" disabled={busy || mergeSelectedIds.length < 2 || !mergeTargetId} onClick={() => void mergeDrafts()} type="button">{busy ? "Combining…" : `Combine ${mergeSelectedIds.length} drafts`}</button></footer>
+          <p className="skill-merge-note">{t("skillExplorer.mergeNote")}</p>
+          <footer><button className="secondary-button" disabled={busy} onClick={() => setMergeOpen(false)} type="button">{t("common.cancel")}</button><button className="primary-button" disabled={busy || mergeSelectedIds.length < 2 || !mergeTargetId} onClick={() => void mergeDrafts()} type="button">{busy ? t("skillExplorer.combining") : t("skillExplorer.combineCount", { count: mergeSelectedIds.length })}</button></footer>
         </section>
       </div> : null}
       {deleteTarget ? <div className="skill-merge-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setDeleteTarget(undefined); }}>
-        <section aria-label={deleteTarget.kind === "draft" ? `Discard Skill draft ${deleteTarget.id}` : `Delete Skill ${deleteTarget.id}`} aria-modal="true" className="skill-workspace-delete-dialog" role="dialog">
-          <header><div><span className="eyebrow">{deleteTarget.kind === "draft" ? "Pending draft" : "Managed Skill"}</span><h3>{deleteTarget.kind === "draft" ? `Discard “${deleteTarget.id}”?` : `Delete “${deleteTarget.id}”?`}</h3><p>{deleteTarget.kind === "draft" ? "This removes the unconfirmed Agent proposal. Any installed revision of the Skill is kept." : "Deletion is limited to user-managed Skills. Built-in packages remain protected."}</p></div><button aria-label="Close delete Skill dialog" className="icon-button" disabled={busy} onClick={() => setDeleteTarget(undefined)} type="button"><CloseIcon size={17} /></button></header>
+        <section aria-label={deleteTarget.kind === "draft" ? t("skillExplorer.discardDraftAria", { id: deleteTarget.id }) : t("skillExplorer.deleteSkillAria", { id: deleteTarget.id })} aria-modal="true" className="skill-workspace-delete-dialog" role="dialog">
+          <header><div><span className="eyebrow">{deleteTarget.kind === "draft" ? t("skillExplorer.pendingDraftEyebrow") : t("skillExplorer.managedSkillEyebrow")}</span><h3>{deleteTarget.kind === "draft" ? t("skillExplorer.discardConfirmTitle", { id: deleteTarget.id }) : t("skillExplorer.deleteConfirmTitle", { id: deleteTarget.id })}</h3><p>{deleteTarget.kind === "draft" ? t("skillExplorer.discardDescription") : t("skillExplorer.deleteDescription")}</p></div><button aria-label={t("skillExplorer.deleteCloseAria")} className="icon-button" disabled={busy} onClick={() => setDeleteTarget(undefined)} type="button"><CloseIcon size={17} /></button></header>
           <div className="skill-workspace-delete-content">
-            {deleteTarget.kind === "draft" ? <div className="skill-workspace-delete-warning"><strong>This action cannot be undone</strong><p>The draft and its unconfirmed proposal history will be removed.</p></div> : deleteTarget.impact.references.length ? <><div className="skill-workspace-delete-blocked"><strong>This Skill is still in use</strong><p>Remove it from the settings below before trying again.</p></div><ul>{deleteTarget.impact.references.map((reference) => <li key={`${reference.scope}-${reference.id}`}><span>{reference.scope}</span><strong>{reference.label}</strong></li>)}</ul></> : <><p>This removes the Skill from the active catalog. Historical run manifests keep their recorded revision and hash.</p><label><span>Type <code>{deleteTarget.id}</code> to confirm</span><input autoFocus onChange={(event) => setDeleteConfirmation(event.target.value)} spellCheck={false} value={deleteConfirmation} /></label></>}
+            {deleteTarget.kind === "draft" ? <div className="skill-workspace-delete-warning"><strong>{t("skillExplorer.deleteIrreversible")}</strong><p>{t("skillExplorer.discardWarningBody")}</p></div> : deleteTarget.impact.references.length ? <><div className="skill-workspace-delete-blocked"><strong>{t("skillExplorer.deleteBlocked")}</strong><p>{t("skillExplorer.deleteBlockedHint")}</p></div><ul>{deleteTarget.impact.references.map((reference) => <li key={`${reference.scope}-${reference.id}`}><span>{reference.scope}</span><strong>{reference.label}</strong></li>)}</ul></> : <><p>{t("skillExplorer.deleteSkillBody")}</p><label><span>{t("skillExplorer.typeToConfirmBefore")}<code>{deleteTarget.id}</code>{t("skillExplorer.typeToConfirmAfter")}</span><input autoFocus onChange={(event) => setDeleteConfirmation(event.target.value)} spellCheck={false} value={deleteConfirmation} /></label></>}
           </div>
-          <footer><button className="secondary-button" disabled={busy} onClick={() => setDeleteTarget(undefined)} type="button">Cancel</button>{deleteTarget.kind === "draft" ? <button className="danger-button" disabled={busy} onClick={() => void confirmDeletion()} type="button">{busy ? "Discarding…" : "Discard draft"}</button> : !deleteTarget.impact.references.length ? <button className="danger-button" disabled={busy || deleteConfirmation !== deleteTarget.id} onClick={() => void confirmDeletion()} type="button">{busy ? "Deleting…" : "Delete Skill"}</button> : null}</footer>
+          <footer><button className="secondary-button" disabled={busy} onClick={() => setDeleteTarget(undefined)} type="button">{t("common.cancel")}</button>{deleteTarget.kind === "draft" ? <button className="danger-button" disabled={busy} onClick={() => void confirmDeletion()} type="button">{busy ? t("skillExplorer.discarding") : t("skillReview.discardDraft")}</button> : !deleteTarget.impact.references.length ? <button className="danger-button" disabled={busy || deleteConfirmation !== deleteTarget.id} onClick={() => void confirmDeletion()} type="button">{busy ? t("skillExplorer.deleting") : t("skillExplorer.deleteSkill")}</button> : null}</footer>
         </section>
       </div> : null}
     </section>

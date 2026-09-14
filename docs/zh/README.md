@@ -10,6 +10,8 @@
 
 ## How-to（操作指南）
 
+- [配置自定义 MCP](how-to/configure-custom-mcp.md)：本地/远程连接、秘密值编辑、OAuth、Inspector 与会话工具选择。
+
 - [部署](how-to/deployment.md) — 本地模式、Docker 和源码构建单文件二进制的操作步骤。
 - [配置网络代理](how-to/configure-network-proxy.md) — 在设置页添加代理并为 LLM、Web 和 MCP 选择策略。
 - [文献调研案例指南](how-to/literature-research-case-guide.md) — 以一项跨数据库文献调研任务为例，演示从启动服务、配置系统到下发任务、审批与查看结果的全流程。

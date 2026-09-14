@@ -414,7 +414,7 @@ def bind_subtask(
             """
             MERGE (st:ToolCall {task_id: $task_id})
               ON CREATE SET st.session_id = $session_id,
-                            st.task_type  = 'program_evolution',
+                            st.tool_type  = 'program_evolution',
                             st.created_at = datetime()
             SET st.status = $status
             WITH st
@@ -482,7 +482,7 @@ def link_search_artifacts(
                                 a.media_type   = $media_type
                 MERGE (st:ToolCall {{task_id: $task_id}})
                   ON CREATE SET st.session_id = $session_id,
-                                st.task_type  = 'program_evolution',
+                                st.tool_type  = 'program_evolution',
                                 st.created_at = datetime()
                 WITH a, st
                 {edge}

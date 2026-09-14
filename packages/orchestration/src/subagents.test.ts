@@ -30,7 +30,7 @@ test("general-purpose preset inherits tools, denies nesting, and matches the run
 
   assert.equal(config.name, "general-purpose");
   assert.equal(config.tools, null);
-  assert.deepEqual(config.disallowedTools, ["task", "propose_plan", "propose_remote_job"]);
+  assert.deepEqual(config.disallowedTools, ["task", "propose_remote_job"]);
   assert.equal(config.timeoutSeconds, DEFAULT_SUBAGENT_TIMEOUT_SECONDS);
   assert.equal(config.maxTurns, DEFAULT_SUBAGENT_MAX_TURNS);
   assert.deepEqual(listSubagentPresets(), [GENERAL_PURPOSE_SUBAGENT]);

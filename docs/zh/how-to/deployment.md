@@ -80,7 +80,7 @@ sudo apk add bubblewrap              # Alpine
 
 开启**沙箱网络访问**的 `domain-allowlist` 模式时，宿主还需要一个可用的 `python3`（沙箱内 egress bridge 的解释器，可用 `SCIENCE_AGENT_EGRESS_PYTHON` 指定）。缺失时该模式的执行会直接失败并说明原因，默认的 `none` 模式不受影响；两种模式都**不需要** root、额外 capability 或系统防火墙配置。
 
-只想先看 Web UI、暂不使用沙箱执行时，可用 `--skip-sandbox-check` 启动；此时 `run_python` / `run_shell` 会失败，其余功能正常。bubblewrap 已安装但宿主限制了无特权用户命名空间时，`serve` 会给出告警并继续启动，排查方式与 [Docker 的沙箱与宿主要求](#沙箱与宿主要求)相同。
+只想先看 Web UI、暂不使用沙箱执行时，可用 `--skip-sandbox-check` 启动；此时 `run_shell` 会失败，其余功能正常。bubblewrap 已安装但宿主限制了无特权用户命名空间时，`serve` 会给出告警并继续启动，排查方式与 [Docker 的沙箱与宿主要求](#沙箱与宿主要求)相同。
 
 ### 命令与选项
 
@@ -166,6 +166,8 @@ SSH 自动部署使用自带 Node runtime 的 Runner SEA 单文件，不要求�
 
 连接时按远端 `uname -m` 选择对应文件，经已鉴权、已校验主机指纹的 SSH SFTP 通道流式上传，校验 SHA-256 后发布并直接启动；同一构建已存在则复用。Runner 的 HTTP 通信仍只经 SSH 隧道。SEA 包含 Node 与 Runner 代码，不包含完整 Linux 用户态：目标机仍需可运行该 Node ELF 的系统库、Bubblewrap 和可用沙箱能力；科学环境按原有托管环境机制准备。缺少部署或沙箱条件时明确报错，不降级为裸 SSH 执行。
 
+每份二进制按自身 SHA-256 命名，所以主程序升级后重连是新增一个文件而不是覆盖旧文件。新二进制启动并通过健康检查之后，控制面会删除同目录下其余以 SHA-256 命名、且没有任何进程正在执行的 Runner 二进制——单个约 120 MB，长期迭代会累积到数 GB。正在被执行的二进制一律保留，包括别的控制面连接正在使用的；目录里不符合该命名的文件不受影响。这一步是尽力而为，失败只记入连接日志，不影响已经建立的连接。
+
 共用入口在本地模式下会读取仓库根目录 `.env`、校验[环境要求](../../../README_zh.md#环境要求)中列出的依赖、按需安装与构建，然后以宿主机普通进程启动各服务。脚本在 Linux 自动选择 Bubblewrap，在 macOS 自动选择 Seatbelt，无需手动设置 `SCIENCE_AGENT_SANDBOX_PROVIDER`：
 
 | 服务 | 地址 | 作用 |
@@ -244,7 +246,7 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 
 **若未放开 `systempaths`（例如沿用旧版 Compose、裸 `docker run` 或 K8s 默认配置）**：产品会自动回退为 `--ro-bind /proc /proc`，执行仍可进行，但沙箱内看到的是**容器的进程列表**，而不是只有自己的进程。回退时 runner 启动日志与预检都会打印明确 warning，说明原因与影响。要恢复更强的隔离，请加回 `systempaths=unconfined`，不要改用 `privileged`。
 
-如果宿主仍然限制用户命名空间，API 与 UI 仍可正常启动、`GET /health` 会反映 runner 状态，但每次 `run_python` / `run_shell` 都会失败。入口脚本在启动时会做一次 bubblewrap 预检，因此 `docker compose logs` 中会出现带上述检查命令的明确告警。Ubuntu 24.04+ 上通常的修复方式是：
+如果宿主仍然限制用户命名空间，API 与 UI 仍可正常启动、`GET /health` 会反映 runner 状态，但每次 `run_shell` 都会失败。入口脚本在启动时会做一次 bubblewrap 预检，因此 `docker compose logs` 中会出现带上述检查命令的明确告警。Ubuntu 24.04+ 上通常的修复方式是：
 
 ```bash
 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

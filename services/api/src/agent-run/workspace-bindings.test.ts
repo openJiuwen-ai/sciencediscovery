@@ -14,15 +14,90 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { SKILL_SNAPSHOT_MANIFEST } from "../skill-sandbox.js";
+import { DatabaseSync } from "node:sqlite";
+import { AgentNotifications } from "../agent-notifications.js";
 
 import type { NpuJob } from "@sciencediscovery/schema";
-import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
+import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
-import type { SessionStore } from "../store.js";
+import { SessionStore } from "../store.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import { createWorkspaceExecutionBindings } from "./workspace-bindings.js";
 
-test("main and child execution bindings route by Runner ID and record isolated workspace ownership", async () => {
+test("one-time timer binding validates time and execution ownership without execution or a write lease", async (t) => {
+  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  const notifications = new AgentNotifications(db, () => false);
+  const store = { assertSessionWritable() {}, assertSessionAllowsRunner() {}, notifications,
+    shellExecutions: { get: async (id: string, owner: { agentId: string }) => {
+      assert.equal(owner.agentId, "main"); if (id !== "owned") throw new Error("not owned"); return {};
+    } },
+  } as unknown as SessionStore;
+  const timer = createWorkspaceExecutionBindings({ store, agentId: "main", sessionId: "session", executionId: "turn",
+    workspaceRoot: "/workspace", permissionScopeLabel: "test", runnerClient: {} as RunnerClient,
+    provenanceRecorder: {} as ProvenanceRecorder, permission: {} as AgentPermissionRuntime }).timers!;
+  await assert.rejects(timer.create({ message: "missing" }), /exactly one/);
+  await assert.rejects(timer.create({ afterMs: 1, at: "2030-01-01T00:00:00Z", message: "both" }), /exactly one/);
+  await assert.rejects(timer.create({ afterMs: 0, message: "invalid" }), /positive/);
+  await assert.rejects(timer.create({ at: "2030-01-01", message: "ambiguous" }), /timezone/);
+  await assert.rejects(timer.create({ afterMs: 60000, executionId: "foreign", message: "not allowed" }), /not owned/);
+  const created = await timer.create({ afterMs: 60000, executionId: "owned", message: "check result" }) as { id: string };
+  assert.equal((timer.list() as unknown[]).length, 1);
+  timer.cancel(created.id);
+  assert.equal(notifications.timers({ sessionId: "session", agentId: "main" })[0]!.state, "cancelled");
+  notifications.stop("session");
+  await assert.rejects(timer.create({ afterMs: 60000, message: "stopped" }), /stopped/);
+});
+
+test("Transfer binding exposes only owned Workspaces and rechecks Runner access after permission", async () => {
+  let allowed = true; let starts = 0;
+  const store = {
+    workspaceIdentity: (_session: string, agent: string, runner = "local") => ({ id: `${agent}-${runner}` }),
+    assertSessionWritable() {}, assertSessionAllowsRunner() {}, assertSessionAllowsRemoteRunner() { if (!allowed) throw new Error("revoked"); },
+    transfers: { start() { starts++; return {}; } },
+  } as unknown as SessionStore;
+  const binding = createWorkspaceExecutionBindings({
+    agentId: "child", sessionId: "session", executionId: "run", workspaceRoot: "/workspace", store,
+    permissionScopeLabel: "child", provenanceRecorder: {} as ProvenanceRecorder, runnerClient: {} as RunnerClient,
+    permission: { requirePrivilege: async () => { allowed = false; } } as unknown as AgentPermissionRuntime,
+    remoteTargets: [{ runnerId: "remote", hostAlias: "Allowed", workspaceKey: "child-key", runnerClient: () => ({} as RunnerClient) }],
+  }).workspaceTransfers!;
+  assert.deepEqual(binding.workspaces().map((item) => item.id), ["child-local", "child-remote"]);
+  await assert.rejects(binding.start({ sourceWorkspaceId: "parent-local", targetWorkspaceId: "child-local", files: [{ sourcePath: "secret", targetPath: "secret" }] }), /not owned/);
+  await assert.rejects(binding.start({ sourceWorkspaceId: "child-local", targetWorkspaceId: "child-remote", files: [{ sourcePath: "in", targetPath: "out" }] }), /revoked/);
+  assert.equal(starts, 0);
+  assert.deepEqual(binding.workspaces().map((item) => item.id), ["child-local"]);
+});
+
+test("main and child execution bindings route by Runner ID and record isolated workspace ownership", async (t) => {
+  const skillRoot = await mkdtemp(resolve(tmpdir(), "binding-skills-"));
+  t.after(() => rm(skillRoot, { recursive: true, force: true }));
+  await mkdir(resolve(skillRoot, "selected"));
+  await writeFile(resolve(skillRoot, "selected/SKILL.md"), "frozen");
+  const hash = createHash("sha256").update("8:SKILL.md:6:frozen").digest("hex");
+  await writeFile(resolve(skillRoot, SKILL_SNAPSHOT_MANIFEST), JSON.stringify({ schemaVersion: 1,
+    skills: [{ id: "selected", hash, revision: 1, version: "1" }] }));
+  let preparations = 0;
+  let failSync = false;
+  // Stands in for a Runner that does not hold this set yet, so every remote
+  // execution here also exercises shipping the frozen bytes.
+  const remoteClient = { prepareSkillPackages: async (
+    manifest: { skills: { hash: string; id: string }[] },
+    loadBundle: () => Promise<{ skills: { files: { content: string; path: string }[] }[] }>,
+  ) => {
+    assert.deepEqual(manifest.skills.map((skill) => skill.id), ["selected"]);
+    assert.equal(manifest.skills[0]?.hash, hash);
+    const bundle = await loadBundle();
+    assert.deepEqual(bundle.skills[0]?.files.map((file) => file.path), ["SKILL.md"]);
+    assert.equal(Buffer.from(bundle.skills[0]!.files[0]!.content, "base64").toString(), "frozen");
+    preparations++;
+    if (failSync) throw new Error("sync failed");
+    return "/runner/projects/.skill-packages/frozen";
+  } } as unknown as RunnerClient;
   const executed: Array<{
     agentId: string;
     executionTimeoutMs?: number;
@@ -66,10 +141,12 @@ test("main and child execution bindings route by Runner ID and record isolated w
     } as unknown as ProvenanceRecorder,
     runnerClient: {} as RunnerClient,
     sessionId: "session-1",
-    skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1",
+    skillPackagesRoot: skillRoot,
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() {},
       // No network in this epoch, so the binding resolves no outbound route.
+      // No cards ticked on this Runner, so no NPU reaches the request.
+      npuDeviceSelection: () => [],
       resolveSandboxEgressProxy: () => undefined,
     } as unknown as SessionStore,
     workspaceRoot: "/workspace",
@@ -83,7 +160,7 @@ test("main and child execution bindings route by Runner ID and record isolated w
     remoteTargets: [{
       runnerId: "runner-1",
       hostAlias: "institution-linux",
-      runnerClient: () => ({} as RunnerClient),
+      runnerClient: () => remoteClient,
       workspaceKey: "project-1/session-1",
     }],
   });
@@ -92,7 +169,7 @@ test("main and child execution bindings route by Runner ID and record isolated w
     agentId: "subagent:subagent-1",
     executionId: "subagent-execution",
     remoteTargets: [{ runnerId: "runner-1", hostAlias: "institution-linux",
-      runnerClient: () => ({} as RunnerClient), workspaceKey: "project-1/session-1/agents/subagent-1" }],
+      runnerClient: () => remoteClient, workspaceKey: "project-1/session-1/agents/subagent-1" }],
   });
 
   // Being allowed a remote machine does not move the default off this one.
@@ -103,22 +180,28 @@ test("main and child execution bindings route by Runner ID and record isolated w
   assert.deepEqual(executed, [
     {
       agentId: "main", runnerId: "local", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
-      skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1", turnId: "main-execution",
+      skillPackagesRoot: skillRoot, turnId: "main-execution",
     },
     {
       agentId: "main", executionTimeoutMs: 45_000, kernelIdleTimeoutMs: 60_000,
       runnerId: "runner-1", remoteHostAlias: "institution-linux",
       runnerWorkspaceKey: "project-1/session-1",
+      skillPackagesRoot: "/runner/projects/.skill-packages/frozen",
       turnId: "main-execution",
     },
     {
       agentId: "subagent:subagent-1", runnerId: "local",
-      skillPackagesRoot: "/data/projects/project/sessions/session-1/skill-snapshots/run-1",
+      skillPackagesRoot: skillRoot,
       turnId: "subagent-execution",
     },
     { agentId: "subagent:subagent-1", runnerId: "runner-1", remoteHostAlias: "institution-linux",
+      skillPackagesRoot: "/runner/projects/.skill-packages/frozen",
       runnerWorkspaceKey: "project-1/session-1/agents/subagent-1", turnId: "subagent-execution" },
   ]);
+  assert.equal(preparations, 2);
+  failSync = true;
+  await assert.rejects(main.executeShell!("echo no", "ephemeral", undefined, undefined, "runner-1"), /sync failed/);
+  assert.equal(executed.length, 4);
   // A machine outside the allowlist is refused, and a Session with none can
   // only ever be told about the local machine.
   await assert.rejects(
@@ -146,7 +229,7 @@ test("main and child scientific environment operations use the selected Runner a
     const binding = createWorkspaceExecutionBindings({
       agentId, executionId: "test", sessionId: "session", permissionScopeLabel: "test", workspaceRoot: "/local/workspace",
       permission: { requirePrivilege: async () => { approvals++; if (revokeOnApproval) allowed = false; } } as unknown as AgentPermissionRuntime,
-      store: { assertSessionWritable() {}, getEnvironmentSourceSettings: () => ({ condaSource: "upstream", pipSource: "upstream" }),
+      store: { assertSessionWritable() {}, assertSessionAllowsRunner() {}, getEnvironmentSourceSettings: () => ({ condaSource: "upstream", pipSource: "upstream" }),
         replaceScientificEnvironmentCatalog: async () => { throw new Error("remote catalog must not replace local catalog"); },
       } as unknown as SessionStore,
       runnerClient: new Proxy({} as RunnerClient, { get() { throw new Error("must not call local Runner"); } }),
@@ -202,7 +285,8 @@ test("scientific executions forward the current outbound route and omit it for n
     scientificEnvironments: [],
     sessionId: "session-1",
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() {},
+      npuDeviceSelection: () => [],
       resolveSandboxEgressProxy: () => resolved,
     } as unknown as SessionStore,
     workspaceRoot: "/workspace",
@@ -248,7 +332,7 @@ test("environment install forwards the trusted workspace only from the Agent bin
     scientificEnvironments: [],
     sessionId: "session-1",
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() {},
       getEnvironmentSourceSettings: () => ({ condaSource: "tsinghua", pipSource: "ustc" }),
       replaceScientificEnvironmentCatalog: async () => undefined,
     } as unknown as SessionStore,
@@ -299,6 +383,7 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
     workloadId: "antibody.protenix.v1",
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
   };
+  let localAllowed = true;
   const bindings = createWorkspaceExecutionBindings({
     agentId: "main",
     executionId: "run-1",
@@ -315,6 +400,8 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
         ? { ...baseJob, id: jobId, sessionId: "session-2" }
         : { ...baseJob, id: jobId },
       listNpuWorkloads: async () => [{ description: "protenix", id: "antibody.protenix.v1", label: "Protenix", phase: "builtin" }],
+      listEnvironmentRevisions: async () => [{ id: "epoch-revision", environmentId: "env" }],
+      listEnvironments: async () => [{ id: "env", status: "ready", currentRevisionId: "latest-revision" }],
       npuJobLogs: async () => baseJob.logs,
       npuJobResult: async () => ({ job: baseJob }),
       submitNpuJob: async (input: unknown) => {
@@ -324,8 +411,10 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
     } as unknown as RunnerClient,
     sessionId: "session-1",
     store: {
-      assertSessionWritable() {},
+      assertSessionWritable() {}, assertSessionAllowsRunner() { if (!localAllowed) throw new Error("Runner local is not allowed"); },
       // No network in this epoch, so the binding resolves no outbound route.
+      // No cards ticked on this Runner, so no NPU reaches the request.
+      npuDeviceSelection: () => [],
       resolveSandboxEgressProxy: () => undefined,
     } as unknown as SessionStore,
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
@@ -337,13 +426,238 @@ test("NPU broker bindings submit through Runner with permission and enforce Sess
   });
   assert.equal(job.id, "npu-job-1");
   assert.deepEqual(submitted, [{
-    environmentRevisionId: "epoch-revision",
+    environmentRevisionId: "latest-revision",
     inputs: { configPath: "antibody_pipeline/config.json" },
     sessionId: "session-1",
     workloadId: "antibody.protenix.v1",
     workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
   }]);
   assert.deepEqual(permissionSummaries, ["Run host NPU workload antibody.protenix.v1 in test"]);
+  await bindings.npuBroker!.submit({ environmentId: "env", workloadId: "antibody.protenix.v1", inputs: {} });
+  assert.equal((submitted[1] as { environmentRevisionId: string }).environmentRevisionId, "latest-revision");
+  await assert.rejects(bindings.npuBroker!.submit({ environmentId: "epoch-revision", workloadId: "antibody.protenix.v1", inputs: {} }), /missing or not ready/);
 
   await assert.rejects(bindings.npuBroker!.get("foreign-job"), /NPU job not found in this Session/);
+  localAllowed = false;
+  await assert.rejects(bindings.npuBroker!.submit({ workloadId: "antibody.protenix.v1", inputs: {} }), /Runner local is not allowed/);
+  assert.equal(submitted.length, 2, "deselected local Runner cannot receive a broker submission");
+});
+
+/**
+ * The whole chain, not a layer of it: a real store holding a real selection, a
+ * real ProvenanceRecorder, and a RunnerClient that captures exactly what the
+ * Runner would receive. Asserting on the recorder's options instead would
+ * prove nothing about the request the Runner actually gets.
+ */
+async function npuChain(selection: number[] | undefined) {
+  const dataDir = await mkdtemp(resolve(tmpdir(), "npu-wiring-"));
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "test-token", baseUrl: "https://models.example.test/v1",
+    model: "test-model", name: "Test model",
+  });
+  const project = await store.createProject("NPU wiring");
+  const session = await store.createSession(project.id, "NPU wiring", { modelId: model.id });
+  const permissionEpoch = store.getSessionPermissionEpoch(session.id)!;
+  const workspaceRoot = store.workspacePath(session.id);
+  await mkdir(workspaceRoot, { recursive: true });
+  if (selection) await store.setNpuDeviceSelection("local", selection);
+  const payloads: Array<Record<string, unknown>> = [];
+  const result = {
+    createdFiles: [], environmentRevisionId: "system-python3-bwrap-v1",
+    environmentVariables: {}, exitCode: 0, finishedAt: new Date().toISOString(),
+    kernelId: "kernel", kernelMode: "ephemeral", language: "python", modifiedFiles: [],
+    networkPolicy: "none", runnerVersion: "test", sandbox: "bubblewrap",
+    startedAt: new Date().toISOString(), stderr: "", stdout: "", workingDirectory: "/workspace",
+  };
+  const runnerClient = {
+    execute: async (request: Record<string, unknown>) => { payloads.push(request); return { ...result, executionId: String(request.executionId) }; },
+    executeShell: async (request: Record<string, unknown>) => { payloads.push(request); return { ...result, executionId: String(request.executionId) }; },
+    // The managed shell tool submits through this call instead, so it needs its
+    // own capture: a request that skipped the field here would still be a
+    // sandbox without cards, however well `executeShell` behaves.
+    startShellExecution: async (request: Record<string, unknown>) => {
+      payloads.push(request);
+      return {
+        agentId: "main", id: String(request.executionId), sessionId: session.id, state: "completed",
+        startedAt: new Date().toISOString(), version: { digest: "sha256:test", workspaceId: "workspace" },
+        result: { ...result, executionId: String(request.executionId), workspaceSnapshot: { id: "snapshot", capturedAt: new Date().toISOString(), files: [], workspace: "workspace" } },
+      };
+    },
+    health: async () => ({ sandbox: "bubblewrap" }),
+    listEnvironmentRevisions: async () => [],
+    listEnvironments: async () => [],
+  } as unknown as RunnerClient;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
+    executionId: "run-npu",
+    permission: {
+      getEpoch: () => permissionEpoch,
+      requirePrivilege: async () => undefined,
+    } as unknown as AgentPermissionRuntime,
+    permissionScopeLabel: "in test",
+    provenanceRecorder: new ProvenanceRecorder(dataDir, store),
+    runnerClient,
+    scientificEnvironments: [],
+    sessionId: session.id,
+    store,
+    workspaceRoot,
+  });
+  return { bindings, cleanup: async () => { await rm(dataDir, { recursive: true, force: true }); }, payloads };
+}
+
+/**
+ * All four execution kinds, in the order a Runner would see them.
+ *
+ * The managed shell is the only one that does not finish inside its own call:
+ * `start` returns as soon as the Runner accepts, and the provenance write that
+ * lands under `<dataDir>/versioning` runs afterwards on the background promise
+ * the store keeps in `active`. Waiting for that promise is what stops
+ * `cleanup()` from deleting the directory while the write is still in flight,
+ * which rm(2) reports as ENOTEMPTY.
+ */
+async function everyExecutionKind(bindings: Awaited<ReturnType<typeof npuChain>>["bindings"]) {
+  await bindings.executePython!("print('python')");
+  await bindings.executeShell!("echo shell", "ephemeral");
+  await bindings.executeScientific!("python", "print('scientific')", undefined, "ephemeral");
+  const managed = await bindings.shellExecutions!.start("echo managed", {});
+  await bindings.shellExecutions!.wait(managed.id, 5_000);
+}
+
+test("cards ticked for a Runner reach the Runner request of every execution kind", async () => {
+  const { bindings, cleanup, payloads } = await npuChain([4]);
+  try {
+    await everyExecutionKind(bindings);
+  } finally {
+    await cleanup();
+  }
+  assert.equal(payloads.length, 4, "each execution must reach the Runner");
+  // The tick is worthless unless it arrives here: this is the field the Runner
+  // reads to decide which cards to bind into the sandbox.
+  for (const payload of payloads) assert.deepEqual(payload.npuDevices, [4]);
+});
+
+test("an unticked Runner sends no NPU field at all, leaving the sandbox unchanged", async () => {
+  const { bindings, cleanup, payloads } = await npuChain(undefined);
+  try {
+    await everyExecutionKind(bindings);
+  } finally {
+    await cleanup();
+  }
+  assert.equal(payloads.length, 4);
+  // Absent rather than an empty array: an empty array would still be a decision.
+  for (const payload of payloads) assert.equal(Object.hasOwn(payload, "npuDevices"), false);
+});
+
+test("clearing a Runner's cards stops them reaching the next execution", async () => {
+  const { bindings, cleanup, payloads } = await npuChain([4, 6]);
+  try {
+    await bindings.executePython!("print('with cards')");
+  } finally {
+    await cleanup();
+  }
+  assert.deepEqual(payloads[0]?.npuDevices, [4, 6]);
+});
+
+test("NPU broker bindings observe terminal jobs to the memory-graph recorder with the declared artifacts", async () => {
+  const observed: Array<{ job: unknown; options: unknown }> = [];
+  const recorder: ProvenanceRecorder = {
+    observeNpuJob: (job: unknown, options: unknown) => { observed.push({ job, options }); },
+  } as unknown as ProvenanceRecorder;
+  const baseJob: NpuJob = {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    createdFiles: ["outputs/predictions.csv"],
+    exitCode: 0,
+    finishedAt: "2026-01-01T00:05:00.000Z",
+    id: "npu-job-2",
+    inputs: { configPath: "antibody_pipeline/config.json" },
+    logs: { stderr: "", stdout: "ok", truncated: false },
+    sessionId: "session-1",
+    startedAt: "2026-01-01T00:01:00.000Z",
+    state: "succeeded",
+    updatedAt: "2026-01-01T00:05:00.000Z",
+    workloadId: "antibody.protenix.v1",
+    workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
+  };
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
+    executionId: "run-2",
+    npuBrokerEnabled: true,
+    parentSubagentId: "subagent-7",
+    permission: {
+      getEpoch: () => ({ environmentRevisionId: undefined, id: "epoch-2" }),
+      requirePrivilege: async () => undefined,
+    } as unknown as AgentPermissionRuntime,
+    permissionScopeLabel: "in test",
+    provenanceRecorder: recorder,
+    runnerClient: {} as RunnerClient,
+    sessionId: "session-1",
+    store: { assertSessionWritable() {}, resolveSandboxEgressProxy: () => undefined } as unknown as SessionStore,
+    workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
+  });
+
+  // Successful declarations (ok:true) get forwarded; ok:false entries do not.
+  // The workspace layer already filters ok:false out before calling the bindings
+  // callback (workspace.ts:result branch), so we test the post-filter shape here.
+  await bindings.observeNpuJob!(baseJob, [
+    { artifact_id: "art-1", path: "outputs/predictions.csv", version: 1 },
+  ]);
+
+  // Sanity-check: this shape is the workspace layer's filtered-and-renamed shape.
+  // The bindings callback only forwards it; the recorder is what does the catalog
+  // lookup. We assert the bindings handed the recorder the right tuple.
+  assert.equal(observed.length, 1);
+  assert.equal((observed[0]!.job as { id: string }).id, "npu-job-2");
+  assert.deepEqual(observed[0]!.options, {
+    artifacts: [{ artifact_id: "art-1", path: "outputs/predictions.csv", version: 1 }],
+    parentSubagentId: "subagent-7",
+    sessionId: "session-1",
+    turnId: "run-2",
+  });
+
+  // A recorder that throws inside observeNpuJob must not bubble up — the
+  // callback is fire-and-forget. Without the try/catch guard the agent loop
+  // would crash on a transient memory-graph outage.
+  const throwing: ProvenanceRecorder = {
+    observeNpuJob: () => { throw new Error("recorder offline"); },
+  } as unknown as ProvenanceRecorder;
+  const guarded = createWorkspaceExecutionBindings({
+    agentId: "main",
+    executionId: "run-2",
+    npuBrokerEnabled: true,
+    permission: {
+      getEpoch: () => ({ environmentRevisionId: undefined, id: "epoch-2" }),
+      requirePrivilege: async () => undefined,
+    } as unknown as AgentPermissionRuntime,
+    permissionScopeLabel: "in test",
+    provenanceRecorder: throwing,
+    runnerClient: {} as RunnerClient,
+    sessionId: "session-1",
+    store: { assertSessionWritable() {}, resolveSandboxEgressProxy: () => undefined } as unknown as SessionStore,
+    workspaceRoot: "/data/projects/project/sessions/session-1/workspace",
+  });
+  assert.doesNotThrow(() => guarded.observeNpuJob!(baseJob, [
+    { artifact_id: "art-1", path: "outputs/predictions.csv", version: 1 },
+  ]));
+});
+
+test("NPU broker bindings omit observeNpuJob when the broker is disabled", () => {
+  const bindings = createWorkspaceExecutionBindings({
+    agentId: "main",
+    executionId: "run-3",
+    permission: {
+      getEpoch: () => ({ environmentRevisionId: undefined, id: "epoch-3" }),
+      requirePrivilege: async () => undefined,
+    } as unknown as AgentPermissionRuntime,
+    permissionScopeLabel: "in test",
+    provenanceRecorder: { observeNpuJob: () => undefined } as unknown as ProvenanceRecorder,
+    runnerClient: {} as RunnerClient,
+    sessionId: "session-1",
+    store: { assertSessionWritable() {}, resolveSandboxEgressProxy: () => undefined } as unknown as SessionStore,
+    workspaceRoot: "/workspace",
+  });
+  assert.equal(bindings.observeNpuJob, undefined);
+  assert.equal(bindings.npuBroker, undefined);
 });

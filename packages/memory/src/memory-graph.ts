@@ -96,8 +96,16 @@ export interface ArtifactProvenanceGraphResult {
   messagesTurnId?: string | null;
   /** Derived-from inputs (input-edge endpoints); empty when the run read no
    * inputs or the input edges are absent — the handler falls back to the
-   * store's inputArtifactVersionIds in that case. */
-  dependencies?: Array<{ artifactId: string; version: number; logicalName: string | null; mediaType: string | null; path: string | null }>;
+   * store's inputArtifactVersionIds in that case. Each dependency carries a
+   * ``kind`` so the two endpoint shapes (Artifact version vs uploaded
+   * SourceFile, which has no version) are distinguishable: a ``source_file``
+   * dependency has ``fileId``/``name`` and links to a SourceFile node, while
+   * an ``artifact`` dependency has ``artifactId``/``version`` and links to an
+   * Artifact version. */
+  dependencies?: Array<
+    | { kind: "artifact"; artifactId: string; version: number; logicalName: string | null; mediaType: string | null; path: string | null }
+    | { kind: "source_file"; fileId: string; name: string | null; mediaType: string | null; path: string | null }
+  >;
 }
 
 export interface MemoryGraphProducedArtifact {
@@ -136,7 +144,19 @@ export interface ObserveExecutionPayload {
   status: string;
   startedAt: string;
   finishedAt: string;
-  taskType: string;
+  /** Coarse classification of the tool (``execution`` / ``search``). Mirrored
+   * onto the ToolCall node's ``tool_type`` property. The execution path sends
+   * ``execution``; search/fetch callers take theirs from the tool registry.
+   * The sink does not validate this — an unknown value lands verbatim (and old
+   * nodes keep the pre-collapse values they were born with, which the web app
+   * folds for display). */
+  toolType: string;
+  /** Full tool identifier (e.g. ``run_shell``). Mirrored onto the ToolCall
+   * node's ``tool_name`` property so the UI can show "this was a run_shell
+   * call" at a glance, and the graph can distinguish run_npu_job from
+   * run_shell without joining Code. Optional — legacy nodes from before
+   * the rename will not have a value (no migration backfills them). */
+  toolName?: string;
   producedArtifacts: MemoryGraphProducedArtifact[];
   /** Provenance addressing info mirrored onto the Code node: CAS hashes for the
    * stdout/stderr/env blocks. null when the Node side has none (shell runs have
@@ -148,14 +168,27 @@ export interface ObserveExecutionPayload {
    * subagent's child SubTask instead of a per-execution SubTask. Absent
    * (undefined) in main-agent context — behavior unchanged. */
   parentSubagentId?: string;
+  /** Uploaded SourceFile nodes this Code run read — a distinct top-level
+   * input channel from ``producedArtifacts[].inputArtifactVersions`` (SourceFile
+   * has no version; endpoint key is ``fileId``). The recorder infers these by
+   * scanning the code text for uploaded-file paths (same grain as
+   * ``inferredArtifactInputs``). Drives the ``SourceFile -[:input]-> Code``
+   * edge in ``upsert_execution``. Absent when the run read no uploaded files. */
+  inputSourceFiles?: Array<{ fileId: string }>;
 }
 
 // MemorySubgraph / MemoryGraphNode / MemoryGraphEdge live in @sciencediscovery/schema
 // (packages/schema/src/index.ts) and are shared with the frontend so the two
 // sides cannot silently drift when new node types or fields are added.
 
-export interface MemoryGraphMcpRecord {
-  url: string;
+/** Unified tool-call product. ``productType`` decides which write path
+ *  the sidecar dispatches to (Paper / WebPage / DbRecord). The unused field
+ *  groups are simply undefined; the request payload uses snake_case so the
+ *  client→server mapping is one mechanical rename (camelCase→snake_case). */
+export interface MemoryGraphToolCallProduct {
+  productType: "paper" | "web_page" | "db_record";
+  // paper fields
+  link?: string;
   title?: string;
   identifier?: string;
   identifierType?: string;
@@ -163,26 +196,45 @@ export interface MemoryGraphMcpRecord {
   authors?: string[];
   abstract?: string;
   source?: string;
+  // web_page fields
+  url?: string;
+  snippet?: string;
+  sourceRefs?: string[];
+  /** Per-product body hash, written onto the WebPage node's
+   *  ``content_hash`` property. The text itself lives in the CAS data pool,
+   *  never on the node — mirroring SourceFile.content_hash /
+   *  Artifact.content_hash (graph = directory, CAS = warehouse). web_page
+   *  only: absent for paper / db_record products, and absent for a
+   *  snippet-only search hit (nothing was fetched → nothing to hash). */
+  contentHash?: string;
 }
 
-export interface ObserveMcpInvocationPayload {
-  invocationId: string;
+/** Unified tool-call payload. The client converts camelCase → snake_case
+ *  on the way to /observe/tool-call (see MemoryGraphClient.observeToolCall). */
+export interface ObserveToolCallPayload {
+  taskId: string;
   sessionId: string;
   turnId: string;
-  source: string;
+  /** Full tool identifier (e.g. ``mcp__pdb__search_structures``, ``web_search``). */
+  toolName: string;
+  /** Coarse classification (``execution`` / ``search``; the sink stores any
+   *  string verbatim, including the pre-collapse values on old nodes). */
   toolType: string;
-  retrievedAt: string;
-  records: MemoryGraphMcpRecord[];
-  /** When set, this search ran inside a subagent: products hang off the
-   * subagent's child SubTask instead of a per-search SubTask. Absent
-   * (undefined) in main-agent context — behavior unchanged. */
+  /** MCP source id; workspace tools (web_search / run_python) leave it undefined. */
+  source?: string;
+  status?: string;
+  resultCount?: number;
+  products: MemoryGraphToolCallProduct[];
+  /** When set, this tool call ran inside a subagent: products hang off the
+   *  subagent's child ToolCall instead of a per-call ToolCall. Absent in
+   *  main-agent context — behavior unchanged. */
   parentSubagentId?: string;
 }
 
 // subagent = one scope SubTask node, mirrored twice: at start
 // (status="running", finishedAt/summary absent) and at terminal landing
 // (ON MATCH only fills gaps). Each internal toolcall is a separate child
-// SubTask (built by upsert_execution / upsert_mcp_search, which take
+// SubTask (built by upsert_execution / upsert_tool_call, which take
 // parent_subagent_id), so the scope itself never carries products.
 export interface ObserveSubagentPayload {
   subagentId: string;
@@ -198,8 +250,8 @@ export interface ObserveSubagentPayload {
   summary?: string;
 }
 
-// Passive ResearchGoal fallback + SessionPlan → SubTask DAG mirror.
-// Domain is inferred from message/plan keywords, not read from any
+// Passive ResearchGoal fallback.
+// Domain is inferred from message keywords, not read from any
 // project, so it travels with the payload instead of being looked up.
 
 export interface ObserveSessionFirstMessagePayload {
@@ -213,28 +265,27 @@ export interface ObserveSessionFirstMessagePayload {
   createdAt: string;
 }
 
-export interface PlanStepMirror {
-  id: string;
-  description: string;
-}
-
-export interface ObserveSessionPlanPayload {
+// Uploaded file → SourceFile node + feeds edge to ResearchGoal. The file_id is
+// a deterministic ``source_file:session:<sid>:<path>`` so re-uploads merge into
+// the same node. media_type/size/content_hash may be absent on partial uploads.
+export interface ObserveUploadFilePayload {
   sessionId: string;
-  goalId: string;
-  planId: string;
-  /** plan.scope — overwrites the first-message goal fallback. */
-  scope: string;
-  /** inferDomain(plan.scope) — re-inferred on plan correction. */
-  domain: string;
-  steps: PlanStepMirror[];
+  /** Deterministic ``source_file:session:<sessionId>:<path>`` → re-uploads merge. */
+  fileId: string;
+  name: string;
+  path: string;
+  mediaType?: string;
+  size?: number;
+  contentHash?: string;
+  createdAt: string;
 }
 
 /**
  * Lightweight keyword heuristic for a ResearchGoal's domain.
  *
  * Pure passive fallback — precision is not the goal; "the graph has a goal
- * with a plausible domain" is. The LLM's explicit plan.scope corrects it
- * later. Biology keywords take priority over DataAnalysis so a
+ * with a plausible domain" is. Biology keywords take priority over
+ * DataAnalysis so a
  * data-analysis task that happens to mention a gene lands in Biology.
  *
  * Bilingual: ScienceDiscovery users write in Chinese, so each domain pairs English
@@ -285,6 +336,47 @@ export class MemoryGraphClient {
     }
   }
 
+  async observeToolCall(payload: ObserveToolCallPayload): Promise<void> {
+    mgLog.info("observeToolCall in: task_id=%s session=%s tool=%s source=%s products=%d",
+      payload.taskId, payload.sessionId, payload.toolName, payload.source ?? "<none>", payload.products.length);
+    try {
+      await this.post("/observe/tool-call", {
+        task_id: payload.taskId,
+        session_id: payload.sessionId,
+        turn_id: payload.turnId,
+        tool_name: payload.toolName,
+        tool_type: payload.toolType,
+        source: payload.source ?? null,
+        status: payload.status ?? "completed",
+        result_count: payload.resultCount ?? 0,
+        products: payload.products.map((p) => ({
+          product_type: p.productType,
+          // paper fields
+          link: p.link ?? null,
+          title: p.title ?? null,
+          identifier: p.identifier ?? null,
+          identifier_type: p.identifierType ?? null,
+          year: p.year ?? null,
+          authors: p.authors ?? null,
+          abstract: p.abstract ?? null,
+          source: p.source ?? null,
+          // web_page fields
+          url: p.url ?? null,
+          snippet: p.snippet ?? null,
+          source_refs: p.sourceRefs ?? null,
+          content_hash: p.contentHash ?? null,
+        })),
+        parent_subagent_id: payload.parentSubagentId ?? null,
+      });
+      mgLog.info("observeToolCall done: task_id=%s delivered (%d products)",
+        payload.taskId, payload.products.length);
+    } catch (error) {
+      mgLog.warn("observeToolCall failed: task_id=%s, error %s",
+        payload.taskId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
   /** Push the Neo4j credential (and optional HTTP/user override) to the sidecar.
    *  ``password`` null clears the stored credential; a string sets/replaces it.
    *  HTTP/user are sent only when provided so the sidecar keeps its current
@@ -320,7 +412,8 @@ export class MemoryGraphClient {
         status: payload.status,
         started_at: payload.startedAt,
         finished_at: payload.finishedAt,
-        task_type: payload.taskType,
+        tool_type: payload.toolType,
+        tool_name: payload.toolName ?? null,
         produced_artifacts: payload.producedArtifacts.map((artifact) => ({
           artifact_id: artifact.artifactId,
           path: artifact.path,
@@ -339,44 +432,12 @@ export class MemoryGraphClient {
         stderr_hash: payload.stderrHash ?? null,
         env_hash: payload.envHash ?? null,
         parent_subagent_id: payload.parentSubagentId ?? null,
+        input_source_files: (payload.inputSourceFiles ?? []).map((f) => ({ file_id: f.fileId })),
       });
       mgLog.info("observeExecution done: execution=%s delivered", payload.executionId);
     } catch (error) {
       mgLog.warn("observeExecution failed: execution=%s, error %s",
         payload.executionId, error instanceof Error ? error.message : String(error));
-      throw error;
-    }
-  }
-
-  async observeMcpInvocation(payload: ObserveMcpInvocationPayload): Promise<void> {
-    const papersWithUrl = payload.records.filter((record) => Boolean(record.url)).length;
-    mgLog.info("observeMcpInvocation in: invocation=%s session=%s source=%s records=%d (%d with url)",
-      payload.invocationId, payload.sessionId, payload.source, payload.records.length, papersWithUrl);
-    try {
-      await this.post("/observe/mcp-search", {
-        invocation_id: payload.invocationId,
-        session_id: payload.sessionId,
-        turn_id: payload.turnId,
-        source: payload.source,
-        tool_type: payload.toolType,
-        retrieved_at: payload.retrievedAt,
-        records: payload.records.map((record) => ({
-          url: record.url,
-          title: record.title,
-          identifier: record.identifier,
-          identifier_type: record.identifierType,
-          year: record.year,
-          authors: record.authors,
-          abstract: record.abstract,
-          source: record.source,
-        })),
-        parent_subagent_id: payload.parentSubagentId ?? null,
-      });
-      mgLog.info("observeMcpInvocation done: invocation=%s delivered (%d papers)",
-        payload.invocationId, papersWithUrl);
-    } catch (error) {
-      mgLog.warn("observeMcpInvocation failed: invocation=%s, error %s",
-        payload.invocationId, error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -426,23 +487,24 @@ export class MemoryGraphClient {
     }
   }
 
-  async observeSessionPlan(payload: ObserveSessionPlanPayload): Promise<void> {
-    mgLog.info("observeSessionPlan in: session=%s plan=%s goal=%s steps=%d",
-      payload.sessionId, payload.planId, payload.goalId, payload.steps.length);
+  async observeUploadFile(payload: ObserveUploadFilePayload): Promise<void> {
+    mgLog.info("observeUploadFile in: session=%s file=%s name=%s",
+      payload.sessionId, payload.fileId, payload.name);
     try {
-      await this.post("/observe/session-plan", {
+      await this.post("/observe/upload-file", {
         session_id: payload.sessionId,
-        goal_id: payload.goalId,
-        plan_id: payload.planId,
-        scope: payload.scope,
-        domain: payload.domain || null,
-        steps: payload.steps.map((step) => ({ id: step.id, description: step.description })),
+        file_id: payload.fileId,
+        name: payload.name,
+        path: payload.path,
+        media_type: payload.mediaType ?? null,
+        size: payload.size ?? null,
+        content_hash: payload.contentHash ?? null,
+        created_at: payload.createdAt,
       });
-      mgLog.info("observeSessionPlan done: session=%s plan=%s (goal corrected from plan.scope)",
-        payload.sessionId, payload.planId);
+      mgLog.info("observeUploadFile done: session=%s file=%s", payload.sessionId, payload.fileId);
     } catch (error) {
-      mgLog.warn("observeSessionPlan failed: session=%s plan=%s, error %s",
-        payload.sessionId, payload.planId, error instanceof Error ? error.message : String(error));
+      mgLog.warn("observeUploadFile failed: session=%s file=%s, error %s",
+        payload.sessionId, payload.fileId, error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -506,6 +568,36 @@ export class MemoryGraphClient {
         sessionId, result.nodes.length, result.edges.length);
     }
     return result;
+  }
+
+  /**
+   * Look up one WebPage's CAS content_hash by node id (O(1) sidecar index
+   * hit) instead of pulling the whole subgraph. Mirrors ``getSubgraph``'s
+   * defensive contract: an unreachable sidecar or an absent node resolves to
+   * ``{ contentHash: null, reason }`` rather than throwing. The id encoding
+   * follows the sidecar's ``_node_identity``: ``"url:<...>"`` for url-only
+   * web_search results, the bare identifier otherwise.
+   */
+  async getWebPageContentHash(
+    sessionId: string,
+    webPageId: string,
+  ): Promise<{ contentHash: string | null; reason?: string }> {
+    const url = `${this.baseUrl}/web-pages/content-hash?session_id=${encodeURIComponent(sessionId)}&web_page_id=${encodeURIComponent(webPageId)}`;
+    let response: Response;
+    try {
+      response = await fetch(url, { headers: this.initHeaders() });
+    } catch (error) {
+      mgLog.warn("getWebPageContentHash error: cannot reach memory-graph service (session=%s): %s",
+        sessionId, error instanceof Error ? error.message : String(error));
+      return { contentHash: null, reason: "memory_graph_unreachable" };
+    }
+    if (!response.ok) {
+      mgLog.warn("getWebPageContentHash not ok: memory-graph returned HTTP %s (session=%s)",
+        response.status, sessionId);
+      return { contentHash: null, reason: "memory_graph_unreachable" };
+    }
+    const body = (await response.json()) as { content_hash?: string | null; reason?: string };
+    return { contentHash: body.content_hash ?? null, reason: body.reason };
   }
 
   /**
@@ -768,7 +860,10 @@ export class MemoryGraphClient {
   }
 
   /** Shape the sidecar's aggregate row into the typed result. Each field is a
-   * hash or routing key — never content. */
+   * hash or routing key — never content. Dependencies are split by ``kind``:
+   * an ``artifact`` input has ``artifactId``/``version`` (links to an Artifact
+   * version node); a ``source_file`` input has ``fileId``/``name`` (links to a
+   * SourceFile node — uploaded files have no version). */
   private toArtifactProvenance(raw: Record<string, unknown>): ArtifactProvenanceGraphResult {
     const dependencies = (raw.dependencies as Array<Record<string, unknown>> | undefined) ?? [];
     return {
@@ -790,13 +885,24 @@ export class MemoryGraphClient {
       language: (raw.language as string | null) ?? null,
       tool: (raw.tool as string | null) ?? null,
       messagesTurnId: (raw.messages_turn_id as string | null) ?? null,
-      dependencies: dependencies.map((dep) => ({
-        artifactId: dep.artifact_id as string,
-        version: dep.version as number,
-        logicalName: (dep.logical_name as string | null) ?? null,
-        mediaType: (dep.media_type as string | null) ?? null,
-        path: (dep.path as string | null) ?? null,
-      })),
+      dependencies: dependencies.map((dep) =>
+        dep.kind === "source_file"
+          ? {
+              kind: "source_file" as const,
+              fileId: (dep.file_id as string | null) ?? "",
+              name: (dep.name as string | null) ?? null,
+              mediaType: (dep.media_type as string | null) ?? null,
+              path: (dep.path as string | null) ?? null,
+            }
+          : {
+              kind: "artifact" as const,
+              artifactId: (dep.artifact_id as string | null) ?? "",
+              version: (dep.version as number | null) ?? 0,
+              logicalName: (dep.logical_name as string | null) ?? null,
+              mediaType: (dep.media_type as string | null) ?? null,
+              path: (dep.path as string | null) ?? null,
+            },
+      ),
     };
   }
 
@@ -812,7 +918,13 @@ export class MemoryGraphClient {
     try {
       const body = await this.postJsonWithBody("/persist/evidence", {
         content: input.content,
-        source_paper_link: input.sourcePaperLink,
+        // Source routing: exactly one of source_paper_link / source_file_id /
+        // source_webpage_link (the sidecar 422's on all-empty / multi-set).
+        // Each is optional; pass only when set so an undefined never shadows
+        // a real source on a different field.
+        ...(input.sourcePaperLink ? { source_paper_link: input.sourcePaperLink } : {}),
+        ...(input.sourceFileId ? { source_file_id: input.sourceFileId } : {}),
+        ...(input.sourceWebpageLink ? { source_webpage_link: input.sourceWebpageLink } : {}),
         locator: input.locator,
         evidence_type: input.evidenceType,
         confidence: input.confidence,
@@ -841,6 +953,16 @@ export class MemoryGraphClient {
         // The Node-side declare callback fills this from the store; the LLM
         // never sees versions. Absent → sidecar falls back to latest.
         ...(input.citesArtifactVersions ? { cites_artifact_versions: input.citesArtifactVersions } : {}),
+        // sourcefile cites: alias → file_id for uploaded non-PDF data files
+        // that directly support the claim (SourceFile -[:supports]-> Claim).
+        // No version companion (SourceFile has no version). Absent → no
+        // sourcefile cite.
+        ...(input.citesSourceFileAliases ? { cites_source_file_aliases: input.citesSourceFileAliases } : {}),
+        // dbrecord cites: alias → "source:identifier" for db-search records
+        // that directly support the claim (DbRecord -[:supports]-> Claim). No
+        // version companion (DbRecord has no version). Absent → no dbrecord
+        // cite.
+        ...(input.citesDbrecordAliases ? { cites_dbrecord_aliases: input.citesDbrecordAliases } : {}),
         ...(input.artifactId ? { artifact_id: input.artifactId } : {}),
         // The report version pins stated_in to the report's exact version; may
         // be absent at declare time (report not landed), re-linked by
@@ -1123,20 +1245,24 @@ export class MemoryGraphSink {
       });
   }
 
-  /** Never throws into the caller. Errors are swallowed and logged. */
-  observeMcpInvocation(payload: ObserveMcpInvocationPayload): void {
+  /** Mirror a tool call into one ToolCall + its products (unified path).
+   *  Never throws; a disabled/unreachable graph leaves the agent loop
+   *  unblocked. The MCP broker emits literature_search / db_search products
+   *  and the WebBroker emits web_search products — both
+   *  funnel through this single write ticket. */
+  observeToolCall(payload: ObserveToolCallPayload): void {
     if (!this.enabled || !this.client) {
-      mgLog.debug("mirror skipped: memory graph not enabled (invocation=%s)", payload.invocationId);
+      mgLog.debug("mirror skipped: memory graph not enabled (tool_call=%s)", payload.taskId);
       return;
     }
-    mgLog.info("mcp search finished, mirroring to memory graph: invocation=%s session=%s",
-      payload.invocationId, payload.sessionId);
+    mgLog.info("tool call finished, mirroring to memory graph: task_id=%s session=%s products=%d",
+      payload.taskId, payload.sessionId, payload.products.length);
     void this.client
-      .observeMcpInvocation(payload)
+      .observeToolCall(payload)
       .then(() => undefined)
       .catch((error: unknown) => {
-        mgLog.warn("mirror failed: invocation=%s session=%s, error %s",
-          payload.invocationId, payload.sessionId,
+        mgLog.warn("mirror failed: task_id=%s session=%s, error %s",
+          payload.taskId, payload.sessionId,
           error instanceof Error ? error.message : String(error));
       });
   }
@@ -1145,7 +1271,7 @@ export class MemoryGraphSink {
    * a disabled/unreachable graph leaves the subagent unblocked. Called twice
    * (start + terminal); MERGE on task_id makes both calls idempotent. The
    * scope never carries products — each internal toolcall is a separate child
-   * hung off this scope by upsert_execution / upsert_mcp_search. */
+   * hung off this scope by upsert_execution / upsert_tool_call. */
   observeSubagent(payload: ObserveSubagentPayload): void {
     if (!this.enabled || !this.client) {
       mgLog.debug("mirror skipped: memory graph not enabled (subagent=%s)", payload.subagentId);
@@ -1182,23 +1308,24 @@ export class MemoryGraphSink {
       });
   }
 
-  /** Correct the ResearchGoal's scope/domain from a proposed SessionPlan's
-   * scope. Steps are not mirrored into SubTask nodes (the framework doesn't
-   * advance step status, so a skeleton would stay PENDING and clutter the
-   * graph). Never throws; plan flow stays unblocked. */
-  observeSessionPlan(payload: ObserveSessionPlanPayload): void {
+  /** Mirror an uploaded file into a SourceFile node + ``feeds`` edge to
+   * ResearchGoal. Never throws; an upload must never fail because the graph is
+   * degraded or disabled. Idempotent (MERGE on deterministic file_id) so
+   * re-uploading the same file creates no duplicate. */
+  observeUploadFile(payload: ObserveUploadFilePayload): void {
     if (!this.enabled || !this.client) {
-      mgLog.debug("mirror skipped: memory graph not enabled (plan=%s)", payload.planId);
+      mgLog.debug("mirror skipped: memory graph not enabled (upload session=%s file=%s)",
+        payload.sessionId, payload.fileId);
       return;
     }
-    mgLog.info("plan proposed, correcting ResearchGoal from plan.scope: session=%s plan=%s",
-      payload.sessionId, payload.planId);
+    mgLog.info("file uploaded, mirroring SourceFile to memory graph: session=%s file=%s",
+      payload.sessionId, payload.fileId);
     void this.client
-      .observeSessionPlan(payload)
+      .observeUploadFile(payload)
       .then(() => undefined)
       .catch((error: unknown) => {
-        mgLog.warn("mirror failed: plan=%s session=%s, error %s",
-          payload.planId, payload.sessionId,
+        mgLog.warn("mirror failed: upload session=%s file=%s, error %s",
+          payload.sessionId, payload.fileId,
           error instanceof Error ? error.message : String(error));
       });
   }

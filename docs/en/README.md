@@ -10,6 +10,8 @@ This is the complete English documentation set.
 
 ## How-to guides
 
+- [Configure custom MCP servers](how-to/configure-custom-mcp.md): local/remote connections, secret editing, OAuth, Inspector and Session tool selection.
+
 - [Deployment](how-to/deployment.md) — local mode, Docker, and building a single-file binary from source.
 - [Configure the network proxy](how-to/configure-network-proxy.md) — add a proxy on the settings page and choose a policy for LLM, web, and MCP traffic.
 - [Literature research case guide](how-to/literature-research-case-guide.md) — run an end-to-end cross-database literature survey, from service startup to approvals and results.

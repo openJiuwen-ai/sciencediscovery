@@ -140,8 +140,13 @@ export async function resolveComposerReferences(
     values.findIndex((candidate) => candidate.kind === reference.kind && candidate.id === reference.id) === index);
 }
 
-export function messagePromptContent(message: Pick<ChatMessage, "annotations" | "content" | "references">): string {
-  if (!message.references?.length && !message.annotations?.length) return message.content;
+export function messagePromptContent(message: Pick<ChatMessage, "annotations" | "content" | "references" | "runtimeNotice">): string {
+  // Runtime records are stored beside the message body, never inside it. The
+  // model input is the only place they are re-attached.
+  const body = message.runtimeNotice
+    ? [message.content, message.runtimeNotice.prompt].filter((part) => part.trim()).join("\n\n")
+    : message.content;
+  if (!message.references?.length && !message.annotations?.length) return body;
   const lines = (message.references ?? []).map((reference) => {
     if (reference.kind === "artifact") {
       return `- Artifact: ${reference.label} (artifact_id=${reference.id}, origin=${reference.origin ?? "unknown"}, created in session ${reference.createdInSessionTitle ?? reference.sessionId ?? "unknown"}); use read_artifact to read its content`;
@@ -155,5 +160,5 @@ export function messagePromptContent(message: Pick<ChatMessage, "annotations" | 
       : `point x=${annotation.x.toFixed(4)}, y=${annotation.y.toFixed(4)}`;
     return `- Figure annotation on ${annotation.artifactLogicalName} (version id ${annotation.artifactVersionId}), ${region}: ${annotation.note}`;
   });
-  return `${message.content}\n\nStructured context references:\n${[...lines, ...annotations].join("\n")}`;
+  return `${body}\n\nStructured context references:\n${[...lines, ...annotations].join("\n")}`;
 }

@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { dirname, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
@@ -45,7 +46,6 @@ import {
   type UpdateModelProviderRequest,
 } from "@sciencediscovery/schema";
 import { createMainAgentProfile, createSubagentProfile, resolveSubagentConfig } from "@sciencediscovery/orchestration";
-import { createEvidenceReferenceTracer } from "@sciencediscovery/provenance";
 import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 import { handleEvolveCompletion } from "../evolution/llm-proxy.js";
 import {
@@ -107,11 +107,13 @@ import type {
   CreateSpecialistRequest,
   DecidePermissionRequest,
   DecideRemoteJobRequest,
+  IdeaTreeSettingsDetails,
   JsonSchema,
   Subagent,
   SubagentInput,
   UpdateSubagentBriefRequest,
   UpdateEnvironmentSourceSettingsRequest,
+  UpdateIdeaTreeSettingsRequest,
   UpdateMcpProxyPoliciesRequest,
   UpdateProxyServerRequest,
   UpdateProxySettingsRequest,
@@ -154,20 +156,27 @@ import type {
   WorkspaceCapabilities,
   WorkspaceUploadResult,
   RegisterRemoteHostRequest,
+  RemoteConnectLog,
   RemoteHostTarget,
   RemoteRunnerStatus,
+  NpuRunnerSelectionsResponse,
   RemoteWorkspaceSyncRequest,
   PromptManifest,
-  ProposePlanRequest,
-  RevisePlanRequest,
   SubagentStep,
   UpdateSpecialistRequest,
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
+  LOCAL_RUNNER_ID,
   UNTITLED_SESSION_TITLE,
+  resolveNpuSelection,
 } from "@sciencediscovery/schema";
+import {
+  IdeaTreePersistenceError,
+  IdeaTreeRuntimeError,
+  isIdeaTreeExecutorSkill,
+} from "@sciencediscovery/idea-tree";
 
 import { SessionStoreHttpError } from "../store.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
@@ -179,8 +188,11 @@ import {
   readablePrivateKey,
   stageGeneratedKey,
 } from "../store/ssh-config.js";
+import { ideaTreeSkillDeletionReferences } from "../idea-tree/deletion-impact.js";
+import { resolveExecutorCapability } from "../idea-tree/executor-capability.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import {
+  inferMediaType,
   parseConflictPolicy,
   readMultipartUploads,
   uploadWorkspaceParts,
@@ -191,7 +203,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { inferDomain, mgLog } from "@sciencediscovery/memory";
+import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -208,10 +220,13 @@ import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-
 import { ModelCatalogStore } from "../model-catalog.js";
 import { handleSkillLibraryRequest } from "./skill-libraries.js";
 import {
+  createEvidenceReferenceTracer,
+  isReviewerReportCandidate,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
+import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
@@ -248,6 +263,8 @@ import {
   capturedModelUsage,
   unreportedModelUsage,
 } from "../model-usage/index.js";
+import { modelUsageAnalyticsToCsv } from "../model-usage.js";
+import { UsageExchangeRateProvider } from "../exchange-rates.js";
 import { timeoutFailure, timeoutMessage } from "../timeouts/index.js";
 import { isAuthorized } from "./auth.js";
 import { readBytes, readJson, readMultipartSkill } from "./body.js";
@@ -255,13 +272,16 @@ import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
 import { send, sendError, sendJson } from "./response.js";
+import { handleCustomMcpRequest, handleMcpOAuthCallback } from "./custom-mcp.js";
 import { contentTypeForPath, serveStatic } from "./static.js";
 import {
   ApiStatusError,
   cancelCurrentSessionRun,
   cancelSessionRun,
+  stopSessionSubagent,
   createSkillEvolutionRun,
   createQueuedRun,
+  createNotificationRun,
   emptyMatch,
   emptyTrace,
   getActiveSessionRun,
@@ -273,7 +293,8 @@ import {
   streamStoredRunEvents,
 } from "../runs/index.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
-import { manageRunnerEnvironment, runnerWorkspaceBindings } from "../runner-management.js";
+import { NotificationDispatcher } from "../notification-dispatch.js";
+import { manageRunnerEnvironment, runnerWorkspaceBindings, runnerTarget } from "../runner-management.js";
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
 import {
   createPlatformServices,
@@ -289,6 +310,53 @@ export * from "../runs/index.js";
 
 export type { ApiServerDependencies } from "../bootstrap/platform.js";
 
+interface ApiServerLifecycle {
+  close(): Promise<void>;
+}
+
+const HTTP_CONNECTION_DRAIN_TIMEOUT_MS = 1_000;
+const apiServerLifecycles = new WeakMap<Server, ApiServerLifecycle>();
+
+function closeHttpServer(server: Server): Promise<void> {
+  return new Promise<void>((resolveClose, rejectClose) => {
+    const drainTimeout = setTimeout(() => {
+      apiLog.warn("http_connection_drain_timed_out", {
+        timeoutMs: HTTP_CONNECTION_DRAIN_TIMEOUT_MS,
+      });
+      server.closeAllConnections();
+    }, HTTP_CONNECTION_DRAIN_TIMEOUT_MS);
+    server.close((error) => {
+      clearTimeout(drainTimeout);
+      if (error) rejectClose(error);
+      else resolveClose();
+    });
+  });
+}
+
+export function closeApiServer(server: Server): Promise<void> {
+  const lifecycle = apiServerLifecycles.get(server);
+  if (!lifecycle) {
+    if (!server.listening) return Promise.resolve();
+    return closeHttpServer(server);
+  }
+  return lifecycle.close();
+}
+
+function usageAnalyticsFilters(url: URL) {
+  return {
+    ...(url.searchParams.get("from") ? { from: url.searchParams.get("from")! } : {}),
+    ...(url.searchParams.get("modelProfileId") ? { modelProfileId: url.searchParams.get("modelProfileId")! } : {}),
+    ...(url.searchParams.get("projectId") ? { projectId: url.searchParams.get("projectId")! } : {}),
+    ...(url.searchParams.get("timeZone") ? { timeZone: url.searchParams.get("timeZone")! } : {}),
+    ...(url.searchParams.get("to") ? { to: url.searchParams.get("to")! } : {}),
+  };
+}
+
+function usageDisplayCurrency(url: URL): "CNY" | "USD" | undefined {
+  const value = url.searchParams.get("displayCurrency");
+  return value === "CNY" || value === "USD" ? value : undefined;
+}
+
 export function createApiServer(config = loadServerConfig(), dependencies: ApiServerDependencies = {}): Server {
   const platform = createPlatformServices(config, repositoryRoot, dependencies);
   const {
@@ -303,6 +371,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    ideaResearch,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpGateway,
@@ -321,6 +392,139 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  const reviewerAuditCoordinator = new ReviewerAuditCoordinator(store, {
+    run: async (task, signal) => {
+      const session = store.getSession(task.sessionId);
+      if (!session) throw new Error("Session not found");
+      const versions = task.artifactVersionIds
+        .map((versionId) => store.getArtifactVersion(task.sessionId, versionId))
+        .filter((version): version is NonNullable<typeof version> => {
+          const artifact = version ? store.getArtifact(task.sessionId, version.artifactId) : undefined;
+          return Boolean(version && artifact && artifact.createdInSessionId === task.sessionId
+            && version.sessionId === task.sessionId && isReviewerReportCandidate(artifact, version));
+        });
+      // An automatic task may outlive a superseded/deleted Artifact. It is a
+      // normal race in an asynchronous workspace, not a Reviewer failure.
+      if (!versions.length && task.origin === "artifact_registered") return { skipped: true };
+      if (!versions.length) throw new Error("No report artifacts to review");
+      const runnableTask = { ...task, artifactVersionIds: versions.map((version) => version.id) };
+      let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
+      if (task.reviewLevel === "deep") {
+        const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
+        // Reviewer Specialist is an internal quality role of this Session,
+        // not a separately configured Agent. Deep review therefore reuses
+        // the Session's effective main-Agent model and credentials.
+        const selectedModel = store.getModel(runtimeSettings.modelId);
+        const apiToken = selectedModel ? store.getModelApiToken(selectedModel.id) : undefined;
+        if (!selectedModel || !apiToken) throw new Error("The Session main Agent model is unavailable");
+        const permission = {
+          getEpoch: () => store.getSessionPermissionEpoch(task.sessionId)!,
+          requirePrivilege: async (privilege: {
+            action: "code" | "connector" | "host";
+            executionId?: string;
+            resource: string;
+            signal?: AbortSignal;
+            summary: string;
+            toolCallId?: string;
+          }) => {
+            const check = await store.requestPermission(task.sessionId, privilege.action, privilege.resource, privilege.summary, {
+              ...(privilege.executionId ? { executionId: privilege.executionId } : {}),
+              ...(privilege.toolCallId ? { toolCallId: privilege.toolCallId } : {}),
+            });
+            if (!check.allowed) throw new Error("Reviewer connector access requires an existing permission grant");
+            return check.authorization;
+          },
+        };
+        const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
+        const reviewerWorkspace: WorkspaceAgentOptions = {
+          config: {
+            apiToken,
+            apiProtocol: selectedModel.apiProtocol,
+            apiVariant: selectedModel.apiVariant,
+            baseUrl: selectedModel.baseUrl,
+            dataDir: store.dataDir,
+            model: selectedModel.model,
+            proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
+            thinkingEffort: selectedModel.thinkingEffort,
+            thinkingMode: selectedModel.thinkingMode,
+          },
+          enabledConnectorIds: runtimeSettings.enabledConnectorIds,
+          executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
+          executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
+          ...createMcpWorkspaceTools({
+            artifactManager, broker: mcpBroker, catalog: mcpCatalog,
+            enabledSourceIds: runtimeSettings.enabledConnectorIds,
+            emitPermissionRequest: () => undefined, paperService, pauseExternalWait: () => () => undefined,
+            permission, projectId: session.projectId, registry: mcpRegistry, sessionId: task.sessionId, store,
+            suppressMemoryGraphMirror: true, turnId: task.toolCallId,
+          }),
+          ...createWebWorkspaceTools({
+            broker: webBroker,
+            context: { forceRefresh: false, projectId: session.projectId, sessionId: task.sessionId, turnId: task.toolCallId },
+            permission,
+          }),
+          approvalMode: session.approvalMode,
+          skills: reviewerSkills,
+          workspaceRoot: store.workspacePath(task.sessionId),
+        };
+        semanticReview = createReviewAgentOptions({
+          modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
+          runIdleTimeoutMs: config.gatewayIdleTimeoutMs,
+          skills: reviewerSkills,
+          workspace: reviewerWorkspace,
+        });
+      }
+      try {
+        const result = await runReviewerCheckpoint({
+          artifactVersionIds: runnableTask.artifactVersionIds,
+          cas: provenanceRecorder.cas,
+          parentRunId: task.toolCallId,
+          reason: task.origin === "manual" ? "Manual Reviewer Specialist request" : "Automatic Artifact evidence audit",
+          reviewLevel: task.reviewLevel,
+          sessionId: task.sessionId,
+          signal,
+          store,
+          toolCallId: task.toolCallId,
+          ...(memoryGraphEnabled() ? {
+            traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, task.sessionId, memoryGraphEnabled),
+            traceArtifactProvenance: async (reference, traceSignal) => {
+              if (traceSignal?.aborted) throw new DOMException("Review cancelled", "AbortError");
+              return memoryGraphClient.traceProvenance({ nodeId: reference.artifactId }, task.sessionId);
+            },
+          } : {}),
+          onProgress: async (progress) => {
+            await store.updateReviewerCheckpointProgress(task.sessionId, task.checkpointMessageId, progress);
+          },
+          onArtifactCompleted: async (completedReviews) => {
+            await store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
+              content: reviewerCheckpointPromptContent(completedReviews, undefined, true), status: "running",
+            });
+          },
+          ...(semanticReview ? { semanticReview } : {}),
+        });
+        if (task.origin === "artifact_registered" && !result.reviews.length) return { skipped: true };
+        await store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
+          content: reviewerCheckpointPromptContent(result.reviews), status: "completed",
+        });
+        return result.reviews;
+      } catch (error) {
+        const cancelled = signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+        const detail = cancelled ? "Review cancelled by user" : error instanceof Error ? error.message : "Reviewer Specialist failed";
+        await store.updateReviewerCheckpointMessage(task.sessionId, task.checkpointMessageId, {
+          content: reviewerCheckpointPromptContent([], detail), error: detail, status: "failed",
+        });
+        throw error;
+      }
+    },
+  }, {
+    isMainAgentBusy: async (sessionId) => (await store.listSessionRuns(sessionId))
+      .some((run) => run.status === "queued" || run.status === "running"),
+  });
+  provenanceRecorder.setArtifactRegisteredHandler(async ({ mediaType, sessionId, version }) => {
+    await reviewerAuditCoordinator.enqueueArtifactVersion({
+      artifactVersionId: version.id, contentHash: version.content.hash, mediaType, sessionId,
+    });
+  });
   const modelCatalog = new ModelCatalogStore({
     bundledPath: config.modelCatalogPath,
     dataDir: config.dataDir,
@@ -331,6 +535,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // `?refresh=1` forces a live fetch.
   const providerModelListCache = new Map<string, { fetchedAt: string; models: DiscoveredModel[] }>();
   const PROVIDER_MODEL_CACHE_TTL_MS = 5 * 60_000;
+  const usageExchangeRateProvider = new UsageExchangeRateProvider({
+    config: config.usageExchangeRates,
+    dataDir: config.dataDir,
+    fetchImpl: dependencies.fetchUsageExchangeRate,
+  });
+  const usageAnalyticsSummary = async (url: URL) => {
+    const summary = await store.getModelUsageAnalyticsSummary(usageAnalyticsFilters(url));
+    const exchangeRates = await usageExchangeRateProvider.rates();
+    return exchangeRates.length ? { ...summary, exchangeRates } : summary;
+  };
   /** Overrides saved on the profile that backs a listing row, so the row shows
    *  what the user stated instead of what the vendor last published. */
   const savedFacts = (profileId: string | undefined): ModelFactOverrides | undefined =>
@@ -367,6 +581,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       ...(user ? { user } : {}),
     };
   };
+  const resolveInstalledExecutorCapability = (skillId: string) => resolveExecutorCapability({
+    ideaTreeAuthorities,
+    skillCatalog,
+    skillId,
+  });
   const patchEphemeralCallback = (server: Server) => {
     // With an ephemeral port (tests), the configured tool-callback URL cannot
     // know the real port in advance; rewrite it from the bound address.
@@ -383,6 +602,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     .then(() => skillLibraryCatalog.load())
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
+    .then(() => reviewerAuditCoordinator.resume())
     .then(() => undefined);
 
   /**
@@ -568,6 +788,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      // OAuth callbacks are authorized by a single-use state and SDK PKCE verifier.
+      if (await handleMcpOAuthCallback(request, response, url, platform.customMcpServers)) return;
       if (url.pathname.startsWith("/api/") && !isAuthorized(request, config.authToken)) {
         sendError(response, 401, "Unauthorized");
         return;
@@ -577,6 +799,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listProjects());
         return;
       }
+      if (await handleCustomMcpRequest(request, response, url, platform.customMcpServers, () => readJson(request), { broker: mcpBroker, registry: mcpRegistry, store })) return;
       if (request.method === "GET" && url.pathname === "/api/mcp/sources") {
         sendJson(response, 200, mcpRegistry.listManifests().map((manifest) => ({
           manifest,
@@ -898,6 +1121,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { ...details, memoryGraphStatus: health });
         return;
       }
+      if (url.pathname === "/api/settings/idea-tree" && request.method === "GET") {
+        sendJson(response, 200, store.getIdeaTreeSettingsDetails() satisfies IdeaTreeSettingsDetails);
+        return;
+      }
+      if (url.pathname === "/api/settings/idea-tree" && request.method === "PUT") {
+        const body = await readJson<UpdateIdeaTreeSettingsRequest>(request);
+        const updated = await store.updateIdeaTreeSettings(body);
+        sendJson(response, 200, updated satisfies IdeaTreeSettingsDetails);
+        return;
+      }
       if (url.pathname === "/api/web/usage" && request.method === "GET") {
         sendJson(response, 200, webBroker.usage());
         return;
@@ -955,19 +1188,42 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listModels());
         return;
       }
-      if (request.method === "GET" && url.pathname === "/api/remote-hosts") {
-        sendJson(response, 200, await Promise.all(store.listRemoteHosts().map(async (host) => ({
-          ...host,
-          runnerStatus: await remoteCompute.runnerStatusWithResources(host.id),
-        }))));
+      if (request.method === "GET" && url.pathname === "/api/runners") {
+        sendJson(response, 200, await Promise.all(["local", ...store.listRemoteHosts().map((host) => host.id)]
+          .map((id) => runnerTarget(store, runnerClient, remoteCompute, id))));
         return;
       }
-      if (request.method === "POST" && url.pathname === "/api/remote-hosts") {
+      const runnerDetail = url.pathname.match(/^\/api\/runners\/([^/]+)$/);
+      if (runnerDetail && request.method === "GET" && runnerDetail[1] !== "npu") {
+        const id = decodeURIComponent(runnerDetail[1]!);
+        if (id !== "local" && !store.getRemoteHost(id)) return sendError(response, 404, "Runner not found");
+        sendJson(response, 200, await runnerTarget(store, runnerClient, remoteCompute, id));
+        return;
+      }
+      if (request.method === "POST" && /^\/api\/runners\/local\/(connect|probe)$/.test(url.pathname)) {
+        const target = await runnerTarget(store, runnerClient, remoteCompute, "local");
+        sendJson(response, target.runnerStatus?.state === "ready" ? 200 : 503, target.runnerStatus);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/remote-hosts") {
+        sendJson(response, 200, await Promise.all(store.listRemoteHosts().map(async (host) => {
+          const runnerStatus = await remoteCompute.runnerStatusWithResources(host.id);
+          // A connected Runner already proves the machine is up. Only ask the
+          // machine itself when it is not connected, which is exactly when
+          // "disconnected" would otherwise say nothing about the machine.
+          const reachability = runnerStatus.state === "ready"
+            ? undefined
+            : await remoteCompute.reachability(host);
+          return { ...host, runnerStatus, ...(reachability ? { reachability } : {}) };
+        })));
+        return;
+      }
+      if (request.method === "POST" && ["/api/remote-hosts", "/api/runners"].includes(url.pathname)) {
         const body = await readJson<RegisterRemoteHostRequest>(request);
         sendJson(response, 201, await registerRemoteHost(body));
         return;
       }
-      const remoteHostProbeMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/probe$/);
+      const remoteHostProbeMatch = url.pathname.match(/^\/api\/(?:remote-hosts|runners)\/([^/]+)\/probe$/);
       if (remoteHostProbeMatch && request.method === "POST") {
         const host = store.getRemoteHost(remoteHostProbeMatch[1]!);
         if (!host) return sendError(response, 404, "Remote host not found");
@@ -1034,6 +1290,63 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, await probeRegisteredSshHost(host.id, host.runnerCommand));
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/runners/npu") {
+        // One place to read every Runner's cards: the local machine's inventory
+        // is fetched live, remote ones ride along on their connection status.
+        const local = await runnerClient.resources()
+          .then((resources) => resources.npu ?? null)
+          .catch(() => null);
+        sendJson(response, 200, {
+          local,
+          selections: store.npuDeviceSelections(),
+        } satisfies NpuRunnerSelectionsResponse);
+        return;
+      }
+      const runnerNpuMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/npu-devices$/);
+      if (runnerNpuMatch && request.method === "PUT") {
+        const runnerId = decodeURIComponent(runnerNpuMatch[1]!);
+        const body = await readJson<{ devices?: unknown }>(request);
+        const devices = body.devices;
+        if (!Array.isArray(devices) || devices.some((entry) => typeof entry !== "number")) {
+          return sendError(response, 400, "Select NPU cards by their host index");
+        }
+        // Only cards being *added* are judged. A card that was usable when it
+        // was ticked and has since been claimed elsewhere must still be
+        // removable: judging the whole set would refuse the very request that
+        // takes the unusable card out, and the operator could never get rid of
+        // it. Removing needs no verdict — it grants nothing.
+        const requested = [...new Set(devices as number[])].sort((left, right) => left - right);
+        const previous = store.npuDeviceSelection(runnerId);
+        const added = requested.filter((hostIndex) => !previous.includes(hostIndex));
+        if (added.length > 0) {
+          // Re-probed rather than read from a cache: a card's availability on a
+          // shared machine changes by the minute, and this is the moment the
+          // product promises the operator that a ticked card works.
+          let inventory;
+          try {
+            inventory = runnerId === LOCAL_RUNNER_ID
+              ? (await runnerClient.npuDevices({ refresh: true }))
+              : (await remoteCompute.runnerClient(runnerId).npuDevices({ refresh: true }));
+          } catch (error) {
+            return sendError(response, 409, `Could not read the NPU cards of Runner ${runnerId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`);
+          }
+          const resolved = resolveNpuSelection(added, inventory);
+          if (resolved.rejected.length > 0) {
+            return sendError(response, 409, resolved.rejected.map((entry) => entry.reason).join(" "));
+          }
+        }
+        try {
+          sendJson(response, 200, {
+            devices: await store.setNpuDeviceSelection(runnerId, requested),
+            runnerId,
+          });
+        } catch (error) {
+          return sendError(response, 404, error instanceof Error ? error.message : "Runner not found");
+        }
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/remote-hosts/key-files") {
         response.setHeader("Cache-Control", "no-store");
         try {
@@ -1080,11 +1393,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { deleted: remoteHostMatch[1] });
         return;
       }
-      const remoteRunnerActionMatch = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/(connect|disconnect)$/);
+      const remoteRunnerActionMatch = url.pathname.match(/^\/api\/(?:remote-hosts\/([^/]+)\/runner|runners\/([^/]+))\/(connect|disconnect)$/);
       if (remoteRunnerActionMatch && request.method === "POST") {
-        const host = store.getRemoteHost(remoteRunnerActionMatch[1]!);
+        const host = store.getRemoteHost(decodeURIComponent((remoteRunnerActionMatch[1] ?? remoteRunnerActionMatch[2])!));
         if (!host) return sendError(response, 404, "Remote host not found");
-        if (remoteRunnerActionMatch[2] === "disconnect") {
+        if (remoteRunnerActionMatch[3] === "disconnect") {
           sendJson(response, 200, await remoteCompute.disconnectRunner(host.id));
           return;
         }
@@ -1099,12 +1412,26 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, status.state === "ready" ? 200 : 503, status);
         return;
       }
+      // The connect above can take minutes while it deploys the Runner; this
+      // is what the settings page polls to show the attempt's progress.
+      const remoteConnectLogMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/connect-log$/)
+        ?? url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/connect-log$/);
+      if (remoteConnectLogMatch && request.method === "GET") {
+        const hostId = decodeURIComponent(remoteConnectLogMatch[1]!);
+        if (hostId !== "local" && !store.getRemoteHost(hostId)) return sendError(response, 404, "Runner not found");
+        sendJson(response, 200, { entries: remoteCompute.connectLog(hostId), hostId } satisfies RemoteConnectLog);
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/connectors") {
         sendJson(response, 200, mcpRegistry.listManifests().map(mcpConnectorManifest));
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/skills") {
-        sendJson(response, 200, skillCatalog.list());
+        sendJson(response, 200, await Promise.all(skillCatalog.list().map(async (descriptor) => {
+          if (!isIdeaTreeExecutorSkill(descriptor)) return descriptor;
+          const resolved = await resolveInstalledExecutorCapability(descriptor.id);
+          return { ...descriptor, ideaTreeExecutor: resolved.capability };
+        })));
         return;
       }
       if (url.pathname.startsWith("/api/skill-libraries") || url.pathname.startsWith("/api/skill-library-proposals")) {
@@ -1268,8 +1595,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillDeletionImpactMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/deletion-impact$/);
       if (skillDeletionImpactMatch && request.method === "GET") {
         const skillId = decodeURIComponent(skillDeletionImpactMatch[1]!);
-        if (!skillCatalog.get(skillId)) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
-        sendJson(response, 200, store.getSkillDeletionImpact(skillId));
+        const skill = skillCatalog.get(skillId);
+        if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
+        const impact = store.getSkillDeletionImpact(skillId);
+        const ideaTreeReferences = skill.ideaTreeExecutor
+          ? await ideaTreeSkillDeletionReferences(store, skillId)
+          : [];
+        impact.references = [...new Map([...impact.references, ...ideaTreeReferences]
+          .map((reference) => [`${reference.scope}:${reference.id}`, reference])).values()];
+        sendJson(response, 200, impact);
         return;
       }
 
@@ -1321,7 +1655,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (skillMatch && request.method === "DELETE") {
         const skillId = decodeURIComponent(skillMatch[1]!);
+        const skill = skillCatalog.get(skillId);
+        if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact: SkillDeletionImpact = store.getSkillDeletionImpact(skillId);
+        const ideaTreeReferences = skill.ideaTreeExecutor
+          ? await ideaTreeSkillDeletionReferences(store, skillId)
+          : [];
+        impact.references = [...new Map([...impact.references, ...ideaTreeReferences]
+          .map((reference) => [`${reference.scope}:${reference.id}`, reference])).values()];
         if (impact.references.length) {
           throw new SkillCatalogError("SKILL_CONFLICT", `Skill is referenced by ${impact.references.length} runtime settings document(s)`);
         }
@@ -1330,30 +1671,50 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, { deleted: skillId });
         return;
       }
-      const runnerManagement = url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/(environment-setup|environment-revisions|environments(?:\/[^/]+(?:\/(?:install|uninstall))?)?|workspaces(?:\/[^/]+)?)$/);
+      const runnerManagement = url.pathname.match(/^\/api\/(?:remote-hosts|runners)\/([^/]+)\/(environment-setup|environment-revisions|environments(?:\/[^/]+(?:\/(?:install|uninstall))?)?|workspaces(?:\/[^/]+(?:\/files)?)?)$/);
       if (runnerManagement) {
         const hostId = decodeURIComponent(runnerManagement[1]!);
         const host = store.getRemoteHost(hostId);
-        if (!host) return sendError(response, 404, "Remote host not found");
+        if (hostId !== "local" && !host) return sendError(response, 404, "Runner not found");
         const operation = runnerManagement[2]!;
         if (operation === "workspaces" && request.method === "GET") {
           sendJson(response, 200, await runnerWorkspaceBindings(store, hostId));
           return;
         }
         let target: RunnerClient;
-        try { target = remoteCompute.runnerClient(hostId); }
+        try { target = hostId === "local" ? runnerClient : remoteCompute.runnerClient(hostId); }
         catch (error) { return sendError(response, 503, error instanceof Error ? error.message : "Connect this Runner first"); }
+        const workspaceFiles = operation.match(/^workspaces\/([^/]+)\/files$/);
+        if (workspaceFiles && request.method === "GET") {
+          const sessionId = decodeURIComponent(workspaceFiles[1]!);
+          const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
+          if (!binding) return sendError(response, 404, "Workspace binding not found");
+          const files = hostId === "local" ? await listWorkspaceFiles(store, sessionId)
+            : await target.listRemoteWorkspaceFiles(binding.workspaceKey);
+          sendJson(response, 200, { runnerId: hostId, workspaceKey: binding.workspaceKey, files });
+          return;
+        }
         if (operation.startsWith("workspaces/") && request.method === "DELETE") {
           const sessionId = decodeURIComponent(operation.slice("workspaces/".length));
           const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
           if (!binding) return sendError(response, 404, "Workspace binding not found");
           if (await sessionHasActiveRun(store, sessionId)) return sendError(response, 409, "Cannot delete a remote workspace during an active run");
+          if (hostId === "local") return sendError(response, 409, "Manage the built-in workspace through its Session; the Session owns its lifecycle");
           await target.deleteRemoteWorkspace(binding.workspaceKey);
           sendJson(response, 200, { deleted: true });
           return;
         }
         const body = request.method === "POST" ? await readJson(request) : undefined;
-        sendJson(response, request.method === "POST" ? 201 : 200, await manageRunnerEnvironment(target, store, operation, request.method ?? "GET", body));
+        const result = await manageRunnerEnvironment(target, store, operation, request.method ?? "GET", body);
+        // Mirroring the built-in catalog lists the Runner's environments, which the Runner
+        // refuses until its setup reaches ready. Setup queries exist to report the states
+        // before that — not-configured, installing, failed — so they must not carry that
+        // refusal; every other operation already needs a ready Runner to have succeeded.
+        const setupState = operation === "environment-setup" ? (result as ScientificEnvironmentSetup).state : undefined;
+        if (hostId === "local" && (setupState === undefined || setupState === "ready")) {
+          await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
+        }
+        sendJson(response, request.method === "POST" ? 201 : 200, result);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/environment-revisions") {
@@ -1561,7 +1922,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (request.method === "POST" && url.pathname === "/api/projects") {
         const body = await readJson<CreateProjectRequest>(request);
-        const project = await store.createProject(body.name ?? "", body.settingsOverrides, body.remoteRunnerHostIds);
+        const project = await store.createProject(body.name ?? "", body.settingsOverrides, body.remoteRunnerHostIds, body.runnerIds);
         try {
           const firstSession = await store.createSession(
             project.id,
@@ -1634,6 +1995,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (projectMatch && request.method === "DELETE") {
         const impact = store.getProjectDeletionImpact(projectMatch[1]!);
+        const ideaTreeRepositories = [];
+        for (const sessionId of impact.sessionIds) {
+          if ((await store.listSessionRuns(sessionId)).some((run) => run.settingsSnapshot.ideaTreeEnabled)) {
+            ideaTreeRepositories.push(ideaTreeRepository(sessionId));
+          }
+        }
         for (const sessionId of impact.sessionIds) {
           if (await sessionHasActiveRun(store, sessionId)) {
             return sendError(response, 409, "Cannot delete a Project while one of its Sessions has an active run");
@@ -1647,6 +2014,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           }
         }
         await store.deleteProject(projectMatch[1]!, body.confirmationId ?? "");
+        void Promise.all(impact.sessionIds.map(sid => ideaResearch.cleanup(projectMatch[1]!, sid))).catch(error => {
+          console.warn("Could not clean up deleted Project research:", error);
+        });
+        // Idea Tree owns its lifecycle and never relies on MemoryGraph's
+        // best-effort mirror cleanup to remove authoritative records.
+        void Promise.all(ideaTreeRepositories.map((repository) => repository.deleteAll())).catch((error) => {
+          console.warn("Could not clean up deleted Project Idea Trees:", error);
+        });
         // Physically delete every node of this project in the memory graph,
         // keyed by the pre-deletion session-id snapshot (private nodes carry
         // no project_id, so the session_ids set is the complete footprint).
@@ -1687,6 +2062,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             reviewCriteria: body.reviewCriteria,
             reviewMode: body.reviewMode,
             remoteRunnerHostIds: body.remoteRunnerHostIds,
+            runnerIds: body.runnerIds,
             specialistId: body.specialistId,
           },
           {
@@ -1771,6 +2147,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listSubagents(sessionSubagentsMatch[1]!));
         return;
       }
+      const stopSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/stop$/);
+      if (stopSubagentMatch && request.method === "POST") {
+        const sessionId = decodeURIComponent(stopSubagentMatch[1]!);
+        const subagentId = decodeURIComponent(stopSubagentMatch[2]!);
+        if (!stopSessionSubagent(store, sessionId, subagentId)) sendError(response, 404, "Subagent not found in this Session");
+        else sendJson(response, 200, { stopped: true, sessionId, subagentId });
+        return;
+      }
       const sessionSubagentBriefMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/brief$/);
       if (sessionSubagentBriefMatch && request.method === "PATCH") {
         const sessionId = sessionSubagentBriefMatch[1]!;
@@ -1847,6 +2231,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const sessionReviewerSettingsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/settings$/);
+      if (sessionReviewerSettingsMatch && request.method === "GET") {
+        sendJson(response, 200, store.getSessionReviewerSpecialistSettings(sessionReviewerSettingsMatch[1]!));
+        return;
+      }
+      if (sessionReviewerSettingsMatch && request.method === "PUT") {
+        sendJson(response, 200, await store.updateSessionReviewerSpecialistSettings(
+          sessionReviewerSettingsMatch[1]!,
+          await readJson(request),
+        ));
+        return;
+      }
+
       const sessionArchiveMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/(archive|restore)$/);
       if (sessionArchiveMatch && request.method === "POST") {
         if (await sessionHasActiveRun(store, sessionArchiveMatch[1]!)) {
@@ -1879,6 +2276,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionMatch && request.method === "PATCH") {
         const body = await readJson<UpdateSessionRequest>(request);
         const sessionId = sessionMatch[1]!;
+        const existingSession = store.getSession(sessionId);
+        if (!existingSession) return sendError(response, 404, "Session not found");
         const requestedApprovalMode = body.approvalMode;
         const { approvalMode: _approvalMode, ...remaining } = body;
         const hasRemainingChanges = Object.values(remaining).some((value) => value !== undefined);
@@ -1922,10 +2321,21 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return sendError(response, 409, "Cannot delete a Session during an active run");
         }
         const body = await readJson<DeleteResourceRequest>(request);
+        const ideaTreeState = (await store.listSessionRuns(sessionMatch[1]!))
+          .some((run) => run.settingsSnapshot.ideaTreeEnabled)
+          ? ideaTreeRepository(sessionMatch[1]!)
+          : undefined;
         if ((await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available) {
           await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         }
+        const researchProjectId = store.getSession(sessionMatch[1]!)!.projectId;
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
+        void ideaResearch.cleanup(researchProjectId, sessionMatch[1]!).catch(error => {
+          console.warn("Could not clean up deleted Session research:", error);
+        });
+        void ideaTreeState?.deleteAll().catch((error) => {
+          console.warn("Could not clean up deleted Session Idea Trees:", error);
+        });
         // Soft-mark this session's Artifact versions + physically delete its
         // private nodes in the memory graph. Fire-and-forget: the store deletion
         // has already committed; a degraded/unreachable graph never blocks the
@@ -1948,11 +2358,25 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (request.headers["content-type"]?.split(";", 1)[0]?.trim() !== "application/pdf") {
           return sendError(response, 415, "Paper upload requires application/pdf");
         }
-        sendJson(response, 201, await paperService.upload({
+        const acquisition = await paperService.upload({
           bytes: await readBytes(request, MAX_PAPER_PDF_BYTES, "PDF"),
           sessionId: paperUploadMatch[1]!,
           title: url.searchParams.get("title") ?? undefined,
-        }));
+        });
+        // Mirror the uploaded PDF as a SourceFile node + feeds edge (same path
+        // as a workspace upload). Fire-and-forget; sink swallows on a degraded
+        // graph. mediaType is fixed application/pdf (handler already enforced it).
+        memoryGraphSink.observeUploadFile({
+          sessionId: acquisition.sessionId,
+          fileId: `source_file:session:${acquisition.sessionId}:${acquisition.pdfPath}`,
+          name: acquisition.title || "source.pdf",
+          path: acquisition.pdfPath,
+          mediaType: "application/pdf",
+          size: acquisition.pdf.size,
+          contentHash: acquisition.pdf.hash,
+          createdAt: acquisition.createdAt,
+        });
+        sendJson(response, 201, acquisition);
         return;
       }
 
@@ -2179,6 +2603,75 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      // Reverse-proxy a WebPage's full body from the CAS data pool back to the
+      // browser. The broker stores the body as a CAS blob and writes only its
+      // SHA-256 onto the WebPage node (graph = directory; CAS = warehouse), so
+      // the card needs an endpoint that turns ``extra.content_hash`` back into
+      // the original blob.
+      // original blob. Session-scoped on two axes: the session must exist,
+      // AND the WebPage must be in that session's subgraph (filtered by the
+      // sidecar's /subgraph, so a foreign-session WebPage id can never resolve).
+      // 64-hex is the only accepted hash form — anything else is 404, so a
+      // stray slash, a malformed id, or a non-hash field can't smuggle a path
+      // traversal into the CAS read.
+      const webPageContentMatch = url.pathname.match(
+        /^\/api\/sessions\/([^/]+)\/web-pages\/([^/]+)\/content$/,
+      );
+      if (webPageContentMatch && request.method === "GET") {
+        const sessionId = decodeURIComponent(webPageContentMatch[1]!);
+        const webPageId = decodeURIComponent(webPageContentMatch[2]!);
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        if (!memoryGraphEnabled()) {
+          // Mirror the toggle-off shape of the other /api/memory/* endpoints:
+          // 404 with the same message as "WebPage absent" so the card's
+          // "未抓取" branch stays the visible default until the graph is back.
+          return sendError(response, 404, "WebPage not found or has no content_hash");
+        }
+        try {
+          // Step 1: O(1) lookup of the WebPage's content_hash by node id. The
+          // sidecar resolves the id against session-scoped nodes (url-only vs
+          // identifier-keyed), so a foreign-session WebPage id can never
+          // resolve — the same isolation the old /subgraph filter provided,
+          // without serialising the whole subgraph.
+          const { contentHash, reason } =
+            await memoryGraphClient.getWebPageContentHash(sessionId, webPageId);
+          if (reason === "memory_graph_unreachable") {
+            return sendError(response, 502, "memory graph unreachable");
+          }
+          if (typeof contentHash !== "string" || !/^[a-f0-9]{64}$/.test(contentHash)) {
+            return sendError(response, 404, "WebPage not found or has no content_hash");
+          }
+          // Step 2: read the body from the data pool (same pool the broker /
+          // recorder dataCas write into).
+          const dataCas = new CasStore(store.dataDir, "data");
+          if (!(await dataCas.has(contentHash))) {
+            return sendError(response, 404, "CAS blob missing for this content_hash");
+          }
+          const bytes = await dataCas.read(contentHash);
+          // CAS blobs are content-addressed and immutable by construction, so
+          // a long-lived cache hit is safe — set the immutable header via a
+          // direct writeHead so it overrides the no-store default in
+          // http/response.ts#send. text/plain because the data pool stores
+          // page bodies verbatim (HTML or text); the front-end stripHtml
+          // helper handles HTML cleanup before rendering.
+          response.writeHead(200, {
+            "cache-control": "public, max-age=31536000, immutable",
+            "content-length": Buffer.byteLength(bytes),
+            "content-type": "text/plain; charset=utf-8",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(bytes);
+          return;
+        } catch (error) {
+          apiLog.warn("web_page_content_failed", {
+            errorMessage: shortErrorMessage(error),
+            sessionId,
+            webPageId,
+          });
+          return sendError(response, 500, "WebPage content read failed");
+        }
+      }
+
       const workspaceProvenanceMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/workspace\/provenance$/);
       if (workspaceProvenanceMatch && request.method === "GET") {
         const sessionId = workspaceProvenanceMatch[1]!;
@@ -2203,7 +2696,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
         };
         const parts = await readMultipartUploads(request, uploadLimits.maxRequestBytes);
-        const result: WorkspaceUploadResult = await uploadWorkspaceParts({
+        const result: WorkspaceUploadResult = await withWorkspaceMutation(new VersionStore(store.dataDir), store.workspacePath(sessionId), () => uploadWorkspaceParts({
           conflict,
           limits: uploadLimits,
           listFiles: () => listWorkspaceFiles(store, sessionId),
@@ -2218,7 +2711,25 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             });
           },
           workspaceRoot: store.workspacePath(sessionId),
-        });
+        }), { kind: "user-upload" });
+        // Mirror each uploaded file into a SourceFile node + feeds edge to the
+        // session's ResearchGoal. Fire-and-forget: a degraded/unreachable graph
+        // never fails the upload (the sink swallows). Only non-failed entries
+        // with a path + hash carry enough to be useful.
+        for (const item of result.uploaded) {
+          if (item.status === "failed" || !item.path || !item.hash) continue;
+          const payload: ObserveUploadFilePayload = {
+            sessionId,
+            fileId: `source_file:session:${sessionId}:${item.path}`,
+            name: item.originalName,
+            path: item.path,
+            mediaType: inferMediaType(item.originalName),
+            size: item.size,
+            contentHash: item.hash,
+            createdAt: new Date().toISOString(),
+          };
+          memoryGraphSink.observeUploadFile(payload);
+        }
         sendJson(response, 201, result);
         return;
       }
@@ -2232,7 +2743,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (sessionRunsMatch && request.method === "POST") {
         const sessionId = sessionRunsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const run = await createQueuedRun(store, skillCatalog, skillLibraryCatalog, sessionId, await readJson<SendMessageRequest>(request));
+        const run = await createQueuedRun(
+          store,
+          skillCatalog,
+          skillLibraryCatalog,
+          ideaTreeAuthorities,
+          sessionId,
+          await readJson<SendMessageRequest>(request),
+          ideaTreeRepository(sessionId),
+        );
         scheduleSessionRuns(
           store,
           runnerClient,
@@ -2246,6 +2765,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           remoteCompute,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(sessionId),
           memoryGraphSink,
           sessionId,
           config,
@@ -2469,6 +2990,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           store,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(sessionId),
           sessionId,
           runId,
           await readJson<CreateSkillEvolutionRunRequest>(request),
@@ -2486,6 +3009,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           remoteCompute,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(sessionId),
           memoryGraphSink,
           sessionId,
           config,
@@ -2550,139 +3075,55 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (artifactReviewsMatch && request.method === "GET") {
         const sessionId = artifactReviewsMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        sendJson(response, 200, await store.listArtifactReviews(sessionId));
+        const reviews = await store.listArtifactReviews(sessionId);
+        sendJson(response, 200, reviews.filter((review) => {
+          const version = store.getArtifactVersion(sessionId, review.artifactVersionId);
+          const artifact = version ? store.getArtifact(sessionId, version.artifactId) : undefined;
+          return Boolean(version && artifact && isReviewerReportCandidate(artifact, version));
+        }));
+        return;
+      }
+      const reviewerAuditTasksMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-audit-tasks$/);
+      if (reviewerAuditTasksMatch && request.method === "GET") {
+        const sessionId = reviewerAuditTasksMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, await store.listReviewerAuditTasks(sessionId));
+        return;
+      }
+      const reviewFeedbackMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/review-feedback$/);
+      if (reviewFeedbackMatch && request.method === "GET") {
+        const sessionId = reviewFeedbackMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        sendJson(response, 200, await store.listReviewFeedback(sessionId));
+        return;
+      }
+      const cancelReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/cancel$/);
+      if (cancelReviewerMatch && request.method === "POST") {
+        const sessionId = cancelReviewerMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        // Automatic and manual Reviewer tasks are owned by the coordinator;
+        // do not route cancellation through the main-Agent run controller.
+        if (!await reviewerAuditCoordinator.cancelSession(sessionId)) {
+          return sendError(response, 409, "No Reviewer Specialist review is active for this session");
+        }
+        sendJson(response, 200, { cancelled: true, runId: "reviewer-specialist", sessionId } satisfies CancelRunResult);
         return;
       }
       const manualReviewerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/reviewer-specialist\/review$/);
       if (manualReviewerMatch && request.method === "POST") {
         const sessionId = manualReviewerMatch[1]!;
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
-        const reviewerSettings = store.getReviewerSpecialistSettings();
-        if (!reviewerSettings.enabled) return sendError(response, 409, "Reviewer Specialist is off");
         const body = await readJson<{ messageId?: string }>(request);
         const messageId = body.messageId?.trim() ?? "";
         if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(messageId)) {
           return sendError(response, 400, "A valid reviewer message id is required");
         }
-        const toolCallId = `manual-review:${messageId}`;
-        await store.appendReviewerCheckpointMessage(sessionId, messageId, toolCallId);
         try {
-          const versions = store.listArtifacts(sessionId)
-            .filter((artifact) => artifact.createdInSessionId === sessionId)
-            .flatMap((artifact) => store.listArtifactVersions(sessionId, artifact.id)
-              .filter((version) => version.sessionId === sessionId)
-              .at(-1) ?? [])
-            .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
-          if (!versions.length) throw new Error("No Artifacts to review");
-          let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
-          if (reviewerSettings.level === "deep") {
-            const session = store.getSession(sessionId)!;
-            const runtimeSettings = store.resolveRuntimeSettings(sessionId).effective;
-            const selectedModel = store.getModel(runtimeSettings.modelId);
-            const apiToken = selectedModel ? store.getModelApiToken(selectedModel.id) : undefined;
-            if (!selectedModel || !apiToken) throw new Error("The selected Reviewer model is unavailable");
-            const permission = {
-              getEpoch: () => store.getSessionPermissionEpoch(sessionId)!,
-              requirePrivilege: async (privilege: {
-                action: "code" | "connector" | "host";
-                executionId?: string;
-                resource: string;
-                signal?: AbortSignal;
-                summary: string;
-                toolCallId?: string;
-              }) => {
-                const check = await store.requestPermission(sessionId, privilege.action, privilege.resource, privilege.summary, {
-                  ...(privilege.executionId ? { executionId: privilege.executionId } : {}),
-                  ...(privilege.toolCallId ? { toolCallId: privilege.toolCallId } : {}),
-                });
-                if (!check.allowed) throw new Error("Reviewer connector access requires an existing permission grant");
-                return check.authorization;
-              },
-            };
-            const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
-            const reviewerWorkspace: WorkspaceAgentOptions = {
-              config: {
-                apiToken,
-                apiProtocol: selectedModel.apiProtocol,
-                apiVariant: selectedModel.apiVariant,
-                baseUrl: selectedModel.baseUrl,
-                dataDir: store.dataDir,
-                model: selectedModel.model,
-                // Deep review creates its own AgentRun rather than reusing the
-                // main-run options. Keep the model profile's resolved proxy on
-                // that path as well; without it, a sandbox that can only reach
-                // the provider through a configured proxy fails as `Failed to fetch`.
-                proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
-                thinkingEffort: selectedModel.thinkingEffort,
-                thinkingMode: selectedModel.thinkingMode,
-              },
-              enabledConnectorIds: runtimeSettings.enabledConnectorIds,
-              executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
-              executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
-              ...createMcpWorkspaceTools({
-                artifactManager, broker: mcpBroker, catalog: mcpCatalog,
-                enabledSourceIds: runtimeSettings.enabledConnectorIds,
-                emitPermissionRequest: () => undefined, paperService, pauseExternalWait: () => () => undefined,
-                permission, projectId: session.projectId, registry: mcpRegistry, sessionId, store,
-                suppressMemoryGraphMirror: true, turnId: toolCallId,
-              }),
-              ...createWebWorkspaceTools({
-                broker: webBroker,
-                context: { forceRefresh: false, projectId: session.projectId, sessionId, turnId: toolCallId },
-                permission,
-              }),
-              approvalMode: session.approvalMode,
-              skills: reviewerSkills,
-              workspaceRoot: store.workspacePath(sessionId),
-            };
-            semanticReview = createReviewAgentOptions({
-              modelIdentity: `${selectedModel.id}:${selectedModel.model}`,
-              runIdleTimeoutMs: config.gatewayIdleTimeoutMs,
-              skills: reviewerSkills,
-              workspace: reviewerWorkspace,
-            });
-          }
-          const result = await runReviewerCheckpoint({
-            artifactVersionIds: versions.map((version) => version.id),
-            cas: provenanceRecorder.cas,
-            parentRunId: toolCallId,
-            reason: "Manual Reviewer Specialist request",
-            reviewLevel: reviewerSettings.level,
-            sessionId,
-            store,
-            toolCallId,
-            ...(memoryGraphEnabled() ? {
-              traceEvidenceReference: createEvidenceReferenceTracer(memoryGraphClient, sessionId, memoryGraphEnabled),
-              traceArtifactProvenance: async (reference, signal) => {
-                if (signal?.aborted) throw new DOMException("Review cancelled", "AbortError");
-                return memoryGraphClient.traceProvenance({ nodeId: reference.artifactId }, sessionId);
-              },
-            } : {}),
-            onProgress: async (progress) => {
-              await store.updateReviewerCheckpointProgress(sessionId, messageId, progress);
-            },
-            onArtifactCompleted: async (completedReviews) => {
-              await store.updateReviewerCheckpointMessage(sessionId, messageId, {
-                content: reviewerCheckpointPromptContent(completedReviews, undefined, true), status: "running",
-              });
-            },
-            ...(semanticReview ? { semanticReview } : {}),
-          });
-          const message = await store.updateReviewerCheckpointMessage(sessionId, messageId, {
-            content: reviewerCheckpointPromptContent(result.reviews),
-            status: "completed",
-          });
-          sendJson(response, 200, { ...result, message });
+          const task = await reviewerAuditCoordinator.enqueueManual(sessionId, messageId);
+          sendJson(response, 202, { task });
         } catch (error) {
-          const detail = error instanceof Error ? error.message : "Reviewer Specialist failed";
-          const message = await store.updateReviewerCheckpointMessage(sessionId, messageId, {
-            content: reviewerCheckpointPromptContent([], detail),
-            error: detail,
-            status: "failed",
-          });
-          const reviews = (await store.listArtifactReviews(sessionId))
-            .filter((review) => review.toolCallId === toolCallId);
-          sendJson(response, 200, { error: detail, message, reviews });
+          const detail = error instanceof Error ? error.message : "Could not schedule Reviewer Specialist";
+          sendError(response, detail === "Reviewer Specialist is off" ? 409 : 400, detail);
         }
         return;
       }
@@ -2752,6 +3193,63 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const artifactAnnotationsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifact-versions\/([^/]+)\/annotations$/);
       if (artifactAnnotationsMatch && request.method === "GET") {
         sendJson(response, 200, store.listArtifactAnnotations(artifactAnnotationsMatch[1]!, artifactAnnotationsMatch[2]!));
+        return;
+      }
+      const researchEventsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/research\/([^/]+)\/events$/);
+      if (researchEventsMatch && request.method === "GET") {
+        const controller = new AbortController();
+        response.once("close", () => controller.abort());
+        try {
+          const body = await ideaResearch.events(researchEventsMatch[1]!, researchEventsMatch[2]!, controller.signal);
+          response.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"});
+          response.flushHeaders();
+          for await (const chunk of body) response.write(chunk);
+          response.end();
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            if (response.headersSent) response.destroy(error instanceof Error ? error : new Error(String(error)));
+            else sendError(response, 502, error instanceof Error ? error.message : String(error));
+          }
+        }
+        return;
+      }
+      const researchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/research$/);
+      if (researchMatch && (request.method === "GET" || request.method === "POST")) {
+        const sid = researchMatch[1]!;
+        if (!store.getSession(sid)) return sendError(response, 404, "Session not found");
+        const input = request.method === "POST" ? await readJson<Record<string, unknown>>(request) : {};
+        const operation = request.method === "GET" ? "list" : String(input.operation ?? "create");
+        if (!["list", "get", "create", "pause", "continue", "end", "defaults"].includes(operation)) return sendError(response, 400, "Unknown research operation");
+        try {
+          const result = await ideaResearch.command(sid, operation, input);
+          if (operation === "create" && typeof input.content === "string") {
+            await store.appendMessage(sid, "user", input.content);
+            await store.appendMessage(sid, "assistant", `已启动 Idea Tree 研究（${result.research.id}）。Python 引擎正在后台执行构思、设计、独立评估和迭代。请在 Idea Tree 卡片查看实时进度，也可以稍后询问研究结果。`);
+          }
+          sendJson(response, 200, result);
+        }
+        catch (error) { sendError(response, 400, error instanceof Error ? error.message : String(error)); }
+        return;
+      }
+      const ideaTreeGraphMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/idea-tree\/graph$/);
+      if (ideaTreeGraphMatch && request.method === "GET") {
+        const sessionId = ideaTreeGraphMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        const hasIdeaTreeRun = (await store.listSessionRuns(sessionId))
+          .some((run) => run.settingsSnapshot.ideaTreeEnabled);
+        if (!hasIdeaTreeRun) {
+          sendJson(response, 200, { graph: null, hasIdeaTreeRun: false, treeIds: [] });
+          return;
+        }
+        const repository = ideaTreeRepository(sessionId);
+        const treeIds = await repository.listTreeIds();
+        const requestedTreeId = url.searchParams.get("tree_id")?.trim();
+        const treeId = requestedTreeId || treeIds[0];
+        if (requestedTreeId && !treeIds.includes(requestedTreeId)) {
+          return sendError(response, 404, "Idea Tree not found");
+        }
+        const graph = treeId ? await repository.readGraph(treeId) : null;
+        sendJson(response, 200, { graph, hasIdeaTreeRun: true, treeIds });
         return;
       }
       const memorySubgraphMatch = url.pathname === "/api/memory/subgraph";
@@ -2945,6 +3443,49 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const activityMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/agent-activity(?:\/(executions|transfers|timers)\/([^/]+)\/(logs|cancel))?$/);
+      if (activityMatch) {
+        const sessionId = decodeURIComponent(activityMatch[1]!);
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        const owners = [{ sessionId, agentId: "main" }, ...store.listSubagents(sessionId).map((child) => ({ sessionId, agentId: `subagent:${child.id}` }))];
+        const executions = owners.flatMap((owner) => store.shellExecutions.list(owner));
+        const transfers = owners.flatMap((owner) => store.transfers.list(owner));
+        const timers = owners.flatMap((owner) => store.notifications.timers(owner));
+        if (!activityMatch[2] && request.method === "GET") {
+          sendJson(response, 200, { executions, transfers, timers, agents: owners.map((owner) => ({ ...owner, stopped: !store.notifications.canWakeAgent(owner) })) });
+          return;
+        }
+        const kind = activityMatch[2]; const id = decodeURIComponent(activityMatch[3] ?? ""); const operation = activityMatch[4];
+        const item = (kind === "executions" ? executions : kind === "transfers" ? transfers : timers).find((entry) => entry.id === id);
+        if (!item) return sendError(response, 404, "Record not found in this Session");
+        const owner = { sessionId, agentId: item.agentId };
+        const runner = (runnerId: string) => {
+          if (runnerId === "local") return runnerClient;
+          store.assertSessionAllowsRemoteRunner(sessionId, runnerId);
+          return remoteCompute.runnerClient(runnerId);
+        };
+        if (kind === "executions" && operation === "logs" && request.method === "GET") {
+          const cursor = Number(url.searchParams.get("cursor") ?? 0);
+          if (!Number.isSafeInteger(cursor) || cursor < 0) return sendError(response, 400, "Invalid log cursor");
+          sendJson(response, 200, await store.shellExecutions.logs(id, owner, runner, cursor)); return;
+        }
+        if (operation === "cancel" && request.method === "POST") {
+          // Explicit management remains available even after Stop/Archive; it never starts work.
+          if (kind === "executions") sendJson(response, 200, await store.shellExecutions.cancel(id, owner, runner));
+          else if (kind === "transfers") sendJson(response, 200, await store.transfers.cancel(id, owner));
+          else { store.notifications.cancelTimer(owner, id); sendJson(response, 200, { cancelled: true }); }
+          return;
+        }
+        return sendError(response, 405, "Unsupported activity operation");
+      }
+      const resumeChildMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/resume$/);
+      if (resumeChildMatch && request.method === "POST") {
+        const sessionId = decodeURIComponent(resumeChildMatch[1]!); const subagentId = decodeURIComponent(resumeChildMatch[2]!);
+        store.assertSessionWritable(sessionId);
+        if (!store.listSubagents(sessionId).some((child) => child.id === subagentId)) return sendError(response, 404, "Subagent not found in this Session");
+        store.notifications.resumeAgent({ sessionId, agentId: `subagent:${subagentId}` });
+        sendJson(response, 200, { resumed: true }); return;
+      }
       const executionRunsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/execution-runs$/);
       if (executionRunsMatch && request.method === "GET") {
         if (!store.getSession(executionRunsMatch[1]!)) return sendError(response, 404, "Session not found");
@@ -2987,6 +3528,40 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/usage/analytics") {
+        sendJson(response, 200, await usageAnalyticsSummary(url));
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/usage/analytics/export") {
+        const format = url.searchParams.get("format") ?? "csv";
+        const summary = await usageAnalyticsSummary(url);
+        if (format === "json") {
+          response.writeHead(200, {
+            "cache-control": "no-store",
+            "content-disposition": "attachment; filename=\"model-usage-analytics.json\"",
+            "content-type": "application/json; charset=utf-8",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(`${JSON.stringify(summary, null, 2)}\n`);
+          return;
+        }
+        if (format === "csv") {
+          const body = modelUsageAnalyticsToCsv(summary, { displayCurrency: usageDisplayCurrency(url) });
+          response.writeHead(200, {
+            "cache-control": "no-store",
+            "content-disposition": "attachment; filename=\"model-usage-analytics.csv\"",
+            "content-length": Buffer.byteLength(body),
+            "content-type": "text/csv; charset=utf-8",
+            "x-content-type-options": "nosniff",
+          });
+          response.end(body);
+          return;
+        }
+        sendError(response, 400, "Usage export format must be csv or json");
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/usage/models") {
         sendJson(response, 200, await store.getGlobalModelUsageSummary());
         return;
@@ -3002,15 +3577,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const body = await readJson<UploadFileRequest>(request);
         const target = resolveWorkspaceFile(store.workspacePath(filesMatch[1]!), body.path ?? "");
         if (Buffer.byteLength(body.content ?? "") > 1_000_000) return sendError(response, 413, "File exceeds 1 MB");
-        await mkdir(dirname(target), { recursive: true });
-        await writeFile(target, body.content ?? "", "utf8");
-        await provenanceRecorder.registerWorkspaceArtifact({
-          origin: "user_upload",
-          originMeta: { uploadedFilename: body.path },
-          path: body.path,
-          sessionId: filesMatch[1]!,
-          workspaceRoot: store.workspacePath(filesMatch[1]!),
-        });
+        await withWorkspaceMutation(new VersionStore(store.dataDir), store.workspacePath(filesMatch[1]!), async () => {
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, body.content ?? "", "utf8");
+          await provenanceRecorder.registerWorkspaceArtifact({
+            origin: "user_upload",
+            originMeta: { uploadedFilename: body.path },
+            path: body.path,
+            sessionId: filesMatch[1]!,
+            workspaceRoot: store.workspacePath(filesMatch[1]!),
+          });
+        }, { kind: "user-file-write" });
         sendJson(response, 201, (await listWorkspaceFiles(store, filesMatch[1]!)).find((file) => file.path === body.path));
         return;
       }
@@ -3048,6 +3625,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           remoteCompute,
           skillCatalog,
           skillLibraryCatalog,
+          ideaTreeAuthorities,
+          ideaTreeRepository(messagesMatch[1]!),
           memoryGraphSink,
           messagesMatch[1]!,
           await readJson<SendMessageRequest>(request),
@@ -3073,6 +3652,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const message = error instanceof Error ? error.message : "Request failed";
       if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);
       else if (error instanceof SessionStoreHttpError) sendError(response, error.statusCode, message);
+      else if (error instanceof IdeaTreePersistenceError || error instanceof IdeaTreeRuntimeError) {
+        sendError(
+          response,
+          error.code === "PERSISTENCE_UNAVAILABLE" ? 503 : error.code === "REVISION_CONFLICT" ? 409 : 500,
+          message,
+        );
+      }
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
         sendError(response, 413, error instanceof Error ? error.message : "Payload too large");
@@ -3107,6 +3693,57 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // Stop the KE job runner's 1s poll chain — every booted server leaves one
   // ref'd timer loop running forever otherwise.
   server.once("close", () => keJobRunner.stop());
+  let hasListened = false;
+  let hasClosed = false;
+  let closePromise: Promise<void> | undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolveClose) => { resolveClosed = resolveClose; });
+  const cleanup = () => cleanupPromise ??= (async () => {
+    ideaResearch.close();
+    remoteCompute.close();
+    mcpBroker.close();
+    webBroker.close();
+    try {
+      await mcpGateway.close?.();
+    } catch (error) {
+      apiLog.warn("mcp_shutdown_failed", { errorMessage: shortErrorMessage(error) });
+    }
+  })();
+  server.once("listening", () => { hasListened = true; });
+  server.once("close", () => {
+    hasClosed = true;
+    resolveClosed();
+    void cleanup();
+  });
+  apiServerLifecycles.set(server, {
+    close: () => closePromise ??= (async () => {
+      if (server.listening) {
+        await closeHttpServer(server);
+      } else if (hasListened && !hasClosed) {
+        await closed;
+      }
+      await cleanup();
+    })(),
+  });
+  const dispatcher = new NotificationDispatcher(store,
+    (batch) => createNotificationRun(store, skillLibraryCatalog, batch),
+    (sessionId) => scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker,
+      mcpRegistry, mcpCatalog, artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+      ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory));
+  let notificationTimer: ReturnType<typeof setInterval> | undefined;
+  let notificationClosed = false;
+  void ready.then(() => {
+    if (notificationClosed) return;
+    notificationTimer = setInterval(() => {
+      void dispatcher.tick().catch((error) => apiLog.warn("notification_dispatch_failed", { errorMessage: shortErrorMessage(error) }));
+    }, 500);
+    notificationTimer.unref();
+  }).catch(() => undefined); // normal startup error handling owns ready failures
+  server.once("close", () => { notificationClosed = true; clearInterval(notificationTimer); dispatcher.close(); });
+  server.on("close", () => {
+    store.close();
+  });
   patchEphemeralCallback(server);
   return server;
 }

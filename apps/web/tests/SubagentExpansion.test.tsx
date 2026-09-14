@@ -22,7 +22,7 @@ import { isNodeCancelled, isNodeCompleted } from "../src/MemoryGraphView.js";
 
 // A minimal folded subgraph: one subagent scope, its surrogate edge to an
 // artifact, plus the artifact node. Mirrors the shape get_subgraph returns
-// after PR2 (folded surrogate edges synthesised scope→product).
+// after the folded surrogate edges synthesised scope→product.
 const SCOPE = "subtask:subagent:sub1";
 const CHILD = "subtask:subagent:sub1:exec:e1";
 const ART = "art1#v1";

@@ -49,6 +49,8 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_PERMISSION_WAIT_TIMEOUT_MS` | `0` | 初始权限决策等待上限（`0` = 无限） |
 | `SCIENTIFIC_ENVS` | `1` | 暴露托管 Python/R 与持久内核；完成 setup 前 runner 也可安全启动 |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员提供的 provisioner 覆盖；正常 setup 安装应用自有固定二进制 |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，托管 micromamba 固定版本的同名发布件；留空使用上游发布地址。无论从哪里下载，固定的 SHA-256 校验都不放宽 |
+| `SCIENCE_AGENT_NPU_PYTHON_PATH` | 自动探测 | 读取 NPU 状态时调用驱动 DCMI 接口所用的宿主 Python；留空按 `/usr/bin/python3`、`/usr/local/bin/python3` 顺序探测，都没有则回退到 `npu-smi` |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存；设置后 provision 离线运行，不再拉取允许渠道。pip `indexUrl` 与 conda channel 仍执行安全校验，但安装时不访问这些网络源（见 [sandbox-execution.md](../explanation/sandbox-execution.md) §6 受控软件源） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单；内置镜像预设（TUNA/USTC）对应的频道 URL 始终被 Runner 接受，自定义频道仍须显式列入 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | 初始持久内核空闲超时（`0` = 无限） |
@@ -67,7 +69,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_KE_OPENALEX_API_KEY` | 未设置 | 知识引擎源链的 OpenAlex API key |
 | `SCIENCE_AGENT_KE_UNPAYWALL_EMAIL` | 未设置 | Unpaywall 联系邮箱（启用该连接器） |
 
-Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管理员明确开启。没有 Ascend NPU、未安装 CANN/MindSpore，或不希望 Agent 调用宿主 NPU 时，请保持 `SCIENCE_AGENT_NPU_BROKER=0`；此时工具表不会包含 `run_npu_job`。本地模式启用后仍使用正常启动入口。启用 Broker 前，应先创建并验证至少一个可导入所需 CANN/MindSpore 栈的 ScienceDiscovery 托管 Python scientific environment revision。内置 NPU workload（包括 `npu.smoke_test`）都要求 `environment_revision_id`；Agent 未显式传入时，API 使用当前 Session revision。`SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` 留空时使用仓内默认白名单，当前包含 `npu.smoke_test` 与 `antibody.protenix.v1`；如需新增模型，提供自定义 JSON 白名单并固定 entrypoint，而不是让 Agent 传任意命令。`SCIENCE_AGENT_NPU_PYTHON` 仅保留给显式使用 `${python}` 的自定义白名单；仓内默认白名单使用 `${managedPython}`，不会读取它。修改白名单 JSON 等价于修改可执行代码入口，应作为部署变更审查；模型权重、数据库、HMMER、CANN、MindScience checkout 等站点资产不进入仓库，通常通过上面的环境变量或 workload 配置引用。
+Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管理员明确开启。没有 Ascend NPU、未安装 CANN/MindSpore，或不希望 Agent 调用宿主 NPU 时，请保持 `SCIENCE_AGENT_NPU_BROKER=0`；此时工具表不会包含 `run_npu_job`。本地模式启用后仍使用正常启动入口。启用 Broker 前，应先创建并验证至少一个可导入所需 CANN/MindSpore 栈的 ScienceDiscovery 包含 Python 的托管科学环境。内置 NPU workload（包括 `npu.smoke_test`）用 `environment_list` 返回的 `environment_id` 选择环境；省略时由 API 解析 Session 所选环境。API 选择该环境最新版 Revision，供 Broker 内部执行与审计；Agent 不能选择历史版本，`environment_revision_id` 会被拒绝。`SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` 留空时使用仓内默认白名单，当前包含 `npu.smoke_test` 与 `antibody.protenix.v1`；如需新增模型，提供自定义 JSON 白名单并固定 entrypoint，而不是让 Agent 传任意命令。`SCIENCE_AGENT_NPU_PYTHON` 仅保留给显式使用 `${python}` 的自定义白名单；仓内默认白名单使用 `${managedPython}`，不会读取它。修改白名单 JSON 等价于修改可执行代码入口，应作为部署变更审查；模型权重、数据库、HMMER、CANN、MindScience checkout 等站点资产不进入仓库，通常通过上面的环境变量或 workload 配置引用。
 
 浏览器仅将 API token 保存在 local storage。模型凭证只存在于后端存储。
 
@@ -102,8 +104,13 @@ Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单 |
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验副本 |
+| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，供无法访问上游发布地址的部署使用；SHA-256 仍按固定版本校验 |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板展示币种换算开关；关闭后费用只显示各模型原始币种 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | 用量看板 USD/CNY 汇率源，默认使用无需 API key 的 Frankfurter；自定义 URL 时汇率来源按 URL host 标注 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | 用量看板汇率缓存 TTL，默认 6 小时 |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | 用量看板汇率请求超时 |
 
 API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。操作步骤与沙箱放权边界见[Docker 部署](../how-to/deployment.md#docker-部署)。
 
@@ -118,6 +125,7 @@ API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，�
 | `.sciencediscovery-data/mcp-result-cache.sqlite` | MCP 连接器结果缓存 |
 | `.sciencediscovery-data/web-cache.sqlite`、`.sciencediscovery-data/web-audit.sqlite` | Web Search/Fetch 缓存与 `WebInvocation` 审计 |
 | `.sciencediscovery-data/model-secrets.key` | 提供方 token 的 AES-256-GCM 密钥（仅属主可读；无密钥则 token 无用） |
+| `.sciencediscovery-data/exchange-rates/usage-display-rates.json` | 用量看板展示币种汇率缓存；刷新失败时可回退为陈旧缓存，页面会标注陈旧缓存状态 |
 | `.sciencediscovery-data/projects/<project-id>/sessions/<session-id>/workspace/` | 每会话工作区：上传/生成文件、`papers/<paper-id>/` 抽取结果 |
 | `.sciencediscovery-data/cas/`、`.sciencediscovery-data/execution-runs/`、`.sciencediscovery-data/prompt-manifests/`、`.sciencediscovery-data/reviews/`、`.sciencediscovery-data/messages/` | 内容寻址 blob、执行记录、prompt manifest、聊天、评审 |
 | `.sciencediscovery-data/claims/`、`.sciencediscovery-data/evidence-items/`、`.sciencediscovery-data/evidence-links/`、`.sciencediscovery-data/mcp-invocations/`、`.sciencediscovery-data/artifact-derivations/` | claim/证据溯源与 MCP 审计 |

@@ -29,7 +29,12 @@ import {
   partitionEvidenceExtra,
   TimeField,
 } from "../src/NodeField.js";
-import { MemoryGraphNodeDetail } from "../src/MemoryGraphProduct.js";
+import {
+  LEGACY_CLASSIFICATION_ALIASES,
+  MemoryGraphNodeDetail,
+  taskTypeLabel,
+  type ClassificationLabelKey,
+} from "../src/MemoryGraphProduct.js";
 
 // Render a node-detail tree under a zh-CN LocaleProvider so the SSR snapshot
 // carries the Chinese labels the assertions check (without the provider,
@@ -321,12 +326,18 @@ test("ResearchGoalDetail hides raw attributes (no inferred/method leakage)", () 
   assert.ok(!html.includes("inferred"), "inferred field not shown");
 });
 
-test("TaskDetail (ToolCall) shows source/tool_type at top level, no raw attributes", () => {
+test("TaskDetail (ToolCall) shows tool_name first, then tool_type/source at top level, no raw attributes", () => {
+  // ToolCall's classification field is ``tool_type`` (renamed from
+  // task_type) and the full tool identifier rides in ``tool_name``, ordered
+  // FIRST on the card so the reader sees the actual tool before the class.
+  // The fixture deliberately keeps a pre-collapse value: nodes born before the
+  // vocabulary shrank still carry ``literature_search`` forever, and the card
+  // has to fold it onto the current "检索" chip rather than render it raw.
   const node = makeNode("ToolCall", {
-    task_type: "literature_search",
+    tool_type: "literature_search",
     status: "completed",
     source: "pubmed",
-    tool_type: "search",
+    tool_name: "mcp__pubmed__search",
     result_count: 12,
     finished_at: "2025-01-15T10:30:00Z",
     created_at: "2025-01-15T10:29:00Z",
@@ -337,13 +348,100 @@ test("TaskDetail (ToolCall) shows source/tool_type at top level, no raw attribut
     client: makeClient(), node, resolveState: "idle", sessionId: "s", subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
   }));
   assert.ok(html.includes("node-status-completed"), "status badge with completed class");
-  assert.ok(html.includes("文献检索"), "task_type shown as friendly label");
+  assert.ok(html.includes("检索"), "legacy tool_type folded onto the current label");
+  assert.ok(!html.includes("文献检索"), "the retired vocabulary's wording is gone");
   assert.ok(html.includes("pubmed"), "source shown at top level");
-  assert.ok(html.includes("search"), "tool_type shown at top level");
+  assert.ok(html.includes("mcp__pubmed__search"), "tool_name shown at top level");
+  // tool_name must be the FIRST field (before the tool_type label row).
+  const nameIdx = html.indexOf("mcp__pubmed__search");
+  const typeLabelIdx = html.indexOf("工具类型");
+  assert.ok(nameIdx > -1 && typeLabelIdx > -1, "both fields render");
+  assert.ok(nameIdx < typeLabelIdx, "tool_name row precedes the tool_type row");
   assert.ok(html.includes("12"), "result count shown");
   assert.ok(!html.includes("node-raw-attrs"), "no raw attributes section");
   assert.ok(!html.includes("auto_inferred_from_mcp_search"), "method not shown");
   assert.ok(!html.includes("inferred"), "inferred field not shown");
+});
+
+// --- classification vocabulary ---------------------------------------------
+
+test("every legacy classification folds onto a current chip label", () => {
+  // The table is the whole read-side story for pre-collapse nodes: it has to
+  // name every value the graph actually holds. These were read off the live
+  // ToolCall population before the collapse (plus `search`, which is a current
+  // value arriving on nodes written after it).
+  const zh = (key: ClassificationLabelKey): string =>
+    ({ "node.task_type.execution": "执行",
+       "node.task_type.search": "检索",
+       "node.task_type.subagent": "子代理作用域",
+       "node.task_type.program_evolution": "程序演进" })[key];
+  const folded: Record<string, string> = {
+    // The pre-collapse execution bucket.
+    code_execution: "执行",
+    // Every pre-collapse search bucket — literature, web, database, and the
+    // two one-off legacy markers.
+    literature_search: "检索",
+    web_search: "检索",
+    db_search: "检索",
+    search_preprints: "检索",
+    lookup_doi: "检索",
+    // Values written after the collapse.
+    execution: "执行",
+    search: "检索",
+    // The two pseudo-types that survived unchanged.
+    subagent: "子代理作用域",
+    program_evolution: "程序演进",
+  };
+  for (const [value, label] of Object.entries(folded)) {
+    assert.equal(taskTypeLabel(value, zh), label, value);
+  }
+});
+
+test("an unknown classification renders as itself, never as an alias", () => {
+  // The fallthrough returns the ORIGINAL string. If it returned the aliased
+  // one, a value someone adds later without teaching the UI would silently
+  // appear as "search" — a wrong label is worse than an ugly one.
+  const passthrough = (key: string): string => key;
+  assert.equal(taskTypeLabel("analysis_integration", passthrough), "analysis_integration");
+  assert.equal(taskTypeLabel("auto_inferred_from_execution", passthrough), "auto_inferred_from_execution");
+  assert.equal(taskTypeLabel("general-purpose", passthrough), "general-purpose");
+  // And the alias table itself only ever lands on a known chip.
+  for (const target of Object.values(LEGACY_CLASSIFICATION_ALIASES)) {
+    assert.ok(["execution", "search"].includes(target), target);
+  }
+});
+
+test("a pre-rename node (task_type only, no tool_type) still shows its classification", () => {
+  // The rename moved task_type → tool_type on ToolCall, but no migration
+  // rewrote existing nodes, so an old ToolCall carries only task_type. The
+  // card reads `toolType ?? taskType`, which is the only reason those nodes
+  // show a classification at all.
+  const node = makeNode("ToolCall", {
+    task_type: "code_execution",
+    status: "completed",
+    tool_name: "run_python",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s", subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(html.includes("执行"), "legacy task_type key renders the folded label");
+  assert.ok(!html.includes("代码执行"), "and not the retired wording");
+});
+
+test("an evolve ToolCall keeps the program_evolution chip and its run affordance", () => {
+  // program_evolution is not a tool class — it marks the evolve search run,
+  // and it is the one classification the frontend branches on. It has to
+  // survive the collapse untouched, chip label included.
+  const node = makeNode("ToolCall", {
+    tool_type: "program_evolution",
+    status: "completed",
+    tool_name: "mcp__llm-wiki__search",
+  }, "subtask:evolve:run-42");
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s", subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(html.includes("程序演进"), "program_evolution renders its own chip");
+  assert.ok(html.includes("检索") === false, "and is not folded into the search bucket");
 });
 
 test("CodeDetail with no produced artifact renders the panel (path B fallback runs client-side)", () => {
@@ -415,4 +513,168 @@ test("MemoryGraphNodeDetail renders outgoing relations grouped by edge type", ()
   const nextAt = html.indexOf("memory-product-links-label\">next");
   assert.ok(producesAt > -1 && nextAt > -1, "both produces and next labels render");
   assert.ok(producesAt < nextAt, "produces listed above next");
+});
+
+// --- WebPage / DbRecord detail cards ---------------------------------------
+
+test("WebPageDetail renders title, identifier badge, url, snippet, source_refs and retrieval fields", () => {
+  // llm-wiki shape: title, identifier (wiki path), identifier_type, source_refs
+  // populated, and the retrieval/system timestamps. The card must surface
+  // every documented surface without leaking `content` (which is always empty
+  // until get_page / web_fetch land a full-text payload).
+  const node = makeNode("WebPage", {
+    title: "BRCA1",
+    identifier: "wiki/BRCA1",
+    identifier_type: "wiki-path",
+    url: "http://wiki.local/BRCA1",
+    snippet: "Tumor suppressor gene involved in DNA repair.",
+    source_refs: ["Smith 2020", "Doe 2021"],
+    retrieval_count: 3,
+    retrieved_at: "2026-09-10T14:32:00Z",
+    created_at: "2026-09-10T14:00:00Z",
+    // Defensive: even if a future stub writes `content`, this iteration does
+    // not render it. The `hidden` attribute keeps it out of sight but in the
+    // DOM so a regression that re-surfaces it would land a visible string.
+    content: "should-not-show",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(html.includes("BRCA1"), "title shown");
+  assert.ok(html.includes("wiki-path:wiki/BRCA1"), "identifier badge shown with type prefix");
+  assert.ok(html.includes('href="http://wiki.local/BRCA1"'), "url rendered as link");
+  assert.ok(html.includes("Tumor suppressor gene involved in DNA repair."), "snippet shown");
+  assert.ok(html.includes("Smith 2020"), "source_refs first item shown");
+  assert.ok(html.includes("Doe 2021"), "source_refs second item shown");
+  assert.ok(html.includes("3"), "retrieval_count shown");
+  assert.ok(html.includes("node-source-refs"), "source_refs renders as a list");
+  // content must NOT reach the user even when present (hidden <p> only).
+  assert.ok(!html.includes("should-not-show"), "content suppressed until the page body is fetched");
+});
+
+test("WebPageDetail hides source_refs section when the list is empty or absent", () => {
+  // web_search hits have no source_refs — the section must collapse entirely
+  // (no empty <ul>, no empty label). An empty array AND a missing key both
+  // exercise the same fallback path; a populated array renders the list.
+  const emptyArray = makeNode("WebPage", {
+    title: "T", url: "http://x", snippet: "s", source_refs: [],
+  });
+  const emptyHtml = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node: emptyArray, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [emptyArray], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(!emptyHtml.includes("原始出处"), "empty source_refs list hides the section");
+  assert.ok(!emptyHtml.includes("node-source-refs"), "no list element for empty source_refs");
+
+  const missing = makeNode("WebPage", { title: "T", url: "http://x", snippet: "s" });
+  const missingHtml = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node: missing, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [missing], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(!missingHtml.includes("原始出处"), "missing source_refs hides the section");
+});
+
+test("WebPageDetail hides identifier badge when identifier is absent", () => {
+  // web_search hits carry no identifier — only a URL. The card must not show
+  // a half-empty badge.
+  const node = makeNode("WebPage", {
+    title: "Some page", url: "http://x", snippet: "s",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(!html.includes("node-identifier-badge"), "no badge without identifier");
+});
+
+test("WebPageDetail falls back to identifier then url when title is absent", () => {
+  // Title is the preferred header but not always present (an llm-wiki path
+  // might land without a curator's title); the header falls back to
+  // identifier (wiki path) then url (last resort).
+  const noTitle = makeNode("WebPage", {
+    identifier: "wiki/BRCA1", url: "http://wiki.local/BRCA1",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node: noTitle, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [noTitle], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(html.includes("wiki/BRCA1"), "header falls back to identifier");
+});
+
+test("DbRecordDetail renders title, copy-able identifier badge, snippet, record link, retrieval fields", () => {
+  // The uniprot row shape: a curator title, a `source:identifier` badge,
+  // snippet, the database's record URL, and retrieval stats. The badge IS the
+  // copy button — the whole `复制标识符 uniprot:P38398` pill is one <button>,
+  // with the affordance spelled out as a leading label instead of a separate
+  // trailing icon (the icon-only variant read as an unexplained blank gap).
+  const node = makeNode("DbRecord", {
+    source: "uniprot",
+    identifier: "P38398",
+    identifier_type: "accession",
+    url: "https://www.uniprot.org/uniprotkb/P38398",
+    title: "BRCA1_HUMAN DNA repair-associated protein",
+    snippet: "Tumor suppressor. The BRCA1-BARD1 heterodimer coordinates DNA damage repair.",
+    retrieval_count: 3,
+    retrieved_at: "2026-09-10T14:32:00Z",
+    created_at: "2026-09-10T14:00:00Z",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(html.includes("BRCA1_HUMAN DNA repair-associated protein"), "title shown");
+  assert.ok(html.includes("uniprot:P38398"), "source:identifier badge shown");
+  assert.ok(html.includes("node-identifier-badge-button"), "badge itself is the copy button");
+  assert.ok(html.includes("复制标识符"), "copy affordance is spelled out on the badge");
+  assert.ok(!html.includes("copy-button"), "no separate trailing copy button beside the text");
+  assert.ok(html.includes("Tumor suppressor. The BRCA1-BARD1"), "snippet shown");
+  assert.ok(html.includes('href="https://www.uniprot.org/uniprotkb/P38398"'), "record link shown");
+  assert.ok(html.includes("记录链接"), "record_link field label translated");
+  assert.ok(html.includes("3"), "retrieval_count shown");
+});
+
+test("DbRecordDetail hides the record link when url is absent", () => {
+  // Some records may not have a public URL — the entire row collapses.
+  const node = makeNode("DbRecord", {
+    source: "uniprot", identifier: "P38398", title: "BRCA1",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(!html.includes("记录链接"), "record_link label hidden when url is missing");
+  // The identifier badge remains even without a record link — the copy
+  // affordance is independent.
+  assert.ok(html.includes("uniprot:P38398"), "identifier badge still shown");
+});
+
+test("DbRecordDetail falls back to created_at for retrieved_at when missing", () => {
+  // ON CREATE does not write retrieved_at; only repeated hits MERGE in.
+  // A brand-new record has no retrieved_at, so the field must fall back to
+  // created_at rather than render an empty row.
+  const node = makeNode("DbRecord", {
+    source: "uniprot", identifier: "P38398", url: "https://x",
+    title: "BRCA1", created_at: "2026-09-10T14:00:00Z",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  // The created_at value appears at least twice (once as retrieved_at
+  // fallback, once as created_at itself).
+  const matches = html.match(/2026-09-10/g) ?? [];
+  assert.ok(matches.length >= 2, "created_at fills in for missing retrieved_at");
+});
+
+test("DbRecordDetail hides identifier badge when identifier is absent", () => {
+  // No identifier — no badge, even with a title and url.
+  const node = makeNode("DbRecord", {
+    source: "uniprot", url: "https://x", title: "BRCA1",
+  });
+  const html = renderZh(createElement(MemoryGraphNodeDetail, {
+    client: makeClient(), node, resolveState: "idle", sessionId: "s",
+    subgraph: { nodes: [node], edges: [] } as MemorySubgraph,
+  }));
+  assert.ok(!html.includes("node-identifier-badge"), "no badge without identifier");
 });

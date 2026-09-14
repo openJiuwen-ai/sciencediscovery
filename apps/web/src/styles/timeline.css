@@ -59,6 +59,13 @@
 .skill-review-timeline-cta button:focus-visible { outline: 3px solid var(--accent-tint); outline-offset: 2px; }
 .run-timeline > .message { margin-bottom: 28px; }
 .run-timeline > .timeline-permission, .run-timeline > .boundary-note { width: calc(100% - var(--timeline-gutter)); margin: 0 0 11px var(--timeline-gutter); }
+.run-timeline > .idea-tree-phase { border-color: var(--accent-border-soft); background: var(--accent-soft); }
+.run-timeline > .idea-tree-phase > span { background: var(--accent-softer); color: var(--accent); }
+.run-timeline > .idea-tree-phase.running > span { animation: spin 1s linear infinite; }
+.run-timeline > .idea-tree-phase p, .run-timeline > .idea-tree-phase strong { color: var(--accent-ink); }
+.idea-research-timeline-card { width: calc(100% - var(--timeline-gutter)); margin: 0 0 11px var(--timeline-gutter); border: 1px solid var(--accent-border-soft); border-radius: 10px; background: var(--accent-soft); color: var(--accent-ink); padding: 12px 14px; font-size: 13px; }
+.idea-research-timeline-card p { margin: 0 0 5px; }
+.idea-research-timeline-card ol { margin: 8px 0 0; padding-left: 19px; color: var(--text-secondary); }
 .timeline-permission.allowed { border-color: var(--success-border); background: var(--success-soft); }
 .timeline-permission.denied, .timeline-permission.cancelled { border-color: var(--danger-border); background: var(--danger-soft); }
 .timeline-permission > div > small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; }
@@ -90,7 +97,14 @@
 .plan-card-heading small, .track-list-heading span, .subagent-list-heading span { color: var(--muted); font-size: 11px; }
 .plan-card-heading i { background: var(--border); color: var(--text-secondary); font-size: 10px; font-style: normal; text-transform: uppercase; }
 .plan-card p { margin: 10px 0; color: var(--text-heading); }
-.plan-card ol { margin: 8px 0; padding-left: 22px; color: var(--text-secondary); }
+.plan-card ol { margin: 8px 0; padding: 0; color: var(--text-secondary); }
+.plan-item-list { display: grid; gap: 8px; list-style: none; }
+.plan-item-list li { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px; font-size: 12px; line-height: 1.45; }
+.plan-item-list li[data-status="completed"] > span:last-child { color: var(--muted); text-decoration: line-through; }
+.plan-item-status { display: grid; width: 16px; height: 16px; place-items: center; box-sizing: border-box; margin-top: 1px; border: 1.5px solid var(--border-strong); border-radius: 4px; background: var(--surface); color: transparent; }
+.plan-item-status.completed { border-color: var(--success); background: var(--success-soft); color: var(--success); }
+.plan-item-status.in_progress { border: 0; border-radius: 50%; background: transparent; color: var(--accent); }
+.plan-item-status.in_progress svg { animation: spin 1s linear infinite; }
 .plan-card details { color: var(--muted); font-size: 12px; }
 .plan-actions { display: flex; gap: 8px; margin-top: 12px; }
 .subagent-list { display: grid; gap: 7px; border-inline-start: 4px solid var(--success-bright); }
@@ -123,6 +137,9 @@
 .specialist-layout fieldset label { display: flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
 .specialist-layout fieldset input[type="checkbox"] { flex: 0 0 24px; width: 24px; min-width: 24px; min-height: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
 .specialist-actions { display: flex; justify-content: space-between; }
+.specialist-actions-secondary { display: flex; align-items: center; gap: 8px; }
+.specialist-layout.idle { grid-template-columns: minmax(0, 1fr); }
+.specialist-layout.idle .specialist-list { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .remote-host-manager, .remote-jobs-panel { display: grid; gap: 14px; }
 .remote-host-empty { margin: 0; color: var(--muted); font-size: 13px; }
 .remote-host-add-row { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -204,6 +221,86 @@
 .remote-resource-stats strong { font-size: 14px; font-variant-numeric: tabular-nums; }
 .remote-host-connection { gap: 7px; }
 .remote-host-resources [role="alert"] { color: var(--danger, #b42318); }
+/* The card list is a full-width list, not a side column: squeezed into half
+   the details grid its readings wrap away from the card name. */
+/* Also used inside the Local Runner card, which is a plain block. */
+.remote-npu { grid-column: 1 / -1; margin-top: 8px; display: grid; gap: 7px; min-width: 0; }
+.remote-host-reachability { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.remote-host-reachability.online { border-color: rgba(22, 163, 74, .45); color: #15803d; }
+.remote-host-reachability.offline { border-color: rgba(220, 38, 38, .45); color: #b91c1c; }
+.remote-npu-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; }
+/* The settings dialog's blanket full-width primary button would push the note
+   and the discard button onto their own lines. This row keeps its controls
+   inline while they fit and wraps as one group only when they do not. */
+.remote-npu-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.remote-npu-actions .primary-button,
+.config-panel .remote-npu-actions .primary-button { width: auto; }
+.remote-npu-unsaved { color: var(--warning-text, #8a5a00); white-space: nowrap; }
+.remote-npu-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; }
+.remote-npu-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+/* Every card row uses the same column tracks, so a reading sits at the same
+   horizontal position on every card and the eye can scan a column at a time.
+   Rows stay one reading line tall; only an unusable card grows, for its reason. */
+.remote-npu-list > li {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.2fr) minmax(150px, 1.1fr) minmax(130px, 1fr) 88px 80px;
+  align-items: center;
+  gap: 3px 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  min-width: 0;
+}
+.remote-npu-pick,
+.config-panel .remote-npu-pick { display: flex; align-items: center; gap: 4px 8px; margin: 0; min-width: 0; cursor: pointer; }
+.remote-npu-pick > span,
+.config-panel .remote-npu-pick > span { display: inline; margin: 0; font-size: 12px; }
+.remote-npu-list input[type="checkbox"],
+.config-panel .remote-npu-list input[type="checkbox"] { flex: none; margin: 0; }
+.remote-npu-pick .remote-detail-badge,
+.config-panel .remote-npu-pick .remote-detail-badge { flex: none; white-space: nowrap; }
+.remote-npu-name,
+.config-panel .remote-npu-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A reading as a one-line meter: caption or icon, bar, value. */
+.remote-npu-meter { display: grid; grid-template-columns: auto minmax(36px, 1fr) auto; align-items: center; gap: 7px; min-width: 0; font-variant-numeric: tabular-nums; }
+.remote-npu-meter:empty { display: block; }
+.remote-npu-meter-caption { color: var(--text-faint); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.remote-npu-meter > svg { color: var(--text-faint); }
+.remote-npu-meter-track { height: 6px; border-radius: 6px; overflow: hidden; background: var(--border); }
+.remote-npu-meter-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.remote-npu-meter.core .remote-npu-meter-track > span { background: var(--success); }
+.remote-npu-meter.core.high .remote-npu-meter-track > span { background: var(--warning-accent); }
+.remote-npu-meter-value { color: var(--muted); white-space: nowrap; }
+/* Temperature and power are chips, not bars: distinct shapes, tints and icons
+   so the reading is recognised before it is read. */
+.remote-npu-chip { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 6px; font-size: 11px; font-weight: 600; line-height: 1.4; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.remote-npu-chip.temperature { border: 1px solid var(--accent-border-soft); border-radius: 999px; background: var(--accent-softer); color: var(--accent-ink); }
+.remote-npu-chip.temperature.warm { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning-strong); }
+.remote-npu-chip.temperature.hot { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); }
+.remote-npu-chip.power { border: 1px dashed var(--warning-border); border-radius: 6px; background: var(--warning-soft); color: var(--warning-strong); }
+.remote-npu-list > li.unusable { opacity: 0.75; }
+.remote-npu-list > li.unusable .remote-npu-pick { cursor: not-allowed; }
+.remote-npu-reason { grid-column: 1 / -1; color: var(--warning-strong); white-space: normal; overflow-wrap: anywhere; }
+.remote-npu [role="alert"] { color: var(--danger, #b42318); }
+@media (max-width: 640px) {
+  .remote-npu-list > li { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .remote-npu-pick,
+  .config-panel .remote-npu-pick { grid-column: 1 / -1; }
+}
+
+/* The live story of a connect attempt: a terminal-like panel under the card. */
+.remote-connect-log { display: grid; gap: 6px; flex-basis: 100%; min-width: 0; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-sunk); }
+.remote-connect-log.live { border-color: var(--accent-border-soft); }
+.remote-connect-log-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.remote-connect-log-header > strong { font-size: 12px; color: var(--text-heading); }
+.remote-connect-log.live .remote-connect-log-header > small { color: var(--accent); }
+.remote-connect-log-body { display: grid; gap: 2px; max-height: 180px; overflow-y: auto; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; }
+.remote-connect-log-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.remote-connect-log-line > time { flex: none; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.remote-connect-log-line > span { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--text-secondary); }
+.remote-connect-log-waiting { color: var(--text-faint); }
+
 .remote-host-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; }
 .remote-host-card-title > strong { font-size: 15px; }
 .remote-host-card small { color: var(--muted); }

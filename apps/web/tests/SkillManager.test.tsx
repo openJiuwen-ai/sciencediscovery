@@ -264,5 +264,14 @@ test("renders skill library cards with pinned head version metadata", async () =
   assert.equal(renderer!.root.findAllByProps({ className: "skill-library-grid" }).length, 1);
   assert.equal(renderer!.root.findAllByProps({ className: "skill-library-card active" }).length, 1);
   assert.equal(renderer!.root.findAllByProps({ "aria-label": "Skill library summary" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-create" }).length, 0);
+  const newLibrary = renderer!.root.findAllByType("button").find((button) => button.children.includes("New library"));
+  assert.ok(newLibrary);
+  await act(async () => newLibrary.props.onClick());
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-create" }).length, 1);
+  const cancel = renderer!.root.findAllByType("button").find((button) => button.children.includes("Cancel"));
+  assert.ok(cancel);
+  await act(async () => cancel.props.onClick());
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-create" }).length, 0);
   await act(async () => renderer!.unmount());
 });

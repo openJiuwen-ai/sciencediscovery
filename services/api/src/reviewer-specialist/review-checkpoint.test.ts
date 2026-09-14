@@ -25,6 +25,7 @@ import type { CasStore } from "@sciencediscovery/cas";
 import type { SessionStore } from "../store.js";
 import {
   cancelReviewerCheckpoints,
+  isReviewerReportCandidate,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
@@ -77,6 +78,50 @@ function fixture(contentText = "分析结果支持该结论 [1].\n[1] Study. arX
   } as unknown as CasStore;
   return { artifact, cas, casReadCount: () => casReads, content, saved, store, version };
 }
+
+test("report candidate policy requires an approved report extension and matching media type", () => {
+  const { artifact, version } = fixture();
+  const reportFiles: Array<readonly [string, string]> = [
+    ["analysis.md", "text/markdown"],
+    ["report.html", "text/html"],
+    ["paper.tex", "application/x-tex"],
+    ["methods.qmd", "text/markdown"],
+  ];
+  for (const [name, mediaType] of reportFiles) {
+    artifact.logicalName = name;
+    version.mediaType = mediaType;
+    assert.equal(isReviewerReportCandidate(artifact, version), true, `${name} is a report candidate`);
+  }
+  const nonReportFiles: Array<readonly [string, string]> = [
+    ["execution.log", "text/plain"],
+    ["appendix.txt", "text/plain"],
+    ["GSEA_gmt.gmt", "text/plain"],
+    ["g2m_enrichment_analysis.py", "text/x-python"],
+    ["enrichment_results.csv", "text/csv"],
+    ["summary.md", "text/plain"],
+  ];
+  for (const [name, mediaType] of nonReportFiles) {
+    artifact.logicalName = name;
+    version.mediaType = mediaType;
+    assert.equal(isReviewerReportCandidate(artifact, version), false, `${name} is not a report candidate`);
+  }
+});
+
+test("Quick checkpoint normalizes media type parameters before narrative checks", async () => {
+  const { cas, saved, store, version } = fixture("The study reports a result. DOI: 10.1234/example");
+  version.mediaType = "text/markdown; charset=utf-8";
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Quick review",
+    sessionId: "session-1",
+    store,
+  });
+
+  assert.equal(saved.length, 1);
+  assert.ok(result.reviews[0]?.checks?.includes("citation"));
+  assert.ok(result.reviews[0]?.findings.some((finding) => finding.code === "CITATION_MARKER_MISSING"));
+});
 
 test("Quick checkpoint combines Citation and Artifact computation checks", async () => {
   const { cas, saved, store, version } = fixture();
@@ -260,7 +305,7 @@ test("Reviewer checkpoint feedback exposes findings to the next model context", 
   assert.match(content, /Status: PASSED/);
   assert.match(content, /Artifact: analysis\.md/);
   assert.match(content, /No findings\./);
-  assert.match(content, /correct applicable findings/);
+  assert.match(content, /read-only diagnostic context/);
   const partial = reviewerCheckpointPromptContent(result.reviews, undefined, true);
   assert.match(partial, /Status: PARTIAL/);
   assert.match(partial, /available for the next main-Agent action/);
@@ -372,7 +417,7 @@ test("Deep checkpoint reuses an identical locked Artifact without rereading CAS 
   assert.equal(saved.length, 2);
 });
 
-test("Deep review keeps structured source Artifacts on Quick checks", async () => {
+test("Reviewer checkpoint ignores structured source Artifacts instead of treating them as reports", async () => {
   const { artifact, cas, store, version } = fixture(JSON.stringify({
     claim: "TP53 mutation frequency was 39.7% [ev1].",
     references: ["[1] Study. arXiv:1706.03762"],
@@ -421,13 +466,12 @@ test("Deep review keeps structured source Artifacts on Quick checks", async () =
 
   assert.equal(executions, 0);
   assert.equal(evidenceTraces, 0);
-  assert.equal(provenanceTraces, 1);
-  assert.equal(result.reviews[0]?.reviewLevel, "quick");
-  assert.deepEqual(result.reviews[0]?.checks, ["structure", "computation"]);
-  assert.deepEqual(result.reviews[0]?.findings, []);
+  assert.equal(provenanceTraces, 0);
+  assert.deepEqual(result.reviews, []);
+  assert.deepEqual(result.checkpoint.reviewedArtifactVersionIds, []);
 });
 
-test("Quick review reports malformed JSON without running narrative checks", async () => {
+test("Reviewer checkpoint ignores malformed JSON rather than reporting it as a report defect", async () => {
   const { artifact, cas, store, version } = fixture("{ not-json");
   artifact.logicalName = "sources.json";
   version.mediaType = "application/json";
@@ -439,9 +483,8 @@ test("Quick review reports malformed JSON without running narrative checks", asy
     store,
   });
 
-  assert.deepEqual(result.reviews[0]?.checks, ["structure"]);
-  assert.equal(result.reviews[0]?.decision, "REVISE_AND_RETRY");
-  assert.deepEqual(result.reviews[0]?.findings.map((finding) => finding.code), ["ARTIFACT_JSON_INVALID"]);
+  assert.deepEqual(result.reviews, []);
+  assert.deepEqual(result.checkpoint.reviewedArtifactVersionIds, []);
 });
 
 test("Deep review runs Computation for an Evidence-backed report without a bibliography", async () => {

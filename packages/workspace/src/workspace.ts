@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
+import type { WorkspaceTransfer, WorkspaceTransferInput } from "@sciencediscovery/schema";
 import {
   SANDBOX_SKILL_EXTENSIONS_ROOT,
   SANDBOX_SKILL_PACKAGES_ROOT,
@@ -221,8 +222,22 @@ export interface WorkspaceToolOptions {
     remove: (id: string) => void;
     supersede: (id: string, content: string, category?: AgentMemoryCategory) => AgentMemoryEntry;
     list: (filter: { category?: AgentMemoryCategory; status?: AgentMemoryStatus }) => AgentMemoryEntry[];
+  timers?: {
+    create(input: { afterMs?: number; at?: string; message: string; executionId?: string }): Promise<unknown>;
+    list(): unknown;
+    cancel(id: string): unknown;
+  };
+  shellExecutions?: {
+    start(code: string, input: { environmentId?: string; cwd?: string }, signal?: AbortSignal, toolCallId?: string, runnerId?: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+    wait(id: string, waitMs: number, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+    list(): import("@sciencediscovery/schema").AgentShellExecution[];
+    get(id: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
+    logs(id: string, cursor?: number): Promise<import("@sciencediscovery/schema").ExecutionLogPage>;
+    cancel(id: string): Promise<import("@sciencediscovery/schema").AgentShellExecution>;
   };
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
+  /** Run-scoped capabilities supplied by the API composition layer. */
+  extraTools?: AgentTool[];
   declareArtifact?: (input: {
     description?: string;
     name?: string;
@@ -237,6 +252,7 @@ export interface WorkspaceToolOptions {
     signal?: AbortSignal,
     toolCallId?: string,
     machine?: string,
+    environment?: { environmentId?: string; cwd?: string },
   ) => Promise<ShellExecutionResult>;
   executeScientific?: (
     language: ScientificLanguage,
@@ -286,10 +302,22 @@ export interface WorkspaceToolOptions {
     logs: (jobId: string, signal?: AbortSignal) => Promise<NpuJobLogs>;
     result: (jobId: string, signal?: AbortSignal) => Promise<NpuJobResult>;
     submit: (
-      input: Omit<CreateNpuJobRequest, "sessionId" | "workspaceRoot">,
+      input: Omit<CreateNpuJobRequest, "sessionId" | "workspaceRoot" | "environmentRevisionId"> & { environmentId?: string },
       signal?: AbortSignal,
     ) => Promise<NpuJob>;
   };
+  /**
+   * Fire-and-forget mirror of one terminal NPU job to the memory graph, called
+   * after the job's ``createdFiles`` were declared as Project artifacts. The
+   * second argument carries the ``declareNpuJobArtifacts`` outputs that landed
+   * successfully (``ok: true`` only — failed declarations are not passed).
+   * Absent = not mirrored. The recorder layer is responsible for skipping
+   * non-terminal jobs and swallowing any failure so this never throws.
+   */
+  observeNpuJob?: (
+    job: NpuJob,
+    artifacts: Array<{ artifact_id: string; path: string; version: number }>,
+  ) => void;
   paperExtractPdf?: (input: {
     artifactJobId: string;
   }, signal?: AbortSignal) => Promise<unknown>;
@@ -302,6 +330,14 @@ export interface WorkspaceToolOptions {
    * pinned: every execution tool still defaults to this machine, and each of
    * these entries is an additional place the model may choose to run.
    */
+  workspaceTransfers?: {
+    workspaces(): Array<{ id: string; runnerId: string; description: string }>;
+    start(input: WorkspaceTransferInput, signal?: AbortSignal): Promise<WorkspaceTransfer>;
+    list(): WorkspaceTransfer[];
+    get(id: string): WorkspaceTransfer;
+    cancel(id: string): Promise<WorkspaceTransfer>;
+  };
+  localRunnerAllowed?: boolean;
   remoteRunners?: Array<{
     runnerId: string;
     description?: string;
@@ -643,26 +679,27 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   const loadedSkillIds = new Set<string>();
 
   /**
-   * The machines this Session may run on. Local is always one of them, so this
-   * parameter only appears once a remote machine is allowed: a Session with no
-   * remote machine sees the same tool surface it always had, and no machine name
-   * it is not allowed to use ever reaches the model.
+   * Describe only the Runners selected for this Session; location does not
+   * bypass the execution permission check.
    */
   const runnerCatalog = [
-    { runnerId: "local", description: "Default local sandbox; current Agent workspace and installed local environments." },
+    ...(options.localRunnerAllowed === false ? [] : [{ runnerId: "local", description: "Sandbox on this machine; current Agent workspace." }]),
     ...(options.remoteRunners ?? []).map((runner) => ({ runnerId: runner.runnerId, description: runner.description || runner.hostAlias })),
   ];
-  const machineParameter = {
-    runner_id: Type.Optional(Type.String({
-      description: `Sandboxed execution environment ID (default: local). Available Runners: ${JSON.stringify(runnerCatalog)}. Non-default Runners have independent workspaces; sync selected inputs explicitly.`,
-    })),
-  };
-  const pythonParameters = Type.Object({
-    code: Type.String({ minLength: 1 }),
-    environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
-    kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
-    ...machineParameter,
+  const runnerSelectionHint = options.localRunnerAllowed !== false
+    ? "Optional (default: local)."
+    : runnerCatalog.length === 1
+      ? `Required. Pass runner_id=${JSON.stringify(runnerCatalog[0]!.runnerId)}; it is the only allowed Runner.`
+      : runnerCatalog.length > 1
+        ? "Required. Choose an allowed Runner ID explicitly."
+        : "No Runner is allowed for this Session; do not invoke Runner tools.";
+  const runnerIdParameter = Type.String({
+    minLength: 1,
+    description: `Sandboxed execution environment ID. ${runnerSelectionHint} Available Runners: ${JSON.stringify(runnerCatalog)}. Runners have independent workspaces; sync selected inputs explicitly.`,
   });
+  const machineParameter = {
+    runner_id: options.localRunnerAllowed === false ? runnerIdParameter : Type.Optional(runnerIdParameter),
+  };
   const listFiles: AgentTool<typeof emptyParameters> = {
     description: "List files in the current session workspace",
     execute: async () => {
@@ -696,7 +733,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   };
 
   const readWorkspaceFile: AgentTool<typeof readFileParameters> = {
-    description: "Read a page of a text file from the current session workspace. Reads start at the first line and return at most 2000 lines or 40 KB; pass offset (1-based line) and limit to page through a larger file. Binary files are not read as text: the result reports the media type and size so you can process the file with run_python or run_shell instead.",
+    description: "Read a page of a text file from the current workspace. Reads start at the first line and return at most 2000 lines or 40 KB; pass offset (1-based line) and limit to page through a larger file. Binary files are not read as text: the result reports the media type and size so you can process the file with run_shell instead.",
     execute: async (_toolCallId, params) => {
       const requested = normalizeMountedReadPath(params.path);
       const roots = requested.root === "parent"
@@ -728,7 +765,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const details = {
           binary: true,
           mediaType: guessMediaType(requested.path),
-          note: "Binary content is never inlined into the conversation. Process this file in the sandbox with run_python or run_shell, or expose it to the user with declare_artifact.",
+          note: "Binary content is never inlined into the conversation. Process this file in the sandbox with run_shell, or expose it to the user with declare_artifact.",
           path: requested.path,
           size: metadata.size,
         };
@@ -816,7 +853,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       version: Type.Optional(Type.Integer({ minimum: 1 })),
     });
     const readArtifact: AgentTool<typeof parameters> = {
-      description: "Read a Project artifact by artifact_id or name, optionally selecting a version. At least one identifier is required. Text versions return one UTF-8 page (at most 2000 lines or 40 KB) plus a page range; use offset and limit to read the rest. Binary versions return only binary=true with the media type and size — their content is never inlined, so process them with run_python or run_shell instead.",
+      description: "Read a Project artifact by artifact_id or name, optionally selecting a version. At least one identifier is required. Text versions return one UTF-8 page (at most 2000 lines or 40 KB) plus a page range; use offset and limit to read the rest. Binary versions return only binary=true with the media type and size — their content is never inlined, so process them with run_shell instead.",
       execute: async (_toolCallId, params) => {
         if (!params.artifact_id && !params.name) throw new Error("artifact_id or name is required");
         const result = await options.readArtifact!({
@@ -854,7 +891,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             throw new Error(`paths must contain at most ${MAX_DECLARE_ARTIFACT_PATHS} paths`);
           }
           const artifacts: Array<
-            | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number }
+            | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string }
             | { error: string; ok: false; path: string }
           > = [];
           for (const path of params.paths) {
@@ -867,6 +904,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
                 origin: result.artifact.origin,
                 path,
                 version: result.version.version,
+                version_id: result.version.id,
               });
             } catch (error) {
               artifacts.push({
@@ -891,6 +929,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           name: result.artifact.name,
           origin: result.artifact.origin,
           version: result.version.version,
+          version_id: result.version.id,
           ...(result.instruction ? { instruction: result.instruction } : {}),
         }) }], details: result };
       },
@@ -901,36 +940,37 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     artifactTools.push(declareArtifact);
   }
 
-  const runPythonTool: AgentTool<typeof pythonParameters> = {
-    description: "Run Python in the current session workspace. Optionally select an Environment Revision and persistent kernel; ephemeral is the default. Save useful outputs as workspace files. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or have the script write its output to a workspace file and read that file with read_file.",
-    execute: async (toolCallId, params, signal) => {
-      const result = options.executeScientific
-        ? await options.executeScientific(
-          "python",
-          params.code,
-          params.environmentRevisionId,
-          params.kernelMode ?? "ephemeral",
-          signal,
-          toolCallId,
-          params.runner_id,
-        )
-        : await options.executePython(params.code, signal, toolCallId, params.runner_id);
-      if (result.exitCode !== 0) {
-        throw new Error(`Python exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
-      }
-      const summary = [
-        result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
-        result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
-        `created files: ${result.createdFiles.join(", ") || "none"}`,
-      ].join("\n");
-      return { content: [{ type: "text", text: summary }], details: result };
-    },
-    label: "Run Python",
-    name: "run_python",
-    parameters: pythonParameters,
-  };
 
-  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools, runPythonTool];
+  const tools: AgentTool[] = [listFiles, readWorkspaceFile, ...provenanceTools, ...artifactTools];
+  if (options.workspaceTransfers) {
+    const transfers = options.workspaceTransfers;
+    const parameters = Type.Object({
+      operation: Type.Union([Type.Literal("workspaces"), Type.Literal("start"), Type.Literal("list"), Type.Literal("status"), Type.Literal("cancel")]),
+      transfer_id: Type.Optional(Type.String({ minLength: 1 })),
+      source_workspace_id: Type.Optional(Type.String({ minLength: 1 })),
+      target_workspace_id: Type.Optional(Type.String({ minLength: 1 })),
+      files: Type.Optional(Type.Array(Type.Object({ source_path: Type.String({ minLength: 1 }), target_path: Type.String({ minLength: 1 }) }), { minItems: 1, maxItems: 50 })),
+      conflict: Type.Optional(Type.Union([Type.Literal("reject"), Type.Literal("overwrite")])),
+    });
+    const transferTool: AgentTool<typeof parameters> = { name: "workspace_transfer", label: "Transfer workspace files", parameters,
+      description: "Copy explicit file mappings between your authorized Workspaces, locally or across Runners. Discover Workspace IDs with workspaces. start returns a durable Transfer ID immediately; inspect progress, completed files and errors with status/list, or cancel. No mirroring or implicit Artifact declaration. Unknown target outcomes must be inspected before explicit retry.",
+      execute: async (_id, params, signal) => {
+        let result: unknown;
+        if (params.operation === "workspaces") result = transfers.workspaces();
+        else if (params.operation === "list") result = transfers.list();
+        else if (params.operation === "start") {
+          if (!params.source_workspace_id || !params.target_workspace_id || !params.files?.length) throw new Error("Both Workspace IDs and explicit file mappings are required");
+          result = await transfers.start({ sourceWorkspaceId: params.source_workspace_id, targetWorkspaceId: params.target_workspace_id,
+            files: params.files.map((file) => ({ sourcePath: file.source_path, targetPath: file.target_path })), conflict: params.conflict ?? "reject" }, signal);
+        } else {
+          if (!params.transfer_id) throw new Error("transfer_id is required");
+          result = params.operation === "cancel" ? await transfers.cancel(params.transfer_id) : transfers.get(params.transfer_id);
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+    };
+    tools.push(transferTool);
+  }
   if (options.remoteRunners?.length) {
     const runners = options.remoteRunners;
     const remoteWorkspaceParameters = Type.Object({
@@ -992,8 +1032,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         description: "Workspace-relative config path when the selected workload lists requiredInputs including configPath, for example antibody_pipeline/config.json.",
         minLength: 1,
       })),
-      environment_revision_id: Type.Optional(Type.String({
-        description: "ScienceDiscovery scientific environment revision for workloads that require managed Python. Omit to use the Session's selected revision.",
+      environment_id: Type.Optional(Type.String({
+        description: "Managed environment ID; always resolves its latest revision. Omit to use the Session-selected environment.",
         minLength: 1,
       })),
       job_id: Type.Optional(Type.String({ minLength: 1 })),
@@ -1001,7 +1041,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const declareNpuJobArtifacts = async (paths: string[]) => {
       if (!options.declareArtifact || paths.length === 0) return [];
       const artifacts: Array<
-        | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number }
+        | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string }
         | { error: string; ok: false; path: string }
       > = [];
       for (const path of paths.slice(0, MAX_DECLARE_ARTIFACT_PATHS)) {
@@ -1014,6 +1054,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             origin: result.artifact.origin,
             path,
             version: result.version.version,
+            version_id: result.version.id,
           });
         } catch (error) {
           artifacts.push({
@@ -1037,13 +1078,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         "Submit or inspect an allowlisted host NPU Broker job without leaving the ScienceDiscovery sandbox.",
         "Use operation=list_workloads first, then choose only a workload id returned by that call.",
         "For operation=submit, provide config_path when the selected workload's requiredInputs includes configPath.",
-        "For a workload with requiresEnvironmentRevision=true, verify a ScienceDiscovery managed environment first and pass its revision as environment_revision_id; omitting it uses the Session-selected revision.",
+        "For a workload with requiresEnvironmentRevision=true, provide environment_id from environment_list; the server resolves its latest revision. Historical revision selection is not supported.",
         "Use status/logs/result/cancel with job_id after submission.",
         "When operation=result returns job.createdFiles, those workspace files are automatically declared as Project artifacts when artifact declaration is available; otherwise call declare_artifact on those exact paths.",
         "Do not use run_shell to access /home, source host env.sh, write host_launch_request.json, or expect NPU devices inside bwrap.",
       ].join(" "),
       execute: async (toolCallId, params, signal) => {
         const broker = options.npuBroker!;
+        if (Object.hasOwn(params, "environment_revision_id")) throw new Error("Historical revision selection is not supported; use environment_id");
         if (params.operation === "list_workloads") {
           const workloads = await broker.listWorkloads(signal);
           return { content: [{ type: "text", text: JSON.stringify({ workloads }) }], details: { workloads } };
@@ -1062,9 +1104,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             if (requested.root !== "workspace") throw new Error("config_path must be in the writable session workspace");
             inputs.configPath = normalizeWorkspaceRelativePath(workspaceRoot, requested.path);
           }
-          const environmentRevisionId = params.environment_revision_id?.trim();
+          const environmentId = params.environment_id?.trim();
           const job = await broker.submit({
-            ...(environmentRevisionId ? { environmentRevisionId } : {}),
+            ...(environmentId ? { environmentId } : {}),
             inputs,
             workloadId,
           }, signal);
@@ -1084,6 +1126,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           const result = await broker.result(jobId, signal);
           const artifacts = await declareNpuJobArtifacts(result.job.createdFiles ?? []);
           const details = artifacts.length > 0 ? { ...result, artifacts } : result;
+          // Mirror the terminal job to the memory graph (fire-and-forget — the
+          // recorder swallows its own failures). Only successfully declared
+          // artifacts carry an artifact_id; failed declarations are skipped so
+          // the produces edge never dangles on a missing Artifact node.
+          options.observeNpuJob?.(result.job, artifacts.filter((artifact): artifact is { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string } => artifact.ok).map((artifact) => ({
+            artifact_id: artifact.artifact_id,
+            path: artifact.path,
+            version: artifact.version,
+          })));
           return { content: [{ type: "text", text: JSON.stringify(details) }], details };
         }
         const job = await broker.cancel(jobId, signal);
@@ -1136,7 +1187,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.queryGraph) {
     const queryGraphParameters = Type.Object({ query: Type.String({ minLength: 1 }) });
     const queryGraph: AgentTool<typeof queryGraphParameters> = {
-      description: "Browse this session's memory-graph nodes (ResearchGoal/Task/ToolCall/Paper/Evidence/Claim/Code/Artifact) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers) or produced (Artifacts/Evidence) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
+      description: "Browse this session's memory-graph nodes (ResearchGoal/Task/ToolCall/Paper/Evidence/Claim/Code/Artifact/SourceFile) by keyword. Returns {hits, total, truncated}. Matching is term-OR: the query is split into words and a node matches if its text contains ANY word; nodes matching more words rank higher. Use it to see what has already been searched (Papers), produced (Artifacts/Evidence), or uploaded (SourceFile) in this session. This is an exploratory read, not an id lookup — to cite a node, use the id returned by declare_evidence/declare_artifact, or list_artifacts for an existing Artifact. Give concrete entity terms that appear in the graph (e.g. 'TP53 NSCLC'), not meta-words like 'paper' or 'evidence'.",
       execute: async (_toolCallId, params) => {
         const result = await options.queryGraph!(params.query);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
@@ -1151,18 +1202,29 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.declareEvidence) {
     const declareEvidenceParameters = Type.Object({
       content: Type.String({ minLength: 1 }),
-      source_paper_link: Type.String({ minLength: 1 }),
+      // Source routing: exactly one of source_paper_link / source_file_id /
+      // source_webpage_link. source_paper_link for a Paper already in the
+      // graph; source_file_id for an uploaded PDF (media_type=application/pdf);
+      // source_webpage_link for a WebPage already in the graph (web_search /
+      // llm-wiki results). Non-PDF data files (CSV/image/etc) cannot be
+      // Evidence sources — use declare_claim's cites_source_file_aliases
+      // instead.
+      source_paper_link: Type.Optional(Type.String({ minLength: 1 })),
+      source_file_id: Type.Optional(Type.String({ minLength: 1 })),
+      source_webpage_link: Type.Optional(Type.String({ minLength: 1 })),
       locator: Type.String({ minLength: 1 }),
       evidence_type: Type.String(),
       confidence: Type.String(),
       strength: Type.String(),
     });
     const declareEvidence: AgentTool<typeof declareEvidenceParameters> = {
-      description: "Record a piece of Evidence extracted from a Paper that already exists in this session's memory graph. Creates an Evidence node + an extracts edge from the source Paper (Paper → Evidence). Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found when the Paper link is unknown). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
+      description: "Record a piece of Evidence extracted from a Paper, an uploaded PDF SourceFile, or a WebPage that already exists in this session's memory graph. Creates an Evidence node + an extracts edge from the source (Paper/PDF-SourceFile/WebPage → Evidence). Pass source_paper_link for a Paper already in the graph, source_file_id for an uploaded PDF (media_type=application/pdf), or source_webpage_link for a WebPage already in the graph (web_search / llm-wiki results) — exactly one. Non-PDF data files (CSV/image/etc) cannot be Evidence sources — use declare_claim's cites_source_file_aliases instead. WebPage evidence is gated on the page's content: today search returns snippets only (no full text), so source_webpage_link is usually rejected with source_webpage_no_content; prefer source_paper_link (literature Paper) or source_file_id (uploaded PDF) for now. The WebPage path lights up automatically once a page-fetch tool populates the page's content. Returns {status:'ok', evidence_id} or a structured error (source_paper_not_found / source_file_not_found / source_file_not_pdf / source_webpage_not_found / source_webpage_no_content / no_source / ambiguous_source). Use the returned evidence_id as the chip alias target in declare_claim's cites_evidence_aliases and write [evidenceN] in your report body.",
       execute: async (_toolCallId, params) => {
         const result = await options.declareEvidence!({
           content: params.content,
-          sourcePaperLink: params.source_paper_link,
+          ...(params.source_paper_link ? { sourcePaperLink: params.source_paper_link } : {}),
+          ...(params.source_file_id ? { sourceFileId: params.source_file_id } : {}),
+          ...(params.source_webpage_link ? { sourceWebpageLink: params.source_webpage_link } : {}),
           locator: params.locator,
           evidenceType: params.evidence_type,
           confidence: params.confidence,
@@ -1184,10 +1246,23 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       locator: Type.String(),
       cites_evidence_aliases: Type.Record(Type.String(), Type.String()),
       cites_artifact_aliases: Type.Record(Type.String(), Type.String()),
+      // alias → file_id for an uploaded non-PDF data file (CSV/image/etc) that
+      // directly supports the claim (SourceFile -[:supports]-> Claim). A PDF
+      // must NOT go here — it goes via declare_evidence → cites_evidence_
+      // aliases (the sidecar rejects a PDF with source_file_is_pdf).
+      cites_source_file_aliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+      // alias → "<source>:<identifier>" for a database record this session
+      // retrieved via db_search that directly supports the claim
+      // (DbRecord -[:supports]-> Claim). Value format is "<source>:<identifier>"
+      // (e.g. "uniprot:P38398"), source = the db source id as it appeared in
+      // the search results / the node's badge (uniprot/pdb/chembl/...); a bare
+      // identifier is accepted only when unambiguous within the session, so
+      // prefer "source:identifier" to avoid the 422 db_record_not_found path.
+      cites_dbrecord_aliases: Type.Optional(Type.Record(Type.String(), Type.String())),
       artifact_id: Type.Optional(Type.String({ minLength: 1 })),
     });
     const declareClaim: AgentTool<typeof declareClaimParameters> = {
-      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + supports edges from the cited Evidence/Artifact (Evidence/Artifact → Claim). At least one citation target is required. A Claim is backed by Evidence/Artifact via supports — it does NOT reach a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map.",
+      description: "Record a Claim (a cited assertion) and link it to its supporting nodes. Creates a Claim node + supports edges from the cited Evidence/Artifact/SourceFile/DbRecord (Evidence/Artifact/SourceFile/DbRecord → Claim). At least one citation target is required. A Claim is backed by Evidence/Artifact/SourceFile/DbRecord via supports — it does NOT reach a Paper directly: to cite a paper, call declare_evidence first and cite the returned evidence_id here. Uploaded non-PDF data files (CSV/image/etc) are cited directly via cites_source_file_aliases (alias format sourcefile+number, e.g. [sourcefile1]) — a PDF must NOT go this route; declare_evidence it first. Database records this session retrieved via db_search (uniprot/pdb/chembl/...) are cited directly via cites_dbrecord_aliases (alias format dbrecord+number, e.g. [dbrecord1]; value format \"<source>:<identifier>\" — e.g. \"uniprot:P38398\"). Choose aliases of the form evidence+number for Evidence (e.g. [evidence1]) or artifact+number for Artifact (e.g. [artifact1]) or sourcefile+number for uploaded data files (e.g. [sourcefile1]) or dbrecord+number for database records (e.g. [dbrecord1]) — no other format. Write each chosen alias token inline in the output body where the claim is asserted; a chip renders only when a [alias] token in the body matches this claim's chip_map. These aliases are platform provenance tags, not academic citations: when the report has a numbered reference list, also write a matching scholarly marker such as [1] next to the claim and map it to reference [1]. Errors: db_record_not_found when the source:identifier (or bare identifier) does not match a DbRecord this session retrieved — pass \"<source>:<identifier>\" (use query_graph to look up the record's source and identifier).",
       execute: async (_toolCallId, params) => {
         const result = await options.declareClaim!({
           content: params.content,
@@ -1196,6 +1271,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           locator: params.locator,
           citesEvidenceAliases: params.cites_evidence_aliases,
           citesArtifactAliases: params.cites_artifact_aliases,
+          ...(params.cites_source_file_aliases ? { citesSourceFileAliases: params.cites_source_file_aliases } : {}),
+          ...(params.cites_dbrecord_aliases ? { citesDbrecordAliases: params.cites_dbrecord_aliases } : {}),
           ...(params.artifact_id ? { artifactId: params.artifact_id } : {}),
         });
         // Surface a reminder to write the alias tokens into the output body
@@ -1203,7 +1280,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         // token in the body matches this claim's chip_map. On error, forward
         // the sidecar's actionable instruction so the LLM can self-correct.
         const instruction = result.status === "ok" && Object.keys(result.chipMap).length
-          ? `Write these alias tokens inline in the output body now, where each claim is asserted: ${Object.keys(result.chipMap).map((alias) => `[${alias}]`).join(", ")}. Aliases must be evidence+number for evidence (e.g. [evidence1]) or artifact+number for artifacts (e.g. [artifact1]) — no other format.`
+          ? `Write these alias tokens inline in the output body now, where each claim is asserted: ${Object.keys(result.chipMap).map((alias) => `[${alias}]`).join(", ")}. Aliases must be evidence+number for evidence (e.g. [evidence1]) or artifact+number for artifacts (e.g. [artifact1]) or sourcefile+number for uploaded data files (e.g. [sourcefile1]) or dbrecord+number for database records (e.g. [dbrecord1]) — no other format. For database records, the value must be "<source>:<identifier>" (e.g. "uniprot:P38398").`
           : result.status === "error" ? result.instruction : undefined;
         const text = JSON.stringify(instruction ? { ...result, instruction } : result);
         return { content: [{ type: "text", text }], details: result };
@@ -2084,14 +2161,18 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.executeShell) {
     const shellParameters = Type.Object({
+      background: Type.Optional(Type.Boolean({ description: "Return after acceptance without waiting for completion." })),
+      wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000, description: "Foreground wait budget (default 10000 ms), not a process timeout." })),
       arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32 })),
       command: Type.Optional(Type.String({ maxLength: 20_000, minLength: 1 })),
-      kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
+      environment_id: Type.Optional(Type.String({ minLength: 1 })),
+      cwd: Type.Optional(Type.String({ maxLength: 1_000 })),
       scriptPath: Type.Optional(Type.String({ maxLength: 1_000, minLength: 1 })),
       ...machineParameter,
     });
     const runShell: AgentTool<typeof shellParameters> = {
-      description: "Run a bounded shell command or an existing shell script from the authorized Session workspace or the read-only $SCIENCEDISCOVERY_SKILLS_DIR Skill package mount. Provide exactly one of command or scriptPath; scriptPath is executed without rewriting it. By default the Session's persistent shell session is used, so cd/export/source carry over to later run_shell calls and whitelisted variables also reach run_python/run_r; pass kernelMode=ephemeral for a one-off clean shell. Network is denied and host paths outside authorized mounts are unavailable. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output, or redirect the output to a workspace file and page through it with read_file.",
+      description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner sandbox Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only. cwd is relative to this Agent's workspace. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized sandbox policy. Large output is bounded; use read_tool_output for retained output."
+        + (options.shellExecutions ? " Foreground execution waits up to wait_ms (default 10000); background=true returns after acceptance. A wait deadline does not stop the command. Retain the returned Execution ID and use execution_status/logs/cancel; do not resubmit a running or unknown command." : ""),
       execute: async (toolCallId, params, signal) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
@@ -2109,9 +2190,27 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             : shellQuote(script.path);
           code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
-        const result = await options.executeShell!(code, params.kernelMode ?? "persistent", signal, toolCallId, params.runner_id);
-        if (result.exitCode !== 0) throw new Error(`Shell exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
+        if (options.shellExecutions) {
+          let execution = await options.shellExecutions.start(code, {
+            environmentId: params.environment_id, cwd: params.cwd,
+          }, signal, toolCallId, params.runner_id);
+          if (!params.background) execution = await options.shellExecutions.wait(execution.id, params.wait_ms ?? 10_000, signal);
+          const pending = execution.state === "queued" || execution.state === "running";
+          return {
+            isError: ["failed", "cancelled", "unknown"].includes(execution.state),
+            content: [{ type: "text", text: JSON.stringify({
+              ...execution,
+              ...(pending ? { instruction: "Execution is still running or queued. The wait ended, not the command. Use execution_status, execution_logs or execution_cancel; do not resubmit it." } : {}),
+            }) }],
+            details: execution,
+          };
+        }
+        if (params.background || params.wait_ms !== undefined) throw new Error("Managed Shell Execution is unavailable on this runtime");
+        const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
+          environmentId: params.environment_id, cwd: params.cwd,
+        });
         return {
+          isError: result.exitCode !== 0,
           content: [{ type: "text", text: [
             result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
             result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
@@ -2128,46 +2227,75 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(runShell);
   }
-  if (options.executeScientific && (options.environments || options.remoteRunners?.length)) {
-    const rParameters = Type.Object({
-      code: Type.String({ minLength: 1 }),
-      environmentRevisionId: Type.Optional(Type.String({ minLength: 1 })),
-      kernelMode: Type.Optional(Type.Union([Type.Literal("ephemeral"), Type.Literal("persistent")])),
-      ...machineParameter,
+  if (options.timers) {
+    const createParameters = Type.Object({
+      after_ms: Type.Optional(Type.Integer({ minimum: 1 })), at: Type.Optional(Type.String()),
+      message: Type.String({ minLength: 1, maxLength: 4000 }), execution_id: Type.Optional(Type.String({ minLength: 1 })),
     });
-    const runR: AgentTool<typeof rParameters> = {
-      description: "Run R in the current session workspace using a managed R Environment Revision. Prefer R for R-native statistical or Bioconductor workflows. A large stdout/stderr is returned as its tail plus a ref; read the earlier part with read_tool_output.",
-      execute: async (toolCallId, params, signal) => {
-        const result = await options.executeScientific!(
-          "r",
-          params.code,
-          params.environmentRevisionId,
-          params.kernelMode ?? "ephemeral",
-          signal,
-          toolCallId,
-          params.runner_id,
-        );
-        if (result.exitCode !== 0) throw new Error(`R exited with ${result.exitCode}: ${result.stderr || result.stdout}`);
-        return {
-          content: [{ type: "text", text: [
-            result.stdout ? `stdout:\n${result.stdout}` : "stdout: (empty)",
-            result.stderr ? `stderr:\n${result.stderr}` : "stderr: (empty)",
-            `created files: ${result.createdFiles.join(", ") || "none"}`,
-            `environment revision: ${result.environmentRevisionId}`,
-            `kernel mode: ${result.kernelMode}`,
-          ].join("\n") }],
-          details: result,
-        };
+    const create: AgentTool<typeof createParameters> = {
+      name: "timer_create", label: "Create timer", parameters: createParameters,
+      description: "Create a one-time reminder: exactly one of after_ms or at (ISO timestamp with timezone). It posts a notice, never executes a command or takes a Workspace write lock. Optional execution_id cancels the reminder when that execution finishes. Stopping/archiving cancels pending timers. No recurring timers.",
+      execute: async (_id, params) => {
+        const value = await options.timers!.create({ afterMs: params.after_ms, at: params.at, message: params.message, executionId: params.execution_id });
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
       },
-      label: "Run R",
-      name: "run_r",
-      parameters: rParameters,
     };
-    tools.push(runR);
+    const list: AgentTool = { name: "timer_list", label: "List timers", parameters: Type.Object({}),
+      description: "List this Agent's one-time timers and their pending/fired/cancelled state.",
+      execute: async () => { const value = options.timers!.list(); return { content: [{ type: "text", text: JSON.stringify(value) }], details: value }; } };
+    const cancelParameters = Type.Object({ timer_id: Type.String({ minLength: 1 }) });
+    const cancel: AgentTool<typeof cancelParameters> = { name: "timer_cancel", label: "Cancel timer", parameters: cancelParameters,
+      description: "Cancel this Agent's pending reminder; does not cancel its associated execution.",
+      execute: async (_id, params) => { const value = options.timers!.cancel(params.timer_id); return { content: [{ type: "text", text: JSON.stringify(value) }], details: value }; } };
+    tools.push(create, list, cancel);
+  }
+  if (options.shellExecutions) {
+    const manager = options.shellExecutions;
+    const statusParameters = Type.Object({
+      execution_id: Type.Optional(Type.String({ minLength: 1 })),
+      wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000 })),
+    });
+    const statusTool: AgentTool<typeof statusParameters> = {
+      name: "execution_status", label: "Execution status",
+      description: "List this Agent's executions, or inspect one by execution_id. Optional wait_ms waits without cancelling the command. No Shell is started and no Workspace write lock is taken. Unknown means inspect before retrying, never automatic replay.",
+      parameters: statusParameters,
+      execute: async (_id, params, signal) => {
+        if (params.wait_ms !== undefined && !params.execution_id) throw new Error("wait_ms requires execution_id");
+        const value = params.execution_id
+          ? await manager.wait(params.execution_id, params.wait_ms ?? 0, signal)
+          : manager.list();
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(statusTool);
+    const logsParameters = Type.Object({ execution_id: Type.String({ minLength: 1 }), cursor: Type.Optional(Type.Integer({ minimum: 0 })) });
+    const logsTool: AgentTool<typeof logsParameters> = {
+      name: "execution_logs", label: "Execution logs",
+      description: "Read retained stdout/stderr incrementally without a Shell or Workspace write lock. Pass nextCursor to continue; retentionTruncated means older output exceeded the retained budget.",
+      parameters: logsParameters,
+      execute: async (_id, params) => {
+        const value = await manager.logs(params.execution_id, params.cursor);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(logsTool);
+    const cancelParameters = Type.Object({ execution_id: Type.String({ minLength: 1 }) });
+    const cancelTool: AgentTool<typeof cancelParameters> = {
+      name: "execution_cancel", label: "Cancel execution",
+      description: "Explicitly request cancellation of this Agent's execution. Query status until termination and version/provenance finalization; this call does not imply the process already stopped.",
+      parameters: cancelParameters,
+      execute: async (_id, params) => {
+        const value = await manager.cancel(params.execution_id);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(cancelTool);
+  }
+  if (options.environments || options.remoteRunners?.length) {
 
     const environmentListParameters = Type.Object({ ...machineParameter });
     const environmentList: AgentTool<typeof environmentListParameters> = {
-      description: "List the selected Runner's shared read-only base and named scientific environments with immutable revision IDs. If setup is unavailable, use environment_setup to inspect its cause or explicitly retry after resolving it.",
+      description: "List shared managed environments on the selected Runner. Choose an environment ID to execute its latest state with run_shell; revisions are audit-only, not execution choices. Use environment_setup to inspect unavailable setup or retry after resolving its cause.",
       execute: async (_toolCallId, _params, signal) => {
         const environments = options.environmentManagement
           ? await options.environmentManagement.list(signal, _params.runner_id)
@@ -2487,6 +2615,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(extractPdf);
   }
+  tools.push(...(options.extraTools ?? []));
   return filterTools(tools, options.toolPolicy);
 }
 

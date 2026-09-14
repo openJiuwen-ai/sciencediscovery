@@ -242,9 +242,13 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     if (!await dialog.isVisible()) {
       await page.getByRole("button", { name: /^(系统设置|System configuration)/ }).click();
     }
-    await dialog.getByRole("navigation", { name: /^(设置分组|Setting groups)$/ })
-      .getByRole("button", { name: /^(模型注册表|Model registry)/ })
-      .click();
+    await expect(dialog).toBeVisible();
+    // Below 900px the settings tree is display:none and collapses behind the
+    // directory button, which takes every group button out of the accessibility
+    // tree with it. Above it the directory button is the one that is hidden.
+    const navigation = dialog.getByRole("navigation", { name: /^(设置分组|Setting groups)$/ });
+    if (!await navigation.isVisible()) await dialog.getByRole("button", { name: /^(Settings directory|设置目录)/ }).click();
+    await navigation.getByRole("button", { name: /^(模型注册表|Model registry)/ }).click();
     return dialog;
   };
 

@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 
 import { BUNDLED_SKILL_IDS, SkillCatalog } from "@sciencediscovery/specialist";
 import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
+import { ideaTreeRepositoryForSession } from "./idea-tree/python-client.js";
+import { createIdeaTreeAuthorityRegistry } from "@sciencediscovery/idea-tree";
 
 import { createQueuedRun, createSkillEvolutionRun, DEFAULT_SELF_EVOLUTION_LIBRARY_ID, SKILL_EVOLUTION_PROMPT_MARKER } from "./runs/index.js";
 import { SessionStore } from "./store.js";
@@ -344,6 +346,45 @@ test("recalled skill library snapshots expose immutable complete package files",
   }
 });
 
+test("skill library package storage accepts paths whose segment starts with dots", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.create({ id: "dot-prefix-library" });
+    const committed = await catalog.commitVersion("dot-prefix-library", {
+      author: { kind: "system" },
+      operations: [{
+        package: {
+          files: [
+            {
+              content: "---\nname: dot-prefix-skill\ndescription: Preserve package resources whose names begin with dots.\nmetadata:\n  version: 1.0.0\n---\n\nUse the bundled resource.\n",
+              path: "SKILL.md",
+            },
+            { content: "dot-prefixed resource", path: "references/..foo.md" },
+          ],
+        },
+        type: "upsert",
+      }],
+    });
+    assert.equal(committed.conflicts.length, 0);
+
+    const search = await catalog.search({
+      libraries: [{
+        contentHash: committed.version!.contentHash,
+        libraryId: "dot-prefix-library",
+        versionId: committed.version!.id,
+      }],
+      query: "dot prefix",
+    });
+    const snapshot = (await catalog.resolveSkills(search.candidates))[0]!;
+    const resource = snapshot.readPackageFiles().find((file) => file.path === "references/..foo.md");
+    assert.equal(Buffer.from(resource!.bytes).toString("utf8"), "dot-prefixed resource");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("queued runs pin enabled skill library heads to immutable version refs", async () => {
   const dataDir = await temporaryDataDir();
   try {
@@ -372,8 +413,17 @@ test("queued runs pin enabled skill library heads to immutable version refs", as
       skillSelectionMode: "selected",
     });
     const session = await store.createSession(project.id, "Queued library session");
+    const persistence = ideaTreeRepositoryForSession({ url: "http://127.0.0.1:1" }, { projectId: project.id, sessionId: session.id });
 
-    const run = await createQueuedRun(store, skillCatalog, catalog, session.id, { content: "find literature evidence" });
+    const run = await createQueuedRun(
+      store,
+      skillCatalog,
+      catalog,
+      createIdeaTreeAuthorityRegistry(),
+      session.id,
+      { content: "find literature evidence" },
+      persistence,
+    );
     assert.deepEqual(run.skillLibraryRefs, [{
       contentHash: committed.version!.contentHash,
       libraryId: "queued-library",
@@ -413,10 +463,28 @@ test("run-level skill self-evolution queues a guided proposal run", async () => 
       skillSelectionMode: "selected",
     });
     const session = await store.createSession(project.id, "Self-evolution session");
-    const source = await createQueuedRun(store, skillCatalog, catalog, session.id, { content: "Summarize a tiny CSV validation workflow" });
+    const authorities = createIdeaTreeAuthorityRegistry();
+    const persistence = ideaTreeRepositoryForSession({ url: "http://127.0.0.1:1" }, { projectId: project.id, sessionId: session.id });
+    const source = await createQueuedRun(
+      store,
+      skillCatalog,
+      catalog,
+      authorities,
+      session.id,
+      { content: "Summarize a tiny CSV validation workflow" },
+      persistence,
+    );
     await store.updateSessionRunStatus(session.id, source.id, "completed", { finishedAt: new Date().toISOString(), startedAt: new Date().toISOString() });
 
-    const evolution = await createSkillEvolutionRun(store, skillCatalog, catalog, session.id, source.id);
+    const evolution = await createSkillEvolutionRun(
+      store,
+      skillCatalog,
+      catalog,
+      authorities,
+      persistence,
+      session.id,
+      source.id,
+    );
     assert.equal(evolution.status, "queued");
     assert.match(evolution.prompt, new RegExp(SKILL_EVOLUTION_PROMPT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(evolution.prompt, /propose_skill_library_update/);

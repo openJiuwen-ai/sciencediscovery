@@ -21,12 +21,15 @@ export interface Project {
   name: string;
   /** Default remote hosts for inheriting Sessions; not a ceiling on Session overrides. */
   remoteRunnerHostIds: string[];
+  /** Unified selection, including local. Absent preserves legacy defaults. */
+  runnerIds?: string[];
   settingsOverrides: RuntimeSettingsOverrides;
 }
 
 export interface CreateProjectRequest {
   name: string;
   remoteRunnerHostIds?: string[];
+  runnerIds?: string[];
   settingsOverrides?: RuntimeSettingsOverrides;
 }
 
@@ -42,6 +45,7 @@ export interface CreateProjectResponse extends Project {
 export interface UpdateProjectRequest {
   name?: string;
   remoteRunnerHostIds?: string[];
+  runnerIds?: string[];
 }
 
 export type SessionListState = "active" | "all" | "archived";
@@ -58,4 +62,12 @@ export interface DeletionImpact {
   targetId: string;
   targetType: "project" | "session";
   totalSessionCount: number;
+}
+
+/** Legacy remote-only lists always included the built-in Runner implicitly. */
+export function effectiveRunnerIds(project: Pick<Project, "runnerIds" | "remoteRunnerHostIds">,
+  session?: Pick<Session, "runnerIds" | "remoteRunnerHostIds">): string[] {
+  if (session?.runnerIds !== undefined) return [...session.runnerIds];
+  if (session?.remoteRunnerHostIds !== undefined) return ["local", ...session.remoteRunnerHostIds];
+  return project.runnerIds ? [...project.runnerIds] : ["local", ...project.remoteRunnerHostIds];
 }

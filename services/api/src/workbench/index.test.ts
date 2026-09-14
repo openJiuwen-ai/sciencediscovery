@@ -40,6 +40,8 @@ function session(index: number): Session {
     projectId: project.id,
     reviewCriteria: [],
     reviewMode: "manual",
+    reviewerAutomaticReviewEnabled: true,
+    reviewerSpecialistLevel: "quick",
     semanticReviewEnabled: false,
     settingsOverrides: {},
     title: `Analysis session ${index}`,

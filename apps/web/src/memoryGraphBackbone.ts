@@ -272,6 +272,14 @@ export function projectToCanvas(
   // （canvas 的 producesExpanded 判定用，记「谁展开过谁」），但不再驱动 keep。
   const keep = new Set<string>(mainChain);
   for (const id of appearedIds) keep.add(id);
+  // SourceFile（用户上传的原料节点）默认常驻可见——它不在 next 主干上、
+  // 连它的 feeds/input 边也不在 PRODUCES_EDGE_TYPES 的展开路径里，否则首次
+  // 进图谱时上传文件节点会被主干投影砍掉，看不到"哪个上传文件喂给了哪段
+  // 代码"。像主干锚点一样无条件 keep，不写 expandedNodeMap/appearedIds，
+  // 因而不污染折叠状态、也不影响双击逐层展开的交互。
+  for (const n of mergedGraph.nodes) {
+    if (n.label === "SourceFile") keep.add(n.id);
+  }
   // expandedNodeMap 不再驱动 keep——appearedIds 已含所有曾出现节点。owner
   // 若该可见（被别的 owner 拉进 appearedIds，或本就在主干），自然在 keep；
   // 折叠删 owner key 不影响其可见性，只影响它名下直接子的去留。

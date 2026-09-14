@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest, type Server } from "node:http";
@@ -33,7 +34,7 @@ import type {
   ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
-import { appendBounded, executePython, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
+import { appendBounded, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { HostNpuJobBroker } from "./npu-broker.js";
 import { SessionEnvProfileStore } from "./session-env-profile.js";
@@ -409,6 +410,7 @@ test("runner health remains available while Python base bootstraps in the backgr
     root: resolve(root, "scientific-envs"),
     runnerVersion: "test",
   }, async (_path, arguments_) => {
+    if (arguments_[1] === "-c") return "[]";
     const prefixIndex = arguments_.indexOf("--prefix");
     const prefix = prefixIndex >= 0 ? arguments_[prefixIndex + 1]! : "";
     if (arguments_[1] === "create") {
@@ -592,6 +594,32 @@ test("bubblewrap runner starts with complete read-only Skill packages and a writ
   assert.equal(await readFile(resolve(packageRoot, "SKILL.md"), "utf8"), "Frozen instructions\n");
 });
 
+test("a shell execution runs a script out of the mounted package and keeps its exit code", async (context) => {
+  const fixture = await workspaceFixture(context);
+  const skillPackagesRoot = resolve(dirname(fixture.workspaceRoot), "skill-snapshots", "run-shell");
+  await mkdir(resolve(skillPackagesRoot, "selected-skill", "scripts"), { recursive: true });
+  await writeFile(resolve(skillPackagesRoot, "selected-skill", "SKILL.md"), "Frozen instructions\n");
+  // Frozen files are read-only and carry no mode, so a packaged script is run
+  // through its interpreter — never read out and re-evaluated by the model.
+  await writeFile(
+    resolve(skillPackagesRoot, "selected-skill", "scripts", "check.sh"),
+    "printf 'checked %s\\n' \"$1\"\nexit 7\n",
+    { mode: 0o444 },
+  );
+
+  const result = await executeShell(config(fixture.dataDir), {
+    agentId: "main",
+    code: 'sh "$SCIENCEDISCOVERY_SKILLS_DIR/selected-skill/scripts/check.sh" sample',
+    executionId: "execution-skill-script",
+    permissionEpoch: epoch(),
+    skillPackagesRoot,
+    workspaceRoot: fixture.workspaceRoot,
+  });
+
+  assert.equal(result.exitCode, 7);
+  assert.match(result.stdout, /^checked sample$/m);
+});
+
 test("runner rejects workspaces outside its configured projects root", async (context) => {
   const fixture = await workspaceFixture(context);
   await assert.rejects(
@@ -713,6 +741,50 @@ test("workspace validation accepts remote roots without local projects and rejec
   assert.equal(await validatedWorkspace(dataDir, local), local);
 });
 
+test("managed Shell HTTP submission detaches, exposes incremental logs, queues writers and cancels without a second Shell", async (context) => {
+  const { dataDir, workspaceRoot } = await workspaceFixture(context);
+  const server = createRunnerServer(config(dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const headers = { authorization: "Bearer runner-test-token" };
+  const owner = new URLSearchParams({ sessionId: epoch().sessionId, agentId: "main" });
+  const get = async (id: string) => (await fetch(`${origin}/shell-executions/${id}?${owner}`, { headers })).json() as Promise<import("@sciencediscovery/schema").ManagedExecution>;
+  const waitFor = async (check: () => Promise<boolean>) => {
+    const deadline = Date.now() + 8000;
+    while (!await check()) {
+      if (Date.now() > deadline) throw new Error("Managed execution did not reach expected state");
+      await new Promise((done) => setTimeout(done, 10));
+    }
+  };
+  const first = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
+    agentId: "main", executionId: "managed-first", workspaceRoot, permissionEpoch: epoch(), executionTimeoutMs: 1,
+    code: "printf 'training-started\\n'; while :; do sleep 1; done",
+  }));
+  assert.equal(first.status, 202, await first.text());
+  await waitFor(async () => {
+    const page = await (await fetch(`${origin}/shell-executions/managed-first/logs?${owner}`, { headers })).json() as import("@sciencediscovery/schema").ExecutionLogPage;
+    return page.chunks.some((chunk: { text: string }) => chunk.text.includes("training-started"));
+  });
+  assert.equal((await get("managed-first")).state, "running", "HTTP return and a short wait budget must not kill the job");
+  const second = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
+    agentId: "main", executionId: "managed-second", workspaceRoot, permissionEpoch: epoch(), code: "echo after-cancel > done.txt",
+  }));
+  assert.equal(second.status, 202);
+  assert.equal((await get("managed-second")).state, "queued");
+  const denied = await fetch(`${origin}/shell-executions/managed-first?sessionId=another&agentId=main`, { headers });
+  assert.equal(denied.status, 400);
+  await fetch(`${origin}/shell-executions/managed-first/cancel?${owner}`, { method: "POST", headers });
+  await waitFor(async () => (await get("managed-first")).state === "cancelled");
+  await waitFor(async () => (await get("managed-second")).state === "completed");
+  assert.ok((await get("managed-first")).version);
+  assert.equal(await readFile(resolve(workspaceRoot, "done.txt"), "utf8"), "after-cancel\n");
+  const replay = await fetch(`${origin}/shell-executions`, signedExecutionInit("runner-test-token", {
+    agentId: "main", executionId: "managed-second", workspaceRoot, permissionEpoch: epoch(), code: "echo replay",
+  }));
+  assert.equal(replay.status, 400);
+});
+
 test("remote workspace executes signed Shell and Python without a local projects tree", async (context) => {
   const dataDir = await mkdtemp(resolve(process.cwd(), ".tmp", "remote-execution-"));
   context.after(() => rm(dataDir, { recursive: true, force: true }));
@@ -730,6 +802,11 @@ test("remote workspace executes signed Shell and Python without a local projects
         code: "printf remote-shell > shell.txt; cat shell.txt",
       }));
       const body = await result.json() as ShellExecutionResult;
+      if (kernelMode === "persistent") {
+        assert.equal(result.status, 400);
+        assert.match(JSON.stringify(body), /persistent runtimes are no longer supported/);
+        continue;
+      }
       assert.equal(result.status, 200, JSON.stringify(body));
       assert.equal(body.exitCode, 0, body.stderr);
       assert.equal(body.sandbox, "bubblewrap");
@@ -822,6 +899,14 @@ test("runner keeps logical remote workspaces persistent and transfers only expli
     headers: authorization,
   })).text();
   assert.equal(content, "remote-data");
+  const captured = await fetch(`${origin}/remote-workspace/snapshots`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({ workspace: "project-1/session-1", paths: ["inputs"] }),
+  });
+  assert.equal(captured.status, 201);
+  const snapshot = await captured.json() as { id: string; files: Array<{ path: string; sha256: string }> };
+  assert.deepEqual(snapshot.files.map((file) => file.path), ["inputs/data.txt"]);
+  assert.match(snapshot.files[0]!.sha256, /^[a-f0-9]{64}$/);
   const workspaceRoot = resolve(fixture.dataDir, "remote-workspaces", "project-1", "session-1");
   assert.equal(await readFile(resolve(workspaceRoot, "inputs", "data.txt"), "utf8"), "remote-data");
   const outside = resolve(fixture.dataDir, "outside");
@@ -843,6 +928,35 @@ test("runner keeps logical remote workspaces persistent and transfers only expli
     headers: authorization,
   })).json();
   assert.deepEqual(afterDelete, []);
+  const snapshotUrl = `${origin}/remote-workspace/snapshots/${snapshot.id}/file?workspace=${workspace}&path=${path}`;
+  assert.equal(await (await fetch(snapshotUrl, { headers: authorization })).text(), "remote-data",
+    "deleting the live Workspace does not change the rooted export");
+  assert.equal((await fetch(snapshotUrl)).status, 401);
+  assert.equal((await fetch(snapshotUrl.replace(workspace, "another-session"), { headers: authorization })).status, 400);
+  assert.equal((await fetch(snapshotUrl.replace(path, "not-selected.txt"), { headers: authorization })).status, 400);
+});
+
+test("verified streaming upload checks checksum, rejects collisions and commits before returning", async (context) => {
+  const fixture = await workspaceFixture(context);
+  const server = createRunnerServer(config(fixture.dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const url = `${origin}/remote-workspace/transfer-file?workspace=test/session&path=file`;
+  const { createHash } = await import("node:crypto");
+  const sha256 = createHash("sha256").update("payload").digest("hex");
+  const headers = { authorization: "Bearer runner-test-token", "x-workspace-size": "7", "x-workspace-sha256": sha256 };
+  const wrong = await fetch(url, { method: "PUT", headers, body: "corrupt" });
+  assert.equal(wrong.status, 400);
+  const before = await (await fetch(`${origin}/remote-workspace/files?workspace=test/session`, { headers })).json();
+  assert.deepEqual(before, []);
+  const success = await fetch(url, { method: "PUT", headers, body: "payload" });
+  assert.equal(success.status, 201);
+  assert.deepEqual(await success.json(), { path: "file", size: 7, sha256 });
+  const snapshot = await (await fetch(`${origin}/remote-workspace/snapshots`, { method: "POST", headers,
+    body: JSON.stringify({ workspace: "test/session", paths: ["file"] }) })).json() as { files: Array<{ sha256: string }> };
+  assert.equal(snapshot.files[0]?.sha256, sha256);
+  assert.equal((await fetch(url, { method: "PUT", headers, body: "payload" })).status, 400);
 });
 
 test("runner NPU Broker runs a signed allowlisted smoke job", async (context) => {
@@ -1805,10 +1919,15 @@ test("runner status reports an active execution and removes it after completion"
     permissionEpoch: epoch(),
     workspaceRoot: fixture.workspaceRoot,
   }));
-  await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
-  const active = await (await fetch(`${origin}/status`, {
-    headers: { authorization: "Bearer runner-test-token" },
-  })).json() as RunnerRuntimeStatus;
+  let active: RunnerRuntimeStatus;
+  const deadline = Date.now() + 5000;
+  do {
+    active = await (await fetch(`${origin}/status`, {
+      headers: { authorization: "Bearer runner-test-token" },
+    })).json() as RunnerRuntimeStatus;
+    if (active.activeExecutions[0]?.status === "running") break;
+    await new Promise((done) => setTimeout(done, 10));
+  } while (Date.now() < deadline);
   assert.equal(active.activeExecutions[0]?.agentId, "main");
   assert.equal(active.activeExecutions[0]?.executionId, "status-execution");
   assert.equal(active.activeExecutions[0]?.sessionId, "session-test");
@@ -1831,12 +1950,19 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
     headers: { authorization: "Bearer runner-test-token" },
   })).json() as RunnerRuntimeStatus;
   const waitFor = async (predicate: (value: RunnerRuntimeStatus) => boolean) => {
+    const startedAt = Date.now();
+    let current: RunnerRuntimeStatus | undefined;
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const current = await status();
+      current = await status();
       if (predicate(current)) return current;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
     }
-    throw new Error("Runner status did not reach the expected state");
+    // The state it did reach and how long it waited for it. This budget counts
+    // polls, so its wall time shrinks as the machine slows: without the
+    // elapsed figure a failure cannot say whether the runner never did the
+    // thing or whether this simply gave up early.
+    throw new Error(`Runner status did not reach the expected state after ${Date.now() - startedAt} ms: `
+      + JSON.stringify(current));
   };
 
   const runningController = new AbortController();
@@ -1881,146 +2007,89 @@ test("runner aborts a disconnected sandbox and removes cancelled queued work fro
   await waitFor((current) => current.activeExecutions.length === 0);
 });
 
-test("runner executes different Session-Agent queues concurrently", async (context) => {
+for (const sharedWorkspace of [false, true]) test(sharedWorkspace
+  ? "runner serializes different Session-Agent queues that name the same Workspace"
+  : "runner executes different Session-Agent workspaces concurrently", async (context) => {
   const fixture = await workspaceFixture(context);
-  let active = 0;
+  const other = resolve(fixture.dataDir, "projects", "parallel-workspace");
+  await mkdir(other, { recursive: true });
+  const server = createRunnerServer(config(fixture.dataDir));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
+  let finished = false;
+  const responses = Promise.all(["subagent:one", "subagent:two"].map((agentId, index) =>
+    fetch(origin + "/execute-shell", signedExecutionInit("runner-test-token", {
+      agentId, executionId: "parallel-" + index, code: "sleep 1; echo complete", kernelMode: "ephemeral",
+      permissionEpoch: epoch(), workspaceRoot: index === 0 || sharedWorkspace ? fixture.workspaceRoot : other,
+    })))).then((value) => { finished = true; return value; });
   let maximumActive = 0;
-  let entered = 0;
-  let releaseBoth!: () => void;
-  const bothEntered = new Promise<void>((resolveBoth) => { releaseBoth = resolveBoth; });
-  const shellSessions = {
-    close: async () => undefined,
-    execute: async (request: ShellExecutionRequest): Promise<ShellExecutionResult> => {
-      active += 1;
-      maximumActive = Math.max(maximumActive, active);
-      entered += 1;
-      if (entered === 2) releaseBoth();
-      try {
-        await Promise.race([
-          bothEntered,
-          new Promise<never>((_resolve, reject) => {
-            setTimeout(() => reject(new Error("different Session-Agent execution was serialized")), 500);
-          }),
-        ]);
-        const now = new Date().toISOString();
-        return {
-          cgroupMode: "none",
-          createdFiles: [],
-          environmentRevisionId: "system-shell-bwrap-v1",
-          environmentVariables: {},
-          executionId: request.executionId,
-          exitCode: 0,
-          finishedAt: now,
-          kernelId: `shell-${request.agentId}`,
-          kernelMode: "persistent",
-          language: "shell",
-          modifiedFiles: [],
-          networkPolicy: "none",
-          runnerVersion: "test",
-          sandbox: "bubblewrap",
-          startedAt: now,
-          stderr: "",
-          stdout: request.agentId,
-          workingDirectory: "/workspace",
-        };
-      } finally {
-        active -= 1;
-      }
-    },
-    list: () => [],
-    teardownKernel: async () => 0,
-    teardownSession: async () => 0,
-    touchAgent: () => undefined,
-  } as unknown as ShellSessionManager;
-  const server = createRunnerServer(config(fixture.dataDir), undefined, undefined, shellSessions);
-  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
-  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-
-  const responses = await Promise.all(["subagent:one", "subagent:two"].map((agentId, index) => (
-    fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
-      agentId,
-      code: "echo overlap",
-      executionId: `overlap-${index}`,
-      kernelMode: "persistent",
-      permissionEpoch: epoch(),
-      workspaceRoot: fixture.workspaceRoot,
-    }))
-  )));
-
-  assert.deepEqual(responses.map((response) => response.status), [200, 200]);
-  assert.equal(maximumActive, 2);
-  const status = await (await fetch(`${origin}/status`, {
-    headers: { authorization: "Bearer runner-test-token" },
-  })).json() as RunnerRuntimeStatus;
-  assert.deepEqual(status.activeExecutions, []);
+  let lastStatus: RunnerRuntimeStatus | undefined;
+  const deadline = Date.now() + 10_000;
+  while (!finished && Date.now() < deadline) {
+    const status = await (await fetch(origin + "/status", {
+      headers: { authorization: "Bearer runner-test-token" },
+    })).json() as RunnerRuntimeStatus;
+    lastStatus = status;
+    maximumActive = Math.max(maximumActive, status.activeExecutions.filter((value) => value.status === "running").length);
+    await new Promise((done) => setTimeout(done, 10));
+  }
+  const completed = await responses;
+  assert.deepEqual(completed.map((response) => response.status), [200, 200]);
+  // A shell that answers non-zero has already said why, in the fields these
+  // assertions used to drop: the bodies were parsed inline and discarded, so
+  // when one guest-tier run failed here it left `1 !== 0` and nothing else to
+  // look at. Both results and the last status travel into the message instead.
+  const results = await Promise.all(completed.map(
+    (response) => response.json() as Promise<ShellExecutionResult>));
+  const evidence = JSON.stringify({ maximumActive, lastStatus, results });
+  for (const result of results) assert.equal(result.exitCode, 0, evidence);
+  assert.equal(maximumActive, sharedWorkspace ? 1 : 2, evidence);
 });
 
-test("runner shell endpoint keeps a persistent session per Session-Agent and downgrades once-scoped grants", async (context) => {
+test("execution endpoints reject persistent workers before running code, including once grants and remote roots", async (context) => {
   const fixture = await workspaceFixture(context);
   const server = createRunnerServer(config(fixture.dataDir));
-  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
-  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
+  for (const endpoint of ["/execute", "/execute-shell", "/shell-executions"]) {
+    for (const language of ["python", "r"]) for (const once of [false, true]) {
+      const response = await fetch(origin + endpoint, signedExecutionInit("runner-test-token", {
+        agentId: "main", executionId: randomUUID(), kernelMode: "persistent", language,
+        code: "touch must-not-exist", runnerWorkspaceKey: "must-not-create/workspace",
+        workspaceRoot: fixture.workspaceRoot, permissionEpoch: { ...epoch(), ...(once ? { executeGrantScope: "once" } : {}) },
+      }));
+      assert.equal(response.status, 400);
+      assert.match(JSON.stringify(await response.json()), /persistent runtimes are no longer supported/);
+    }
+  }
+  await assert.rejects(stat(resolve(fixture.dataDir, "remote-workspaces")), { code: "ENOENT" });
+  const status = await (await fetch(origin + "/status", { headers: { authorization: "Bearer runner-test-token" } })).json() as RunnerRuntimeStatus;
+  assert.deepEqual(status.kernels, []); assert.deepEqual(status.activeExecutions, []);
+});
 
-  const first = await (await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
-    agentId: "main",
-    code: "export FOO=http\necho first",
-    executionId: "shell-http-one",
-    kernelMode: "persistent",
-    permissionEpoch: epoch(),
-    workspaceRoot: fixture.workspaceRoot,
-  }))).json() as ShellExecutionResult;
-  assert.equal(first.exitCode, 0);
-  assert.equal(first.kernelMode, "persistent");
-  assert.equal(first.workingDirectory, "/workspace");
-  assert.equal(first.environmentVariables.FOO, "http");
-
-  const second = await (await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
-    agentId: "main",
-    code: "echo \"FOO=$FOO\"",
-    executionId: "shell-http-two",
-    kernelMode: "persistent",
-    permissionEpoch: epoch(),
-    workspaceRoot: fixture.workspaceRoot,
-  }))).json() as ShellExecutionResult;
-  assert.equal(second.kernelId, first.kernelId);
-  assert.equal(second.stdout.trim(), "FOO=http");
-
-  const kernels = await (await fetch(`${origin}/kernels`, {
-    headers: { authorization: "Bearer runner-test-token" },
-  })).json() as Array<{ agentId: string; id: string; language: string }>;
-  assert.equal(kernels.some((kernel) => (
-    kernel.agentId === "main" && kernel.id === first.kernelId && kernel.language === "shell"
-  )), true);
-
-  // The sedimented profile reaches a later ephemeral python execution.
-  const python = await (await fetch(`${origin}/execute`, signedExecutionInit("runner-test-token", {
-    agentId: "main",
-    code: "import os\nprint(os.environ.get('FOO'))",
-    executionId: "shell-profile-python",
-    permissionEpoch: epoch(),
-    workspaceRoot: fixture.workspaceRoot,
-  }))).json() as PythonExecutionResult;
-  assert.equal(python.exitCode, 0);
-  assert.equal(python.stdout.trim(), "http");
-
-  const once = await (await fetch(`${origin}/execute-shell`, signedExecutionInit("runner-test-token", {
-    agentId: "main",
-    code: "echo once",
-    executionId: "shell-http-once",
-    kernelMode: "persistent",
-    permissionEpoch: { ...epoch(), executeGrantScope: "once" },
-    workspaceRoot: fixture.workspaceRoot,
-  }))).json() as ShellExecutionResult;
-  assert.equal(once.kernelMode, "ephemeral");
-
-  const teardown = await (await fetch(`${origin}/kernels/teardown`, {
-    body: JSON.stringify({ reason: "test cleanup", sessionId: "session-test" }),
-    headers: { authorization: "Bearer runner-test-token", "content-type": "application/json" },
-    method: "POST",
-  })).json() as { count: number };
-  assert.equal(teardown.count, 1);
+test("legacy ephemeral calls do not inherit Shell cwd, exports or a historical profile", async (context) => {
+  const fixture = await workspaceFixture(context);
+  await mkdir(resolve(fixture.workspaceRoot, "old"));
+  const profiles = new SessionEnvProfileStore();
+  profiles.update("session-test", "main", "epoch-test", "/workspace/old", { FOO: "historical" });
+  const server = createRunnerServer(config(fixture.dataDir), undefined, undefined, undefined, profiles);
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => server.close(() => done())));
+  const origin = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
+  const execute = async (path: string, code: string) => {
+    const response = await fetch(origin + path, signedExecutionInit("runner-test-token", {
+      agentId: "main", executionId: randomUUID(), code, permissionEpoch: epoch(), workspaceRoot: fixture.workspaceRoot,
+    }));
+    assert.equal(response.status, 200);
+    const result = await response.json() as ShellExecutionResult;
+    assert.equal(result.exitCode, 0, result.stderr); assert.equal(result.kernelMode, "ephemeral");
+    return result;
+  };
+  await execute("/execute-shell", "export FOO=current; cd old; echo first");
+  assert.equal((await execute("/execute-shell", 'printf "%s|%s" "$PWD" "${FOO-unset}"')).stdout, "/workspace|unset");
+  assert.equal((await execute("/execute", "import os; print(os.getcwd() + '|' + os.environ.get('FOO', 'unset'))")).stdout.trim(), "/workspace|unset");
 });
 
 test("a runner started for an SSH tunnel listens on a private socket and opens no port", async (context) => {

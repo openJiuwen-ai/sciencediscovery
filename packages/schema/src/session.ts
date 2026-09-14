@@ -22,11 +22,16 @@ import type {
 import type { ConnectorId } from "./connectors.js";
 import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
+import type { IdeaTreePhase, IdeaTreeRunSettingsSnapshot } from "./idea-tree.js";
 import type { PermissionRequest } from "./permission.js";
-import type { ApprovalMode, PlanApprovalDecision, SessionPlan } from "./plan.js";
+<<<<<<< HEAD
+import type { ApprovalMode, PlanApprovalDecision, PlanSnapshot, SessionPlan } from "./plan.js";
+=======
+import type { ApprovalMode, PlanSnapshot } from "./plan.js";
+>>>>>>> upstream/main
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
-import type { EffectiveRuntimeSettings, EnabledSkillLibrary, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
 
 export const SESSION_TITLE_MAX_CHARACTERS = 24;
@@ -76,9 +81,14 @@ export interface Session {
   /**
    * Independent Session selection from the global remote catalog. Absent means the
    * Session inherits the Project list; an empty array means this Session may not
-   * use any remote machine. Local execution is always available either way.
+   * use any remote machine. Legacy selections implicitly include local execution.
    */
   remoteRunnerHostIds?: string[];
+  runnerIds?: string[];
+  /** Enables automatic Reviewer Specialist tasks for this Session only. */
+  reviewerAutomaticReviewEnabled: boolean;
+  /** Quick is the default; Deep adds semantic verification for this Session. */
+  reviewerSpecialistLevel: ReviewerSpecialistLevel;
   /** @deprecated Legacy Semantic Review catalog compatibility; no runtime reviewer consumes it. */
   semanticReviewEnabled: boolean;
   settingsOverrides: RuntimeSettingsOverrides;
@@ -91,14 +101,15 @@ export interface Session {
  * Reference kind for composer/Markdown-chip links. `artifact` / `session` /
  * `skill` are the user-message composer references (an `@artifact` read into
  * context, an `@session` cross-session reference, an `@skill` activation).
- * `evidence` / `artifact` are the memory-graph chip kinds that let a final
- * report's prose cite graph nodes — `declare_claim`'s chip_map only ever
- * produces these two (a Paper is never cited directly: the report cites an
- * Evidence node that was extracted from it). The alias → node-id map is
- * persisted on the report Artifact version's `references` so the chips
- * survive reloads.
+ * `evidence` / `artifact` / `sourcefile` / `dbrecord` are the memory-graph chip
+ * kinds that let a final report's prose cite graph nodes — `declare_claim`'s
+ * chip_map produces these (a Paper is never cited directly: the report cites an
+ * Evidence node that was extracted from it; an uploaded non-PDF data file is
+ * cited as a SourceFile; a database record this session retrieved via db_search
+ * is cited as a DbRecord). The alias → node-id map is persisted on the report
+ * Artifact version's `references` so the chips survive reloads.
  */
-export type ComposerReferenceKind = "artifact" | "session" | "skill" | "evidence";
+export type ComposerReferenceKind = "artifact" | "session" | "skill" | "evidence" | "sourcefile" | "dbrecord";
 
 export interface ComposerReference {
   createdInSessionTitle?: string;
@@ -113,18 +124,32 @@ export interface ComposerReference {
   version?: number;
 }
 
+/** Runtime-originated records delivered with a turn: completed background
+ * Executions and fired timers. `prompt` is model-facing text and is never the
+ * user-visible message body; the counts let the UI summarize it without
+ * parsing that text. */
+export interface RuntimeNotice {
+  executions: number;
+  prompt: string;
+  timers: number;
+}
+
 export interface ChatMessage {
   annotations?: ArtifactAnnotation[];
   content: string;
   createdAt: string;
   id: string;
-  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice";
+  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice" | "wake_notice";
   modelId?: string;
   modelName?: string;
   /** Canonical provider transcript for this assistant turn. It is replayed to
    * the configured model but is not used as the user-visible message body. */
   modelContext?: Array<Record<string, unknown>>;
   references?: ComposerReference[];
+  /** Runtime records that rode along with this turn. The model input re-attaches
+   * `prompt`; the transcript keeps it out of `content` so a runtime wake is
+   * never rendered as something the user typed. */
+  runtimeNotice?: RuntimeNotice;
   reviewerCheckpoint?: {
     error?: string;
     /** Persisted live progress for the current Reviewer Specialist stage. */
@@ -197,6 +222,7 @@ export interface WorkspaceFileRecord {
 
 /** Immutable attribution for one observed content state of a Workspace file. */
 export interface WorkspaceFileRevision {
+  publicationSequence?: number;
   artifactVersionIds: string[];
   contentHash?: string;
   createdAt: string;
@@ -218,6 +244,8 @@ export interface WorkspaceFileRevision {
 }
 
 export interface WorkspaceFileRevisionInput {
+  /** Trusted local Runner receipt. Not a user-supplied ordering number. */
+  publicationVersion?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   artifactVersionId?: string;
   contentHash?: string;
   executionRunId?: string;
@@ -287,6 +315,8 @@ export interface WorkbenchSearchResponse {
 export interface ToolTrace {
   /** Structured tool arguments as issued by the model. */
   args?: Record<string, unknown>;
+  /** Full structured tool result details, when the tool provides them. */
+  details?: unknown;
   id: string;
   /** Serialized tool arguments; carried by tool.started and kept by the timeline. */
   input?: string;
@@ -314,6 +344,12 @@ export type SessionRunStatus =
   | "interrupted";
 
 export interface SessionRun {
+  /** Trusted notification context, never accepted from SendMessageRequest. */
+  notificationDelivery?: {
+    sessionId: string; agentId: string; epoch: number; agentEpoch: number;
+    notifications: Array<{ id: string; sessionId: string; agentId: string; kind: "execution" | "timer"; sourceId: string; message: string; createdAt: number; readAt?: number }>;
+  };
+  automaticWake?: boolean;
   annotationIds: string[];
   assistantMessageId?: string;
   createdAt: string;
@@ -325,7 +361,7 @@ export interface SessionRun {
   references: ComposerReference[];
   retryOfRunId?: string;
   sessionId: string;
-  settingsSnapshot: EffectiveRuntimeSettings;
+  settingsSnapshot: EffectiveRuntimeSettings & IdeaTreeRunSettingsSnapshot;
   /** Version-pinned skill libraries declared as prompt sources for this run. */
   skillLibraryRefs?: PromptSkillLibraryRef[];
   startedAt?: string;
@@ -362,10 +398,24 @@ export type RunStreamEvent =
    */
   | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
   | { kick: number; turn: number; type: "stall_kick" }
-  | { delta: string; turn: number; type: "assistant.thinking.delta" }
-  | { content: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
-  | { delta: string; type: "assistant.delta" }
-  | { content: string; truncated?: boolean; type: "assistant.snapshot" }
+  | { delta: string; responseId?: string; turn: number; type: "assistant.thinking.delta" }
+  | { content: string; responseId?: string; truncated?: boolean; turn: number; type: "assistant.thinking.snapshot" }
+  | { delta: string; responseId?: string; type: "assistant.delta" }
+  | { content: string; responseId?: string; truncated?: boolean; type: "assistant.snapshot" }
+  /**
+   * One actual model invoke attempt begins. Its text/thinking deltas and the
+   * matching assistant.response.settled carry the same `responseId`, so the
+   * timeline can keep one Markdown container even when audit events (e.g. an
+   * approval-policy switch) interleave. Old records predate the identity and
+   * omit it entirely.
+   */
+  | { responseId: string; turn: number; type: "assistant.response.started" }
+  /**
+   * The model invoke attempt settled (completed, failed, or was aborted).
+   * Terminal for that response only; the run may continue with a new identity.
+   */
+  | { responseId: string; turn: number; type: "assistant.response.settled" }
+  | { nodeId?: string; phase: IdeaTreePhase; treeId?: string; type: "idea_tree.phase" }
   | { trace: ToolTrace; type: "tool.started" }
   | { trace: ToolTrace; type: "tool.completed" }
   | { chunk: string; toolCallId: string; type: "tool.output" }
@@ -375,6 +425,7 @@ export type RunStreamEvent =
   /** A plan approval decision (V3-C2): carries the decision record and the
    *  post-decision plan so the timeline updates both without a refetch. */
   | { decision: PlanApprovalDecision; plan: SessionPlan; type: "plan.approval_decided" }
+  | { plan: PlanSnapshot; type: "plan.updated" }
   | { subagent: Subagent; type: "subagent.updated" }
   | { step: SubagentStep; subagentId: string; type: "subagent.step" }
   | { subagentId: string; type: "subagent.usage"; usage: SubagentUsage }
@@ -383,6 +434,7 @@ export type RunStreamEvent =
    *  conversation. The card renders in the transcript where it was asked
    *  for, so the search sits next to the sentence that motivated it. */
   | { run: EvolveRun; type: "evolve_run.created" }
+  | { researchId: string; type: "idea_research.created" }
   | { request: PermissionRequest; type: "permission.required" }
   | { request: PermissionRequest; type: "permission.resolved" }
   | { review: ArtifactReviewRun; type: "artifact_review.completed" }
@@ -424,6 +476,7 @@ export interface CreateSessionRequest {
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
   remoteRunnerHostIds?: string[];
+  runnerIds?: string[];
   settingsOverrides?: RuntimeSettingsOverrides;
   specialistId?: string;
   title?: string;
@@ -439,6 +492,7 @@ export interface UpdateSessionRequest {
   reviewMode?: "auto" | "manual";
   /** Set to null to drop the override and inherit the Project's allowed machines. */
   remoteRunnerHostIds?: string[] | null;
+  runnerIds?: string[] | null;
   reviewModelId?: string;
   semanticReviewEnabled?: boolean;
   skillSelectionMode?: SkillSelectionMode;
@@ -461,11 +515,11 @@ export interface CreateSkillEvolutionRunRequest {
   targetLibraryId?: string;
 }
 
-/** Result of stopping the agent run that is currently streaming for a Session. */
+/** Stop also disables automatic wakeups when no foreground run is active. */
 
 export interface CancelRunResult {
   cancelled: boolean;
-  runId: string;
+  runId?: string;
   sessionId: string;
 }
 
@@ -481,6 +535,8 @@ export interface WorkspaceUploadItemResult {
   hash?: string;
   originalName: string;
   path?: string;
+  /** Byte size of the uploaded content; absent on failed entries. */
+  size?: number;
   status: "created" | "overwritten" | "renamed" | "failed";
 }
 

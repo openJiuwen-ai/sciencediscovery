@@ -101,6 +101,7 @@ export interface RemoteModelFacts {
  * hand-entered rate has no such source to cite.
  */
 export interface UserModelPricing {
+  cacheWriteInput?: number;
   cachedInput?: number;
   currency: ModelCatalogPricing["currency"];
   input: number;
@@ -146,6 +147,7 @@ export interface ProviderModelEntry {
 export type ModelFactOrigin = "catalog" | "remote" | "user";
 
 export interface ResolvedModelPricing {
+  cacheWriteInput?: number;
   cachedInput?: number;
   currency: ModelCatalogPricing["currency"];
   input: number;
@@ -301,6 +303,7 @@ export type ModelCatalogPriceSchedule =
 /** A vendor-published time period whose rates differ from the conservative
  * top-level price. Periods are never merged across provider presets. */
 export interface ModelCatalogPricePeriod {
+  cacheWriteInput?: number;
   cachedInput?: number;
   id: ModelCatalogPricePeriodId;
   input: number;
@@ -316,6 +319,8 @@ export interface ModelCatalogPricePeriod {
  * does not publish them, not zero.
  */
 export interface ModelCatalogPricing {
+  /** Price for cache-write / cache-creation input tokens, if published. */
+  cacheWriteInput?: number;
   /** Discounted price for cache-hit input tokens, if published. */
   cachedInput?: number;
   currency: "CNY" | "USD";

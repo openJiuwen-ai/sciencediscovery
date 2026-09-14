@@ -16,7 +16,6 @@ import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useS
 
 import {
   readRenamedStorageItem,
-  SHOW_PHYSICAL_FILES_STORAGE_KEY,
   TOKEN_STORAGE_KEY,
   WORKSPACE_COLLAPSED_STORAGE_KEY,
   WORKSPACE_WIDTH_STORAGE_KEY,
@@ -36,8 +35,6 @@ import type {
   ConnectorManifest,
   CreateProxyServerRequest,
   DeletionImpact,
-  Environment,
-  EnvironmentRevision,
   ExecutionRun,
   EvidenceLink,
   McpProxyPolicies,
@@ -50,10 +47,9 @@ import type {
   ModelApiVariant,
   ModelThinkingEffort,
   ModelThinkingMode,
+  ModelUsageAnalyticsFilters,
   ModelUsageBucket,
   MemoryGraphNodeLabel,
-  PaperAcquisition,
-  PaperVisionRun,
   PermissionEpoch,
   PermissionGrant,
   PermissionDecision,
@@ -65,6 +61,8 @@ import type {
   ProxySettingsDetails,
   RemoteHostTarget,
   RemoteJob,
+  ReviewerAuditTask,
+  ReviewerSpecialistLevel,
   ReviewerSpecialistSettings,
   RuntimeSettingsDetails,
   RuntimeSettingsOverrides,
@@ -76,13 +74,17 @@ import type {
   SessionArtifactOutput,
   SessionDetail,
   SessionListState,
+
   RevisePlanRequest,
   SessionPlan,
+
+
   SessionRunEvent,
   SessionUsageSummary,
   ScientificArtifact,
   ScientificArtifactKind,
   GlobalModelUsageSummary,
+  ModelUsageAnalyticsSummary,
   Subagent,
   SkillDescriptor,
   Specialist,
@@ -94,6 +96,8 @@ import type {
   UpdateWebSettingsRequest,
   MemoryGraphSettingsDetails,
   UpdateMemoryGraphSettingsRequest,
+  IdeaTreeSettingsDetails,
+  UpdateIdeaTreeSettingsRequest,
   WebSettingsDetails,
   WorkspaceCapabilities,
   WorkspaceFile,
@@ -101,7 +105,7 @@ import type {
   WorkbenchSearchResult,
 } from "@sciencediscovery/schema";
 import type { ModelCatalogDetails } from "@sciencediscovery/schema";
-import { constrainCatalogThinking, setModelCatalogSnapshot } from "@sciencediscovery/schema";
+import { constrainCatalogThinking, setModelCatalogSnapshot, effectiveRunnerIds } from "@sciencediscovery/schema";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import {
   classifyScientificArtifact,
@@ -149,7 +153,6 @@ import {
   SendIcon,
   SessionIcon,
   SettingsIcon,
-  ShieldCheckIcon,
   SparkleIcon,
   StopIcon,
   StructureIcon,
@@ -181,20 +184,22 @@ import {
   type RunTimelineEntry,
 } from "./timeline/RunTimeline.js";
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
-import { duplicateModelProfileId, modelOptionLabel } from "./modelLabels.js";
+import { duplicateModelProfileId } from "./modelLabels.js";
 import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
 import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
 import { SubagentConversation } from "./SubagentConversation.js";
+import { WakeNotice } from "./WakeNotice.js";
 import {
   QuotaSettingsEditor,
   RuntimeStatusPanel,
   SandboxNetworkSettingsEditor,
   TimeoutSettingsEditor,
 } from "./RuntimeControls.js";
-import { effectiveRemoteRunnerHostIds, ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
-import { RunUsageInline, UsagePage } from "./UsagePage.js";
+import { ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
+import { AgentActivityPanel } from "./AgentActivityPanel.js";
+import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
 import { WorkspaceFileProvenanceModal } from "./WorkspaceFileProvenanceModal.js";
@@ -218,14 +223,16 @@ import {
 } from "./artifactTree.js";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type WebSettingsDraft } from "./WebSettingsEditor.js";
 import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
+import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
+import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
 import { EvidenceHover } from "./EvidenceHoverCard.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
-import { MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
+import { isMemoryGraphVisible, MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
 import { EvolveAlgorithmPicker } from "./evolve/EvolveAlgorithmPicker.js";
 import { EvolvePanel } from "./evolve/EvolvePanel.js";
 import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
@@ -234,7 +241,11 @@ import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // App layer so the right-rail card can open it directly (previously the only
 // entries were the per-product modals).
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
+
 const KnowledgeEnginePage = lazy(() => import("./knowledge-engine/KnowledgeEnginePage.js").then((m) => ({ default: m.KnowledgeEnginePage })));
+
+import { IdeaTreeView } from "./IdeaTreeView.js";
+
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
@@ -245,7 +256,7 @@ import { InlineErrorAlert, updateInlineErrors } from "./InlineErrorAlert.js";
 import { createSettingsErrorRouter } from "./settings-error-routing.js";
 import { isPrimaryViewChange, parseViewState, serializeViewState, type ViewState } from "./view-url.js";
 import { PermissionCards, PermissionGrantManager } from "./Permissions.js";
-import { useLocale, type MessageKey } from "./i18n/index.js";
+import { translateActive, useLocale, type MessageKey } from "./i18n/index.js";
 import { formatRunFailure } from "./run-failure.js";
 import {
   ComposerCommandChips,
@@ -294,14 +305,16 @@ import {
   sortSessionRuns,
 } from "./session/model.js";
 import {
-  activityCardId,
+  collectLatestRunPlans,
   collectRunChangedPaths,
   groupRunActivity,
   setActivityCardExpanded,
   type ActivityCardExpansion,
   type GovernedDownloadCandidate,
+  type RunPlanSnapshot,
   type RunActivityGroup,
 } from "./session/run-activity.js";
+import { ProcessRecord, WorkspaceFolder } from "./ProcessRecord.js";
 import { ConversationArtifactList } from "./session/ConversationArtifactList.js";
 import { anchorArtifactOutputs, groupArtifactOutputsByRun } from "./session/run-artifacts.js";
 import {
@@ -322,6 +335,7 @@ import {
 const SELF_EVOLUTION_LIBRARY_ID = "project-skills";
 const BUILT_IN_SKILL_LIBRARY_ID = "built-in-skills";
 const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
+const EMPTY_STRING_ARRAY: readonly string[] = [];
 
 function subagentsByRootRun(runs: readonly SessionRun[], subagents: readonly Subagent[]): Map<string, Subagent[]> {
   const runIds = new Set(runs.map((run) => run.id));
@@ -359,6 +373,17 @@ export function canSummarizeRunAsSkill(run: SessionRun | undefined): run is Sess
     && !isSkillAuthoringRun;
 }
 
+export function latestSkillSourceRun(runs: readonly SessionRun[], sessionId: string): SessionRun | undefined {
+  return selectSessionReplayRun(runs.filter((run) => run.sessionId === sessionId && canSummarizeRunAsSkill(run)));
+}
+
+export function skillSummaryRun(runs: readonly SessionRun[], source: SessionRun): SessionRun | undefined {
+  // This exact field is emitted by buildSkillEvolutionPrompt, not by user prose.
+  return selectSessionReplayRun(runs.filter((run) => run.sessionId === source.sessionId
+    && run.prompt.startsWith(SKILL_EVOLUTION_PROMPT_MARKER)
+    && run.prompt.split("\n").includes(`- source_run_id: ${source.id}`)));
+}
+
 export function artifactTreeIconKind(
   artifact: Pick<ScientificArtifact, "kind" | "name">,
 ): ScientificArtifactKind {
@@ -370,6 +395,36 @@ export function workspaceFileTreeIconKind(
   file: Pick<WorkspaceFile, "previewKind">,
 ): ScientificArtifactKind {
   return file.previewKind ?? "other";
+}
+
+/**
+ * An automatic review owns a checkpoint message that is created after the
+ * Artifact stream event. Merge it into the local transcript rather than only
+ * updating a card that was already present when polling began.
+ */
+export function mergeReviewerCheckpointMessages(
+  currentMessages: readonly ChatMessage[],
+  remoteMessages: readonly ChatMessage[],
+): ChatMessage[] {
+  const remoteCheckpoints = remoteMessages.filter((message) => message.kind === "reviewer_checkpoint");
+  const remoteById = new Map(remoteCheckpoints.map((message) => [message.id, message]));
+  const currentIds = new Set(currentMessages.map((message) => message.id));
+  return [
+    ...currentMessages.map((message) => message.kind === "reviewer_checkpoint"
+      ? remoteById.get(message.id) ?? message
+      : message),
+    ...remoteCheckpoints.filter((message) => !currentIds.has(message.id)),
+  ];
+}
+
+export function hasAutomaticReviewerTaskForArtifactVersions(
+  tasks: readonly Pick<ReviewerAuditTask, "artifactVersionIds" | "origin">[],
+  artifactVersionIds: readonly string[],
+): boolean {
+  if (!artifactVersionIds.length) return false;
+  const watched = new Set(artifactVersionIds);
+  return tasks.some((task) => task.origin === "artifact_registered"
+    && task.artifactVersionIds.some((versionId) => watched.has(versionId)));
 }
 
 function TreeFileIcon({ kind }: { kind: ScientificArtifactKind }): ReactNode {
@@ -398,9 +453,10 @@ function CompactPathTreeList<TLeaf extends PathTreeLeaf>({
   entries: readonly PathTreeEntry<TLeaf>[];
   renderLeaf: (leaf: TLeaf) => ReactNode;
 }): ReactNode {
+  const { t } = useLocale();
   return <div className={renderDirectoryControl ? "artifact-tree selection-mode" : "artifact-tree"}>
-    {entries.map((entry) => entry.kind === "directory" ? <details className="artifact-tree-directory" key={`directory:${entry.path}`} open>
-      <summary aria-label={`Folder ${entry.path}`} className={renderDirectoryControl ? "selection-mode" : undefined}>
+    {entries.map((entry) => entry.kind === "directory" ? <details className="artifact-tree-directory" key={`directory:${entry.path}`}>
+      <summary aria-label={t("app.folderAria", { path: entry.path })} className={renderDirectoryControl ? "selection-mode" : undefined}>
         <ChevronRightIcon className="artifact-tree-chevron" size={14} />
         {renderDirectoryControl?.(entry)}
         <ProjectIcon className="artifact-tree-node-icon artifact-tree-folder-icon" size={14} />
@@ -425,6 +481,7 @@ export function ArtifactTreeList({
   onSelectionChange?: (artifacts: readonly ScientificArtifact[], selected: boolean) => void;
   selectedArtifactIds?: ReadonlySet<string>;
 }): ReactNode {
+  const { t } = useLocale();
   const selection = selectedArtifactIds && onSelectionChange
     ? { change: onSelectionChange, ids: selectedArtifactIds }
     : undefined;
@@ -437,7 +494,7 @@ export function ArtifactTreeList({
       const checked = allSelected ? true : selectedCount ? "mixed" as const : false;
       return <button
         aria-checked={checked}
-        aria-label={`${allSelected ? "Deselect" : "Select"} folder ${entry.path}`}
+        aria-label={allSelected ? t("app.deselectFolderAria", { path: entry.path }) : t("app.selectFolderAria", { path: entry.path })}
         className="artifact-tree-selection-control"
         onClick={(event) => {
           event.preventDefault();
@@ -450,7 +507,7 @@ export function ArtifactTreeList({
     } : undefined}
     renderLeaf={(entry) => selection ? <button
       aria-checked={selection.ids.has(entry.artifact.id)}
-      aria-label={`${selection.ids.has(entry.artifact.id) ? "Deselect" : "Select"} ${entry.artifact.name}`}
+      aria-label={selection.ids.has(entry.artifact.id) ? t("app.deselectItemAria", { name: entry.artifact.name }) : t("app.selectItemAria", { name: entry.artifact.name })}
       className={selection.ids.has(entry.artifact.id) ? "artifact-tree-file selection-mode selected" : "artifact-tree-file selection-mode"}
       onClick={() => selection.change([entry.artifact], !selection.ids.has(entry.artifact.id))}
       role="checkbox"
@@ -462,7 +519,7 @@ export function ArtifactTreeList({
       <span className="artifact-tree-label">{entry.name}</span>
     </button> : lifecycleActions ? <div className="artifact-tree-file-row">
       <button
-        aria-label={`Open ${entry.artifact.name}`}
+        aria-label={t("app.openItemAria", { name: entry.artifact.name })}
         className="artifact-tree-file"
         onClick={() => onOpen(entry.artifact)}
         title={entry.artifact.name}
@@ -474,7 +531,7 @@ export function ArtifactTreeList({
       </button>
       <ArtifactLifecycleControls artifact={entry.artifact} />
     </div> : <button
-      aria-label={`Open ${entry.artifact.name}`}
+      aria-label={t("app.openItemAria", { name: entry.artifact.name })}
       className="artifact-tree-file"
       onClick={() => onOpen(entry.artifact)}
       title={entry.artifact.name}
@@ -513,7 +570,7 @@ export function WorkspaceFileTreeList({
       const checked = allSelected ? true : selectedCount ? "mixed" as const : false;
       return <button
         aria-checked={checked}
-        aria-label={`${allSelected ? "Deselect" : "Select"} folder ${entry.path}`}
+        aria-label={allSelected ? t("app.deselectFolderAria", { path: entry.path }) : t("app.selectFolderAria", { path: entry.path })}
         className="artifact-tree-selection-control"
         onClick={(event) => {
           event.preventDefault();
@@ -526,7 +583,7 @@ export function WorkspaceFileTreeList({
     } : undefined}
     renderLeaf={(entry) => selection ? <button
       aria-checked={selection.paths.has(entry.file.path)}
-      aria-label={`${selection.paths.has(entry.file.path) ? "Deselect" : "Select"} ${entry.file.path}`}
+      aria-label={selection.paths.has(entry.file.path) ? t("app.deselectItemAria", { name: entry.file.path }) : t("app.selectItemAria", { name: entry.file.path })}
       className={selection.paths.has(entry.file.path)
         ? "artifact-tree-file workspace-file-tree-leaf selection-mode selected"
         : "artifact-tree-file workspace-file-tree-leaf selection-mode"}
@@ -540,7 +597,7 @@ export function WorkspaceFileTreeList({
       <span className="artifact-tree-label">{entry.name}</span>
     </button> : onShowProvenance ? <div className="workspace-file-tree-row">
       <button
-        aria-label={`Open ${entry.file.path}`}
+        aria-label={t("app.openItemAria", { name: entry.file.path })}
         className="artifact-tree-file workspace-file-tree-leaf"
         onClick={() => onOpen(entry.file)}
         title={entry.file.path}
@@ -558,7 +615,7 @@ export function WorkspaceFileTreeList({
         type="button"
       ><InfoIcon size={14} /></button>
     </div> : <button
-      aria-label={`Open ${entry.file.path}`}
+      aria-label={t("app.openItemAria", { name: entry.file.path })}
       className="artifact-tree-file workspace-file-tree-leaf"
       onClick={() => onOpen(entry.file)}
       title={entry.file.path}
@@ -639,12 +696,16 @@ export function mergeRefreshedSessionDetail(
 }
 
 export type SystemSettingsGroup =
+  | `runner:${string}`
+  | "runner-add"
   | "connection"
   | "environments"
   | "global"
+  | "idea-tree"
   | "language"
   | "memory-graph"
   | "models"
+  | "mcp"
   | "permissions"
   | "proxies"
   | "quotas"
@@ -666,9 +727,11 @@ const SYSTEM_SETTINGS_GROUPS: Array<{
   { id: "sandbox-network" },
   { id: "runtime" },
   { id: "models" },
+  { id: "mcp" },
   { id: "proxies" },
   { id: "web" },
   { id: "memory-graph" },
+  { id: "idea-tree" },
   { id: "environments" },
   { id: "skills" },
   { id: "specialists" },
@@ -678,7 +741,7 @@ const SYSTEM_SETTINGS_GROUPS: Array<{
 ];
 
 function isSystemSettingsGroup(value: string | undefined): value is SystemSettingsGroup {
-  return SYSTEM_SETTINGS_GROUPS.some((group) => group.id === value);
+  return value === "runner-add" || Boolean(value?.startsWith("runner:") && value.length > 7) || SYSTEM_SETTINGS_GROUPS.some((group) => group.id === value);
 }
 
 function proxyMcpServers(sources: McpSourceManifest[]): Array<{ id: string; label: string }> {
@@ -709,30 +772,56 @@ function findResourceTarget(
   return session ? { id: session.id, kind, label: session.title } : undefined;
 }
 
-export function SystemSettingsLayout({
-  activeGroup,
-  children,
-  onSelect,
-}: {
+const SETTINGS_CATEGORIES = [
+  { id: "general", groups: ["global", "language"] },
+  { id: "runners", groups: [] },
+  { id: "capabilities", groups: ["models", "mcp", "web", "memory-graph", "skills", "specialists"] },
+  { id: "access", groups: ["proxies", "sandbox-network", "permissions", "connection"] },
+  { id: "resources", groups: ["timeouts", "quotas", "runtime"] },
+] as const;
+
+export function SystemSettingsLayout({ activeGroup, children, onSelect, runners = [] }: {
   activeGroup: SystemSettingsGroup;
   children: ReactNode;
   onSelect: (group: SystemSettingsGroup) => void;
+  runners?: RemoteHostTarget[];
 }) {
   const { t } = useLocale();
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const runnerGroup = activeGroup.startsWith("runner:") || ["remote", "environments", "runner-add"].includes(activeGroup);
+  useEffect(() => {
+    const category = SETTINGS_CATEGORIES.find((item) => item.id === "runners" ? runnerGroup : (item.groups as readonly string[]).includes(activeGroup));
+    if (category) setCollapsed((current) => ({ ...current, [category.id]: false }));
+    setNavigationOpen(false);
+  }, [activeGroup]);
+  const select = (group: SystemSettingsGroup) => { onSelect(group); setNavigationOpen(false); };
+  const selectedRunnerId = activeGroup.startsWith("runner:") ? activeGroup.slice(7) : "local";
+  const selectedLabel = runnerGroup
+    ? activeGroup === "runner-add" ? t("runnerCatalog.addRunner") : selectedRunnerId === "local" ? t("remote.localRunner") : runners.find((runner) => runner.id === selectedRunnerId)?.runnerName ?? runners.find((runner) => runner.id === selectedRunnerId)?.alias ?? selectedRunnerId
+    : t(`settings.groups.${activeGroup}.label` as MessageKey);
   return <div className="system-config-layout">
-    <nav aria-label={t("settings.groups")} className="settings-group-nav">
-      {SYSTEM_SETTINGS_GROUPS.map((group) => <button
-        aria-current={activeGroup === group.id ? "page" : undefined}
-        className={activeGroup === group.id ? "active" : ""}
-        key={group.id}
-        onClick={() => onSelect(group.id)}
-        type="button"
-      >
-        <strong>{t(`settings.groups.${group.id}.label` as MessageKey)}</strong>
-        <small>{t(`settings.groups.${group.id}.description` as MessageKey)}</small>
-      </button>)}
+    <button className="settings-navigation-toggle secondary-button" type="button" aria-expanded={navigationOpen} aria-controls="settings-tree" onClick={() => setNavigationOpen(!navigationOpen)}>
+      <span>{t("settings.tree.browse")}</span><strong>{selectedLabel}</strong>
+    </button>
+    <nav id="settings-tree" aria-label={t("settings.groups")} className={`settings-group-nav${navigationOpen ? " navigation-open" : ""}`}>
+      {SETTINGS_CATEGORIES.map((category) => <section className="settings-tree-category" key={category.id}>
+        <div className="settings-tree-heading">
+          <button type="button" aria-expanded={!collapsed[category.id]} aria-controls={`settings-category-${category.id}`} onClick={() => setCollapsed((current) => ({ ...current, [category.id]: !current[category.id] }))}>
+            <span aria-hidden="true">{collapsed[category.id] ? "▸" : "▾"}</span><strong>{t(`settings.tree.${category.id}`)}</strong>
+          </button>
+          {category.id === "runners" ? <button className="settings-tree-add" type="button" aria-label={t("runnerCatalog.addRunner")} title={t("runnerCatalog.addRunner")} aria-current={activeGroup === "runner-add" ? "page" : undefined} onClick={() => select("runner-add")}>+</button> : null}
+        </div>
+        <ul id={`settings-category-${category.id}`} hidden={collapsed[category.id]}>
+          {category.id === "runners" ? runners.map((runner) => <li key={runner.id}><button type="button" title={runner.id} aria-current={runnerGroup && activeGroup !== "runner-add" && runner.id === selectedRunnerId ? "page" : undefined} className={runnerGroup && activeGroup !== "runner-add" && runner.id === selectedRunnerId ? "active" : ""} onClick={() => select(`runner:${runner.id}`)}>
+            <strong>{runner.id === "local" ? t("remote.localRunner") : runner.runnerName ?? runner.alias}</strong>
+          </button></li>) : category.groups.map((group) => <li key={group}><button aria-current={activeGroup === group ? "page" : undefined} className={activeGroup === group ? "active" : ""} onClick={() => select(group)} type="button" title={t(`settings.groups.${group}.description` as MessageKey)}>
+            <strong>{t(`settings.groups.${group}.label` as MessageKey)}</strong>
+          </button></li>)}
+        </ul>
+      </section>)}
     </nav>
-    <div className="settings-group-detail">{children}</div>
+    <div className="settings-group-detail" key={activeGroup}>{children}</div>
   </div>;
 }
 
@@ -757,7 +846,7 @@ export function SystemSettingsFooter({
 
 export function remoteCredentialDraftSaveError(editing: boolean): string | undefined {
   return editing
-    ? "Remote machine credentials use the Save credentials button on their machine card. Save or cancel that form before saving System settings."
+    ? translateActive("app.remoteCredentialDraftError")
     : undefined;
 }
 
@@ -773,7 +862,7 @@ function measureWorkspaceMaxWidth(): number {
 
 
 function formatByteLimit(bytes: number): string {
-  if (bytes === 0) return "unlimited";
+  if (bytes === 0) return translateActive("app.unlimited");
   if (bytes >= 1_073_741_824 && bytes % 1_073_741_824 === 0) return `${bytes / 1_073_741_824} GiB`;
   if (bytes >= 1_048_576 && bytes % 1_048_576 === 0) return `${bytes / 1_048_576} MiB`;
   if (bytes >= 1_000_000) return `${Math.round(bytes / 1_000_000)} MB`;
@@ -796,17 +885,21 @@ function SessionUsageChip({
   breakdown: string;
   sessionTokens: number | null | undefined;
 }) {
+  const { t } = useLocale();
   const hasReportedTokens = sessionTokens !== null && sessionTokens !== undefined;
+  const tokenCount = formatCompactTokenValue(sessionTokens);
   return (
     <div
       className={hasReportedTokens ? "session-usage-chip" : "session-usage-chip muted"}
-      aria-label="Model usage"
+      aria-label={t("usage.aria")}
       title={hasReportedTokens
-        ? `${formatCompactTokenValue(sessionTokens)} session tokens${breakdown ? `; ${breakdown}` : ""}`
-        : "No reported usage yet"}
+        ? breakdown
+          ? t("app.sessionUsageTokensBreakdown", { breakdown, count: tokenCount })
+          : t("app.sessionUsageTokens", { count: tokenCount })
+        : t("app.noReportedUsage")}
     >
-      <span>Usage</span>
-      <strong>{formatCompactTokenValue(sessionTokens)}</strong>
+      <span>{t("app.usage")}</span>
+      <strong>{tokenCount}</strong>
       {breakdown ? <small className="session-usage-chip-breakdown">{breakdown}</small> : null}
     </div>
   );
@@ -821,10 +914,11 @@ export function QueuedRunsPanel({
   onCancel?: (run: SessionRun) => void;
   runs: SessionRun[];
 }) {
+  const { t } = useLocale();
   if (!runs.length) return null;
   return (
-    <section aria-label="Queued runs" className="queued-runs-panel">
-      <div><strong>Queued</strong><span>{runs.length}</span></div>
+    <section aria-label={t("app.queuedRuns")} className="queued-runs-panel">
+      <div><strong>{t("app.queued")}</strong><span>{runs.length}</span></div>
       <ul>
         {runs.map((run) => {
           const cancelling = cancellingRunIds.has(run.id);
@@ -832,10 +926,10 @@ export function QueuedRunsPanel({
             <li key={run.id}>
               <p title={run.prompt}>{run.prompt}</p>
               {onCancel ? <button
-                aria-label="Cancel queued run"
+                aria-label={t("app.cancelQueuedRun")}
                 disabled={cancelling}
                 onClick={() => onCancel(run)}
-                title="Cancel queued run"
+                title={t("app.cancelQueuedRun")}
                 type="button"
               >
                 <CloseIcon size={14} />
@@ -857,133 +951,7 @@ export function isArtifactPreviewFile(file: WorkspaceFile): boolean {
     || file.path.endsWith(".markdown");
 }
 
-/** The document a preview card renders: report-like names first, then any markdown. */
-function previewDocumentFile(files: WorkspaceFile[]): WorkspaceFile | undefined {
-  return previewMarkdownFile(files)
-    ?? files.find((file) => file.path.endsWith(".md") || file.path.endsWith(".markdown"));
-}
 
-function ArtifactPreview({
-  client,
-  expanded,
-  files,
-  onChipClick,
-  onToggle,
-  sessionId,
-}: {
-  client: ApiClient;
-  expanded: boolean;
-  files: WorkspaceFile[];
-  onChipClick?: (reference: ComposerReference) => void;
-  onToggle: (expanded: boolean) => void;
-  sessionId: string;
-}) {
-  const [chartUrl, setChartUrl] = useState<string>();
-  const [table, setTable] = useState<string[][]>([]);
-  const [document, setDocument] = useState<string>();
-  const [loadFailed, setLoadFailed] = useState(false);
-  // Chip references resolved from the report artifact's latest version, so
-  // [alias] tokens in the preview render as clickable chips.
-  const [references, setReferences] = useState<ComposerReference[] | undefined>();
-
-  const chart = files.find((file) => file.path === "analysis_chart.svg");
-  const summary = files.find((file) => file.path === "analysis_summary.csv");
-  const markdownFile = previewDocumentFile(files);
-
-  // Contents load lazily once the card is expanded; collapsed cards only list
-  // the files they would preview, so a folded history costs no file reads.
-  useEffect(() => {
-    if (!expanded) return;
-    let active = true;
-    let objectUrl: string | undefined;
-    setLoadFailed(false);
-
-    void (async () => {
-      if (chart) {
-        objectUrl = URL.createObjectURL(await client.readFile(sessionId, chart.path));
-        if (active) setChartUrl(objectUrl);
-      } else setChartUrl(undefined);
-      if (summary) {
-        const text = await (await client.readFile(sessionId, summary.path)).text();
-        if (active) setTable(text.trim().split("\n").map((line) => line.split(",")));
-      } else setTable([]);
-      if (markdownFile) {
-        const text = await (await client.readFile(sessionId, markdownFile.path)).text();
-        if (active) setDocument(text);
-        // readFile gives the blob only; resolve the report's version references
-        // so chips render. Best-effort — a lookup miss leaves plain text.
-        try {
-          const artifacts = await client.listArtifacts(sessionId);
-          // See reportReferences effect: declaredPath is the stable file path;
-          // logicalName may be an LLM-chosen display name that won't match.
-          const artifact = artifacts.find((item) => item.originMeta?.declaredPath === markdownFile.path
-            || item.logicalName === markdownFile.path);
-          if (artifact) {
-            const versions = await client.listArtifactVersions(sessionId, artifact.id);
-            const latest = [...versions].sort((left, right) => right.version - left.version)[0];
-            if (active && latest?.references?.length) setReferences(latest.references);
-          }
-        } catch {
-          /* lookup is advisory; the document still renders without chips */
-        }
-      } else {
-        if (active) setDocument(undefined);
-        setReferences(undefined);
-      }
-    })().catch(() => {
-      if (active) setLoadFailed(true);
-    });
-
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [chart, client, expanded, markdownFile, sessionId, summary]);
-
-  if (!chart && !summary && !markdownFile) return null;
-  const previewedNames = [
-    chart?.path,
-    summary?.path,
-    ...files.filter((file) => file.path.endsWith(".md") || file.path.endsWith(".markdown")).map((file) => file.path),
-  ].filter(Boolean).join(" · ");
-  return (
-    <details
-      aria-label="Analysis results"
-      className="result-preview"
-      open={expanded}
-      onToggle={(event) => {
-        if (event.currentTarget.open !== expanded) onToggle(event.currentTarget.open);
-      }}
-    >
-      <summary>
-        <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span className="result-preview-heading">
-          <span><span className="eyebrow">Generated result</span><strong>{markdownFile ? "Research report" : "Workspace analysis"}</strong></span>
-          <small>{previewedNames}</small>
-          <small className="result-preview-attribution">Grouped with the latest run by file modified time</small>
-        </span>
-        <span className="status-dot">Ready</span>
-      </summary>
-      {expanded ? <div className="result-preview-body">
-        {loadFailed ? <p className="muted">Some preview files could not be read. The workspace file list may still open them directly.</p> : null}
-        {chartUrl ? <img src={chartUrl} alt="Bar chart of numeric column means" /> : null}
-        {table.length ? (
-          <div className="table-scroll">
-            <table>
-              <thead><tr>{table[0]?.map((cell) => <th key={cell}>{cell}</th>)}</tr></thead>
-              <tbody>
-                {table.slice(1).map((row, rowIndex) => (
-                  <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={`${rowIndex}-${cellIndex}`}>{cell}</td>)}</tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-        {document ? <MarkdownRenderer className="paper-preview" content={document} onChipClick={onChipClick} references={references} /> : null}
-      </div> : null}
-    </details>
-  );
-}
 
 function SkeletonRows({ className, count }: { className: string; count: number }) {
   return <div aria-hidden="true" className={className}>{Array.from({ length: count }, (_, index) => <span className="skeleton" key={index} />)}</div>;
@@ -1020,6 +988,17 @@ export async function runSessionCreationOnce<T>({
   return true;
 }
 
+function usageAnalyticsFilters(filters: UsageAnalyticsUiFilters = {}): ModelUsageAnalyticsFilters {
+  return {
+    ...filters,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+}
+
+function shouldRefreshUsageForEvent(workspaceView: "session" | "usage", event: RunStreamEvent): boolean {
+  return workspaceView === "usage" && event.type === "run.status" && isTerminalRunStatus(event.status);
+}
+
 export function App() {
   const { locale, setLocale, t } = useLocale();
   // No built-in fallback token: the server generates one on its first start and
@@ -1040,10 +1019,7 @@ export function App() {
   const [connectors, setConnectors] = useState<ConnectorManifest[]>([]);
   const [skills, setSkills] = useState<SkillDescriptor[]>([]);
   const [skillLibraries, setSkillLibraries] = useState<SkillLibrary[]>([]);
-  const [papers, setPapers] = useState<PaperAcquisition[]>([]);
-  const [paperVisionRuns, setPaperVisionRuns] = useState<PaperVisionRun[]>([]);
-  const [visionModelId, setVisionModelId] = useState<string>();
-  const [paperBusy, setPaperBusy] = useState(false);
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -1067,25 +1043,35 @@ export function App() {
     sessionId: string;
   }>();
   const [workspaceCapabilities, setWorkspaceCapabilities] = useState<WorkspaceCapabilities>();
-  const [permissionEpoch, setPermissionEpoch] = useState<PermissionEpoch>();
+  const [, setPermissionEpoch] = useState<PermissionEpoch>();
   const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
   const [executionRuns, setExecutionRuns] = useState<ExecutionRun[]>([]);
-  const [environments, setEnvironments] = useState<Environment[]>([]);
-  const [environmentRevisions, setEnvironmentRevisions] = useState<EnvironmentRevision[]>([]);
   const [derivations, setDerivations] = useState<ArtifactDerivation[]>([]);
   const [promptManifests, setPromptManifests] = useState<PromptManifest[]>([]);
   const [artifactReviews, setArtifactReviews] = useState<ArtifactReviewRun[]>([]);
+  const [reviewerAuditTasks, setReviewerAuditTasks] = useState<ReviewerAuditTask[]>([]);
+  // Artifact registration intentionally does not wait for automatic review
+  // scheduling. Keep watching a newly declared report briefly so its queued
+  // background task can turn on the normal reviewer poll without a reload.
+  const [reviewerTaskDiscoveryVersions, setReviewerTaskDiscoveryVersions] = useState<Record<string, string[]>>({});
   const [downloadCandidates, setDownloadCandidates] = useState<GovernedDownloadCandidate[]>([]);
   const [downloadJobs, setDownloadJobs] = useState<ArtifactJob[]>([]);
   const [downloadPlans, setDownloadPlans] = useState<ArtifactPlan[]>([]);
   const [reviewerSpecialistSettings, setReviewerSpecialistSettings] = useState<ReviewerSpecialistSettings>();
+  const [reviewerSessionSettingsBusy, setReviewerSessionSettingsBusy] = useState(false);
   /** Manual Reviewer activity is isolated per Session, matching the API queue. */
   const [manualReviewerBusyBySession, setManualReviewerBusyBySession] = useState<Record<string, true>>({});
-  const [plans, setPlans] = useState<SessionPlan[]>([]);
+  /** Cancelling a review is independent from stopping the main Agent run. */
+  const [stoppingReviewerSessionIds, setStoppingReviewerSessionIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [plans, setPlans] = useState<RunPlanSnapshot[]>([]);
+  // Approval-gated session plans (V3-C2 lifecycle) — separate from the
+  // model-declared snapshot plans above.
+  const [sessionPlans, setSessionPlans] = useState<SessionPlan[]>([]);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
+  const [settingsRunners, setSettingsRunners] = useState<RemoteHostTarget[]>([]);
   const [remoteHosts, setRemoteHosts] = useState<RemoteHostTarget[]>([]);
   const [specialists, setSpecialists] = useState<Specialist[]>([]);
   const [mcpInvocations, setMcpInvocations] = useState<McpInvocation[]>([]);
@@ -1093,6 +1079,8 @@ export function App() {
   const [evidenceLinks, setEvidenceLinks] = useState<EvidenceLink[]>([]);
   const [sessionUsage, setSessionUsage] = useState<SessionUsageSummary>();
   const [globalUsage, setGlobalUsage] = useState<GlobalModelUsageSummary>();
+  const [usageAnalytics, setUsageAnalytics] = useState<ModelUsageAnalyticsSummary>();
+  const [usageFilters, setUsageFilters] = useState<UsageAnalyticsUiFilters>({});
   const [workspaceView, setWorkspaceView] = useState<"session" | "usage">(() => initialView.view === "usage" ? "usage" : "session");
   // `/evolve` runs for the active session, plus which one the panel shows. The
   // card is the only persistent handle a search has (the command never creates
@@ -1106,6 +1094,7 @@ export function App() {
   // button). The snapshot is shared via useMemorySubgraph so the explorer never
   // re-fetches what the card already polled.
   const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
+
   const [knowledgeEngineOpen, setKnowledgeEngineOpen] = useState(false);
   // V4-C1: conversation KB scope — the KB list for the composer picker and the
   // active session's runtime settings details (kbScopeKbIds/kbScopeWebSearch
@@ -1114,6 +1103,14 @@ export function App() {
   const [sessionSettings, setSessionSettings] = useState<RuntimeSettingsDetails>();
   // A graph node a report chip asked to open; MemoryGraphView selects it on
   // change, then clears the pending state. Set by handleChipClick (paper chips).
+
+  // A graph node a report chip asked to open; MemoryGraphExplorer picks it
+  // up as `initialNodeId` on mount (and reacts to changes while open via an
+  // effect — see MemoryGraphExplorer). Set by handleChipClick (paper /
+  // sourcefile chips). The label is carried for symmetry / future callers
+  // that might want to scope the focus by label, but the explorer reads the
+  // id directly when focusing a node.
+
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
   // An Evidence chip asked to open its detail modal (shows the evidence + its
   // source Paper). Set by handleChipClick (evidence chips).
@@ -1171,6 +1168,7 @@ export function App() {
   const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
   const [memoryGraphSettings, setMemoryGraphSettings] = useState<MemoryGraphSettingsDetails>();
+  const [ideaTreeSettings, setIdeaTreeSettings] = useState<IdeaTreeSettingsDetails>();
   // Configuration editors write only to these dialog-scoped drafts. They are
   // deliberately owned here so changing the left-hand section cannot unmount
   // and lose a draft, or accidentally persist it.
@@ -1180,6 +1178,7 @@ export function App() {
   const [sandboxNetworkSettingsEdit, setSandboxNetworkSettingsEdit] = useState<SandboxNetworkSettings>();
   const [webSettingsEdit, setWebSettingsEdit] = useState<WebSettingsDraft>();
   const [memoryGraphSettingsEdit, setMemoryGraphSettingsEdit] = useState<MemoryGraphSettingsDraft>();
+  const [ideaTreeSettingsEdit, setIdeaTreeSettingsEdit] = useState<IdeaTreeSettingsDraft>();
   const [localeEdit, setLocaleEdit] = useState<"en" | "zh-CN">();
   const [tokenEdit, setTokenEdit] = useState<string>();
   // Set when the server rejected the current token, so the Connection panel can
@@ -1234,8 +1233,7 @@ export function App() {
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(() => initialView.workspaceOpen !== undefined
     ? !initialView.workspaceOpen
     : readRenamedStorageItem(localStorage, WORKSPACE_COLLAPSED_STORAGE_KEY) === "1");
-  const [showPhysicalFiles, setShowPhysicalFiles] = useState(() =>
-    readRenamedStorageItem(localStorage, SHOW_PHYSICAL_FILES_STORAGE_KEY) === "1");
+  const [showPhysicalFiles, setShowPhysicalFiles] = useState(false);
   const [artifactSelectionMode, setArtifactSelectionMode] = useState(false);
   const [selectedArtifactIds, setSelectedArtifactIds] = useState<ReadonlySet<string>>(() => new Set());
   const [artifactArchiveBusy, setArtifactArchiveBusy] = useState(false);
@@ -1255,6 +1253,7 @@ export function App() {
   const sessionActivity = useRef(createSessionActivity());
   const sessionRunSnapshots = useRef(new Map<string, SessionRun[]>());
   const activeSessionIdRef = useRef<string | undefined>(undefined);
+  const workspaceViewRef = useRef(workspaceView);
   const latestSessionSummaries = useRef(new Map<string, VersionedSessionSummary>());
   const renameRevision = useRef(0);
   const renameSavesInFlight = useRef(new Set<string>());
@@ -1292,6 +1291,7 @@ export function App() {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  const listSkillDrafts = useCallback(() => client.listSkillReviewDrafts(), [client]);
 
   // Derived rather than stored: the panel must show the *current* record, so a
   // status that changed while it was open (a budget gate, a stop) is reflected
@@ -1343,7 +1343,7 @@ export function App() {
   }, [client, activeProjectId]);
   const loadMarkdownImage = useCallback(async (path: string, signal: AbortSignal): Promise<Blob> => {
     const sessionId = session?.id;
-    if (!sessionId) throw new Error("No active Session is available for this image");
+    if (!sessionId) throw new Error(translateActive("error.noActiveSessionForImage"));
     try {
       return await client.readFile(sessionId, path, signal);
     } catch (error) {
@@ -1360,7 +1360,14 @@ export function App() {
   const openMarkdownImageArtifacts = useCallback(() => {
     setWorkspaceView("session");
     setWorkspaceCollapsed(false);
-    window.requestAnimationFrame(() => workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    window.requestAnimationFrame(() => {
+      const panel = workspacePanel.current;
+      for (const selector of ['[data-folder="files"]', ".artifact-catalog-section"]) {
+        const section = panel?.querySelector<HTMLDetailsElement>(selector);
+        if (section) section.open = true;
+      }
+      panel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }, []);
   const { dismiss: dismissToast, push: pushToast, toasts } = useToasts();
   const reportSystemSettingsError = useCallback((message?: string) => {
@@ -1378,6 +1385,11 @@ export function App() {
   /** Persisted Reviewer checkpoints survive a browser refresh; do not rely only on local request state. */
   const reviewerCheckpointRunning = Boolean(session?.messages.some((message) =>
     message.kind === "reviewer_checkpoint" && message.reviewerCheckpoint?.status === "running"));
+  const reviewerAuditRunning = reviewerAuditTasks.some((task) => task.status === "queued" || task.status === "running");
+  const reviewerTaskDiscoveryVersionIds = session?.id
+    ? reviewerTaskDiscoveryVersions[session.id] ?? EMPTY_STRING_ARRAY
+    : EMPTY_STRING_ARRAY;
+  const reviewerTaskDiscoveryPending = reviewerTaskDiscoveryVersionIds.length > 0;
   /**
    * The timeline and folded-in message of the Session whose messages are on
    * screen, so the two always describe the same Session.
@@ -1389,6 +1401,10 @@ export function App() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    workspaceViewRef.current = workspaceView;
+  }, [workspaceView]);
 
   useEffect(() => {
     setOpenSubagentId(undefined);
@@ -1432,7 +1448,8 @@ export function App() {
       client.getSandboxNetworkSettings(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph]) => {
+      client.getIdeaTreeSettings(),
+    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph, ideaTree]) => {
       if (!active) return;
       setModels(modelItems);
       setModelProviders(providerRegistry.providers);
@@ -1446,6 +1463,7 @@ export function App() {
       setSandboxNetworkSettings(sandboxNetwork);
       setWebSettings(web);
       setMemoryGraphSettings(memoryGraph);
+      setIdeaTreeSettings(ideaTree);
       setWorkspaceCapabilities({
         maxFileBytes: quotas.uploadMaxFileBytes,
         maxRequestBytes: quotas.uploadMaxRequestBytes,
@@ -1505,6 +1523,17 @@ export function App() {
     if (message) pushToast("error", t("error.request"), message);
   }, [pushToast]);
 
+  const refreshUsageData = useCallback(async (): Promise<void> => {
+    const filters = usageAnalyticsFilters(usageFilters);
+    const [usage, analytics] = await Promise.all([
+      client.getGlobalModelUsage(),
+      client.getModelUsageAnalytics(filters),
+    ]);
+    setGlobalUsage(usage);
+    setUsageAnalytics(analytics);
+    setError(undefined);
+  }, [client, setError, usageFilters]);
+
   // The artifact named by the URL (or an old shared link) no longer exists:
   // tell the user, close the modal and let the URL sync drop the stale key.
   // That is URL normalization, not a navigation, so it must not push a
@@ -1514,7 +1543,7 @@ export function App() {
     setArtifactModalName(undefined);
     setArtifactModalVersion(undefined);
     setArtifactModalSessionId(undefined);
-    pushToast("info", t("error.artifactNotFound"), `“${logicalName}” is not available in this Session`);
+    pushToast("info", t("error.artifactNotFound"), t("error.artifactUnavailableInSession", { name: logicalName }));
   }, [pushToast]);
 
   // Long-lived panels keep these in effect dependencies, so they must not be
@@ -1580,9 +1609,7 @@ export function App() {
     localStorage.setItem(WORKSPACE_WIDTH_STORAGE_KEY, String(workspaceWidth));
   }, [workspaceWidth]);
 
-  useEffect(() => {
-    localStorage.setItem(SHOW_PHYSICAL_FILES_STORAGE_KEY, showPhysicalFiles ? "1" : "0");
-  }, [showPhysicalFiles]);
+  useEffect(() => { setShowPhysicalFiles(false); }, [activeSessionId]);
 
   useEffect(() => {
     setArtifactSelectionMode(false);
@@ -1796,7 +1823,8 @@ export function App() {
       client.listMcpSources(),
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
-    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph]) => {
+      client.getIdeaTreeSettings(),
+    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph, ideaTree]) => {
       setProjects(projectItems);
       setModels(modelItems);
       setModelProviders(providerRegistry.providers);
@@ -1814,6 +1842,7 @@ export function App() {
       setMcpSources(mcpSourceDetails.map((item) => item.manifest));
       setWebSettings(web);
       setMemoryGraphSettings(memoryGraph);
+      setIdeaTreeSettings(ideaTree);
       setWorkspaceCapabilities({
         maxFileBytes: quotas.uploadMaxFileBytes,
         maxRequestBytes: quotas.uploadMaxRequestBytes,
@@ -1833,9 +1862,7 @@ export function App() {
         const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
         if (target) void openScopedSettings(target);
       }
-      setVisionModelId((current) => modelItems.some((item) => item.id === current && item.vision)
-        ? current
-        : modelItems.find((item) => item.vision)?.id);
+
     }).catch((reason: Error) => {
       // A cold start directly into System settings is an explicit settings
       // load operation, so its failure belongs to that dialog. Other startup
@@ -1945,24 +1972,23 @@ export function App() {
       setSessionRuns([]);
       setArtifactOutputs([]);
       setExecutionRuns([]);
-      setEnvironments([]);
-      setEnvironmentRevisions([]);
       setDerivations([]);
       setPromptManifests([]);
       setArtifactReviews([]);
+      setReviewerAuditTasks([]);
       setPlans([]);
+      setSessionPlans([]);
       setSubagents([]);
       setRemoteJobs([]);
       setMcpInvocations([]);
       setClaims([]);
       setEvidenceLinks([]);
-      setPapers([]);
-      setPaperVisionRuns([]);
+
       setPendingAnnotations([]);
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, invocations, claimItems, linkItems, paperItems, visionItems, environmentItems, revisionItems, planItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -1974,14 +2000,10 @@ export function App() {
       client.listArtifactDerivations(sessionId),
       client.listPromptManifests(sessionId),
       client.listArtifactReviews(sessionId),
+      client.listReviewerAuditTasks(sessionId),
       client.listMcpInvocations(sessionId),
       client.listClaims(sessionId),
       client.listEvidenceLinks(sessionId),
-      client.listPapers(sessionId),
-      client.listPaperVisionRuns(sessionId),
-      client.listEnvironments().catch(() => []),
-      client.listEnvironmentRevisions().catch(() => []),
-      client.listSessionPlans(sessionId),
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
       client.listArtifactOutputs(sessionId),
@@ -2029,19 +2051,20 @@ export function App() {
     setSessionRuns(sessionRunItems);
     setArtifactOutputs(artifactOutputItems);
     syncSessionRunActivity(sessionId, sessionRunItems);
-    setEnvironments(environmentItems);
-    setEnvironmentRevisions(revisionItems);
     setDerivations(artifactDerivations);
     setPromptManifests(manifests);
     setArtifactReviews(artifactReviewRuns);
-    setPlans(planItems);
+    setReviewerAuditTasks(reviewerTasks);
+    setPlans([
+      ...terminalEvents.flatMap(([, events]) => collectLatestRunPlans(events)),
+      ...collectLatestRunPlans(replayEvents),
+    ]);
     setSubagents(subagentItems);
     setRemoteJobs(remoteJobItems);
     setMcpInvocations(invocations);
     setClaims(claimItems);
     setEvidenceLinks(linkItems);
-    setPapers(paperItems);
-    setPaperVisionRuns(visionItems);
+
     setReplayTimelines((current) => {
       const hydrated = hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun);
       for (const [runId, timeline] of Object.entries(hydrated)) {
@@ -2089,25 +2112,37 @@ export function App() {
     if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setArtifactOutputs(outputs);
   }
 
-  // A manual review keeps running on the server after a browser refresh. Poll
-  // only its small persisted state until it reaches a terminal result, without
-  // replacing active main-agent messages or timelines.
+  // Reviewer tasks persist independently from Agent runs. Poll only their
+  // small state until terminal, so background audits never block the chat.
   useEffect(() => {
     const sessionId = session?.id;
-    if (!sessionId || !reviewerCheckpointRunning) return;
+    if (!sessionId || (!reviewerCheckpointRunning && !reviewerAuditRunning && !reviewerTaskDiscoveryPending)) return;
     let active = true;
+    let discoveryMisses = 0;
     const refreshReviewerCheckpoint = () => {
-      void Promise.all([client.getSession(sessionId), client.listArtifactReviews(sessionId)])
-        .then(([detail, reviews]) => {
+      void Promise.all([client.getSession(sessionId), client.listArtifactReviews(sessionId), client.listReviewerAuditTasks(sessionId)])
+        .then(([detail, reviews, tasks]) => {
           if (!active || !shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
-          const remoteById = new Map(detail.messages.map((message) => [message.id, message]));
-          setSession((current) => current?.id === sessionId ? {
-            ...current,
-            messages: current.messages.map((message) => message.kind === "reviewer_checkpoint"
-              ? remoteById.get(message.id) ?? message
-              : message),
-          } : current);
+          setSession((current) => current?.id === sessionId
+            ? { ...current, messages: mergeReviewerCheckpointMessages(current.messages, detail.messages) }
+            : current);
           setArtifactReviews(reviews);
+          setReviewerAuditTasks(tasks);
+          if (reviewerTaskDiscoveryVersionIds.length) {
+            const taskWasScheduled = hasAutomaticReviewerTaskForArtifactVersions(tasks, reviewerTaskDiscoveryVersionIds);
+            discoveryMisses = taskWasScheduled ? 0 : discoveryMisses + 1;
+            // Registration is intentionally asynchronous. After a few short
+            // polls, leave any actual queued/running task to the normal poll;
+            // otherwise stop watching a non-reviewable Artifact.
+            if (taskWasScheduled || discoveryMisses >= 5) {
+              setReviewerTaskDiscoveryVersions((current) => {
+                if (!current[sessionId]) return current;
+                const next = { ...current };
+                delete next[sessionId];
+                return next;
+              });
+            }
+          }
         })
         .catch(() => undefined);
     };
@@ -2117,7 +2152,7 @@ export function App() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [client, reviewerCheckpointRunning, session?.id]);
+  }, [client, reviewerAuditRunning, reviewerCheckpointRunning, reviewerTaskDiscoveryPending, reviewerTaskDiscoveryVersionIds, session?.id]);
 
   useEffect(() => {
     const visibleSessionId = activeSessionId;
@@ -2188,7 +2223,13 @@ export function App() {
   // Open a report chip's referenced graph node. Evidence chips open a dedicated
   // detail modal (evidence content + the Paper it was extracted from); artifact
   // chips open the ArtifactModal directly (so an [artifact1] chip shows the
-  // figure/data itself); paper/claim chips switch the memory view to the node.
+  // figure/data itself); sourcefile chips do the same — user-uploaded files
+  // show up in the artifacts list with origin=user_upload, so a [sourcefile1]
+  // chip resolves to that ArtifactModal just like clicking data.csv from the
+  // right rail. dbrecord chips skip all of the above (no dedicated modal) and
+  // fall through to the graph explorer like ``session``/``skill`` would if they
+  // had a label. The final fallthrough opens the full-screen graph explorer
+  // for any future kind that has a graph label but no dedicated modal.
   async function handleChipClick(reference: ComposerReference): Promise<void> {
     // Evidence chips open a dedicated detail modal (evidence content + the
     // Paper it was extracted from), not the workspace memory panel.
@@ -2222,13 +2263,38 @@ export function App() {
         // fall through to the memory-panel path below.
       }
     }
+    // Source-file chips open the same ArtifactModal the right-rail artifacts
+    // card uses for user-uploaded files: clicking [sourcefile1] should land
+    // on data.csv's preview, not jump to a graph canvas. The chip's id is
+    // the graph SourceFile node id (``source_file:session:<sid>:<filename>``)
+    // — its trailing segment is the basename the ArtifactModal opens by.
+    // Reverse-resolve from the cached artifacts list (the workspace already
+    // polled it) so the click is synchronous and the right Session is pinned.
+    if (reference.kind === "sourcefile") {
+      const baseName = reference.id.includes(":")
+        ? reference.id.slice(reference.id.lastIndexOf(":") + 1)
+        : reference.id;
+      const hit = artifacts.find((item) => item.logicalName === baseName);
+      if (hit) {
+        setArtifactModalVersion(reference.version);
+        setArtifactModalSessionId(hit.createdInSessionId || undefined);
+        setArtifactModalName(hit.logicalName);
+        return;
+      }
+      console.warn("[chip] sourcefile chip did not resolve: id=", reference.id);
+      // fall through to the memory-panel path below.
+    }
     const label = KIND_TO_LABEL[reference.kind];
     if (!label) return; // session/skill chips have no graph node label.
     setPendingMemoryNode({ label, id: reference.id });
+    // Open the full-screen explorer and close the artifact modal so the chip
+    // jump lands on a graph canvas focused on the node, not on the inline card
+    // (which has no chip wiring). The explorer reads `pendingMemoryNode` as
+    // its `initialNodeId` and reacts to changes while open, so re-selecting
+    // a different node from a chained modal still focuses the new one.
+    setMemoryExplorerOpen(true);
     setArtifactModalName(undefined);
     setArtifactModalSessionId(undefined);
-    if (workspaceCollapsed) setWorkspaceCollapsed(false);
-    else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // V3-C3: wrap evidence chips with the hover preview card; other chip kinds
@@ -2291,7 +2357,7 @@ export function App() {
       setProjectCreationOpen(false);
       setProjectsExpanded(false);
       setSessionsExpanded(true);
-      pushToast("success", "Project created", project.name);
+      pushToast("success", t("app.projectCreated"), project.name);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("error.createProject"));
     }
@@ -2309,7 +2375,7 @@ export function App() {
       isInFlight: () => sessionCreationInFlight.current,
       onCreated: (created) => {
         if (activeProjectIdRef.current !== projectId) {
-          pushToast("success", "Session created", created.title);
+          pushToast("success", t("app.sessionCreated"), created.title);
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
@@ -2322,7 +2388,7 @@ export function App() {
           setMessage(initialMessage);
           setComposerReferences([]);
         }
-        pushToast("success", "Session created", created.title);
+        pushToast("success", t("app.sessionCreated"), created.title);
       },
       onError: setError,
       setInFlight: (value) => { sessionCreationInFlight.current = value; },
@@ -2385,9 +2451,9 @@ export function App() {
       }
       saved = true;
       setError(undefined);
-      pushToast("success", target.kind === "project" ? "Project renamed" : "Session renamed", name);
+      pushToast("success", target.kind === "project" ? t("app.projectRenamed") : t("app.sessionRenamed"), name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Could not rename ${target.kind}`);
+      setError(reason instanceof Error ? reason.message : target.kind === "project" ? t("error.renameProject") : t("error.renameSession"));
     } finally {
       renameSavesInFlight.current.delete(key);
       setRenameSavingKeys((current) => {
@@ -2406,9 +2472,9 @@ export function App() {
       await client.createProxyServer(input);
       setProxySettings(await client.getProxySettings());
       setError(undefined);
-      pushToast("success", "Proxy server added", input.name.trim());
+      pushToast("success", t("app.proxyServerAdded"), input.name.trim());
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not add proxy server");
+      setError(reason instanceof Error ? reason.message : t("error.addProxyServer"));
       throw reason;
     }
   }
@@ -2420,15 +2486,15 @@ export function App() {
       // intentionally computed on GET and are not part of mutation responses.
       setProxySettings(await client.getProxySettings());
       setError(undefined);
-      pushToast("success", "Proxy server updated", saved.name);
+      pushToast("success", t("app.proxyServerUpdated"), saved.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not update proxy server");
+      setError(reason instanceof Error ? reason.message : t("error.updateProxyServer"));
       throw reason;
     }
   }
 
   async function deleteProxyServer(server: ProxyServer): Promise<void> {
-    if (!window.confirm(`Delete proxy server “${server.name}”?`)) return;
+    if (!window.confirm(t("proxy.server.deleteConfirm", { name: server.name }))) return;
     try {
       await client.deleteProxyServer(server.id);
       setProxySettings((current) => current ? {
@@ -2436,9 +2502,9 @@ export function App() {
         servers: current.servers.filter((item) => item.id !== server.id),
       } : current);
       setError(undefined);
-      pushToast("success", "Proxy server deleted", server.name);
+      pushToast("success", t("app.proxyServerDeleted"), server.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not delete proxy server");
+      setError(reason instanceof Error ? reason.message : t("error.deleteProxyServer"));
     }
   }
 
@@ -2446,9 +2512,9 @@ export function App() {
     try {
       setProxySettings(await client.updateProxySettings({ defaultPolicy }));
       setError(undefined);
-      pushToast("success", "Global proxy default updated");
+      pushToast("success", t("app.proxyDefaultUpdated"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not update the global proxy default");
+      setError(reason instanceof Error ? reason.message : t("error.updateProxyDefault"));
     }
   }
 
@@ -2459,9 +2525,9 @@ export function App() {
       const saved = await client.updateMcpProxyPolicies({ policies });
       setMcpProxyPolicies(saved.policies);
       setError(undefined);
-      pushToast("success", "MCP proxy policy updated", serverId);
+      pushToast("success", t("app.mcpProxyPolicyUpdated"), serverId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not update MCP proxy policy");
+      setError(reason instanceof Error ? reason.message : t("error.updateMcpProxyPolicy"));
     }
   }
 
@@ -2478,7 +2544,7 @@ export function App() {
     try {
       const saved = await client.updateWebSettings(input);
       setWebSettings(saved);
-      pushToast("success", "Web settings updated");
+      pushToast("success", t("app.webSettingsUpdated"));
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("error.saveWeb");
       reportSystemSettingsError(message);
@@ -2491,9 +2557,22 @@ export function App() {
     try {
       const saved = await client.updateMemoryGraphSettings(input);
       setMemoryGraphSettings(saved);
-      pushToast("success", "ScienceMemory settings updated");
+      pushToast("success", t("app.memoryGraphSettingsUpdated"));
     } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save ScienceMemory settings");
+      reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.saveMemoryGraph"));
+      throw reason;
+    }
+  }
+
+  async function saveIdeaTreeSettings(input: UpdateIdeaTreeSettingsRequest): Promise<void> {
+    reportSystemSettingsError();
+    try {
+      const saved = await client.updateIdeaTreeSettings(input);
+      setIdeaTreeSettings(saved);
+      setIdeaTreeSettingsEdit(undefined);
+      pushToast("success", t("ideaTree.saved"));
+    } catch (reason) {
+      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save Idea Tree settings");
       throw reason;
     }
   }
@@ -2505,6 +2584,7 @@ export function App() {
     setSandboxNetworkSettingsEdit(undefined);
     setWebSettingsEdit(undefined);
     setMemoryGraphSettingsEdit(undefined);
+    setIdeaTreeSettingsEdit(undefined);
     setLocaleEdit(undefined);
     setTokenEdit(undefined);
   }
@@ -2525,6 +2605,21 @@ export function App() {
     reportSystemSettingsError();
     setSkillWorkspaceLaunch(undefined);
     setShowConfig(false);
+  }
+
+  useEffect(() => {
+    if (!showConfig) return;
+    let disposed = false;
+    void client.listRunners().then((items) => { if (!disposed) setSettingsRunners(items); })
+      .catch((error: Error) => { if (!disposed) reportSystemSettingsError(error.message); });
+    return () => { disposed = true; };
+  }, [client, showConfig]);
+
+  const selectedSettingsRunnerId = systemSettingsGroup.startsWith("runner:") ? systemSettingsGroup.slice(7) : "local";
+  const selectedSettingsRunner = settingsRunners.find((item) => item.id === selectedSettingsRunnerId);
+  function updateSettingsRunners(items: RemoteHostTarget[]): void {
+    setSettingsRunners(items);
+    setSystemSettingsGroup((current) => current.startsWith("runner:") && !items.some((item) => item.id === current.slice(7)) ? "runner:local" : current);
   }
 
   function selectSystemSettingsGroup(group: SystemSettingsGroup): void {
@@ -2554,6 +2649,7 @@ export function App() {
       if (sandboxNetworkSettingsEdit) await saveSandboxNetworkSettings(sandboxNetworkSettingsEdit);
       if (webSettingsEdit) await saveWebSettings(webSettingsRequest(webSettingsEdit));
       if (memoryGraphSettingsEdit) await saveMemoryGraphSettings(memoryGraphSettingsRequest(memoryGraphSettingsEdit));
+      if (ideaTreeSettingsEdit && ideaTreeWeightsValid(ideaTreeSettingsEdit)) await saveIdeaTreeSettings(ideaTreeSettingsRequest(ideaTreeSettingsEdit));
       if (providerSettingsRef.current?.hasUnsavedDraft()) {
         const saved = await providerSettingsRef.current.saveDraft();
         if (!saved) return;
@@ -2686,7 +2782,7 @@ export function App() {
 
   async function refreshPlans(sessionId: string): Promise<void> {
     try {
-      setPlans(await client.listSessionPlans(sessionId));
+      setSessionPlans(await client.listSessionPlans(sessionId));
     } catch {
       // a failed refresh leaves the SSE-driven state as-is
     }
@@ -2701,7 +2797,7 @@ export function App() {
         expectedVersion: plan.version,
         ...(reason ? { reason } : {}),
       });
-      setPlans((current) => [...current.filter((item) => item.id !== outcome.plan.id), outcome.plan]);
+      setSessionPlans((current) => [...current.filter((item) => item.id !== outcome.plan.id), outcome.plan]);
       setError(undefined);
       pushToast(decision === "approve" ? "success" : "info", decision === "approve" ? `Plan v${outcome.decision.planVersion} approved` : "Plan rejected");
     } catch (reason) {
@@ -2717,7 +2813,7 @@ export function App() {
     setPlanActionBusy(true);
     try {
       const revised = await client.reviseSessionPlan(session.id, plan.id, body);
-      setPlans((current) => [...current.filter((item) => item.id !== revised.id), revised]);
+      setSessionPlans((current) => [...current.filter((item) => item.id !== revised.id), revised]);
       setError(undefined);
       pushToast("success", `Plan revised to v${revised.version}`);
       return true;
@@ -2740,8 +2836,8 @@ export function App() {
       pushToast(
         decision === "deny" ? "info" : "success",
         decision === "allow_matching" && result.resolvedRequests.length > 1
-          ? `${result.resolvedRequests.length} matching permissions granted`
-          : decision === "deny" ? "Permission denied" : "Permission granted",
+          ? t("app.matchingPermissionsGranted", { count: result.resolvedRequests.length })
+          : decision === "deny" ? t("timeline.permissionDenied") : t("timeline.permissionGranted"),
       );
     } catch (reason) {
       const conflict = permissionRequestFromConflict(reason);
@@ -2749,10 +2845,10 @@ export function App() {
         reconcilePermissionSnapshots(request.sessionId, [conflict]);
         setError(undefined);
         pushToast("info", conflict.state === "allowed"
-          ? "Permission was already granted"
+          ? t("app.permissionAlreadyGranted")
           : conflict.state === "denied"
-            ? "Permission was already denied"
-            : "Permission was cancelled");
+            ? t("app.permissionAlreadyDenied")
+            : t("app.permissionWasCancelled"));
         return;
       }
       if (request.sessionId) await refreshPermissionState(request.sessionId).catch(() => undefined);
@@ -2764,8 +2860,37 @@ export function App() {
     await settingsErrorRouter.run("revokePermission", async () => {
       await client.revokePermissionGrant(grant.id);
       setPermissionGrants((current) => current.filter((candidate) => candidate.id !== grant.id));
-      pushToast("success", "Permission grant revoked");
+      pushToast("success", t("app.permissionGrantRevoked"));
     }, t("error.revokePermission"));
+  }
+
+  async function updateSessionReviewerSpecialistSettings(next: {
+    automaticReviewEnabled: boolean;
+    level: ReviewerSpecialistLevel;
+  }): Promise<void> {
+    const targetSessionId = activeSessionId;
+    if (!targetSessionId || session?.archivedAt) return;
+    setReviewerSessionSettingsBusy(true);
+    try {
+      const updated = await client.updateSessionReviewerSpecialistSettings(targetSessionId, next);
+      if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
+        setSession((current) => current?.id === targetSessionId ? {
+          ...current,
+          reviewerAutomaticReviewEnabled: updated.automaticReviewEnabled,
+          reviewerSpecialistLevel: updated.level,
+        } : current);
+      }
+      setSessions((current) => current.map((item) => item.id === targetSessionId ? {
+        ...item,
+        reviewerAutomaticReviewEnabled: updated.automaticReviewEnabled,
+        reviewerSpecialistLevel: updated.level,
+      } : item));
+      setError(undefined);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("error.updateReviewerSettings"));
+    } finally {
+      setReviewerSessionSettingsBusy(false);
+    }
   }
 
   async function runManualReviewerSpecialist(): Promise<void> {
@@ -2778,7 +2903,7 @@ export function App() {
     const messageId = crypto.randomUUID();
     const toolCallId = `manual-review:${messageId}`;
     const optimisticMessage: ChatMessage = {
-      content: "Reviewer Specialist review",
+      content: t("app.reviewerCheckpointContent"),
       createdAt: new Date().toISOString(),
       id: messageId,
       kind: "reviewer_checkpoint",
@@ -2792,27 +2917,12 @@ export function App() {
     try {
       const result = await client.runReviewerSpecialist(targetSessionId, messageId);
       if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
-        setSession((current) => current?.id === targetSessionId ? {
-          ...current,
-          messages: current.messages.map((item) => item.id === messageId ? result.message : item),
-        } : current);
-        setArtifactReviews((current) => {
-          const returnedIds = new Set(result.reviews.map((review) => review.id));
-          return [...current.filter((review) => !returnedIds.has(review.id)), ...result.reviews];
-        });
+        setReviewerAuditTasks((current) => [...current.filter((task) => task.id !== result.task.id), result.task]);
       }
       setError(undefined);
-      if (result.error) {
-        pushToast("error", "Review failed", result.error);
-        return;
-      }
-      pushToast(
-        "success",
-        "Review finished",
-        `${result.reviews.length} Artifact${result.reviews.length === 1 ? "" : "s"} reviewed`,
-      );
+      pushToast("info", t("app.reviewStarted"), t("app.reviewStartedDetail"));
     } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : "Could not run Reviewer Specialist";
+      const detail = reason instanceof Error ? reason.message : t("error.runReviewer");
       if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
         setSession((current) => current?.id === targetSessionId ? {
           ...current,
@@ -2824,11 +2934,33 @@ export function App() {
         } : current);
       }
       setError(undefined);
-      pushToast("error", "Review failed", detail);
+      pushToast("error", t("app.reviewFailed"), detail);
     } finally {
       setManualReviewerBusyBySession((current) => {
         const { [targetSessionId]: _completed, ...remaining } = current;
         return remaining;
+      });
+    }
+  }
+
+  async function stopReviewerSpecialist(): Promise<void> {
+    const targetSessionId = activeSessionId;
+    if (!targetSessionId
+      || (!reviewerCheckpointRunning && !reviewerAuditRunning)
+      || stoppingReviewerSessionIds.has(targetSessionId)) return;
+    setStoppingReviewerSessionIds((current) => new Set(current).add(targetSessionId));
+    try {
+      await client.cancelReviewerSpecialist(targetSessionId);
+      setError(undefined);
+      pushToast("info", t("app.reviewStopped"), t("app.reviewStoppedDetail"));
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : t("error.stopReviewer");
+      pushToast("error", t("error.stopReview"), detail);
+    } finally {
+      setStoppingReviewerSessionIds((current) => {
+        const next = new Set(current);
+        next.delete(targetSessionId);
+        return next;
       });
     }
   }
@@ -2841,9 +2973,9 @@ export function App() {
       setRemoteJobs(jobs);
       if (updated.outputRecords.some((output) => output.localPath)) setFiles(await client.listFiles(activeSessionId));
       setError(updated.error);
-      if (!updated.error) pushToast(decision === "deny" ? "info" : "success", decision === "deny" ? "Remote job declined" : "Remote job approved");
+      if (!updated.error) pushToast(decision === "deny" ? "info" : "success", decision === "deny" ? t("app.remoteJobDeclined") : t("app.remoteJobApproved"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not decide remote job");
+      setError(reason instanceof Error ? reason.message : t("error.decideRemoteJob"));
     }
   }
 
@@ -2855,7 +2987,7 @@ export function App() {
       if (updated.outputRecords.some((output) => output.localPath)) setFiles(await client.listFiles(activeSessionId));
       setError(updated.error);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not refresh remote job");
+      setError(reason instanceof Error ? reason.message : t("error.refreshRemoteJob"));
     }
   }
 
@@ -2875,15 +3007,15 @@ export function App() {
         setProjectSettings(await client.getProjectSettings(activeProjectId));
         await refreshVisibleSessions();
       }
-      pushToast("success", "Global defaults saved");
-    }, "Could not save global settings");
+      pushToast("success", t("app.globalDefaultsSaved"));
+    }, t("error.saveGlobalSettings"));
   }
 
   async function saveTimeoutSettings(settings: SystemTimeoutSettings): Promise<void> {
     await settingsErrorRouter.run("saveTimeoutSettings", async () => {
       setTimeoutSettings(await client.replaceTimeoutSettings(settings));
-      pushToast("success", "Timeout settings saved");
-    }, "Could not save timeout settings");
+      pushToast("success", t("app.timeoutSettingsSaved"));
+    }, t("error.saveTimeoutSettings"));
   }
 
   async function saveQuotaSettings(settings: SystemQuotaSettings): Promise<void> {
@@ -2895,8 +3027,8 @@ export function App() {
         maxRequestBytes: saved.uploadMaxRequestBytes,
         maxWorkspaceBytes: saved.runnerMaxWorkspaceBytes,
       });
-      pushToast("success", "Quota settings saved");
-    }, "Could not save quota settings");
+      pushToast("success", t("app.quotaSettingsSaved"));
+    }, t("error.saveQuotaSettings"));
   }
 
   async function saveSandboxNetworkSettings(settings: SandboxNetworkSettings): Promise<void> {
@@ -2905,12 +3037,14 @@ export function App() {
       setSandboxNetworkSettings(saved);
       pushToast(
         "success",
-        "Sandbox network access saved",
+        t("app.sandboxNetworkSaved"),
         saved.mode === "domain-allowlist"
-          ? `${saved.allowedDomains.length} allowed domains. Open Sessions lost their persistent kernels and shell.`
-          : "Sandbox code has no network access. Open Sessions lost their persistent kernels and shell.",
+          ? t("app.sandboxNetworkAllowlistDetail", { count: saved.allowedDomains.length })
+          : saved.mode === "open"
+            ? t("app.sandboxNetworkOpenDetail")
+            : t("app.sandboxNetworkNoneDetail"),
       );
-    }, "Could not save sandbox network access settings");
+    }, t("error.saveSandboxNetwork"));
   }
 
   async function openScopedSettings(target: ResourceTarget): Promise<void> {
@@ -2920,7 +3054,7 @@ export function App() {
       setScopedSettings(target.kind === "project"
         ? await client.getProjectSettings(target.id)
         : await client.getSessionSettings(target.id));
-    }, "Could not load settings");
+    }, t("error.loadScopedSettings"));
   }
 
   async function saveScopedSettings(overrides: RuntimeSettingsOverrides): Promise<void> {
@@ -2935,8 +3069,8 @@ export function App() {
         if (settingsTarget.id === activeProjectId) setProjectSettings(updated);
       }
       await refreshVisibleSessions();
-      pushToast("success", settingsTarget.kind === "project" ? "Project overrides saved" : "Session overrides saved");
-    }, "Could not save scoped settings");
+      pushToast("success", settingsTarget.kind === "project" ? t("app.projectOverridesSaved") : t("app.sessionOverridesSaved"));
+    }, t("error.saveScopedSettings"));
   }
 
   function closeScopedSettings(): void {
@@ -2962,9 +3096,9 @@ export function App() {
         syncSessionSummary(updated);
       }
       setError(undefined);
-      pushToast("success", action === "archive" ? "Session archived" : "Session restored");
+      pushToast("success", action === "archive" ? t("app.sessionArchivedToast") : t("app.sessionRestoredToast"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Could not ${action} Session`);
+      setError(reason instanceof Error ? reason.message : action === "archive" ? t("error.archiveSession") : t("error.restoreSession"));
     } finally {
       setLifecycleBusy(false);
     }
@@ -2980,7 +3114,7 @@ export function App() {
         : await client.getSessionDeletionImpact(target.id));
     } catch (reason) {
       setDeletionTarget(undefined);
-      setError(reason instanceof Error ? reason.message : "Could not preview deletion");
+      setError(reason instanceof Error ? reason.message : t("error.previewDeletion"));
     }
   }
 
@@ -3011,9 +3145,9 @@ export function App() {
       setDeletionImpact(undefined);
       setDeletionConfirmation("");
       setError(undefined);
-      pushToast("success", deletionTarget.kind === "project" ? "Project deleted" : "Session deleted", deletionTarget.label);
+      pushToast("success", deletionTarget.kind === "project" ? t("app.projectDeleted") : t("app.sessionDeleted"), deletionTarget.label);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not delete resource");
+      setError(reason instanceof Error ? reason.message : t("error.deleteResource"));
     } finally {
       setLifecycleBusy(false);
     }
@@ -3039,7 +3173,7 @@ export function App() {
       ? filesToUpload.filter((file) => file.size <= maxFileBytes)
       : filesToUpload;
     for (const file of oversized) {
-      pushToast("error", "Upload skipped", `${file.name} exceeds the ${formatByteLimit(maxFileBytes)} limit`);
+      pushToast("error", t("app.uploadSkipped"), t("app.uploadSkippedDetail", { limit: formatByteLimit(maxFileBytes), name: file.name }));
     }
     if (!accepted.length) return;
     const result = await client.uploadWorkspaceFiles(activeSessionId, accepted);
@@ -3047,32 +3181,19 @@ export function App() {
     if (activeProjectId) setArtifacts(await client.listProjectArtifacts(activeProjectId));
     for (const item of result.uploaded) {
       if (item.status === "failed") {
-        pushToast("error", "Upload failed", `${item.originalName}: ${item.error ?? "unknown error"}`);
+        pushToast("error", t("app.uploadFailed"), `${item.originalName}: ${item.error ?? t("app.unknownError")}`);
       } else {
-        pushToast("success", "File uploaded", item.path ?? item.originalName);
+        pushToast("success", t("app.fileUploaded"), item.path ?? item.originalName);
       }
     }
   }
 
-  async function uploadPaper(file: File): Promise<void> {
-    if (!activeSessionId || session?.archivedAt) return;
-    if (file.size > 50 * 1024 * 1024) throw new Error("PDF uploads are limited to 50 MiB");
-    setPaperBusy(true);
-    try {
-      const paper = await client.uploadPaper(activeSessionId, file);
-      setPapers((current) => [...current, paper]);
-      setFiles(await client.listFiles(activeSessionId));
-      setError(undefined);
-      pushToast("success", "PDF uploaded", file.name);
-    } finally {
-      setPaperBusy(false);
-    }
-  }
+
 
   async function openWorkspacePath(path: string, targetSessionId = activeSessionId): Promise<void> {
     if (!targetSessionId) return;
     const file = await client.readFile(targetSessionId, path);
-    if (path.toLowerCase().endsWith(".md")) {
+    if (/\.(md|markdown)$/i.test(path)) {
       setMarkdownDocument({ content: await file.text(), path });
       return;
     }
@@ -3081,32 +3202,7 @@ export function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
-  async function analyzePaperVision(paper: PaperAcquisition): Promise<void> {
-    if (session?.archivedAt) return;
-    if (!activeSessionId || !visionModelId) {
-      setError("Configure and select a vision-capable model first");
-      return;
-    }
-    const model = models.find((item) => item.id === visionModelId);
-    if (!model?.hasApiToken) {
-      setError(`Save an API token for ${model?.name ?? "the vision model"} in Model settings`);
-      return;
-    }
-    setPaperBusy(true);
-    setError(undefined);
-    try {
-      const run = await client.analyzePaperVision(activeSessionId, paper.id, {
-        modelId: visionModelId,
-      });
-      setPaperVisionRuns((current) => [...current, run]);
-      setFiles(await client.listFiles(activeSessionId));
-      pushToast("success", "Vision analysis finished");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Vision analysis failed");
-    } finally {
-      setPaperBusy(false);
-    }
-  }
+
 
   function updateSessionStreamCount(sessionId: string, delta: 1 | -1): void {
     let count: number;
@@ -3158,6 +3254,9 @@ export function App() {
       sessionTitle,
     });
     if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail);
+    if (shouldRefreshUsageForEvent(workspaceViewRef.current, streamEvent)) {
+      void refreshUsageData().catch((reason: Error) => setError(reason.message));
+    }
     if (!routing.updatesSessionView) return;
     if (streamEvent.type === "run.status" && isTerminalRunStatus(streamEvent.status)) {
       void refreshArtifactOutputs(sessionId).catch(() => undefined);
@@ -3189,8 +3288,12 @@ export function App() {
         return [...current.filter((item) => item.id !== request.id), request];
       });
     }
-    if (streamEvent.type === "plan.proposed") {
-      setPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
+    if (streamEvent.type === "plan.updated" && runId) {
+      const plan = { ...streamEvent.plan, runId };
+      setSessionPlans((current) => {
+        const otherPlans = current.filter((item) => item.runId !== runId || item.agentId !== plan.agentId);
+        return plan.items.length ? [...otherPlans, plan] : otherPlans;
+      });
     }
     if (streamEvent.type === "plan.approval_decided") {
       setPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
@@ -3199,6 +3302,9 @@ export function App() {
       || streamEvent.type === "subagent.step"
       || streamEvent.type === "subagent.usage") {
       setSubagents((current) => reduceSubagentSnapshots(current, streamEvent));
+    }
+    if (streamEvent.type === "idea_research.created") {
+      window.dispatchEvent(new CustomEvent("idea-research-updated", {detail: {sessionId}}));
     }
     if (streamEvent.type === "evolve_run.created") {
       // Into the same list the workspace card reads, so a search the agent
@@ -3225,6 +3331,16 @@ export function App() {
           ...current.filter((item) => item.version.id !== streamEvent.version!.id),
         ].toSorted((left, right) => left.version.createdAt.localeCompare(right.version.createdAt)
           || left.version.version - right.version.version));
+      }
+      if (streamEvent.artifact.origin === "llm_declared"
+        && streamEvent.version
+        && ["html", "latex", "markdown", "report"].includes(streamEvent.artifact.kind)) {
+        const artifactVersionId = streamEvent.version.id;
+        setReviewerTaskDiscoveryVersions((current) => {
+          const watched = current[sessionId] ?? EMPTY_STRING_ARRAY;
+          if (watched.includes(artifactVersionId)) return current;
+          return { ...current, [sessionId]: [...watched, artifactVersionId] };
+        });
       }
     }
     if (streamEvent.type === "workspace.changed") {
@@ -3278,7 +3394,7 @@ export function App() {
       if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) await refreshSession(sessionId);
     }).catch((reason) => {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : "Could not resume run events");
+        setError(reason instanceof Error ? reason.message : t("error.resumeRunEvents"));
       }
     }).finally(() => {
       if (runAbortControllers.current.get(sessionId) === controller) {
@@ -3296,24 +3412,30 @@ export function App() {
         const usage = await client.getWebUsage();
         pushToast(
           "success",
-          "Web usage",
-          `${usage.searches} searches · ${usage.fetches} fetches · ${usage.cacheHits} cache hits · ${usage.fallbacks} fallbacks · ${usage.failures} failures`,
+          t("app.webUsage"),
+          t("app.webUsageDetail", {
+            cacheHits: usage.cacheHits,
+            failures: usage.failures,
+            fallbacks: usage.fallbacks,
+            fetches: usage.fetches,
+            searches: usage.searches,
+          }),
         );
         setMessage("");
         setError(undefined);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Could not load web usage");
+        setError(reason instanceof Error ? reason.message : t("error.loadWebUsage"));
       }
       return;
     }
     const submittedSessionId = activeSessionId;
     const selectedModel = models.find((item) => item.id === session.modelId);
     if (!selectedModel) {
-      setError("Assign an available model to this task before running it");
+      setError(t("error.noTaskModelAssigned"));
       return;
     }
     if (!selectedModel.hasApiToken) {
-      setError(`Save an API token for ${selectedModel.name} in Model settings`);
+      setError(t("error.modelTokenRequired", { model: selectedModel.name }));
       return;
     }
     const content = message.trim();
@@ -3383,7 +3505,7 @@ export function App() {
       if (shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) await refreshSession(submittedSessionId);
     } catch (reason) {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : "Run failed");
+        setError(reason instanceof Error ? reason.message : t("error.runFailed"));
         if (autoNameFirstMessage) {
           void refreshSession(submittedSessionId).catch(() => undefined);
         }
@@ -3422,7 +3544,7 @@ export function App() {
       }
     } catch (reason) {
       if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : "Could not cancel queued run");
+        setError(reason instanceof Error ? reason.message : t("error.cancelQueuedRun"));
       }
     } finally {
       setCancellingQueuedRunIds((current) => {
@@ -3437,12 +3559,12 @@ export function App() {
   async function summarizeRunAsSkill(run: SessionRun): Promise<void> {
     if (!session || !canSummarizeRunAsSkill(run) || skillEvolutionSourceRunIds.has(run.id)) return;
     if (!session.modelId || !models.find((item) => item.id === session.modelId)?.hasApiToken) {
-      setError("Assign an available model with an API token before summarizing this run as a Skill");
+      setError(t("error.skillEvolutionModelRequired"));
       return;
     }
     const writableLibraries = skillLibraries.filter((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
     if (!writableLibraries.length) {
-      setError("Create a writable Skill Library before summarizing this run as a Skill");
+      setError(t("error.skillLibraryRequired"));
       return;
     }
     setSkillEvolutionSourceRunIds((current) => new Set(current).add(run.id));
@@ -3453,10 +3575,10 @@ export function App() {
       syncSessionRunActivity(session.id, nextRuns);
       setIsFollowingOutput(true);
       setError(undefined);
-      pushToast("info", "Skill proposal queued", `Run ${run.id.slice(0, 8)} will be summarized into a writable Skill Library.`);
+      pushToast("info", t("app.skillProposalQueued"), t("app.skillProposalQueuedDetail", { id: run.id.slice(0, 8) }));
       await refreshSession(session.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Could not queue Skill self-evolution";
+      const message = reason instanceof Error ? reason.message : t("error.queueSkillEvolution");
       setError(message);
     } finally {
       setSkillEvolutionSourceRunIds((current) => {
@@ -3470,26 +3592,15 @@ export function App() {
 
   async function stopRun(sessionId = activeSessionId): Promise<void> {
     const hasAgentRun = Boolean(sessionId && runningSessionIds.has(sessionId));
-    const hasReviewerCheckpoint = Boolean(sessionId === activeSessionId && reviewerCheckpointRunning);
-    if (!sessionId || (!hasAgentRun && !hasReviewerCheckpoint) || stoppingSessionIds.has(sessionId)) return;
+    if (!sessionId || !hasAgentRun || stoppingSessionIds.has(sessionId)) return;
     setStoppingSessionIds((current) => new Set(current).add(sessionId));
-    try {
-      await requestRunStop({
-        cancelRun: (target) => client.cancelCurrentRun(target),
-        controllers: runAbortControllers.current,
-        sessionId,
-      });
-    } finally {
-      // A manual Reviewer has no Agent stream to clear this state. Its persisted
-      // checkpoint is refreshed separately and will render the cancellation.
-      if (!hasAgentRun) {
-        setStoppingSessionIds((current) => {
-          const next = new Set(current);
-          next.delete(sessionId);
-          return next;
-        });
-      }
-    }
+    // The main run stream clears this state on its terminal event. Reviewer
+    // cancellation is deliberately handled by its own independent state.
+    await requestRunStop({
+      cancelRun: (target) => client.cancelCurrentRun(target),
+      controllers: runAbortControllers.current,
+      sessionId,
+    });
   }
 
   async function openWorkspaceFile(file: WorkspaceFile): Promise<void> {
@@ -3498,7 +3609,7 @@ export function App() {
     try {
       await openWorkspacePath(file.path);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not open file");
+      setError(reason instanceof Error ? reason.message : t("error.openFile"));
     }
   }
 
@@ -3512,7 +3623,7 @@ export function App() {
         ? { ...current, provenance }
         : current);
     } catch (reason) {
-      const error = reason instanceof Error ? reason.message : "Could not load file provenance";
+      const error = reason instanceof Error ? reason.message : t("error.loadFileProvenance");
       setWorkspaceFileProvenanceTarget((current) => current?.sessionId === sessionId && current.file.path === file.path
         ? { ...current, error }
         : current);
@@ -3521,7 +3632,7 @@ export function App() {
 
   function openArtifact(artifact: ScientificArtifact): void {
     if (!activeSessionId) {
-      pushToast("info", "Artifact retained", "Create or select a Session to open this Project artifact.");
+      pushToast("info", t("app.artifactRetained"), t("app.artifactRetainedDetail"));
       return;
     }
     setArtifactModalVersion(undefined);
@@ -3603,7 +3714,7 @@ export function App() {
         const name = normalizeArtifactArchivePath(artifact.name);
         const versions = await client.listProjectArtifactVersions(activeProjectId, artifact.id);
         const version = versions.find((item) => item.version === artifact.currentVersion) ?? versions.at(-1);
-        if (!version) throw new Error("Artifact has no version");
+        if (!version) throw new Error(translateActive("error.artifactNoVersion"));
         return { artifact, name, version };
       }));
       const metadata = metadataResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
@@ -3670,15 +3781,16 @@ export function App() {
   useEffect(() => {
     if (workspaceView !== "usage") return;
     let active = true;
-    void client.getGlobalModelUsage().then((usage) => {
-      if (!active) return;
-      setGlobalUsage(usage);
-      setError(undefined);
-    }).catch((reason: Error) => {
-      if (active) setError(reason instanceof Error ? reason.message : "Could not load model usage");
+    void refreshUsageData().catch((reason: Error) => {
+      if (active) setError(reason instanceof Error ? reason.message : t("error.loadModelUsage"));
     });
     return () => { active = false; };
-  }, [client, workspaceView]);
+  }, [refreshUsageData, setError, workspaceView]);
+
+  async function exportUsageAnalytics(format: "csv" | "json", displayCurrency: "CNY" | "USD"): Promise<void> {
+    const blob = await client.exportModelUsageAnalytics(format, { ...usageAnalyticsFilters(usageFilters), displayCurrency });
+    downloadBlob(blob, `model-usage-analytics.${format}`);
+  }
 
   async function openSessionFromUsage(sessionId: string): Promise<void> {
     const match = workbenchIndex.find((item) => item.sessionId === sessionId)
@@ -3697,7 +3809,7 @@ export function App() {
       setActiveSessionId(sessionId);
       await refreshSession(sessionId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not open Session from usage");
+      setError(reason instanceof Error ? reason.message : t("error.openSessionFromUsage"));
     }
   }
 
@@ -3719,7 +3831,7 @@ export function App() {
         setArtifactModalName(result.path);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not open search result");
+      setError(reason instanceof Error ? reason.message : t("error.openSearchResult"));
     }
   }
 
@@ -3753,12 +3865,9 @@ export function App() {
   }
 
   const activeProject = projects.find((project) => project.id === activeProjectId);
-  // Remote machines the open Session may use (its own override, else the
-  // Project allowlist); drives the session-bar badge. Allowing remote machines
-  // never disables local file access or local execution.
-  const allowedRemoteHosts = session
-    ? remoteHosts.filter((host) => effectiveRemoteRunnerHostIds(activeProject, session).includes(host.id))
-    : [];
+  const selectedRunnerIds = activeProject && session ? effectiveRunnerIds(activeProject, session) : [];
+  const selectedRunnerNames = selectedRunnerIds.map((id) => id === "local" ? t("remote.localRunner")
+    : remoteHosts.find((host) => host.id === id)?.runnerName ?? remoteHosts.find((host) => host.id === id)?.alias ?? id);
   // The Project/Session behind the scoped settings dialog, for the remote-compute sections.
   const scopedSettingsProject = settingsTarget?.kind === "project"
     ? projects.find((project) => project.id === settingsTarget.id)
@@ -3824,10 +3933,7 @@ export function App() {
     // The handler must observe the Provider draft state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerDraftDirty, showConfig]);
-  const visionModels = models.filter((item) => item.vision);
-  const latestExecution = executionRuns.at(-1);
-  const latestEnvironmentRevision = environmentRevisions.find((revision) => revision.id === latestExecution?.environmentRevisionId);
-  const latestEnvironment = environments.find((environment) => environment.id === latestEnvironmentRevision?.environmentId);
+
   const sessionUsageBreakdown = sessionUsage
     ? usageInOutLabel(sessionUsage.totals)
     : "";
@@ -3865,6 +3971,13 @@ export function App() {
   const activeTimelineSubagentIds = collectTimelineSubagentIds(runTimeline);
   const replayTimelineSubagentIds = new Map(Object.entries(sessionReplayTimelines).map(([runId, timeline]) =>
     [runId, collectTimelineSubagentIds(timeline.entries)]));
+  const latestPlannedRunId = [...sessionRuns]
+    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .findLast((run) => plans.some((plan) => plan.runId === run.id))?.id;
+  const workspacePlanRunId = activeTimelineRunId ?? latestPlannedRunId;
+  const workspacePlans = workspacePlanRunId
+    ? plans.filter((plan) => plan.runId === workspacePlanRunId)
+    : [];
   const replayedRunIds = new Set(Object.keys(sessionReplayTimelines).filter((runId) => runId !== activeTimelineRunId));
   const conversationBlocks = buildConversationBlocks(displayedMessages, sessionRuns, replayedRunIds);
   const timelinePermissionRequestIds = collectTimelinePermissionRequestIds([
@@ -3872,18 +3985,19 @@ export function App() {
     ...Object.values(sessionReplayTimelines).flatMap((timeline) => timeline.entries),
   ]);
   const queuedRuns = sessionRuns.filter((run) => run.status === "queued");
-  // Activity cards (plans, subagents, remote jobs, permission prompts, result
-  // previews) are attributed to the run that produced them and rendered right
+  // Timeline activity cards (subagents, remote jobs, permission prompts, and
+  // result previews) are attributed to the run that produced them and rendered right
   // after that run's conversation block instead of piling up below the whole
-  // flow. The run currently streaming or replaying keeps its cards right
-  // after its timeline, which is already the chronological end of the flow.
+  // flow. Plans are projected independently into the right-hand Workspace.
+  // The run currently streaming or replaying keeps its cards right after its
+  // timeline, which is already the chronological end of the flow.
   const runActivityGroups = groupRunActivity(sessionRuns, {
     downloadCandidates,
     downloadJobs,
     downloadPlans,
     permissionRequests: permissionRequests.filter((request) => !timelinePermissionRequestIds.has(request.id)),
-    plans,
-    previewFiles: files.filter(isArtifactPreviewFile),
+    plans: [],
+    previewFiles: [],
     remoteJobs,
     subagents,
   }, session?.id ? runChangedPaths[session.id] ?? {} : {}, mcpInvocations);
@@ -3913,6 +4027,24 @@ export function App() {
     displayedMessageIds,
     replayedRunIds,
   });
+  const visibleOutputs = [...artifactOutputAnchors.activeTimeline,
+    ...[...artifactOutputAnchors.byMessage.values()].flat(), ...[...artifactOutputAnchors.byReplayTimeline.values()].flat()];
+  const registeredPaths = new Set(visibleOutputs.filter((output) => output.version.sessionId === session?.id)
+    .map((output) => output.version.sourcePath).filter(Boolean));
+  const currentPreviewFiles = files.filter((file, index) => !registeredPaths.has(file.path)
+    && (file.previewKind || /\.(md|markdown|html|csv|json|ipynb|png|jpg|jpeg|svg|pdf)$/i.test(file.path))
+    && files.findIndex((other) => other.path === file.path) === index);
+  // Current bytes are shown once, never presented as an old Run's snapshot.
+  const latestOutputRun = selectSessionReplayRun(sessionRuns.filter((run) => isTerminalRunStatus(run.status)));
+  const outputMessageId = latestOutputRun?.assistantMessageId ?? latestOutputRun?.userMessageId;
+  const currentFileSlot = latestOutputRun?.id === activeTimelineRunId && runTimeline.length ? "active"
+    : latestOutputRun && replayedRunIds.has(latestOutputRun.id) ? `run:${latestOutputRun.id}`
+      : outputMessageId && displayedMessageIds.has(outputMessageId) ? `message:${outputMessageId}` : "tail";
+  function renderConversationOutputs(slot: string, outputs: readonly SessionArtifactOutput[] = []): ReactNode {
+    return <ConversationArtifactList outputs={outputs} onOpen={openArtifactVersion}
+      currentFiles={currentFileSlot === slot ? currentPreviewFiles : []}
+      onOpenCurrentFile={(file) => void openWorkspacePath(file.path).catch((reason: Error) => setError(reason.message))} />;
+  }
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
   const artifactGroups = groupArtifactsBySession({
@@ -3925,10 +4057,10 @@ export function App() {
   const visibleProjects = getVisibleProjects(projects, activeProjectId, projectsExpanded);
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
-    : "Workspace";
+    : t("app.workspace");
   const activeSessionLabel = session
     ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, session.title)
-    : "Start a research session";
+    : t("app.startResearchSession");
   const mainProjectRenameTarget = activeProject
     && renameTarget?.kind === "project"
     && renameTarget.id === activeProject.id
@@ -3946,7 +4078,6 @@ export function App() {
     hasModel: Boolean(activeModel),
     message,
     modelsAvailable: models.length > 0,
-    reviewerCheckpointRunning,
     runningSessionIds,
     sessionArchived,
     stoppingSessionIds,
@@ -4013,7 +4144,7 @@ export function App() {
       });
       await refreshGovernedDownloads(session.id);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : "Could not prepare artifact download");
+      reportError(error instanceof Error ? error.message : t("error.prepareDownload"));
     }
   }
 
@@ -4024,32 +4155,38 @@ export function App() {
       else await client.retryMcpArtifactJob(session.id, job.id);
       await refreshGovernedDownloads(session.id);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : `Could not ${action} artifact job`);
+      reportError(error instanceof Error ? error.message : action === "cancel" ? t("error.cancelArtifactJob") : t("error.retryArtifactJob"));
     }
   }
 
   function renderSkillEvolutionCard(sourceRun: SessionRun | undefined): ReactNode {
     if (!session || !canSummarizeRunAsSkill(sourceRun)) return null;
     const missingLibrary = !skillLibraries.some((library) => library.id !== BUILT_IN_SKILL_LIBRARY_ID);
-    const busy = skillEvolutionSourceRunIds.has(sourceRun.id);
-    return <section aria-label="Skill self-evolution" className="skill-evolution-card">
-      <header><span><SparkleIcon size={16} /></span><div><strong>Summarize as Skill</strong><small>default {SELF_EVOLUTION_LIBRARY_ID}</small></div></header>
+    const summaryRun = skillSummaryRun(sessionRuns, sourceRun);
+    const finished = summaryRun && isTerminalRunStatus(summaryRun.status);
+    const busy = skillEvolutionSourceRunIds.has(sourceRun.id) || Boolean(summaryRun && !finished);
+    if ((missingLibrary || sessionArchived || !session.modelId) && !busy && !summaryRun) return null;
+    return <ProcessRecord key={sourceRun.id} active={!finished || busy} failed={Boolean(finished && summaryRun.status !== "completed")}
+      label={summaryRun ? t("record.skillFinished", { status: summaryRun.status === "completed" ? t("subagent.status.completed") : summaryRun.status === "failed" ? t("subagent.status.failed") : summaryRun.status }) : t("app.summarizeAsSkill")}>
+      <section aria-label={t("app.skillEvolutionAria")} className="skill-evolution-card" data-source-run-id={sourceRun.id}>
+      <header><span><SparkleIcon size={16} /></span><div><strong>{t("app.summarizeAsSkill")}</strong><small>{t("app.skillLibraryDefault", { id: SELF_EVOLUTION_LIBRARY_ID })}</small></div></header>
       <button
         className="secondary-button"
         disabled={busy || sessionArchived || !session.modelId || missingLibrary}
         onClick={() => void summarizeRunAsSkill(sourceRun)}
-        title={missingLibrary ? "Create a writable Skill Library first" : "Queue a self-evolution run for this completed run"}
+        title={missingLibrary ? t("app.skillEvolutionNeedLibrary") : t("app.skillEvolutionQueueTooltip")}
         type="button"
-      >{busy ? "Queuing..." : "Create proposal"}</button>
-    </section>;
+      >{busy ? t("app.skillEvolutionQueuing") : t("app.createProposal")}</button>
+      {finished && summaryRun.error ? <p role="alert">{summaryRun.error}</p> : null}
+    </section></ProcessRecord>;
   }
 
   function renderRunActivityGroup(group: RunActivityGroup, timelineSubagentIds: ReadonlySet<string> = new Set()) {
     if (!session) return null;
-    const artifactCardId = activityCardId("artifacts", group.runId ?? "unattributed");
     const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
+
         <OrchestrationPanel
           busy={planActionBusy}
           expandedCards={activityCardExpansion}
@@ -4058,6 +4195,8 @@ export function App() {
           onToggleCard={toggleActivityCard}
           plans={group.plans}
         />
+
+
         <SubagentCards onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
@@ -4071,7 +4210,7 @@ export function App() {
           onToggleCard={toggleActivityCard}
           plans={group.downloadPlans}
         />
-        <ArtifactPreview client={client} expanded={Boolean(activityCardExpansion[artifactCardId])} files={group.previewFiles} onChipClick={handleChipClick} onToggle={(expanded) => toggleActivityCard(artifactCardId, expanded)} sessionId={session.id} />
+
       </div>
     );
   }
@@ -4109,7 +4248,7 @@ export function App() {
                   {inlineTarget ? <div className={project.id === activeProjectId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                     <span className="nav-icon"><ProjectIcon size={16} /></span>
                     <InlineRenameInput
-                      ariaLabel={`Rename Project ${project.name}`}
+                      ariaLabel={t("app.renameProjectAria", { name: project.name })}
                       className="nav-inline-rename"
                       disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                       onChange={setRenameDraft}
@@ -4126,7 +4265,7 @@ export function App() {
                       setSessionFilterOpen(false);
                     }}
                     onDoubleClick={() => beginInlineRename(target, "sidebar")}
-                    title={`${project.name} · Double-click to rename Project`}
+                    title={t("app.renameProjectHint", { name: project.name })}
                     type="button"
                   >
                     <span className="nav-icon"><ProjectIcon size={16} /></span><span title={project.name}>{label}</span>
@@ -4198,7 +4337,7 @@ export function App() {
                     {inlineTarget && !item.archivedAt ? <div className={item.id === activeSessionId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                       <span className="nav-icon"><SessionIcon size={15} /></span>
                       <InlineRenameInput
-                        ariaLabel={`Rename Session ${item.title}`}
+                        ariaLabel={t("app.renameSessionAria", { name: item.title })}
                         className="nav-inline-rename"
                         disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                         onChange={setRenameDraft}
@@ -4209,10 +4348,10 @@ export function App() {
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
                       onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
-                      title={`${item.title}${item.archivedAt ? " · Archived" : " · Double-click to rename Session"}`}
+                      title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: item.title })}
                       type="button"
                     >
-                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={`${item.title}${item.archivedAt ? " · Archived" : ""}`}>{label}{item.archivedAt ? " · Archived" : ""}</span>
+                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : item.title}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
                     </button>}
                     <SessionOverflowMenu
                       archived={Boolean(item.archivedAt)}
@@ -4239,11 +4378,15 @@ export function App() {
           </> : null}
         </div>
 
-        <div className="sidebar-quick-actions" aria-label="Workbench navigation">
+        <div className="sidebar-quick-actions" aria-label={t("app.workbenchNavigation")}>
           <button type="button" onClick={() => void openGlobalSearch()}><span><SearchIcon size={16} /></span><span>{t("app.search")}</span><kbd>Ctrl K</kbd></button>
           <button type="button" className={workspaceView === "usage" ? "active" : undefined} onClick={() => void openUsageView()}><span><SparkleIcon size={16} /></span><span>{t("app.usage")}</span></button>
+
           <button type="button" data-testid="open-knowledge-engine" onClick={() => setKnowledgeEngineOpen(true)}><span><SparkleIcon size={16} /></span><span>{t("app.knowledgeEngine")}</span></button>
           <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
+
+          <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); openMarkdownImageArtifacts(); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
+
         </div>
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>
           <span><SettingsIcon size={17} /></span><span>{t("app.systemConfiguration")}</span><span className="mode-chip">{models.length}</span>
@@ -4252,10 +4395,22 @@ export function App() {
 
       <main className="main-area">
         {workspaceView === "usage" ? (
-          <UsagePage summary={globalUsage} onOpenSession={(sessionId) => void openSessionFromUsage(sessionId)} />
+          <UsagePage
+            analytics={usageAnalytics}
+            filters={usageFilters}
+            onExport={(format, displayCurrency) => void exportUsageAnalytics(format, displayCurrency).catch((reason: Error) => setError(reason.message))}
+            onFiltersChange={(filters) => {
+              setUsageFilters(filters);
+              setUsageAnalytics(undefined);
+            }}
+            onOpenSession={(sessionId) => void openSessionFromUsage(sessionId)}
+            summary={globalUsage}
+          />
         ) : openSubagent && session && openSubagent.sessionId === session.id ? (
           <SubagentConversation
             key={openSubagent.id}
+            onListSkillDrafts={listSkillDrafts}
+            onOpenSkillReviews={openGeneratedSkillDraftExplorer}
             loadWorkspaceImage={loadMarkdownImage}
             onBack={() => setOpenSubagentId(undefined)}
             onChipClick={handleChipClick}
@@ -4272,14 +4427,14 @@ export function App() {
           />
         ) : (
           <>
-        {sessionArchived ? <div className="archived-banner"><strong>Archived Session</strong><span>Historical messages, files, and audit records remain available. Restore this Session to make changes or start a run.</span></div> : null}
+        {sessionArchived ? <div className="archived-banner"><strong>{t("app.archivedBannerTitle")}</strong><span>{t("app.archivedBannerBody")}</span></div> : null}
 
         <div className={workspaceCollapsed ? "content-grid workspace-collapsed" : "content-grid"} style={workspaceCollapsed ? undefined : { gridTemplateColumns: `minmax(0, 1fr) ${workspaceWidth}px` }}>
           <section className="conversation">
             {activeProject || session ? <div className="session-bar">
               <div className="session-bar-title">
                 {mainProjectRenameTarget ? <InlineRenameInput
-                  ariaLabel={`Rename Project ${mainProjectRenameTarget.label}`}
+                  ariaLabel={t("app.renameProjectAria", { name: mainProjectRenameTarget.label })}
                   className="session-bar-project-rename"
                   disabled={renameSavingKeys.has(resourceTargetKey(mainProjectRenameTarget))}
                   onChange={setRenameDraft}
@@ -4288,12 +4443,12 @@ export function App() {
                 /> : activeProject ? <button
                   className="session-bar-project"
                   onDoubleClick={() => beginInlineRename({ id: activeProject.id, kind: "project", label: activeProject.name }, "main")}
-                  title="Double-click to rename Project"
+                  title={t("app.renameProjectHint", { name: activeProjectLabel })}
                   type="button"
                 >{activeProjectLabel}</button> : <span className="session-bar-project">{activeProjectLabel}</span>}
                 {session ? <span aria-hidden="true" className="session-bar-sep">›</span> : null}
                 {mainSessionRenameTarget ? <InlineRenameInput
-                  ariaLabel={`Rename Session ${mainSessionRenameTarget.label}`}
+                  ariaLabel={t("app.renameSessionAria", { name: mainSessionRenameTarget.label })}
                   className="session-bar-session-rename"
                   disabled={renameSavingKeys.has(resourceTargetKey(mainSessionRenameTarget))}
                   onChange={setRenameDraft}
@@ -4307,17 +4462,17 @@ export function App() {
                       onClick={() => {
                         beginInlineRename({ id: session.id, kind: "session", label: session.title }, "main");
                       }}
-                      title="Rename session"
+                      title={t("app.renameSessionTitle", { name: activeSessionLabel })}
                       type="button"
                     ><span>{activeSessionLabel}</span><EditIcon size={13} /></button>
                   ) : <span>{activeSessionLabel}</span>}</h1>
                 ) : null}
               </div>
               <div className="session-bar-meta">
-                {session ? <span className="session-runner-target" title={allowedRemoteHosts.length
-                  ? `Local runner stays available; this Session may also use: ${allowedRemoteHosts.map((host) => host.alias).join(", ")}`
-                  : "This Session runs on the local runner"}>
-                  {allowedRemoteHosts.length ? "Remote available" : "Local runner"}
+                {session ? <span className="session-runner-target" title={selectedRunnerIds.length
+                  ? t("app.runnerSelectionTooltip", { hosts: selectedRunnerNames.join(", ") })
+                  : t("app.runnerSelectionEmpty")}>
+                  {t("app.runnerSelectionChip", { count: selectedRunnerIds.length })}
                 </span> : null}
                 {session ? (
                   <SessionUsageChip
@@ -4325,7 +4480,7 @@ export function App() {
                     sessionTokens={sessionUsage?.totals.totalTokens}
                   />
                 ) : null}
-                <span className={error ? "connection bad" : "connection"} title={error ? `Needs attention: ${error}` : "Local API connected"}><i />{error ? "Needs attention" : null}</span>
+                <span className={error ? "connection bad" : "connection"} title={error ? t("app.connectionErrorTooltip", { error }) : t("app.connectionOkTooltip")}><i />{error ? t("app.connectionErrorChip") : null}</span>
               </div>
             </div> : null}
             {sessionPending ? (
@@ -4350,7 +4505,7 @@ export function App() {
                       <span className="eyebrow">{t("empty.sessionReady")}</span>
                       <h2>{t("empty.investigate")}</h2>
                       <p>{session.enabledConnectorIds.includes("pubmed") && session.enabledConnectorIds.includes("uniprot")
-                        ? "Try “Research human TP53 and create a cited evidence brief.”"
+                        ? t("app.sessionIntroPrompt")
                         : t("empty.sessionCsvHelp")}</p>
                     </div>
                   ) : null}
@@ -4361,14 +4516,16 @@ export function App() {
                           checkpointError={block.message.reviewerCheckpoint.error}
                           checkpointProgress={block.message.reviewerCheckpoint.progress}
                           checkpointStatus={block.message.reviewerCheckpoint.status}
-                          reviewLevel={reviewerSpecialistSettings?.level}
+                          reviewLevel={session.reviewerSpecialistLevel}
                           reviews={artifactReviews}
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
+                      ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
+                        <WakeNotice notice={block.message.runtimeNotice} />
                       ) : (
                         <article className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
-                          <div className="avatar">{block.message.role === "user" ? "You" : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
-                          <div><span className="message-role">{block.message.role === "user" ? "Researcher" : block.message.kind === "review_notice" ? "Reviewer notice" : "ScienceDiscovery"}{block.message.modelName ? ` · ${block.message.modelName}` : ""}</span><MarkdownRenderer
+                          <div className="avatar">{block.message.role === "user" ? t("app.roleYou") : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
+                          <div><span className="message-role">{block.message.role === "user" ? t("app.roleResearcher") : block.message.kind === "review_notice" ? t("app.roleReviewerNotice") : "ScienceDiscovery"}{block.message.modelName ? ` · ${block.message.modelName}` : ""}</span><MarkdownRenderer
                             className="message-content"
                             content={block.message.content}
                             loadWorkspaceImage={block.message.role === "assistant" ? loadMarkdownImage : undefined}
@@ -4379,22 +4536,27 @@ export function App() {
                             workspaceSessionId={block.message.role === "assistant" ? session.id : undefined}
                           /></div>
                           <RunUsageInline run={messageUsageByMessageId.get(block.message.id)} />
-                          {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label="Copy message as Markdown" /> : null}
+                          {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label={t("app.copyMessage")} /> : null}
                         </article>
                       )}
+                      {block.message.kind !== "wake_notice" && block.message.runtimeNotice
+                        ? <WakeNotice notice={block.message.runtimeNotice} />
+                        : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
-                      <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.byMessage.get(block.message.id) ?? []} />
+                      {renderConversationOutputs(`message:${block.message.id}`, artifactOutputAnchors.byMessage.get(block.message.id))}
                     </Fragment>
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
                       <RunTimeline
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
+                        ideaResearchClient={client}
+                        ideaResearchSessionId={session.id}
                         footer={<>
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
                             renderRunActivityGroup(group, replayTimelineSubagentIds.get(block.runId)))}
-                          <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.byReplayTimeline.get(block.runId) ?? []} />
+                          {renderConversationOutputs(`run:${block.runId}`, artifactOutputAnchors.byReplayTimeline.get(block.runId))}
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
@@ -4403,6 +4565,7 @@ export function App() {
                         onLoadToolOutput={(trace) => loadToolOutput(session.id, block.runId, trace)}
                         onOpenArtifacts={openMarkdownImageArtifacts}
                         onOpenSkillReviews={openGeneratedSkillDraftExplorer}
+                        onListSkillDrafts={listSkillDrafts}
                         onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)}
                         references={reportReferences}
                         onToggle={(id, expanded) => setReplayTimelines((current) => {
@@ -4417,19 +4580,21 @@ export function App() {
                             },
                           };
                         })}
-                        reviewerLevel={reviewerSpecialistSettings?.level}
+                        reviewerLevel={session.reviewerSpecialistLevel}
                         workspaceSessionId={session.id}
                       />
-                      {renderSkillEvolutionCard(sessionRuns.find((run) => run.id === block.runId))}
+
                     </Fragment>
                   ))}
                   <RunTimeline
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
+                    ideaResearchClient={client}
+                    ideaResearchSessionId={session.id}
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
-                      <ConversationArtifactList onOpen={openArtifactVersion} outputs={artifactOutputAnchors.activeTimeline} />
+                      {renderConversationOutputs("active", artifactOutputAnchors.activeTimeline)}
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
@@ -4438,6 +4603,7 @@ export function App() {
                     onLoadToolOutput={(trace) => loadToolOutput(session.id, runTimelines[session.id]?.runId, trace)}
                     onOpenArtifacts={openMarkdownImageArtifacts}
                     onOpenSkillReviews={openGeneratedSkillDraftExplorer}
+                    onListSkillDrafts={listSkillDrafts}
                     onPermissionDecision={decidePermission}
                     onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)}
                     references={reportReferences}
@@ -4457,18 +4623,20 @@ export function App() {
                         },
                       };
                     })}
-                    reviewerLevel={reviewerSpecialistSettings?.level}
+                    reviewerLevel={session.reviewerSpecialistLevel}
                     workspaceSessionId={session.id}
                   />
+                  {renderConversationOutputs("tail")}
+                  {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
-                  {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>Latest activity <ChevronDownIcon size={15} /></button></div> : null}
+                  {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
                   {composerTrigger ? <ComposerReferenceMenu trigger={composerTrigger} suggestions={composerSuggestions} onSelect={selectComposerSuggestion} /> : null}
                   {showEvolveAlgorithmPicker ? <EvolveAlgorithmPicker onSelect={selectEvolveAlgorithm} onDismiss={() => setEvolvePickerDismissed(true)} /> : null}
                   <ComposerCommandChips commands={selectedComposerCommands} onRemove={removeComposerCommand} />
                   <ComposerReferenceChips references={composerReferences} onRemove={removeComposerReference} />
-                  {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={`Remove annotation: ${annotation.artifactLogicalName}: ${annotation.note}`} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
+                  {pendingAnnotations.length ? <div className="annotation-chips">{pendingAnnotations.map((annotation) => <button key={annotation.id} onClick={() => setPendingAnnotations((current) => current.filter((item) => item.id !== annotation.id))} title={t("app.removeAnnotation", { name: annotation.artifactLogicalName, note: annotation.note })} type="button"><TargetIcon size={12} /> {annotation.artifactLogicalName}: {annotation.note} <CloseIcon size={12} /></button>)}</div> : null}
                   <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => {
                     const value = event.target.value;
                     setMessage(value);
@@ -4531,7 +4699,7 @@ export function App() {
 
           {workspaceCollapsed ? null : <aside className="workspace-panel" ref={workspacePanel}>
             <div
-              aria-label="Resize workspace panel"
+              aria-label={t("app.resizeWorkspace")}
               aria-orientation="vertical"
               aria-valuemax={workspaceMaxWidth}
               aria-valuemin={MIN_WORKSPACE_WIDTH}
@@ -4564,20 +4732,12 @@ export function App() {
             <div className="section-heading">
               <div><h2>{t("app.workspace")}</h2></div>
               <div className="workspace-heading-actions">
-                <button
-                  aria-pressed={showPhysicalFiles}
-                  className={showPhysicalFiles ? "developer-files-toggle active" : "developer-files-toggle"}
-                  onClick={() => {
-                    if (showPhysicalFiles) exitWorkspaceFileSelection();
-                    setShowPhysicalFiles((current) => !current);
-                  }}
-                  title={t("app.physicalFilesHelp")}
-                  type="button"
-                >{t("app.physicalFiles")}</button>
+
                 <span className="file-count">{artifacts.length}</span>
                 <button aria-label={t("app.hideWorkspace")} className="icon-button workspace-collapse-button" onClick={() => setWorkspaceCollapsed(true)} title={t("app.hideWorkspace")} type="button"><PanelRightIcon size={15} /></button>
               </div>
             </div>
+<WorkspaceFolder key={`files:${activeSessionId}`} name="files" label={t("record.files")}>
             {activeSessionId && !sessionArchived ? (
               <label className={dragActive ? "drop-zone active" : "drop-zone"} onDragEnter={() => setDragActive(true)} onDragLeave={() => setDragActive(false)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                 event.preventDefault();
@@ -4592,11 +4752,11 @@ export function App() {
                 }} />
                 <span className="upload-icon"><UploadIcon size={19} /></span>
                 <strong>{t("app.dropFiles")}</strong>
-                <small>single or multiple · text and binary · {formatByteLimit(workspaceCapabilities?.maxFileBytes ?? 1_073_741_824)} max each</small>
+                <small>{t("app.dropHint", { size: formatByteLimit(workspaceCapabilities?.maxFileBytes ?? 1_073_741_824) })}</small>
               </label>
             ) : <p className="muted">{sessionArchived ? t("app.archivedWorkspace") : t("app.createSessionWorkspace")}</p>}
 
-            <details className="workspace-fold artifact-catalog-section" open>
+            {artifacts.length > 0 ? <details className="workspace-fold artifact-catalog-section">
               <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("app.artifacts")}</strong><span className="fold-meta">{artifacts.length}</span></summary>
               <div className="artifact-catalog">
                 {!projectsLoaded ? <SkeletonRows className="file-skeleton" count={3} /> : <ArtifactLifecycleProvider
@@ -4604,8 +4764,8 @@ export function App() {
                   onError={setError}
                   resetKey={activeProjectId ?? ""}
                 >{artifactGroups.map((group) => (
-                  <section className="artifact-session-group" key={group.id}>
-                    <header>
+                  <details className="artifact-session-group" key={group.id}>
+                    <summary>
                       <span className="artifact-session-heading"><strong>{group.label}</strong><span>{group.items.length}</span></span>
                       <span className="artifact-session-actions">
                         <button
@@ -4613,7 +4773,9 @@ export function App() {
                           aria-pressed={artifactSelectionMode}
                           className="artifact-header-action"
                           disabled={!artifacts.length}
-                          onClick={() => {
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
                             if (artifactSelectionMode) exitArtifactSelection();
                             else {
                               setArtifactSelectionMode(true);
@@ -4627,14 +4789,14 @@ export function App() {
                           aria-label={t("app.downloadSelectedArtifacts")}
                           className="artifact-header-action"
                           disabled={!artifactSelectionMode || !selectedArtifactIds.size || artifactArchiveBusy}
-                          onClick={() => void downloadSelectedArtifacts()}
+                          onClick={(event) => { event.preventDefault(); event.stopPropagation(); void downloadSelectedArtifacts(); }}
                           title={artifactSelectionMode
                             ? `${t("app.downloadSelectedArtifacts")} · ${t("app.selectedArtifacts", { count: selectedArtifactIds.size })}`
                             : t("app.downloadSelectedArtifacts")}
                           type="button"
                         ><DownloadIcon size={14} /></button>
                       </span>
-                    </header>
+                    </summary>
                     <div className="file-list">
                       <ArtifactTreeList
                         entries={buildArtifactTree(group.items)}
@@ -4644,19 +4806,18 @@ export function App() {
                         selectedArtifactIds={artifactSelectionMode ? selectedArtifactIds : undefined}
                       />
                     </div>
-                  </section>
+                  </details>
                 ))}</ArtifactLifecycleProvider>}
                 {activeProjectId && artifacts.length === 0 ? <p className="muted centered">{t("app.noArtifacts")}</p> : null}
               </div>
-            </details>
+            </details> : null}
 
-            {showPhysicalFiles ? <details className="workspace-fold physical-files" open>
+            {files.length > 0 ? <details className="workspace-fold physical-files" open={showPhysicalFiles} onToggle={(event) => { if (event.currentTarget.open !== showPhysicalFiles) setShowPhysicalFiles(event.currentTarget.open); }}>
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
                 <strong>{t("app.physicalFiles")}</strong>
-                <span className="fold-meta">{files.length}</span>
-                <span className="workspace-fold-actions">
-                  <button
+                <span className="workspace-file-heading-meta">
+                  {showPhysicalFiles ? <button
                     aria-label={workspaceFileSelectionMode ? t("app.cancelWorkspaceFileSelection") : t("app.selectWorkspaceFiles")}
                     aria-pressed={workspaceFileSelectionMode}
                     className="artifact-header-action"
@@ -4672,7 +4833,8 @@ export function App() {
                     }}
                     title={workspaceFileSelectionMode ? t("app.cancelWorkspaceFileSelection") : t("app.selectWorkspaceFiles")}
                     type="button"
-                  >{workspaceFileSelectionMode ? <CloseIcon size={14} /> : <CheckIcon size={14} />}</button>
+                  >{workspaceFileSelectionMode ? <CloseIcon size={14} /> : <CheckIcon size={14} />}</button> : null}
+                  <span className="fold-meta">{files.length}</span>
                 </span>
               </summary>
               <div className="workspace-fold-body file-list">
@@ -4687,78 +4849,55 @@ export function App() {
                 {activeSessionId && files.length === 0 ? <p className="muted centered">{t("app.noFiles")}</p> : null}
               </div>
             </details> : null}
-
-            {session ? <MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => setMemoryExplorerOpen(true)} /> : null}
-
-            {session ? <EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /> : null}
-
-            {session ? <ReviewerControlCard
-              busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning}
-              disabled={sessionArchived}
-              onRun={() => void runManualReviewerSpecialist()}
-              settings={reviewerSpecialistSettings}
-            /> : null}
-
-            {session ? (
-              <details className="workspace-fold" aria-label="Paper search and extraction">
-                <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>Paper reader</strong><span className="fold-meta">{papers.length} parsed</span></summary>
-                <div className="workspace-fold-body">
-                  <label className="pdf-upload">
-                    <input type="file" accept="application/pdf,.pdf" disabled={paperBusy || sessionArchived} onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) void uploadPaper(file).catch((reason: Error) => setError(reason.message));
-                      event.target.value = "";
-                    }} />
-                    <span><UploadIcon size={14} /> Upload full PDF</span><small>50 MiB · 200 pages max</small>
-                  </label>
-                  {visionModels.length ? (
-                    <label className="vision-picker"><span>Optional vision model</span><select disabled={sessionArchived} value={visionModelId ?? ""} onChange={(event) => setVisionModelId(event.target.value)}>{visionModels.map((item) => <option key={item.id} value={item.id}>{modelOptionLabel(item, visionModels, t)}</option>)}</select></label>
-                  ) : <p className="paper-note">Mark a model as vision capable in Model settings to analyze scanned pages or extracted figures. OCR is not run.</p>}
-                  <div className="paper-library">
-                    {papers.map((paper) => {
-                      const analysisBase = paper.manifestPath.replace(/manifest\.json$/, "");
-                      const table = paper.extraction.tables[0];
-                      const image = paper.extraction.images[0];
-                      const visionRun = paperVisionRuns.filter((run) => run.paperId === paper.id).at(-1);
-                      return (
-                        <article key={paper.id}>
-                          <div><strong>{paper.title}</strong><small>{paper.extraction.pageCount} pages · {paper.extraction.tables.length} tables · {paper.extraction.images.length} figures</small></div>
-                          <div className="paper-actions">
-                            <button type="button" onClick={() => void openWorkspacePath(paper.pdfPath).catch((reason: Error) => setError(reason.message))}>PDF</button>
-                            <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${paper.extraction.textPath}`).catch((reason: Error) => setError(reason.message))}>Full text</button>
-                            {table ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${table.csvPath}`).catch((reason: Error) => setError(reason.message))}>Table</button> : null}
-                            {image ? <button type="button" onClick={() => void openWorkspacePath(`${analysisBase}${image.path}`).catch((reason: Error) => setError(reason.message))}>Figure</button> : null}
-                            {visionModels.length ? <button type="button" disabled={paperBusy || sessionArchived} onClick={() => void analyzePaperVision(paper)}>Vision</button> : null}
-                            {visionRun ? <button type="button" onClick={() => void openWorkspacePath(visionRun.resultPath).catch((reason: Error) => setError(reason.message))}>Vision result</button> : null}
-                          </div>
-                          {paper.extraction.warnings.map((warning) => <p key={warning}>{warning}</p>)}
-                        </article>
-                      );
-                    })}
-                    {!papers.length ? <p className="paper-note">Use the chat agent's MCP tools for governed literature downloads, or upload a local PDF here for extraction.</p> : null}
-                  </div>
-                </div>
-              </details>
-            ) : null}
-
-            <details className="workspace-fold" aria-label="Provenance record">
-              <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>Provenance record</strong></summary>
+            </WorkspaceFolder>
+            <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")}>
+            {workspacePlans.length ? <details className="workspace-fold workspace-plan-section">
+              <summary>
+                <ChevronRightIcon className="fold-chevron" size={15} />
+                <strong>{t("app.tasks")}</strong>
+                <span className="fold-meta">{workspacePlans.length}</span>
+              </summary>
               <div className="workspace-fold-body">
-                <div className="trust-metrics">
-                  <div><strong>{executionRuns.length}</strong><span>Execution runs</span></div>
-                  <div><strong>{latestExecution?.language ?? "—"}</strong><span>Language</span></div>
-                  <div><strong>{latestExecution?.kernelMode ?? "—"}</strong><span>Kernel mode</span></div>
-                  <div><strong>{latestEnvironment?.name ?? "—"}</strong><span>Environment</span></div>
-                  <div><strong>{latestExecution?.environmentRevisionId?.slice(0, 12) ?? "—"}</strong><span>Environment revision</span></div>
-                  <div><strong>{derivations.length}</strong><span>Derivations</span></div>
-                  <div><strong>{promptManifests.length}</strong><span>Prompt manifests</span></div>
-                  <div><strong>{mcpInvocations.length}</strong><span>MCP invocations</span></div>
-                  <div><strong>{claims.length}</strong><span>Claims</span></div>
-                  <div><strong>{evidenceLinks.length}</strong><span>Evidence links</span></div>
-                </div>
+                <OrchestrationPanel expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} plans={workspacePlans} terminalRunIds={new Set(sessionRuns.filter((run) => isTerminalRunStatus(run.status)).map((run) => run.id))} />
               </div>
-            </details>
-            <div className="boundary-note"><span><ShieldCheckIcon size={15} /></span><p title="Python, R, and shell run in bubblewrap with an immutable Environment Revision, one writable workspace, and no network."><strong>Isolated execution</strong> · Epoch {permissionEpoch?.id.slice(0, 8) ?? "loading"}{permissionEpoch?.memoryLostReason ? ` · ${permissionEpoch.memoryLostReason}` : ""}</p></div>
+            </details> : null}
+
+            {session ? <IdeaTreeView client={client} onOpenSubagent={setOpenSubagentId} onOpenArtifact={(id) => { const artifact = artifacts.find(item => item.id === id); if (artifact) setArtifactModalName(artifact.name); }} onError={reportError} refreshKey={`exec:${executionRuns.length}:msg:${session.messages.length}`} sessionId={session.id} /> : null}
+
+            {session && evolveRuns.length ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("evolve.card.title")}</strong><span className="fold-meta">{evolveRuns.length}</span></summary><EvolveRunCard onOpenRun={setOpenEvolveRunId} runs={evolveRuns} /></details> : null}
+
+            {session && reviewerSpecialistSettings?.enabled ? <details className="workspace-fold"><summary>{t("specialist.reviewerName")}</summary><ReviewerControlCard
+              busy={Boolean(manualReviewerBusyBySession[session.id]) || reviewerCheckpointRunning || reviewerAuditRunning}
+              configBusy={reviewerSessionSettingsBusy}
+              disabled={sessionArchived}
+              automaticReviewEnabled={session.reviewerAutomaticReviewEnabled}
+              level={session.reviewerSpecialistLevel}
+              onAutomaticReviewChange={(automaticReviewEnabled) => void updateSessionReviewerSpecialistSettings({
+                automaticReviewEnabled,
+                level: session.reviewerSpecialistLevel,
+              })}
+              onLevelChange={(level) => void updateSessionReviewerSpecialistSettings({
+                automaticReviewEnabled: session.reviewerAutomaticReviewEnabled,
+                level,
+              })}
+              onRun={() => void runManualReviewerSpecialist()}
+              onStop={() => void stopReviewerSpecialist()}
+              settings={reviewerSpecialistSettings}
+              stopping={stoppingReviewerSessionIds.has(session.id)}
+            /></details> : null}
+            {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} sessionId={activeSessionId} /> : null}
+            </WorkspaceFolder>
+            {session && memoryGraphSettings?.enabled !== false && isMemoryGraphVisible(memorySubgraph, memoryHealth) ? <WorkspaceFolder key={`memory:${activeSessionId}`} name="memory" label={t("record.memory")}>
+              <details className="workspace-fold"><summary>{t("settings.memoryGraph.title")}</summary><MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => {
+                // The card is the "browse the whole graph" entry: drop any
+                // focus left over from an earlier chip jump, or the explorer
+                // would open fogged on that stale node instead of the spine.
+                setPendingMemoryNode(undefined);
+                setMemoryExplorerOpen(true);
+              }} /></details>
+            </WorkspaceFolder> : null}
+
+
           </aside>}
           {workspaceCollapsed ? (
             <button aria-label={t("app.showWorkspace")} className="workspace-expander" onClick={() => setWorkspaceCollapsed(false)} title={t("app.showWorkspace")} type="button">
@@ -4774,10 +4913,10 @@ export function App() {
 
       {markdownDocument ? (
         <div className="document-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMarkdownDocument(undefined); }}>
-          <section aria-label={`Rendered Markdown: ${markdownDocument.path}`} aria-modal="true" className="document-panel" role="dialog">
+          <section aria-label={t("app.renderedMarkdownAria", { path: markdownDocument.path })} aria-modal="true" className="document-panel" role="dialog">
             <header className="document-header">
-              <div><span className="eyebrow">Rendered Markdown</span><h2>{markdownDocument.path.split("/").at(-1)}</h2><small title={markdownDocument.path}>{markdownDocument.path}</small></div>
-              <button aria-label="Close Markdown reader" className="icon-button" onClick={() => setMarkdownDocument(undefined)} title="Close Markdown reader"><CloseIcon size={20} /></button>
+              <div><span className="eyebrow">{t("app.renderedMarkdown")}</span><h2>{markdownDocument.path.split("/").at(-1)}</h2><small title={markdownDocument.path}>{markdownDocument.path}</small></div>
+              <button aria-label={t("app.closeMarkdownReader")} className="icon-button" onClick={() => setMarkdownDocument(undefined)} title={t("app.closeMarkdownReader")}><CloseIcon size={20} /></button>
             </header>
             <MarkdownRenderer className="document-markdown" content={markdownDocument.content} />
           </section>
@@ -4852,10 +4991,14 @@ export function App() {
           <Suspense fallback={null}>
             <MemoryGraphExplorer
               client={client}
-              // Opened from the right-rail card, not a product modal: no initial
-              // node and no autoChain (autoChain would jump straight into a
-              // chain view; the default here is the full graph backbone, and
-              // removing autoChain entirely is a later commit).
+              // Opened from the right-rail card, not a product modal: no entry
+              // node, so the explorer lands on the full graph backbone. A chip
+              // jump (a report [dbrecord1]/[evidence1]/[sourcefile1] click, or
+              // the dbrecord fallthrough) sets pendingMemoryNode and the
+              // explorer focuses that node — the entry node is a non-spine
+              // node, so it must name it here for projectToCanvas to keep it
+              // visible (otherwise the detail card has no node to render).
+              {...(pendingMemoryNode ? { initialNodeId: pendingMemoryNode.id } : {})}
               onClose={() => setMemoryExplorerOpen(false)}
               onError={reportError}
               sessionId={session.id}
@@ -4871,6 +5014,18 @@ export function App() {
           client={client}
           evidenceId={evidenceDetailId}
           onClose={() => setEvidenceDetailId(undefined)}
+          // SourceFile upstream of this Evidence → open the ArtifactModal on
+          // the same logicalName the right-rail card uses (mirrors the
+          // sourcefile chip click flow). Pin to the SourceFile's owning
+          // session so the modal reads its own artifact list, not the active
+          // Session's (artifacts are project-scoped but the chain walk
+          // already gave us the canonical session id from the node id).
+          onOpenSourceFile={(logicalName, sessionId) => {
+            setArtifactModalVersion(undefined);
+            setArtifactModalSessionId(sessionId);
+            setEvidenceDetailId(undefined);
+            setArtifactModalName(logicalName);
+          }}
           sessionId={activeSessionId}
         />
       ) : null}
@@ -4886,7 +5041,7 @@ export function App() {
               key={detail}
               onDismiss={() => setSystemSettingsErrors((current) => current.filter((item) => item !== detail))}
             />)}
-            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={selectSystemSettingsGroup}>
+            <SystemSettingsLayout activeGroup={systemSettingsGroup} onSelect={selectSystemSettingsGroup} runners={settingsRunners}>
               {systemSettingsGroup === "global" ? (
                 globalSettings ? <ScopedSettingsEditor allowInheritance={false} connectors={connectors} details={globalSettings} draft={globalSettingsEdit ?? globalSettingsDraft(globalSettings)} models={models} onDraftChange={setGlobalSettingsEdit} onSave={saveGlobalSettings} scopeLabel={t("settings.global")} showActions={false} skillScope="global" skills={skills} /> : <p className="muted">{t("settings.loadingGlobal")}</p>
               ) : null}
@@ -4938,6 +5093,11 @@ export function App() {
                   ref={providerSettingsRef}
                 />
               </> : null}
+              {systemSettingsGroup === "mcp" ? <McpServerSettings client={client} sources={mcpSources} sessionId={activeSessionId || undefined} sessionTitle={session?.title} onChanged={async () => {
+                const [items, sourceDetails] = await Promise.all([client.listConnectors(), client.listMcpSources()]);
+                setConnectors(items);
+                setMcpSources(sourceDetails.map((item) => item.manifest));
+              }} /> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings
                   ? <ProxySettingsEditor
@@ -4964,6 +5124,17 @@ export function App() {
                   ? <MemoryGraphSettingsEditor draft={memoryGraphSettingsEdit ?? createMemoryGraphSettingsDraft(memoryGraphSettings)} onChange={setMemoryGraphSettingsEdit} settings={memoryGraphSettings} />
                   : <p className="muted">{t("settings.loadingMemoryGraph")}</p>
               ) : null}
+              {systemSettingsGroup === "idea-tree" ? (
+                ideaTreeSettings
+                  ? <IdeaTreeSettingsEditor
+                    draft={ideaTreeSettingsEdit ?? createIdeaTreeSettingsDraft(ideaTreeSettings)}
+                    onChange={setIdeaTreeSettingsEdit}
+                    onSave={() => void saveIdeaTreeSettings(ideaTreeSettingsRequest(ideaTreeSettingsEdit ?? createIdeaTreeSettingsDraft(ideaTreeSettings)))}
+                    saving={systemSettingsSaving}
+                    settings={ideaTreeSettings}
+                  />
+                  : <p className="muted">{t("settings.loadingIdeaTree")}</p>
+              ) : null}
               {systemSettingsGroup === "skills" ? <SkillManager
                 client={client}
                 onCatalogChange={setSkills}
@@ -4978,12 +5149,16 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "specialists" ? <SpecialistManager client={client} connectors={connectors} onChanged={setSpecialists} onError={reportSystemSettingsError} skills={skills} /> : null}
               {systemSettingsGroup === "permissions" ? <PermissionGrantManager grants={permissionGrants.filter((grant) => grant.scope !== "once")} onRevoke={(grant) => void revokePermission(grant)} /> : null}
-              {systemSettingsGroup === "remote" ? <RemoteHostManager
-                client={client}
-                onCredentialEditStateChange={setRemoteCredentialDraftOpen}
-                onError={reportSystemSettingsError}
+              {systemSettingsGroup === "runner-add" ? <RemoteHostManager
+                client={client} addMode onHostsChange={updateSettingsRunners}
+                onAdded={(id) => setSystemSettingsGroup(`runner:${id}`)} onCancelAdd={() => setSystemSettingsGroup("runner:local")}
+                onCredentialEditStateChange={setRemoteCredentialDraftOpen} onError={reportSystemSettingsError}
               /> : null}
-              {systemSettingsGroup === "environments" ? <RunnerEnvironmentSettings client={client} onError={reportSystemSettingsError} /> : null}
+              {systemSettingsGroup.startsWith("runner:") || systemSettingsGroup === "remote" || systemSettingsGroup === "environments" ? <RunnerEnvironmentSettings
+                key={selectedSettingsRunnerId} client={client} runnerId={selectedSettingsRunnerId} runner={selectedSettingsRunner} onError={reportSystemSettingsError}
+                machine={<RemoteHostManager client={client} selectedRunnerId={selectedSettingsRunnerId} onHostsChange={updateSettingsRunners}
+                  onCredentialEditStateChange={setRemoteCredentialDraftOpen} onError={reportSystemSettingsError} />}
+              /> : null}
               {systemSettingsGroup === "connection" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.localAccess")}</span><h3>{t("settings.connection")}</h3><p>{t("settings.connectionHelp")}</p></div>
                 {tokenRejected ? <InlineErrorAlert detail={t("settings.tokenRejected")} title={t("settings.tokenRejectedTitle")} /> : null}
@@ -5023,8 +5198,8 @@ export function App() {
 
       {settingsTarget ? (
         <div className="config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeScopedSettings(); }}>
-          <section aria-label={`${settingsTarget.kind} settings`} aria-modal="true" className="config-panel" role="dialog">
-            <div className="config-header"><div><span className="eyebrow">{settingsTarget.kind} overrides</span><h2>{settingsTarget.label}</h2></div><button className="icon-button" onClick={closeScopedSettings} aria-label="Close scoped settings" title="Close scoped settings"><CloseIcon size={20} /></button></div>
+          <section aria-label={t("app.scopedSettingsAria", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })} aria-modal="true" className="config-panel" role="dialog">
+            <div className="config-header"><div><span className="eyebrow">{t("app.scopedOverrides", { kind: t(settingsTarget.kind === "project" ? "settings.project" : "settings.session") })}</span><h2>{settingsTarget.label}</h2></div><button className="icon-button" onClick={closeScopedSettings} aria-label={t("app.closeScopedSettings")} title={t("app.closeScopedSettings")}><CloseIcon size={20} /></button></div>
             {scopedSettingsErrors.map((detail) => <InlineErrorAlert
               detail={detail}
               key={detail}
@@ -5054,11 +5229,11 @@ export function App() {
               knowledgeBases={keKbs}
               models={models}
               onSave={saveScopedSettings}
-              scopeLabel={settingsTarget.kind === "project" ? "Project" : "Session"}
+              scopeLabel={t(settingsTarget.kind === "project" ? "settings.project" : "settings.session")}
               skillLibraries={skillLibraries}
               skillScope={settingsTarget.kind === "project" ? "project" : "session"}
               skills={skills}
-            /> : <p className="muted">Loading effective settings and sources…</p>}
+            /> : <p className="muted">{t("app.loadingScopedSettings")}</p>}
           </section>
         </div>
       ) : null}
@@ -5103,6 +5278,7 @@ export {
   runsRequiringEventReplay,
   selectSessionReplayRun,
   shouldApplySessionScopedUpdate,
+  shouldRefreshUsageForEvent,
   sortSessionRuns,
 };
 export type {

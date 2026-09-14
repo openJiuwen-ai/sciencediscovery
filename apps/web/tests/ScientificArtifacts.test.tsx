@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { ArtifactVersionProvenance, MemoryGraphNode, ScientificArtifact, ScientificArtifactVersion, Session } from "@sciencediscovery/schema";
@@ -91,6 +92,27 @@ test("JSON preview labels unparseable documents and still shows the raw text", (
   assert.match(html, /Preview truncated/);
 });
 
+test("JSON preview keeps long unbreakable values complete in the DOM", () => {
+  const sequence = "GTCAACACTGG".repeat(60);
+  const html = renderToStaticMarkup(createElement(JsonSourcePreview, {
+    parsed: true,
+    source: `{\n  "dna": "${sequence}"\n}`,
+    truncated: false,
+  }));
+  assert.match(html, new RegExp(sequence));
+});
+
+// Issue #69: long unbreakable JSON values (DNA/RNA sequences) stretched the
+// artifact dialog past the viewport edge — no scrollbar, no hint, content
+// silently cut. Lock the two rules that keep the dialog on screen and wrap
+// such values inside the preview.
+test("artifact preview stylesheet keeps the dialog on screen and wraps unbreakable runs", () => {
+  const dialogs = readFileSync(new URL("../src/styles/dialogs.css", import.meta.url), "utf8");
+  assert.match(dialogs, /\.artifact-modal-backdrop \{[^}]*grid-template-columns: minmax\(0, 100%\)/);
+  const artifacts = readFileSync(new URL("../src/styles/artifacts.css", import.meta.url), "utf8");
+  assert.match(artifacts, /\.artifact-source-preview \{ overflow-wrap: anywhere; \}/);
+});
+
 test("dataset table replaces an empty grid with an explicit no-rows explanation", () => {
   const empty = renderToStaticMarkup(createElement(DatasetTable, {
     columns: [],
@@ -165,11 +187,25 @@ function switchLabelsAndHandlers(node: unknown): Array<{ click: () => void; labe
   return nested;
 }
 
+// Hooks (useLocale) only run during a React render, so a component that uses
+// them cannot be invoked as a plain function outside one. Render a probe that
+// calls the component during render — the default locale context applies —
+// and captures the returned element tree for the handler walk above.
+function renderComponentTree(render: () => unknown): unknown {
+  let tree: unknown;
+  function Probe() {
+    tree = render();
+    return null;
+  }
+  renderToStaticMarkup(createElement(Probe));
+  return tree;
+}
+
 test("both view switches report the view they select, in either starting view", () => {
   for (const view of ["table", "raw"] as const) {
     const seen: string[] = [];
     const switches = switchLabelsAndHandlers(
-      DatasetPreview({ ...TABULAR_JSON, onViewChange: (next) => seen.push(next), view }),
+      renderComponentTree(() => DatasetPreview({ ...TABULAR_JSON, onViewChange: (next) => seen.push(next), view })),
     );
     assert.deepEqual(switches.map((item) => item.label), ["Table", "Raw JSON"], `starting from ${view}`);
     for (const item of switches) item.click();

@@ -548,6 +548,15 @@ async function streamOpenAiTurn(
       minimaxReasoning.push(...structuredClone(delta.reasoning_details));
       const thought = reasoningText(delta.reasoning_details);
       if (thought) callbacks.onThinkingDelta?.(thought);
+    } else if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+      // A gateway that serves a reasoning model under the plain `openai`
+      // dialect still streams the thought in `reasoning_content` — Volcengine
+      // Ark, SiliconFlow and vLLM all do. Dropping it left the user watching an
+      // idle screen for the whole reasoning phase while the text was on the
+      // wire. Only display: the variants whose contract requires the thought to
+      // come back in the next request echo it in `assistantMessage` below, and
+      // an endpoint that never asked for it must not receive an unknown field.
+      callbacks.onThinkingDelta?.(delta.reasoning_content);
     }
 
     if (typeof delta.content === "string" && delta.content) {

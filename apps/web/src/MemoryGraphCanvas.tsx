@@ -29,9 +29,11 @@ import { zoom, zoomIdentity, zoomTransform, type D3ZoomEvent } from "d3-zoom";
 
 import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
+import { translateActive } from "./i18n/index.js";
+
 /**
  * One colour per node label, drawn from a vivid, high-saturation palette
- * (each hue is pushed bright so the eight categories read at a glance even
+ * (each hue is pushed bright so the nine categories read at a glance even
  * on a dense graph). Kept in a plain map (not CSS variables) because SVG
  * paints inline and we want the same predictable palette across renders.
  * The palette is purely visual: it does not change any data semantics,
@@ -40,7 +42,7 @@ import type { MemoryGraphEdgeType, MemoryGraphNodeLabel, MemorySubgraph } from "
 export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
   ResearchGoal: "#F6114A", // vivid red
   Task: "#0AA0BF",         // bright teal (subagent scope)
-  ToolCall: "#FCA00C",     // amber (code_execution / literature_search / …)
+  ToolCall: "#FCA00C",     // amber (execution / search / …)
   Paper: "#F36E98",        // rose pink
   Evidence: "#78B177",     // sage
   Claim: "#F05006",        // burnt orange
@@ -51,6 +53,11 @@ export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
   SearchRun: "#c0a98a",    // muted ochre
   SearchNode: "#bfb08f",   // pale straw
   SearchCell: "#ab9c7e",   // dusty gold
+  SourceFile: "#6366F1",   // indigo (a user-uploaded input file)
+  // Search-result products — the full card render landed separately, but
+  // the colour must land now so the canvas doesn't render unknown labels.
+  WebPage: "#0EA5E9",       // sky blue (a web page)
+  DbRecord: "#8B5CF6",      // violet (a database record)
 };
 
 /**
@@ -76,6 +83,7 @@ export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   inspires: "#818790",
   elected: "#818790",
   occupies: "#818790",
+  feeds: "#818790",
 };
 
 /**
@@ -112,7 +120,8 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
   // plural kind name ("Artifacts"/"Papers") so it reads as a stack to expand.
   if (extra.aggregated === true || node.id.startsWith("_group:")) {
     const kind = typeof extra.kind === "string" ? extra.kind : node.label;
-    return kind === "Artifact" ? "Artifacts" : kind === "Paper" ? "Papers" : kind;
+    return kind === "Artifact" ? translateActive("memory.aggregate.artifacts")
+      : kind === "Paper" ? translateActive("memory.aggregate.papers") : kind;
   }
   // Artifact versions are separate nodes on a composite key, so the caption
   // carries the version too: two circles both reading "evolve/e…" told the
@@ -128,7 +137,7 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
   const name = node.label === "Artifact" ? artifactBase
     : node.label === "Code" ? pick("tool") ?? pick("code_id")
     : node.label === "Task" ? pick("objective") ?? pick("task_type") ?? pick("task_id")
-    : node.label === "ToolCall" ? pick("task_type") ?? pick("tool_type") ?? pick("task_id")
+    : node.label === "ToolCall" ? pick("tool_name") ?? pick("tool_type") ?? pick("task_id")
     : node.label === "Paper" ? pick("title") ?? pick("link")
     : node.label === "ResearchGoal" ? pick("core_objective") ?? pick("goal_id")
     // The algorithm alone read as a mystery word ("puct"); the held-out score
@@ -141,6 +150,23 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     })()
     : node.label === "SearchNode" ? `#${String(extra.node_index ?? "?")}`
     : node.label === "SearchCell" ? `i${String(extra.island ?? "?")} (${String(extra.complexity_bin ?? "?")},${String(extra.diversity_bin ?? "?")})`
+    : node.label === "SourceFile" ? pick("name") ?? pick("path")
+    // WebPage picks title → identifier (wiki path) → url, mirroring the detail
+    // card's display order; identifier survives a missing title (wiki pages
+    // sometimes arrive without one), and the url is the last resort.
+    : node.label === "WebPage" ? pick("title") ?? pick("identifier") ?? pick("url")
+    // DbRecord paints `source:identifier` when both exist (the same string
+    // the copy-badge shows on the detail card), the bare identifier when
+    // source is missing, and falls back to title → url. The prefixed form
+    // is what disambiguates two databases' same accession (e.g. PDB and
+    // UniProt each have their own "P38398"-shaped ids) at a glance on a
+    // dense canvas.
+    : node.label === "DbRecord" ? (() => {
+      const id = pick("identifier");
+      const src = pick("source");
+      if (id) return src ? `${src}:${id}` : id;
+      return pick("title") ?? pick("url");
+    })()
     : pick("title") ?? pick("name");
   const resolved = name ?? node.id;
   // Long paths/URLs read better from the tail (basename) than the head.
@@ -204,7 +230,7 @@ export function isScopeNode(node: { extra?: Record<string, unknown>; id: string 
 
 /**
  * A child of an expanded scope carries `extra.parent_subtask_id`, or its
- * task_id embeds `:exec:` (PR1's child task_id shape
+ * task_id embeds `:exec:` (the child task_id shape
  * `subtask:subagent:<id>:exec:<execId>`). Smaller/lighter on the canvas so
  * the scope↔child hierarchy reads at a glance.
  */
@@ -241,8 +267,8 @@ export function aggregateOwnerScope(groupId: string): string | undefined {
 
 /**
  * Resolve a child node's owning scope id — ``extra.parent_subtask_id`` when
- * PR1 wrote it, otherwise the prefix before ``:exec:`` in the task_id. Used
- * by the layout's incremental seed so a newly-expanded child appears near its
+ * present, otherwise the prefix before ``:exec:`` in the task_id. Used by
+ * the layout's incremental seed so a newly-expanded child appears near its
  * parent scope's settled position instead of at a random ring slot. Returns
  * ``undefined`` when the node is not a scope child.
  */
@@ -255,7 +281,7 @@ function childParentScopeId(id: string, extra?: Record<string, unknown>): string
 
 /**
  * A terminal-but-cancelled SubTask/Code (`extra.status === "cancelled"`,
- * PR1's aborted subagent). Drawn grey + solid-outline, distinct from pending
+ * an aborted subagent). Drawn grey + solid-outline, distinct from pending
  * (dashed) and completed (borderless full-fill).
  */
 export function isCancelledNode(node: { extra?: Record<string, unknown> }): boolean {
@@ -297,7 +323,8 @@ interface SimNode {
   parentScopeId?: string;
   // A scope/Code that finished by cancellation (extra.status === "cancelled"):
   // grey solid outline + greyed fill, distinct from pending (dashed) and
-  // completed (solid full-fill). PR1 writes cancelled on aborted subagents.
+  // completed (solid full-fill). The sidecar writes cancelled on aborted
+  // subagents.
   cancelled?: boolean;
   // True when this scope's children + real edges are merged into the current
   // graph (expandedScopes in the explorer). A folded scope's stack shows;
@@ -1313,7 +1340,7 @@ export function MemoryGraphCanvas({
     const known = new Set(subgraph.nodes.map((node) => node.id));
     // Count contains edges per source so a scope node can advertise how many
     // children it owns (the "▸ N" badge). Folded subgraphs carry the contains
-    // spine (PR2), so this counts real children even before expansion.
+    // spine, so this counts real children even before expansion.
     const containsOut = new Map<string, number>();
     for (const edge of subgraph.edges) {
       if (edge.type === "contains" && known.has(edge.source)) {
@@ -1337,8 +1364,9 @@ export function MemoryGraphCanvas({
       // child hangs off a scope via contains (first child only — 需求1) or is
       // reached via the scope-internal next chain: it carries
       // extra.parent_subtask_id, or its task_id embeds ":exec:". cancelled is a
-      // terminal status PR1 writes on aborted subagents — neither pending
-      // (unfinished) nor completed (succeeded/…), so it gets its own branch.
+      // terminal status the sidecar writes on aborted subagents — neither
+      // pending (unfinished) nor completed (succeeded/…), so it gets its own
+      // branch.
       const isScope = isScopeNode(node);
       const isChild = isChildNode(node);
       const cancelled = isCancelledNode(node);
@@ -1909,7 +1937,7 @@ export function MemoryGraphCanvas({
           // ToolCall 子节点时无内容可展开）。
           if (!node.childCount) return null;
           const hints = scopeHintsRef.current;
-          return node.folded ? (hints?.expand ?? "Click to expand") : (hints?.collapse ?? "Click to collapse");
+          return node.folded ? (hints?.expand ?? translateActive("scope.clickExpand")) : (hints?.collapse ?? translateActive("scope.clickCollapse"));
         }
         if (node.isAggregate) {
           // aggregate 节点：双击 toggle 成员展开。aggregateExpanded → 收起提示。
@@ -1917,8 +1945,8 @@ export function MemoryGraphCanvas({
           if (!node.aggregateCount) return null;
           const hints = scopeHintsRef.current;
           return node.aggregateExpanded
-            ? (hints?.collapse ?? "Click to collapse")
-            : (hints?.expand ?? "Click to expand");
+            ? (hints?.collapse ?? translateActive("scope.clickCollapse"))
+            : (hints?.expand ?? translateActive("scope.clickExpand"));
         }
         // 非 scope/aggregate 节点（规则3）：双击 toggle produces 成员。
         // producesExpanded → "双击收起节点"；否则 → "双击展开节点"。
@@ -1931,8 +1959,8 @@ export function MemoryGraphCanvas({
         if (!(foldedProducesCountsRef.current?.get(node.id) ?? 0)) return null;
         const hints = producesHintsRef.current ?? scopeHintsRef.current;
         return node.producesExpanded
-          ? (hints?.collapse ?? "Double-click to collapse")
-          : (hints?.expand ?? "Double-click to expand");
+          ? (hints?.collapse ?? translateActive("scope.clickCollapse"))
+          : (hints?.expand ?? translateActive("scope.clickExpand"));
       });
 
     // Live animation: d3-force's native rAF timer fires `on("tick")` at high

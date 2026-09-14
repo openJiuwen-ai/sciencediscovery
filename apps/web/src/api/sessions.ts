@@ -36,6 +36,7 @@ import type {
   PlanApprovalDecision,
   RevisePlanRequest,
   SessionPlan,
+  SessionReviewerSpecialistSettings,
   UpdateSessionRequest,
   RotatePermissionEpochRequest,
 } from "@sciencediscovery/schema";
@@ -117,6 +118,20 @@ export class SessionsApiClient extends ProjectsApiClient {
 
   replaceSessionSettings(sessionId: string, body: RuntimeSettingsOverrides): Promise<RuntimeSettingsDetails> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/settings`, {
+      body: JSON.stringify(body),
+      method: "PUT",
+    });
+  }
+
+  getSessionReviewerSpecialistSettings(sessionId: string): Promise<SessionReviewerSpecialistSettings> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-specialist/settings`);
+  }
+
+  updateSessionReviewerSpecialistSettings(
+    sessionId: string,
+    body: SessionReviewerSpecialistSettings,
+  ): Promise<SessionReviewerSpecialistSettings> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/reviewer-specialist/settings`, {
       body: JSON.stringify(body),
       method: "PUT",
     });

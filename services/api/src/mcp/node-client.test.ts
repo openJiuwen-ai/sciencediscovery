@@ -15,31 +15,39 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import test from "node:test";
 
+import type { LogFields, OperationalLogger } from "@sciencediscovery/operational-logging";
 import type { McpInvokeRequest, ResolvedProxy } from "@sciencediscovery/schema";
 
 import { effectiveRouting, loadExtensionsConfig } from "./extensions-config.js";
 import { McpNodeClient, proxyEnvOverlay, resolveMcpPython } from "./node-client.js";
 
-const SDK_ROOT = pathToFileURL(resolve(process.cwd(), "node_modules/@modelcontextprotocol/sdk/dist/esm")).href;
+const SDK_SERVER = import.meta.resolve("@modelcontextprotocol/sdk/server/index.js");
+const SDK_STDIO = import.meta.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+const SDK_TYPES = import.meta.resolve("@modelcontextprotocol/sdk/types.js");
 
 /** A real stdio MCP server (official SDK, low-level API — no extra deps). */
 const ECHO_SERVER_SOURCE = `
-import { Server } from "${SDK_ROOT}/server/index.js";
-import { StdioServerTransport } from "${SDK_ROOT}/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "${SDK_ROOT}/types.js";
+import { Server } from "${SDK_SERVER}";
+import { StdioServerTransport } from "${SDK_STDIO}";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "${SDK_TYPES}";
 
 const server = new Server({ name: "echo", version: "1.0.0" }, { capabilities: { tools: {} } });
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [{
-    name: "echo_upper",
-    description: "Uppercase the input text",
-    inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
-  }],
-}));
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  if (process.env.MCP_TEST_CATALOG_FAILURE === "1") {
+    console.error("catalog stderr marker Authorization: Bearer catalog-secret");
+    throw new Error("catalog failed");
+  }
+  return {
+    tools: [{
+      name: "echo_upper",
+      description: "Uppercase the input text",
+      inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+    }],
+  };
+});
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const text = String(request.params.arguments?.text ?? "");
   if (text === "explode") return { content: [{ type: "text", text: "synthetic failure" }], isError: true };
@@ -65,7 +73,30 @@ function invokeRequest(args: Record<string, unknown>): McpInvokeRequest {
   };
 }
 
-function fixtureClient(): { client: McpNodeClient; dir: string } {
+interface RecordedLog {
+  event: string;
+  fields: LogFields;
+  level: "debug" | "info" | "warn" | "error";
+}
+
+function recordingLogger(): { events: RecordedLog[]; logger: OperationalLogger } {
+  const events: RecordedLog[] = [];
+  const record = (level: RecordedLog["level"]) => (event: string, fields: LogFields = {}) => {
+    events.push({ event, fields: structuredClone(fields), level });
+  };
+  return {
+    events,
+    logger: {
+      path: "",
+      debug: record("debug"),
+      error: record("error"),
+      info: record("info"),
+      warn: record("warn"),
+    },
+  };
+}
+
+function fixtureClient(logger?: OperationalLogger, env: Record<string, string> = {}): { client: McpNodeClient; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), "mcp-node-"));
   const serverPath = join(dir, "echo-server.mjs");
   writeFileSync(serverPath, ECHO_SERVER_SOURCE);
@@ -77,12 +108,13 @@ function fixtureClient(): { client: McpNodeClient; dir: string } {
         command: process.execPath,
         description: "Echo server",
         enabled: true,
+        env,
         routing: { keywords: ["echo"], mode: "prefer", priority: 7 },
         type: "stdio",
       },
     },
   }));
-  const client = new McpNodeClient(() => loadExtensionsConfig(configPath));
+  const client = new McpNodeClient(() => loadExtensionsConfig(configPath), undefined, logger);
   return { client, dir };
 }
 
@@ -99,6 +131,50 @@ test("catalog lists tools from a real stdio server with routing annotations", as
     assert.equal((tool.annotations?.routing as { priority: number }).priority, 7);
     assert.equal(tool.inputSchema.type, "object");
     assert.match(tool.schemaHash, /^[0-9a-f]{64}$/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("connection lifecycle records server and proxy metadata without credentials", async () => {
+  const recorded = recordingLogger();
+  const { client } = fixtureClient(recorded.logger);
+  try {
+    await client.reload({
+      echo: {
+        mode: "url",
+        url: "http://proxy-user:proxy-password@proxy.example.test:8080/private?token=secret",
+      },
+    });
+    const started = recorded.events.find((entry) => entry.event === "mcp_connection_started");
+    assert(started);
+    assert.equal(started.level, "info");
+    assert.equal(started.fields.serverId, "echo");
+    assert.equal(started.fields.transport, "stdio");
+    assert.equal(started.fields.proxyMode, "url");
+    assert.equal(started.fields.proxyHost, "proxy.example.test:8080");
+    assert.equal(started.fields.proxyApplied, true);
+    assert.ok(recorded.events.some((entry) => entry.event === "mcp_connection_succeeded"));
+    assert.ok(recorded.events.some((entry) => entry.event === "mcp_catalog_loaded"));
+    const serialized = JSON.stringify(recorded.events);
+    assert.doesNotMatch(serialized, /proxy-user|proxy-password|token=secret|\/private/);
+  } finally {
+    await client.close();
+  }
+  assert.ok(recorded.events.some((entry) => entry.event === "mcp_connection_closed"
+    && entry.fields.reason === "shutdown"));
+});
+
+test("catalog failures include a bounded redacted stdio stderr tail", async () => {
+  const recorded = recordingLogger();
+  const { client } = fixtureClient(recorded.logger, { MCP_TEST_CATALOG_FAILURE: "1" });
+  try {
+    const catalog = await client.catalog();
+    assert.match(catalog.servers[0]?.error ?? "", /catalog failed/);
+    const failed = recorded.events.find((entry) => entry.event === "mcp_catalog_server_failed");
+    assert(failed);
+    assert.match(String(failed.fields.stderrTail), /catalog stderr marker/);
+    assert.doesNotMatch(JSON.stringify(failed), /catalog-secret/);
   } finally {
     await client.close();
   }
@@ -182,14 +258,15 @@ test("a dead server is classified as a transport error and retried per policy", 
   // retry/classification contract is pinned on the real code path.
   const dir = mkdtempSync(join(tmpdir(), "mcp-node-dead-"));
   const serverPath = join(dir, "dies.mjs");
-  writeFileSync(serverPath, "process.exit(1);\n");
+  writeFileSync(serverPath, 'console.error("Authorization: Bearer stderr-secret password=hidden"); process.exit(1);\n');
   const configPath = join(dir, "extensions_config.json");
   writeFileSync(configPath, JSON.stringify({
     mcpServers: {
       echo: { args: [serverPath], command: process.execPath, enabled: true, type: "stdio" },
     },
   }));
-  const client = new McpNodeClient(() => loadExtensionsConfig(configPath));
+  const recorded = recordingLogger();
+  const client = new McpNodeClient(() => loadExtensionsConfig(configPath), undefined, recorded.logger);
   try {
     const response = await client.invoke(invokeRequest({ text: "abc" }));
     assert.equal(response.isError, true);
@@ -201,6 +278,14 @@ test("a dead server is classified as a transport error and retried per policy", 
     }
     // The failure text reaches the caller instead of being swallowed.
     assert.ok(response.content.some((block) => block.type === "text" && block.text.length > 0));
+    assert.ok(recorded.events.some((entry) => entry.event === "mcp_connection_failed"));
+    assert.ok(recorded.events.some((entry) => entry.event === "mcp_invocation_attempt_failed"
+      && entry.fields.status === "transport-error"));
+    assert.ok(recorded.events.some((entry) => entry.event === "mcp_invocation_retry_scheduled"));
+    const serialized = JSON.stringify(recorded.events);
+    assert.match(serialized, /stderrTail/);
+    assert.match(serialized, /\[REDACTED\]/);
+    assert.doesNotMatch(serialized, /stderr-secret|password=hidden/);
   } finally {
     await client.close();
   }

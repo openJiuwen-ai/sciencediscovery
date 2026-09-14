@@ -34,7 +34,7 @@ import {
  *   2. Let the subagent create and declare review notes while retaining a private file; let the main Agent create and declare the final report.
  *   3. Inspect the subagent card's identity and terminal state, then open its dedicated conversation for the tool/text steps and usage feedback.
  *   4. Verify the main answer and both declared Artifacts, while private files stay out of the Artifact catalog and @ suggestions.
- *   5. Open the separate physical-file tree and reload the Session to verify persisted subagent state.
+ *   5. Confirm child-private files exist in the child execution but not the main Workspace; reload the Session to verify persisted subagent state.
  * Environment: Isolated local stack at E2E_BASE_URL with shell sandbox and a journey-owned Project/Session.
  * Type: mocked
  * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; main/subagent routing uses the general-purpose preset system marker.
@@ -71,7 +71,7 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
   ], [
     {
       arguments: {
-        command: `mkdir -p review private && printf '# Review notes\\n\\n${childMarker}\\n' > review/notes.md && printf 'private context' > private/context.txt && echo ${childMarker}`,
+        command: `mkdir -p review private && printf '# Review notes\\n\\n${childMarker}\\n' > review/notes.md && printf 'private context' > private/context.txt && test "$(cat private/context.txt)" = 'private context' && echo PRIVATE-FILE-VERIFIED && echo ${childMarker}`,
       },
       delayMs: 700,
       tool: "run_shell",
@@ -117,31 +117,73 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
       },
     );
 
+    await journey.step("身份栏紧接用户输入", "即使先调用工具，头像和模型标题也位于整轮回复顶部，后续正文不重复显示。", async () => {
+      const timeline = page.locator(".run-timeline").first();
+      const identity = timeline.locator(":scope > .run-identity");
+      await expect(identity).toHaveCount(1);
+      await expect(timeline.locator(".avatar")).toHaveCount(1);
+      await expect(timeline.locator(":scope > :first-child")).toHaveClass(/run-identity/);
+      const user = page.locator(".message.user").first();
+      const userBox = (await user.boundingBox())!;
+      const identityBox = (await identity.boundingBox())!;
+      expect(identityBox.y).toBeGreaterThanOrEqual(userBox.y + userBox.height);
+      expect(identityBox.y + identityBox.height).toBeLessThanOrEqual((await timeline.locator(".timeline-disclosure.tool").first().boundingBox())!.y);
+      await identity.scrollIntoViewIfNeeded();
+    });
+
     await journey.step(
       "在主对话里看到这位「助手」",
-      "主对话出现一张 Subagent 卡片，写明它接到的任务、类型 general-purpose 和已完成的状态。",
+      "主对话保留一条 Subagent 无框记录，写明任务和已完成状态，不再显示集合标题统计。",
       async () => {
         const subagentSection = page.locator("section[aria-label='Subagent activity']");
         await expect(subagentSection).toBeVisible();
-        const card = subagentSection.locator("article.subagent-card").first();
-        await expect(card).toHaveClass(/completed/);
+        const card = subagentSection.locator("details.process-agent-record").first();
+        await expect(card).toHaveClass(/process-agent-record.*completed/);
+        await expect(subagentSection.locator(".subagent-list-heading")).toHaveCount(0);
+        expect(await card.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(card.locator(":scope > summary svg")).toHaveCount(0);
+        await expect(card).not.toHaveAttribute("open", "");
+        await expect(card.locator(":scope > summary")).toHaveCSS("min-height", "28px");
+        await expect(subagentSection).toHaveCSS("margin-bottom", "4px");
         await expect(card).toContainText("Review the analysis workspace");
         await expect(card).toContainText("general-purpose");
         await expect(card).toContainText("completed");
+        await card.locator(":scope > summary").scrollIntoViewIfNeeded();
       },
     );
+
+    await journey.step("原位展开为卡片", "Subagent 记录展开后恢复边框，保留状态、用量和独立会话入口。", async () => {
+      const card = page.locator("section[aria-label='Subagent activity'] details.process-agent-record").first();
+      await card.locator(":scope > summary").click();
+      await expect(card).toHaveAttribute("open", "");
+      expect(await card.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+      await expect(card.getByRole("button", { name: /^Open SubAgent: / })).toBeVisible();
+      await card.scrollIntoViewIfNeeded();
+    });
 
     await journey.step(
       "点开卡片核对助手到底做了什么",
       "卡片打开助手自己的会话页，里面有助手的工具步骤、它的回复和用量信息，过程是可核对的而不是黑箱。",
       async () => {
-        const card = page.locator("section[aria-label='Subagent activity'] article.subagent-card").first();
+        const card = page.locator("section[aria-label='Subagent activity'] details.process-agent-record").first();
+        await expect(card).toHaveAttribute("open", "");
+        expect(await card.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await card.locator(":scope > summary").click();
+        expect(await card.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await card.locator(":scope > summary").click();
         await card.getByRole("button", { name: /^Open SubAgent: / }).click();
         const conversation = page.locator("section.subagent-conversation");
         await expect(conversation).toBeVisible();
         await expect(conversation.locator(".subagent-page-meta")).toContainText(/tokens|Usage unavailable/);
         // The subagent executes the two journey tools without a mode-selection round trip.
         await expect(conversation.locator(".run-timeline details.timeline-disclosure.tool")).toHaveCount(2);
+        const execution = conversation.locator(".run-timeline details.timeline-disclosure.tool").first();
+        await execution.locator(":scope > summary").click();
+        const result = execution.locator(".tool-io-section").filter({ has: page.locator(".tool-io-label", { hasText: /^Result$/ }) }).locator("pre");
+        const completed = JSON.parse(await result.textContent() ?? "{}");
+        expect(completed.state).toBe("completed");
+        expect(completed.result.exitCode).toBe(0);
+        expect(completed.result.stdout).toContain("PRIVATE-FILE-VERIFIED");
         const reply = conversation.locator(".run-timeline .message.assistant").last();
         await expect(reply).toContainText("review notes are ready");
         await expect(reply).toContainText(childMarker);
@@ -199,15 +241,14 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
     );
 
     await journey.step(
-      "确认助手的草稿纸确实存在，只是不算成果",
-      "打开工作区文件树后，助手私有目录下的文件都能看到；它们只是没有资格进入产物目录。",
+      "确认助手的独立工作区没有混进主工作区",
+      "助手步骤已验证私有文件存在；主工作区只包含主 Agent 的文件，不隐式出现子工作区或其副本。",
       async () => {
         await tree.openPhysicalFiles();
         const physicalNames = await tree.physicalFiles.evaluateAll((elements) =>
           elements.map((element) => element.getAttribute("title") ?? element.textContent ?? ""));
         expect(physicalNames).toContain("results/final.md");
-        expect(physicalNames.some((name) => /subagents\/.+\/review\/notes\.md$/.test(name))).toBe(true);
-        expect(physicalNames.some((name) => /subagents\/.+\/private\/context\.txt$/.test(name))).toBe(true);
+        expect(physicalNames.some((name) => /(?:^|\/)(?:subagents|private|review)\//.test(name))).toBe(false);
       },
     );
 

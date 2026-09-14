@@ -18,6 +18,8 @@
 
 import type { ReactNode } from "react";
 
+import { useLocale } from "./i18n/index.js";
+
 export interface DetailModalProps {
   /** Small label above the title (e.g. "Evidence", "markdown"). */
   eyebrow: string;
@@ -32,14 +34,15 @@ export interface DetailModalProps {
 }
 
 export function DetailModal({ children, controls, eyebrow, onClose, title }: DetailModalProps) {
+  const { t } = useLocale();
   return (
     <div className="artifact-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section aria-label={`Detail: ${title}`} aria-modal="true" className="artifact-modal-panel" role="dialog">
+      <section aria-label={t("detailModal.aria", { title })} aria-modal="true" className="artifact-modal-panel" role="dialog">
         <header className="artifact-modal-header">
           <div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>
           <div className="artifact-modal-controls">
             {controls}
-            <button aria-label="Close detail viewer" className="icon-button" onClick={onClose} title="Close detail viewer" type="button">✕</button>
+            <button aria-label={t("detailModal.close")} className="icon-button" onClick={onClose} title={t("detailModal.close")} type="button">✕</button>
           </div>
         </header>
         <div className="artifact-modal-body">

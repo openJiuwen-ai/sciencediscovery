@@ -17,10 +17,12 @@ import { mkdir, rm } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 
 import type { CancelRunResult, ModelProfile, Project, RunnerHealth, Session, SessionDetail, SessionRun, SessionRunEvent, SessionUsageSummary } from "@sciencediscovery/schema";
 
+import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { createApiServer, type ServerConfig } from "./server.js";
 
 const authorization = { authorization: "Bearer test-token" };
@@ -42,7 +44,7 @@ const RUNNER_HEALTH: RunnerHealth = {
   platform: "linux",
   runnerVersion: "test",
   sandbox: "bubblewrap",
-  sandboxNetwork: { available: true, modes: ["none", "domain-allowlist"] },
+  sandboxNetwork: { available: true, modes: ["none", "domain-allowlist", "open"] },
   scientificEnvs: { available: false, enabled: false, languages: [], provisioner: "test", startersReady: false },
   seccompBaseline: "multiarch-v1-profile-aware",
   status: "ok",
@@ -114,7 +116,7 @@ function writeSseEvent(response: ServerResponse, event: unknown): void {
   response.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-/** The scripted model calls run_python, so the REAL in-process tool execution
+/** The scripted model calls run_shell, so the REAL in-process tool execution
  *  hits the permission gate and the run blocks awaiting the user's decision. */
 function startBlockingPermissionGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
   let runCount = 0;
@@ -125,8 +127,39 @@ function startBlockingPermissionGateway(context: TestContext): Promise<{ origin:
       request.on("end", () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
         writeSseEvent(response, {
-          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-python-${runCount}`, type: "function", function: { name: "run_python", arguments: JSON.stringify({ code: "print(1)" }) } }] } }],
+          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-shell-${runCount}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: "printf 1" }) } }] } }],
         });
+        response.write("data: [DONE]\n\n");
+        response.end();
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  context.after(() => new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  }));
+  return new Promise((ready) => {
+    server.listen(0, "127.0.0.1", () => ready({
+      origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      runCount: () => runCount,
+    }));
+  });
+}
+
+function startBlockingPermissionUsageGateway(context: TestContext): Promise<{ origin: string; runCount: () => number }> {
+  let runCount = 0;
+  const server = createHttpServer((request, response) => {
+    if (request.url === "/chat/completions" && request.method === "POST") {
+      runCount += 1;
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        writeSseEvent(response, {
+          choices: [{ delta: { tool_calls: [{ index: 0, id: `call-shell-${runCount}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: "printf 1" }) } }] } }],
+        });
+        writeSseEvent(response, { choices: [], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
         response.write("data: [DONE]\n\n");
         response.end();
       });
@@ -196,6 +229,7 @@ function startStubRunner(context: TestContext): Promise<string> {
 }
 
 interface TestApi {
+  dataDir: string;
   gatewayRunCount: () => number;
   modelId: string;
   origin: string;
@@ -211,7 +245,7 @@ async function startApi(
   await mkdir(dataDir, { recursive: true });
   context.after(() => rm(dataDir, { force: true, recursive: true }));
   const [runnerUrl, gateway] = await Promise.all([startStubRunner(context), startGateway(context)]);
-  const server = createApiServer(testConfig(dataDir, runnerUrl));
+  const server = createApiServer(testConfig(dataDir, runnerUrl), { mcpTransport: offlineMcpTransport });
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
   context.after(() => new Promise<void>((done) => {
     server.close(() => done());
@@ -238,11 +272,18 @@ async function startApi(
   });
   assert.equal(projectResponse.status, 201);
   return {
+    dataDir,
     gatewayRunCount: gateway.runCount,
     modelId: (await modelResponse.json() as ModelProfile).id,
     origin,
     projectId: (await projectResponse.json() as Project).id,
   };
+}
+
+function wakeStopped(api: TestApi, sessionId: string): boolean {
+  const db = new DatabaseSync(resolve(api.dataDir, "catalog.sqlite"), { readOnly: true });
+  try { return Boolean(db.prepare("SELECT stopped FROM agent_wake_gates WHERE session = ?").get(sessionId)?.stopped); }
+  finally { db.close(); }
 }
 
 async function createSession(api: TestApi, title: string, overrides: Partial<Pick<Session, "approvalMode">> = {}): Promise<string> {
@@ -275,6 +316,13 @@ async function createRun(api: TestApi, sessionId: string, content: string): Prom
 
 function cancelRun(api: TestApi, sessionId: string): Promise<Response> {
   return fetch(`${api.origin}/api/sessions/${sessionId}/runs/current/cancel`, {
+    headers: authorization,
+    method: "POST",
+  });
+}
+
+function cancelReviewer(api: TestApi, sessionId: string): Promise<Response> {
+  return fetch(`${api.origin}/api/sessions/${sessionId}/reviewer-specialist/cancel`, {
     headers: authorization,
     method: "POST",
   });
@@ -406,18 +454,49 @@ test("GET session usage reports gateway token usage for a completed run", async 
   assert.equal(usage.totals.unreportedInvocationCount, 0);
 });
 
+test("cancelling a blocked run preserves reported model usage", async (context) => {
+  const api = await startApi(context, "blocked-cancel-usage", startBlockingPermissionUsageGateway);
+  const sessionId = await createSession(api, "Blocked cancel usage", { approvalMode: "ask_for_dangerous" });
+
+  const blocked = await createRun(api, sessionId, "Run code and keep usage");
+  try {
+    await waitForGatewayTurn(api, 1);
+    await waitForRunStatus(api, sessionId, blocked.id, "blocked");
+
+    assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
+    await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+
+    const usage = await getUsage(api, sessionId);
+    assert.equal(usage.totals.invocationCount, 1);
+    assert.equal(usage.totals.reportedInvocationCount, 1);
+    assert.equal(usage.totals.inputTokens, 7);
+    assert.equal(usage.totals.outputTokens, 3);
+    assert.equal(usage.totals.totalTokens, 10);
+    assert.equal(usage.latestInvocation?.outcome, "cancelled");
+    assert.equal(usage.latestInvocation?.usageStatus, "reported");
+  } finally {
+    const current = (await listRuns(api, sessionId)).find((run) => run.id === blocked.id);
+    if (current && (current.status === "queued" || current.status === "running" || current.status === "blocked")) {
+      await cancelRunById(api, sessionId, blocked.id);
+      await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
+    }
+  }
+});
+
 test("stopping a stuck run ends the stream as cancelled and frees the Session", async (context) => {
   const api = await startApi(context, "run-cancel");
   const sessionId = await createSession(api, "Stuck session");
 
   const cancelBeforeRun = await cancelRun(api, sessionId);
-  assert.equal(cancelBeforeRun.status, 409, "cancelling with no active run is an explicit conflict");
-  assert.match((await cancelBeforeRun.json() as { error: string }).error, /No run is active/);
+  assert.equal(cancelBeforeRun.status, 200, "Stop closes automatic wakeups even without a foreground run");
+  assert.deepEqual(await cancelBeforeRun.json(), { cancelled: true, sessionId });
+  assert.equal(wakeStopped(api, sessionId), true);
 
   const run = await startRun(api, sessionId, "Analyze the dataset");
   assert.equal(run.status, 200);
   const streamed = readUntilTerminal(run);
   await waitForGatewayTurn(api, 1);
+  assert.equal(wakeStopped(api, sessionId), false, "an explicit new user request resumes automatic wakeups");
 
   const queued = await startRun(api, sessionId, "Second run while the first is stuck");
   assert.equal(queued.status, 200, "a second prompt queues behind the active run");
@@ -428,6 +507,7 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   const cancelResult = await cancel.json() as CancelRunResult;
   assert.equal(cancelResult.cancelled, true);
   assert.equal(cancelResult.sessionId, sessionId);
+  assert.equal(wakeStopped(api, sessionId), true);
 
   const types = await streamed;
   assert.equal(types.at(0), "run.queued");
@@ -439,7 +519,23 @@ test("stopping a stuck run ends the stream as cancelled and frees the Session", 
   const queuedCancel = await cancelRun(api, sessionId);
   assert.equal(queuedCancel.status, 200, "the queued follow-up becomes the current run and can be stopped");
   assert.ok((await queuedStream).includes("run.cancelled"));
-  assert.equal((await cancelRun(api, sessionId)).status, 409, "a repeated Stop after the queue drains is a safe no-op");
+  assert.equal((await cancelRun(api, sessionId)).status, 200, "a repeated Stop after the queue drains is a safe no-op");
+});
+
+test("Reviewer stop has its own route and does not cancel an Agent run", async (context) => {
+  const api = await startApi(context, "reviewer-stop-isolation");
+  const sessionId = await createSession(api, "Reviewer isolation");
+  const run = await startRun(api, sessionId, "Analyze the dataset");
+  const streamed = readUntilTerminal(run);
+  await waitForGatewayTurn(api, 1);
+
+  const reviewerCancel = await cancelReviewer(api, sessionId);
+  assert.equal(reviewerCancel.status, 409, "the dedicated route is registered and only acts on reviews");
+  assert.match((await reviewerCancel.json() as { error: string }).error, /No Reviewer Specialist review is active/);
+  assert.equal((await listRuns(api, sessionId))[0]?.status, "running", "Reviewer Stop leaves the Agent run alone");
+
+  assert.equal((await cancelRun(api, sessionId)).status, 200);
+  assert.ok((await streamed).includes("run.cancelled"));
 });
 
 test("a stuck Session does not block runs in another Session", async (context) => {
@@ -473,6 +569,7 @@ test("cancelling a blocked run persists the approval's terminal state and the to
   await waitForGatewayTurn(api, 1);
   await waitForRunStatus(api, sessionId, blocked.id, "blocked");
   assert.equal((await cancelRunById(api, sessionId, blocked.id)).status, 202);
+  assert.equal(wakeStopped(api, sessionId), true, "stopping the active run by ID closes the same gate");
   await waitForRunStatus(api, sessionId, blocked.id, "cancelled");
 
   const eventsResponse = await fetch(
@@ -482,9 +579,9 @@ test("cancelling a blocked run persists the approval's terminal state and the to
   assert.equal(eventsResponse.status, 200);
   const events = await eventsResponse.json() as SessionRunEvent[];
 
-  const started = events.find((record) => record.event.type === "tool.started" && record.event.trace.name === "run_python");
+  const started = events.find((record) => record.event.type === "tool.started" && record.event.trace.name === "run_shell");
   assert.ok(started?.event.type === "tool.started");
-  assert.match(JSON.stringify(started.event.trace.args ?? {}), /print\(1\)/, "the replayed tool call keeps its arguments");
+  assert.match(JSON.stringify(started.event.trace.args ?? {}), /printf 1/, "the replayed tool call keeps its arguments");
 
   const requiredIndex = events.findIndex((record) => record.event.type === "permission.required");
   assert.ok(requiredIndex >= 0, "the approval request itself is part of the replay");

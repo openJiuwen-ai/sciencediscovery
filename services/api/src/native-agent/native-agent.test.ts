@@ -20,6 +20,8 @@ import test from "node:test";
 
 import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
+import type { AgentTool } from "@sciencediscovery/tools";
+import { Type } from "typebox";
 
 import {
   configuredMaxParallelToolCalls,
@@ -134,9 +136,12 @@ test("loop streams a tool round trip and returns wire-format final messages", as
     assert(start && start.type === "tool_execution_start" && start.toolName === "list_files");
     const end = events.find((event) => event.type === "tool_execution_end");
     assert(end && end.type === "tool_execution_end" && !end.isError);
+    assert.equal((end.result.details as { files?: Array<{ path: string }> }).files?.[0]?.path, "readme.md");
     const usageEvents = events.filter((event) => event.type === "usage");
     assert.equal(usageEvents.length, 1);
-    const modelUsage = events.find((event) => event.type === "model_usage");
+    const modelUsageEvents = events.filter((event) => event.type === "model_usage");
+    assert.equal(modelUsageEvents.length, 1);
+    const modelUsage = modelUsageEvents[0];
     assert(modelUsage && modelUsage.type === "model_usage" && modelUsage.usageReported);
 
     // The second model call saw the tool result in history.
@@ -147,6 +152,28 @@ test("loop streams a tool round trip and returns wire-format final messages", as
   }
 });
 
+test("native tool end events omit details when the runtime result has none", () => {
+  const events: AgentEvent[] = [];
+  const agent = createNativeAgent(workspace() as NativeAgentOptions);
+  agent.subscribe((event) => events.push(event));
+  (agent as unknown as {
+    emitRuntimeEvent(event: {
+      call: { args: Record<string, unknown>; id: string; name: string };
+      content: string;
+      isError: boolean;
+      type: "tool_execution_end";
+    }): void;
+  }).emitRuntimeEvent({
+    call: { args: {}, id: "call-no-details", name: "probe" },
+    content: "ok",
+    isError: false,
+    type: "tool_execution_end",
+  });
+
+  const end = events.find((event) => event.type === "tool_execution_end");
+  assert.ok(end && end.type === "tool_execution_end");
+  assert.equal("details" in end.result, false);
+});
 
 test("main and child native Agents receive Runner IDs, descriptions and explicit sync tools", async (context) => {
   for (const child of [false, true]) {
@@ -157,7 +184,8 @@ test("main and child native Agents receive Runner IDs, descriptions and explicit
         assert.equal(call.tools.some((tool) => tool.name === "propose_remote_job"), false);
         assert.ok(call.tools.some((tool) => tool.name === "sync_remote_workspace"));
         assert.match(JSON.stringify(call.tools), /runner_id/);
-        return toolTurn("run_python", { code: "print(42)", runner_id: "runner-gpu" });
+        assert.equal(call.tools.some((tool) => tool.name === "run_python" || tool.name === "run_r"), false);
+        return toolTurn("run_shell", { command: "python -c 'print(42)'", runner_id: "runner-gpu" });
       },
       () => textTurn("done"),
     ]);
@@ -168,7 +196,8 @@ test("main and child native Agents receive Runner IDs, descriptions and explicit
       const agent = createNativeAgent({
         ...base,
         ...(child ? { subagent: { name: "analysis", instructions: "Analyze in your own workspace" } } : {}),
-        executePython: async (_code, _signal, _toolCallId, runnerId) => {
+        executeShell: async (_code, mode, _signal, _toolCallId, runnerId) => {
+          assert.equal(mode, "ephemeral");
           seen.push(runnerId);
           return { createdFiles: [], exitCode: 0, stderr: "", stdout: "42" } as never;
         },
@@ -199,23 +228,20 @@ test("ordinary tools are available on the first model step without a mode activa
   }
 });
 
-test("Plan lifecycle and read_skill can run in the same first-step tool batch", async () => {
-  let plan: import("@sciencediscovery/schema").SessionPlan | undefined;
+test("Plan update and read_skill can run in the same first-step tool batch", async () => {
+  let plan: import("@sciencediscovery/schema").PlanSnapshot | undefined;
+  let planUpdates = 0;
   const options = workspace() as NativeAgentOptions;
-  options.planRepository = {
-    async abandon() { throw new Error("not called"); },
+  options.planStore = {
     async latest() { return plan && structuredClone(plan); },
-    async propose(input) {
+    async update(input, toolCallId) {
+      planUpdates += 1;
       plan = {
-        caveats: input.caveats ?? [], createdAt: "now", feasibilityConfidence: input.feasibilityConfidence,
-        id: "plan-1", mode: "recorded", runId: "run-1", scope: input.scope, sessionId: "session-1",
-        state: "recorded", steps: input.steps.map((description, index) => ({ description, id: `step-${index}`, status: "pending" })),
-        updatedAt: "now", version: 1,
+        agentId: "main", ...(input.explanation ? { explanation: input.explanation } : {}),
+        items: structuredClone(input.plan), toolCallId, turn: 1, updatedAt: "now",
       };
       return structuredClone(plan);
     },
-    async revise() { throw new Error("not called"); },
-    async updateStep() { throw new Error("not called"); },
   };
   options.skills = [{
     content: "Follow the frozen literature workflow.",
@@ -230,20 +256,27 @@ test("Plan lifecycle and read_skill can run in the same first-step tool batch", 
   }];
   const { calls, streamer } = scriptStreamer([
     (call) => {
-      assert.ok(call.tools.some((tool) => tool.name === "propose_plan"));
+      assert.ok(call.tools.some((tool) => tool.name === "update_plan"));
       assert.ok(call.tools.some((tool) => tool.name === "read_skill"));
       assert.ok(call.tools.some((tool) => tool.name === "list_files"));
       return toolBatchTurn([
         {
-          args: { feasibilityConfidence: "high", scope: "Inspect files", steps: ["List files"] },
+          args: { explanation: "Outdated draft", plan: [{ status: "pending", step: "Old step" }] },
+          id: "call-plan-old",
+          name: "update_plan",
+        },
+        {
+          args: { explanation: "Inspect files", plan: [{ status: "pending", step: "List files" }] },
           id: "call-plan",
-          name: "propose_plan",
+          name: "update_plan",
         },
         { args: { skillId: "literature-review" }, id: "call-skill", name: "read_skill" },
       ]);
     },
     (call) => {
       const input = call.systemPrompt + call.history.map((message) => String(message.content ?? "")).join("\n");
+      const superseded = call.history.find((message) => message.role === "tool" && message.tool_call_id === "call-plan-old");
+      assert.match(String(superseded?.content ?? ""), /"superseded":true/u);
       assert.match(input, /Inspect files/u);
       assert.match(input, /Follow the frozen literature workflow/u);
       return textTurn("planned");
@@ -253,7 +286,8 @@ test("Plan lifecycle and read_skill can run in the same first-step tool batch", 
   try {
     await createNativeAgent(options).execute("plan the inspection");
     assert.equal(calls[0]?.tools.some((tool) => tool.name === "activate_execution_mode"), false);
-    assert.equal(plan?.scope, "Inspect files");
+    assert.equal(planUpdates, 1);
+    assert.equal(plan?.explanation, "Inspect files");
   } finally {
     restore();
   }
@@ -396,6 +430,37 @@ test("dynamic context keeps one Skill body and adds a durable lower-authority re
     assert.equal(historyText.match(/Follow the frozen literature workflow\./gu)?.length, 1);
     assert.match(historyText, /channel="active_skills"/u);
     assert.match(historyText, /instructionsVisibleInHistory":true/u);
+  } finally {
+    restore();
+  }
+});
+
+test("run-scoped extra tools are visible and executable only when supplied to the Lead Native Agent", async () => {
+  const parameters = Type.Object({ tree_id: Type.String() });
+  const treeView: AgentTool<typeof parameters> = {
+    description: "Lead-only fixture tree view",
+    execute: async (_toolCallId, params) => ({
+      content: [{ type: "text", text: `view:${params.tree_id}` }],
+      details: { treeId: params.tree_id },
+    }),
+    label: "Tree view",
+    name: "tree_view",
+    parameters,
+  };
+  const { calls, streamer } = scriptStreamer([
+    (call) => {
+      assert.equal(call.tools.some((candidate) => candidate.name === "tree_view"), true);
+      return toolTurn("tree_view", { tree_id: "tree-0123456789abcdef" });
+    },
+    () => textTurn("done"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({ ...workspace(), extraTools: [treeView] } as NativeAgentOptions);
+    const result = await agent.execute("inspect the tree");
+    assert.equal(calls.length, 2);
+    const toolMessage = result.finalMessages.find((message) => message.role === "tool");
+    assert.match(String(toolMessage?.content), /view:tree-0123456789abcdef/u);
   } finally {
     restore();
   }
@@ -753,6 +818,43 @@ test("abort cancels the run and pre-abort rejects immediately", async () => {
   }
 });
 
+test("abort preserves reported usage from a completed model turn", async () => {
+  const usage = { inputTokens: 11, outputTokens: 4, totalTokens: 15, cacheReadTokens: 2, cacheWriteTokens: null };
+  const { streamer } = scriptStreamer([
+    () => ({ ...toolTurn("run_shell", { command: "python -c 'print(1)'" }), usage }),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const events: AgentEvent[] = [];
+    let markToolStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => { markToolStarted = resolve; });
+    const agent = createNativeAgent({
+      ...workspace(),
+      executeShell: async (_code, _mode, signal) => {
+        markToolStarted();
+        assert(signal);
+        await new Promise((_resolve, reject) => {
+          if (signal.aborted) return reject(new Error("aborted"));
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+        throw new Error("unreachable");
+      },
+    } as NativeAgentOptions);
+    agent.subscribe((event) => events.push(event));
+
+    const run = agent.execute("go");
+    await toolStarted;
+    agent.abort();
+    await assert.rejects(() => run, /Agent run cancelled/);
+
+    const modelUsage = events.findLast((event) => event.type === "model_usage");
+    assert(modelUsage && modelUsage.type === "model_usage" && modelUsage.usageReported);
+    assert.deepEqual(modelUsage.usage, usage);
+  } finally {
+    restore();
+  }
+});
+
 test("an agent handle executes exactly once", async () => {
   const { streamer } = scriptStreamer([() => textTurn("first")]);
   const restore = setModelTurnStreamerForTest(streamer);
@@ -914,7 +1016,7 @@ test("an oversized execution result enters history as a head/tail preview the mo
   const stdout = Array.from({ length: 200_000 }, (_, index) => `metric-${index + 1}`).join("\n");
   let refInHistory = "";
   const { streamer } = scriptStreamer([
-    () => toolTurn("run_python", { code: "print(metrics)" }),
+    () => toolTurn("run_shell", { command: "python metrics.py" }),
     (call) => {
       refInHistory = /ref "(tool-output-[0-9a-f]{16})"/.exec(String(call.history.at(-1)?.content))?.[1] ?? "";
       return toolTurn("read_tool_output", { limit: 3, ref: refInHistory }, "call-read-back");
@@ -925,14 +1027,14 @@ test("an oversized execution result enters history as a head/tail preview the mo
   try {
     const agent = createNativeAgent({
       ...options,
-      executePython: async () => ({
+      executeShell: async () => ({
         createdFiles: [],
         environmentRevisionId: "rev-1",
         exitCode: 0,
         finishedAt: "2026-08-28T00:00:01.000Z",
         kernelId: "kernel-1",
         kernelMode: "ephemeral",
-        language: "python",
+        language: "shell",
         modifiedFiles: [],
         networkPolicy: "deny",
         runnerVersion: "test",
@@ -945,19 +1047,19 @@ test("an oversized execution result enters history as a head/tail preview the mo
     } as unknown as NativeAgentOptions);
     const result = await agent.execute("run the metrics script");
 
-    const executionResult = String(result.finalMessages.find((message) => message.name === "run_python")?.content);
+    const executionResult = String(result.finalMessages.find((message) => message.name === "run_shell")?.content);
     assert.ok(
       Buffer.byteLength(executionResult, "utf8") < 60 * 1_024,
       `the result entering history is ${Buffer.byteLength(executionResult, "utf8")} bytes`,
     );
-    assert.match(executionResult, /^\[bounded tool output] run_python produced 200003 lines/);
+    assert.match(executionResult, /^\[bounded tool output] run_shell produced 200004 lines/);
     assert.match(executionResult, /head\/tail preview/, "both initial context and the trailing outcome survive");
     assert.equal(executionResult.includes("metric-1\n"), true, "the head survives in the current result");
     assert.equal(executionResult.includes("created files: none"), true, "the trailing summary survives");
     assert.ok(refInHistory, "the bounded result carries a re-read ref");
 
     const pagedBack = String(result.finalMessages.find((message) => message.name === "read_tool_output")?.content);
-    assert.match(pagedBack, /\[tool output page] run_python ref tool-output-[0-9a-f]{16}: lines 1-3 of 200003/);
+    assert.match(pagedBack, /\[tool output page] run_shell ref tool-output-[0-9a-f]{16}: lines 1-3 of 200004/);
     assert.equal(pagedBack.endsWith("stdout:\nmetric-1\nmetric-2\n"), true, "the omitted head is recoverable");
   } finally {
     restore();

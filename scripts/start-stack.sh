@@ -466,7 +466,7 @@ start_stack() {
     SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN="${SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN:-sciencediscovery-memory-graph-local}" \
     "$memory_graph_python" -m sciencediscovery_memory_graph.server &
     pids+=("$!")
-    wait_healthy "memory-graph" "http://127.0.0.1:17674/health"
+    wait_healthy "memory-graph" "http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17674}/health"
   fi
 
   # Start the evolve search sidecar. It holds no persistent business state and
@@ -479,7 +479,7 @@ start_stack() {
     SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN="${SCIENCE_AGENT_EVOLVE_INTERNAL_TOKEN:-sciencediscovery-evolve-local}" \
     "$evolve_python" -m sciencediscovery_evolve.server &
     pids+=("$!")
-    wait_healthy "evolve" "http://127.0.0.1:4313/health"
+    wait_healthy "evolve" "http://127.0.0.1:${SCIENCE_AGENT_EVOLVE_PORT:-4313}/health"
   fi
 
   echo "Starting the control API..." >&2

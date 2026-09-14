@@ -15,6 +15,8 @@
 
 import type { ApiError } from "@sciencediscovery/schema";
 
+import { translateActive } from "../i18n/index.js";
+
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -63,7 +65,7 @@ export class AuthApiClient {
       this.reportAuthStatus(response.status);
       const body = (await response.json().catch(() => ({ error: response.statusText }))) as ApiError;
       throw new ApiRequestError(
-        body.error || `Request failed (${response.status})`,
+        body.error || translateActive("error.requestFailed", { status: response.status }),
         response.status,
         body.code,
         body.details,
@@ -88,7 +90,7 @@ export class AuthApiClient {
       this.reportAuthStatus(response.status);
       const body = (await response.json().catch(() => ({ error: response.statusText }))) as ApiError;
       throw new ApiRequestError(
-        body.error || `Request failed (${response.status})`,
+        body.error || translateActive("error.requestFailed", { status: response.status }),
         response.status,
         body.code,
         body.details,

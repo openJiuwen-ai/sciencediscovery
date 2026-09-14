@@ -17,7 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -97,10 +97,12 @@ import {
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
 import { strToU8, zipSync } from "fflate";
+import { RefStore, VersionStore, withWorkspaceMutation, workspaceHeadName } from "@sciencediscovery/cas";
 
 import {
   aggregateToolText,
-  createApiServer,
+  closeApiServer,
+  createApiServer as createProductionApiServer,
   createDeltaCoalescingSink,
   loadServerConfig,
   prepareSubagentHandoff,
@@ -109,6 +111,7 @@ import {
   waitForPermissionDecision,
   type ServerConfig,
 } from "./server.js";
+import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { SessionStore } from "./store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
@@ -116,11 +119,21 @@ import type { McpTransportClient } from "@sciencediscovery/data-source";
 const authorization = { authorization: "Bearer test-token" };
 const execFileAsync = promisify(execFile);
 
+// General API fixtures do not own live Python MCP servers. MCP integration
+// cases pass their explicit transport; an unexpected invocation fails closed.
+function createApiServer(...[config, dependencies]: Parameters<typeof createProductionApiServer>) {
+  return createProductionApiServer(config, { mcpTransport: offlineMcpTransport, ...dependencies });
+}
+
 interface TestSseEvent {
   subagent?: { id: string };
   subagentId?: string;
   type: string;
   [key: string]: unknown;
+}
+
+function pythonCommand(code: string): string {
+  return `python3 - <<'PY'\n${code}\nPY`;
 }
 
 function parseSseEvents(stream: string): TestSseEvent[] {
@@ -151,6 +164,51 @@ function subagentSseGoldens(stream: string): string[][] {
     lanes.set(id, lane);
   }
   return [...lanes.values()].sort((left, right) => left.join(",").localeCompare(right.join(",")));
+}
+
+/**
+ * Compact SSE summary for an assertion message.
+ *
+ * A bare count assertion fails as "1 !== 2", which says nothing about which
+ * call went missing or where the switch landed relative to it. This keeps both
+ * answers in the CI log without dumping the stream: per-type counts, then the
+ * ordered type sequence with consecutive repeats collapsed and the tail capped.
+ */
+function sseDiagnostics(events: TestSseEvent[]): string {
+  const counts = new Map<string, number>();
+  for (const event of events) counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
+  const tally = [...counts.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([type, count]) => `${type}=${count}`)
+    .join(" ");
+
+  const sequence: Array<{ count: number; type: string }> = [];
+  for (const event of events) {
+    const last = sequence.at(-1);
+    if (last?.type === event.type) last.count += 1;
+    else sequence.push({ count: 1, type: event.type });
+  }
+  const rendered = sequence.map((run) => run.count > 1 ? `${run.type}x${run.count}` : run.type);
+  const capped = rendered.length > 40
+    ? [...rendered.slice(0, 20), `…(${rendered.length - 40} more)…`, ...rendered.slice(-20)]
+    : rendered;
+
+  return `counts{ ${tally} } order[ ${capped.join(" > ")} ]`;
+}
+
+/**
+ * Compact permission-authorization summary for an assertion message: the fields
+ * these tests actually turn on, so a failure shows whether a call was prompted
+ * and under which mode instead of only how many records exist.
+ */
+function authorizationDiagnostics(records: readonly PermissionAuthorization[]): string {
+  const rows = records.map((record) => [
+    record.source,
+    record.approvalMode,
+    record.outcome,
+    record.permissionRequestId ? "prompted" : "unprompted",
+  ].join("/"));
+  return `authorizations(${records.length})[ ${rows.join(" | ")} ]`;
 }
 
 function testConfig(dataDir: string, runnerUrl = "http://127.0.0.1:1"): ServerConfig {
@@ -285,7 +343,7 @@ test("the passthrough sandbox resolves its stable Python path through the host P
   const tempRoot = resolve(process.cwd(), ".tmp", `bwrap-path-${Date.now()}-${process.pid}`);
   const hostBin = resolve(tempRoot, "host-bin");
   await mkdir(hostBin, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const hostPython = resolve(hostBin, "python3");
   await writeFile(hostPython, "#!/bin/sh\nprintf 'alternate host python\\n'\n");
@@ -299,6 +357,37 @@ test("the passthrough sandbox resolves its stable Python path through the host P
 
   assert.equal(stdout, "alternate host python\n");
 });
+
+const testApiOrigins = new Map<string, { origin: string; close(): Promise<void> }>();
+
+async function removeTestRoot(root: string): Promise<void> {
+  const api = testApiOrigins.get(root);
+  if (api) {
+    const { origin } = api;
+    // A completed foreground request may have queued a completion turn. Close
+    // the Session gates before removing files that those turns still own.
+    const projects = await jsonRequest<Project[]>(`${origin}/api/projects`, { headers: authorization });
+    for (const project of projects.body) {
+      const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${project.id}/sessions`, { headers: authorization });
+      for (const session of sessions.body) {
+        await jsonRequest(`${origin}/api/sessions/${session.id}/run/cancel`, { headers: authorization, method: "POST" });
+      }
+    }
+    const deadline = Date.now() + 10000;
+    let status = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+    while (status.body.sessions.length && Date.now() < deadline) {
+      await new Promise((done) => setTimeout(done, 25));
+      status = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+    }
+    assert.deepEqual(status.body.sessions, [], "Fixture teardown must drain Agent turns before deleting data");
+    await api.close();
+    testApiOrigins.delete(root);
+  }
+  // maxRetries: a server torn down just before this may still have detached
+  // async writes in flight (e.g. the fire-and-forget evolution store init);
+  // a concurrent file landing between readdir and rmdir surfaces ENOTEMPTY.
+  await rm(root, { force: true, maxRetries: 10, recursive: true, retryDelay: 100 });
+}
 
 async function startTestApi(
   context: TestContext,
@@ -334,8 +423,69 @@ async function startTestApi(
     server.close(() => resolveClose());
     server.closeAllConnections();
   }));
-  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  testApiOrigins.set(dataDir, { origin, close: () => new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  }) });
+  return { origin };
 }
+
+test("closing the API server drains active connections before closing the MCP transport", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `api-mcp-shutdown-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  let closeCalls = 0;
+  let closeCompleted = false;
+  const mcpTransport: McpTransportClient = {
+    catalog: offlineMcpTransport.catalog,
+    close: async () => {
+      closeCalls += 1;
+      await new Promise<void>((done) => setTimeout(done, 20));
+      closeCompleted = true;
+    },
+    invoke: async () => { throw new Error("MCP invocation is not expected"); },
+    reload: offlineMcpTransport.reload,
+  };
+  const server = createApiServer(testConfig(root), { mcpTransport });
+  let forcedConnectionsClosed = false;
+  const closeAllConnections = server.closeAllConnections.bind(server);
+  server.closeAllConnections = () => {
+    forcedConnectionsClosed = true;
+    closeAllConnections();
+  };
+  context.after(async () => {
+    if (server.listening) await new Promise<void>((done) => server.close(() => done()));
+    await rm(root, { force: true, maxRetries: 10, recursive: true, retryDelay: 50 });
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address() as AddressInfo;
+  const socket = connect(address.port, "127.0.0.1");
+  await new Promise<void>((connected, reject) => {
+    socket.once("connect", connected);
+    socket.once("error", reject);
+  });
+  socket.on("error", () => undefined);
+  const socketClosed = new Promise<void>((closed) => socket.once("close", () => closed()));
+  socket.write([
+    "POST /api/projects HTTP/1.1",
+    `Host: 127.0.0.1:${address.port}`,
+    "Authorization: Bearer test-token",
+    "Content-Type: application/json",
+    "Content-Length: 1024",
+    "",
+    "{",
+  ].join("\r\n"));
+  await new Promise<void>((ready) => setTimeout(ready, 20));
+
+  await closeApiServer(server);
+  await socketClosed;
+
+  assert.equal(forcedConnectionsClosed, true);
+  assert.equal(closeCalls, 1);
+  assert.equal(closeCompleted, true);
+  await closeApiServer(server);
+  assert.equal(closeCalls, 1);
+});
 
 async function startScientificTestApi(
   context: TestContext,
@@ -541,7 +691,7 @@ test("updating SSH credentials immediately probes with the newly stored username
   const remoteCompute = new RemoteComputeClient(
     resolve(tempRoot, "ssh-config"),
     async () => { throw new Error("The HTTP layer passes explicit SSH access"); },
-    transport,
+    { transport },
   );
   const emptyMcpCatalog: McpCatalog = {
     loadedAt: new Date().toISOString(),
@@ -549,9 +699,9 @@ test("updating SSH credentials immediately probes with the newly stored username
     servers: [],
   };
   const mcpTransport: McpTransportClient = {
-    catalog: async () => emptyMcpCatalog,
+    catalog: offlineMcpTransport.catalog,
     invoke: async () => { throw new Error("Credential updates do not invoke MCP"); },
-    reload: async () => emptyMcpCatalog,
+    reload: offlineMcpTransport.reload,
   };
   const server = createApiServer(testConfig(tempRoot), { mcpTransport, remoteCompute });
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
@@ -625,7 +775,7 @@ async function createTestModel(
 test("authenticated proxy REST returns complete settings URLs and manages MCP policies", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `proxy-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
 
   assert.equal((await fetch(`${origin}/api/proxy/settings`)).status, 401);
@@ -774,7 +924,7 @@ async function startToolModel(context: TestContext): Promise<{
               reasoning_content: "I should use the isolated Python tool to analyze the uploaded CSV.",
               role: "assistant",
               tool_calls: [{
-                function: { arguments: JSON.stringify({ code: analysisCode }), name: "run_python" },
+                function: { arguments: JSON.stringify({ command: pythonCommand(analysisCode) }), name: "run_shell" },
                 id: "call-run-python",
                 index: 0,
                 type: "function",
@@ -957,8 +1107,8 @@ async function startSubagentModel(
               role: "assistant",
               tool_calls: [{
                 function: {
-                  arguments: JSON.stringify({ code: options.subagentPythonCode ?? "print('subagent permission check')" }),
-                  name: "run_python",
+                  arguments: JSON.stringify({ command: pythonCommand(options.subagentPythonCode ?? "print('subagent permission check')") }),
+                  name: "run_shell",
                 },
                 id: "call-subagent-python",
                 index: 0,
@@ -1367,7 +1517,7 @@ const CONFIGURED_TOKENS = {
 test("loadServerConfig uses safe local defaults", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `config-defaults-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const config = loadServerConfig({ SCIENCE_AGENT_DATA_DIR: tempRoot });
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 4310);
@@ -1436,7 +1586,7 @@ test("loadServerConfig validates gateway timeout bounds", () => {
 test("creating a Project opens an implicit Session and refines its first-message title", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1507,7 +1657,7 @@ test("creating a Project opens an implicit Session and refines its first-message
 test("every later unnamed Session independently reuses first-message automatic naming", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `later-session-auto-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1583,7 +1733,7 @@ test("every later unnamed Session independently reuses first-message automatic n
 test("Session title refinement completes while the first task is still running", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-concurrent-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, false, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1636,7 +1786,7 @@ test("Session title refinement completes while the first task is still running",
 test("Session title refinement persists when the naming model finishes after the run stream closes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-after-terminal-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1707,7 +1857,7 @@ test("Session title refinement persists when the naming model finishes after the
 test("concurrent first messages keep every run and auto-name only once from queue order one", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-first-message-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, true, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1769,7 +1919,7 @@ test("concurrent first messages keep every run and auto-name only once from queu
 test("an asynchronous title refinement never overwrites a manual rename", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-manual-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, true);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1821,7 +1971,7 @@ test("an asynchronous title refinement never overwrites a manual rename", async 
 test("a second message never triggers another naming request", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-auto-name-dedupe-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context, false, false, "Compact title");
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1868,7 +2018,7 @@ test("a second message never triggers another naming request", async (context) =
 test("an explicitly named Session is never auto-renamed", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `session-explicit-name-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const namingModel = await startAutoNamingModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   await createTestModel(origin, {
@@ -1920,7 +2070,7 @@ test("aggregateToolText preserves every textual tool-result block", () => {
 test("permission wait timeout and abort cancel only the abandoned request and emit its terminal state", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `permission-timeout-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
@@ -1979,7 +2129,7 @@ test("permission wait timeout and abort cancel only the abandoned request and em
 test("runtime-status Kernel teardown is authenticated and proxied to the Runner", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `kernel-teardown-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   let runnerRequest: { authorization?: string; body?: unknown; path?: string } = {};
   const runner = createHttpServer(async (request, response) => {
     const chunks: Buffer[] = [];
@@ -2020,7 +2170,7 @@ test("runtime-status Kernel teardown is authenticated and proxied to the Runner"
 test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `timeout-runtime-status-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const runner = createRunnerServer({
     authToken: "runner-test-token",
@@ -2038,6 +2188,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   const runnerOrigin = `http://127.0.0.1:${(runner.address() as AddressInfo).port}`;
 
   let gatewayMode: "silent" | "tool-success-timeout-text" | "tool-timeout" = "silent";
+  let completionNotifications = 0;
   const openModelResponses: ServerResponse[] = [];
   const gateway = createHttpServer((request, response) => {
     if (request.url !== "/chat/completions" || request.method !== "POST") {
@@ -2047,26 +2198,32 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; });
     request.on("end", () => {
-      if (gatewayMode === "silent") {
+      const body = JSON.parse(raw) as { messages: Array<{ content?: unknown; role?: string }> };
+      const latestUser = body.messages.findLast((message) => message.role === "user"
+        && !(typeof message.content === "string" && message.content.startsWith("<runtime_context_data ")))?.content;
+      const notification = typeof latestUser === "string" && latestUser.startsWith("[Execution notifications]");
+      if (gatewayMode === "silent" && !notification) {
         // The API's configured idle timer aborts this deliberately silent stream.
         openModelResponses.push(response);
         return;
       }
-      const body = JSON.parse(raw) as { messages: Array<{ content?: unknown; role?: string }> };
       const lastRole = body.messages.at(-1)?.role;
       response.writeHead(200, { "content-type": "text/event-stream" });
       const send = (frame: unknown) => response.write(`data: ${JSON.stringify(frame)}\n\n`);
-      if (lastRole === "tool") {
+      if (notification) {
+        completionNotifications++;
+        send({ choices: [{ delta: { content: "Completion recorded; no command replay." } }] });
+      } else if (lastRole === "tool" || body.messages.some((message) => message.role === "tool")) {
         send({ choices: [{ delta: { content: gatewayMode === "tool-timeout"
           ? "The requested operation did not complete."
           : "The successful tool output was summarized." } }] });
       } else {
-        // Real run_python execution: the sleep trips the configured Runner
-        // exec timeout in tool-timeout mode; the print completes in success mode.
+        // Foreground timeout ends only the wait. The detached Shell must finish
+        // normally and retain its result, rather than produce runner_exec.
         const code = gatewayMode === "tool-timeout"
           ? "import time\ntime.sleep(2)"
           : "print('A paper title says: Python execution timed out after 25 ms')";
-        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_python", arguments: JSON.stringify({ code }) } }] } }] });
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: pythonCommand(code), wait_ms: gatewayMode === "tool-timeout" ? 25 : 10000 }) } }] } }] });
       }
       response.write("data: [DONE]\n\n");
       response.end();
@@ -2214,9 +2371,39 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
     { headers: authorization },
   );
   const runnerNotice = toolTimeoutDetail.body.messages.find((message) => message.kind === "timeout_notice");
-  assert.equal(runnerNotice?.timeout?.kind, "runner_exec");
-  assert.equal(runnerNotice?.timeout?.timeoutMs, 25);
-  assert.match(runnerNotice?.content ?? "", /Runner execution timeout was reached after 25 milliseconds/);
+  assert.equal(runnerNotice, undefined);
+  const activityUrl = `${origin}/api/sessions/${toolTimeoutSession.body.id}/agent-activity`;
+  type Activity = { executions: Array<{ id: string; state: string }> };
+  let activity = await jsonRequest<Activity>(activityUrl, { headers: authorization });
+  assert.equal(activity.body.executions.length, 1);
+  const executionId = activity.body.executions[0]!.id;
+  assert.ok(["queued", "running"].includes(activity.body.executions[0]!.state));
+  const deadline = Date.now() + 10000;
+  while (activity.body.executions[0]?.state !== "completed" && Date.now() < deadline) {
+    await new Promise((done) => setTimeout(done, 25));
+    activity = await jsonRequest<Activity>(activityUrl, { headers: authorization });
+  }
+  assert.equal(activity.body.executions.length, 1);
+  assert.equal(activity.body.executions[0]?.id, executionId);
+  assert.equal(activity.body.executions[0]?.state, "completed");
+  const completedExecutions = await jsonRequest<ExecutionRun[]>(
+    `${origin}/api/sessions/${toolTimeoutSession.body.id}/execution-runs`, { headers: authorization },
+  );
+  assert.equal(completedExecutions.body.length, 1);
+  assert.equal(completedExecutions.body[0]?.exitCode, 0);
+  assert.equal(completedExecutions.body[0]?.status, "succeeded");
+
+  // Both completed Shells wake the model independently. Drain their bounded
+  // notification turns before switching the shared fixture to a silent user
+  // request; otherwise the cancellation assertion observes unrelated work.
+  const notificationDeadline = Date.now() + 10000;
+  let settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+  while ((completionNotifications !== 2 || settled.body.sessions.length !== 0) && Date.now() < notificationDeadline) {
+    await new Promise((done) => setTimeout(done, 25));
+    settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
+  }
+  assert.equal(completionNotifications, 2);
+  assert.deepEqual(settled.body.sessions, []);
 
   gatewayMode = "silent";
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
@@ -2249,7 +2436,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
 test("native MCP literature flow produces an audited cited summary", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `literature-review-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startLiteratureModel(context);
   const searchSchema = {
       additionalProperties: false,
@@ -2446,7 +2633,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
 test("workbench search and Composer references use authenticated authoritative identities", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `workbench-search-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startTextModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
@@ -2510,7 +2697,9 @@ test("workbench search and Composer references use authenticated authoritative i
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
 
@@ -2537,7 +2726,7 @@ test("workbench search and Composer references use authenticated authoritative i
 test("running sessions accept queued runs and start them after the active run completes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `queued-runs-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startTextModel(context, true);
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
@@ -2585,7 +2774,7 @@ test("running sessions accept queued runs and start them after the active run co
 test("completed runs persist the assistant message identity used by hydrated timeline deduplication", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `completed-run-message-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const modelServer = await startTextModel(context);
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, { baseUrl: modelServer.baseUrl });
@@ -2626,7 +2815,7 @@ test("completed runs persist the assistant message identity used by hydrated tim
 test("environment setup and mutation routes reject unauthenticated callers", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `environment-permission-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const requests = [
     fetch(`${origin}/api/environment-source-settings`),
@@ -2657,7 +2846,7 @@ test("environment setup and mutation routes reject unauthenticated callers", asy
 test("authenticated environment catalog routes proxy create, install, uninstall, and delete", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `environment-routes-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const installBodies: Array<Record<string, unknown>> = [];
   const { origin } = await startScientificTestApi(context, tempRoot, (body) => installBodies.push(body));
 
@@ -2781,10 +2970,113 @@ test("authenticated environment catalog routes proxy create, install, uninstall,
   assert.equal(final.body.some((environment) => environment.id === created.body.id), false);
 });
 
+test("the built-in Runner answers setup queries before its scientific environments exist", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `runner-setup-unconfigured-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const snapshot = Buffer.from("{\"format\":\"scientific-test\"}\n");
+  const snapshotHash = createHash("sha256").update(snapshot).digest("hex");
+  const revision: EnvironmentRevision = {
+    channels: ["conda-forge"], createdAt: new Date().toISOString(), environmentId: "starter-python",
+    id: "rev-starter-python", language: "python", languageVersion: "test", packages: [], packageSpecHash: snapshotHash,
+    platform: "linux-x64", provisioner: "test", runnerVersion: "test",
+    snapshot: { hash: snapshotHash, size: snapshot.length },
+  };
+  const environment: Environment = {
+    createdAt: new Date().toISOString(), currentRevisionId: revision.id, id: "starter-python", kind: "starter",
+    language: "python", name: "Starter python", updatedAt: new Date().toISOString(),
+  };
+  // A Runner whose environments are not installed yet reports its setup and refuses its
+  // catalog: exactly the state the settings page opens in on a first start.
+  const catalogReads: string[] = [];
+  let state: ScientificEnvironmentSetup["state"] = "not-configured";
+  const component = (): ScientificEnvironmentSetup["components"]["conda"] => ({
+    action: null, completedAt: null, error: null, message: "Waiting for the installation to start",
+    phase: state === "ready" ? "complete" : "pending", startedAt: null, state, updatedAt: new Date().toISOString(),
+  });
+  const runner = createHttpServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://runner.test");
+    const send = (status: number, body: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(`${JSON.stringify(body)}\n`);
+    };
+    if (url.pathname === "/health") {
+      return send(200, {
+        cgroupDelegated: false, cgroupMode: "none", cgroupRoot: "",
+        executionAuth: "bearer+hmac-sha256", executionUser: "test", executionTimeoutMs: 60_000,
+        maxFileBytes: 0, maxOutputBytes: 1_000_000, maxWorkspaceBytes: 1024, networkPolicy: "none",
+        noNewPrivileges: true, runnerVersion: "test", sandbox: "bubblewrap",
+        scientificEnvs: state === "ready"
+          ? { available: true, enabled: true, languages: ["python"], provisioner: "test", startersReady: true }
+          : { available: false, enabled: true, languages: [], provisioner: null, startersReady: false,
+            unavailableReason: "Scientific environments are not configured; install them in System Settings" },
+        seccompBaseline: "multiarch-v1-profile-aware", status: "ok", workerConcurrency: null,
+      });
+    }
+    if (url.pathname === "/environment-setup") {
+      if (request.method === "POST") state = "installing";
+      return send(request.method === "POST" ? 202 : 200, {
+        allowedChannels: ["conda-forge"], completedAt: null, components: { conda: component(), micromamba: component() },
+        error: null, managedProvisioner: true, message: "Scientific environments are not installed yet",
+        networkPolicy: "allowed-channels", phase: state === "ready" ? "complete" : "pending", provisioner: null,
+        provisionerVersion: null, startedAt: null, starterPackages: { python: ["python=3.12"], r: ["r-base=4.4"] },
+        state, updatedAt: new Date().toISOString(),
+      } satisfies ScientificEnvironmentSetup);
+    }
+    if (url.pathname === "/environments" || url.pathname === "/environment-revisions") {
+      catalogReads.push(url.pathname);
+      if (state !== "ready") {
+        return send(500, { error: "Scientific environments are not configured; install them in System Settings" });
+      }
+      return send(200, url.pathname === "/environments" ? [environment] : [revision]);
+    }
+    if (url.pathname === `/environment-revisions/${revision.id}/snapshot`) {
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end(snapshot);
+    }
+    send(404, { error: "not found" });
+  });
+  await new Promise<void>((listening) => runner.listen(0, "127.0.0.1", listening));
+  context.after(() => new Promise<void>((closed) => runner.close(() => closed())));
+  const server = createApiServer(testConfig(tempRoot, `http://127.0.0.1:${(runner.address() as AddressInfo).port}`));
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
+  context.after(() => new Promise<void>((closed) => { server.close(() => closed()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const unconfigured = await jsonRequest<ScientificEnvironmentSetup>(
+    `${origin}/api/runners/local/environment-setup`,
+    { headers: authorization },
+  );
+  assert.equal(unconfigured.response.status, 200, JSON.stringify(unconfigured.body));
+  assert.equal(unconfigured.body.state, "not-configured");
+  assert.deepEqual(catalogReads, [], "a setup query must not read a catalog the Runner has not built yet");
+
+  const started = await jsonRequest<ScientificEnvironmentSetup>(`${origin}/api/runners/local/environment-setup`, {
+    body: JSON.stringify({ confirmed: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(started.response.status, 201);
+  assert.equal(started.body.state, "installing");
+  assert.deepEqual(catalogReads, [], "an installation that has only started has no catalog to mirror");
+
+  state = "ready";
+  const ready = await jsonRequest<ScientificEnvironmentSetup>(
+    `${origin}/api/runners/local/environment-setup`,
+    { headers: authorization },
+  );
+  assert.equal(ready.body.state, "ready");
+  assert.deepEqual([...new Set(catalogReads)].sort(), ["/environment-revisions", "/environments"]);
+  const installed = await jsonRequest<Environment[]>(`${origin}/api/runners/local/environments`, { headers: authorization });
+  assert.deepEqual(installed.body.map((item) => item.id), ["starter-python"]);
+  const mirrored = await jsonRequest<Environment[]>(`${origin}/api/environments`, { headers: authorization });
+  assert.deepEqual(mirrored.body.map((item) => item.id), ["starter-python"]);
+});
+
 test("an active run keeps its effective settings snapshot while later runs use updates", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const delayedModel = await startTextModel(context, true);
   const nextModel = await startTextModel(context);
@@ -2916,7 +3208,7 @@ test("an active run keeps its effective settings snapshot while later runs use u
 test("skill lifecycle APIs author, import, edit, select, audit impact, and delete safely", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `skill-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
 
   assert.equal((await fetch(`${origin}/api/skills`)).status, 401);
@@ -2928,6 +3220,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     "audit-systematic-review",
     "audit-tree-search",
     "chunked-analysis",
+    "assessment-screening",
     "citation-reviewer",
     "code-engineer",
     "comparative-analysis",
@@ -2936,6 +3229,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     "deep-research",
     "document-summary",
     "evidence-discipline",
+    "creative-material-design",
     "evidence-extractor",
     "evidence-notes",
     "evolve-design",
@@ -2943,6 +3237,8 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
     "idea-debate",
     "knowledge-engine-explore",
     "knowledge-engine-grow",
+    "idea-tree-team",
+    "insight-aggregator",
     "life-science-evidence-brief",
     "literature-searcher",
     "long-form-audit",
@@ -2962,6 +3258,13 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   ]);
   assert.equal(initial.body[0]?.readOnly, true);
   assert.equal("instructions" in (initial.body[0] ?? {}), false);
+  const fixtureExecutor = initial.body.find((skill) => skill.id === "idea-tree-team");
+  assert.deepEqual(fixtureExecutor?.ideaTreeExecutor, {
+    authorityKey: "idea-tree-result",
+    authorityVersion: "3.0.0",
+    available: true,
+    developmentOnly: true,
+  });
 
   const dialogueDraft = await jsonRequest<{ name: string; origin: string; sourceSummary: string }>(`${origin}/api/skills/drafts/dialogue`, {
     body: JSON.stringify({ description: "Prepare a repeatable microscopy quantification workflow." }),
@@ -3053,11 +3356,19 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   });
   assert.equal(project.response.status, 201);
   const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
-    body: JSON.stringify({ title: "Inherits skill" }),
+    body: JSON.stringify({
+      title: "Inherits skill",
+    }),
     headers: { ...authorization, "content-type": "application/json" },
     method: "POST",
   });
   assert.deepEqual(session.body.enabledSkillIds, [created.body.id]);
+  const standardSession = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
+    body: JSON.stringify({}),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PATCH",
+  });
+  assert.equal(standardSession.response.status, 200);
   const impact = await jsonRequest<SkillDeletionImpact>(`${origin}/api/skills/${created.body.id}/deletion-impact`, {
     headers: authorization,
   });
@@ -3107,7 +3418,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
 test("Agent-created Skill stays in draft until review publishes it to a Skill Library", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const modelServer = await startSkillCreatorModel(context);
   const model = await createTestModel(origin, {
@@ -3174,7 +3485,7 @@ test("Agent-created Skill stays in draft until review publishes it to a Skill Li
 test("PDF upload extracts full text and tables into the session workspace", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `paper-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     body: JSON.stringify({ name: "Paper project" }),
@@ -3288,7 +3599,7 @@ test("PDF upload extracts full text and tables into the session workspace", asyn
 test("legacy Reviewer does not inject findings or block the main agent", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `review-loop-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin, {
     baseUrl: await startReviewerCorrectionModel(context),
@@ -3314,7 +3625,9 @@ test("legacy Reviewer does not inject findings or block the main agent", async (
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
   const started = parseSseEvents(stream).find((event) => event.type === "run.started");
@@ -3330,7 +3643,7 @@ test("legacy Reviewer does not inject findings or block the main agent", async (
 test("API runs a configured OpenAI-compatible model through the gateway and Python", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const { origin } = await startTestApi(context, tempRoot);
   const toolModel = await startToolModel(context);
@@ -3438,7 +3751,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
   assert.ok(eventTypes.indexOf("assistant.thinking.delta") < eventTypes.indexOf("tool.started"));
   assert.ok(eventTypes.indexOf("tool.started") < eventTypes.indexOf("tool.completed"));
   assert.match(stream, /"type":"tool.started"/);
-  assert.match(stream, /"name":"run_python"/);
+  assert.match(stream, /"name":"run_shell"/);
   assert.match(stream, /"type":"assistant.delta"/);
   assert.doesNotMatch(stream, /"type":"review.completed"/);
   assert.match(stream, /"type":"run.completed"/);
@@ -3548,7 +3861,7 @@ test("API runs a configured OpenAI-compatible model through the gateway and Pyth
 test("API runs one observable subagent through task and keeps nested task denied", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const subagentCatalog = ({
     loadedAt: new Date().toISOString(),
     revision: "arxiv-subagent-catalog",
@@ -3640,22 +3953,35 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
+    "assistant.response.settled",
     "tool.started",
     "tool.output",
     "tool.completed",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
+  // Two model deltas, one streamed step: message deltas are coalesced into a
+  // single step event instead of one cumulative snapshot per token.
   assert.deepEqual(subagentSseGoldens(stream), [[
     "subagent.updated",
     "subagent.updated",
     "subagent.step",
     "subagent.step",
-    "subagent.step",
     "subagent.usage",
     "subagent.updated",
   ]]);
+  const streamedAssistantSteps = parseSseEvents(stream).flatMap((rawEvent) => {
+    const event = rawEvent as { step?: SubagentStep; type: string };
+    return event.type === "subagent.step" && event.step?.kind === "assistant" ? [event.step] : [];
+  });
+  assert.deepEqual(
+    streamedAssistantSteps.map((step) => step.content),
+    ["Subagent inspected the workspace and returned a concise result."],
+  );
   const eventTypes = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
     return data ? [(JSON.parse(data) as { type: string }).type] : [];
@@ -3687,6 +4013,25 @@ test("API runs one observable subagent through task and keeps nested task denied
   const assistantSteps = subagents.body[0]?.steps.filter((step) => step.kind === "assistant") ?? [];
   assert.equal(assistantSteps.length, 1);
   assert.equal(assistantSteps[0]?.content, "Subagent inspected the workspace and returned a concise result.");
+  // The run stream stores one record per logical step. The snapshots streamed
+  // while a message is still arriving are broadcast to live subscribers and
+  // never stored, so this file cannot grow with the length of the message.
+  const subagentStream = await jsonRequest<SessionRunEvent[]>(
+    `${origin}/api/sessions/${session.body.id}/runs/${parentExecutionId}`
+      + `/streams/subagent-${subagents.body[0]?.id}/events`,
+    { headers: authorization },
+  );
+  const storedSteps = subagentStream.body.flatMap((record) =>
+    record.event.type === "subagent.step" ? [record.event.step] : []);
+  assert.equal(
+    storedSteps.length,
+    new Set(storedSteps.map((step) => step.id)).size,
+    `the stream stored a step more than once: ${JSON.stringify(storedSteps.map((step) => step.id))}`,
+  );
+  assert.deepEqual(
+    storedSteps.filter((step) => step.kind === "assistant").map((step) => step.content),
+    ["Subagent inspected the workspace and returned a concise result."],
+  );
   assert.deepEqual(subagents.body[0]?.usage, {
     cacheReadTokens: null,
     cacheWriteTokens: null,
@@ -3716,7 +4061,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.equal(subagentToolNames.some((name) => name.startsWith("mcp__")), false);
   assert.equal(subagentToolNames.includes("invoke_connector"), false);
   assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "task"), false);
-  assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "propose_plan"), false);
+  assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "update_plan"), true);
   assert.equal(subagentRequest.tools?.some((tool) => tool.function?.name === "propose_remote_job"), false);
   const subagentSystemPrompt = subagentRequest.messages?.find((message) => message.role === "system")?.content ?? "";
   assert.doesNotMatch(subagentSystemPrompt, /<subagent_system>/);
@@ -3726,12 +4071,12 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.match(subagentSystemPrompt, /<name>code-engineer<\/name>/);
   assert.match(subagentSystemPrompt, /<name>structure-pocket-inspection<\/name>/);
   assert.doesNotMatch(subagentSystemPrompt, /# Code Engineer/);
-  assert.doesNotMatch(subagentSystemPrompt, /Plan governance mode/);
   const subagentUserPrompt = subagentRequest.messages?.find((message) => message.role === "user")?.content ?? "";
-  assert.match(subagentUserPrompt, new RegExp(`Private workspace root: subagents/${subagents.body[0]?.id}`));
+  assert.match(subagentUserPrompt, new RegExp(`Workspace ID: ${subagents.body[0]?.handoff?.workspaceId}`));
+  assert.match(subagentUserPrompt, /parent Workspace is not mounted or readable/);
   assert.match(subagentUserPrompt, /Handoff manifest visible inside your workspace: handoff\.json/);
   assert.ok(fixture.requests.some((request) => request.tools?.some((tool) => tool.function?.name === "task")));
-  assert.equal(leadRequest.tools?.some((tool) => tool.function?.name === "propose_plan"), true);
+  assert.equal(leadRequest.tools?.some((tool) => tool.function?.name === "update_plan"), true);
 
   const parentResultRequest = fixture.requests.find((request) =>
     request.messages?.some((message) => message.role === "tool"));
@@ -3755,7 +4100,7 @@ test("API runs one observable subagent through task and keeps nested task denied
 test("API does not auto-select a specialist by description for a subagent type", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-specialist-no-match-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentType: "code-engineer" });
   const model = await createTestModel(origin, {
@@ -3812,7 +4157,7 @@ test("API does not auto-select a specialist by description for a subagent type",
 test("API validates subagent Brief v1 structured output before summarizing task result", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { structuredSubagentResult: true });
   const model = await createTestModel(origin, {
@@ -3861,7 +4206,7 @@ test("API validates subagent Brief v1 structured output before summarizing task 
 test("subagent handoff skips oversized parent files instead of failing the run setup", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-limits-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -3882,15 +4227,16 @@ test("subagent handoff skips oversized parent files instead of failing the run s
   assert.deepEqual(handoff.inputPaths, ["inputs/small.csv"]);
   assert.equal(handoff.skippedInputPaths?.[0]?.path, "large.csv");
   assert.match(handoff.skippedInputPaths?.[0]?.reason ?? "", /single file size limit/);
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-limit-test/inputs/small.csv"), "utf8")), "value\n1\n");
-  const manifest = JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")) as NonNullable<Subagent["handoff"]>;
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-limit-test");
+  assert.equal((await readFile(resolve(childRoot, "inputs/small.csv"), "utf8")), "value\n1\n");
+  const manifest = JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")) as NonNullable<Subagent["handoff"]>;
   assert.equal(manifest.skippedInputPaths?.[0]?.path, "large.csv");
 });
 
 test("subagent handoff copies only declared or referenced parent files", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-selective-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -3909,9 +4255,13 @@ test("subagent handoff copies only declared or referenced parent files", async (
   });
 
   assert.deepEqual(handoff.inputPaths, ["inputs/needed.csv"]);
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/needed.csv"), "utf8")), "value\n1\n");
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/inputs/notneeded.csv")));
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/inputs/unmentioned.csv")));
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-selective-test");
+  assert.equal((await readFile(resolve(childRoot, "needed.csv"), "utf8")), "value\n1\n");
+  await assert.rejects(readFile(resolve(childRoot, "inputs/notneeded.csv")));
+  await assert.rejects(readFile(resolve(childRoot, "inputs/unmentioned.csv")));
+  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-selective-test/needed.csv")));
+  await writeFile(resolve(childRoot, "needed.csv"), "child changed");
+  assert.equal(await readFile(resolve(workspaceRoot, "needed.csv"), "utf8"), "value\n1\n");
   const copiedProvenance = store.getWorkspaceFileProvenance(
     session.id,
     "subagents/subagent-selective-test/inputs/needed.csv",
@@ -3920,7 +4270,9 @@ test("subagent handoff copies only declared or referenced parent files", async (
   assert.equal(copiedProvenance?.currentRevision.originMeta?.kind, "subagent-handoff-copy");
   assert.equal(copiedProvenance?.lineage[0]?.path, "needed.csv");
   assert.equal(copiedProvenance?.lineage[0]?.session.id, session.id);
-  const manifest = JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")) as {
+  assert.equal(copiedProvenance?.currentRevision.originMeta?.workspaceId, handoff.workspaceId);
+  assert.ok(copiedProvenance?.currentRevision.originMeta?.transferId);
+  const manifest = JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")) as {
     availableParentInputPaths?: string[];
     parentInputPaths?: string[];
   };
@@ -3928,10 +4280,40 @@ test("subagent handoff copies only declared or referenced parent files", async (
   assert.equal(manifest.availableParentInputPaths, undefined);
 });
 
+test("subagent handoff keeps both aliases on one committed source despite parent changes", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-handoff-source-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Stable handoff");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+  const parent = store.workspacePath(session.id);
+  await writeFile(resolve(parent, "input.txt"), "committed input");
+  const wait = store.transfers.wait.bind(store.transfers);
+  let waited = 0;
+  context.mock.method(store.transfers, "wait", async (...args: Parameters<typeof wait>) => {
+    const result = await wait(...args);
+    if (++waited === 1) await writeFile(resolve(parent, "input.txt"), "a later parent write");
+    return result;
+  });
+  await prepareSubagentHandoff(store, session.id, "stable-child", { description: "Read input.txt", prompt: "Inspect the delivered input", inputPaths: ["input.txt"] });
+  const child = store.agentWorkspacePath(session.id, "stable-child");
+  assert.equal(await readFile(resolve(child, "inputs/input.txt"), "utf8"), "committed input");
+  assert.equal(await readFile(resolve(child, "input.txt"), "utf8"), "committed input");
+  assert.equal(await readFile(resolve(parent, "input.txt"), "utf8"), "a later parent write");
+  const jobs = store.transfers.list({ sessionId: session.id, agentId: "main" });
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0]?.sourceSnapshotId, jobs[1]?.sourceSnapshotId);
+  const revision = store.getWorkspaceFileProvenance(session.id, "subagents/stable-child/input.txt")!.currentRevision;
+  assert.equal(revision.contentHash, jobs[0]?.progress[0]?.sha256);
+  assert.equal(revision.originMeta?.sourceSnapshotId, jobs[0]?.sourceSnapshotId);
+});
+
 test("subagent handoff does not implicitly copy the only parent file", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-no-default-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -3948,9 +4330,10 @@ test("subagent handoff does not implicitly copy the only parent file", async (co
   });
 
   assert.deepEqual(handoff.inputPaths, []);
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-no-default-test/inputs/mmc5.csv")));
-  await assert.rejects(readFile(resolve(workspaceRoot, "subagents/subagent-no-default-test/mmc5.csv")));
-  const manifest = JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")) as {
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-no-default-test");
+  await assert.rejects(readFile(resolve(childRoot, "inputs/mmc5.csv")));
+  await assert.rejects(readFile(resolve(childRoot, "mmc5.csv")));
+  const manifest = JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")) as {
     parentInputPaths?: string[];
   };
   assert.deepEqual(manifest.parentInputPaths, []);
@@ -3959,7 +4342,7 @@ test("subagent handoff does not implicitly copy the only parent file", async (co
 test("subagent handoff preserves copied input snapshots for audit", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-audit-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   store.setAvailableSkillIds([]);
   await store.load();
@@ -3975,15 +4358,16 @@ test("subagent handoff preserves copied input snapshots for audit", async (conte
     inputPaths: ["needed.csv"],
     prompt: "Use the declared input.",
   });
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-cleanup-test/inputs/needed.csv"), "utf8")), "value\n1\n");
-  assert.equal((await readFile(resolve(workspaceRoot, "subagents/subagent-cleanup-test/needed.csv"), "utf8")), "value\n1\n");
-  assert.ok(JSON.parse(await readFile(resolve(workspaceRoot, handoff.manifestPath), "utf8")));
+  const childRoot = store.agentWorkspacePath(session.id, "subagent-cleanup-test");
+  assert.equal((await readFile(resolve(childRoot, "inputs/needed.csv"), "utf8")), "value\n1\n");
+  assert.equal((await readFile(resolve(childRoot, "needed.csv"), "utf8")), "value\n1\n");
+  assert.ok(JSON.parse(await readFile(resolve(childRoot, "handoff.json"), "utf8")));
 });
 
 test("API fails subagents when structured output fails schema validation", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-invalid-schema-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     structuredSubagentOutput: "{\"summary\":\"Structured inspection\"}",
@@ -4035,7 +4419,7 @@ test("API fails subagents when structured output fails schema validation", async
 test("API preserves raw subagent structured output when final JSON parsing fails", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-raw-output-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     structuredSubagentOutput: "analysis complete but no final json",
@@ -4091,7 +4475,7 @@ function unwrapTaskResultContent(content: string): Record<string, unknown> {
 test("API PATCH endpoint updates a non-running subagent brief and rejects running updates", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-brief-patch-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { pauseSubagent: true });
   const model = await createTestModel(origin, {
@@ -4248,7 +4632,7 @@ test("API PATCH endpoint updates a non-running subagent brief and rejects runnin
 test("manual subagent permission requests use the outer SSE sink and refresh the shared epoch", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-permission-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentUsesPython: true });
   const model = await createTestModel(origin, {
@@ -4326,7 +4710,7 @@ test("manual subagent permission requests use the outer SSE sink and refresh the
 test("concurrent permission decisions serialize and return an authoritative conflict", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-permission-conflict-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const created = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {
     body: JSON.stringify({ name: "Permission conflict" }),
@@ -4376,7 +4760,7 @@ test("concurrent permission decisions serialize and return an authoritative conf
 test("switching an active run to always-allow resolves its pending subagent action", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-active-always-allow-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentUsesPython: true });
   const model = await createTestModel(origin, {
@@ -4448,7 +4832,7 @@ test("switching an active run to always-allow resolves its pending subagent acti
 });
 
 /**
- * A model that calls run_python twice and then answers. Both calls are governed
+ * A model that runs Python through run_shell twice and then answers. Both calls are governed
  * `code` privileges, so the pair is what an approval-mode switch made between
  * them has to act on. `pauseBeforeSecondCall` holds the second turn until the
  * test releases it, which is the window a test needs when the first call was
@@ -4475,8 +4859,8 @@ async function startTwoPythonCallModel(
           role: "assistant",
           tool_calls: [{
             function: {
-              arguments: JSON.stringify({ code: `print("step ${toolResultCount + 1}")` }),
-              name: "run_python",
+              arguments: JSON.stringify({ command: pythonCommand(`print("step ${toolResultCount + 1}")`) }),
+              name: "run_shell",
             },
             id: `call-python-${toolResultCount + 1}`,
             index: 0,
@@ -4516,7 +4900,7 @@ async function startTwoPythonCallModel(
 test("switching to always-allow during a run stops asking for the tool calls that follow", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-always-allow-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startTwoPythonCallModel(context);
   const model = await createTestModel(origin, {
@@ -4546,7 +4930,11 @@ test("switching to always-allow during a run stops asking for the tool calls tha
   let permissionRequestId: string | undefined;
   while (!permissionRequestId) {
     const chunk = await reader.read();
-    assert.equal(chunk.done, false, "run ended before the first tool asked for permission");
+    assert.equal(
+      chunk.done,
+      false,
+      `run ended before the first tool asked for permission — ${sseDiagnostics(parseSseEvents(stream))}`,
+    );
     stream += decoder.decode(chunk.value, { stream: true });
     const completed = stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2));
     const required = parseSseEvents(completed).find((event) => event.type === "permission.required");
@@ -4566,28 +4954,43 @@ test("switching to always-allow during a run stops asking for the tool calls tha
     stream += decoder.decode(chunk.value, { stream: true });
   }
   stream += decoder.decode();
-  assert.match(stream, /"type":"run.completed"/);
+  assert.ok(
+    /"type":"run\.completed"/.test(stream),
+    `the run must reach run.completed — ${sseDiagnostics(parseSseEvents(stream))}`,
+  );
 
   const events = parseSseEvents(stream);
-  assert.equal(
-    events.filter((event) => event.type === "tool.completed").length,
-    2,
-    "both Python calls must have run",
-  );
-  assert.equal(
-    events.filter((event) => event.type === "permission.required").length,
-    1,
-    "only the call made before the switch may ask",
-  );
+  // This case has failed on CI as a bare "1 !== 2". The authorizations are read
+  // before the first count assertion — a read-only GET — so every assertion
+  // below can name the stream and the permission records it disagreed with.
   const authorizations = await jsonRequest<PermissionAuthorization[]>(
     `${origin}/api/sessions/${session.body.id}/permission-authorizations`,
     { headers: authorization },
   );
-  assert.equal(authorizations.body.length, 2);
+  const diagnostics = `${sseDiagnostics(events)} ${authorizationDiagnostics(authorizations.body)}`;
+  assert.equal(
+    events.filter((event) => event.type === "tool.completed").length,
+    2,
+    `both Python calls must have run — ${diagnostics}`,
+  );
+  assert.equal(
+    events.filter((event) => event.type === "permission.required").length,
+    1,
+    `only the call made before the switch may ask — ${diagnostics}`,
+  );
+  assert.equal(
+    authorizations.body.length,
+    2,
+    `each Python call must record one authorization — ${diagnostics}`,
+  );
   const unprompted = authorizations.body.filter((record) => !record.permissionRequestId);
-  assert.equal(unprompted.length, 1, "the call after the switch must not go through a request");
-  assert.equal(unprompted[0]?.source, "always_allow");
-  assert.equal(unprompted[0]?.approvalMode, "always_allow");
+  assert.equal(
+    unprompted.length,
+    1,
+    `the call after the switch must not go through a request — ${diagnostics}`,
+  );
+  assert.equal(unprompted[0]?.source, "always_allow", `unprompted authorization source — ${diagnostics}`);
+  assert.equal(unprompted[0]?.approvalMode, "always_allow", `unprompted authorization mode — ${diagnostics}`);
 
   // The switch is auditable from the run's own persisted timeline, so a reload
   // replays it rather than depending on the live stream.
@@ -4638,7 +5041,7 @@ test("switching to always-allow during a run stops asking for the tool calls tha
 test("switching to ask during a run stops the tool calls that follow for approval", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-ask-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startTwoPythonCallModel(context, { pauseBeforeSecondCall: true });
   const model = await createTestModel(origin, {
@@ -4730,7 +5133,7 @@ test("switching to ask during a run stops the tool calls that follow for approva
 test("manual concurrent actions keep independent live waiters and resume independently", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-independent-permissions-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     requireConcurrentSubagents: true,
@@ -4849,7 +5252,7 @@ test("manual concurrent actions keep independent live waiters and resume indepen
 test("allow-matching resolves every currently pending action covered by the Session grant", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-matching-permissions-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, {
     requireConcurrentSubagents: true,
@@ -4936,7 +5339,7 @@ test("allow-matching resolves every currently pending action covered by the Sess
 test("always-allow executes subagent code without permission requests or grants", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-auto-permission-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const subagentPythonCode = "print('x' * 650)";
   const fixture = await startSubagentModel(context, { subagentPythonCode, subagentUsesPython: true });
@@ -4972,8 +5375,8 @@ test("always-allow executes subagent code without permission requests or grants"
     return event.type === "subagent.step" && event.step?.kind === "tool" ? [event.step] : [];
   });
   assert.deepEqual(streamedToolSteps.map((step) => step.status), ["running", "completed"]);
-  assert.ok(streamedToolSteps.every((step) => step.input === subagentPythonCode));
-  assert.equal(streamedToolSteps[0]?.content, subagentPythonCode);
+  assert.ok(streamedToolSteps.every((step) => step.input === pythonCommand(subagentPythonCode)));
+  assert.equal(streamedToolSteps[0]?.content, pythonCommand(subagentPythonCode));
   assert.ok((streamedToolSteps[1]?.content.length ?? 0) > 400);
 
   const permissions = await jsonRequest<PermissionRequest[]>(
@@ -5004,7 +5407,7 @@ test("always-allow executes subagent code without permission requests or grants"
     { headers: authorization },
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
-  assert.equal(toolStep?.input, subagentPythonCode);
+  assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
   assert.equal(toolStep?.status, "completed");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /x{650}/);
@@ -5013,7 +5416,7 @@ test("always-allow executes subagent code without permission requests or grants"
 test("failed subagent tool steps retain raw input and the full error result", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-failed-tool-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const subagentPythonCode = "raise RuntimeError('y' * 650)";
   const fixture = await startSubagentModel(context, { subagentPythonCode, subagentUsesPython: true });
@@ -5045,8 +5448,11 @@ test("failed subagent tool steps retain raw input and the full error result", as
     { headers: authorization },
   );
   const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
-  assert.equal(toolStep?.input, subagentPythonCode);
-  assert.equal(toolStep?.status, "failed");
+  assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
+  const execution = JSON.parse(toolStep?.content ?? "{}");
+  assert.equal(execution.state, "failed");
+  assert.equal(execution.result?.exitCode, 1);
+  assert.equal(toolStep?.status, "failed", "Failed Shell result must remain failed in the subagent timeline");
   assert.ok((toolStep?.content.length ?? 0) > 400);
   assert.match(toolStep?.content ?? "", /RuntimeError/);
   assert.match(toolStep?.content ?? "", /y{650}/);
@@ -5055,7 +5461,7 @@ test("failed subagent tool steps retain raw input and the full error result", as
 test("API flushes in-flight subagent progress before the run completes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-progress-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { pauseSubagent: true });
   const model = await createTestModel(origin, {
@@ -5105,7 +5511,7 @@ test("API flushes in-flight subagent progress before the run completes", async (
 test("API runs two task calls concurrently with independent persisted records", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-concurrency-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { requireConcurrentSubagents: true, taskCount: 2 });
   const model = await createTestModel(origin, {
@@ -5135,6 +5541,8 @@ test("API runs two task calls concurrently with independent persisted records", 
   assert.deepEqual(rootSseGolden(stream), [
     "run.started",
     "agent.phase",
+    "assistant.response.started",
+    "assistant.response.settled",
     "tool.started",
     "tool.started",
     "tool.output",
@@ -5142,13 +5550,14 @@ test("API runs two task calls concurrently with independent persisted records", 
     "tool.output",
     "tool.completed",
     "agent.phase",
+    "assistant.response.started",
     "assistant.delta",
+    "assistant.response.settled",
     "run.completed",
   ]);
   const childGolden = [
     "subagent.updated",
     "subagent.updated",
-    "subagent.step",
     "subagent.step",
     "subagent.step",
     "subagent.usage",
@@ -5187,7 +5596,7 @@ test("API runs two task calls concurrently with independent persisted records", 
 test("API rolls surplus task calls through the bounded per-run concurrency pool", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-limit-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const taskCount = DEFAULT_MAX_CONCURRENT_SUBAGENTS + 1;
   const fixture = await startSubagentModel(context, {
@@ -5240,7 +5649,7 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
 test("hierarchical settings and Project/Session lifecycle APIs preserve and delete the expected data", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-lifecycle-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const modelA = await createTestModel(origin, { model: "model-a", name: "Model A" });
   const modelB = await createTestModel(origin, { model: "model-b", name: "Model B" });
@@ -5302,6 +5711,20 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
   assert.equal(session.response.status, 201);
   assert.equal(session.body.modelId, modelB.id);
   assert.deepEqual(session.body.settingsOverrides, {});
+  const reviewerDefaults = await jsonRequest<{ automaticReviewEnabled: boolean; level: string }>(
+    `${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`,
+    { headers: authorization },
+  );
+  assert.deepEqual(reviewerDefaults.body, { automaticReviewEnabled: true, level: "quick" });
+  const reviewerSessionSettings = await jsonRequest<{ automaticReviewEnabled: boolean; level: string }>(
+    `${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`,
+    {
+      body: JSON.stringify({ automaticReviewEnabled: false, level: "deep" }),
+      headers: { ...authorization, "content-type": "application/json" },
+      method: "PUT",
+    },
+  );
+  assert.deepEqual(reviewerSessionSettings.body, { automaticReviewEnabled: false, level: "deep" });
   const renamedSession = await jsonRequest<Session>(`${origin}/api/sessions/${session.body.id}`, {
     body: JSON.stringify({ title: "Renamed lifecycle session" }),
     headers: { ...authorization, "content-type": "application/json" },
@@ -5386,6 +5809,11 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
     headers: { ...authorization, "content-type": "application/json" },
     method: "PUT",
   })).status, 409);
+  assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`, {
+    body: JSON.stringify({ automaticReviewEnabled: true, level: "quick" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  })).status, 409);
   assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
     body: JSON.stringify({ content: "blocked" }),
     headers: { ...authorization, "content-type": "application/json" },
@@ -5458,7 +5886,7 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
   // not short-circuited (default is off).
   const tempRoot = resolve(process.cwd(), ".tmp", `cleanup-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const received: { path: string; body: unknown }[] = [];
   const fakeSidecar = createHttpServer((request, response) => {
@@ -5575,7 +6003,7 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
 test("model connectivity endpoint uses the encrypted saved credential", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `model-connectivity-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   let providerAuthorization = "";
   const provider = createHttpServer(async (request, response) => {
     providerAuthorization = request.headers.authorization ?? "";
@@ -5616,7 +6044,7 @@ test("model connectivity endpoint uses the encrypted saved credential", async (c
 test("provider REST discovers models, reports upstream failure, and keeps manual fallback honest", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   let failDiscovery = false;
   const receivedAuth: Array<string | undefined> = [];
@@ -5743,7 +6171,7 @@ test("provider REST discovers models, reports upstream failure, and keeps manual
 test("model registry persists multiple profiles and assigns them per session", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `models-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const { origin } = await startTestApi(context, tempRoot);
 
@@ -5876,10 +6304,86 @@ test("model registry persists multiple profiles and assigns them per session", a
   assert.doesNotMatch(await readFile(resolve(tempRoot, "catalog.sqlite"), "utf8"), /must-not-persist/);
 });
 
+test("Workspace HTTP writes wait for the active writer and publish refs before returning", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `workspace-admission-${randomUUID()}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { recursive: true, force: true }));
+  const uploads: Record<string, unknown>[] = [];
+  const graph = createHttpServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      if (request.url === "/observe/upload-file") uploads.push(JSON.parse(body));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "healthy" }));
+    });
+  });
+  await new Promise<void>((done) => graph.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => graph.close(() => done())));
+  const server = createApiServer({ ...testConfig(dataDir, "http://127.0.0.1:1"), memoryGraph: {
+    url: `http://127.0.0.1:${(graph.address() as AddressInfo).port}`, internalToken: "test",
+  } });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  context.after(() => new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const enabled = await fetch(`${origin}/api/memory/settings`, {
+    method: "PUT", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(enabled.status, 200);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ name: "Single writer" }),
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ modelId: model.id, title: "Admission" }),
+  });
+  const store = new SessionStore(dataDir); await store.load();
+  const workspace = store.workspacePath(session.body.id);
+  const versions = new VersionStore(dataDir);
+  for (const multipart of [false, true]) {
+    let entered!: () => void; const started = new Promise<void>((done) => { entered = done; });
+    let release!: () => void; const gate = new Promise<void>((done) => { release = done; });
+    const writer = withWorkspaceMutation(versions, workspace, async () => { entered(); await gate; }, { kind: "running-command" });
+    await started;
+    const name = multipart ? "multipart.txt" : "file.txt";
+    const form = new FormData(); form.append("files", new Blob(["uploaded"]), name);
+    let returned = false;
+    const upload = fetch(`${origin}/api/sessions/${session.body.id}/${multipart ? "workspace/upload" : "files"}`, {
+      method: "POST", headers: multipart ? authorization : { ...authorization, "content-type": "application/json" },
+      body: multipart ? form : JSON.stringify({ path: name, content: "uploaded" }),
+    }).then((response) => { returned = true; return response; });
+    try {
+      await new Promise((done) => setTimeout(done, 60));
+      assert.equal(returned, false);
+      assert.equal(uploads.length, 0, "SourceFile is not published before upload admission");
+      await assert.rejects(access(resolve(workspace, name)), { code: "ENOENT" });
+    } finally { release(); await writer; }
+    const response = await upload;
+    assert.equal(response.status, 201, await response.text());
+    assert.equal(await readFile(resolve(workspace, name), "utf8"), "uploaded");
+    const refs = await RefStore.open(versions);
+    try {
+      const head = refs.head(workspaceHeadName(workspace)); assert.ok(head);
+      const record = await versions.readRecord<{ kind: string }>(head, "WorkspaceMutation");
+      assert.equal(record.value.kind, multipart ? "user-upload" : "user-file-write");
+      await versions.validateClosure(head);
+    } finally { refs.close(); }
+    if (multipart) {
+      for (let attempt = 0; attempt < 100 && !uploads.length; attempt += 1) {
+        await new Promise((done) => setTimeout(done, 10));
+      }
+      assert.equal(uploads.length, 1);
+      assert.equal(uploads[0]!.file_id, `source_file:session:${session.body.id}:${name}`);
+      assert.equal(uploads[0]!.content_hash, createHash("sha256").update("uploaded").digest("hex"));
+      assert.equal(uploads[0]!.size, Buffer.byteLength("uploaded"));
+    }
+  }
+});
+
 test("WSP-001 multipart upload preserves hashes and exposes specific workspace preview kinds", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-upload-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -5985,7 +6489,7 @@ test("WSP-001 multipart upload preserves hashes and exposes specific workspace p
 test("WSP-003 rejects traversal upload paths and leaves the host untouched", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-escape-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -6028,7 +6532,7 @@ test("WSP-003 rejects traversal upload paths and leaves the host untouched", asy
 test("same-named uploads remain physically isolated and append one Project artifact version chain", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `wsp-iso-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -6080,7 +6584,7 @@ test("same-named uploads remain physically isolated and append one Project artif
 test("artifact outputs endpoint is Session-scoped and rejects an unknown Session", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `artifact-outputs-api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
     body: JSON.stringify({ name: "Artifact outputs API" }),
@@ -6107,7 +6611,7 @@ test("artifact outputs endpoint is Session-scoped and rejects an unknown Session
 test("Artifact deletion endpoint logically deletes without removing history or workspace files", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `artifact-lifecycle-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const model = await createTestModel(origin);
   const project = await jsonRequest<Project>(`${origin}/api/projects`, {
@@ -6208,8 +6712,8 @@ test("Artifact deletion endpoint logically deletes without removing history or w
 test("recovery cancels and replays undecided approvals for run and subagent scopes", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `recover-approvals-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
-  const store = new SessionStore(tempRoot);
+  context.after(() => removeTestRoot(tempRoot));
+  let store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
     apiToken: "test-token",
@@ -6231,6 +6735,13 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
     prompt: "Run a Python check",
     subagentType: "general-purpose",
   });
+  const versions = new VersionStore(tempRoot);
+  const history = [{ role: "user", content: "Completed context, not a command to replay" }];
+  const after = await versions.putRecord("AgentStateSnapshot", { history });
+  const step = await versions.putRecord("TrajectoryStep", { after });
+  const refs = await RefStore.open(versions);
+  try { await refs.commit(versions, `agents/${encodeURIComponent(`subagent:${subagent.id}`)}/head`, null, step); }
+  finally { refs.close(); }
 
   const runScoped = await store.requestPermission(
     session.id, "code", "workspace-code", "Run python code", { executionId: run.id });
@@ -6238,8 +6749,13 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
     session.id, "code", "workspace-code", "Run python code in subagent", { executionId: subagent.id });
   if (runScoped.allowed || subagentScoped.allowed) throw new Error("Expected pending permission requests");
 
+  store = new SessionStore(tempRoot);
+  await store.load();
   await recoverSessionRuns(store);
 
+  assert.equal(store.listSubagents(session.id).find((child) => child.id === subagent.id)?.status, "failed", "a crashed child cannot remain permanently busy");
+  const recoveredContext = store.listSubagents(session.id).find((child) => child.id === subagent.id)!.contextRef!;
+  assert.deepEqual((await versions.readRecord<{ history: unknown[] }>(recoveredContext, "SubagentContext")).value.history, history);
   assert.equal(store.getPermissionRequest(runScoped.request.id)?.state, "cancelled");
   assert.equal(store.getPermissionRequest(subagentScoped.request.id)?.state, "cancelled");
   const replay = await store.listSessionRunEvents(session.id, run.id);
@@ -6261,7 +6777,7 @@ test("recovery cancels and replays undecided approvals for run and subagent scop
 test("cancelling a run while a subagent approval is pending persists its terminal state once", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `subagent-cancel-approval-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
   const fixture = await startSubagentModel(context, { subagentUsesPython: true });
   const model = await createTestModel(origin, {
@@ -6322,6 +6838,46 @@ test("cancelling a run while a subagent approval is pending persists its termina
   assert.ok(record.event.type === "permission.resolved" && record.event.request.decidedAt);
 });
 
+test("stopping a child Agent closes only its wake gate and joins its active model call", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `subagent-stop-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const { origin } = await startTestApi(context, tempRoot);
+  const fixture = await startSubagentModel(context, { pauseSubagent: true });
+  context.after(() => fixture.releaseSubagent());
+  const model = await createTestModel(origin, { baseUrl: fixture.baseUrl, model: "stop-child", name: "Stop child" });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ name: "Stop child" }),
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({ title: "Stop child", modelId: model.id, approvalMode: "always_allow" }),
+  });
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    method: "POST", headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify({ content: "Delegate inspection" }),
+  });
+  const streamPromise = run.text();
+  await fixture.subagentStarted;
+  const children = await jsonRequest<Subagent[]>(`${origin}/api/sessions/${session.body.id}/subagents`, { headers: authorization });
+  const childId = children.body[0]!.id;
+  const stop = await fetch(`${origin}/api/sessions/${session.body.id}/subagents/${childId}/stop`, { method: "POST", headers: authorization });
+  assert.equal(stop.status, 200);
+  const stream = await streamPromise;
+  assert.match(stream, /"type":"run.completed"/);
+  assert.doesNotMatch(stream, /"type":"run.cancelled"/);
+  const finished = await jsonRequest<Subagent[]>(`${origin}/api/sessions/${session.body.id}/subagents`, { headers: authorization });
+  assert.equal(finished.body[0]?.status, "cancelled");
+  const db = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"), { readOnly: true });
+  try {
+    const gate = db.prepare("SELECT stopped FROM agent_instance_wake_gates WHERE session = ? AND agent = ?").get(session.body.id, `subagent:${childId}`);
+    assert.equal(gate?.stopped, 1);
+    const parent = db.prepare("SELECT stopped FROM agent_wake_gates WHERE session = ?").get(session.body.id);
+    assert.equal(parent?.stopped, 0);
+  } finally { db.close(); }
+  assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/subagents/not-owned/stop`, { method: "POST", headers: authorization })).status, 404);
+  fixture.releaseSubagent();
+});
+
 test("delta coalescing merges streamed text without reordering surrounding events", async () => {
   const published: RunStreamEvent[] = [];
   const sink = createDeltaCoalescingSink((event) => { published.push(event); }, 10_000, 1_000);
@@ -6366,10 +6922,51 @@ test("delta coalescing publishes a window when its timer fires", async () => {
   assert.equal(published.length, 1, "an empty buffer flushes to nothing");
 });
 
+test("delta coalescing never merges text across response identities", async () => {
+  const published: RunStreamEvent[] = [];
+  const sink = createDeltaCoalescingSink((event) => { published.push(event); }, 10_000, 1_000);
+  void sink.emit({ delta: "first ", responseId: "response-1", type: "assistant.delta" });
+  void sink.emit({ delta: "attempt", responseId: "response-1", type: "assistant.delta" });
+  // Same type, no turn change — only the response identity differs (a retry
+  // after input-overflow recovery). The open window must flush first.
+  void sink.emit({ delta: "second ", responseId: "response-2", type: "assistant.delta" });
+  void sink.emit({ delta: "attempt", responseId: "response-2", type: "assistant.delta" });
+  await sink.flush();
+  assert.deepEqual(published, [
+    { delta: "first attempt", responseId: "response-1", type: "assistant.delta" },
+    { delta: "second attempt", responseId: "response-2", type: "assistant.delta" },
+  ], "merged text never crosses a model-response boundary");
+
+  const thinking: RunStreamEvent[] = [];
+  const thinkingSink = createDeltaCoalescingSink((event) => { thinking.push(event); }, 10_000, 1_000);
+  void thinkingSink.emit({ delta: "reason ", responseId: "response-1", turn: 1, type: "assistant.thinking.delta" });
+  // Same response, different channel: thinking and text never interleave.
+  void thinkingSink.emit({ delta: "answer", responseId: "response-1", type: "assistant.delta" });
+  await thinkingSink.flush();
+  assert.deepEqual(thinking, [
+    { delta: "reason ", responseId: "response-1", turn: 1, type: "assistant.thinking.delta" },
+    { delta: "answer", responseId: "response-1", type: "assistant.delta" },
+  ], "channels of one response stay separate windows");
+});
+
+test("response lifecycle events flush the open delta window before publishing", async () => {
+  const published: RunStreamEvent[] = [];
+  const sink = createDeltaCoalescingSink((event) => { published.push(event); }, 10_000, 1_000);
+  void sink.emit({ delta: "partial", responseId: "response-1", type: "assistant.delta" });
+  void sink.emit({ responseId: "response-1", turn: 1, type: "assistant.response.settled" });
+  void sink.emit({ responseId: "response-2", turn: 1, type: "assistant.response.started" });
+  await sink.flush();
+  assert.deepEqual(published, [
+    { delta: "partial", responseId: "response-1", type: "assistant.delta" },
+    { responseId: "response-1", turn: 1, type: "assistant.response.settled" },
+    { responseId: "response-2", turn: 1, type: "assistant.response.started" },
+  ], "lifecycle boundaries order strictly around buffered deltas");
+});
+
 test("publishing routes growable payloads into child streams and keeps the main timeline slim", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `stream-routing-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
   const store = new SessionStore(tempRoot);
   await store.load();
   const model = await store.createModel({
@@ -6423,7 +7020,7 @@ test("publishing routes growable payloads into child streams and keeps the main 
 test("the model catalog endpoint serves the packaged snapshot and keeps it when a refresh fails", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `model-catalog-api-${Date.now()}-${process.pid}`);
   await mkdir(resolve(tempRoot, "packaged"), { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const document = (contextWindow: number) => ({
     openai: {
@@ -6504,7 +7101,7 @@ test("the model catalog endpoint serves the packaged snapshot and keeps it when 
 test("provider model REST saves stated facts and shows them back on the listing", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-model-facts-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  context.after(() => removeTestRoot(tempRoot));
 
   const upstream = createHttpServer((request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
@@ -6569,4 +7166,286 @@ test("provider model REST saves stated facts and shows them back on the listing"
   });
   assert.equal(rejected.response.status, 400);
   assert.match(rejected.body.error, /must state both an input and an output rate/);
+});
+
+// Startup connects every enabled MCP source, and a bundled one is a child
+// process. Before this was wired up, closing the listener left those children
+// running: `node --test` finished every case and then hung forever with
+// nothing left to serve, which reads as a broken test run rather than a leak.
+test("closing the server closes the MCP transport it connected at startup", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-mcp-close-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  // Startup work that was already in flight can still be writing here while
+  // the directory is being removed, which is a race in the cleanup, not a
+  // finding about the server.
+  context.after(() => rm(tempRoot, { force: true, maxRetries: 10, recursive: true, retryDelay: 50 }));
+  let closed = 0;
+  const mcpTransport: McpTransportClient = {
+    ...offlineMcpTransport,
+    close: async () => { closed += 1; },
+  };
+  const server = createProductionApiServer(testConfig(tempRoot), { mcpTransport });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+
+  assert.equal(closed, 0, "the transport must stay open while the server is serving");
+  await new Promise<void>((resolveClose) => {
+    server.close(() => resolveClose());
+    server.closeAllConnections();
+  });
+  // The listener's close callback and the teardown both run on `close`; give
+  // the asynchronous one a turn before reading the count.
+  await new Promise((settled) => setImmediate(settled));
+
+  assert.equal(closed, 1);
+});
+
+// --- WebPage content reverse-proxy from CAS data pool ---------------------
+
+/** Spin up a tiny sidecar whose only job is to serve /web-pages/content-hash
+ *  with whatever node set the test scenario needs. Each call resolves the
+ *  requested web_page_id against the node list (matching node.id, the same
+ *  encoding the API server passes through) and returns that node's
+ *  content_hash. Returns the URL + a setter for the next node list. */
+async function startFakeSidecar(context: TestContext, initial: { nodes?: Array<Record<string, unknown>>; reason?: string }): Promise<{ setNodes(nodes: Array<Record<string, unknown>>): void; url: string }> {
+  let currentNodes = initial.nodes ?? [];
+  const server = createHttpServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://sidecar.test");
+    if (url.pathname === "/web-pages/content-hash") {
+      const webPageId = url.searchParams.get("web_page_id");
+      const node = currentNodes.find((n) => n.id === webPageId);
+      const contentHash = (node?.extra as Record<string, unknown> | undefined)?.content_hash ?? null;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify({ content_hash: contentHash })}\n`);
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(`{}\n`);
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  return {
+    setNodes(nodes) { currentNodes = nodes; },
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+  };
+}
+
+test("WPC-001 GET /api/sessions/<sid>/web-pages/<id>/content returns the CAS body with immutable cache headers", async (context) => {
+  // Happy path: the WebPage node carries content_hash, the CAS blob exists,
+  // and the endpoint streams it back verbatim with text/plain + immutable.
+  const tempRoot = resolve(process.cwd(), ".tmp", `wpc-happy-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+
+  // Land a real CAS blob in the data pool (same pool the broker's dataCas
+  // uses).
+  const bodyText = "BRCA1 is a tumor suppressor gene.";
+  const contentHash = createHash("sha256").update(bodyText).digest("hex");
+  const blobPath = resolve(tempRoot, "versioning", "data", "blobs", "sha256", contentHash);
+  await mkdir(resolve(tempRoot, "versioning", "data", "blobs", "sha256"), { recursive: true });
+  await writeFile(blobPath, bodyText, "utf8");
+
+  const fake = await startFakeSidecar(context, {
+    nodes: [
+      {
+        label: "WebPage",
+        id: "url:https://example.test/brca1",
+        extra: { url: "https://example.test/brca1", content_hash: contentHash, has_full_content: true },
+      },
+      { label: "WebPage", id: "wiki/BRCA1", extra: { identifier: "wiki/BRCA1", content_hash: contentHash } },
+    ],
+  });
+
+  const server = createProductionApiServer({ ...testConfig(tempRoot), memoryGraph: { url: fake.url, internalToken: "test" } });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const project = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "WebPage content happy" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const sessionId = project.body.firstSession.id;
+  // Toggle memory-graph on (default is off → /subgraph proxy returns empty).
+  const enabled = await fetch(`${origin}/api/memory/settings`, {
+    body: JSON.stringify({ enabled: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+  assert.equal(enabled.status, 200);
+
+  // URL-keyed WebPage: raw `url:` prefix in the id is what /subgraph returns
+  // for a snippet-only/web_search WebPage.
+  const urlResponse = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/${encodeURIComponent("url:https://example.test/brca1")}/content`, { headers: authorization });
+  assert.equal(urlResponse.status, 200);
+  assert.equal(await urlResponse.text(), bodyText);
+  assert.equal(urlResponse.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(urlResponse.headers.get("cache-control"), "public, max-age=31536000, immutable");
+
+  // Identifier-keyed WebPage: a wiki path carries a `/` (and is therefore
+  // percent-encoded in the URL). The handler must decode and match against
+  // the bare id the sidecar returned.
+  const idResponse = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/${encodeURIComponent("wiki/BRCA1")}/content`, { headers: authorization });
+  assert.equal(idResponse.status, 200);
+  assert.equal(await idResponse.text(), bodyText);
+});
+
+test("WPC-002 GET /api/sessions/<sid>/web-pages/<id>/content returns 404 for every absent precondition", async (context) => {
+  // Each precondition flips one variable from the happy path. The handler
+  // must refuse with the documented message — session missing, WebPage
+  // missing, content_hash missing, content_hash malformed, CAS blob gone.
+  const tempRoot = resolve(process.cwd(), ".tmp", `wpc-404-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+
+  // One real CAS blob + a WebPage that references it. We'll later delete the
+  // blob to test the "CAS physically missing" branch.
+  const realBody = "real body";
+  const realHash = createHash("sha256").update(realBody).digest("hex");
+  const blobPath = resolve(tempRoot, "versioning", "data", "blobs", "sha256", realHash);
+  await mkdir(resolve(tempRoot, "versioning", "data", "blobs", "sha256"), { recursive: true });
+  await writeFile(blobPath, realBody, "utf8");
+
+  const fake = await startFakeSidecar(context, {
+    nodes: [
+      { label: "WebPage", id: "wp-hash", extra: { url: "https://example.test/has-hash", content_hash: realHash } },
+      { label: "WebPage", id: "wp-snippet", extra: { url: "https://example.test/snippet-only" } },
+      { label: "WebPage", id: "wp-bad-hash", extra: { url: "https://example.test/bad", content_hash: "not-a-hex-hash" } },
+    ],
+  });
+
+  const server = createProductionApiServer({ ...testConfig(tempRoot), memoryGraph: { url: fake.url, internalToken: "test" } });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const project = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "WebPage content 404s" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const sessionId = project.body.firstSession.id;
+  await fetch(`${origin}/api/memory/settings`, {
+    body: JSON.stringify({ enabled: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+
+  const expect = async (webPageId: string, expectedMessage: RegExp, expectedStatus = 404) => {
+    const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/${encodeURIComponent(webPageId)}/content`, { headers: authorization });
+    assert.equal(response.status, expectedStatus, `expected ${expectedStatus} for ${webPageId}, got ${response.status}`);
+    const body = await response.json() as { error?: string };
+    assert.match(body.error ?? "", expectedMessage);
+  };
+
+  // session missing
+  const missingSession = await fetch(`${origin}/api/sessions/${randomUUID()}/web-pages/wp-hash/content`, { headers: authorization });
+  assert.equal(missingSession.status, 404);
+  assert.match((await missingSession.json() as { error?: string }).error ?? "", /Session not found/);
+
+  // WebPage missing from subgraph (id not in the sidecar's set)
+  await expect("wp-does-not-exist", /WebPage not found or has no content_hash/);
+  // WebPage present but no content_hash (snippet-only)
+  await expect("wp-snippet", /WebPage not found or has no content_hash/);
+  // content_hash malformed (defends against bad upstream data; 64-hex gate)
+  await expect("wp-bad-hash", /WebPage not found or has no content_hash/);
+
+  // CAS blob physically missing: delete the file, the endpoint must still
+  // refuse rather than silently 500. The session-scoped CAS read in
+  // dataCas.has() returns false on ENOENT.
+  await rm(blobPath);
+  await expect("wp-hash", /CAS blob missing for this content_hash/);
+});
+
+test("WPC-003 the web-page content endpoint requires auth like the rest of /api", async (context) => {
+  // Without a Bearer token the gateway must return 401, never 200 — same
+  // gate every other /api/sessions/<sid>/... route uses.
+  const tempRoot = resolve(process.cwd(), ".tmp", `wpc-auth-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const fake = await startFakeSidecar(context, { nodes: [] });
+  const server = createProductionApiServer({ ...testConfig(tempRoot), memoryGraph: { url: fake.url, internalToken: "test" } });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { server.close(() => resolveClose()); server.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const noAuth = await fetch(`${origin}/api/sessions/${randomUUID()}/web-pages/anything/content`);
+  assert.equal(noAuth.status, 401);
+});
+
+test("WPC-004 the memory-graph disabled toggle short-circuits the endpoint without crashing", async (context) => {
+  // Default state: the toggle is OFF. /api/memory/subgraph returns an empty
+  // body with reason="memory_graph_disabled", and the new endpoint should
+  // translate that into a 404 "not found" — never a 5xx. The user-visible
+  // effect is identical to "this session has no WebPage with content".
+  const tempRoot = resolve(process.cwd(), ".tmp", `wpc-disabled-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  // Sidecar that errors on /subgraph — disabled toggle should never reach it.
+  const sidecarCalls: string[] = [];
+  const server = createHttpServer((request, response) => {
+    sidecarCalls.push(request.url ?? "");
+    response.writeHead(500, { "content-type": "application/json" });
+    response.end(`{"error":"sidecar should not be hit"}`);
+  });
+  await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => server.close(() => resolveClose())));
+  const sidecarUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  const api = createProductionApiServer({ ...testConfig(tempRoot), memoryGraph: { url: sidecarUrl, internalToken: "test" } });
+  await new Promise<void>((resolveListen) => api.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { api.close(() => resolveClose()); api.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const project = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Disabled memory graph" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const sessionId = project.body.firstSession.id;
+  // Toggle is off by default — no PUT to /api/memory/settings.
+  const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/wp-hash/content`, { headers: authorization });
+  assert.equal(response.status, 404);
+  assert.match((await response.json() as { error?: string }).error ?? "", /WebPage not found or has no content_hash/);
+  assert.equal(sidecarCalls.length, 0, "disabled toggle must short-circuit before any sidecar request");
+});
+
+test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", async (context) => {
+  // The sidecar is reachable (HTTP 200) but its Neo4j is unreachable, so it
+  // answers { content_hash: null, reason: "memory_graph_unreachable" }. The API
+  // server must surface that as a 502 "memory graph unreachable", not a 404
+  // "WebPage not found" — otherwise a graph outage reads as "your data is
+  // gone" in the UI.
+  const tempRoot = resolve(process.cwd(), ".tmp", `wpc-unreachable-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const sidecar = createHttpServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://sidecar.test");
+    if (url.pathname === "/web-pages/content-hash") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify({ content_hash: null, reason: "memory_graph_unreachable" })}\n`);
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(`{}\n`);
+  });
+  await new Promise<void>((resolveListen) => sidecar.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => sidecar.close(() => resolveClose())));
+  const sidecarUrl = `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`;
+
+  const api = createProductionApiServer({ ...testConfig(tempRoot), memoryGraph: { url: sidecarUrl, internalToken: "test" } });
+  await new Promise<void>((resolveListen) => api.listen(0, "127.0.0.1", resolveListen));
+  context.after(() => new Promise<void>((resolveClose) => { api.close(() => resolveClose()); api.closeAllConnections(); }));
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  const project = await jsonRequest<{ project: { id: string }; firstSession: { id: string } }>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "WebPage content unreachable" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const sessionId = project.body.firstSession.id;
+  await fetch(`${origin}/api/memory/settings`, {
+    body: JSON.stringify({ enabled: true }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+
+  const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/wp-anything/content`, { headers: authorization });
+  assert.equal(response.status, 502);
+  assert.match((await response.json() as { error?: string }).error ?? "", /memory graph unreachable/);
 });

@@ -49,6 +49,8 @@ export interface SubagentInput {
 }
 
 export interface SubagentHandoff {
+  /** Stable independent Workspace identity; absent on legacy parent-directory handoffs. */
+  workspaceId?: string;
   inputPaths: string[];
   manifestPath: string;
   privateWorkspacePath: string;
@@ -70,6 +72,8 @@ export interface SubagentUsage {
 export interface SubagentStep {
   content: string;
   createdAt: string;
+  /** Full structured tool result details, when the step records a completed tool call. */
+  details?: unknown;
   id: string;
   /** Raw tool input retained when a completed tool step replaces its running snapshot. */
   input?: string;
@@ -80,6 +84,8 @@ export interface SubagentStep {
 }
 
 export interface Subagent {
+  /** Closed model history in the existing agent-state pool, never executable replay. */
+  contextRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
   createdAt: string;
   error?: string;
   finishedAt?: string;
@@ -93,6 +99,8 @@ export interface Subagent {
   rawStructuredResult?: string;
   structuredResult?: unknown;
   sessionId: string;
+  /** Exact executable Specialist configuration used for this task. */
+  specialistConfigHash?: string;
   specialistId?: string;
   status: "cancelled" | "completed" | "failed" | "running" | "timed_out";
   steps: SubagentStep[];

@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { readFile } from "node:fs/promises";
+import { createIdeaResearchClient } from "../idea-tree/research.js";
 import { resolve } from "node:path";
 
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
+import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
+import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { CustomMcpServers } from "../mcp/custom-servers.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { reviewerLog } from "@sciencediscovery/provenance";
 import type {
   EvolveGoal, EvolveRunProposal, ModelsDevPayload, ResolvedProxy,
 } from "@sciencediscovery/schema";
-import { resolveWorkspaceFile } from "@sciencediscovery/workspace";
 
 import { apiLog, configureApiLogging } from "../logging.js";
 import { MemoryGraphClient, MemoryGraphSink, mgLog } from "@sciencediscovery/memory";
@@ -34,7 +36,8 @@ import { PaperService } from "../papers.js";
 import { PermissionDecisionQueue } from "@sciencediscovery/governance";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import { RunnerClient } from "@sciencediscovery/executor";
-import { CasStore } from "@sciencediscovery/cas";
+import { CasStore, VersionStore } from "@sciencediscovery/cas";
+import { storeEvolutionInput } from "../evolution/workspace-input.js";
 import { CandidateSources } from "../evolution/candidates.js";
 import { RunTokenRegistry } from "../evolution/llm-proxy.js";
 import { EvolveOrchestrator } from "../evolution/orchestrator.js";
@@ -66,10 +69,31 @@ export interface ApiServerDependencies {
   connectorFetch?: typeof fetch;
   /** Test seam: resolve the model catalog from a fixture instead of models.dev. */
   fetchModelCatalog?: (options: { proxy?: ResolvedProxy; url: string }) => Promise<ModelsDevPayload>;
+  /** Test seam: resolve usage display exchange rates without touching the network. */
+  fetchUsageExchangeRate?: typeof fetch;
+  /** Test/embedding seam. Production uses the Python tree service. */
+  ideaTreeRepository?: (scope: { projectId: string; sessionId: string }) => IdeaTreePersistence;
   /** Test seam: drive MCP through a stub transport instead of live servers. */
   mcpTransport?: McpTransportClient;
   /** Test seam: exercise remote-host HTTP flows without connecting to a real SSH machine. */
   remoteCompute?: RemoteComputeClient;
+}
+
+async function initializeComponent<T>(component: string, operation: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  apiLog.info("framework_component_initialization_started", { component });
+  try {
+    const result = await operation();
+    apiLog.info("framework_component_ready", { component, durationMs: Date.now() - started });
+    return result;
+  } catch (error) {
+    apiLog.error("framework_component_initialization_failed", {
+      component,
+      durationMs: Date.now() - started,
+      errorMessage: shortErrorMessage(error),
+    });
+    throw error;
+  }
 }
 
 /**
@@ -126,6 +150,7 @@ export function createPlatformServices(
   }, config.memoryGraph.neo4jPassword);
   const skillCatalog = new SkillCatalog(config.dataDir, repositoryRoot);
   const runnerClient = new RunnerClient(config.runnerUrl, config.runnerToken);
+  const ideaTreeAuthorities = createIdeaTreeAuthorityRegistry();
 
   mgLog.setDataDir(config.dataDir);
   reviewerLog.setLogDir(resolve(config.dataDir, "logs"));
@@ -137,25 +162,45 @@ export function createPlatformServices(
   });
   const memoryGraphSink = new MemoryGraphSink(memoryGraphClient, () => store.getMemoryGraphSettings().enabled);
   const memoryGraphEnabled = () => store.getMemoryGraphSettings().enabled;
+  const ideaTreeRepository = (sessionId: string) => {
+    const session = store.getSession(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    return dependencies.ideaTreeRepository?.({ projectId: session.projectId, sessionId }) ?? ideaTreeRepositoryForSession(
+      { token: config.evolve.internalToken, url: config.evolve.url },
+      { projectId: session.projectId, sessionId },
+    );
+  };
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createBuiltinMcpSourceRegistry();
-  const mcpGateway: McpTransportClient = dependencies.mcpTransport ?? new McpNodeClient();
+  const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
+  const mcpGateway: McpTransportClient = dependencies.mcpTransport
+    ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog);
   const mcpProxyMap = (): Record<string, ResolvedProxy> => {
     const serverIds = new Set<string>();
     for (const manifest of mcpRegistry.listManifests()) serverIds.add(manifest.transport.mcpServerId);
     for (const serverId of Object.keys(store.getMcpProxyPolicies())) serverIds.add(serverId);
     const map: Record<string, ResolvedProxy> = {};
     for (const serverId of serverIds) {
+      const policy = store.mcpProxyPolicy(serverId);
       try {
-        map[serverId] = store.resolveProxy(store.mcpProxyPolicy(serverId));
-      } catch {
+        map[serverId] = store.resolveProxy(policy);
+      } catch (error) {
+        apiLog.warn("mcp_proxy_resolution_failed", {
+          errorMessage: shortErrorMessage(error),
+          policy,
+          serverId,
+        });
         // Resolution errors are surfaced on invoke instead of blocking startup.
       }
     }
     return map;
   };
-  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap);
-  const webBroker = new WebBroker(config.dataDir, store, new NativeWebProviderClient());
+  const mcpCatalog = new McpSourceCatalog(mcpRegistry, mcpGateway, mcpProxyMap, (catalog) => customMcpServers.applyCatalog(catalog));
+  // WebBroker mirrors successful web_search / web_fetch to the graph (WebPage
+  // nodes by URL); the registry's ``toolGraphType(...)`` gates the emit. The
+  // sink is the same instance used by the MCP broker — fire-and-forget in
+  // both paths.
+  const webBroker = new WebBroker(config.dataDir, store, new NativeWebProviderClient(), { memoryGraphSink });
   const mcpBroker = new McpGovernanceBroker(
     config.dataDir,
     store,
@@ -174,6 +219,7 @@ export function createPlatformServices(
     dependencies.connectorFetch,
   );
   artifactManager.setCompletedHandler(async ({ candidate, job, plan }) => {
+    const location = store.workspaceLocation(job.sessionId, plan.destination.path);
     await provenanceRecorder.registerWorkspaceArtifact({
       logicalName: candidate.logicalName,
       origin: "mcp_download",
@@ -184,11 +230,11 @@ export function createPlatformServices(
         sourceRecordId: candidate.sourceRecordId,
         sourceUrl: candidate.sourceUrl,
       },
-      path: plan.destination.path,
+      path: location.path,
       sessionId: job.sessionId,
       sourcePath: plan.destination.path,
       title: candidate.logicalName,
-      workspaceRoot: store.workspacePath(job.sessionId),
+      workspaceRoot: location.root,
     });
   });
 
@@ -199,6 +245,8 @@ export function createPlatformServices(
   // Run-scoped model tokens. In memory only: a token that outlived the process
   // would outlive the run it belongs to, and that is the property it exists for.
   const evolveRunTokens = new RunTokenRegistry();
+  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken,
+    apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`, store, tokens: evolveRunTokens });
   const evolveCas = new CasStore(config.dataDir);
   const evolveCandidates = new CandidateSources(
     config.dataDir, process.env.SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR?.trim() || undefined,
@@ -216,6 +264,7 @@ export function createPlatformServices(
       apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
       cas: evolveCas,
       workspacePath: (sessionId: string) => store.workspacePath(sessionId),
+      workspaceVersions: new VersionStore(store.dataDir),
       // Wired here because this is the only scope holding both the evolve
       // subsystem's stores and the session store that owns artifacts.
       publishResult: async ({ run, winnerCodeHash }) => {
@@ -255,6 +304,16 @@ export function createPlatformServices(
           originMeta: { evolveRunId: run.id, role: "winner" },
           sessionId: run.sessionId,
         });
+        provenanceRecorder.notifyArtifactRegistered({
+          mediaType: "text/plain; charset=utf-8",
+          sessionId: run.sessionId,
+          version: seed.version,
+        });
+        provenanceRecorder.notifyArtifactRegistered({
+          mediaType: "text/plain; charset=utf-8",
+          sessionId: run.sessionId,
+          version: winnerVersion.version,
+        });
         // Mirror both versions onto the graph's evolve SubTask. Without this
         // the run's node carried a `searches` edge and nothing else — the one
         // thing the search existed to produce was in SessionStore but invisible
@@ -293,12 +352,9 @@ export function createPlatformServices(
     }
   };
   const storeEvolveInput = (sessionId: string) =>
-    async (input: { content?: string; path?: string }) => {
-      const bytes = input.content !== undefined
-        ? Buffer.from(input.content, "utf-8")
-        : await readFile(resolveWorkspaceFile(store.workspacePath(sessionId), input.path ?? ""));
-      return `sha256:${(await evolveCas.put(bytes)).hash}`;
-    };
+    (input: { content?: string; path?: string }) => storeEvolutionInput(
+      new VersionStore(store.dataDir), store.workspacePath(sessionId), input,
+    );
 
   /**
    * The `/evolve` capability, registered once.
@@ -340,6 +396,12 @@ export function createPlatformServices(
         releaseWait?.();
       }
     },
+    createIdeaResearch: async (input) => {
+      const view = await ideaResearch.command(turn.sessionId, "create", input);
+      await turn.emit({type: "idea_research.created", researchId: view.research.id});
+      return {researchId: view.research.id, status: view.research.status, message: "Python engine started. Follow progress in the Idea Tree card."};
+    },
+    getIdeaResearch: (researchId?: string) => ideaResearch.summary(turn.sessionId, researchId),
     getEvolveRun: async (runId?: string) => {
       // The id is optional and prefix-tolerant, because the caller is a model
       // whose context routinely does not contain it: a search started in an
@@ -514,6 +576,7 @@ export function createPlatformServices(
 
   return {
     artifactManager,
+    customMcpServers,
     evolutionStore,
     keGraphRoots,
     keJobRunner,
@@ -524,6 +587,9 @@ export function createPlatformServices(
     evolveOrchestrator,
     evolveRunTokens,
     evolveRuntimeFactory,
+    ideaResearch,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpGateway,
@@ -540,6 +606,13 @@ export function createPlatformServices(
     remoteCompute: dependencies.remoteCompute ?? new RemoteComputeClient(
       config.sshConfigPath,
       async (hostId) => store.remoteHostSshAccess(hostId),
+      {
+        logger: apiLog,
+        // Machines on an isolated network cannot fetch the environment
+        // provisioner themselves; this installation keeps one per architecture
+        // and hands it over when it deploys their Runner.
+        provisionerCacheDir: resolve(config.dataDir, "provisioners"),
+      },
     ),
     runnerClient,
     skillCatalog,
@@ -561,6 +634,8 @@ export async function initializePlatformServices(
     evolutionStore,
     evolveOrchestrator,
     evolveRuntimeFactory,
+    ideaTreeAuthorities,
+    ideaTreeRepository,
     mcpBroker,
     mcpCatalog,
     mcpRegistry,
@@ -574,15 +649,16 @@ export async function initializePlatformServices(
     store,
     webBroker,
   } = services;
-  await skillCatalog.load();
+  await initializeComponent("skill_catalog", () => skillCatalog.load());
   store.setAvailableSkillIds(skillCatalog.ids());
-  await store.load();
+  await initializeComponent("custom_mcp_servers", () => services.customMcpServers.load());
+  await initializeComponent("session_store", () => store.load());
   await mcpCatalog.refresh().catch((error) => {
     apiLog.warn("mcp_catalog_startup_failed", { errorMessage: shortErrorMessage(error) });
     console.warn("MCP catalog was unavailable during API startup:", error);
   });
-  await artifactManager.resumeInterrupted();
-  await recoverSessionRuns(store, memoryGraphClient);
+  await initializeComponent("artifact_recovery", () => artifactManager.resumeInterrupted());
+  await initializeComponent("run_recovery", () => recoverSessionRuns(store, memoryGraphClient));
   // A run left "running" by a previous process is never going to finish: the
   // sidecar's stream died with that connection. Settle them at boot so the UI
   // never shows a spinner for a run nobody is driving.
@@ -628,6 +704,8 @@ export async function initializePlatformServices(
         remoteCompute,
         skillCatalog,
         skillLibraryCatalog,
+        ideaTreeAuthorities,
+        ideaTreeRepository(session.id),
         memoryGraphSink,
         session.id,
         config,

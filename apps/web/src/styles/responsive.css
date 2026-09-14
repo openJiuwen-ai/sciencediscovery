@@ -33,6 +33,7 @@
   .content-grid { display: flex; flex-direction: column; }
   .conversation { min-height: 720px; border-right: 0; }
   .workspace-panel { border-top: 1px solid var(--border); }
+  .workflow-controls > label { grid-template-columns: minmax(120px, .7fr) minmax(0, 1.3fr); }
   .workspace-resizer, .composer-hint { display: none; }
   .session-bar { padding: 6px 14px; }
   .session-bar .connection { display: none; }
@@ -45,6 +46,14 @@
   .document-markdown, .artifact-modal-body { padding: 28px 20px 44px; }
   .environment-source-settings { grid-template-areas: "intro intro" "pip conda" "save save"; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .system-config-dialog { width: calc(100vw - 32px); height: min(80vh, calc(100vh - 56px)); }
+  /* The same two-level directory folds away to leave room for narrow forms. */
+  .system-config-layout { position: relative; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-navigation-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 12px; min-width: 0; text-align: left; }
+  .settings-navigation-toggle strong { overflow-wrap: anywhere; }
+  .settings-group-nav { display: none; }
+  .settings-group-nav.navigation-open { display: flex; position: absolute; inset: 52px 0 0; z-index: 5; border-right: 0; }
+  .settings-group-nav button { width: 100%; min-width: 0; }
+  .settings-group-detail { padding: 22px 18px 30px; }
   .skill-workspace-dialog { width: calc(100vw - 20px); height: calc(100vh - 20px); }
   .skill-workspace-layout { grid-template-columns: 190px minmax(0, 1fr); grid-template-rows: 170px minmax(0, 1fr) minmax(120px, 170px); }
   .skill-workspace-catalog { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--border); }
@@ -72,14 +81,11 @@
   .composer-run-actions { width: 100%; flex-direction: column; }
   .send-button { width: 100%; }
   .trust-metrics { grid-template-columns: repeat(2, 1fr); }
+  .workflow-controls > label { grid-template-columns: minmax(0, 1fr); gap: 5px; }
   .config-backdrop { padding: 12px; }
   .config-panel { max-height: calc(100vh - 24px); padding: 24px 20px; }
   .system-config-dialog { width: 100%; height: calc(100vh - 24px); padding: 0; }
   .system-config-dialog > .config-header { padding: 18px; }
-  .system-config-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .settings-group-nav { max-width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 10px; border-right: 0; border-bottom: 1px solid var(--border); }
-  .settings-group-nav button { flex: 0 0 155px; width: auto; min-width: 0; padding: 9px 10px; }
-  .settings-group-detail { padding: 22px 18px 30px; }
   .provider-editor-primary, .provider-advanced-grid { grid-template-columns: minmax(0, 1fr); }
   .provider-manual-form, .provider-manual-price { grid-template-columns: minmax(0, 1fr); }
   .provider-manual-price { grid-column: 1 / -1; }
@@ -95,7 +101,10 @@
   .skill-library-catalog { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--border); }
   .skill-library-create, .skill-library-diff-controls, .skill-library-diff { grid-template-columns: minmax(0, 1fr); }
   .skill-library-create > button, .skill-library-diff-controls > button { width: 100%; }
-  .skill-library-detail > header, .environment-card-heading { align-items: stretch; flex-direction: column; }
+  .skill-library-create-actions { width: 100%; }
+  .skill-library-create-actions > button { flex: 1 1 0; }
+  .skill-library-detail > header { align-items: stretch; flex-direction: column; }
+  .environment-card-heading { align-items: flex-start; flex-direction: column; }
   .skill-manager-hero { align-items: stretch; flex-direction: column; }
   .skill-manager-hero-actions { width: 100%; align-items: stretch; flex-direction: column; }
   .skill-manager-tabs { width: 100%; }
@@ -135,7 +144,7 @@
   .timeout-grid, .runtime-status-summary { grid-template-columns: 1fr; }
   .environment-setup-components, .environment-starter-plan, .environment-create { grid-template-columns: 1fr; }
   .environment-install { grid-template-columns: minmax(0, 1fr); }
-  .environment-install .secondary-button, .environment-card-heading .danger-button { width: 100%; }
+  .environment-install .secondary-button { width: 100%; }
   .environment-source-settings { grid-template-areas: "intro" "pip" "conda" "save"; grid-template-columns: minmax(0, 1fr); }
   .environment-source-save { justify-self: stretch; width: 100%; }
   .specialist-layout { grid-template-columns: minmax(0, 1fr); }

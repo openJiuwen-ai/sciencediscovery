@@ -20,8 +20,9 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /**
- * Egress bridge: the piece that makes `domain-allowlist` work without ever
- * giving the sandbox a network interface.
+ * Egress bridge: the piece that makes sandbox network access
+ * (`domain-allowlist` or `open`) work without ever giving the sandbox a
+ * network interface.
  *
  * The sandbox keeps `--unshare-all` (no `--share-net`), so its only reachable
  * network is its own empty namespace's loopback. The runner's egress gateway
@@ -151,7 +152,7 @@ export interface EgressBridge {
 
 export class EgressBridgeUnavailableError extends Error {
   constructor(reason: string) {
-    super(`Sandbox network access (domain-allowlist) is unavailable: ${reason}`);
+    super(`Sandbox network access (domain-allowlist and open) is unavailable: ${reason}`);
     this.name = "EgressBridgeUnavailableError";
   }
 }
@@ -173,9 +174,10 @@ let interpreterProbe: Promise<EgressBridgeInterpreter> | undefined;
 /**
  * The host interpreter alone, probed at most once per runner process.
  *
- * `/health` reports whether `domain-allowlist` is servable, and every agent run
- * starts by reading runner health, so this must not spawn a process per call —
- * and must not write anything. Only `resolveEgressBridge` touches the disk.
+ * `/health` reports whether sandbox network access is servable, and every agent
+ * run starts by reading runner health, so this must not spawn a process per
+ * call — and must not write anything. Only `resolveEgressBridge` touches the
+ * disk.
  */
 export function resolveEgressInterpreter(
   env: NodeJS.ProcessEnv = process.env,
@@ -202,7 +204,7 @@ export function resolveEgressInterpreter(
 
 /**
  * The interpreter plus the bridge script staged under this data directory,
- * resolved once per data directory. Failure is terminal for `domain-allowlist`
+ * resolved once per data directory. Failure is terminal for network-enabled
  * executions on purpose: falling back to "no bridge" would mean either no
  * network at all with a confusing error, or — far worse — a silently
  * unfiltered path.

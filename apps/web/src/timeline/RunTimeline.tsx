@@ -16,9 +16,11 @@ import type {
   ApprovalMode,
   ArtifactReviewRun,
   ComposerReference,
+  IdeaTreePhase,
   PermissionDecision,
   PermissionRequest,
   RunStreamEvent,
+  SkillReviewDraftSummary,
   Subagent,
   SubagentStep,
   SubagentUsage,
@@ -27,14 +29,17 @@ import type {
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { BrandIcon, CheckIcon, ChevronRightIcon, SpinnerIcon, WarningIcon } from "../icons.js";
+import { IdeaResearchTimelineCard } from "../IdeaResearchTimelineCard.js";
 import { MarkdownRenderer } from "../Markdown.js";
 import { SubagentCards } from "../Orchestration.js";
 import { PermissionDecisionActions, permissionMatchingKey } from "../PermissionDecisionActions.js";
 import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
+import { SkillReviewRecords } from "../SkillReviewRecords.js";
 import { ToolIoSections } from "./ToolIoSections.js";
 import { useLocale } from "../i18n/index.js";
 import { formatRunFailure } from "../run-failure.js";
+import type { ApiClient } from "../api.js";
 
 // Memory-graph tools are internal bookkeeping: the LLM uses them to read the
 // graph and record claims/evidence while composing the report, but they are
@@ -48,9 +53,25 @@ function isGraphToolTrace(trace: ToolTrace): boolean {
 
 export type RunTimelineEntry =
   | {
+      id: string;
+      researchId: string;
+      type: "idea-research";
+    }
+  | {
+      id: string;
+      nodeId?: string;
+      phase: IdeaTreePhase;
+      status: "completed" | "running";
+      treeId?: string;
+      type: "idea-tree-phase";
+    }
+  | {
       content: string;
       expanded: boolean;
+      userExpanded?: boolean;
       id: string;
+      /** Response identity this thinking belongs to, when the producing event carried one. */
+      responseId?: string;
       status: "completed" | "running";
       truncated?: boolean;
       turn: number;
@@ -60,11 +81,19 @@ export type RunTimelineEntry =
       expanded: boolean;
       id: string;
       trace: ToolTrace;
+      userExpanded?: boolean;
       type: "tool";
     }
   | {
       content: string;
       id: string;
+      /** Response identity this answer belongs to, when the producing event carried one. */
+      responseId?: string;
+      /** True while the response that produced this entry is still streaming.
+       * Cleared when the response settles or the run terminates, so bypass
+       * cards appended after the entry (approval switches, permissions)
+       * cannot hide the streaming cursor. */
+      streaming?: boolean;
       /** Chip references the run.completed message carried. Filled when the
        * terminal event arrives so the assistant entry renders [alias] chips
        * from the message's own references rather than the session-wide
@@ -204,11 +233,6 @@ export function reduceSubagentSnapshots(subagents: Subagent[], event: RunStreamE
   return subagents.map((subagent, candidateIndex) => candidateIndex === index ? updated : subagent);
 }
 
-function subagentsOverlap(left: Subagent, right: Subagent): boolean {
-  return (!left.finishedAt || left.finishedAt >= right.createdAt)
-    && (!right.finishedAt || right.finishedAt >= left.createdAt);
-}
-
 function updateTimelineSubagent(
   entries: RunTimelineEntry[],
   subagentId: string,
@@ -235,16 +259,30 @@ function approvalModeLabelKey(mode: ApprovalMode): "timeline.approvalModeAlwaysA
   return mode === "always_allow" ? "timeline.approvalModeAlwaysAllow" : "timeline.approvalModeAsk";
 }
 
-function finishThinking(entries: RunTimelineEntry[]): RunTimelineEntry[] {
+/** Close running thinking entries. Identity-carrying entries belong to a
+ * response that has not settled: a bypass event (approval switch, permission
+ * prompt, subagent progress) must not fake their end. Only the response's
+ * own first text — reasoning precedes the answer — its settled lifecycle
+ * event, or a terminal run event may close them. */
+function finishThinking(entries: RunTimelineEntry[], scope: { all?: boolean; responseId?: string } = {}): RunTimelineEntry[] {
   return entries
     .map((entry) => entry.type === "thinking" && entry.status === "running"
-      ? { ...entry, expanded: false, status: "completed" }
+      && (scope.all
+        || entry.responseId === undefined
+        || (scope.responseId !== undefined && entry.responseId === scope.responseId))
+      ? { ...entry, expanded: entry.userExpanded ?? false, status: "completed" }
       : entry)
     // Drop a thinking step that ended up with no reasoning text — it would
     // render as an empty "Thought process" card wedged between assistant
     // turns, and its presence also blocks the next assistant delta from
     // appending to the previous assistant message.
     .filter((entry): boolean => !(entry.type === "thinking" && entry.status === "completed" && !entry.content.trim())) as RunTimelineEntry[];
+}
+
+function finishIdeaTreePhases(entries: RunTimelineEntry[]): RunTimelineEntry[] {
+  return entries.map((entry) => entry.type === "idea-tree-phase" && entry.status === "running"
+    ? { ...entry, status: "completed" }
+    : entry);
 }
 
 function nextAnswerId(entries: RunTimelineEntry[]): string {
@@ -254,6 +292,36 @@ function nextAnswerId(entries: RunTimelineEntry[]): string {
 function nextThinkingId(entries: RunTimelineEntry[], turn: number): string {
   const segment = entries.filter((entry) => entry.type === "thinking" && entry.turn === turn).length + 1;
   return segment === 1 ? `thinking-${turn}` : `thinking-${turn}-${segment}`;
+}
+
+/** Entry index of the assistant entry carrying this response identity, if any. */
+function findAssistantByResponseId(entries: RunTimelineEntry[], responseId: string): number {
+  return entries.findIndex((entry) => entry.type === "assistant" && entry.responseId === responseId);
+}
+
+/** Entry index of the thinking entry carrying this response identity, if any. */
+function findThinkingByResponseId(entries: RunTimelineEntry[], responseId: string): number {
+  return entries.findIndex((entry) => entry.type === "thinking" && entry.responseId === responseId);
+}
+
+/**
+ * Legacy events carry no response identity. This conservative lookup only
+ * repairs the known historical defect where approval-switch audit cards sat
+ * between two halves of one answer: skip trailing approval-mode entries and
+ * resume the nearest assistant behind them. Everything else (tools,
+ * permissions, subagents, non-empty thinking) still stops the search, keeping
+ * old replay segmentation intact. Never used for events that do carry an ID.
+ */
+function findLegacyContinuation(entries: RunTimelineEntry[]): number {
+  let index = entries.length - 1;
+  while (index >= 0 && entries[index]!.type === "approval-mode") index -= 1;
+  const entry = entries[index];
+  return entry?.type === "assistant" && entry.responseId === undefined ? index : -1;
+}
+
+/** Update one entry in place; entries keep the position of first appearance. */
+function replaceEntry(entries: RunTimelineEntry[], index: number, update: (entry: RunTimelineEntry) => RunTimelineEntry): RunTimelineEntry[] {
+  return entries.map((entry, entryIndex) => entryIndex === index ? update(entry) : entry);
 }
 
 /** Keep streamed agent activity in the exact order in which each step started. */
@@ -267,18 +335,6 @@ export function reduceRunTimeline(
     if (updated !== entries) return updated;
 
     const finished = finishThinking(entries);
-    const overlappingGroupIndex = finished.findLastIndex((entry) =>
-      entry.type === "subagents"
-      && entry.subagents.some((subagent) => subagentsOverlap(subagent, event.subagent)));
-    if (overlappingGroupIndex >= 0) {
-      return finished.map((entry, index) => index === overlappingGroupIndex && entry.type === "subagents"
-        ? {
-            ...entry,
-            subagents: [...entry.subagents, event.subagent]
-              .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
-          }
-        : entry);
-    }
     return [...finished, {
       id: `subagents-${subagentId}`,
       subagents: [event.subagent],
@@ -290,12 +346,40 @@ export function reduceRunTimeline(
     return updateTimelineSubagent(entries, event.subagentId, event);
   }
 
+  if (event.type === "idea_tree.phase") {
+    const finished = finishIdeaTreePhases(finishThinking(entries));
+    const previousPhaseIndex = finished.findLastIndex((entry) => entry.type === "idea-tree-phase");
+    const previousPhase = finished[previousPhaseIndex];
+    if (previousPhase?.type === "idea-tree-phase" && previousPhase.phase === event.phase
+      && previousPhase.nodeId === event.nodeId && previousPhase.treeId === event.treeId) {
+      return finished.map((entry, index) => index === previousPhaseIndex && entry.type === "idea-tree-phase"
+        ? { ...entry, status: "running" }
+        : entry);
+    }
+    return [...finished, {
+      id: `idea-tree-phase-${finished.filter((entry) => entry.type === "idea-tree-phase").length + 1}`,
+      ...(event.nodeId ? { nodeId: event.nodeId } : {}),
+      phase: event.phase,
+      status: "running",
+      ...(event.treeId ? { treeId: event.treeId } : {}),
+      type: "idea-tree-phase",
+    }];
+  }
+
+  if (event.type === "idea_research.created") {
+    if (entries.some(entry => entry.type === "idea-research" && entry.researchId === event.researchId)) return entries;
+    return [...finishThinking(entries), { id: `idea-research-${event.researchId}`, researchId: event.researchId, type: "idea-research" }];
+  }
+
   if (event.type === "agent.phase") {
     const finished = finishThinking(entries);
     const last = finished.at(-1);
-    if (last?.type === "thinking" && last.turn === event.turn) {
+    // Reopen only an unstamped placeholder: one carrying a responseId belongs
+    // to a settled attempt (e.g. a retried invoke or a second execution of
+    // the same run), and that attempt keeps its own completed card.
+    if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return finished.map((entry, index) => index === finished.length - 1 && entry.type === "thinking"
-        ? { ...entry, expanded: true, status: "running" }
+        ? { ...entry, expanded: entry.userExpanded ?? true, status: "running" }
         : entry);
     }
     return [...finished, {
@@ -309,10 +393,27 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.thinking.delta") {
+    if (event.responseId !== undefined) {
+      const index = findThinkingByResponseId(entries, event.responseId);
+      if (index >= 0) {
+        return replaceEntry(entries, index, (entry) => entry.type === "thinking"
+          ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? true, status: "running" }
+          : entry);
+      }
+      return [...entries, {
+        content: event.delta,
+        expanded: true,
+        id: nextThinkingId(entries, event.turn),
+        responseId: event.responseId,
+        status: "running",
+        turn: event.turn,
+        type: "thinking",
+      }];
+    }
     const last = entries.at(-1);
-    if (last?.type === "thinking" && last.turn === event.turn) {
+    if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return entries.map((entry, entryIndex) => entryIndex === entries.length - 1 && entry.type === "thinking"
-        ? { ...entry, content: entry.content + event.delta, expanded: true, status: "running" }
+        ? { ...entry, content: entry.content + event.delta, expanded: entry.userExpanded ?? true, status: "running" }
         : entry);
     }
     const finished = finishThinking(entries);
@@ -327,9 +428,30 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.thinking.snapshot") {
+    if (event.responseId !== undefined) {
+      const index = findThinkingByResponseId(entries, event.responseId);
+      const thinkingFields = {
+        content: event.content,
+        ...(event.truncated ? { truncated: true } : {}),
+      } as const;
+      if (index >= 0) {
+        return replaceEntry(entries, index, (entry) => entry.type === "thinking"
+          ? { ...entry, ...thinkingFields }
+          : entry);
+      }
+      return [...entries, {
+        expanded: false,
+        id: nextThinkingId(entries, event.turn),
+        responseId: event.responseId,
+        status: "completed",
+        turn: event.turn,
+        type: "thinking",
+        ...thinkingFields,
+      }];
+    }
     const finished = finishThinking(entries);
     const last = finished.at(-1);
-    if (last?.type === "thinking" && last.turn === event.turn) {
+    if (last?.type === "thinking" && last.turn === event.turn && last.responseId === undefined) {
       return finished.map((entry, entryIndex) => entryIndex === finished.length - 1 && entry.type === "thinking"
         ? {
             ...entry,
@@ -347,6 +469,47 @@ export function reduceRunTimeline(
       turn: event.turn,
       type: "thinking",
     }];
+  }
+
+  // Response lifecycle: `started` cannot render anything by itself — the first
+  // delta (or snapshot) of the identity creates the entry where it first
+  // appears. What it does is adopt the unstamped thinking placeholder that
+  // `agent.phase` opened for this turn (agent.phase fires at turn_start,
+  // before this response's identity exists), so later thinking deltas of this
+  // response land on that card instead of stacking a second one. A retry
+  // attempt finds no unstamped placeholder and is a no-op.
+  if (event.type === "assistant.response.started") {
+    let adoptIndex = -1;
+    entries.forEach((entry, index) => {
+      if (entry.type === "thinking" && entry.status === "running"
+        && entry.responseId === undefined && entry.turn === event.turn) adoptIndex = index;
+    });
+    if (adoptIndex < 0) return entries;
+    return entries.map((entry, index) => index === adoptIndex && entry.type === "thinking"
+      ? { ...entry, responseId: event.responseId }
+      : entry);
+  }
+
+  // `settled` is terminal for this response identity only — the run may
+  // continue with tool calls or another attempt. Close the response's
+  // thinking (dropping an adopted placeholder that never received reasoning)
+  // and stop its streaming cursor, even while the run itself keeps running.
+  if (event.type === "assistant.response.settled") {
+    let changed = false;
+    const closed = entries.map((entry) => {
+      if (entry.type === "thinking" && entry.responseId === event.responseId && entry.status === "running") {
+        changed = true;
+        return { ...entry, expanded: entry.userExpanded ?? false, status: "completed" as const };
+      }
+      if (entry.type === "assistant" && entry.responseId === event.responseId && entry.streaming) {
+        changed = true;
+        return { ...entry, streaming: false };
+      }
+      return entry;
+    });
+    if (!changed) return entries;
+    return closed.filter((entry): boolean =>
+      !(entry.type === "thinking" && entry.responseId === event.responseId && !entry.content.trim())) as RunTimelineEntry[];
   }
 
   if (event.type === "tool.started") {
@@ -382,7 +545,7 @@ export function reduceRunTimeline(
     return entries.map((entry, entryIndex) => entryIndex === index && entry.type === "tool"
       ? {
           ...entry,
-          expanded: false,
+          expanded: entry.userExpanded ?? false,
           trace: {
             ...(entry.trace.args !== undefined ? { args: entry.trace.args } : {}),
             ...(entry.trace.input !== undefined
@@ -395,10 +558,28 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.delta") {
-    const finished = finishThinking(entries);
-    const last = finished.at(-1);
-    if (last?.type === "assistant") {
-      return finished.map((entry, index) => index === finished.length - 1 && entry.type === "assistant"
+    // Text of a response closes that response's own thinking (reasoning
+    // precedes the answer); other responses' thinking is left to its own
+    // lifecycle events.
+    const finished = finishThinking(entries, { responseId: event.responseId });
+    if (event.responseId !== undefined) {
+      const index = findAssistantByResponseId(finished, event.responseId);
+      if (index >= 0) {
+        return replaceEntry(finished, index, (entry) => entry.type === "assistant"
+          ? { ...entry, content: entry.content + event.delta, streaming: entry.streaming ?? true }
+          : entry);
+      }
+      return [...finished, {
+        content: event.delta,
+        id: nextAnswerId(finished),
+        responseId: event.responseId,
+        streaming: true,
+        type: "assistant",
+      }];
+    }
+    const legacy = findLegacyContinuation(finished);
+    if (legacy >= 0) {
+      return replaceEntry(finished, legacy, (entry) => entry.type === "assistant"
         ? { ...entry, content: entry.content + event.delta }
         : entry);
     }
@@ -406,23 +587,30 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "assistant.snapshot") {
-    const finished = finishThinking(entries);
-    const last = finished.at(-1);
-    if (last?.type === "assistant") {
-      return finished.map((entry, index) => index === finished.length - 1 && entry.type === "assistant"
-        ? {
-            ...entry,
-            content: event.content,
-            ...(event.truncated ? { truncated: true } : {}),
-          }
+    const finished = finishThinking(entries, { responseId: event.responseId });
+    const snapshotFields = { content: event.content, ...(event.truncated ? { truncated: true } : {}) } as const;
+    if (event.responseId !== undefined) {
+      const index = findAssistantByResponseId(finished, event.responseId);
+      if (index >= 0) {
+        return replaceEntry(finished, index, (entry) => entry.type === "assistant"
+          ? { ...entry, ...snapshotFields }
+          : entry);
+      }
+      return [...finished, {
+        id: nextAnswerId(finished),
+        responseId: event.responseId,
+        streaming: true,
+        type: "assistant",
+        ...snapshotFields,
+      }];
+    }
+    const legacy = findLegacyContinuation(finished);
+    if (legacy >= 0) {
+      return replaceEntry(finished, legacy, (entry) => entry.type === "assistant"
+        ? { ...entry, ...snapshotFields }
         : entry);
     }
-    return [...finished, {
-      content: event.content,
-      id: nextAnswerId(finished),
-      ...(event.truncated ? { truncated: true } : {}),
-      type: "assistant",
-    }];
+    return [...finished, { id: nextAnswerId(finished), type: "assistant", ...snapshotFields }];
   }
 
   if (event.type === "permission.required" || event.type === "permission.resolved") {
@@ -497,7 +685,8 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "run.completed") {
-    const finished = finishThinking(entries);
+    const finished = finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) =>
+      entry.type === "assistant" && entry.streaming ? { ...entry, streaming: false } : entry);
     const messageReferences = event.message.references;
     // Thread the message's own chip references onto the assistant entry that
     // carries the same report prose. The terminal message is the authoritative
@@ -523,9 +712,10 @@ export function reduceRunTimeline(
     const summary = event.type === "run.failed"
       ? formatRunFailure(event.errorCode, event.error)
       : event.reason;
-    return finishThinking(entries).map((entry) => {
+    return finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) => {
+      if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running") {
-        return { ...entry, expanded: false, trace: { ...entry.trace, status: "failed", summary } };
+        return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
       return cancelPendingPermission(entry);
     });
@@ -537,9 +727,10 @@ export function reduceRunTimeline(
       || event.status === "cancelled"
       || event.status === "interrupted")) {
     const summary = event.reason ?? event.run.error ?? `Run ${event.status}`;
-    return finishThinking(entries).map((entry) => {
+    return finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) => {
+      if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running" && event.status !== "completed") {
-        return { ...entry, expanded: false, trace: { ...entry.trace, status: "failed", summary } };
+        return { ...entry, expanded: entry.userExpanded ?? false, trace: { ...entry.trace, status: "failed", summary } };
       }
       return cancelPendingPermission(entry);
     });
@@ -566,7 +757,7 @@ export function setTimelineEntryExpanded(
   expanded: boolean,
 ): RunTimelineEntry[] {
   return entries.map((entry) => entry.id === id && (entry.type === "thinking" || entry.type === "tool")
-    ? { ...entry, expanded }
+    ? { ...entry, expanded, userExpanded: expanded }
     : entry);
 }
 
@@ -597,6 +788,8 @@ export function skillDraftNameFromTrace(trace: ToolTrace): string | undefined {
 export function RunTimeline({
   agentLabel = "ScienceDiscovery",
   artifactReviews = [],
+  ideaResearchClient,
+  ideaResearchSessionId,
   entries,
   footer,
   isRunning,
@@ -605,6 +798,7 @@ export function RunTimeline({
   onLoadToolOutput,
   onOpenArtifacts,
   onOpenSkillReviews,
+  onListSkillDrafts,
   onPermissionDecision,
   onOpenSubagent,
   onToggle,
@@ -615,6 +809,8 @@ export function RunTimeline({
 }: {
   agentLabel?: string;
   artifactReviews?: ArtifactReviewRun[];
+  ideaResearchClient?: ApiClient;
+  ideaResearchSessionId?: string;
   entries: RunTimelineEntry[];
   /** Content that belongs to the completed run, rendered before its final action. */
   footer?: ReactNode;
@@ -625,6 +821,7 @@ export function RunTimeline({
   onLoadToolOutput?: (trace: ToolTrace) => Promise<string | undefined>;
   onOpenArtifacts?: () => void;
   onOpenSkillReviews?: (skillId?: string) => void;
+  onListSkillDrafts?: () => Promise<SkillReviewDraftSummary[]>;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   onOpenSubagent?: (subagent: Subagent) => void;
   onToggle: (id: string, expanded: boolean) => void;
@@ -644,22 +841,22 @@ export function RunTimeline({
   useEffect(() => {
     if (!onLoadToolOutput) return;
     for (const entry of entries) {
-      if (entry.type !== "tool" || !entry.expanded || entry.trace.status === "running") continue;
+      if (entry.type !== "tool" || (!entry.expanded && entry.trace.name !== "create_skill") || entry.trace.status === "running") continue;
       const trace = entry.trace;
       if (!trace.outputStream || trace.output !== undefined) continue;
       if (toolOutputs[trace.id] !== undefined || loadingToolIds.current.has(trace.id)) continue;
       loadingToolIds.current.add(trace.id);
       void onLoadToolOutput(trace)
         .then((output) => setToolOutputs((current) => ({ ...current, [trace.id]: output ?? "" })))
+        .catch(() => { /* Keep the existing summary when loading the full result fails. */ })
         .finally(() => loadingToolIds.current.delete(trace.id));
     }
   }, [entries, onLoadToolOutput, toolOutputs]);
-  if (!entries.length) return null;
-  const reviewTrace = [...entries].reverse().find((entry) =>
+  if (!entries.length || (!footer && entries.every((entry) => entry.type === "permission" && entry.request.state !== "pending"))) return null;
+  const reviewTraces = entries.filter((entry): entry is Extract<RunTimelineEntry, { type: "tool" }> =>
     entry.type === "tool"
       && entry.trace.name === "create_skill"
       && entry.trace.status === "completed");
-  const createdSkillId = reviewTrace?.type === "tool" ? skillDraftNameFromTrace(reviewTrace.trace) : undefined;
   async function decidePermission(request: PermissionRequest, decision: PermissionDecision): Promise<void> {
     if (!onPermissionDecision) return;
     const matcher = permissionMatchingKey(request);
@@ -679,10 +876,27 @@ export function RunTimeline({
   }
   return (
     <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite">
+      <header className="message assistant run-identity">
+        <div className="avatar"><BrandIcon size={19} /></div>
+        <div><span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span></div>
+      </header>
       {entries.map((entry) => {
+        if (entry.type === "idea-research") {
+          return <IdeaResearchTimelineCard client={ideaResearchClient} key={entry.id} researchId={entry.researchId} sessionId={ideaResearchSessionId} />;
+        }
+        if (entry.type === "idea-tree-phase") {
+          const label = t(`ideaTree.phase.${entry.phase}`);
+          return (
+            <aside className={`boundary-note idea-tree-phase ${entry.status}`} key={entry.id}>
+              <span>{statusIcon(entry.status)}</span>
+              <p><strong>{label}</strong>{entry.nodeId ? ` · ${entry.nodeId}` : ""}</p>
+            </aside>
+          );
+        }
+
         if (entry.type === "history-truncated") {
           return (
-            <aside className="boundary-note" key={entry.id}>
+            <aside className="boundary-note process-notice" key={entry.id}>
               <span><WarningIcon size={15} /></span>
               <p>{entry.droppedEvents} run event(s) were removed by the retention policy; approval records are kept.</p>
             </aside>
@@ -691,7 +905,7 @@ export function RunTimeline({
 
         if (entry.type === "approval-mode") {
           return (
-            <aside className="boundary-note" key={entry.id}>
+            <aside className="boundary-note process-notice" key={entry.id}>
               <span><WarningIcon size={15} /></span>
               <p>{t("timeline.approvalModeChanged", {
                 from: t(approvalModeLabelKey(entry.previousApprovalMode)),
@@ -734,10 +948,9 @@ export function RunTimeline({
         }
 
         if (entry.type === "permission") {
+          if (entry.request.state !== "pending") return null;
           const pending = entry.request.state === "pending";
-          const status = pending ? t("permissions.required") : entry.request.state === "allowed"
-            ? t("timeline.permissionGranted")
-            : entry.request.state === "denied" ? t("timeline.permissionDenied") : t("timeline.permissionCancelled");
+          const status = t("permissions.required");
           return (
             <article className={`permission-card timeline-permission ${entry.request.state}`} key={entry.id}>
               <div>
@@ -773,7 +986,7 @@ export function RunTimeline({
           return (
             <SubagentCards
               className="timeline-subagents"
-              heading={entry.subagents.length > 1 ? "Subagents" : "Subagent"}
+              hideHeading
               key={entry.id}
               onOpenSubagent={onOpenSubagent ?? (() => undefined)}
               subagents={entry.subagents}
@@ -783,10 +996,8 @@ export function RunTimeline({
 
         if (entry.type === "assistant") {
           return (
-            <article className="message assistant streaming" key={entry.id}>
-              <div className="avatar"><BrandIcon size={19} /></div>
-              <div>
-                <span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span>
+            <article className="message assistant streaming assistant-continuation" key={entry.id}>
+              <div className="message-body">
                 <MarkdownRenderer
                   className="message-content"
                   content={entry.content}
@@ -797,7 +1008,9 @@ export function RunTimeline({
                   workspaceSessionId={workspaceSessionId}
                 />
                 {entry.truncated ? <p className="muted">Earlier replay text was truncated by the retention policy.</p> : null}
-                {isRunning && entries.at(-1)?.id === entry.id ? <span className="cursor" /> : null}
+                {isRunning && (entry.responseId !== undefined
+                  ? entry.streaming
+                  : entries[findLegacyContinuation(entries)]?.id === entry.id) ? <span className="cursor" /> : null}
               </div>
             </article>
           );
@@ -807,7 +1020,7 @@ export function RunTimeline({
           const label = entry.status === "running" ? t("timeline.thinking") : t("timeline.thoughtTurn", { turn: entry.turn });
           return (
             <details
-              className={`timeline-disclosure thinking ${entry.status}`}
+              className={`timeline-disclosure thinking ${entry.status}${entry.status !== "running" ? " process-record" : ""}`}
               key={entry.id}
               open={entry.expanded}
               onToggle={(event) => {
@@ -851,7 +1064,7 @@ export function RunTimeline({
 
         return (
           <details
-            className={`timeline-disclosure tool ${entry.trace.status}`}
+            className={`timeline-disclosure tool ${entry.trace.status}${entry.trace.status !== "running" ? " process-record" : ""}`}
             key={entry.id}
             open={entry.expanded}
             onToggle={(event) => {
@@ -861,7 +1074,8 @@ export function RunTimeline({
             <summary>
               <span className="timeline-chevron"><ChevronRightIcon size={16} /></span>
               <span className="timeline-icon">{statusIcon(entry.trace.status)}</span>
-              <span className="timeline-label"><strong>{entry.trace.name}</strong><small>{t("timeline.toolCall")}</small></span>
+              <span className="timeline-label"><strong>{entry.trace.status === "running" ? entry.trace.name : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: entry.trace.name })}</strong><small>{t("timeline.toolCall")}</small></span>
+              {(entry.trace.status === "running" || entry.expanded) && entries.some((candidate) => candidate.type === "permission" && candidate.request.state === "allowed" && candidate.request.toolCallId === entry.trace.id) ? <small className="tool-authorization">{t("record.authorized")}</small> : null}
               <span className={`timeline-status ${entry.trace.status}`}>{entry.trace.status}</span>
             </summary>
             <div className="timeline-content tool-content">
@@ -871,11 +1085,8 @@ export function RunTimeline({
         );
       })}
       {footer}
-      {reviewTrace && onOpenSkillReviews ? <aside className="skill-review-timeline-cta">
-        <span className="skill-review-timeline-icon"><CheckIcon size={17} /></span>
-        <div><strong>{t("timeline.skillDraftReady")}</strong><small>{t("timeline.skillDraftReadyDescription")}</small></div>
-        <button onClick={() => onOpenSkillReviews(createdSkillId)} type="button">{t("timeline.reviewSkill")}</button>
-      </aside> : null}
+      {reviewTraces.length && onOpenSkillReviews ? <SkillReviewRecords listDrafts={onListSkillDrafts} onOpen={onOpenSkillReviews}
+        traces={reviewTraces.map(({ trace }) => ({ ...trace, output: trace.output ?? toolOutputs[trace.id] }))} /> : null}
     </section>
   );
 }

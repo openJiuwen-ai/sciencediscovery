@@ -81,6 +81,15 @@ const NON_AUTHORITY_TAGS = new Map([
   // shown to the model, never emitted as a structural block.
   ["artifact_id", "citation-alias placeholder in prompt prose"],
   ["evidence_id", "citation-alias placeholder in prompt prose"],
+  // Same notation for uploaded-file citations: {"sourcefileN": "<file_id>"}
+  // in the cite-alias teaching (block 4). A SourceFile node id placeholder,
+  // not a structural block.
+  ["file_id", "citation-alias placeholder in prompt prose"],
+  // dbrecord citation teaches the model to write "<source>:<identifier>"
+  // (e.g. "uniprot:P38398") in the body. The "source" slot names the
+  // database id, not a structural block; this is the same kind of
+  // notation placeholder as the alias keys above.
+  ["source", "db-record cite-format placeholder in prompt prose"],
   // Structural tags of the summarization sub-request. Everything embedded in
   // them is HTML-escaped by buildSummaryPrompt first, so the wrapped content
   // cannot close them; that request also binds no tools.
@@ -99,7 +108,7 @@ test("denylist covers every framework authority block", () => {
     "packages/workspace/src/prompt.ts",
     "packages/context/src/compaction.ts",
     "packages/tools/src/deferred-tools.ts",
-    "packages/plan-mode/src/index.ts",
+    "packages/plan/src/index.ts",
     "services/api/src/native-agent/index.ts",
   ];
   const emitted = new Set<string>();

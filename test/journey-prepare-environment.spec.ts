@@ -21,10 +21,12 @@ import {
   currentEnvironmentRevision,
   environmentSetup,
   expandToolStep,
+  openEnvironmentDisclosure,
   openEnvironmentPage,
   openProjectSession,
   scriptedModel,
   sendUserMessage,
+  sessionExecutionRuns,
   waitForRunTerminal,
   type JourneyFixture,
 } from "./helpers/journeys.ts";
@@ -33,14 +35,14 @@ import {
  * E2E-META
  * Purpose: A user can create a named Python environment in settings, use its immutable revision in an Agent request, inspect provenance, and delete it.
  * Steps:
- *   1. Verify the isolated stack already has a ready managed Python base, then open Environments through the UI.
+ *   1. Verify the isolated stack already has a ready managed Python base, then open the built-in Runner's scientific environments through the UI.
  *   2. Inspect separate pip/conda sources and the read-only base; create a named Python environment through the UI.
- *   3. Confirm package installation controls exist without invoking them, then read the created environment's current revision through REST for stub injection only.
- *   4. Tell the Agent the environment name and verify marked Python output plus environment provenance.
+ *   3. Confirm package installation controls exist without invoking them, then read the created environment ID and current revision through REST.
+ *   4. Tell the Agent the environment name, verify the marked Python output, and check the recorded execution ran on that environment's revision.
  *   5. Return to settings and delete the named environment through the UI.
  * Environment: Isolated local stack at E2E_BASE_URL with managed Python setup already ready; no package installation is performed.
  * Type: mocked
- * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; deterministic run_python call using the UI-created revision.
+ * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1; deterministic run_shell call using the UI-created environment ID; revision is checked only as provenance.
  * WebSearch: none
  * PaperSources: none
  * MCP: none
@@ -56,7 +58,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
     preconditions: [
       "隔离栈已启动，且托管 Python base 已经就绪（未就绪时本旅程记为 BLOCKED，不记通过）",
       "本旅程只做创建 / 查看 / 选用 / 删除，不执行任何联网的软件包安装",
-      "模型由旅程自带的本地 stub 驱动，替用户说出环境名并传入该环境的当前修订",
+      "模型由旅程自带的本地 stub 驱动，传入环境 ID，服务端选择最新版；修订只用于溯源核对",
     ],
   });
 
@@ -65,8 +67,8 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
   let revision!: Awaited<ReturnType<typeof currentEnvironmentRevision>>["revision"];
 
   await journey.step(
-    "确认托管 Python 已就绪，并打开环境设置页",
-    "系统设置里的「环境」页显示托管 Python 已经 Ready；base 没就绪时这条旅程应当被判为前置未满足。",
+    "确认托管 Python 已就绪，并打开本机 Runner 的科学环境页",
+    "系统设置的 Runner 目录里选本机，科学环境页签显示托管 Python 已经 Ready；base 没就绪时这条旅程应当被判为前置未满足。",
     async () => {
       const setup = await environmentSetup(page);
       testInfo.skip(
@@ -75,7 +77,9 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
       );
       await page.goto("/");
       manager = await openEnvironmentPage(page);
-      await expect(manager.locator(".environment-setup-state")).toContainText("Ready");
+      const setupDisclosure = await openEnvironmentDisclosure(manager, ".environment-setup-state");
+      await expect(setupDisclosure).toContainText("Ready");
+      await expect(manager.locator(".environment-setup-state")).toBeVisible();
     },
   );
 
@@ -83,12 +87,13 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
     "查看软件源与只读的基础环境",
     "pip 与 conda 各有独立的来源选择器，Huawei Cloud 只出现在 pip；基础环境标为只读，也没有删除入口。",
     async () => {
+      await openEnvironmentDisclosure(manager, ".environment-source-settings");
       const pipSources = manager.getByLabel("Global pip source");
       const condaSources = manager.getByLabel("Global conda source");
       await expect(pipSources.getByRole("option", { name: "Huawei Cloud" })).toHaveCount(1);
       await expect(condaSources.getByRole("option", { name: "Huawei Cloud" })).toHaveCount(0);
 
-      const base = manager.locator(".environment-catalog article").filter({ hasText: /PYTHON · base/i });
+      const base = manager.locator(".environment-catalog article").filter({ hasText: /PYTHON base/i });
       await expect(base).toBeVisible();
       await expect(base).toContainText("Read-only");
       await expect(base.getByRole("button", { name: "Delete" })).toHaveCount(0);
@@ -97,12 +102,14 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
 
   await journey.step(
     "在界面上创建一个自己的命名 Python 环境",
-    "填名字、选 Python、点创建之后，这个环境作为「named」出现在环境目录里。",
+    "点添加、填名字、选初始 Python 工具、点创建之后，这个环境出现在受管理环境目录里。",
     async () => {
-      await manager.getByLabel("Environment language").selectOption("python");
+      await manager.getByRole("button", { name: "Add environment", exact: true }).click();
+      await manager.getByLabel("Initial environment tools").selectOption("python");
       await manager.getByLabel("Environment name").fill(environmentName);
       const createResponsePromise = page.waitForResponse((response) =>
-        response.request().method() === "POST" && new URL(response.url()).pathname === "/api/environments", {
+        response.request().method() === "POST"
+        && new URL(response.url()).pathname === "/api/runners/local/environments", {
         timeout: 120_000,
       });
       await manager.getByRole("button", { name: "Create", exact: true }).click();
@@ -110,7 +117,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
 
       const environmentCard = manager.locator(".environment-catalog article").filter({ hasText: environmentName });
       await expect(environmentCard).toBeVisible({ timeout: 60_000 });
-      await expect(environmentCard).toContainText("PYTHON · named");
+      await expect(environmentCard).toContainText("Managed environment");
     },
   );
 
@@ -135,12 +142,11 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
   const stub = await scriptedModel([
     {
       arguments: {
-        code: `print('${marker}')`,
-        environmentRevisionId: revision.id,
-        kernelMode: "ephemeral",
+        command: `python -c "print('${marker}')"`,
+        environment_id: revision.environmentId,
       },
       delayMs: 500,
-      tool: "run_python",
+      tool: "run_shell",
     },
     { text: `The calculation completed in ${environmentName}; output marker ${marker}.` },
   ]);
@@ -169,18 +175,25 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
           `Use the named environment ${environmentName} to run a small Python calculation and report its output.`,
         );
         expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
-        await expect(await expandToolStep(page, { contains: marker })).toContainText(marker);
+        const toolStep = await expandToolStep(page, { contains: marker });
+        await expect(toolStep, "the calculation itself must succeed, not only be attempted")
+          .not.toHaveClass(/\bfailed\b/);
+        await expect(toolStep).toContainText(marker);
       },
     );
 
     await journey.step(
       "事后核对这次计算用的就是我建的环境",
-      "溯源记录里显示的环境名正是刚创建的那个命名环境，并带上它当时的不可变修订。",
+      "这次计算留下的执行记录成功结束，并指向刚创建的那个命名环境当时的不可变修订。",
       async () => {
-        const provenance = page.locator("details[aria-label='Provenance record']");
-        if (await provenance.getAttribute("open") === null) await provenance.locator(":scope > summary").click();
-        await expect(provenance).toContainText(environmentName);
-        await expect(provenance).toContainText(revision.id.slice(0, 12));
+        // The timeline no longer carries an environment provenance disclosure, so the
+        // check reads the record the product keeps for the execution itself.
+        const executions = (await sessionExecutionRuns(page, fixture!.session.id))
+          .filter((execution) => execution.tool === "run_shell");
+        expect(executions).toHaveLength(1);
+        expect(executions[0]?.status).toBe("succeeded");
+        expect(executions[0]?.exitCode).toBe(0);
+        expect(executions[0]?.environmentRevisionId).toBe(revision.id);
       },
     );
 
@@ -196,7 +209,7 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
         const deleteResponsePromise = page.waitForResponse((response) =>
           response.request().method() === "DELETE"
           && new URL(response.url()).pathname
-            .includes(`/api/environments/${encodeURIComponent(revision.environmentId)}`), {
+            .includes(`/api/runners/local/environments/${encodeURIComponent(revision.environmentId)}`), {
           timeout: 120_000,
         });
         await reopenedCard.getByRole("button", { name: "Delete" }).click();

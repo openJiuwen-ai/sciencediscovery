@@ -70,6 +70,7 @@ export const BUNDLED_SKILL_IDS = [
   "audit-systematic-review",
   "audit-tree-search",
   "chunked-analysis",
+  "assessment-screening",
   "code-engineer",
   "comparative-analysis",
   "computation-reviewer",
@@ -78,6 +79,7 @@ export const BUNDLED_SKILL_IDS = [
   "deep-research",
   "document-summary",
   "evidence-discipline",
+  "creative-material-design",
   "evidence-extractor",
   "evidence-notes",
   "evolve-design",
@@ -85,6 +87,8 @@ export const BUNDLED_SKILL_IDS = [
   "idea-debate",
   "knowledge-engine-explore",
   "knowledge-engine-grow",
+  "idea-tree-team",
+  "insight-aggregator",
   "life-science-evidence-brief",
   "literature-searcher",
   "long-form-audit",
@@ -118,6 +122,7 @@ const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "audit-systematic-review": "1.1.0",
   "audit-tree-search": "1.1.0",
   "chunked-analysis": "1.0.0",
+  "assessment-screening": "1.0.0",
   "code-engineer": "1.0.0",
   "comparative-analysis": "1.0.0",
   "computation-reviewer": "1.0.0",
@@ -126,6 +131,7 @@ const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "deep-research": "1.0.0",
   "document-summary": "1.0.0",
   "evidence-discipline": "1.0.0",
+  "creative-material-design": "1.0.0",
   "evidence-extractor": "1.0.0",
   "evidence-notes": "1.0.0",
   "evolve-design": "1.0.0",
@@ -133,6 +139,8 @@ const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "idea-debate": "1.0.0",
   "knowledge-engine-explore": "1.0.0",
   "knowledge-engine-grow": "1.0.0",
+  "idea-tree-team": "4.0.0",
+  "insight-aggregator": "1.0.0",
   "life-science-evidence-brief": "1.1.0",
   "literature-searcher": "1.0.0",
   "long-form-audit": "1.0.0",
@@ -216,6 +224,7 @@ export interface RuntimeSkillSnapshot {
    */
   preFinishAudit?: boolean;
   readPackageFiles: () => SkillPackageFileBytes[];
+  metadata: Record<string, string>;
   readResource: (path: string) => SkillResourceContent;
   resources: SkillResource[];
   revision: number;
@@ -662,6 +671,7 @@ export function validateSkillPackage(
       hash: hashSkillPackageFiles(files),
       id: name,
       instructions: parsed.instructions,
+      ...(metadata ? { metadata } : {}),
       name,
       readOnly: options.readOnly ?? false,
       resources,
@@ -1510,6 +1520,23 @@ export class SkillCatalog {
     return { draft, files, loaded, provenance };
   }
 
+  private runtimeSnapshot(value: LoadedPackage): RuntimeSkillSnapshot {
+    const detail = structuredClone(value.detail);
+    const files = cloneFiles(value.files);
+    return {
+      content: detail.instructions,
+      description: detail.description,
+      hash: detail.hash,
+      id: detail.id,
+      metadata: structuredClone(detail.metadata ?? {}),
+      readPackageFiles: () => packageFileBytes(files),
+      readResource: (path: string) => resourceContent(detail, files, path),
+      resources: structuredClone(detail.resources),
+      revision: detail.currentRevision,
+      version: detail.version,
+    };
+  }
+
   private async commitManaged(
     loaded: LoadedPackage,
     revision: number,
@@ -1898,6 +1925,42 @@ export class SkillCatalog {
     return resourceContent(value.detail, value.files, path);
   }
 
+  /** Resolve an immutable historical package and verify its frozen identity. */
+  async resolveRevision(ref: {
+    hash: string;
+    id: string;
+    revision: number;
+    version: string;
+  }): Promise<RuntimeSkillSnapshot> {
+    this.assertLoaded();
+    if (!Number.isInteger(ref.revision) || ref.revision < 1) {
+      throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill revision is invalid: ${ref.id}@${ref.revision}`);
+    }
+    let value: LoadedPackage | undefined;
+    const builtIn = this.builtIns.get(ref.id);
+    if (builtIn) {
+      if (ref.revision !== builtIn.detail.currentRevision) {
+        throw new SkillCatalogError("SKILL_NOT_FOUND", `Built-in Skill revision not found: ${ref.id}@${ref.revision}`);
+      }
+      value = builtIn;
+    } else {
+      const currentRevision = this.index.managed[ref.id]?.currentRevision;
+      if (!currentRevision || ref.revision > currentRevision) {
+        throw new SkillCatalogError("SKILL_NOT_FOUND", `Managed Skill revision not found: ${ref.id}@${ref.revision}`);
+      }
+      value = ref.revision === currentRevision
+        ? this.managed.get(ref.id)
+        : await this.loadManaged(ref.id, ref.revision);
+    }
+    if (!value || value.detail.hash !== ref.hash || value.detail.version !== ref.version) {
+      throw new SkillCatalogError(
+        "SKILL_CONFLICT",
+        `Frozen Skill identity does not match persisted revision: ${ref.id}@${ref.revision}`,
+      );
+    }
+    return this.runtimeSnapshot(value);
+  }
+
   resolve(ids: string[]): RuntimeSkillSnapshot[] {
     this.assertLoaded();
     return ids.map((id) => {
@@ -1911,6 +1974,7 @@ export class SkillCatalog {
         hash: detail.hash,
         id: detail.id,
         ...(declaresPreFinishAudit(value.detail.frontmatter) ? { preFinishAudit: true } : {}),
+        metadata: { ...detail.metadata },
         readPackageFiles: () => packageFileBytes(files),
         readResource: (path: string) => resourceContent(detail, files, path),
         resources: structuredClone(detail.resources),

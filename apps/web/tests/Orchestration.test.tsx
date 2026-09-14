@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { SessionPlan, Subagent } from "@sciencediscovery/schema";
+import type { Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -23,42 +23,36 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api.js";
 import { BuiltInReviewerSpecialist, OrchestrationPanel, SpecialistManager, SubagentCards } from "../src/Orchestration.js";
 import { activityCardId } from "../src/session/run-activity.js";
+import type { RunPlanSnapshot } from "../src/session/run-activity.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const timestamp = "2026-07-15T00:00:00.000Z";
 const noopToggle = () => undefined;
 
-test("built-in Reviewer Specialist exposes the configured Quick/Deep control", () => {
+test("built-in Reviewer Specialist explains that Quick/Deep is chosen per Session", () => {
   const html = renderToStaticMarkup(createElement(BuiltInReviewerSpecialist, {
     busy: true,
     enabled: true,
-    level: "deep",
-    onLevelChange: () => undefined,
     onToggle: noopToggle,
   }));
 
-  assert.match(html, /aria-label="Reviewer Specialist level"/);
-  assert.match(html, /<option value="quick">Quick<\/option>/);
-  assert.match(html, /<option value="deep" selected="">Deep<\/option>/);
-  assert.doesNotMatch(html, /value="smart"/);
-  assert.match(html, /<select[^>]*disabled=""/);
+  assert.match(html, /Choose the level of Quick\/Deep per Session\./);
+  assert.doesNotMatch(html, /<select/);
+  assert.doesNotMatch(html, /Completed-review handoff/);
+  assert.match(html, /<button[^>]*disabled=""/);
   assert.match(html, /aria-checked="true"/);
 });
 
-function buildPlan(overrides: Partial<SessionPlan> = {}): SessionPlan {
+function buildPlan(overrides: Partial<RunPlanSnapshot> = {}): RunPlanSnapshot {
   return {
-    caveats: ["Validate external references"],
-    createdAt: timestamp,
-    feasibilityConfidence: "medium",
-    id: "plan-1",
-    mode: "recorded",
-    scope: "Compare two independent methods",
-    sessionId: "session-1",
-    state: "recorded",
-    steps: [{ description: "Run both methods", id: "step-1", status: "pending" }],
+    agentId: "main",
+    explanation: "Compare two independent methods",
+    items: [{ status: "pending", step: "Run both methods" }],
+    runId: "run-1",
+    toolCallId: "call-plan-1",
+    turn: 1,
     updatedAt: timestamp,
-    version: 1,
     ...overrides,
   };
 }
@@ -100,9 +94,9 @@ test("recorded plan collapses to a live Todo summary", () => {
     plans: [buildPlan()],
   }));
 
-  assert.match(html, /Plan · v1/);
-  assert.match(html, /0\/1 completed · medium feasibility/);
-  assert.match(html, /active/);
+  assert.match(html, /Plan · main/);
+  assert.match(html, /0\/1 completed/);
+  assert.match(html, /<i>Pending<\/i>/);
   assert.match(html, /aria-expanded="false"/);
   assert.doesNotMatch(html, /recorded mode/);
   // Scope and step list stay folded away until the card is expanded.
@@ -112,10 +106,9 @@ test("recorded plan collapses to a live Todo summary", () => {
 
 test("completed plan summary reports completed step counts", () => {
   const plan = buildPlan({
-    state: "completed",
-    steps: [
-      { description: "Run both methods", id: "step-1", status: "completed" },
-      { description: "Summarize", id: "step-2", status: "pending" },
+    items: [
+      { step: "Run both methods", status: "completed" },
+      { step: "Summarize", status: "pending" },
     ],
   });
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
@@ -124,34 +117,68 @@ test("completed plan summary reports completed step counts", () => {
     plans: [plan],
   }));
 
-  assert.match(html, /1\/2 completed · medium feasibility/);
+  assert.match(html, /1\/2 completed/);
   assert.match(html, /completed/);
 });
 
-test("panel renders every plan it is given, not only the latest", () => {
-  const older = buildPlan({ id: "plan-1", version: 1 });
-  const newer = buildPlan({ id: "plan-2", version: 2 });
+test("panel renders independent plan snapshots for different agents", () => {
+  const main = buildPlan({ agentId: "main" });
+  const worker = buildPlan({ agentId: "subagent:worker-1", toolCallId: "call-plan-2" });
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
     expandedCards: {},
     onToggleCard: noopToggle,
-    plans: [older, newer],
+    plans: [main, worker],
   }));
 
-  assert.match(html, /Plan · v1/);
-  assert.match(html, /Plan · v2/);
+  assert.match(html, /Plan · main/);
+  assert.match(html, /Plan · subagent:worker-1/);
+});
+
+test("plan badge follows completion and terminal state without repeating the summary", () => {
+  for (const [items, terminal, badge] of [
+    [[{ step: "Done", status: "completed" }], false, "Completed"],
+    [[{ step: "Done", status: "completed" }], true, "Completed"],
+    [[{ step: "Unfinished", status: "in_progress" }], true, "Finished"],
+    [[{ step: "Working", status: "in_progress" }], false, "In progress"],
+    [[], true, "cleared"],
+  ] as const) {
+    const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
+      expandedCards: {}, onToggleCard: noopToggle,
+      plans: [buildPlan({ items: [...items] })],
+      terminalRunIds: new Set(terminal ? ["run-1"] : []),
+    }));
+    assert.ok(html.includes(`<i>${badge}</i>`));
+    assert.equal((html.match(/\d\/\d completed/g) ?? []).length, 1);
+    assert.doesNotMatch(html, /process-record/);
+    if (terminal) assert.doesNotMatch(html, /1 in progress/);
+  }
 });
 
 test("expanded plan card shows the live scope and step states", () => {
-  const plan = buildPlan();
+  const plan = buildPlan({
+    items: [
+      { step: "Collect papers", status: "completed" },
+      { step: "Compare results", status: "in_progress" },
+      { step: "Write report", status: "pending" },
+    ],
+  });
   const html = renderToStaticMarkup(createElement(OrchestrationPanel, {
-    expandedCards: { [activityCardId("plan", plan.id)]: true },
+    expandedCards: { [activityCardId("plan", `${plan.runId}:${plan.agentId}`)]: true },
     onToggleCard: noopToggle,
     plans: [plan],
   }));
 
   assert.match(html, /aria-expanded="true"/);
   assert.match(html, /Compare two independent methods/);
-  assert.match(html, /Run both methods/);
+  assert.match(html, /Collect papers/);
+  assert.match(html, /Compare results/);
+  assert.match(html, /Write report/);
+  assert.match(html, /aria-label="Completed"/);
+  assert.match(html, /aria-label="In progress"/);
+  assert.match(html, /aria-label="Pending"/);
+  assert.match(html, /plan-item-status completed/);
+  assert.match(html, /plan-item-status in_progress/);
+  assert.match(html, /plan-item-status pending/);
   assert.match(html, /data-status="pending"/);
 });
 
@@ -221,7 +248,7 @@ test("clicking a subagent card selects that SubAgent for navigation", async () =
   await act(async () => renderer!.unmount());
 });
 
-test("specialist form uses the primary action button skeleton", () => {
+test("specialist editor starts collapsed behind the specialist list", () => {
   const html = renderToStaticMarkup(createElement(SpecialistManager, {
     client: {} as ApiClient,
     connectors: [],
@@ -230,7 +257,9 @@ test("specialist form uses the primary action button skeleton", () => {
     skills: [],
   }));
 
-  assert.match(html, /class="primary-button"[^>]*>Create specialist</);
+  // The list-type setting shows the list first; the blank create form only
+  // opens after "New specialist" is clicked.
+  assert.match(html, />＋ New specialist</);
+  assert.doesNotMatch(html, /specialist-form-card/);
   assert.doesNotMatch(html, /specialist-description-card/);
-  assert.match(html, />Description<\/span><textarea required="" rows="4" maxLength="500"/);
 });

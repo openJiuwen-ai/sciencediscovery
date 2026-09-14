@@ -34,6 +34,7 @@
 import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import { useEffect, useRef } from "react";
 
+import { useLocale } from "../i18n/index.js";
 import type { EvolveRunView } from "./model.js";
 import {
   diffGraph,
@@ -54,6 +55,7 @@ export interface SearchGraphCanvasProps {
 }
 
 export function SearchGraphCanvas({ autoFollow = true, onSelect, selectedIndex, view }: SearchGraphCanvasProps) {
+  const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | undefined>(undefined);
   const layoutRef = useRef<SearchGraphLayout | undefined>(undefined);
@@ -230,8 +232,8 @@ export function SearchGraphCanvas({ autoFollow = true, onSelect, selectedIndex, 
     <div className="evolve-canvas-wrap">
       <div className="evolve-canvas" ref={hostRef} />
       <div className="evolve-canvas-toolbar">
-        <button type="button" className="evolve-canvas-btn" onClick={handleFit} title="Fit all nodes in view">
-          {"⤢ Fit"}
+        <button type="button" className="evolve-canvas-btn" onClick={handleFit} title={t("evolve.fitView")}>
+          {`⤢ ${t("evolve.fit")}`}
         </button>
       </div>
     </div>

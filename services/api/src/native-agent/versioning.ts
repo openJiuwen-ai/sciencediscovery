@@ -6,7 +6,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  RefStore, snapshotWorkspace, StepCommitCoordinator, VersionStore,
+  RefStore, committedWorkspaceSnapshot, StepCommitCoordinator, VersionStore,
   type AgentStateRef, type TrajectoryStep,
 } from "@sciencediscovery/cas";
 import type { RuntimeMessage, RuntimeToolCall, RunEvent, TurnLifecycle } from "@sciencediscovery/runtime-core";
@@ -78,7 +78,7 @@ export function harnessBuildDigest(): Promise<AgentStateRef["digest"]> {
         }
       }
     };
-    const packages = ["runtime-core", "context", "model", "tools", "workspace", "plan-mode", "evolve", "orchestration"];
+    const packages = ["runtime-core", "context", "model", "tools", "workspace", "plan", "evolve", "orchestration"];
     for (const name of packages) {
       const root = dirname(fileURLToPath(import.meta.resolve(`@sciencediscovery/${name}`)));
       hash.update(name); await walk(root, root);
@@ -103,7 +103,7 @@ export class AgentStateAssembler {
 
   async assemble(input: Omit<AgentStateSnapshot, "workspace" | "runtime" | "authorities" | "forkFidelity">): Promise<AgentStateRef> {
     const authorities = await this.readAuthorities();
-    const workspace = await snapshotWorkspace(this.store, this.workspaceRoot);
+    const workspace = await committedWorkspaceSnapshot(this.store, this.workspaceRoot);
     return this.store.putRecord("AgentStateSnapshot", jsonValue({
       ...input, workspace, runtime: this.readRuntime(), authorities,
       forkFidelity: [
@@ -186,7 +186,7 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     await this.refs.commit(this.store, name, this.refs.head(name), this.context);
   }
 
-  async recordObservation(input: { call: RuntimeToolCall; content: string; isError: boolean; sequence: number }): Promise<void> {
+  async recordObservation(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number }): Promise<void> {
     const content = await this.store.put("agent-state", input.content, "text/plain;charset=utf-8");
     const ref = await this.store.putRecord("ToolObservation", jsonValue({ ...input, content }));
     this.turnObservations.push({ sequence: input.sequence, ref });

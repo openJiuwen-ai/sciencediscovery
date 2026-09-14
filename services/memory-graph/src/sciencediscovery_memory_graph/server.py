@@ -18,11 +18,14 @@ Routes:
 
 - ``GET /health`` → ``{status}`` (healthy/degraded/disabled/needs-password)
 - ``POST /observe/execution`` (Bearer) → upsert one execution's nodes + edges
-- ``POST /observe/mcp-search`` (Bearer) → upsert one MCP search's SubTask + Papers
+- ``POST /observe/tool-call`` (Bearer) → unified upsert ticket for any tool
+  call's ToolCall + Paper/WebPage/DbRecord products (broker/recorder are the
+  only callers; the legacy ``/observe/mcp-search`` endpoint no longer
+  exists)
 - ``POST /observe/session-first-message`` (Bearer) → upsert ResearchGoal from
   a session's first user message (passive fallback, one goal per session)
-- ``POST /observe/session-plan`` (Bearer) → mirror a SessionPlan's steps into
-  a SubTask skeleton + linear ``next`` chain, correcting the goal's scope/domain
+- ``POST /observe/upload-file`` (Bearer) → upsert a SourceFile node (an
+  uploaded input file) + a ``feeds`` edge to ResearchGoal (fire-and-forget)
 - ``GET /subgraph?session_id=...`` (Bearer) → ``{nodes, edges, total, truncated}``
 - ``POST /query/by-node-type`` (Bearer) → filter nodes by label(s)
 - ``POST /query/by-edge-type`` (Bearer) → filter edges by type(s) + endpoint nodes
@@ -43,7 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -61,10 +64,10 @@ from .persistence import (
     delete_session_graph,
     link_claims_to_report,
     upsert_execution,
-    upsert_mcp_search,
     upsert_session_first_message,
-    upsert_session_plan,
+    upsert_source_file,
     upsert_subagent,
+    upsert_tool_call,
 )
 from .search_graph import bind_subtask, get_search_graph, link_search_artifacts, upsert_search_progress
 from .query import (
@@ -78,6 +81,7 @@ from .query import (
     get_scope_expansion,
     get_subgraph,
     get_trace,
+    get_web_page_content_hash,
     query_match,
 )
 
@@ -91,10 +95,13 @@ app = FastAPI(title="sciencediscovery-memory-graph")
 # compatibility name for the Task/ToolCall split) and the evolve search's
 # (SearchRun/SearchNode/SearchCell and the search-structure edges).
 # ``stated_in`` links a Claim to the report Artifact it is stated in.
+# ``feeds`` links an uploaded SourceFile to its ResearchGoal (SourceFile →
+# ResearchGoal).
 _NODE_LABELS = {"ResearchGoal", "SubTask", "Task", "ToolCall", "Paper", "Evidence", "Claim",
-                "Code", "Artifact", "SearchRun", "SearchNode", "SearchCell"}
+                "Code", "Artifact", "SearchRun", "SearchNode", "SearchCell", "SourceFile",
+                "WebPage", "DbRecord"}
 _EDGE_TYPES = {"next", "produces", "extracts", "supports", "stated_in", "supersedes", "input",
-               "contains", "searches", "root", "expands", "inspires", "elected", "occupies"}
+               "contains", "searches", "root", "expands", "inspires", "elected", "occupies", "feeds"}
 
 
 def _error(code: str, http: int, message: str, instruction: str | None = None) -> None:
@@ -169,7 +176,16 @@ class ObserveExecutionRequest(BaseModel):
     status: str
     started_at: str
     finished_at: str
-    task_type: str = "code_execution"
+    tool_type: str = "execution"
+    # Full tool identifier mirrored onto the ToolCall's ``tool_name``
+    # (the post-rename field; pre-rename nodes carried ``task_type`` only).
+    # Optional: absent → the sidecar falls back to ``tool`` (the execution
+    # path's tool id IS the tool name — run_shell / run_python / run_r — so
+    # callers that only set ``tool`` get the same graph either way; NPU jobs
+    # set both when the graph name differs from the run-tool id).
+    # Declared explicitly: Pydantic v2 default extra="ignore" would silently
+    # drop an undeclared field (same gotcha as parent_subagent_id).
+    tool_name: str | None = None
     produced_artifacts: list[ProducedArtifact] = Field(default_factory=list)
     # Provenance addressing info mirrored onto the Code node (CAS hashes for
     # the executionLog/code/environments blocks). All None when the Node side
@@ -178,12 +194,23 @@ class ObserveExecutionRequest(BaseModel):
     stderr_hash: str | None = None
     env_hash: str | None = None
     # When set, this execution ran inside a subagent: a child SubTask is built
-    # (task_type=code_execution) hung off the subagent's scope via contains,
+    # (tool_type=execution) hung off the subagent's scope via contains,
     # and produces runs child→Code/Artifact. Absent in main-agent context —
     # behavior unchanged. MUST be declared explicitly (Pydantic v2 default
     # extra="ignore" would otherwise silently drop it and the child branch
     # would never run, regressing products onto a per-execution SubTask).
     parent_subagent_id: str | None = None
+    # Uploaded SourceFile nodes (``{file_id}``) this Code run read — a distinct
+    # top-level input channel from ``produced_artifacts[].input_artifact_versions``
+    # (SourceFile has no version; endpoint key is ``file_id``). The recorder
+    # infers these by scanning the code text for uploaded-file paths (same grain
+    # as inferredArtifactInputs). Drives the ``SourceFile -[:input]-> Code``
+    # edge in upsert_execution. MUST be declared explicitly: Pydantic v2 defaults
+    # to extra="ignore", so an undeclared field is silently dropped at validation
+    # — model_dump() omits it and the edge never gets built (same gotcha as
+    # input_artifact_versions above). Declared as a list of dict to match the
+    # loose ``ref.get(...)`` consumption in persistence._link_source_file_inputs.
+    input_source_files: list[dict[str, Any]] | None = None
 
 
 @app.post("/observe/execution", dependencies=[Depends(require_internal_token)])
@@ -206,83 +233,20 @@ def observe_execution(req: ObserveExecutionRequest) -> dict[str, Any]:
             status=req.status,
             started_at=req.started_at,
             finished_at=req.finished_at,
-            task_type=req.task_type,
+            tool_type=req.tool_type,
+            tool_name=req.tool_name,
             produced_artifacts=[a.model_dump() for a in req.produced_artifacts],
             stdout_hash=req.stdout_hash,
             stderr_hash=req.stderr_hash,
             env_hash=req.env_hash,
             parent_subagent_id=req.parent_subagent_id,
+            input_source_files=req.input_source_files,
         )
         written = 1 + len(req.produced_artifacts)
         log.info("observe/execution done: execution=%s wrote %d node(s)", req.execution_id, written)
         return {"status": "healthy", "written": written}
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/execution failed: execution=%s: %s", req.execution_id, exc)
-        raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
-
-
-# --- Write: observeMcpInvocation --------------------------------------------
-
-class McpSearchRecord(BaseModel):
-    """One record from a successful MCP literature-search invocation.
-
-    Only records with a ``url`` contribute a Paper node (the link is the dedup
-    key); records without a URL are dropped on the Python side.
-    """
-
-    url: str
-    title: str | None = None
-    identifier: str | None = None
-    identifierType: str | None = None
-    year: str | None = None
-    authors: list[str] | None = None
-    abstract: str | None = None
-    source: str | None = None
-
-
-class ObserveMcpSearchRequest(BaseModel):
-    invocation_id: str
-    session_id: str
-    turn_id: str
-    source: str
-    tool_type: str
-    retrieved_at: str
-    records: list[McpSearchRecord] = Field(default_factory=list)
-    # When set, this search ran inside a subagent: a child SubTask is built
-    # (task_type=literature_search) hung off the subagent's scope via contains,
-    # and produces runs child→Paper. Absent in main-agent context — behavior
-    # unchanged. MUST be declared explicitly (Pydantic v2 default extra="ignore"
-    # would otherwise silently drop it and the child branch would never run).
-    parent_subagent_id: str | None = None
-
-
-@app.post("/observe/mcp-search", dependencies=[Depends(require_internal_token)])
-def observe_mcp_search(req: ObserveMcpSearchRequest) -> dict[str, Any]:
-    driver = handle()
-    log.info("observe/mcp-search in: invocation=%s session=%s source=%s records=%d",
-             req.invocation_id, req.session_id, req.source, len(req.records))
-    if not driver.is_reachable():
-        log.warning("observe/mcp-search skipped: Neo4j not reachable, this search will not be mirrored")
-        return {"status": "degraded", "written": 0}
-    try:
-        upsert_mcp_search(
-            invocation_id=req.invocation_id,
-            session_id=req.session_id,
-            turn_id=req.turn_id,
-            source=req.source,
-            tool_type=req.tool_type,
-            retrieved_at=req.retrieved_at,
-            records=[r.model_dump() for r in req.records],
-            parent_subagent_id=req.parent_subagent_id,
-        )
-        # 1 SubTask + N Papers (only those with a URL; the rest are dropped).
-        papers_with_url = sum(1 for r in req.records if r.url)
-        written = 1 + papers_with_url
-        log.info("observe/mcp-search done: invocation=%s wrote %d node(s) (%d papers)",
-                 req.invocation_id, written, papers_with_url)
-        return {"status": "healthy", "written": written, "papers": papers_with_url}
-    except Exception as exc:  # pragma: no cover - belt-and-suspenders
-        log.exception("observe/mcp-search failed: invocation=%s: %s", req.invocation_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
 
 
@@ -299,7 +263,7 @@ class ObserveSubagentRequest(BaseModel):
     seq). task_type is the coarse scope label (normally ``subagent``); the
     actual subagent role rides in ``subagent_type``. Products are NOT hung off
     this scope — each internal toolcall is a separate child SubTask built by
-    /observe/execution or /observe/mcp-search with parent_subagent_id.
+    /observe/execution or /observe/tool-call with parent_subagent_id.
     """
 
     subagent_id: str
@@ -312,6 +276,92 @@ class ObserveSubagentRequest(BaseModel):
     status: str
     finished_at: str | None = None
     summary: str | None = None
+
+
+# --- Write: observeToolCall (unified tool-call ticket) --------------------
+#
+# A single endpoint that any search/fetch tool (literature sources, the wiki,
+# database sources, web_search / web_fetch) can hit. Products carry
+# ``product_type`` so the sidecar can fan them out to
+# the right write path (Paper / WebPage / DbRecord). The MCP broker and the
+# WebBroker both emit here; the legacy ``/observe/mcp-search`` endpoint was
+# retired in the cutover (orphaned-Paper cleanup ran alongside). Field
+# naming convention: ``identifier_type`` / ``source_refs`` /
+# ``parent_subagent_id`` are snake_case throughout this endpoint — the TS
+# client uses the same shape.
+
+class ToolCallProduct(BaseModel):
+    """One product the ToolCall produced. ``product_type`` dispatches to the
+    right write path; the unused field groups are simply None.
+    """
+
+    product_type: Literal["paper", "web_page", "db_record"]
+    # paper fields (Paper write path)
+    link: str | None = None
+    title: str | None = None
+    identifier: str | None = None
+    identifier_type: str | None = None
+    year: str | None = None
+    authors: list[str] | None = None
+    abstract: str | None = None
+    # ``source`` doubles as Paper.source (paper products) and DbRecord.source
+    # (db_record products). The product_type decides which write path consumes it.
+    source: str | None = None
+    # web_page fields (WebPage write path)
+    url: str | None = None
+    snippet: str | None = None
+    source_refs: list[str] | None = None
+    # Hash of the page body as landed in the CAS data pool — the node stores
+    # only this address, never the text (mirrors SourceFile.content_hash).
+    # None on snippet-only products (plain searches); the upsert's ON MATCH
+    # COALESCE keeps an existing hash when None arrives.
+    content_hash: str | None = None
+
+
+class ObserveToolCallRequest(BaseModel):
+    task_id: str
+    session_id: str
+    turn_id: str
+    tool_name: str
+    tool_type: str
+    source: str | None = None
+    status: str = "completed"
+    result_count: int = 0
+    products: list[ToolCallProduct] = Field(default_factory=list)
+    # When set, this tool call ran inside a subagent: a child ToolCall is built
+    # hung off the subagent's scope via contains, and produces runs child→
+    # product. Absent in main-agent context — behavior unchanged.
+    parent_subagent_id: str | None = None
+
+
+@app.post("/observe/tool-call", dependencies=[Depends(require_internal_token)])
+def observe_tool_call(req: ObserveToolCallRequest) -> dict[str, Any]:
+    driver = handle()
+    log.info("observe/tool-call in: task_id=%s session=%s tool=%s source=%s products=%d",
+             req.task_id, req.session_id, req.tool_name, req.source, len(req.products))
+    if not driver.is_reachable():
+        log.warning("observe/tool-call skipped: Neo4j not reachable, this tool call will not be mirrored")
+        return {"status": "degraded", "written": 0}
+    try:
+        upsert_tool_call(
+            task_id=req.task_id,
+            session_id=req.session_id,
+            turn_id=req.turn_id,
+            tool_name=req.tool_name,
+            tool_type=req.tool_type,
+            source=req.source,
+            status=req.status,
+            result_count=req.result_count,
+            products=[p.model_dump() for p in req.products],
+            parent_subagent_id=req.parent_subagent_id,
+        )
+        written = 1 + len(req.products)
+        log.info("observe/tool-call done: task_id=%s wrote %d node(s) (%d products)",
+                 req.task_id, written, len(req.products))
+        return {"status": "healthy", "written": written, "products": len(req.products)}
+    except Exception as exc:  # pragma: no cover - belt-and-suspenders
+        log.exception("observe/tool-call failed: task_id=%s: %s", req.task_id, exc)
+        raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
 
 
 @app.post("/observe/subagent", dependencies=[Depends(require_internal_token)])
@@ -355,6 +405,21 @@ def read_subgraph(session_id: str = Query(...)) -> dict[str, Any]:
                  session_id, result["total"], len(result["edges"]),
                  " [truncated at 500]" if result["truncated"] else "")
     return result
+
+
+@app.get("/web-pages/content-hash", dependencies=[Depends(require_internal_token)])
+def read_web_page_content_hash(
+    session_id: str = Query(...),
+    web_page_id: str = Query(...),
+) -> dict[str, Any]:
+    """O(1) lookup of one WebPage's content_hash, for the API server's
+    /api/sessions/<sid>/web-pages/<id>/content reverse proxy. Replaces pulling
+    the whole /subgraph just to read one node's hash. Returns
+    ``{"content_hash": null, "reason": "memory_graph_unreachable"}`` when the
+    graph is down vs ``{"content_hash": null}`` for not-found / no-body, so the
+    API server can return 502 for an outage and 404 for a genuine absence."""
+    content_hash, reason = get_web_page_content_hash(session_id, web_page_id)
+    return {"content_hash": content_hash, "reason": reason}
 
 
 # --- Read: query/* (cross-session search + chain) ----------------------------
@@ -670,6 +735,37 @@ def _latest_artifact_version(artifact_id: str) -> int | None:
         return rec["v"] if rec and rec["v"] is not None else None
 
 
+def _get_source_file_media_type(file_id: str) -> str | None | bool:
+    """Return a SourceFile node's ``media_type``, distinguishing absence.
+
+    The declare_evidence / declare_claim cite gates (block 3) route a
+    SourceFile by media_type: a PDF may be an Evidence source (extracts →
+    Evidence → supports → Claim), a non-PDF data file may directly support a
+    Claim (SourceFile -[:supports]-> Claim). Returns:
+
+    - ``False`` — no SourceFile node with that file_id (the caller 422s with
+      ``source_file_not_found``);
+    - ``None`` — the node exists but ``media_type`` is unset. This happens for
+      uploads whose extension ``inferMediaType`` doesn't know (e.g. .npy,
+      .pkl). The node IS in the graph, so "not found" would mislead the LLM
+      into hunting for a different file_id — callers treat unset as
+      "not a PDF" (the non-PDF data-file route), never as missing;
+    - a media-type string — the node's actual ``media_type``.
+    """
+    driver = handle()
+    if not driver.is_reachable():
+        return False
+    with driver.session() as session:
+        result = session.run(
+            "MATCH (sf:SourceFile {file_id: $fid}) RETURN sf.media_type AS mt",
+            fid=file_id,
+        )
+        rec = result.single()
+    if not rec:
+        return False
+    return rec["mt"] if rec["mt"] is not None else None
+
+
 def _await_node(label: str, id_field: str, value: str, attempts: int = 10, delay_s: float = 0.3) -> bool:
     """Poll for a node's existence with short sleeps.
 
@@ -712,7 +808,18 @@ def _await_artifact_version(artifact_id: str, version: int, attempts: int = 10, 
 
 class DeclareEvidenceRequest(BaseModel):
     content: str
-    source_paper_link: str
+    # Source of the Evidence — exactly one of source_paper_link /
+    # source_file_id / source_webpage_link. Paper branch: an existing
+    # Paper's normalized link. SourceFile branch: an uploaded PDF's file_id
+    # (media_type=application/pdf); non-PDF data files cannot be Evidence
+    # sources (see source_file_not_pdf below). WebPage branch: an existing
+    # WebPage's URL — the sidecar additionally gates on the page's
+    # content_hash (its body was landed in the CAS data pool by a
+    # fetch/get_page tool), rejecting search-snippet-only pages with
+    # source_webpage_no_content.
+    source_paper_link: str | None = None
+    source_file_id: str | None = None
+    source_webpage_link: str | None = None
     locator: str
     evidence_type: str
     confidence: str
@@ -723,13 +830,115 @@ class DeclareEvidenceRequest(BaseModel):
 @app.post("/persist/evidence", dependencies=[Depends(require_internal_token)])
 def persist_evidence(req: DeclareEvidenceRequest) -> dict[str, Any]:
     driver = handle()
-    log.info("persist/evidence in: session=%s paper=%s", req.session_id, req.source_paper_link)
+    log.info("persist/evidence in: session=%s paper=%s source_file=%s webpage=%s",
+             req.session_id, req.source_paper_link or "-",
+             req.source_file_id or "-", req.source_webpage_link or "-")
     if not driver.is_reachable():
         return {"status": "degraded", "evidence_id": None, "reason": "memory_graph_unreachable"}
-    # Validate the source Paper exists before creating an orphan Evidence.
-    link = _normalize_link(req.source_paper_link)
-    if not link or not _node_exists("Paper", "link", link):
-        _error("source_paper_not_found", 422, "no Paper with that link")
+    # Source routing: exactly one of (source_paper_link, source_file_id,
+    # source_webpage_link). The three are mutually exclusive — passing more
+    # than one is ambiguous (which source?), passing none creates an orphan
+    # Evidence with no provenance. 422 with a structured code so the LLM can
+    # self-correct rather than guess.
+    provided = [s for s in (req.source_paper_link, req.source_file_id,
+                            req.source_webpage_link) if s]
+    if not provided:
+        _error(
+            "no_source", 422,
+            "an Evidence needs a source: pass exactly one of source_paper_link "
+            "(for a Paper already in the graph), source_file_id (for an "
+            "uploaded PDF), or source_webpage_link (for a WebPage already in "
+            "the graph).",
+            "pass source_paper_link=<paper url/doi> for a Paper, "
+            "source_file_id=<file_id> for an uploaded PDF, or "
+            "source_webpage_link=<page url/identifier> for a WebPage.",
+        )
+    if len(provided) > 1:
+        _error(
+            "ambiguous_source", 422,
+            "pass exactly one of source_paper_link / source_file_id / "
+            "source_webpage_link, not multiple.",
+            "remove all but one source: source_paper_link for a Paper, "
+            "source_file_id for an uploaded PDF, source_webpage_link for a "
+            "WebPage — an Evidence has one source.",
+        )
+    source_file_id: str | None = None
+    link: str | None = None
+    webpage_link: str | None = None
+    if req.source_file_id:
+        # SourceFile-PDF branch. Gate media_type: only a PDF may be an Evidence
+        # source (evidence = an argument extracted from a document). A non-PDF
+        # data file (CSV/image/etc) is not extractable prose — it directly
+        # supports a Claim instead, via declare_claim's cites_source_file_refs.
+        media_type = _get_source_file_media_type(req.source_file_id)
+        if media_type is False:
+            _error(
+                "source_file_not_found", 422,
+                f"no SourceFile with file_id {req.source_file_id} in this session",
+                "the file_id is the SourceFile node's file_id (obtain via "
+                "query_graph or list_files); pass the correct file_id under "
+                "source_file_id.",
+            )
+        if media_type != "application/pdf":
+            _error(
+                "source_file_not_pdf", 422,
+                f"file_id {req.source_file_id} is a {media_type or 'unknown-type'} "
+                "file, not a PDF — only PDF files can be Evidence sources.",
+                "PDF 文件可以作为 Evidence 的来源（从文件抽取的论据）。数据文件"
+                "（CSV/图片等）不能作为 Evidence 来源——请用 declare_claim 的 "
+                "cites_source_file_aliases 直接支撑断言：先取该文件的 file_id（用 "
+                "query_graph 或 list_files），再传 cites_source_file_aliases="
+                "{\"sourcefileN\": \"<file_id>\"}。",
+            )
+        source_file_id = req.source_file_id
+    elif req.source_webpage_link:
+        # WebPage branch. WebPage has two unique keys: url (web_search)
+        # or identifier (llm-wiki, whose identifier is the wiki path); the
+        # probe MATCHes both the raw input and its _normalize_link form so
+        # the LLM can pass either (a url variant normalizes onto the upserted
+        # key; _normalize_link is URL-shaped and would mangle an opaque wiki
+        # identifier like wiki/BRCA1 into an https:// URL, so the raw form is
+        # the only match for identifiers). ``webpage_link`` carries the RAW
+        # input downstream — declare_evidence re-normalizes for its own
+        # double-form MATCH. The content gate is the dormancy rule: search
+        # mirrors only a snippet, so the page's full text is not in the
+        # graph — an Evidence "extracted from" it would be fabricated from a
+        # summary. The gate keys on ``content_hash`` (the body lives in the
+        # CAS data pool, addressed by the hash — nothing is stored on the
+        # node); the semantics are unchanged: reject until a fetch/get_page
+        # tool populated the body.
+        webpage_link = req.source_webpage_link
+        with driver.session() as sess:
+            row = sess.run(
+                "MATCH (w:WebPage {session_id: $sid}) "
+                "WHERE w.url IN [$nlink, $raw] OR w.identifier IN [$nlink, $raw] "
+                "RETURN w.content_hash AS content_hash LIMIT 1",
+                sid=req.session_id, nlink=_normalize_link(req.source_webpage_link),
+                raw=req.source_webpage_link).single()
+        if row is None:
+            _error(
+                "source_webpage_not_found", 422,
+                f"no WebPage with url/identifier {webpage_link} in this session",
+                "the link must be the page's URL exactly as the search "
+                "results returned (or the llm-wiki path); use query_graph to "
+                "find the WebPage node's url, or declare Evidence from a "
+                "Paper/PDF source instead.",
+            )
+        if not row["content_hash"]:
+            _error(
+                "source_webpage_no_content", 422,
+                f"WebPage {webpage_link} has no retrieved full text — only a "
+                "search snippet is in the graph.",
+                "网页正文尚未抓取（检索只带回摘要），暂不能作为 Evidence 来源。"
+                "请改用 source_paper_link（文献 Paper）或 source_file_id（已"
+                "上传的 PDF）；网页证据链待页面抓取能力上线后自动可用。",
+            )
+    else:
+        # Paper branch: validate the Paper exists before creating an orphan
+        # Evidence (legacy behavior, unchanged).
+        link = _normalize_link(req.source_paper_link or "")
+        if not link or not _node_exists("Paper", "link", link):
+            _error("source_paper_not_found", 422, "no Paper with that link")
     evidence_id = str(uuid4())
     try:
         declare_evidence(
@@ -741,8 +950,12 @@ def persist_evidence(req: DeclareEvidenceRequest) -> dict[str, Any]:
             evidence_type=req.evidence_type,
             confidence=req.confidence,
             strength=req.strength,
+            source_file_id=source_file_id,
+            source_webpage_link=webpage_link,
         )
-        log.info("persist/evidence done: evidence=%s session=%s", evidence_id, req.session_id)
+        log.info("persist/evidence done: evidence=%s session=%s paper=%s source_file=%s webpage=%s",
+                 evidence_id, req.session_id, link or "-",
+                 source_file_id or "-", webpage_link or "-")
         return {"status": "ok", "evidence_id": evidence_id}
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("persist/evidence failed: session=%s: %s", req.session_id, exc)
@@ -773,6 +986,24 @@ class DeclareClaimRequest(BaseModel):
     # ``cites_artifact_aliases``. Filled in by the Node side (the LLM never sees
     # versions — the declare callback looks them up from the store).
     cites_artifact_versions: dict[str, int] = Field(default_factory=dict)
+    # alias → file_id, e.g. {"sourcefile1": "<file_id>"}; the alias is what the
+    # LLM writes into the report body, the file_id resolves it to an uploaded
+    # non-PDF SourceFile (CSV/image/etc) that directly supports the claim
+    # (SourceFile -[:supports]-> Claim). PDFs are NOT allowed here — a PDF must
+    # go via declare_evidence (extracts → Evidence) and be cited as Evidence
+    # via cites_evidence_aliases. SourceFile has no version (unlike Artifact), so
+    # there is no cites_source_file_versions companion.
+    cites_source_file_aliases: dict[str, str] = Field(default_factory=dict)
+    # alias → "<source>:<identifier>", e.g. {"dbrecord1": "uniprot:P38398"};
+    # the alias is what the LLM writes into the report body, the value resolves
+    # to a DbRecord this session retrieved via db_search (uniprot/pdb/chembl/...)
+    # that directly supports the claim (DbRecord -[:supports]-> Claim, mirroring
+    # the Artifact path). The value's source prefix routes to the composite key
+    # (session_id, source, identifier); a bare identifier is accepted only when
+    # unambiguous within the session (0 or >1 hits → 422 db_record_not_found;
+    # >1 asks the LLM to re-pass "source:identifier"). DbRecord has no version,
+    # so there is no cites_dbrecord_versions companion.
+    cites_dbrecord_aliases: dict[str, str] = Field(default_factory=dict)
     # The report Artifact this claim is stated in; builds stated_in (Claim→Artifact).
     artifact_id: str | None = None
     # The report Artifact's version; pins the stated_in edge to the report's
@@ -789,24 +1020,33 @@ class DeclareClaimRequest(BaseModel):
 @app.post("/persist/claim", dependencies=[Depends(require_internal_token)])
 def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
     driver = handle()
-    log.info("persist/claim in: session=%s ev_aliases=%d art_aliases=%d artifact=%s",
+    log.info("persist/claim in: session=%s ev_aliases=%d art_aliases=%d sf_aliases=%d db_aliases=%d artifact=%s",
              req.session_id,
              len(req.cites_evidence_aliases),
              len(req.cites_artifact_aliases),
+             len(req.cites_source_file_aliases),
+             len(req.cites_dbrecord_aliases),
              req.artifact_id or "-")
     # Business validation that needs no graph: a claim must cite something.
     # This surfaces to the LLM even when the graph is down (it's a logic error,
     # not an availability one), so it runs before the degraded branch. A Claim
     # no longer cites a Paper directly — to cite a paper the LLM declares an
     # Evidence extracted from it and cites the Evidence here. cites_evidence_
-    # aliases / cites_artifact_aliases are the ONLY cite fields; there is no
-    # separate node-id list anymore.
-    if not (req.cites_evidence_aliases or req.cites_artifact_aliases):
+    # aliases / cites_artifact_aliases / cites_source_file_aliases are the ONLY
+    # cite fields; there is no separate node-id list anymore.
+    if not (req.cites_evidence_aliases or req.cites_artifact_aliases
+            or req.cites_source_file_aliases or req.cites_dbrecord_aliases):
         _error(
             "no_cites_target", 422,
-            "at least one cite is required — pass cites_evidence_aliases or cites_artifact_aliases",
+            "at least one cite is required — pass cites_evidence_aliases, "
+            "cites_artifact_aliases, cites_source_file_aliases, or "
+            "cites_dbrecord_aliases",
             "pass cites_evidence_aliases={\"evN\": \"<evidence_id>\"} for evidence, "
-            "or cites_artifact_aliases={\"aN\": \"<artifact_id>\"} for a produced artifact.",
+            "cites_artifact_aliases={\"aN\": \"<artifact_id>\"} for a produced artifact, "
+            "cites_source_file_aliases={\"sourcefileN\": \"<file_id>\"} for an "
+            "uploaded non-PDF data file, or "
+            "cites_dbrecord_aliases={\"dbN\": \"<source>:<identifier>\"} for a "
+            "database record retrieved via db_search.",
         )
     if not driver.is_reachable():
         return {"status": "degraded", "claim_id": None, "chip_map": {}, "reason": "memory_graph_unreachable"}
@@ -855,12 +1095,105 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
             )
         artifact_alias_map[alias] = aid
         cites_artifact_refs.append({"artifact_id": aid, "version": version})
+    # source_file alias → file_id; the cited SourceFile must already exist
+    # (block 1's upsert_source_file wrote it at upload time). Gate media_type:
+    # only a NON-PDF data file may directly support a Claim — a PDF must go via
+    # declare_evidence (extracts → Evidence → supports → Claim) so its
+    # arguments are recorded as Evidence first. file_id passes straight through
+    # (SourceFile has no version, so there is no version-resolution step like
+    # the artifact path's splitArtifactVersionSuffix).
+    source_file_alias_map: dict[str, str] = {}
+    cites_source_file_refs: list[dict[str, Any]] = []
+    for alias, fid in (req.cites_source_file_aliases or {}).items():
+        if not fid:
+            continue
+        media_type = _get_source_file_media_type(fid)
+        if media_type is False:
+            _error(
+                "source_file_not_found", 422,
+                f"no SourceFile with file_id {fid} in this session",
+                f"the file_id is the SourceFile node's file_id (obtain via "
+                f"query_graph or list_files); pass the correct file_id under "
+                f"alias {alias} in cites_source_file_aliases.",
+            )
+        if media_type == "application/pdf":
+            _error(
+                "source_file_is_pdf", 422,
+                f"file_id {fid} is a PDF — a PDF cannot directly support a Claim.",
+                "PDF 文件应先经 declare_evidence 抽取证据，再用返回的 "
+                "evidence_id 通过 cites_evidence_aliases 引用，不能直接支撑 Claim。"
+                "请先调用 declare_evidence(source_file_id=该文件) 抽取 Evidence，"
+                "再用返回的 evidence_id 通过 declare_claim 的 "
+                "cites_evidence_aliases 引用。",
+            )
+        source_file_alias_map[alias] = fid
+        cites_source_file_refs.append({"file_id": fid})
+    # dbrecord alias → "<source>:<identifier>"; the cited DbRecord must already
+    # exist (a db_search mirrored it at search time). The value's source prefix
+    # routes to the composite key (session_id, source, identifier); a bare
+    # identifier is resolved within the session and accepted only when
+    # unambiguous (0 or >1 hits both 422 — >1 tells the LLM to re-pass
+    # "source:identifier"). DbRecord has no version, so this loop is closer to
+    # the sourcefile loop than to the artifact (version-resolved) one.
+    dbrecord_alias_map: dict[str, str] = {}
+    cites_db_record_refs: list[dict[str, Any]] = []
+    for alias, value in (req.cites_dbrecord_aliases or {}).items():
+        if not value:
+            continue
+        # Split on the first ":" only — values like "uniprot:P38398" carry a
+        # source prefix; bare identifiers fall through to the session-wide
+        # uniqueness probe.
+        if ":" in value:
+            source, identifier = value.split(":", 1)
+        else:
+            source, identifier = None, value
+        with driver.session() as sess:
+            if source:
+                rec = sess.run(
+                    "MATCH (d:DbRecord {session_id: $sid, source: $src, identifier: $id}) "
+                    "RETURN count(d) AS c",
+                    sid=req.session_id, src=source, id=identifier,
+                ).single()
+                hits = rec["c"]
+            else:
+                # Iterate the result (both the HTTP adapter's _HttpResult and
+                # the Bolt Result are iterable) — _HttpResult has no .data().
+                rows = [rec["src"] for rec in sess.run(
+                    "MATCH (d:DbRecord {session_id: $sid, identifier: $id}) "
+                    "RETURN d.source AS src",
+                    sid=req.session_id, id=identifier,
+                )]
+                hits = len(rows)
+                source = rows[0] if hits == 1 else None
+        if hits != 1:
+            _error(
+                "db_record_not_found", 422,
+                f"no DbRecord for {value} in this session" if hits == 0
+                else f"identifier {identifier} matches {hits} DbRecords from different sources",
+                "pass the value as \"<source>:<identifier>\" — source is the db "
+                "source id from the search results (e.g. \"uniprot:P38398\"); "
+                "use query_graph to find the record's source and identifier.",
+            )
+        dbrecord_alias_map[alias] = value
+        cites_db_record_refs.append({"source": source, "identifier": identifier})
     # De-dup so a ref that appears under multiple aliases is matched once.
     cites_node_ids = list(dict.fromkeys(cites_node_ids))
     seen_refs: set[tuple[str, int]] = set()
     cites_artifact_refs = [r for r in cites_artifact_refs
                            if (r["artifact_id"], r["version"]) not in seen_refs
                            and not seen_refs.add((r["artifact_id"], r["version"]))]
+    seen_sf: set[str] = set()
+    cites_source_file_refs = [r for r in cites_source_file_refs
+                              if r["file_id"] not in seen_sf
+                              and not seen_sf.add(r["file_id"])]
+    # De-dup DbRecord refs on the composite (source, identifier) — one DbRecord
+    # node per (source, identifier) within a session, so the same record cited
+    # under multiple aliases merges to one MERGE target. chip_map still emits
+    # one entry per alias (the LLM wrote that many [dbrecordN] tokens).
+    seen_db: set[tuple[str, str]] = set()
+    cites_db_record_refs = [r for r in cites_db_record_refs
+                            if (r["source"], r["identifier"]) not in seen_db
+                            and not seen_db.add((r["source"], r["identifier"]))]
     # NOTE: the report Artifact (stated_in target) is keyed on (artifact_id,
     # version) too, but it is NOT existence-checked here. declare_claim runs
     # in an EARLIER turn than the report write, so the report version node
@@ -881,6 +1214,8 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
             content_hash=content_hash,
             cites_node_ids=cites_node_ids,
             cites_artifact_refs=cites_artifact_refs,
+            cites_source_file_refs=cites_source_file_refs,
+            cites_db_record_refs=cites_db_record_refs,
             artifact_id=req.artifact_id,
             artifact_version=req.artifact_version,
         )
@@ -912,6 +1247,27 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
             if target.get("version") is not None:
                 entry["version"] = target["version"]
             chip_map[alias] = entry
+    # sourcefile chip: id is the SourceFile's file_id (the SourceFile node's
+    # identity in the frontend is its file_id — _node_identity keys SourceFile
+    # on file_id — so a chip click matches node.id === reference.id directly,
+    # like the Evidence path). SourceFile has no version, so unlike the
+    # artifact chip nothing is carried alongside.
+    file_by_id = {t.get("file_id"): t for t in cited_targets if t.get("file_id")}
+    for alias, fid in source_file_alias_map.items():
+        if fid in file_by_id:
+            chip_map[alias] = {"kind": "sourcefile", "id": fid, "label": alias}
+    # dbrecord chip: id is the bare identifier (DbRecord's node identity in
+    # the frontend is its identifier — _ID_FIELDS["DbRecord"] — so a chip click
+    # matches node.id === reference.id directly, like the Evidence/SourceFile
+    # paths). DbRecord has no version, so unlike the artifact chip nothing is
+    # carried alongside. Evidence/Artifact/SourceFile targets carry no
+    # ``identifier`` field, so the identifier-only index never collides.
+    dbrecord_by_identifier = {t.get("identifier"): t for t in cited_targets
+                              if t.get("identifier")}
+    for alias, value in dbrecord_alias_map.items():
+        identifier = value.split(":", 1)[1] if ":" in value else value
+        if identifier in dbrecord_by_identifier:
+            chip_map[alias] = {"kind": "dbrecord", "id": identifier, "label": alias}
     log.info("persist/claim done: claim=%s session=%s chip_map=%d cited=%d",
              claim_id, req.session_id, len(chip_map), len(cited_targets))
     return {"status": "ok", "claim_id": claim_id, "chip_map": chip_map,
@@ -1047,49 +1403,43 @@ def observe_session_first_message(req: ObserveSessionFirstMessageRequest) -> dic
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
 
 
-# --- Write: observeSessionPlanProposed (SubTask DAG mirror) -------------------
+# --- Write: observeUploadFile (SourceFile + feeds) ---------------------------
 
-class PlanStepMirror(BaseModel):
-    id: str
-    description: str
-
-
-class ObserveSessionPlanRequest(BaseModel):
+class ObserveUploadFileRequest(BaseModel):
     session_id: str
-    goal_id: str
-    plan_id: str
-    scope: str
-    domain: str | None = None
-    steps: list[PlanStepMirror] = Field(default_factory=list)
+    file_id: str
+    name: str
+    path: str
+    media_type: str | None = None
+    size: int | None = None
+    content_hash: str | None = None
+    created_at: str
 
 
-@app.post("/observe/session-plan", dependencies=[Depends(require_internal_token)])
-def observe_session_plan(req: ObserveSessionPlanRequest) -> dict[str, Any]:
+@app.post("/observe/upload-file", dependencies=[Depends(require_internal_token)])
+def observe_upload_file(req: ObserveUploadFileRequest) -> dict[str, Any]:
     driver = handle()
-    log.info("observe/session-plan in: session=%s plan=%s goal=%s steps=%d",
-             req.session_id, req.plan_id, req.goal_id, len(req.steps))
+    log.info("observe/upload-file in: session=%s file=%s name=%s",
+             req.session_id, req.file_id, req.name)
     if not driver.is_reachable():
-        log.warning("observe/session-plan skipped: Neo4j not reachable, this plan will not be mirrored")
-        return {"status": "degraded", "written": 0, "goal_corrected": False}
+        log.warning("observe/upload-file skipped: Neo4j not reachable, this file will not be mirrored")
+        return {"status": "degraded", "written": 0}
     try:
-        # Corrects the ResearchGoal's scope/domain from plan.scope. Does NOT
-        # mirror steps into SubTask nodes (the framework doesn't advance step
-        # status, so a skeleton would stay PENDING and clutter the graph).
-        result = upsert_session_plan(
+        upsert_source_file(
+            file_id=req.file_id,
             session_id=req.session_id,
-            goal_id=req.goal_id,
-            plan_id=req.plan_id,
-            scope=req.scope,
-            domain=req.domain,
-            steps=[s.model_dump() for s in req.steps],
+            name=req.name,
+            path=req.path,
+            media_type=req.media_type,
+            size=req.size,
+            content_hash=req.content_hash,
+            created_at=req.created_at,
         )
-        corrected = bool(result.get("goal_corrected", False))
-        log.info("observe/session-plan done: session=%s plan=%s goal_corrected=%s",
-                 req.session_id, req.plan_id, corrected)
-        return {"status": "healthy", "written": 0, "goal_corrected": corrected}
+        log.info("observe/upload-file done: session=%s file=%s", req.session_id, req.file_id)
+        return {"status": "healthy", "written": 1}
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
-        log.exception("observe/session-plan failed: session=%s plan=%s: %s",
-                      req.session_id, req.plan_id, exc)
+        log.exception("observe/upload-file failed: session=%s file=%s: %s",
+                      req.session_id, req.file_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
 
 

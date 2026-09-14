@@ -11,7 +11,6 @@ import {
   createDurableDomainContributors,
   DurableContextStore,
   DurableSkillStateContributor,
-  DurableTaskStateContributor,
 } from "./durable-state.js";
 
 function call(name: string, args: Record<string, unknown>, id = `call-${name}`): RuntimeToolCall {
@@ -26,14 +25,9 @@ test("durable state hydrates structured calls and survives removal of source his
         id: "skill-1",
         type: "function",
         function: { name: "read_skill", arguments: JSON.stringify({ skillId: "literature-review" }) },
-      }, {
-        id: "plan-1",
-        type: "function",
-        function: { name: "propose_plan", arguments: JSON.stringify({ scope: "review" }) },
       }],
     },
     { role: "tool", tool_call_id: "skill-1", name: "read_skill", content: "full skill body" },
-    { role: "tool", tool_call_id: "plan-1", name: "propose_plan", content: "{\"steps\":[\"search\"]}" },
   ];
   const store = new DurableContextStore({
     history,
@@ -46,7 +40,6 @@ test("durable state hydrates structured calls and survives removal of source his
   store.registerSkill({ id: "literature-review", revision: 2, version: "1.1.0" });
 
   const registry = new ContextContributorRegistry<RuntimeMessage>()
-    .register(new DurableTaskStateContributor(store, ["main"]))
     .register(new DurableSkillStateContributor(store, ["main"]))
     .freeze();
   const output = await registry.collect({
@@ -58,11 +51,9 @@ test("durable state hydrates structured calls and survives removal of source his
     turn: 9,
   });
   assert.equal(output.sections.length, 0, "runtime observations must not be promoted to system authority");
-  assert.equal(output.messages.length, 2);
-  assert.match(String(output.messages[0]?.content), /task_state/u);
-  assert.match(String(output.messages[0]?.content), /search/u);
-  assert.match(String(output.messages[1]?.content), /literature-review/u);
-  assert.match(String(output.messages[1]?.content), /instructionsVisibleInHistory":false/u);
+  assert.equal(output.messages.length, 1);
+  assert.match(String(output.messages[0]?.content), /literature-review/u);
+  assert.match(String(output.messages[0]?.content), /instructionsVisibleInHistory":false/u);
   assert.deepEqual(store.snapshot().goal, {
     constraints: ["cite evidence"],
     objective: "review TP53",

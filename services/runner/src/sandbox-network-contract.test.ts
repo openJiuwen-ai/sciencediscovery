@@ -20,6 +20,7 @@ import { test } from "node:test";
 import {
   allowedDomainMatches,
   epochSandboxNetworkAccess,
+  isSandboxNetworkMode,
   normalizeAllowedDomains,
   parseAllowedDomain,
   type PermissionEpoch,
@@ -98,6 +99,23 @@ test("a snapshot that disagrees with the epoch mode degrades to no network", () 
       mode: "domain-allowlist",
       revision: "abc",
     },
+    networkPolicy: "none",
+  }).mode, "none");
+});
+
+test("open is a valid sandbox network mode and round-trips through an epoch", () => {
+  assert.equal(isSandboxNetworkMode("open"), true);
+  assert.equal(isSandboxNetworkMode("bogus"), false);
+  // The snapshot is carried as-is when it agrees with the epoch mode, so an
+  // open policy survives the trip without falling back to no network.
+  const access = epochSandboxNetworkAccess({
+    networkAccess: { allowPrivateNetwork: false, allowedDomains: [], egressProxyPolicy: "inherit", mode: "open", revision: "abc" },
+    networkPolicy: "open",
+  });
+  assert.equal(access.mode, "open");
+  // A snapshot disagreeing with the epoch mode still degrades to no network.
+  assert.equal(epochSandboxNetworkAccess({
+    networkAccess: { allowPrivateNetwork: false, allowedDomains: [], egressProxyPolicy: "inherit", mode: "open", revision: "abc" },
     networkPolicy: "none",
   }).mode, "none");
 });

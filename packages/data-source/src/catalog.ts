@@ -68,11 +68,11 @@ export function inputSchemasCompatible(
 function statusFor(manifest: McpSourceManifest, catalog: McpCatalog): McpSourceStatus {
   const toolIds = Object.keys(manifest.tools);
   const server = catalog.servers.find((candidate) => candidate.id === manifest.transport.mcpServerId);
-  if (!server) {
+  if (!server || server.error || !server.enabled) {
     return {
       availableTools: [],
       catalogRevision: catalog.revision,
-      error: `MCP server is not available: ${manifest.transport.mcpServerId ?? "(missing id)"}`,
+      error: server?.error ?? `MCP server is not available: ${manifest.transport.mcpServerId ?? "(missing id)"}`,
       lastCheckedAt: catalog.loadedAt,
       missingTools: toolIds,
       sourceId: manifest.id,
@@ -107,9 +107,11 @@ export class McpSourceCatalog {
     /** Current per-server resolved proxies, sent with reloads so the gateway
      *  rebuilds MCP connections under the right outbound configuration. */
     private readonly proxyMapProvider?: () => Record<string, ResolvedProxy>,
+    private readonly onCatalog?: (catalog: McpCatalog) => void,
   ) {}
 
   private apply(catalog: McpCatalog): McpCatalog {
+    this.onCatalog?.(catalog);
     this.catalog = catalog;
     this.statuses.clear();
     for (const source of this.registry.list()) {
