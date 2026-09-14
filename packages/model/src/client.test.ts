@@ -99,6 +99,45 @@ async function withServer(
   }
 }
 
+/**
+ * A reasoning model reached through a gateway configured as the plain `openai`
+ * dialect — Volcengine Ark serving DeepSeek is the case this came from. The
+ * thought is on the wire in `reasoning_content`; before this it was dropped and
+ * the user watched an idle screen for the whole reasoning phase. It is shown,
+ * not replayed: an endpoint that never asked for the field must not get it back.
+ */
+test("a plain openai endpoint still shows reasoning_content without replaying it", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [
+      { choices: [{ delta: { reasoning_content: "weighing " } }] },
+      { choices: [{ delta: { reasoning_content: "the options" } }] },
+      { choices: [{ delta: { content: "Done." } }] },
+    ]);
+  }, async (baseUrl) => {
+    const thinkingDeltas: string[] = [];
+    const turn = await streamModelTurn(
+      {
+        apiToken: "secret",
+        apiProtocol: "openai-chat-completions",
+        apiVariant: "openai",
+        baseUrl,
+        model: "stub",
+      },
+      "system prompt",
+      [{ role: "user", content: "hi" }],
+      [],
+      policy,
+      new AbortController().signal,
+      { onThinkingDelta: (delta) => thinkingDeltas.push(delta) },
+    );
+
+    assert.deepEqual(thinkingDeltas, ["weighing ", "the options"]);
+    assert.equal(turn.assistantMessage.content, "Done.");
+    assert.equal(turn.assistantMessage.reasoning_content, undefined);
+  });
+});
+
 test("openai stream assembles text, thinking, split tool calls, and usage", async () => {
   let requestPayload: Record<string, unknown> | undefined;
   let requestPath = "";
