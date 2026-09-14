@@ -65,6 +65,10 @@ import {
   createPlanTool,
   type PlanStore,
 } from "@sciencediscovery/plan";
+import {
+  createPlanLifecycleTools,
+  type PlanRepository,
+} from "@sciencediscovery/plan-mode";
 import { createEvolveTools, type EvolveToolRuntime } from "@sciencediscovery/evolve";
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
@@ -149,6 +153,8 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
    *  none. One object instead of two forwarded callbacks and a deps bundle
    *  threaded through three run-loop entry points. */
   evolve?: EvolveToolRuntime;
+  /** Approval-gated plan lifecycle repository (V3-C2, plan-mode package). */
+  planRepository?: PlanRepository;
   planStore?: PlanStore;
 }
 

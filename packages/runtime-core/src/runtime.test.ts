@@ -626,6 +626,8 @@ test("an outer abort is never mistaken for a stall kick", async () => {
   assert.equal(loop.snapshot().phase, "cancelled", "an outer abort keeps the cancellation semantics");
   assert.equal(calls, 1, "no retry happened");
   assert.deepEqual(events, [], "no stall kick was emitted");
+});
+
 test("model deltas carry a response identity that settles once per invoke attempt", async () => {
   const events: RunEvent<never>[] = [];
   const loop = new AgentLoop<RuntimeMessage, Input, never>({

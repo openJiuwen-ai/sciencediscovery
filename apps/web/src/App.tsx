@@ -3290,13 +3290,13 @@ export function App() {
     }
     if (streamEvent.type === "plan.updated" && runId) {
       const plan = { ...streamEvent.plan, runId };
-      setSessionPlans((current) => {
+      setPlans((current) => {
         const otherPlans = current.filter((item) => item.runId !== runId || item.agentId !== plan.agentId);
         return plan.items.length ? [...otherPlans, plan] : otherPlans;
       });
     }
     if (streamEvent.type === "plan.approval_decided") {
-      setPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
+      setSessionPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
     }
     if (streamEvent.type === "subagent.updated"
       || streamEvent.type === "subagent.step"

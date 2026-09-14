@@ -164,6 +164,8 @@ import type {
   PromptManifest,
   SubagentStep,
   UpdateSpecialistRequest,
+  ProposePlanRequest,
+  RevisePlanRequest,
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
@@ -203,7 +205,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
+import { inferDomain, mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { apiLog, runLog } from "../logging.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -3730,7 +3732,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     (batch) => createNotificationRun(store, skillLibraryCatalog, batch),
     (sessionId) => scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker,
       mcpRegistry, mcpCatalog, artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
-      ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory));
+      ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId, config, memoryGraphClient, evolveRuntimeFactory, knowledgeEngineTools));
   let notificationTimer: ReturnType<typeof setInterval> | undefined;
   let notificationClosed = false;
   void ready.then(() => {

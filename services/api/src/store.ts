@@ -146,6 +146,10 @@ import type {
   WorkspaceFileRevision,
   WorkspaceFileRevisionInput,
   ResolvedModelPricing,
+  SessionPlan,
+  PlanStep,
+  ProposePlanRequest,
+  RevisePlanRequest,
 } from "@sciencediscovery/schema";
 import {
   LOCAL_RUNNER_ID,

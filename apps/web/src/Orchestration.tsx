@@ -17,6 +17,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type {
   ConnectorManifest,
   PlanConfidence,
+  SessionPlan,
   ReviewerSpecialistLevel,
   RevisePlanRequest,
   Subagent,

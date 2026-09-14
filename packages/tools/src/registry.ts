@@ -196,7 +196,6 @@ export function sanitizeToolDetails(details: unknown): unknown {
     return { ...(sanitized as Record<string, unknown>), __detailsBoundary: boundary };
   }
   return { __detailsBoundary: boundary, value: sanitized };
->>>>>>> upstream/main
 }
 
 /**

@@ -222,6 +222,7 @@ export interface WorkspaceToolOptions {
     remove: (id: string) => void;
     supersede: (id: string, content: string, category?: AgentMemoryCategory) => AgentMemoryEntry;
     list: (filter: { category?: AgentMemoryCategory; status?: AgentMemoryStatus }) => AgentMemoryEntry[];
+  };
   timers?: {
     create(input: { afterMs?: number; at?: string; message: string; executionId?: string }): Promise<unknown>;
     list(): unknown;

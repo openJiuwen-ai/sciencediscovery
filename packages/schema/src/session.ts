@@ -24,11 +24,7 @@ import type { EvolveRun } from "./evolution.js";
 import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { IdeaTreePhase, IdeaTreeRunSettingsSnapshot } from "./idea-tree.js";
 import type { PermissionRequest } from "./permission.js";
-<<<<<<< HEAD
 import type { ApprovalMode, PlanApprovalDecision, PlanSnapshot, SessionPlan } from "./plan.js";
-=======
-import type { ApprovalMode, PlanSnapshot } from "./plan.js";
->>>>>>> upstream/main
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
 import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";

@@ -258,14 +258,10 @@ function buildWorkspacePromptValues(
 ): string[] {
   return [
     WORKSPACE_SYSTEM_PROMPT,
-<<<<<<< HEAD
     `Context clock: today is ${now.toISOString().slice(0, 10)} (UTC). Treat events dated after this day as future events — do not present them as having happened, and never fill gaps about them from model memory.`,
-    'Runner local: default local sandbox and this Agent workspace. Execute Shell/Python/R only through Runner tools. Independent SSH/SLURM jobs are not supported.',
-=======
     governance?.localRunnerAllowed === false
       ? 'Runner local is not selected for this Session. Pass an allowed runner_id explicitly for execution. Workspace file access remains available; never silently change execution location.'
       : 'Runner local: sandbox on this machine and this Agent workspace. Execute Shell/Python/R only through Runner tools. Independent SSH/SLURM jobs are not supported.',
->>>>>>> upstream/main
     scientificEnvsAvailable
       ? "\nManaged scientific environments can contain Python, R, and other tools. Use environment_list/environment_create/environment_delete/environment_install/environment_uninstall for managed environments. Select an environment ID with run_shell to run its latest state; revisions are audit-only. Every Shell call starts fresh without retained cd/export or interpreter memory. Managed prefixes are read-only in the sandbox; use environment_create/install/uninstall/delete for dependency changes. environment_install accepts conda, pip, CRAN and Bioconductor; pip supports package specs or explicitly staged local wheel files. Its optional HTTPS indexUrl overrides the configured package source for that installation. Create a named environment to customize dependencies; the shared base is read-only."
       : "\nLocal managed environments are unavailable. run_shell without environment_id uses the system Shell sandbox. Check environment_setup on the selected Runner; local readiness does not determine remote readiness.",

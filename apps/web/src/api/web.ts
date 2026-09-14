@@ -29,10 +29,7 @@ import type {
 
 import { KnowledgeEngineApiClient } from "./knowledge-engine.js";
 
-
 export class WebApiClient extends KnowledgeEngineApiClient {
-
-export class WebApiClient extends EvolveApiClient {
   startMcpAuthorization(id: string, redirectUrl: string): Promise<McpAuthorizationStart> {
     return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify({ redirectUrl }) });
   }

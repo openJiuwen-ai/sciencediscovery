@@ -129,7 +129,6 @@ import {
 import { agentMemoryReliabilityLabel, reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 import type { BackgroundReviewManager } from "../agent-memory/background-review.js";
 import type { PlanApprovalDecision, SessionPlan } from "@sciencediscovery/schema";
-import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
 import {
   createIdeaTreeTools,
   createExecutorDescriptor,
@@ -841,8 +840,7 @@ async function executeAgentRun(
   if (skillPackagesRoot) {
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
-  const runtimeSkills = activeSkills.map(({ content, description, hash, id, preFinishAudit, readResource, resources, revision, version }) => ({
-  const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, readResource, resources, revision, version }) => ({
+  const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, preFinishAudit, readResource, resources, revision, version }) => ({
     content,
     description,
     hash,
