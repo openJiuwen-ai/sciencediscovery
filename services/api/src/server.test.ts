@@ -3971,6 +3971,25 @@ test("API runs one observable subagent through task and keeps nested task denied
   const assistantSteps = subagents.body[0]?.steps.filter((step) => step.kind === "assistant") ?? [];
   assert.equal(assistantSteps.length, 1);
   assert.equal(assistantSteps[0]?.content, "Subagent inspected the workspace and returned a concise result.");
+  // The run stream stores one record per logical step. The snapshots streamed
+  // while a message is still arriving are broadcast to live subscribers and
+  // never stored, so this file cannot grow with the length of the message.
+  const subagentStream = await jsonRequest<SessionRunEvent[]>(
+    `${origin}/api/sessions/${session.body.id}/runs/${parentExecutionId}`
+      + `/streams/subagent-${subagents.body[0]?.id}/events`,
+    { headers: authorization },
+  );
+  const storedSteps = subagentStream.body.flatMap((record) =>
+    record.event.type === "subagent.step" ? [record.event.step] : []);
+  assert.equal(
+    storedSteps.length,
+    new Set(storedSteps.map((step) => step.id)).size,
+    `the stream stored a step more than once: ${JSON.stringify(storedSteps.map((step) => step.id))}`,
+  );
+  assert.deepEqual(
+    storedSteps.filter((step) => step.kind === "assistant").map((step) => step.content),
+    ["Subagent inspected the workspace and returned a concise result."],
+  );
   assert.deepEqual(subagents.body[0]?.usage, {
     cacheReadTokens: null,
     cacheWriteTokens: null,

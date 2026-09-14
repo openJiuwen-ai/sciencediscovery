@@ -287,8 +287,9 @@ const SUBAGENT_PROGRESS_FLUSH_MS = 250;
 /** Coalesce streamed subagent text before it reaches the run-event stream.
  *  Each delta used to persist a full cumulative snapshot of the message, so a
  *  stream cost O(N^2) in message length: one 2-minute subagent wrote 234 MB
- *  across 25k lines for 34 logical steps. Consumers still receive
- *  whole-content snapshots, just at this cadence rather than once per token. */
+ *  across 25k lines for 34 logical steps. Live subscribers still receive
+ *  whole-content snapshots, just at this cadence rather than once per token;
+ *  the snapshots in between are transient and never reach the run stream. */
 const SUBAGENT_STREAM_EMIT_MS = 250;
 const activeSessions = new Map<string, RuntimeSessionRun>();
 const scheduledSessions = new Set<string>();
@@ -298,7 +299,20 @@ const cancelledRuns = new Set<string>();
 export const DEFAULT_SELF_EVOLUTION_LIBRARY_ID = DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
 export const SKILL_EVOLUTION_PROMPT_MARKER = "[Skill self-evolution M1.6]";
 
-type RunEventSink = (event: RunStreamEvent) => void | Promise<void>;
+/**
+ * How far an event travels.
+ *
+ * A transient event reaches live subscribers and stops there. Streamed
+ * subagent text uses it: the run stream would otherwise keep one cumulative
+ * snapshot per interval of a message it already stores once at the end, and
+ * the durable copy a reload reads back is the Subagent record the progress
+ * flush writes, not this stream.
+ */
+interface RunEventDelivery {
+  transient?: boolean;
+}
+
+type RunEventSink = (event: RunStreamEvent, delivery?: RunEventDelivery) => void | Promise<void>;
 type RunEventSubscriber = (event: SessionRunEvent) => void;
 const runEventSubscribers = new Map<string, Set<RunEventSubscriber>>();
 
@@ -1407,28 +1421,42 @@ async function executeAgentRun(
             enqueueProgressFlush();
           }, SUBAGENT_PROGRESS_FLUSH_MS);
         };
-        let pendingMessageStep: SubagentStep | undefined;
+        // The newest snapshot of the message being streamed. It is broadcast to
+        // live subscribers on a timer and written to the run stream exactly
+        // once, when the message ends.
+        let liveMessageStep: SubagentStep | undefined;
         let messageEmitTimer: ReturnType<typeof setTimeout> | undefined;
         const recordStep = (step: SubagentStep) => {
           const existing = steps.findIndex((candidate) => candidate.id === step.id);
           if (existing >= 0) steps[existing] = step;
           else steps.push(step);
         };
-        /** Emit the newest coalesced text snapshot. Runs before every other
-         *  event so the stream keeps the order the agent produced. */
-        const flushMessageStep = () => {
-          if (messageEmitTimer) {
-            clearTimeout(messageEmitTimer);
-            messageEmitTimer = undefined;
-          }
-          if (!pendingMessageStep) return;
-          const step = pendingMessageStep;
-          pendingMessageStep = undefined;
+        const clearMessageEmitTimer = () => {
+          if (!messageEmitTimer) return;
+          clearTimeout(messageEmitTimer);
+          messageEmitTimer = undefined;
+        };
+        /** Show the newest text to whoever is watching, without storing it. */
+        const broadcastMessageStep = () => {
+          clearMessageEmitTimer();
+          if (!liveMessageStep) return;
+          void emit(
+            { step: liveMessageStep, subagentId: subagent.id, type: "subagent.step" },
+            { transient: true },
+          );
+        };
+        /** End the streamed message and store it. Runs before every other event
+         *  so the stream keeps the order the agent produced. */
+        const finalizeMessageStep = () => {
+          clearMessageEmitTimer();
+          if (!liveMessageStep) return;
+          const step = liveMessageStep;
+          liveMessageStep = undefined;
           void emit({ step, subagentId: subagent.id, type: "subagent.step" });
         };
         const publishStep = (step: SubagentStep) => {
           recordStep(step);
-          flushMessageStep();
+          finalizeMessageStep();
           void emit({ step, subagentId: subagent.id, type: "subagent.step" });
           scheduleProgressFlush();
         };
@@ -1450,12 +1478,9 @@ async function executeAgentRun(
               };
           activeMessageStep = { id: step.id, kind };
           recordStep(step);
-          pendingMessageStep = step;
+          liveMessageStep = step;
           if (!messageEmitTimer) {
-            messageEmitTimer = setTimeout(() => {
-              messageEmitTimer = undefined;
-              flushMessageStep();
-            }, SUBAGENT_STREAM_EMIT_MS);
+            messageEmitTimer = setTimeout(broadcastMessageStep, SUBAGENT_STREAM_EMIT_MS);
           }
           scheduleProgressFlush();
         };
@@ -1744,7 +1769,7 @@ async function executeAgentRun(
           }
           if (event.type === "usage") {
             subagent.usage = event.usage;
-            flushMessageStep();
+            finalizeMessageStep();
             void emit({ subagentId: subagent.id, type: "subagent.usage", usage: event.usage });
             scheduleProgressFlush();
           }
@@ -1832,7 +1857,7 @@ async function executeAgentRun(
         for (const request of await store.cancelPendingPermissionRequests(subagent.id)) {
           await emit({ request, type: "permission.resolved" });
         }
-        flushMessageStep();
+        finalizeMessageStep();
         if (progressFlushTimer) {
           clearTimeout(progressFlushTimer);
           progressFlushTimer = undefined;
@@ -2319,7 +2344,7 @@ export function createDeltaCoalescingSink(
     return Promise.resolve(publish(merged));
   };
 
-  const emit: RunEventSink = (event) => {
+  const emit: RunEventSink = (event, delivery) => {
     if (event.type === "assistant.delta" || event.type === "assistant.thinking.delta") {
       const turn = event.type === "assistant.thinking.delta" ? event.turn : undefined;
       const responseId = event.responseId;
@@ -2334,7 +2359,7 @@ export function createDeltaCoalescingSink(
       return Promise.resolve();
     }
     void flush();
-    return Promise.resolve(publish(event));
+    return Promise.resolve(publish(event, delivery));
   };
 
   return { emit, flush };
@@ -2360,9 +2385,14 @@ export async function publishRunEvent(
   sessionId: string,
   runId: string,
   event: RunStreamEvent,
+  delivery?: RunEventDelivery,
 ): Promise<SessionRunEvent> {
   let record: SessionRunEvent;
-  if (event.type === "tool.output") {
+  if (delivery?.transient) {
+    // Live-only: no sequence is allocated because nothing is stored, matching
+    // the zero the child streams already report for their broadcast copy.
+    record = { createdAt: new Date().toISOString(), event, runId, sequence: 0, sessionId };
+  } else if (event.type === "tool.output") {
     const persisted = await store.appendRunStreamEvent(sessionId, runId, toolOutputStreamId(event.toolCallId), event);
     record = { ...persisted, sequence: 0 };
   } else if (event.type === "subagent.step") {
@@ -2751,8 +2781,10 @@ export function scheduleSessionRuns(
         }
         runLog.info("run_started", { runId: next.id, sessionId });
         let eventQueue = Promise.resolve();
-        const publish: RunEventSink = (event) => {
-          eventQueue = eventQueue.then(() => publishRunEvent(store, sessionId, next.id, event)).then(() => undefined);
+        const publish: RunEventSink = (event, delivery) => {
+          eventQueue = eventQueue
+            .then(() => publishRunEvent(store, sessionId, next.id, event, delivery))
+            .then(() => undefined);
           return eventQueue;
         };
         const deltaSink = createDeltaCoalescingSink(publish);
