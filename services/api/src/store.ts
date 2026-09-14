@@ -14,7 +14,9 @@
 
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -247,11 +249,16 @@ import {
 import {
   assertValidStreamId,
   MAIN_RUN_STREAM,
-  parseStreamLines,
+  parseStreamLine,
   type RunStreamLine,
 } from "./store/run-streams.js";
 
 export { MAIN_RUN_STREAM } from "./store/run-streams.js";
+
+/** Bytes examined when repairing a torn stream tail; a partial record is the
+ *  last line, so a window this size is far larger than any single event. */
+const TORN_TAIL_SCAN_BYTES = 8 * 1024 * 1024;
+const NEWLINE_BYTE = 0x0a;
 
 const SESSION_DATA_CATEGORIES = [
   "messages",
@@ -4831,18 +4838,13 @@ export class SessionStore {
   private async recoverStreamTail(sessionId: string, runId: string, streamId: string): Promise<number> {
     const path = this.runStreamPath(sessionId, runId, streamId);
     let last = 0;
-    let content = "";
-    try {
-      content = await readFile(path, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (content && !content.endsWith("\n")) {
-      const lastNewline = content.lastIndexOf("\n");
-      content = lastNewline >= 0 ? content.slice(0, lastNewline + 1) : "";
-      await writeFile(path, content, "utf8");
-    }
-    for (const record of parseStreamLines(content)) {
+    // A run's stream can reach hundreds of MB. Reading it whole to find the
+    // tail allocated the file twice (one string plus the split array) and
+    // could exhaust the heap before the process served a single request, so
+    // the torn tail is repaired from a bounded window and the sequence high
+    // water mark is computed by streaming one line at a time.
+    await this.repairTornStreamTail(path);
+    for await (const record of this.streamLines(path)) {
       last = Math.max(last, record.sequence);
     }
     if (streamId === MAIN_RUN_STREAM) {
@@ -4854,14 +4856,69 @@ export class SessionStore {
   }
 
   private async readStreamLines(path: string): Promise<RunStreamLine[]> {
-    let content = "";
+    const records: RunStreamLine[] = [];
+    for await (const record of this.streamLines(path)) records.push(record);
+    return records;
+  }
+
+  /**
+   * Yield the stream's records one line at a time. Only a single line is held
+   * besides the caller's own accumulation, so a large file no longer needs a
+   * whole second copy of itself on the heap just to be parsed.
+   */
+  private async *streamLines(path: string): AsyncGenerator<RunStreamLine> {
+    let handle;
     try {
-      content = await readFile(path, "utf8");
+      handle = await open(path, "r");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    return parseStreamLines(content);
+    try {
+      const reader = createInterface({
+        crlfDelay: Infinity,
+        input: handle.createReadStream({ autoClose: false, encoding: "utf8" }),
+      });
+      for await (const line of reader) {
+        const record = parseStreamLine(line);
+        if (record) yield record;
+      }
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /**
+   * Drop a partial line left by a crash mid-write. Only the file's tail is
+   * examined: a torn record is by definition the last one, so scanning the
+   * final window is enough and keeps the cost independent of file size.
+   */
+  private async repairTornStreamTail(path: string): Promise<void> {
+    let size: number;
+    try {
+      ({ size } = await stat(path));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (size === 0) return;
+    const windowSize = Math.min(size, TORN_TAIL_SCAN_BYTES);
+    const buffer = Buffer.alloc(windowSize);
+    const handle = await open(path, "r");
+    try {
+      await handle.read(buffer, 0, windowSize, size - windowSize);
+    } finally {
+      await handle.close();
+    }
+    if (buffer[windowSize - 1] === NEWLINE_BYTE) return;
+    const lastNewline = buffer.lastIndexOf(NEWLINE_BYTE);
+    if (lastNewline < 0) {
+      // No record boundary in the window: only safe to clear when the window
+      // covered the whole file, otherwise leave the bytes for a human.
+      if (windowSize === size) await truncate(path, 0);
+      return;
+    }
+    await truncate(path, size - (windowSize - 1 - lastNewline));
   }
 
   async listExecutionRuns(sessionId: string): Promise<ExecutionRun[]> {

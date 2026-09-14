@@ -3922,15 +3922,24 @@ test("API runs one observable subagent through task and keeps nested task denied
     "assistant.response.settled",
     "run.completed",
   ]);
+  // Two model deltas, one streamed step: message deltas are coalesced into a
+  // single step event instead of one cumulative snapshot per token.
   assert.deepEqual(subagentSseGoldens(stream), [[
     "subagent.updated",
     "subagent.updated",
     "subagent.step",
     "subagent.step",
-    "subagent.step",
     "subagent.usage",
     "subagent.updated",
   ]]);
+  const streamedAssistantSteps = parseSseEvents(stream).flatMap((rawEvent) => {
+    const event = rawEvent as { step?: SubagentStep; type: string };
+    return event.type === "subagent.step" && event.step?.kind === "assistant" ? [event.step] : [];
+  });
+  assert.deepEqual(
+    streamedAssistantSteps.map((step) => step.content),
+    ["Subagent inspected the workspace and returned a concise result."],
+  );
   const eventTypes = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
     return data ? [(JSON.parse(data) as { type: string }).type] : [];
@@ -5480,7 +5489,6 @@ test("API runs two task calls concurrently with independent persisted records", 
   const childGolden = [
     "subagent.updated",
     "subagent.updated",
-    "subagent.step",
     "subagent.step",
     "subagent.step",
     "subagent.usage",

@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -901,6 +901,60 @@ test("proxy settings project supported authenticated URLs while catalog and SQLi
       && !error.message.includes("leak-user")
       && !error.message.includes("leak-password"),
   );
+});
+
+test("recovering a large run stream does not load the whole file into the heap", { timeout: 120_000 }, async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `run-events-large-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const model = await store.createModel({
+    apiToken: "token",
+    baseUrl: "https://models.example.test/v1",
+    model: "model",
+    name: "Model",
+  });
+  const project = await store.createProject("Large stream");
+  const session = await store.createSession(project.id, "Replay", model.id);
+  const run = await store.createSessionRun({
+    prompt: "Big stream",
+    sessionId: session.id,
+    settingsSnapshot: store.resolveRuntimeSettings(session.id).effective,
+  });
+  await store.appendSessionRunEvent(session.id, run.id, { phase: "thinking", turn: 1, type: "agent.phase" });
+
+  // Grow the stream well past what a single heap-resident copy would cost.
+  // Reading it whole (readFile + split) allocated the file twice, which is how
+  // a 236 MB subagent stream took the API down at startup.
+  const streamPath = resolve(tempRoot, "run-events", session.id, run.id, "main.jsonl");
+  const filler = "x".repeat(64 * 1024);
+  const lines: string[] = [];
+  for (let sequence = 2; sequence <= 1_600; sequence += 1) {
+    lines.push(JSON.stringify({
+      createdAt: new Date().toISOString(),
+      event: { content: filler, phase: "thinking", turn: sequence, type: "agent.phase" },
+      sequence,
+    }));
+  }
+  await appendFile(streamPath, `${lines.join("\n")}\n`, "utf8");
+  const { size } = await stat(streamPath);
+  assert.ok(size > 100 * 1024 * 1024, `stream should exceed 100 MB, saw ${size}`);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  global.gc?.();
+  const before = process.memoryUsage().heapUsed;
+  // Appending forces tail recovery, the path that used to read the file whole.
+  const appended = await reopened.appendSessionRunEvent(session.id, run.id, {
+    phase: "thinking",
+    turn: 1_601,
+    type: "agent.phase",
+  });
+  const grew = process.memoryUsage().heapUsed - before;
+  assert.equal(appended.sequence, 1_601, "recovery resumes after the highest sequence on disk");
+  assert.ok(grew < size / 4, `tail recovery should not hold the file on the heap: grew ${grew} for a ${size} byte stream`);
 });
 
 test("run event streams repair a torn tail and keep sequences monotonic", async (context) => {

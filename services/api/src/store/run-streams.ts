@@ -23,18 +23,24 @@ export interface RunStreamLine {
   sequence: number;
 }
 
+/** Parse one JSONL record, or undefined when the line is blank or torn. */
+export function parseStreamLine(line: string): RunStreamLine | undefined {
+  if (!line) return undefined;
+  let parsed: RunStreamLine;
+  try {
+    parsed = JSON.parse(line) as RunStreamLine;
+  } catch {
+    return undefined; // Ignore a torn tail left by a crash mid-write.
+  }
+  if (typeof parsed.sequence !== "number" || typeof parsed.createdAt !== "string" || !parsed.event) return undefined;
+  return parsed;
+}
+
 export function parseStreamLines(content: string): RunStreamLine[] {
   const records: RunStreamLine[] = [];
   for (const line of content.split("\n")) {
-    if (!line) continue;
-    let parsed: RunStreamLine;
-    try {
-      parsed = JSON.parse(line) as RunStreamLine;
-    } catch {
-      continue; // Ignore a torn tail left by a crash mid-write.
-    }
-    if (typeof parsed.sequence !== "number" || typeof parsed.createdAt !== "string" || !parsed.event) continue;
-    records.push(parsed);
+    const parsed = parseStreamLine(line);
+    if (parsed) records.push(parsed);
   }
   return records;
 }
