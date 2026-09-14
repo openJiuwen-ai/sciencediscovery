@@ -1068,7 +1068,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           // recorder swallows its own failures). Only successfully declared
           // artifacts carry an artifact_id; failed declarations are skipped so
           // the produces edge never dangles on a missing Artifact node.
-          options.observeNpuJob?.(result.job, artifacts.filter((artifact): artifact is { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number } => artifact.ok).map((artifact) => ({
+          options.observeNpuJob?.(result.job, artifacts.filter((artifact): artifact is { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string } => artifact.ok).map((artifact) => ({
             artifact_id: artifact.artifact_id,
             path: artifact.path,
             version: artifact.version,
