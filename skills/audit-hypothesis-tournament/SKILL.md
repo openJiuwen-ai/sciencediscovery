@@ -65,7 +65,8 @@ Report the audit compactly in the `review_checkpoint` reason:
 `score=N; critical: [...]; warning: [...]`. Issue vocabulary:
 perspective-generation-skipped (critical) / generation-anchor-mismatch /
 elo-hand-computed (critical) / elo-deviation (critical) / verdict-records-missing / hallucinated-evidence (critical) /
-evidence-grading-missing / unfalsifiable-candidate / boundary-not-presented.
+evidence-grading-missing / unfalsifiable-candidate / boundary-not-presented /
+vague-quantifier / number-mismatch.
 
 ## Discipline
 
@@ -73,5 +74,12 @@ evidence-grading-missing / unfalsifiable-candidate / boundary-not-presented.
   and file reads of the actual artifacts; never judge from impression.
 - A check you cannot complete (e.g. trajectory compacted away) is a warning
   with the reason stated, never a fabricated critical.
+- Exact counts only: any count in the output (perspectives, generations,
+  verdicts, Elo figures) comes from a tool or artifact read —
+  "several/many/about N" for anything countable is a warning
+  `vague-quantifier`.
+- Numbers verbatim: a digit, unit, or magnitude that differs from its
+  artifact or ledger source is a finding (`number-mismatch`), never a
+  paraphrase.
 - When the output is genuinely complete and trustworthy, say so and score
   high — do not invent problems.

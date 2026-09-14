@@ -114,9 +114,9 @@ export const SKILL_LIMITS = {
 
 const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "antibody-protenix-pipeline": "1.0.0",
-  "audit-hypothesis-tournament": "1.0.0",
-  "audit-systematic-review": "1.0.0",
-  "audit-tree-search": "1.0.0",
+  "audit-hypothesis-tournament": "1.1.0",
+  "audit-systematic-review": "1.1.0",
+  "audit-tree-search": "1.1.0",
   "chunked-analysis": "1.0.0",
   "code-engineer": "1.0.0",
   "comparative-analysis": "1.0.0",

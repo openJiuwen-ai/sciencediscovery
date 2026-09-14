@@ -65,10 +65,16 @@ branch-expansion-skipped (critical) / tree-artifact-mismatch (critical) /
 world-model-unused (critical) / hallucinated-evidence (critical) /
 final-rank-hand-computed (critical) / internal-score-as-final (critical) /
 evidence-grading-missing / replication-missing / replication-no-variance /
-budget-overrun.
+budget-overrun / vague-quantifier / number-mismatch.
 
 ## Discipline
 
 - Verify with tools only; never guess paths or state.
 - Unverifiable checks are warnings with reasons, never fabricated criticals.
+- Exact counts only: any count in the output (branches, replications,
+  budget figures) comes from a tool or artifact read — "several/many/about
+  N" for anything countable is a warning `vague-quantifier`.
+- Numbers verbatim: a digit, unit, or magnitude that differs from its
+  artifact or ledger source is a finding (`number-mismatch`), never a
+  paraphrase.
 - Score honestly — do not invent problems for a clean run.

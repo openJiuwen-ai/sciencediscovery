@@ -64,11 +64,17 @@ Report compactly in the `review_checkpoint` reason:
 Issue vocabulary: claim-refuted (critical) / quote-mismatch (critical) /
 hallucination-signal (critical) / claim-partially-supported /
 missing-source / incomplete-step / boundary-not-marked /
-conflict-not-presented.
+conflict-not-presented / vague-quantifier / number-mismatch.
 
 ## Discipline
 
 - Verify with tools only — claim verdicts and quote checks must be real
   KB queries.
 - Uncheckable items are warnings with reasons, never guesses.
+- Exact counts only: when the deliverable states a count or quantity,
+  obtain it with a tool (doc_grep match count, listing length) —
+  "several/many/about N" for anything countable is a warning
+  `vague-quantifier`.
+- Numbers verbatim: a digit, unit, or magnitude that differs from its
+  source is a finding (`number-mismatch`), never a paraphrase.
 - A clean, well-sourced review earns a high score — do not invent problems.

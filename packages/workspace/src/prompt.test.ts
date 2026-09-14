@@ -251,3 +251,37 @@ test("agent-memory governance part renders labeled entries and stays non-protect
   // Without entries the part disappears entirely (no empty section noise).
   assert.equal(buildWorkspacePromptParts([], false, {}).find((candidate) => candidate.id === "agent-memory.governance"), undefined);
 });
+
+test("context-clock part injects the run date as a droppable identity-adjacent section", () => {
+  const parts = buildWorkspacePromptParts([], false, {}, new Date("2026-09-14T12:00:00.000Z"));
+  const clock = parts.find((part) => part.id === "workspace.context-clock");
+  assert.ok(clock);
+  // Advisory: the protected answer-discipline already covers future-event honesty,
+  // so under extreme budget pressure the clock itself may be dropped.
+  assert.equal(clock!.protected, false);
+  assert.match(clock!.content, /today is 2026-09-14 \(UTC\)/);
+  assert.match(clock!.content, /future events/i);
+  // It sits directly after the static identity so the clock reads as system-level framing.
+  assert.ok(parts.findIndex((part) => part.id === "workspace.identity") < parts.findIndex((part) => part.id === "workspace.context-clock"));
+});
+
+test("answer discipline forbids fabricated tool transcripts and unbacked action claims (m8.1.9)", () => {
+  const prompt = buildWorkspaceSystemPrompt([], false);
+  assert.match(prompt, /Never simulate tool calls or their outputs in your own text/i);
+  assert.match(prompt, /a drafted tool-invocation transcript is fabrication/i);
+  assert.match(prompt, /A claim that an action was performed must point to an actual tool call earlier in this run; otherwise say it was not done/i);
+});
+
+test("bound kb-scope governance appends context self-management guidance; unbound stays lean", () => {
+  const bound = buildWorkspacePromptParts([], false, {
+    knowledgeBaseScope: { droppedKbIds: [], kbLabels: ["Test KB (kb-1)"], singleKbId: "kb-1", webSearchEnabled: true },
+  }).find((part) => part.id === "kb-scope.governance")!;
+  assert.match(bound.content, /Context self-management \(guidance, not hard rules\)/);
+  assert.match(bound.content, /expand only the blocks the current step needs/);
+  assert.match(bound.content, /save intermediate findings as workspace files/);
+  const unbound = buildWorkspacePromptParts([], false, {
+    knowledgeBaseScope: { droppedKbIds: ["ghost"], kbLabels: [], webSearchEnabled: true },
+  }).find((part) => part.id === "kb-scope.governance")!;
+  assert.doesNotMatch(unbound.content, /Context self-management/);
+  assert.match(unbound.content, /UNBOUND/);
+});
