@@ -166,53 +166,17 @@ export function ScopedSettingsEditor({
     });
   }
 
-  /** `inherit` drops both skill fields; `all` needs no whitelist to be stored. */
-  function setSkillMode(value: "inherit" | SkillSelectionMode): void {
+  function toggleKbScopeKb(kbId: string): void {
     setDraft((current) => {
-      const next = { ...current };
-      delete next.enabledSkillIds;
-      if (value === "inherit") delete next.skillSelectionMode;
-      else if (value === "all") next.skillSelectionMode = "all";
-      else {
-        next.skillSelectionMode = "selected";
-        next.enabledSkillIds = current.enabledSkillIds ?? [];
-      }
-      return next;
+      const selected = current.kbScopeKbIds ?? [];
+      const nextValues = selected.includes(kbId)
+        ? selected.filter((item) => item !== kbId)
+        : [...selected, kbId];
+      return { ...current, kbScopeKbIds: nextValues };
     });
   }
 
-  function toggleArrayValue(field: "enabledConnectorIds" | "enabledSkillIds" | "kbScopeKbIds", value: string): void {
-    setDraft((current) => {
-      const selected = current[field] ?? [];
-      const nextValues = selected.includes(value as never)
-        ? selected.filter((item) => item !== value)
-        : [...selected, value] as never[];
-      return { ...current, [field]: nextValues };
-    });
-  }
-
-  function setSkillLibraryMount(libraryId: string, patch: Partial<EnabledSkillLibrary>): void {
-    setDraft((current) => {
-      const mounts = normalizeSkillLibraryMounts(current.enabledSkillLibraries ?? skillLibraryMounts, skillLibraries);
-      const index = mounts.findIndex((mount) => mount.libraryId === libraryId);
-      if (index < 0) return current;
-      mounts[index] = normalizeSkillLibraryMount({ ...mounts[index]!, ...patch });
-      return { ...current, enabledSkillLibraries: mounts };
-    });
-  }
-
-  function toggleSkillLibrary(library: SkillLibrary): void {
-    setDraft((current) => {
-      const mounts = normalizeSkillLibraryMounts(current.enabledSkillLibraries ?? skillLibraryMounts, skillLibraries);
-      const selected = mounts.some((mount) => mount.libraryId === library.id);
-      return {
-        ...current,
-        enabledSkillLibraries: selected
-          ? mounts.filter((mount) => mount.libraryId !== library.id)
-          : [...mounts, normalizeSkillLibraryMount({ libraryId: library.id })],
-      };
-    });
-  }  async function submit(event: FormEvent): Promise<void> {
+  async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     setSaving(true);
     try {
@@ -231,14 +195,8 @@ export function ScopedSettingsEditor({
   const kbWebDenied = draft.kbScopeWebSearch !== undefined
     ? draft.kbScopeWebSearch === false
     : kbWebInheritedDenied;
-  const skillInheritable = skillScope === "session";
-  // Project is the root skill layer, so an unset mode there simply means `all`.
-  const skillMode: "inherit" | SkillSelectionMode = draft.skillSelectionMode
-    ?? (skillInheritable ? "inherit" : "all");
-  const skillWhitelist = skillMode === "selected";
-  const rawSkillLibraryMounts = draft.enabledSkillLibraries ?? details.effective.enabledSkillLibraries;
-  const skillLibraryMounts = normalizeSkillLibraryMounts(rawSkillLibraryMounts, skillLibraries);
-  const skillLibraryMountsById = new Map(skillLibraryMounts.map((mount) => [mount.libraryId, normalizeSkillLibraryMount(mount)]));  return (
+  const skillLibraryMounts = normalizeSkillLibraryMounts(draft.enabledSkillLibraries ?? details.effective.enabledSkillLibraries, skillLibraries);
+  return (
     <form className="scoped-settings" onSubmit={(event) => void submit(event)}>
       <div className="editor-heading">
         <strong>{t("settings.runtimeTitle", { scope: scopeLabel })}</strong>
@@ -258,7 +216,7 @@ export function ScopedSettingsEditor({
         {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}
       </label>
 
-{skillScope === "global" || knowledgeBases === undefined ? null : <fieldset className="settings-array" disabled={disabled || saving}>
+      {skillScope === "global" || knowledgeBases === undefined ? null : <fieldset className="settings-array" disabled={disabled || saving}>
         <legend>{t("settings.kbScope")}</legend>
         <small className="settings-hint">{t("settings.kbScopeHint")}</small>
         {allowInheritance ? <select aria-label="Knowledge-base scope mode" value={kbScopeOverride ? "override" : "inherit"} onChange={(event) => setKbScopeMode(event.target.value === "override")}>
@@ -266,7 +224,7 @@ export function ScopedSettingsEditor({
           <option value="override">{t("settings.kbScopeOverrideOption", { count: draft.kbScopeKbIds?.length ?? 0 })}</option>
         </select> : null}
         {kbScopeOverride || !allowInheritance ? <div className="settings-choices">
-          {knowledgeBases.map((kb) => <label key={kb.id}><input checked={kbScopeBound.includes(kb.id)} onChange={() => toggleArrayValue("kbScopeKbIds", kb.id)} type="checkbox" /><span>{kb.name}<small>{t("composer.kbScopeKbStats", { documents: kb.stats?.documents ?? 0, entities: kb.stats?.entities ?? 0 })}</small></span></label>)}
+          {knowledgeBases.map((kb) => <label key={kb.id}><input checked={kbScopeBound.includes(kb.id)} onChange={() => toggleKbScopeKb(kb.id)} type="checkbox" /><span>{kb.name}<small>{t("composer.kbScopeKbStats", { documents: kb.stats?.documents ?? 0, entities: kb.stats?.entities ?? 0 })}</small></span></label>)}
           {!knowledgeBases.length ? <p className="settings-choice-empty">{t("settings.noKnowledgeBases")}</p> : null}
         </div> : null}
         {kbScopeBound.length ? <div className="settings-choices">
@@ -291,55 +249,8 @@ export function ScopedSettingsEditor({
         {allowInheritance ? <SettingsSource details={details} field="kbScopeKbIds" /> : null}
       </fieldset>}
 
-      {skillScope === "global" ? null : <fieldset className="settings-array" disabled={disabled || saving}>
-        <legend>{t(FIELD_LABELS.skillSelectionMode)}</legend>
-        <select aria-label={t("settings.skillModeAria")} value={skillMode} onChange={(event) => setSkillMode(event.target.value as "inherit" | SkillSelectionMode)}>
-          {skillInheritable ? <option value="inherit">
-            {t("settings.skillModeInherit", { mode: t(SKILL_MODE_LABELS[details.effective.skillSelectionMode]), count: details.effective.enabledSkillIds.length })}
-          </option> : null}
-          <option value="all">{t(SKILL_MODE_LABELS.all)}</option>
-          <option value="selected">{t(SKILL_MODE_LABELS.selected)}</option>
-        </select>
-        {skillWhitelist ? <div className="settings-choices">
-          {skills.map((skill) => <label key={skill.id}><input type="checkbox" checked={draft.enabledSkillIds?.includes(skill.id) ?? false} onChange={() => toggleArrayValue("enabledSkillIds", skill.id)} /><span>{skill.name}<small>{skill.source === "built-in" ? t("common.builtIn") : t("settings.managedRevision", { revision: skill.currentRevision })}</small></span></label>)}
-          {!skills.length ? <p className="settings-choice-empty">{t("settings.noSkills")}</p> : null}
-        </div> : <small className="settings-hint">{t("settings.skillModeAllHint")}</small>}
-        {skillInheritable ? <SettingsSource details={details} field="skillSelectionMode" /> : null}
-      </fieldset>}
-
-      {skillScope === "global" ? null : <fieldset className="settings-array" disabled={disabled || saving}>
-        <legend>{t(FIELD_LABELS.enabledSkillLibraries)}</legend>
-        <small className="settings-hint">{t("settings.skillLibrariesPickerHint" as MessageKey)}</small>
-        <div className="settings-library-list">
-          {skillLibraries.map((library) => {
-            const mount = skillLibraryMountsById.get(library.id);
-            const selected = Boolean(mount);
-            const selectedMount = mount ?? normalizeSkillLibraryMount({ libraryId: library.id });
-            return <div className={selected ? "settings-library-row selected" : "settings-library-row"} key={library.id}>
-              <label className="settings-library-picker">
-                <input
-                  aria-label={t("settings.skillLibraryToggleAria" as MessageKey, { name: library.name })}
-                  checked={selected}
-                  disabled={!library.headVersionId && !selected}
-                  onChange={() => toggleSkillLibrary(library)}
-                  type="checkbox"
-                />
-                <span className="settings-library-main">
-                  <strong>{library.name}</strong>
-                  <small>{library.headVersionId ? t("settings.skillLibraryHead" as MessageKey, { version: library.headVersionId.slice(0, 8) }) : t("settings.skillLibraryNoVersions" as MessageKey)}</small>
-                </span>
-              </label>
-              {selected ? <div className="settings-library-controls">
-                <label><span>{t("settings.skillLibraryVersion" as MessageKey)}</span><input value={selectedMount.versionId ?? "head"} onChange={(event) => setSkillLibraryMount(library.id, { versionId: event.target.value || "head" })} placeholder="head" /></label>
-                <label><span>{t("settings.skillLibraryPriority" as MessageKey)}</span><input inputMode="numeric" type="number" value={selectedMount.priority ?? 0} onChange={(event) => setSkillLibraryMount(library.id, { priority: Number(event.target.value || 0) })} /></label>
-                <label><span>{t("settings.skillLibraryLimit" as MessageKey)}</span><input inputMode="numeric" max={100} min={1} type="number" value={selectedMount.limit ?? 12} onChange={(event) => setSkillLibraryMount(library.id, { limit: Number(event.target.value || 12) })} /></label>
-              </div> : null}
-            </div>;
-          })}
-          {!skillLibraries.length ? <p className="settings-choice-empty">{t("settings.noSkillLibraries" as MessageKey)}</p> : null}
-        </div>
-        <SettingsSource details={details} field="enabledSkillLibraries" />
-      </fieldset>}      {afterFields}
+      <PluginSettingsSections {...{ details, draft, setDraft, connectors, allowInheritance, disabled: disabled || saving, t, skillLibraries, skills, skillScope }} renderSource={(field) => <SettingsSource details={details} field={field} />} />
+      {afterFields}
       {disabled ? <p className="settings-readonly">{t("settings.archivedReadonly")}</p> : null}
       {!showActions ? null : onCancel ? <div className="dialog-actions">
         <button className="secondary-button" disabled={saving} onClick={onCancel} type="button">{t("common.cancel")}</button>
