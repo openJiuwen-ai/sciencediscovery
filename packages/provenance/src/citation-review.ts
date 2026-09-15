@@ -71,6 +71,8 @@ export function citationSourceSnapshot(url: string, result: unknown): CitationSo
       : JSON.stringify(result);
   return {
     content: content.slice(0, MAX_SOURCE_SNAPSHOT_CHARACTERS),
+    sourceId: url,
+    sourceType: "paper_metadata",
     status: "available",
     url,
   };

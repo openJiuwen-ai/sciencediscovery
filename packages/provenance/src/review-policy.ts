@@ -14,13 +14,22 @@
 
 import { createHash } from "node:crypto";
 
-import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
+import type {
+  ComposerReference,
+  EvidenceAssessment,
+  EvidenceLevel,
+  EvidenceLocator,
+  ReviewClaim,
+  ScientificArtifactVersion,
+  SourceAssessment,
+  SourceSnapshot,
+} from "@sciencediscovery/schema";
 
 import type { EvidenceReferenceTraceResult, TraceEvidenceReference } from "./computation-review.js";
 
 // Bump whenever the Deep evidence protocol changes so old semantic verdicts are not reused.
-export const SEMANTIC_REVIEWER_VERSION = "1.9.0-canonical-literature-urls";
-export const REVIEW_POLICY_VERSION = "1.7.0";
+export const SEMANTIC_REVIEWER_VERSION = "2.3.0-source-availability-gate";
+export const REVIEW_POLICY_VERSION = "2.3.0";
 // Bounds apply to one model task, never to the number of reviewable items in
 // a locked Artifact. Every detected reference and Evidence-linked claim gets
 // its own queued task.
@@ -39,6 +48,12 @@ export interface QuantitativeEvidenceClaim {
   alias: string;
   excerpt: string;
   values: string[];
+}
+
+/** A numeric statement explicitly tied to a generated Artifact chip. */
+export interface QuantitativeArtifactClaim extends QuantitativeEvidenceClaim {
+  artifactId: string;
+  artifactVersion?: number;
 }
 
 export interface SemanticReviewExecutionMetadata {
@@ -62,9 +77,42 @@ export interface ReviewAgentRequest {
 /** A bounded, governed source snapshot obtained before the Citation model pass. */
 export interface CitationSourceProbe {
   content?: string;
+  /** Already-authorized, CAS-pinned material from the current Session only. */
+  materials?: CitationSourceMaterial[];
   message?: string;
+  /** Stable identity of the governed source, normally the citation key. */
+  sourceId?: string;
+  sourceType?: "abstract" | "paper_metadata";
   status: "available" | "unavailable";
   url?: string;
+}
+
+/** A bounded excerpt and stable position issued by the Reviewer evidence gateway. */
+export interface CitationSourceMaterial {
+  content: string;
+  evidenceLevel: "E2" | "E3";
+  locator: EvidenceLocator["locator"];
+  sourceId: string;
+  sourceType: "paper_fulltext" | "supplement" | "table";
+}
+
+export interface CitationEvidenceRecord {
+  assessment: SourceAssessment;
+  claim: ReviewClaim;
+  locators: EvidenceLocator[];
+  snapshots: SourceSnapshot[];
+}
+
+/** Read-only, version-pinned computation material. E4 is never inferred from prose. */
+export interface ComputationSourceProbe {
+  materials?: Array<{
+    content: string;
+    locator: EvidenceLocator["locator"];
+    sourceId: string;
+    sourceType: "artifact" | "code" | "execution";
+  }>;
+  message?: string;
+  status: "available" | "unavailable";
 }
 
 export interface LiteratureCitationCandidate {
@@ -74,6 +122,206 @@ export interface LiteratureCitationCandidate {
   label: string;
   marker?: string;
   reference: string;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Turn a single citation occurrence into a version-pinned claim. The planner
+ * is deliberately deterministic at this stage: a model may later explain an
+ * assessment but cannot invent a new claim or lower its evidence threshold.
+ */
+export function citationReviewClaim(
+  content: string,
+  version: ScientificArtifactVersion,
+  candidate: LiteratureCitationCandidate,
+): ReviewClaim {
+  const text = citationClaimExcerpt(content, candidate);
+  return {
+    artifactVersionId: version.id,
+    citationKeys: [candidate.key],
+    id: `citation:${sha256(`${version.id}\u0000${candidate.key}\u0000${text}`).slice(0, 24)}`,
+    kind: "citation",
+    requiredEvidenceLevel: citationRequiredEvidenceLevel(text),
+    text,
+  };
+}
+
+function citationRequiredEvidenceLevel(text: string): EvidenceLevel {
+  // Exact results need a table/figure/supplement locator; an abstract cannot
+  // establish their denominator, unit, subgroup, or statistical scope.
+  if (/(?:\bn\s*=|\bp\s*[<=>]|\b(?:95%\s*)?ci\b|\bhazard ratio\b|\bodds ratio\b|\brisk ratio\b|\b\d+(?:\.\d+)?\s*%|\btable\s*\d+\b|\bfigure\s*\d+\b)/iu.test(text)) return "E3";
+  // Method, mechanism and scope claims require the paper body or a figure
+  // legend. Keep this deliberately conservative: uncertain language stays E1.
+  if (/\b(?:method|methods|protocol|cohort|randomi[sz]ed|mechanism|pathway|limitation|in vitro|in vivo|assay)\b/iu.test(text)) return "E2";
+  return "E1";
+}
+
+/**
+ * Convert a governed source response to immutable source facts. These facts
+ * are useful without ScienceMemory and contain no provider-owned full text.
+ */
+export function citationEvidenceRecord(
+  claim: ReviewClaim,
+  probe: CitationSourceProbe,
+): Omit<CitationEvidenceRecord, "assessment"> {
+  const retrievedAt = new Date().toISOString();
+  const material = [{
+    content: probe.content?.slice(0, MAX_EVIDENCE_CHARACTERS) ?? "",
+    evidenceLevel: "E1" as const,
+    locator: { field: "governed_metadata_or_abstract" },
+    sourceId: probe.sourceId ?? claim.citationKeys[0] ?? "unknown",
+    sourceType: probe.sourceType ?? "paper_metadata",
+  }, ...((probe.materials ?? []).map((item) => ({ ...item, content: item.content.slice(0, MAX_EVIDENCE_CHARACTERS) })))];
+  const snapshots: SourceSnapshot[] = [];
+  const locators: EvidenceLocator[] = [];
+  for (const item of material) {
+    const snapshotHash = sha256(item.content);
+    const snapshotId = `snapshot:${snapshotHash.slice(0, 24)}`;
+    const locatorId = `locator:${sha256(`${snapshotId}\u0000${JSON.stringify(item.locator)}\u0000${item.content}`).slice(0, 24)}`;
+    snapshots.push({
+      availability: probe.status === "available" && item.content ? "available" : "unavailable",
+      evidenceLevel: item.evidenceLevel,
+      id: snapshotId,
+      retrievedAt,
+      snapshot: { hash: snapshotHash, size: Buffer.byteLength(item.content) },
+      sourceId: item.sourceId,
+      sourceType: item.sourceType,
+    });
+    if (item.content) locators.push({
+      excerpt: item.content.slice(0, 1_500),
+      excerptHash: sha256(item.content.slice(0, 1_500)),
+      id: locatorId,
+      locator: item.locator,
+      snapshotId,
+    });
+  }
+  return {
+    claim,
+    locators,
+    snapshots,
+  };
+}
+
+export function computationReviewClaim(
+  version: ScientificArtifactVersion,
+  candidate: QuantitativeArtifactClaim,
+): ReviewClaim {
+  return {
+    artifactVersionId: version.id,
+    citationKeys: [],
+    id: `computation:${sha256(`${version.id}\u0000${candidate.artifactId}\u0000${candidate.excerpt}`).slice(0, 24)}`,
+    kind: "computation",
+    requiredEvidenceLevel: "E4",
+    text: candidate.excerpt,
+  };
+}
+
+/**
+ * Persist only source snapshots issued by the Reviewer gateway.  In
+ * particular, a model cannot turn an Artifact chip into an E4 source itself.
+ */
+export function computationEvidenceRecord(
+  claim: ReviewClaim,
+  probe: ComputationSourceProbe,
+): Omit<CitationEvidenceRecord, "assessment"> {
+  const retrievedAt = new Date().toISOString();
+  const snapshots: SourceSnapshot[] = [];
+  const locators: EvidenceLocator[] = [];
+  for (const item of probe.materials ?? []) {
+    const content = item.content.slice(0, MAX_EVIDENCE_CHARACTERS);
+    if (!content) continue;
+    const snapshotHash = sha256(content);
+    const snapshotId = `snapshot:${snapshotHash.slice(0, 24)}`;
+    const locatorId = `locator:${sha256(`${snapshotId}\u0000${JSON.stringify(item.locator)}\u0000${content}`).slice(0, 24)}`;
+    snapshots.push({
+      availability: probe.status === "available" ? "available" : "unavailable",
+      evidenceLevel: "E4",
+      id: snapshotId,
+      retrievedAt,
+      snapshot: { hash: snapshotHash, size: Buffer.byteLength(content) },
+      sourceId: item.sourceId,
+      sourceType: item.sourceType,
+    });
+    locators.push({
+      excerpt: content.slice(0, 1_500),
+      excerptHash: sha256(content.slice(0, 1_500)),
+      id: locatorId,
+      locator: item.locator,
+      snapshotId,
+    });
+  }
+  return { claim, locators, snapshots };
+}
+
+/** Strong source assessments are impossible without a matching issued locator. */
+export function validatedSourceAssessment(
+  claim: ReviewClaim,
+  raw: { assessment?: unknown; locatorIds?: unknown; rationale?: unknown },
+  allowedLocatorIds: ReadonlySet<string> | ReadonlyMap<string, EvidenceLevel>,
+): SourceAssessment {
+  const requested = typeof raw.assessment === "string" ? raw.assessment.toUpperCase() : "INCONCLUSIVE";
+  const assessment: EvidenceAssessment = requested === "SUPPORTED" || requested === "PARTIALLY_SUPPORTED" || requested === "CONTRADICTED"
+    ? requested
+    : "INCONCLUSIVE";
+  const locatorLevel = (id: string): EvidenceLevel | undefined => allowedLocatorIds instanceof Map
+    ? allowedLocatorIds.get(id)
+    : allowedLocatorIds.has(id) ? "E1" : undefined;
+  const locatorIds = Array.isArray(raw.locatorIds)
+    ? [...new Set(raw.locatorIds.filter((id): id is string => typeof id === "string" && locatorLevel(id) !== undefined))]
+    : [];
+  const rationale = typeof raw.rationale === "string" ? raw.rationale.trim().slice(0, 1_000) : "";
+  if (assessment !== "INCONCLUSIVE" && !locatorIds.length) {
+    return { assessment: "INCONCLUSIVE", claimId: claim.id, locatorIds: [], policyVersion: REVIEW_POLICY_VERSION, rationale: "Model assessment omitted an issued evidence locator." };
+  }
+  const rank: Record<EvidenceLevel, number> = { E0: 0, E1: 1, E2: 2, E3: 3, E4: 4 };
+  if (assessment !== "INCONCLUSIVE" && !locatorIds.some((id) => rank[locatorLevel(id)!] >= rank[claim.requiredEvidenceLevel])) {
+    return { assessment: "INCONCLUSIVE", claimId: claim.id, locatorIds: [], policyVersion: REVIEW_POLICY_VERSION, rationale: `Model assessment did not cite an issued ${claim.requiredEvidenceLevel} locator.` };
+  }
+  return { assessment, claimId: claim.id, locatorIds, policyVersion: REVIEW_POLICY_VERSION, rationale };
+}
+
+/** Whether the gateway issued a locator that can support this claim's evidence level. */
+export function hasRequiredEvidenceLocator(
+  claim: ReviewClaim,
+  locators: EvidenceLocator[],
+  snapshots: SourceSnapshot[],
+): boolean {
+  const rank: Record<EvidenceLevel, number> = { E0: 0, E1: 1, E2: 2, E3: 3, E4: 4 };
+  const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
+  return locators.some((locator) => {
+    const level = snapshotsById.get(locator.snapshotId)?.evidenceLevel;
+    return level !== undefined && rank[level] >= rank[claim.requiredEvidenceLevel];
+  });
+}
+
+/** @deprecated Use validatedSourceAssessment for all issued evidence levels. */
+export const validatedCitationAssessment = validatedSourceAssessment;
+
+/** E4 conclusions require the result data, code, and recorded execution together. */
+export function validatedComputationAssessment(
+  claim: ReviewClaim,
+  raw: { assessment?: unknown; locatorIds?: unknown; rationale?: unknown },
+  locators: EvidenceLocator[],
+  snapshots: SourceSnapshot[],
+): SourceAssessment {
+  const levels = new Map(locators.map((locator) => [locator.id, "E4" as const]));
+  const assessment = validatedSourceAssessment(claim, raw, levels);
+  if (assessment.assessment === "INCONCLUSIVE") return assessment;
+  const snapshotsById = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
+  const sourceTypes = new Set(assessment.locatorIds
+    .map((id) => locators.find((locator) => locator.id === id))
+    .map((locator) => locator ? snapshotsById.get(locator.snapshotId)?.sourceType : undefined));
+  const required = ["artifact", "code", "execution"];
+  if (!required.every((sourceType) => sourceTypes.has(sourceType as SourceSnapshot["sourceType"]))) {
+    return {
+      assessment: "INCONCLUSIVE", claimId: claim.id, locatorIds: [], policyVersion: REVIEW_POLICY_VERSION,
+      rationale: "Model assessment did not cite the issued Artifact, code, and execution locators together.",
+    };
+  }
+  return assessment;
 }
 
 /** Extract stable, bounded units so a bibliography is reviewed one paper at a time. */
@@ -225,6 +473,7 @@ export type ExecuteReviewAgent = (
 
 export interface SemanticReviewOptions extends SemanticReviewExecutionMetadata {
   execute: ExecuteReviewAgent;
+  probeComputation?: (claim: QuantitativeArtifactClaim, signal?: AbortSignal) => Promise<ComputationSourceProbe>;
   probeCitation?: (input: ReviewAgentRequest, signal?: AbortSignal) => Promise<CitationSourceProbe>;
 }
 
@@ -250,6 +499,25 @@ export function artifactEvidenceAliases(content: string): string[] {
   )];
 }
 
+function numericClaimExcerpts(content: string): string[] {
+  return content.split(/\r?\n/gu).flatMap((line) => {
+    const trimmed = line.trim();
+    if (/^\|.*\|$/u.test(trimmed) && !/^\|?\s*:?-{3,}/u.test(trimmed)) {
+      return trimmed.slice(1, -1).split("|").map((cell) => cell.trim());
+    }
+    return trimmed.split(/(?<=[.!?。！？])\s+/gu);
+  }).map((excerpt) => excerpt.trim()).filter(Boolean);
+}
+
+function numericClaimValues(excerpt: string): string[] {
+  const withoutReferences = excerpt.replace(/\[[^\]]+\]/gu, " ");
+  const valuePattern = /\b\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?\s*(?:%|‰)(?!\w)|\b\d+(?:\.\d+)?\s*(?:%|‰)(?!\w)|\b\d+(?:\.\d+)?\s*(?:mg\/?L|ng\/?mL|μg\/?mL|mmol\/?L)\b|\b(?:n\s*=\s*)\d+\b|\b\d+\s*(?:patients?|cases?|subjects?)\b|\b\d+\s*(?:例|人|名)\b|\b(?:p|hr|or|rr)\s*(?:=|<|>|≤|≥)\s*\d+(?:\.\d+)?\b/giu;
+  return [...withoutReferences.matchAll(valuePattern)]
+    .map((match) => match[0]!.trim())
+    .filter((value, index, all) => Boolean(value) && all.indexOf(value) === index)
+    .slice(0, 8);
+}
+
 /**
  * Keep Deep Computation focused on claims it can actually assess. A bare
  * `[evidenceN]` reference is still checked by Quick graph integrity, but does not
@@ -258,30 +526,11 @@ export function artifactEvidenceAliases(content: string): string[] {
 export function quantitativeEvidenceClaims(content: string): QuantitativeEvidenceClaim[] {
   const claims: QuantitativeEvidenceClaim[] = [];
   const seen = new Set<string>();
-  const excerpts = content.split(/\r?\n/gu).flatMap((line) => {
-    const trimmed = line.trim();
-    // A Markdown table row is not a single claim: aliases in one column must
-    // not be applied to numeric values from another column.
-    if (/^\|.*\|$/u.test(trimmed) && !/^\|?\s*:?-{3,}/u.test(trimmed)) {
-      return trimmed.slice(1, -1).split("|").map((cell) => cell.trim());
-    }
-    return trimmed.split(/(?<=[.!?。！？])\s+/gu);
-  });
-  for (const rawExcerpt of excerpts) {
-    const excerpt = rawExcerpt.trim();
-    if (!excerpt) continue;
+  for (const excerpt of numericClaimExcerpts(content)) {
     const aliases = [...new Set([...excerpt.matchAll(/\[((?:ev|evidence)\d+)\]/giu)]
       .map((match) => normalizeEvidenceAlias(match[1]!)))];
     if (!aliases.length) continue;
-    const withoutAliases = excerpt.replace(/\[(?:ev|evidence)\d+\]/giu, " ");
-    // A year, a citation identifier, or a Markdown heading is not a numerical
-    // claim. Keep only quantities that carry scientific meaning by themselves:
-    // percentages/ranges, explicit sample sizes, units, and statistical values.
-    const valuePattern = /\b\d+(?:\.\d+)?\s*[–-]\s*\d+(?:\.\d+)?\s*(?:%|‰)(?!\w)|\b\d+(?:\.\d+)?\s*(?:%|‰)(?!\w)|\b\d+(?:\.\d+)?\s*(?:mg\/?L|ng\/?mL|μg\/?mL|mmol\/?L)\b|\b(?:n\s*=\s*)\d+\b|\b\d+\s*(?:patients?|cases?|subjects?)\b|\b\d+\s*(?:例|人|名)\b|\b(?:p|hr|or|rr)\s*(?:=|<|>|≤|≥)\s*\d+(?:\.\d+)?\b/giu;
-    const values = [...withoutAliases.matchAll(valuePattern)]
-      .map((match) => match[0]!.trim())
-      .filter((value, index, all) => Boolean(value) && all.indexOf(value) === index)
-      .slice(0, 8);
+    const values = numericClaimValues(excerpt);
     if (!values.length) continue;
     for (const alias of aliases) {
       const claim = { alias, excerpt: excerpt.slice(0, 1_000), values };
@@ -290,6 +539,39 @@ export function quantitativeEvidenceClaims(content: string): QuantitativeEvidenc
         seen.add(key);
         claims.push(claim);
       }
+    }
+  }
+  return claims;
+}
+
+/** Numeric claims with a declared generated-Artifact chip, planned for E4. */
+export function quantitativeArtifactClaims(
+  content: string,
+  version: ScientificArtifactVersion,
+): QuantitativeArtifactClaim[] {
+  const artifactReferences = new Map(
+    (version.references ?? [])
+      .filter((reference): reference is ComposerReference => reference.kind === "artifact")
+      .map((reference) => [normalizeEvidenceAlias(reference.label), reference]),
+  );
+  if (!artifactReferences.size) return [];
+  const claims: QuantitativeArtifactClaim[] = [];
+  const seen = new Set<string>();
+  for (const rawExcerpt of numericClaimExcerpts(content)) {
+    const values = numericClaimValues(rawExcerpt);
+    if (!values.length) continue;
+    for (const marker of rawExcerpt.matchAll(/\[([^\]]+)\]/gu)) {
+      const reference = artifactReferences.get(normalizeEvidenceAlias(marker[1]!));
+      if (!reference) continue;
+      const claim = {
+        alias: normalizeEvidenceAlias(marker[1]!),
+        artifactId: reference.id,
+        ...(reference.version !== undefined ? { artifactVersion: reference.version } : {}),
+        excerpt: rawExcerpt.slice(0, 1_000),
+        values,
+      };
+      const key = `${claim.artifactId}\u0000${claim.artifactVersion ?? "latest"}\u0000${claim.excerpt}`;
+      if (!seen.has(key)) { seen.add(key); claims.push(claim); }
     }
   }
   return claims;

@@ -169,6 +169,62 @@ export interface ArtifactReviewFinding {
   status: "open";
 }
 
+/** Evidence strength required before Reviewer Specialist may make a source-level conclusion. */
+export type EvidenceLevel = "E0" | "E1" | "E2" | "E3" | "E4";
+
+/** A source-level conclusion. Strong conclusions must name issued EvidenceLocator ids. */
+export type EvidenceAssessment = "SUPPORTED" | "PARTIALLY_SUPPORTED" | "CONTRADICTED" | "INCONCLUSIVE";
+
+/** A bounded claim cut from one immutable Artifact version. */
+export interface ReviewClaim {
+  artifactVersionId: string;
+  citationKeys: string[];
+  id: string;
+  kind: "citation" | "computation";
+  requiredEvidenceLevel: EvidenceLevel;
+  text: string;
+}
+
+/** Immutable, content-addressed source material used by a Reviewer assessment. */
+export interface SourceSnapshot {
+  availability: "available" | "denied" | "parse_failed" | "unavailable";
+  evidenceLevel: EvidenceLevel;
+  id: string;
+  retrievedAt: string;
+  snapshot: { hash: string; size: number };
+  sourceId: string;
+  sourceType: "abstract" | "artifact" | "code" | "dataset" | "execution" | "paper_metadata" | "paper_fulltext" | "supplement" | "table";
+}
+
+/** A bounded, stable position inside a locked source snapshot. */
+export interface EvidenceLocator {
+  excerpt: string;
+  excerptHash: string;
+  id: string;
+  locator: {
+    column?: string;
+    executionId?: string;
+    field?: string;
+    line?: number;
+    outputPath?: string;
+    page?: number;
+    paragraph?: number;
+    row?: string;
+    section?: string;
+    table?: string;
+  };
+  snapshotId: string;
+}
+
+/** Persisted result of one claim checked against issued snapshots and locators. */
+export interface SourceAssessment {
+  assessment: EvidenceAssessment;
+  claimId: string;
+  locatorIds: string[];
+  policyVersion: string;
+  rationale: string;
+}
+
 export interface ArtifactReviewRun {
   artifactContentHash: string;
   artifactId: string;
@@ -200,6 +256,13 @@ export interface ArtifactReviewRun {
   };
   /** Smart-only findings retained separately so semantic conclusions can be safely reused. */
   smartFindings?: ArtifactReviewFinding[];
+  /** Source-level Deep review records. Strong assessments always reference issued locators. */
+  sourceAssessments?: Array<{
+    assessment: SourceAssessment;
+    claim: ReviewClaim;
+    locators: EvidenceLocator[];
+    snapshots: SourceSnapshot[];
+  }>;
   /** Deep Citation runs each identifiable paper as a separately retryable task. */
   citationTasks?: Array<{
     attempts: number;

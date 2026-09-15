@@ -93,6 +93,10 @@ function configuredLevelLabel(level: "quick" | "smart" | "deep" | undefined, t: 
 function CompletedReview({ review }: { review: ArtifactReviewRun }) {
   const { t } = useLocale();
   const presentation = resultLabel(review, t);
+  // Inconclusive evidence availability and model-protocol diagnostics are not
+  // report defects. They remain in the immutable review record/logs, while the
+  // card presents only a source contradiction the user can act on.
+  const sourceIssues = review.sourceAssessments?.filter((record) => record.assessment.assessment === "CONTRADICTED") ?? [];
   return (
     <details className={`reviewer-specialist-card process-record ${presentation.tone}`}>
       <summary className="reviewer-specialist-card-heading">
@@ -113,6 +117,22 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
               </li>
             ))}
           </ul>
+        ) : null}
+        {sourceIssues.length ? (
+          <section aria-label="Source verification notes" className="reviewer-source-issues">
+            <ul>
+              {sourceIssues.map((record) => {
+                const assessment = record.assessment.assessment;
+                const label = "Citation contradiction";
+                return (
+                  <li key={record.claim.id}>
+                    <b className={assessment.toLowerCase()}>{label}</b>
+                    <span>{record.claim.citationKeys.join(", ")}{record.assessment.rationale ? ` — ${record.assessment.rationale}` : ""}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
         ) : null}
         {!review.findings.length ? (
           <p>{review.decision === "SKIPPED"

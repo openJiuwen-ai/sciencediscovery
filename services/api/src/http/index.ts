@@ -200,6 +200,8 @@ import {
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
+import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
+import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
@@ -443,6 +445,37 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           skills: reviewerSkills,
           workspace: reviewerWorkspace,
         });
+        // Paper Reader may already have produced a permitted, immutable
+        // full-text/table extraction. Attach it as an additional Reviewer-only
+        // source; this does not download, parse, or write anything.
+        const publicProbe = semanticReview.probeCitation;
+        const paperEvidence = new ReviewerPaperEvidenceGateway(store);
+        const computationEvidence = new ReviewerComputationEvidenceGateway(store, provenanceRecorder.cas);
+        semanticReview = {
+          ...semanticReview,
+          probeComputation: (claim, probeSignal) => {
+            if (probeSignal?.aborted) throw new DOMException("Review cancelled", "AbortError");
+            return computationEvidence.resolve(task.sessionId, claim);
+          },
+          probeCitation: async (request, probeSignal) => {
+            const materials = request.citation
+              ? await paperEvidence.resolveCitation(request.sessionId, request.citation)
+              : [];
+            // A matching acquisition already proves the source identity through
+            // its recorded identifier. Prefer it to a new external lookup:
+            // Deep must remain useful when a Connector is unavailable.
+            if (materials.length) return {
+              materials,
+              sourceId: request.citation?.key,
+              sourceType: "paper_metadata" as const,
+              status: "available" as const,
+            };
+            const publicSource = publicProbe
+              ? await publicProbe(request, probeSignal)
+              : { status: "unavailable" as const, message: "No governed literature source is configured." };
+            return publicSource;
+          },
+        };
       }
       try {
         const result = await runReviewerCheckpoint({

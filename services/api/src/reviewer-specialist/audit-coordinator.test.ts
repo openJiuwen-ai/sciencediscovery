@@ -532,7 +532,7 @@ test("an automatic audit with no current report is silently superseded without c
   assert.deepEqual(await store.listReviewFeedback(session.id), []);
 });
 
-test("automatic audits wait for the lead Agent to be idle", async (context) => {
+test("automatic Deep audits wait for the lead Agent to be idle", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `reviewer-yield-main-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
   context.after(() => removeDataDir(dataDir));
@@ -541,6 +541,7 @@ test("automatic audits wait for the lead Agent to be idle", async (context) => {
   const project = await store.createProject("Reviewer yields to lead");
   const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
   await store.updateReviewerSpecialistSettings({ enabled: true });
+  await store.updateSessionReviewerSpecialistSettings(session.id, { automaticReviewEnabled: true, level: "deep" });
   const report = await store.createArtifactVersion({
     content: { hash: "d".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
@@ -548,6 +549,7 @@ test("automatic audits wait for the lead Agent to be idle", async (context) => {
   let mainBusy = true;
   let executions = 0;
   const coordinator = new ReviewerAuditCoordinator(store, { run: async () => { executions += 1; return []; } }, {
+    deepBatchQuietMs: 0,
     isMainAgentBusy: () => mainBusy,
     mainAgentBusyRetryMs: 10,
     quickBatchQuietMs: 0,
@@ -564,6 +566,32 @@ test("automatic audits wait for the lead Agent to be idle", async (context) => {
   assert.equal(executions, 1);
 });
 
+test("automatic Quick audits run after the quiet window while the lead Agent is busy", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `reviewer-quick-parallel-${Date.now()}-${process.pid}`);
+  await mkdir(dataDir, { recursive: true });
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Reviewer Quick parallel");
+  const session = await store.createSession(project.id, "Audit", {}, {}, { allowUnconfiguredModel: true });
+  await store.updateReviewerSpecialistSettings({ enabled: true });
+  const report = await store.createArtifactVersion({
+    content: { hash: "a".repeat(64), size: 1 }, kind: "markdown", logicalName: "report.md", mediaType: "text/markdown",
+    origin: "llm_declared", sessionId: session.id, sourcePath: "report.md",
+  });
+  let executions = 0;
+  const coordinator = new ReviewerAuditCoordinator(store, { run: async () => { executions += 1; return []; } }, {
+    isMainAgentBusy: () => true,
+    quickBatchQuietMs: 0,
+  });
+  const task = await coordinator.enqueueArtifactVersion({
+    artifactVersionId: report.version.id, contentHash: report.version.content.hash, mediaType: report.version.mediaType, sessionId: session.id,
+  });
+  assert.equal(task?.reviewLevel, "quick");
+  await waitFor(async () => (await store.listReviewerAuditTasks(session.id))[0]?.status === "completed");
+  assert.equal(executions, 1);
+});
+
 test("automatic audits share one process-wide background lane", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `reviewer-global-lane-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
@@ -574,6 +602,8 @@ test("automatic audits share one process-wide background lane", async (context) 
   const firstSession = await store.createSession(project.id, "First", {}, {}, { allowUnconfiguredModel: true });
   const secondSession = await store.createSession(project.id, "Second", {}, {}, { allowUnconfiguredModel: true });
   await store.updateReviewerSpecialistSettings({ enabled: true });
+  await store.updateSessionReviewerSpecialistSettings(firstSession.id, { automaticReviewEnabled: true, level: "deep" });
+  await store.updateSessionReviewerSpecialistSettings(secondSession.id, { automaticReviewEnabled: true, level: "deep" });
   const first = await store.createArtifactVersion({
     content: { hash: "e".repeat(64), size: 1 }, kind: "markdown", logicalName: "first.md", mediaType: "text/markdown",
     origin: "llm_declared", sessionId: firstSession.id, sourcePath: "first.md",
@@ -591,7 +621,7 @@ test("automatic audits share one process-wide background lane", async (context) 
       if (executions === 1) await gate;
       return [];
     },
-  }, { mainAgentBusyRetryMs: 10, quickBatchQuietMs: 0 });
+  }, { deepBatchQuietMs: 0, mainAgentBusyRetryMs: 10, quickBatchQuietMs: 0 });
   await coordinator.enqueueArtifactVersion({ artifactVersionId: first.version.id, contentHash: first.version.content.hash, mediaType: first.version.mediaType, sessionId: firstSession.id });
   await coordinator.enqueueArtifactVersion({ artifactVersionId: second.version.id, contentHash: second.version.content.hash, mediaType: second.version.mediaType, sessionId: secondSession.id });
   // Both enqueues schedule their own drain, so either Session can win the

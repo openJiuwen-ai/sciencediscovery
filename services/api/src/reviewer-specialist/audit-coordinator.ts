@@ -370,25 +370,25 @@ export class ReviewerAuditCoordinator {
             });
             continue;
           }
-          // Automatic review is intentionally low priority: it never starts
-          // while its Session's lead Agent has queued/running work, and the
-          // one process-wide lane prevents separate Sessions from piling up
-          // concurrent Deep model calls.
-          if (this.automaticTaskId) {
+          // Quick is a bounded local CAS check over an immutable Artifact, so
+          // it may run alongside the lead Agent after its quiet window. Deep
+          // remains low priority because it can consume the Session model.
+          const deep = task.reviewLevel === "deep";
+          if (deep && this.automaticTaskId) {
             delayedUntil = Date.now() + (this.scheduling.mainAgentBusyRetryMs ?? AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS);
             return;
           }
-          if (await this.scheduling.isMainAgentBusy?.(sessionId)) {
+          if (deep && await this.scheduling.isMainAgentBusy?.(sessionId)) {
             delayedUntil = Date.now() + (this.scheduling.mainAgentBusyRetryMs ?? AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS);
             return;
           }
           // The await above lets another Session's drain run, so check the
           // shared lane again before admitting this background task.
-          if (this.automaticTaskId) {
+          if (deep && this.automaticTaskId) {
             delayedUntil = Date.now() + (this.scheduling.mainAgentBusyRetryMs ?? AUTOMATIC_RETRY_WHILE_MAIN_BUSY_MS);
             return;
           }
-          this.automaticTaskId = task.id;
+          if (deep) this.automaticTaskId = task.id;
         }
         let controller: AbortController | undefined;
         try {

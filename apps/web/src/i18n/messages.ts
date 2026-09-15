@@ -4261,7 +4261,7 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "specialist.save": "保存专家",
   "specialist.create": "创建专家",
   "specialist.builtinSectionAria": "内置专家",
-  "specialist.reviewerName": "评审专家",
+  "specialist.reviewerName": "Reviewer Specialist",
   "specialist.reviewerHint": "可在每个会话中选择「快速」或「深入」级别。",
   "specialist.reviewerTurnOff": "关闭评审专家",
   "specialist.reviewerTurnOn": "开启评审专家",

@@ -276,9 +276,14 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .reviewer-finding-list li.warning b { color: var(--warning-strong); }
 .reviewer-finding-list li.critical b { color: var(--danger-deep); }
 .reviewer-finding-list li span { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.reviewer-source-issues { margin-top: 10px; }
+.reviewer-source-issues ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.reviewer-source-issues li { display: flex; flex-wrap: wrap; gap: 5px; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+.reviewer-source-issues li > b { color: var(--warning-strong); font-size: inherit; }
+.reviewer-source-issues li > b.contradicted { color: var(--danger-deep); }
 .reviewer-specialist-card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 10px; color: var(--text-faint); font-size: 10px; }
 .reviewer-specialist-card footer code { border-radius: 4px; background: var(--surface-soft); padding: 2px 5px; color: var(--text-secondary); }
-.reviewer-progress-card { display: grid; gap: 5px; border: 1px solid #d8e7f5; border-left: 4px solid #2d77df; border-radius: 9px; background: #f8fcff; padding: 11px 12px; }
+.reviewer-progress-card { display: grid; gap: 5px; border: 1px solid #d8e7f5; border-radius: 9px; background: #f8fcff; padding: 11px 12px; }
 .reviewer-progress-card strong { color: var(--text-strong); font-size: 12px; }
 .reviewer-progress-card small { color: var(--muted); font-size: 11px; }
 .reviewer-progress-card p { display: inline-flex; align-items: center; gap: 7px; margin: 3px 0 1px; color: #52739a; font-size: 12px; }

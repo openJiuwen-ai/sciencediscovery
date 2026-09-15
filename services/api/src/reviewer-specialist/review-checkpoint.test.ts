@@ -25,6 +25,7 @@ import type { CasStore } from "@sciencediscovery/cas";
 import type { SessionStore } from "../store.js";
 import {
   cancelReviewerCheckpoints,
+  citationReviewClaim,
   isReviewerReportCandidate,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
@@ -105,6 +106,14 @@ test("report candidate policy requires an approved report extension and matching
     version.mediaType = mediaType;
     assert.equal(isReviewerReportCandidate(artifact, version), false, `${name} is not a report candidate`);
   }
+});
+
+test("citation claim planner requires E3 evidence for exact numeric results", () => {
+  const { content, version } = fixture("The response rate was 42% [1].\n[1] Example et al. (2024). PMID: 12345678");
+  const claim = citationReviewClaim(content.toString("utf8"), version, {
+    key: "pmid:12345678", label: "PMID: 12345678", marker: "[1]", reference: "[1] Example et al. (2024). PMID: 12345678",
+  });
+  assert.equal(claim.requiredEvidenceLevel, "E3");
 });
 
 test("Quick checkpoint normalizes media type parameters before narrative checks", async () => {
@@ -311,6 +320,44 @@ test("Reviewer checkpoint feedback exposes findings to the next model context", 
   assert.match(partial, /available for the next main-Agent action/);
 });
 
+test("Reviewer checkpoint sends only source contradictions to the main-Agent context", () => {
+  const review = {
+    artifactContentHash: "hash",
+    artifactId: "artifact-1",
+    artifactLogicalName: "analysis.md",
+    artifactVersionId: "version-1",
+    checkpointId: "checkpoint-1",
+    createdAt: "2026-08-05T00:00:00.000Z",
+    decision: "ACCEPT_AND_PROCEED",
+    findings: [],
+    finishedAt: "2026-08-05T00:00:01.000Z",
+    id: "review-1",
+    reviewerSpecialistVersion: "deep",
+    reviewLevel: "deep" as const,
+    sessionId: "session-1",
+    sourceAssessments: [
+      {
+        assessment: { assessment: "SUPPORTED" as const, claimId: "claim-supported", locatorIds: ["locator-supported"], policyVersion: "2", rationale: "Supported." },
+        claim: { artifactVersionId: "version-1", citationKeys: ["pmid:1"], id: "claim-supported", kind: "citation" as const, requiredEvidenceLevel: "E1" as const, text: "Supported claim" },
+        locators: [],
+        snapshots: [],
+      },
+      {
+        assessment: { assessment: "INCONCLUSIVE" as const, claimId: "claim-inconclusive", locatorIds: [], policyVersion: "2", rationale: "Abstract was unavailable." },
+        claim: { artifactVersionId: "version-1", citationKeys: ["pmid:2"], id: "claim-inconclusive", kind: "citation" as const, requiredEvidenceLevel: "E1" as const, text: "Unverified claim" },
+        locators: [],
+        snapshots: [],
+      },
+    ],
+    status: "completed" as const,
+  } satisfies ArtifactReviewRun;
+
+  const content = reviewerCheckpointPromptContent([review]);
+  assert.doesNotMatch(content, /Source verification notes/);
+  assert.doesNotMatch(content, /pmid:2 is INCONCLUSIVE/);
+  assert.doesNotMatch(content, /pmid:1/);
+});
+
 test("Reviewer checkpoint failure is context, not an Artifact defect", () => {
   const content = reviewerCheckpointPromptContent([], "memory graph unavailable");
   assert.match(content, /Status: FAILED/);
@@ -343,6 +390,46 @@ test("Reviewer checkpoint keeps an operationally incomplete Deep stage out of ma
   assert.doesNotMatch(content, /incomplete|semantically verified/i);
 });
 
+test("Deep computation accepts a generated Artifact claim only with issued E4 locators", async () => {
+  const { cas, store, version } = fixture("Response rate was 42% [artifact1].");
+  version.references = [{ id: "generated-data-1", kind: "artifact", label: "artifact1", version: 1 }];
+  let issuedLocators: string[] = [];
+  const result = await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "Deep computation evidence",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v1",
+      computationSkillHash: "computation-v1",
+      execute: async (request) => {
+        if (request.prompt.includes("Issued E4 computation evidence")) {
+          issuedLocators = [...request.prompt.matchAll(/locator:[a-f0-9]+/gu)].map((match) => match[0]);
+          return JSON.stringify({ computation: {
+            assessment: "SUPPORTED", findings: [], locatorIds: issuedLocators, rationale: "The output data records 42%.", status: "COMPLETED",
+          } });
+        }
+        return JSON.stringify({ computation: { findings: [], status: "COMPLETED" } });
+      },
+      modelIdentity: "model-1",
+      probeComputation: async () => ({
+        materials: [
+          { content: "response_rate,42%", locator: { executionId: "execution-1", field: "artifact_content", outputPath: "outputs/result.csv" }, sourceId: "artifact-version:data-1", sourceType: "artifact" },
+          { content: "print('42%')", locator: { executionId: "execution-1", field: "source_code" }, sourceId: "execution:execution-1", sourceType: "code" },
+          { content: "42%", locator: { executionId: "execution-1", field: "stdout" }, sourceId: "execution:execution-1", sourceType: "execution" },
+        ],
+        status: "available" as const,
+      }),
+    },
+    sessionId: "session-1",
+    store,
+  });
+  assert.equal(issuedLocators.length, 3);
+  assert.equal(result.reviews[0]?.smartStatus, "completed");
+  assert.equal(result.reviews[0]?.sourceAssessments?.[0]?.assessment.assessment, "SUPPORTED");
+  assert.equal(result.reviews[0]?.sourceAssessments?.[0]?.claim.requiredEvidenceLevel, "E4");
+});
+
 test("Deep checkpoint reuses an identical locked Artifact without rereading CAS or graph", async () => {
   const { cas, casReadCount, saved, store, version } = fixture();
   let executions = 0;
@@ -358,17 +445,23 @@ test("Deep checkpoint reuses an identical locked Artifact without rereading CAS 
       }
       assert.match(request.prompt, /verify paper identity, then \(2\) check whether the nearby Artifact claim is supported/i);
       assert.match(request.prompt, /CITATION_CLAIM_NOT_SUPPORTED/i);
+      const locatorId = request.prompt.match(/locator:[a-f0-9]+/u)?.[0];
+      assert.ok(locatorId);
       return JSON.stringify({ citation: {
+        assessment: "CONTRADICTED",
         findings: [{
           code: "CITATION_CLAIM_NOT_SUPPORTED",
           evidenceAliases: [],
           message: "The cited paper metadata does not establish the stated measurement.",
           severity: "warning",
         }],
+        locatorIds: [locatorId],
+        rationale: "The issued source snapshot does not support the stated measurement.",
         status: "COMPLETED",
       } });
     },
     modelIdentity: "model-1",
+    probeCitation: async () => ({ content: "Verified source metadata.", sourceId: "arxiv:1706.03762", status: "available" as const }),
   };
   const traceArtifactProvenance = async () => {
     provenanceQueries += 1;
@@ -526,6 +619,102 @@ test("Deep review runs Computation for an Evidence-backed report without a bibli
   assert.equal(result.reviews[0]?.smartStatus, "completed");
 });
 
+test("Deep Citation remains independently verifiable when ScienceMemory is disabled", async () => {
+  const { cas, store, version } = fixture([
+    "The reported intervention improved the endpoint [1].",
+    "[1] Example et al. (2024). PMID: 12345678",
+  ].join("\n"));
+  const result = await runReviewerCheckpoint({
+    artifactVersionIds: [version.id],
+    cas,
+    parentRunId: "run-1",
+    reason: "Citation review without ScienceMemory",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v2",
+      computationSkillHash: "computation-v2",
+      execute: async (request) => {
+        assert.equal(request.stage, "citation");
+        const locatorId = request.prompt.match(/locator:[a-f0-9]+/u)?.[0];
+        assert.ok(locatorId, "the model receives only issued source locators");
+        return JSON.stringify({ citation: {
+          assessment: "SUPPORTED",
+          findings: [],
+          locatorIds: [locatorId],
+          rationale: "The governed metadata identifies the cited record; available abstract text is consistent with the bounded claim.",
+          status: "COMPLETED",
+        } });
+      },
+      modelIdentity: "model-1",
+      probeCitation: async () => ({
+        content: JSON.stringify({ abstract: "The intervention improved the endpoint.", identifier: "12345678", title: "Example study" }),
+        sourceId: "pmid:12345678",
+        sourceType: "abstract",
+        status: "available",
+      }),
+    },
+    sessionId: "session-1",
+    store,
+    // Deliberately omit graph tracers: Citation must not depend on ScienceMemory.
+  });
+
+  const record = result.reviews[0]?.sourceAssessments?.[0];
+  assert.equal(result.reviews[0]?.smartStatus, "completed");
+  assert.equal(record?.assessment.assessment, "SUPPORTED");
+  assert.equal(record?.assessment.locatorIds.length, 1);
+  assert.equal(record?.snapshots[0]?.sourceId, "pmid:12345678");
+  assert.equal(record?.snapshots[0]?.availability, "available");
+});
+
+test("Deep Citation discards a strong model verdict without an issued locator", async () => {
+  const { cas, store, version } = fixture("The claim is contradicted [1].\n[1] Example et al. (2024). PMID: 12345678");
+  const result = await runReviewerCheckpoint({
+    artifactVersionIds: [version.id],
+    cas,
+    parentRunId: "run-1",
+    reason: "Reject unanchored citation verdict",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v2",
+      computationSkillHash: "computation-v2",
+      execute: async () => JSON.stringify({ citation: {
+        assessment: "CONTRADICTED",
+        findings: [{ code: "CITATION_CLAIM_NOT_SUPPORTED", evidenceAliases: [], message: "The model says this is contradicted.", severity: "warning" }],
+        locatorIds: ["locator:not-issued"],
+        rationale: "Untrusted locator.",
+        status: "COMPLETED",
+      } }),
+      modelIdentity: "model-1",
+      probeCitation: async () => ({ content: "Verified metadata.", sourceId: "pmid:12345678", status: "available" }),
+    },
+    sessionId: "session-1",
+    store,
+  });
+
+  assert.equal(result.reviews[0]?.smartStatus, "inconclusive");
+  assert.deepEqual(result.reviews[0]?.smartFindings, []);
+  assert.equal(result.reviews[0]?.sourceAssessments?.[0]?.assessment.assessment, "INCONCLUSIVE");
+});
+
+test("Deep Citation rejects an E1 verdict for a numeric claim that requires E3 evidence", async () => {
+  const { cas, store, version } = fixture("The response rate was 42% [1].\n[1] Example et al. (2024). PMID: 12345678");
+  let executions = 0;
+  const result = await runReviewerCheckpoint({
+    artifactVersionIds: [version.id], cas, parentRunId: "run-1", reason: "Numeric evidence gate", reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v2", computationSkillHash: "computation-v2", modelIdentity: "model-1",
+      execute: async () => { executions += 1; return JSON.stringify({}); },
+      probeCitation: async () => ({ content: "Verified abstract metadata.", sourceId: "pmid:12345678", status: "available" }),
+    },
+    sessionId: "session-1", store,
+  });
+  const record = result.reviews[0]?.sourceAssessments?.[0];
+  assert.equal(record?.claim.requiredEvidenceLevel, "E3");
+  assert.equal(record?.assessment.assessment, "INCONCLUSIVE");
+  assert.match(record?.assessment.rationale ?? "", /No issued E3 source locator/u);
+  assert.equal(executions, 0);
+});
+
 test("Deep review does not duplicate Quick missing Evidence mapping as semantic unavailable", async () => {
   const { cas, store, version } = fixture("The rate was 39.7% [ev1].");
   let executions = 0;
@@ -674,9 +863,18 @@ test("Deep Citation queues every identifiable reference and retries only the fai
         attempts.set(key, count);
         seen.push(`${key}:${count}`);
         if (key === "pmid:11111111" && count === 1) throw new Error("temporary gateway error");
-        return JSON.stringify({ citation: { findings: [], status: "COMPLETED" } });
+        const locatorId = request.prompt.match(/locator:[a-f0-9]+/u)?.[0];
+        assert.ok(locatorId);
+        return JSON.stringify({ citation: {
+          assessment: "SUPPORTED",
+          findings: [],
+          locatorIds: [locatorId],
+          rationale: "The governed metadata matches the bounded citation claim.",
+          status: "COMPLETED",
+        } });
       },
       modelIdentity: "model-1",
+      probeCitation: async (request) => ({ content: `Verified source ${request.citation?.key}.`, sourceId: request.citation?.key, status: "available" as const }),
     },
     sessionId: "session-1",
     store,
@@ -687,6 +885,41 @@ test("Deep Citation queues every identifiable reference and retries only the fai
   assert.equal(result.reviews[0]?.citationTasks?.[0]?.attempts, 2);
   assert.equal(progress.at(-1)?.completed, 2);
   assert.equal(progress.at(-1)?.failed, 0);
+});
+
+test("Deep Citation opens one provider cooldown circuit after a 429", async () => {
+  const { cas, store, version } = fixture([
+    "The first claim uses [1]; the second claim uses [2].",
+    "[1] Alpha et al. (2020). PMID: 11111111",
+    "[2] Beta et al. (2021). PMID: 22222222",
+  ].join("\n"));
+  let probes = 0;
+  const result = await runReviewerCheckpoint({
+    artifactVersionIds: [version.id],
+    cas,
+    parentRunId: "run-1",
+    reason: "Citation provider cooldown",
+    reviewLevel: "deep",
+    semanticReview: {
+      citationSkillHash: "citation-v1",
+      computationSkillHash: "computation-v1",
+      execute: async (request) => request.stage === "computation"
+        ? JSON.stringify({ computation: { findings: [], status: "COMPLETED" } })
+        : assert.fail("citation model must not run while provider is rate-limited"),
+      modelIdentity: "model-1",
+      probeCitation: async () => {
+        probes += 1;
+        throw new Error("Brave returned HTTP 429 Retry after the provider cooldown.");
+      },
+    },
+    sessionId: "session-1",
+    store,
+  });
+
+  assert.equal(probes, 1);
+  assert.equal(result.reviews[0]?.smartStatus, "inconclusive");
+  assert.deepEqual(result.reviews[0]?.citationTasks?.map((task) => task.status), ["inconclusive", "inconclusive"]);
+  assert.deepEqual(result.reviews[0]?.citationTasks?.map((task) => task.attempts), [1, 0]);
 });
 
 test("Deep checkpoints serialize per Session and avoid concurrent duplicate model calls", async () => {

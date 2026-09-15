@@ -20,6 +20,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ReviewerPanel } from "../src/ReviewerPanel.js";
+import { LocaleProvider } from "../src/i18n/index.js";
 
 function review(overrides: Partial<ArtifactReviewRun> = {}): ArtifactReviewRun {
   return {
@@ -95,6 +96,28 @@ test("ReviewerPanel calls a missing academic citation a standard citation", () =
 
   assert.match(html, /Standard citation missing/);
   assert.doesNotMatch(html, /Citation marker missing/);
+});
+
+test("ReviewerPanel localizes review status and finding labels while retaining the Reviewer Specialist name", () => {
+  const finding = {
+    code: "CITATION_MARKER_MISSING",
+    evidenceRefs: ["artifact:version-1"],
+    id: "finding-zh-1",
+    message: "Add [1] next to the claim.",
+    severity: "warning" as const,
+    status: "open" as const,
+  };
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" },
+    createElement(ReviewerPanel, {
+      reviews: [review({ decision: "REVISE_AND_RETRY", findings: [finding] })],
+      toolCallId: "review-call",
+    }),
+  ));
+
+  assert.match(html, /Reviewer Specialist/);
+  assert.match(html, /只读/);
+  assert.match(html, /发现告警/);
+  assert.match(html, /缺少规范引用标记/);
 });
 
 test("ReviewerPanel keeps only actionable findings and hides Deep operational incompleteness", () => {
