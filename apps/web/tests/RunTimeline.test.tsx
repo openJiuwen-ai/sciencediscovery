@@ -861,6 +861,8 @@ test("finish gate badges render as boundary notes with the verdict text", () => 
   assert.match(html, /boundary-note/);
   assert.match(html, /Finish gate \(turn 5\)/);
   assert.match(html, /final self-audit/);
+});
+
 test("an approval switch between deltas of one response keeps a single markdown container", () => {
   // Issue #76 方式 B：同一次模型响应的两个 delta 之间插入审批切换。
   const entries = apply([
