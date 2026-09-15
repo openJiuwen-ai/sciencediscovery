@@ -5,6 +5,7 @@
 - [整体运行时架构](architecture.md) — 常驻进程、模块边界和跨进程时序。
 - [控制面](control-plane.md) — `services/api` 的职责、存储与运行生命周期。
 - [Agent 后端](agent-backend.md) — Node 原生 agent loop 的模块结构、模型传输、延迟工具与历史压缩。
+- [组件与插件机制](plugins.md) — 能力归属、单向依赖、公开插件入口、API/Web 扩展点、固定 StateView 与受控候选应用。
 - [沙箱执行](sandbox-execution.md) — bubblewrap/seccomp、科学环境和持久内核机制。
 - [Project/Session Runner 继承](runner-inheritance.md) — Project 提供默认值，Session 可独立选机，不是权限子集。
 - [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — 昇腾设备不能稳定直通 bwrap 时的宿主白名单作业方案。

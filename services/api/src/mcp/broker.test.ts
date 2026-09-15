@@ -32,6 +32,32 @@ import type { McpCatalog, McpInvokeResponse, McpToolResult } from "@sciencedisco
 import type { ObserveToolCallPayload } from "@sciencediscovery/memory";
 import { McpSourceCatalog } from "@sciencediscovery/data-source";
 
+test("direct broker calls enforce every source plugin while frozen Run selections remain stable", async context => {
+  const dataDir = resolve(process.cwd(), ".tmp", `mcp-plugin-gates-${Date.now()}-${process.pid}`);
+  const store = new SessionStore(dataDir);
+  await store.load();
+  const project = await store.createProject("Source plugins");
+  const session = await store.createSession(project.id, "Sources", {}, {}, { allowUnconfiguredModel: true });
+  const registry = createBuiltinMcpSourceRegistry();
+  const ids = registry.list().map(source => source.manifest.id);
+  await store.replaceProjectSettings(project.id, { enabledConnectorIds: ids,
+    plugins: Object.fromEntries(ids.map(id => [`connector.${id}`, { enabled: false }])) });
+  const unexpected = async (): Promise<never> => { throw new Error("Unexpected MCP transport access"); };
+  const gateway: McpTransportClient = { catalog: unexpected, reload: unexpected, invoke: unexpected };
+  const broker = new McpGovernanceBroker(dataDir, store, registry, new McpSourceCatalog(registry, gateway), gateway);
+  context.after(async () => { broker.close(); store.close(); await rm(dataDir, { recursive: true, force: true }); });
+  for (const source of registry.list()) {
+    const sourceId = source.manifest.id;
+    registry.upsert({ ...source, validateInput: () => { throw new Error("Reached validation after selection gate"); } });
+    const request = { projectId: project.id, sessionId: session.id, sourceId,
+      toolId: Object.keys(source.manifest.tools)[0]!, input: {}, toolCallId: `call-${sourceId}`, turnId: "turn" };
+    await assert.rejects(broker.invoke(request), /not enabled for this session/);
+    await assert.rejects(broker.invoke({ ...request, allowedSourceIds: [] }), /not enabled for this session/);
+    // A trusted existing Run keeps its original scope even after project settings change.
+    await assert.rejects(broker.invoke({ ...request, allowedSourceIds: [sourceId] }), /Reached validation after selection gate/);
+  }
+});
+
 test("governance broker invokes native UniProt MCP through the gateway and caches normalized records", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `mcp-native-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });

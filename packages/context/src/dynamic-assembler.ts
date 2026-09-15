@@ -32,6 +32,7 @@ import {
   type TokenEstimator,
 } from "./token-estimator.js";
 import { ContextValidator } from "./validator.js";
+import type { StateView } from "./state-view.js";
 
 export interface DynamicRenderedContext<TMessage extends RuntimeMessage = RuntimeMessage> {
   compaction: HistoryCompactionStatistics;
@@ -56,6 +57,7 @@ export interface DynamicContextTrace<TMessage extends RuntimeMessage = RuntimeMe
 }
 
 export interface DynamicContextAssemblerOptions<TMessage extends RuntimeMessage> {
+  stateView?(): StateView;
   budget: ContextBudgetConfig;
   compactor: HistoryCompactor<TMessage>;
   contextId: string;
@@ -114,6 +116,7 @@ implements ContextAssembler<TMessage, ModelInput<TMessage>> {
     try {
       const collect = async (visibleHistory: readonly TMessage[]) => {
         collection = await this.options.registry.collectDetailed({
+          ...(this.options.stateView ? { stateView: this.options.stateView() } : {}),
           contextId: this.options.contextId,
           history: visibleHistory,
           scope: this.options.scope,

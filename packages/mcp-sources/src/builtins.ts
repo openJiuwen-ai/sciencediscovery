@@ -17,9 +17,9 @@ import { uniprotMcpSource } from "./uniprot.js";
 import { createPublicBiomedSources } from "./public-biomed.js";
 import { createLlmWikiSource } from "./llm-wiki.js";
 
-export function createBuiltinMcpSourceRegistry(): McpSourceRegistry {
+export function createBuiltinMcpSourceRegistry(options: { exclude?: readonly string[] } = {}): McpSourceRegistry {
   const registry = createMcpSourceRegistry();
-  registry.register(uniprotMcpSource);
+  if (!options.exclude?.includes("uniprot")) registry.register(uniprotMcpSource);
   try {
     registry.register(createLlmWikiSource());
   } catch {

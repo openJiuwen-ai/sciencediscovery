@@ -84,6 +84,7 @@ export interface ScriptedTextStep {
 export type ScriptedModelStep = ScriptedTextStep | ScriptedToolStep;
 
 export interface ScriptedModelCall {
+  offeredTools?: string[];
   arguments?: Record<string, unknown>;
   route: "main" | "subagent";
   step: number;
@@ -238,6 +239,7 @@ export function scriptedModel(
         sequence += 1;
         const id = `chatcmpl-journey-${sequence}`;
         calls.push({
+          offeredTools: body.tools?.map((tool) => tool.function?.name ?? ""),
           ...("tool" in step ? { arguments: step.arguments, tool: step.tool } : {}),
           route,
           step: stepIndex,

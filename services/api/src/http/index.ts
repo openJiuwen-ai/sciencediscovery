@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
+import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
+import { handlePluginRequest } from "../plugins/http.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
@@ -437,8 +439,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             return check.authorization;
           },
         };
-        const reviewerSkills = skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
+        const reviewerSkills = runtimeSettings.plugins?.skill?.enabled === false ? [] : skillCatalog.resolve(["citation-reviewer", "computation-reviewer", "literature-searcher"]);
+        const reviewerConnectorIds = filterEnabledMcpSources(runtimeSettings.enabledConnectorIds, runtimeSettings.plugins);
         const reviewerWorkspace: WorkspaceAgentOptions = {
+          pluginSettings: structuredClone(runtimeSettings.plugins),
           config: {
             apiToken,
             apiProtocol: selectedModel.apiProtocol,
@@ -450,12 +454,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             thinkingEffort: selectedModel.thinkingEffort,
             thinkingMode: selectedModel.thinkingMode,
           },
-          enabledConnectorIds: runtimeSettings.enabledConnectorIds,
+          enabledConnectorIds: reviewerConnectorIds,
           executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
           executeShell: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
           ...createMcpWorkspaceTools({
             artifactManager, broker: mcpBroker, catalog: mcpCatalog,
-            enabledSourceIds: runtimeSettings.enabledConnectorIds,
+            enabledSourceIds: reviewerConnectorIds,
             emitPermissionRequest: () => undefined, paperService, pauseExternalWait: () => () => undefined,
             permission, projectId: session.projectId, registry: mcpRegistry, sessionId: task.sessionId, store,
             suppressMemoryGraphMirror: true, turnId: task.toolCallId,
@@ -604,6 +608,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     .then(() => skillLibraryCatalog.load())
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
+    .then(() => store.plugins.bindAssets(async (settings) => {
+      const refs = await skillLibraryCatalog.resolveEnabledRefs(settings.enabledSkillLibraries);
+      const skills = skillCatalog.resolve(settings.enabledSkillIds ?? []).map(({id,hash,revision,version}) => ({id,hash,revision:revision ?? null,version}));
+      return {settings:{...settings,enabledSkillLibraries:settings.enabledSkillLibraries?.map((mount) => ({
+        ...mount,versionId:refs.find((ref) => ref.libraryId===mount.libraryId && (!mount.versionId || mount.versionId==="head" || ref.versionId===mount.versionId))!.versionId,
+      }))},assets:{skills,libraries:refs}};
+    }))
     .then(() => reviewerAuditCoordinator.resume())
     .then(() => undefined);
 
@@ -801,6 +812,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, store.listProjects());
         return;
       }
+      if (await handlePluginRequest(request, response, url, store.plugins, () => readJson(request))) return;
       if (await handleCustomMcpRequest(request, response, url, platform.customMcpServers, () => readJson(request), { broker: mcpBroker, registry: mcpRegistry, store })) return;
       if (request.method === "GET" && url.pathname === "/api/mcp/sources") {
         sendJson(response, 200, mcpRegistry.listManifests().map((manifest) => ({
@@ -3706,6 +3718,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const closed = new Promise<void>((resolveClose) => { resolveClosed = resolveClose; });
   const cleanup = () => cleanupPromise ??= (async () => {
     ideaResearch.close();
+    await (await platform.connectorPlugins).dispose();
     remoteCompute.close();
     mcpBroker.close();
     webBroker.close();

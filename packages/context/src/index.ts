@@ -17,3 +17,5 @@ export * from "./search-index.js";
 export * from "./token-estimator.js";
 export * from "./trace.js";
 export * from "./validator.js";
+export * from "./state-view.js";
+export * from "./state-coordinator.js";

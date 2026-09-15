@@ -111,7 +111,7 @@ function editor(settings: RuntimeSettingsDetails, key?: string) {
 }
 
 function settingsControls(root: ReactTestInstance) {
-  const selects = root.findAllByType("select");
+  const selects = root.findAllByType("select").filter((select) => !select.props["aria-label"]?.endsWith(" plugin"));
   assert.equal(selects.length, 3);
   return {
     connectorMode: selects[1]!,

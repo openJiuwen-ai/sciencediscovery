@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Type } from "typebox";
 import type { ContextContributor } from "@sciencediscovery/context";
+import { createStateView } from "@sciencediscovery/context";
 import { ToolRegistry } from "@sciencediscovery/tools";
 
 import {
@@ -129,11 +130,12 @@ test("plan context traces an unobservable history anchor without guessing stalen
     },
     async update() { throw new Error("not used"); },
   };
-  const contributor = createPlanContextFactory(store, ["subagent"]).create({
+  const contributor = createPlanContextFactory(["subagent"]).create({
     contextId: "run-1",
     scope: "subagent",
   }) as ContextContributor;
   const contribution = await contributor.contribute({
+    stateView: createStateView({id:"fixed",scope:"subagent",components:[{id:"plan",schemaVersion:1,revision:"r",fidelity:"captured",value:await store.latest()}]}),
     contextId: "run-1",
     history: [{ role: "user", content: "continue" }],
     latestUserInput: "continue",
@@ -149,4 +151,9 @@ test("plan context traces an unobservable history anchor without guessing stalen
     toolCallId: "compacted-away",
     updatedAt: "2026-09-09T00:00:00.000Z",
   });
+});
+
+test("Plan projection refuses a live-store fallback without a checkpoint", async () => {
+  const contributor=createPlanContextFactory(["main"]).create({contextId:"r",scope:"main"}) as ContextContributor;
+  await assert.rejects(contributor.contribute({contextId:"r",scope:"main",history:[],latestUserInput:"",turn:1,signal:new AbortController().signal}),/fixed StateView/);
 });

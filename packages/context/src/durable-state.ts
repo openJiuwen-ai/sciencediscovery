@@ -4,6 +4,7 @@
 import type { RuntimeMessage, RuntimeToolCall, ToolDispatchResult } from "@sciencediscovery/runtime-core";
 
 import type { AgentScope, ContextContribution, ContextContributor } from "./contributor.js";
+import type { StateView } from "./state-view.js";
 
 const MAX_RECORDS_PER_CHANNEL = 5;
 const MAX_VALUE_CHARACTERS = 3_000;
@@ -241,12 +242,13 @@ export class DurableContextStore {
 export class DurableSkillStateContributor<TMessage extends RuntimeMessage = RuntimeMessage>
 implements ContextContributor<TMessage> {
   readonly id = "skills.durable-state";
+  readonly stateReads = ["context.durable"];
   readonly required = true;
 
   constructor(private readonly store: DurableContextStore, readonly scopes: readonly AgentScope[]) {}
 
-  async contribute(request: { history: readonly TMessage[] }): Promise<ContextContribution<TMessage>> {
-    const skills = this.store.snapshot().skills;
+  async contribute(request: { history: readonly TMessage[]; stateView?: StateView }): Promise<ContextContribution<TMessage>> {
+    const skills = (request.stateView ? request.stateView.read<DurableContextSnapshot>("context.durable") : this.store.snapshot()).skills;
     if (!skills.length) return {};
     const visible = new Set<string>();
     for (const message of request.history) {
@@ -265,6 +267,7 @@ implements ContextContributor<TMessage> {
 }
 
 class DurableRecordsContributor<TMessage extends RuntimeMessage> implements ContextContributor<TMessage> {
+  readonly stateReads = ["context.durable"];
   readonly required = false;
 
   constructor(
@@ -274,8 +277,8 @@ class DurableRecordsContributor<TMessage extends RuntimeMessage> implements Cont
     private readonly channel: "artifacts" | "delegations" | "memory" | "reviews",
   ) {}
 
-  async contribute(): Promise<ContextContribution<TMessage>> {
-    const records = this.store.snapshot()[this.channel];
+  async contribute(request: { stateView?: StateView } = {}): Promise<ContextContribution<TMessage>> {
+    const records = (request.stateView ? request.stateView.read<DurableContextSnapshot>("context.durable") : this.store.snapshot())[this.channel];
     if (!records.length) return {};
     return { messages: [hiddenDataMessage<TMessage>(this.channel, records.map(renderRecord))] };
   }

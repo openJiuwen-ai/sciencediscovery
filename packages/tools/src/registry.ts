@@ -62,6 +62,8 @@ export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
    * to a random per-registry (per-run) value; injectable for tests.
    */
   untrustedFenceNonce?: string;
+  /** Required bounded-state reduction. Failure stops the turn; observers remain best-effort. */
+  commitResult?(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number }): Promise<void>;
 }
 
 export interface ToolBatchSupersedeDecision {
@@ -358,6 +360,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       content = guarded.content;
       outputRecord = guarded.record;
     }
+    await this.options.commitResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });
     try { this.options.onResult?.({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence }); } catch { /* observer isolation */ }
     // Fence last: storage (recordResult), bounding (outputGuard) and observers
     // (onResult) all see the raw content; only the model-visible text (history
@@ -383,6 +386,7 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
     const details = { ok: true, superseded: true, supersededBy: byCallId };
     const content = JSON.stringify(details);
     if (this.options.recordResult) await this.options.recordResult({ call, content, details, isError: false, sequence });
+    await this.options.commitResult?.({ call, content, details, isError: false, sequence });
     try { this.options.onResult?.({ call, content, details, isError: false, sequence }); } catch { /* observer isolation */ }
     return { content, details, isError: false, message: this.options.createResultMessage(call, content) };
   }

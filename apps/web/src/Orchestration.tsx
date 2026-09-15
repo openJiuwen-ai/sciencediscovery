@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ProjectRecordSlot } from "./plugins/project-views.js";
 import { useEffect, useState, type FormEvent } from "react";
 
 import type {
@@ -40,11 +41,9 @@ type Translate = (key: MessageKey, variables?: Record<string, number | string>) 
 
 function visibleReviewerLevel(level: ReviewerSpecialistLevel): VisibleReviewerLevel { return level; }
 
-function planSummary(plan: RunPlanSnapshot, t: Translate, terminal = false): string {
-  const completed = plan.items.filter((item) => item.status === "completed").length;
-  const active = plan.items.filter((item) => item.status === "in_progress").length;
-  const summary = t("plan.summary", { completed, total: plan.items.length });
-  return active && !terminal ? `${summary} · ${t("plan.summaryActive", { active })}` : summary;
+export function PlanCard(props: { expanded: boolean; onToggle:(expanded:boolean)=>void; plan:RunPlanSnapshot; terminal?:boolean }) {
+ const {t}=useLocale();
+ return <ProjectRecordSlot kind="plan.card" {...props} t={t} icons={{check:<CheckIcon size={13}/>,spinner:<SpinnerIcon size={14}/>,chevron:<ChevronRightIcon size={15}/>}} />;
 }
 
 function PlanItemStatus({ status }: { status: RunPlanSnapshot["items"][number]["status"] }) {
@@ -166,45 +165,6 @@ export function SessionPlanCard({
   );
 }
 
-
-export function PlanCard({
-  expanded,
-  onToggle,
-  plan,
-  terminal = false,
-}: {
-  expanded: boolean;
-  onToggle: (expanded: boolean) => void;
-  plan: RunPlanSnapshot;
-  terminal?: boolean;
-}) {
-  const { t } = useLocale();
-  const completed = plan.items.length > 0 && plan.items.every((item) => item.status === "completed");
-  const status = !plan.items.length ? t("plan.badge.cleared")
-    : completed ? t("plan.status.completed")
-    : terminal ? t("record.finished")
-    : plan.items.some((item) => item.status === "in_progress") ? t("plan.status.inProgress")
-    : t("plan.status.pending");
-  const title = t("plan.title", { agent: plan.agentId });
-  return (
-    <article className="plan-card recorded">
-      <button aria-expanded={expanded} className="plan-card-heading" onClick={() => onToggle(!expanded)} type="button">
-        <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-        <span className="plan-card-label"><strong title={title}>{title}</strong><small>{planSummary(plan, t, terminal)}</small></span>
-        <i>{status}</i>
-      </button>
-      {expanded ? <div className="plan-card-body">
-        {plan.explanation ? <p>{plan.explanation}</p> : null}
-        <ol className="plan-item-list">{plan.items.map((item, index) => <li key={`${index}:${item.step}`} data-status={item.status}>
-          <PlanItemStatus status={item.status} />
-          <span>{item.step}</span>
-        </li>)}</ol>
-      </div> : null}
-    </article>
-  );
-}
-
-
 export function OrchestrationPanel({
   busy,
   expandedCards,
@@ -218,7 +178,7 @@ export function OrchestrationPanel({
   busy?: boolean;
   onDecidePlan?: (plan: SessionPlan, decision: "approve" | "reject", reason?: string) => void;
   onRevisePlan?: (plan: SessionPlan, body: RevisePlanRequest) => Promise<boolean>;
-  /** Model-declared snapshot plans (update_plan). */
+  /** Model-declared snapshot plans (update_plan), rendered through the plugin slot. */
   plans: RunPlanSnapshot[];
   /** Approval-gated session plans (V3-C2 lifecycle). */
   sessionPlans?: SessionPlan[];
@@ -239,16 +199,16 @@ export function OrchestrationPanel({
         plan={plan}
       />;
     })}
-    {plans.map((plan) => {
-      const cardId = activityCardId("plan", `${plan.runId}:${plan.agentId}`);
-      return <PlanCard
-        expanded={Boolean(expandedCards[cardId])}
-        key={`${plan.runId}:${plan.agentId}`}
-        onToggle={(expanded) => onToggleCard(cardId, expanded)}
-        plan={plan}
-        terminal={terminalRunIds.has(plan.runId)}
-      />;
-    })}
+    {plans.length ? <ProjectRecordSlot
+      cardIdFor={(runId, agentId) => activityCardId("plan", `${runId}:${agentId}`)}
+      expandedCards={expandedCards}
+      icons={{ check: <CheckIcon size={13} />, chevron: <ChevronRightIcon size={15} />, spinner: <SpinnerIcon size={14} /> }}
+      kind="plan.panel"
+      onToggleCard={onToggleCard}
+      plans={plans}
+      t={t}
+      terminalRunIds={terminalRunIds}
+    /> : null}
   </section>;
 }
 

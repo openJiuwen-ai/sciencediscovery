@@ -184,6 +184,8 @@ import {
   type RunTimelineEntry,
 } from "./timeline/RunTimeline.js";
 import { globalSettingsDraft, ScopedSettingsEditor } from "./ScopedSettingsEditor.js";
+import { PluginWebHost } from "./plugins/host.js";
+import type { PluginComposition } from "./api/plugins.js";
 import { duplicateModelProfileId } from "./modelLabels.js";
 import { ArtifactLifecycleControls, ArtifactLifecycleProvider } from "./ArtifactLifecycleControls.js";
 import { SkillManager } from "./SkillManager.js";
@@ -1190,6 +1192,7 @@ export function App() {
   const [projectSettings, setProjectSettings] = useState<RuntimeSettingsDetails>();
   const [settingsTarget, setSettingsTarget] = useState<ResourceTarget>();
   const [scopedSettings, setScopedSettings] = useState<RuntimeSettingsDetails>();
+  const [scopedSettingsRevision, setScopedSettingsRevision] = useState<string>();
   const [renameTarget, setRenameTarget] = useState<InlineRenameTarget>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameSavingKeys, setRenameSavingKeys] = useState<ReadonlySet<string>>(() => new Set());
@@ -3050,19 +3053,25 @@ export function App() {
   async function openScopedSettings(target: ResourceTarget): Promise<void> {
     setSettingsTarget(target);
     setScopedSettings(undefined);
+    setScopedSettingsRevision(undefined);
     await settingsErrorRouter.run("loadScopedSettings", async () => {
-      setScopedSettings(target.kind === "project"
-        ? await client.getProjectSettings(target.id)
-        : await client.getSessionSettings(target.id));
+      const scope = target.kind === "project" ? {projectId:target.id} :
+        {projectId:sessions.find((item) => item.id === target.id)?.projectId ?? activeProjectId!,sessionId:target.id};
+      const composition = await client.getPluginComposition(scope);
+      setScopedSettings(composition.settings);
+      setScopedSettingsRevision(composition.revision);
     }, t("error.loadScopedSettings"));
   }
 
   async function saveScopedSettings(overrides: RuntimeSettingsOverrides): Promise<void> {
     if (!settingsTarget) return;
     await settingsErrorRouter.run("saveScopedSettings", async () => {
-      const updated = settingsTarget.kind === "project"
-        ? await client.replaceProjectSettings(settingsTarget.id, overrides)
-        : await client.replaceSessionSettings(settingsTarget.id, overrides);
+      const scope = settingsTarget.kind === "project" ? {projectId:settingsTarget.id} :
+        {projectId:sessions.find((item) => item.id === settingsTarget.id)?.projectId ?? activeProjectId!,sessionId:settingsTarget.id};
+      const composition = await client.pluginBridge<PluginComposition>({apiVersion:1,pluginId:"host.settings",scope,
+        kind:"command",method:"replace",input:{expectedRevision:scopedSettingsRevision,overrides}});
+      const updated = composition.settings;
+      setScopedSettingsRevision(composition.revision);
       setScopedSettings(updated);
       if (settingsTarget.kind === "project") {
         setProjects(await client.listProjects());
@@ -4216,6 +4225,7 @@ export function App() {
   }
 
   return (
+    <PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
@@ -5248,6 +5258,7 @@ export function App() {
       /> : null}
 
     </div>
+    </PluginWebHost>
   );
 }
 

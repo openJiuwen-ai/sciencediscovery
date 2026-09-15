@@ -20,6 +20,25 @@ test("rejects duplicate tool names when freezing the run registry", () => {
   assert.throws(() => new ToolRegistry([tool, tool], { createResultMessage: resultMessage }), /Duplicate tool name/);
 });
 
+test("state commits are awaited and fail closed while observers remain isolated", async () => {
+  let committed = false;
+  const make = (fail: boolean) => new ToolRegistry([{
+    name: "echo", label: "echo", description: "echo", parameters: Type.Object({}),
+    async execute() { return { content: [{ type: "text" as const, text: "result" }] }; },
+  }], {
+    async commitResult({ content }) {
+      await Promise.resolve();
+      assert.equal(content, "result");
+      if (fail) throw new Error("state commit failed");
+      committed = true;
+    },
+    onResult() { assert.ok(committed); throw new Error("observer failed"); },
+    createResultMessage: resultMessage,
+  });
+  assert.equal((await make(false).execute({ id: "one", name: "echo", args: {} }, new AbortController().signal)).content, "result");
+  await assert.rejects(make(true).execute({ id: "two", name: "echo", args: {} }, new AbortController().signal), /state commit failed/);
+});
+
 test("executes tools and creates the canonical result message", async () => {
   const registry = new ToolRegistry([{
     name: "echo", label: "echo", description: "echo", parameters: Type.Object({ value: Type.String() }),

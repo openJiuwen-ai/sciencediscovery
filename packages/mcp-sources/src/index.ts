@@ -13,6 +13,7 @@
 // limitations under the License.
 
 export { createMcpSourceRegistry, McpSourceRegistry } from "./registry.js";
+export { filterEnabledMcpSources } from "./selection.js";
 export { createBuiltinMcpSourceRegistry } from "./builtins.js";
 export { createLlmWikiSource } from "./llm-wiki.js";
 export { UNIPROT_MCP_MANIFEST, uniprotMcpSource } from "./uniprot.js";

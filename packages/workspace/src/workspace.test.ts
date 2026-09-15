@@ -32,7 +32,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath } from "./workspace.js";
+import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -78,6 +78,9 @@ test("run-scoped extra tools are injected before the established allow/deny poli
     toolPolicy: { disallowed: ["tree_view"] },
   });
   assert.equal(denied.some((tool) => tool.name === "tree_view"), false);
+  // A scheduler contribution must not duplicate host-owned workflow tools.
+  const schedulerOptions = { ...options, toolPolicy: { allowed: ["tree_view"] } };
+  assert.deepEqual(createSubagentTools(schedulerOptions), []);
 });
 
 test("run_shell selects the latest environment by ID and preserves its execution parameters", async (context) => {

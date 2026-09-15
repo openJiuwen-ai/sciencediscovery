@@ -677,7 +677,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     : undefined;
   const skillPackagesRoot = options.skillPackagesRoot;
   const skillExtensionsRoot = resolve(workspaceRoot, SKILL_EXTENSIONS_WORKSPACE_PATH);
-  const loadedSkillIds = new Set<string>();
 
   /**
    * Describe only the Runners selected for this Session; location does not
@@ -1933,79 +1932,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(tournamentRankTool);
   }
-  if (options.runSubagent) {
-    const specialistSummary = summarizeSpecialistsForTaskTool(options.specialists);
-    const specialistLiterals = options.specialists?.map((specialist) => Type.Literal(specialist.id)) ?? [];
-    const specialistIdSchema = specialistSummary
-      ? Type.Union(
-        specialistLiterals as [typeof specialistLiterals[number], ...typeof specialistLiterals],
-        {
-          description: `Optional user specialist to apply to this subagent. Choose the id whose description best matches the requested delegated work. Available specialists: ${specialistSummary}`,
-        },
-      )
-      : Type.String({
-        description: "Optional user specialist id to apply to this subagent.",
-        minLength: 1,
-      });
-    const briefParameters = Type.Object({
-      collaborationRules: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 12, minItems: 1 }),
-      constraints: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 20, minItems: 1 }),
-      goal: Type.String({ maxLength: 2_000, minLength: 1 }),
-      outputJsonSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-      outputRequirements: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 20, minItems: 1 }),
-      version: Type.Optional(Type.Integer({ maximum: 1000, minimum: 1 })),
-    });
-    const taskParameters = Type.Object({
-      brief: Type.Optional(briefParameters),
-      description: Type.String({ maxLength: 80, minLength: 1 }),
-      inputPaths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), { maxItems: 50 })),
-      max_turns: Type.Optional(Type.Integer({
-        default: DEFAULT_SUBAGENT_MAX_TURNS,
-        description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
-        maximum: MAX_SUBAGENT_MAX_TURNS,
-        minimum: DEFAULT_SUBAGENT_MAX_TURNS,
-      })),
-      prompt: Type.String({ maxLength: 20_000, minLength: 1 }),
-      specialistId: Type.Optional(specialistIdSchema),
-      subagent_type: Type.Optional(Type.String({ maxLength: 80, minLength: 1 })),
-      timeout_seconds: Type.Optional(Type.Integer({
-        default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-        description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
-        maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
-        minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-      })),
-      tools: Type.Optional(Type.Union([
-        Type.Null(),
-        Type.Array(Type.String({ minLength: 1 }), { maxItems: 32 }),
-      ])),
-    });
-    const task: AgentTool<typeof taskParameters> = {
-      description: [
-        "Run one focused task in a subagent. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
-        specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
-      ].filter(Boolean).join(" "),
-      execute: async (toolCallId, params, signal) => {
-        const subagent = await options.runSubagent!({
-          ...(params.brief ? { brief: params.brief } : {}),
-          description: params.description,
-          ...(params.inputPaths ? { inputPaths: params.inputPaths } : {}),
-          ...(params.max_turns === undefined ? {} : { maxTurns: params.max_turns }),
-          prompt: params.prompt,
-          ...(params.specialistId ? { specialistId: params.specialistId } : {}),
-          ...(params.subagent_type ? { subagentType: params.subagent_type } : {}),
-          ...(params.timeout_seconds === undefined ? {} : { timeoutSeconds: params.timeout_seconds }),
-          ...(params.tools === undefined ? {} : { tools: params.tools }),
-        }, signal);
-        const summary = summarizeSubagentResult(subagent);
-        return { content: [{ type: "text", text: JSON.stringify(summary) }], details: { subagent, summary } };
-      },
-      isConcurrencySafe: () => true,
-      label: "Run subagent",
-      name: "task",
-      parameters: taskParameters,
-    };
-    tools.push(task);
-  }
+
+  tools.push(...createSubagentTools(options));
   if (options.reviewCheckpoint) {
     const reviewCheckpointParameters = Type.Object({
       artifactVersionIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 20 })),
@@ -2026,114 +1954,6 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: reviewCheckpointParameters,
     };
     tools.push(reviewCheckpoint);
-  }
-  if (options.proposeSkillLibraryUpdate) {
-    const sourceRefParameters = Type.Object({
-      id: Type.String({ minLength: 1 }),
-      kind: Type.Union([
-        Type.Literal("artifact"),
-        Type.Literal("review-finding"),
-        Type.Literal("run"),
-        Type.Literal("session"),
-        Type.Literal("tool-call"),
-      ]),
-    });
-    const skillPackageParameters = Type.Object({
-      files: Type.Array(Type.Object({
-        content: Type.String({ minLength: 1 }),
-        encoding: Type.Optional(Type.Union([Type.Literal("base64"), Type.Literal("utf8")])),
-        path: Type.String({ minLength: 1 }),
-      }), { minItems: 1, maxItems: 32 }),
-    });
-    const generatedSkillParameters = Type.Object({
-      allowedTools: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
-      compatibility: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
-      description: Type.String({ minLength: 1, maxLength: 1024 }),
-      instructions: Type.String({ minLength: 1 }),
-      license: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-      metadata: Type.Optional(Type.Record(Type.String({ minLength: 1, maxLength: 64 }), Type.String({ minLength: 1, maxLength: 500 }))),
-      name: Type.String({ minLength: 1, maxLength: 64 }),
-      version: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-    });
-    const operationParameters = Type.Union([
-      Type.Object({ package: skillPackageParameters, type: Type.Literal("upsert") }),
-      Type.Object({ skill: generatedSkillParameters, type: Type.Literal("upsert_skill") }),
-      Type.Object({ skillId: Type.String({ minLength: 1 }), type: Type.Literal("delete") }),
-    ]);
-    const proposeSkillLibraryUpdateParameters = Type.Object({
-      baseVersionId: Type.Optional(Type.String({ minLength: 1 })),
-      libraryId: Type.String({ minLength: 1 }),
-      operations: Type.Array(operationParameters, { minItems: 1, maxItems: 16 }),
-      rationale: Type.String({ minLength: 1, maxLength: 4_000 }),
-      sourceRefs: Type.Optional(Type.Array(sourceRefParameters, { maxItems: 16 })),
-    });
-    const proposeSkillLibraryUpdate: AgentTool<typeof proposeSkillLibraryUpdateParameters> = {
-      description: "Propose a self-evolution update to a writable Skill Library. Prefer operations with type `upsert_skill` and a structured `skill` object; the tool will generate a valid SKILL.md with YAML frontmatter. Use raw `upsert` packages only when extra resource files are needed. This only creates a pending proposal; when the user asks to publish accepted proposals, call `publish_skill_library_update` with the proposal ids.",
-      execute: async (toolCallId, params, signal) => {
-        const operations = params.operations.map((operation) => {
-          if (operation.type !== "upsert_skill") return operation;
-          return {
-            package: {
-              files: [{
-                content: renderGeneratedSkillMarkdown(operation.skill),
-                path: "SKILL.md",
-              }],
-            },
-            type: "upsert" as const,
-          };
-        });
-        const proposal = await options.proposeSkillLibraryUpdate!({
-          author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
-          ...(params.baseVersionId ? { baseVersionId: params.baseVersionId } : {}),
-          dryRun: true,
-          libraryId: params.libraryId,
-          operations,
-          rationale: params.rationale,
-          sourceRefs: params.sourceRefs ?? [],
-        }, signal, toolCallId);
-        return {
-          content: [{ type: "text", text: JSON.stringify({
-            conflicts: proposal.result.conflicts,
-            diagnostics: proposal.result.diagnostics,
-            diff: proposal.result.diff,
-            id: proposal.id,
-            libraryId: proposal.libraryId,
-            nextTool: proposal.result.conflicts.length ? undefined : "publish_skill_library_update",
-            status: proposal.status,
-          }, null, 2) }],
-          details: proposal,
-        };
-      },
-      label: "Propose skill library update",
-      name: "propose_skill_library_update",
-      parameters: proposeSkillLibraryUpdateParameters,
-    };
-    tools.push(proposeSkillLibraryUpdate);
-  }
-  if (options.publishSkillLibraryUpdate) {
-    const publishSkillLibraryUpdateParameters = Type.Object({
-      proposalIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
-    });
-    const publishSkillLibraryUpdate: AgentTool<typeof publishSkillLibraryUpdateParameters> = {
-      description: "Publish one or more pending Skill Library self-evolution proposals after user permission is granted. Multiple proposals must belong to the same writable library and are merged into one new library version.",
-      execute: async (toolCallId, params, signal) => {
-        const result = await options.publishSkillLibraryUpdate!({ proposalIds: params.proposalIds }, signal, toolCallId);
-        return {
-          content: [{ type: "text", text: JSON.stringify({
-            conflicts: result.result.conflicts,
-            diagnostics: result.result.diagnostics,
-            diff: result.result.diff,
-            proposalIds: result.proposals.map((proposal) => proposal.id),
-            publishedVersionId: result.result.version?.id,
-          }, null, 2) }],
-          details: result,
-        };
-      },
-      label: "Publish skill library update",
-      name: "publish_skill_library_update",
-      parameters: publishSkillLibraryUpdateParameters,
-    };
-    tools.push(publishSkillLibraryUpdate);
   }
   if (options.traceProvenance) {
     const traceProvenanceParameters = Type.Object({
@@ -2428,6 +2248,169 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       tools.push(uninstallEnvironment);
     }
   }
+  tools.push(...createSkillTools(options), ...createMcpTools(options));
+  if (options.artifactDownload) {
+    const artifactDownloadParameters = Type.Object({
+      candidateId: Type.String({ minLength: 1 }),
+      destinationPath: Type.Optional(Type.String({ minLength: 1 })),
+      mcpInvocationId: Type.String({ minLength: 1 }),
+    });
+    const artifactDownload: AgentTool<typeof artifactDownloadParameters> = {
+      description: "Download one ArtifactCandidate returned by a previous MCP tool call into the governed Session workspace. This call waits for permission and download completion. It does not extract or read PDF contents.",
+      execute: async (_toolCallId, params, signal) => {
+        const result = await options.artifactDownload!(params, signal);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          details: result,
+        };
+      },
+      label: "Download artifact",
+      name: "artifact_download",
+      parameters: artifactDownloadParameters,
+    };
+    tools.push(artifactDownload);
+  }
+  if (options.paperExtractPdf) {
+    const extractPdfParameters = Type.Object({
+      artifactJobId: Type.String({ minLength: 1 }),
+    });
+    const extractPdf: AgentTool<typeof extractPdfParameters> = {
+      description: "Extract text, tables, and page metadata from a completed PDF artifact download. Call this only after artifact_download has returned a completed artifactJobId.",
+      execute: async (_toolCallId, params, signal) => {
+        const result = await options.paperExtractPdf!(params, signal);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          details: result,
+        };
+      },
+      label: "Extract PDF",
+      name: "paper_extract_pdf",
+      parameters: extractPdfParameters,
+      // Extracted PDF text is attacker-influenceable document content (a
+      // hostile PDF reaches the model through this tool exactly like through
+      // the KE corpus tools) — fence it. Not tag-neutralized: verbatim
+      // fidelity of the extracted text is the point of the tool.
+      untrustedCategory: "document",
+    };
+    tools.push(extractPdf);
+  }
+  tools.push(...(options.extraTools ?? []));
+  return filterTools(tools, options.toolPolicy);
+}
+
+/** The same domain handlers are used by the legacy facade and plugin host. */
+export function createSkillTools(options: Pick<WorkspaceToolOptions, "skills" | "createSkill" | "toolPolicy" | "proposeSkillLibraryUpdate" | "publishSkillLibraryUpdate">): AgentTool[] {
+  const tools: AgentTool[] = [];
+  const loadedSkillIds = new Set<string>();
+  if (options.proposeSkillLibraryUpdate) {
+    const sourceRefParameters = Type.Object({
+      id: Type.String({ minLength: 1 }),
+      kind: Type.Union([
+        Type.Literal("artifact"),
+        Type.Literal("review-finding"),
+        Type.Literal("run"),
+        Type.Literal("session"),
+        Type.Literal("tool-call"),
+      ]),
+    });
+    const skillPackageParameters = Type.Object({
+      files: Type.Array(Type.Object({
+        content: Type.String({ minLength: 1 }),
+        encoding: Type.Optional(Type.Union([Type.Literal("base64"), Type.Literal("utf8")])),
+        path: Type.String({ minLength: 1 }),
+      }), { minItems: 1, maxItems: 32 }),
+    });
+    const generatedSkillParameters = Type.Object({
+      allowedTools: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+      compatibility: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+      description: Type.String({ minLength: 1, maxLength: 1024 }),
+      instructions: Type.String({ minLength: 1 }),
+      license: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+      metadata: Type.Optional(Type.Record(Type.String({ minLength: 1, maxLength: 64 }), Type.String({ minLength: 1, maxLength: 500 }))),
+      name: Type.String({ minLength: 1, maxLength: 64 }),
+      version: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+    });
+    const operationParameters = Type.Union([
+      Type.Object({ package: skillPackageParameters, type: Type.Literal("upsert") }),
+      Type.Object({ skill: generatedSkillParameters, type: Type.Literal("upsert_skill") }),
+      Type.Object({ skillId: Type.String({ minLength: 1 }), type: Type.Literal("delete") }),
+    ]);
+    const proposeSkillLibraryUpdateParameters = Type.Object({
+      baseVersionId: Type.Optional(Type.String({ minLength: 1 })),
+      libraryId: Type.String({ minLength: 1 }),
+      operations: Type.Array(operationParameters, { minItems: 1, maxItems: 16 }),
+      rationale: Type.String({ minLength: 1, maxLength: 4_000 }),
+      sourceRefs: Type.Optional(Type.Array(sourceRefParameters, { maxItems: 16 })),
+    });
+    const proposeSkillLibraryUpdate: AgentTool<typeof proposeSkillLibraryUpdateParameters> = {
+      description: "Propose a self-evolution update to a writable Skill Library. Prefer operations with type `upsert_skill` and a structured `skill` object; the tool will generate a valid SKILL.md with YAML frontmatter. Use raw `upsert` packages only when extra resource files are needed. This only creates a pending proposal; when the user asks to publish accepted proposals, call `publish_skill_library_update` with the proposal ids.",
+      execute: async (toolCallId, params, signal) => {
+        const operations = params.operations.map((operation) => {
+          if (operation.type !== "upsert_skill") return operation;
+          return {
+            package: {
+              files: [{
+                content: renderGeneratedSkillMarkdown(operation.skill),
+                path: "SKILL.md",
+              }],
+            },
+            type: "upsert" as const,
+          };
+        });
+        const proposal = await options.proposeSkillLibraryUpdate!({
+          author: { kind: "self-evolution", name: "Agent self-evolution proposal" },
+          ...(params.baseVersionId ? { baseVersionId: params.baseVersionId } : {}),
+          dryRun: true,
+          libraryId: params.libraryId,
+          operations,
+          rationale: params.rationale,
+          sourceRefs: params.sourceRefs ?? [],
+        }, signal, toolCallId);
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            conflicts: proposal.result.conflicts,
+            diagnostics: proposal.result.diagnostics,
+            diff: proposal.result.diff,
+            id: proposal.id,
+            libraryId: proposal.libraryId,
+            nextTool: proposal.result.conflicts.length ? undefined : "publish_skill_library_update",
+            status: proposal.status,
+          }, null, 2) }],
+          details: proposal,
+        };
+      },
+      label: "Propose skill library update",
+      name: "propose_skill_library_update",
+      parameters: proposeSkillLibraryUpdateParameters,
+    };
+    tools.push(proposeSkillLibraryUpdate);
+  }
+  if (options.publishSkillLibraryUpdate) {
+    const publishSkillLibraryUpdateParameters = Type.Object({
+      proposalIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
+    });
+    const publishSkillLibraryUpdate: AgentTool<typeof publishSkillLibraryUpdateParameters> = {
+      description: "Publish one or more pending Skill Library self-evolution proposals after user permission is granted. Multiple proposals must belong to the same writable library and are merged into one new library version.",
+      execute: async (toolCallId, params, signal) => {
+        const result = await options.publishSkillLibraryUpdate!({ proposalIds: params.proposalIds }, signal, toolCallId);
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            conflicts: result.result.conflicts,
+            diagnostics: result.result.diagnostics,
+            diff: result.result.diff,
+            proposalIds: result.proposals.map((proposal) => proposal.id),
+            publishedVersionId: result.result.version?.id,
+          }, null, 2) }],
+          details: result,
+        };
+      },
+      label: "Publish skill library update",
+      name: "publish_skill_library_update",
+      parameters: publishSkillLibraryUpdateParameters,
+    };
+    tools.push(publishSkillLibraryUpdate);
+  }
+
   const selectedSkillsForDiscovery = options.skills ?? [];
   if (selectedSkillsForDiscovery.length) {
     const skillLiterals = selectedSkillsForDiscovery.map((skill) => Type.Literal(skill.id));
@@ -2553,6 +2536,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(createSkill);
   }
+  return filterTools(tools, options.toolPolicy);
+}
+
+export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | "toolPolicy">): AgentTool[] {
+  const tools: AgentTool[] = [];
   for (const mcpTool of options.mcpTools ?? []) {
     tools.push({
       deferred: true,
@@ -2571,52 +2559,85 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       routing: mcpTool.routing,
     });
   }
-  if (options.artifactDownload) {
-    const artifactDownloadParameters = Type.Object({
-      candidateId: Type.String({ minLength: 1 }),
-      destinationPath: Type.Optional(Type.String({ minLength: 1 })),
-      mcpInvocationId: Type.String({ minLength: 1 }),
+  return filterTools(tools, options.toolPolicy);
+}
+
+/** Default delegation preserves the established request/result and budget semantics. */
+export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy">): AgentTool[] {
+  const tools: AgentTool[] = [];
+  if (options.runSubagent) {
+    const specialistSummary = summarizeSpecialistsForTaskTool(options.specialists);
+    const specialistLiterals = options.specialists?.map((specialist) => Type.Literal(specialist.id)) ?? [];
+    const specialistIdSchema = specialistSummary
+      ? Type.Union(
+        specialistLiterals as [typeof specialistLiterals[number], ...typeof specialistLiterals],
+        {
+          description: `Optional user specialist to apply to this subagent. Choose the id whose description best matches the requested delegated work. Available specialists: ${specialistSummary}`,
+        },
+      )
+      : Type.String({
+        description: "Optional user specialist id to apply to this subagent.",
+        minLength: 1,
+      });
+    const briefParameters = Type.Object({
+      collaborationRules: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 12, minItems: 1 }),
+      constraints: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 20, minItems: 1 }),
+      goal: Type.String({ maxLength: 2_000, minLength: 1 }),
+      outputJsonSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      outputRequirements: Type.Array(Type.String({ maxLength: 1_000, minLength: 1 }), { maxItems: 20, minItems: 1 }),
+      version: Type.Optional(Type.Integer({ maximum: 1000, minimum: 1 })),
     });
-    const artifactDownload: AgentTool<typeof artifactDownloadParameters> = {
-      description: "Download one ArtifactCandidate returned by a previous MCP tool call into the governed Session workspace. This call waits for permission and download completion. It does not extract or read PDF contents.",
-      execute: async (_toolCallId, params, signal) => {
-        const result = await options.artifactDownload!(params, signal);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          details: result,
-        };
-      },
-      label: "Download artifact",
-      name: "artifact_download",
-      parameters: artifactDownloadParameters,
-    };
-    tools.push(artifactDownload);
-  }
-  if (options.paperExtractPdf) {
-    const extractPdfParameters = Type.Object({
-      artifactJobId: Type.String({ minLength: 1 }),
+    const taskParameters = Type.Object({
+      brief: Type.Optional(briefParameters),
+      description: Type.String({ maxLength: 80, minLength: 1 }),
+      inputPaths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), { maxItems: 50 })),
+      max_turns: Type.Optional(Type.Integer({
+        default: DEFAULT_SUBAGENT_MAX_TURNS,
+        description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
+        maximum: MAX_SUBAGENT_MAX_TURNS,
+        minimum: DEFAULT_SUBAGENT_MAX_TURNS,
+      })),
+      prompt: Type.String({ maxLength: 20_000, minLength: 1 }),
+      specialistId: Type.Optional(specialistIdSchema),
+      subagent_type: Type.Optional(Type.String({ maxLength: 80, minLength: 1 })),
+      timeout_seconds: Type.Optional(Type.Integer({
+        default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+        description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
+        maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
+        minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+      })),
+      tools: Type.Optional(Type.Union([
+        Type.Null(),
+        Type.Array(Type.String({ minLength: 1 }), { maxItems: 32 }),
+      ])),
     });
-    const extractPdf: AgentTool<typeof extractPdfParameters> = {
-      description: "Extract text, tables, and page metadata from a completed PDF artifact download. Call this only after artifact_download has returned a completed artifactJobId.",
-      execute: async (_toolCallId, params, signal) => {
-        const result = await options.paperExtractPdf!(params, signal);
-        return {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          details: result,
-        };
+    const task: AgentTool<typeof taskParameters> = {
+      description: [
+        "Run one focused task in a subagent. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
+        specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
+      ].filter(Boolean).join(" "),
+      execute: async (toolCallId, params, signal) => {
+        const subagent = await options.runSubagent!({
+          ...(params.brief ? { brief: params.brief } : {}),
+          description: params.description,
+          ...(params.inputPaths ? { inputPaths: params.inputPaths } : {}),
+          ...(params.max_turns === undefined ? {} : { maxTurns: params.max_turns }),
+          prompt: params.prompt,
+          ...(params.specialistId ? { specialistId: params.specialistId } : {}),
+          ...(params.subagent_type ? { subagentType: params.subagent_type } : {}),
+          ...(params.timeout_seconds === undefined ? {} : { timeoutSeconds: params.timeout_seconds }),
+          ...(params.tools === undefined ? {} : { tools: params.tools }),
+        }, signal);
+        const summary = summarizeSubagentResult(subagent);
+        return { content: [{ type: "text", text: JSON.stringify(summary) }], details: { subagent, summary } };
       },
-      label: "Extract PDF",
-      name: "paper_extract_pdf",
-      parameters: extractPdfParameters,
-      // Extracted PDF text is attacker-influenceable document content (a
-      // hostile PDF reaches the model through this tool exactly like through
-      // the KE corpus tools) — fence it. Not tag-neutralized: verbatim
-      // fidelity of the extracted text is the point of the tool.
-      untrustedCategory: "document",
+      isConcurrencySafe: () => true,
+      label: "Run subagent",
+      name: "task",
+      parameters: taskParameters,
     };
-    tools.push(extractPdf);
+    tools.push(task);
   }
-  tools.push(...(options.extraTools ?? []));
   return filterTools(tools, options.toolPolicy);
 }
 

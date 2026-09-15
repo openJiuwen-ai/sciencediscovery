@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sciencediscovery/plugin-sdk": "workspace:*",
     "@sciencediscovery/artifact-manager": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@sciencediscovery/cas": "workspace:*",
@@ -39,7 +40,11 @@
     "ajv": "8.17.1",
     "fflate": "0.8.2",
     "undici": "8.7.0",
-    "yaml": "2.9.0"
+    "yaml": "2.9.0",
+    "@sciencediscovery/skill": "workspace:*",
+    "@sciencediscovery/mcp": "workspace:*",
+    "@sciencediscovery/scheduler": "workspace:*",
+    "@sciencediscovery/artifact-json": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.1.1",

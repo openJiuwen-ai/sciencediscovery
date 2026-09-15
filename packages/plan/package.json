@@ -3,7 +3,24 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { "types": "./src/index.ts", "default": "./dist/index.js" },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./src/plugin.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./manifest": {
+      "types": "./src/manifest.ts",
+      "default": "./dist/manifest.js"
+    },
+    "./web": {
+      "types": "./src/web.tsx",
+      "default": "./dist/web.js"
+    }
+  },
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -15,7 +32,15 @@
     "@sciencediscovery/runtime-core": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",
     "@sciencediscovery/tools": "workspace:*",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "@sciencediscovery/plugin-sdk": "workspace:*"
   },
-  "devDependencies": { "@types/node": "26.1.1" }
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "react": "19.2.7"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
 }

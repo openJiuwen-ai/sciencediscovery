@@ -1054,6 +1054,7 @@ async function startSubagentModel(
 ): Promise<{
   baseUrl: string;
   getMaxConcurrentSubagents: () => number;
+  concurrencyBarrierTimedOut: () => boolean;
   releaseSubagent: () => void;
   requests: Array<{
     messages?: Array<{ content?: string; role?: string }>;
@@ -1066,12 +1067,13 @@ async function startSubagentModel(
   const taskCount = options.taskCount ?? 1;
   // How many subagent requests the barrier waits for before letting any of
   // them answer. It is not always `taskCount`: the concurrency-limit test
-  // issues one task call more than the API admits, so the surplus call never
-  // reaches this model and the barrier would fall through to its timeout.
+  // issues one task call more than the API admits at once. The surplus call
+  // reaches this model only after a slot is released.
   const concurrentSubagentTarget = options.concurrentSubagentTarget ?? taskCount;
   let activeSubagentRequests = 0;
   let maxConcurrentSubagents = 0;
   let startedSubagentRequests = 0;
+  let concurrencyBarrierTimedOut = false;
   let releaseConcurrencyBarrier: () => void = () => undefined;
   const concurrencyBarrier = new Promise<void>((resolveBarrier) => {
     releaseConcurrencyBarrier = resolveBarrier;
@@ -1222,7 +1224,10 @@ async function startSubagentModel(
         // open, so this timer fires just when fewer subagents ran than the
         // test demands. It must outlast the API's own start-up latency for the
         // whole fan-out, or a slow machine silently caps the observed peak.
-        const fallback = setTimeout(releaseConcurrencyBarrier, CONCURRENCY_BARRIER_TIMEOUT_MS);
+        const fallback = setTimeout(() => {
+          concurrencyBarrierTimedOut = true;
+          releaseConcurrencyBarrier();
+        }, CONCURRENCY_BARRIER_TIMEOUT_MS);
         await concurrencyBarrier;
         clearTimeout(fallback);
       }
@@ -1246,6 +1251,7 @@ async function startSubagentModel(
   context.after(() => new Promise<void>((resolveClose) => modelServer.close(() => resolveClose())));
   return {
     baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`,
+    concurrencyBarrierTimedOut: () => concurrencyBarrierTimedOut,
     getMaxConcurrentSubagents: () => maxConcurrentSubagents,
     releaseSubagent,
     requests,
@@ -5628,6 +5634,8 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
   assert.equal(run.status, 200);
   const stream = await run.text();
   assert.match(stream, /"type":"run.completed"/);
+  assert.equal(fixture.concurrencyBarrierTimedOut(), false,
+    `Subagent startup did not reach the concurrency barrier within ${CONCURRENCY_BARRIER_TIMEOUT_MS}ms`);
   assert.equal(fixture.getMaxConcurrentSubagents(), DEFAULT_MAX_CONCURRENT_SUBAGENTS);
 
   const subagents = await jsonRequest<Subagent[]>(
@@ -5635,6 +5643,7 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
     { headers: authorization },
   );
   assert.equal(subagents.body.length, taskCount);
+  assert.ok(subagents.body.every(subagent => subagent.status === "completed"));
   const startedDescriptions = subagents.body.map((subagent) => subagent.input.description).toSorted();
   const allDescriptions = Array.from({ length: taskCount }, (_, index) => `Inspect workspace ${index + 1}`);
   assert.equal(startedDescriptions.length, taskCount);

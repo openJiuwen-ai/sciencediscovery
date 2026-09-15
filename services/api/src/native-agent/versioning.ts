@@ -10,6 +10,7 @@ import {
   type AgentStateRef, type TrajectoryStep,
 } from "@sciencediscovery/cas";
 import type { RuntimeMessage, RuntimeToolCall, RunEvent, TurnLifecycle } from "@sciencediscovery/runtime-core";
+import type { StateCheckpoint, StateView, StateProvider } from "@sciencediscovery/context";
 
 export interface AgentVersioningOptions {
   agentId: string;
@@ -38,6 +39,7 @@ export interface ModelContextSnapshot<I = unknown> {
 }
 
 export interface ContextAssemblyRecord {
+  checkpoint?: StateCheckpoint;
   turn: number;
   manifest: AgentStateRef;
   state: AgentStateRef;
@@ -46,6 +48,7 @@ export interface ContextAssemblyRecord {
 }
 
 export interface AgentStateSnapshot {
+  checkpoint?: StateCheckpoint;
   agentId: string;
   trajectoryId: string;
   turn: number;
@@ -78,7 +81,8 @@ export function harnessBuildDigest(): Promise<AgentStateRef["digest"]> {
         }
       }
     };
-    const packages = ["runtime-core", "context", "model", "tools", "workspace", "plan", "evolve", "orchestration"];
+    const packages = ["runtime-core", "context", "model", "tools", "workspace", "plan", "evolve", "orchestration",
+      "plugin-sdk", "skill", "mcp", "scheduler", "mcp-sources"];
     for (const name of packages) {
       const root = dirname(fileURLToPath(import.meta.resolve(`@sciencediscovery/${name}`)));
       hash.update(name); await walk(root, root);
@@ -101,11 +105,16 @@ export class AgentStateAssembler {
     }
   }
 
-  async assemble(input: Omit<AgentStateSnapshot, "workspace" | "runtime" | "authorities" | "forkFidelity">): Promise<AgentStateRef> {
-    const authorities = await this.readAuthorities();
-    const workspace = await committedWorkspaceSnapshot(this.store, this.workspaceRoot);
+  captureWorkspace(): Promise<AgentStateRef> {
+    return committedWorkspaceSnapshot(this.store, this.workspaceRoot);
+  }
+
+  async assemble(input: Omit<AgentStateSnapshot, "workspace" | "runtime" | "authorities" | "forkFidelity">, view?: StateView): Promise<AgentStateRef> {
+    const authorities = view ? view.read("authorities") : await this.readAuthorities();
+    const workspace = view ? view.read<AgentStateRef>("workspace") : await this.captureWorkspace();
     return this.store.putRecord("AgentStateSnapshot", jsonValue({
-      ...input, workspace, runtime: this.readRuntime(), authorities,
+      ...input, workspace, runtime: view ? view.read("runtime") : this.readRuntime(), authorities,
+      ...(view ? { checkpoint: view.checkpoint } : {}),
       forkFidelity: [
         { component: "agent-state-and-workspace", fidelity: "restorable", detail: "Captured logical state and Linux file tree; no restore API in this phase" },
         { component: "kernel-environment-memory-graph", fidelity: "reference-only", detail: "External authority identifiers are captured; process heaps and graph databases are not snapshotted" },
@@ -133,6 +142,7 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
   private children: AgentStateRef[] = [];
   private assemblyTrace: unknown = null;
   private readonly assembler: AgentStateAssembler;
+  private inputView?: StateView;
 
   constructor(dataDir: string, workspaceRoot: string, readonly options: AgentVersioningOptions, readRuntime: () => unknown) {
     this.store = new VersionStore(dataDir);
@@ -171,12 +181,29 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
 
   trace(record: unknown): void { this.assemblyTrace = jsonValue(record); }
 
+  workspaceStateProvider(): StateProvider {
+    return {
+      id: "workspace",
+      capture: async (signal) => {
+        signal.throwIfAborted();
+        const value = await this.assembler.captureWorkspace();
+        return { id: "workspace", schemaVersion: 1, revision: value.digest, value, fidelity: "captured" };
+      },
+    };
+  }
+
+  async captureInputState(view: StateView, turn: number, history: M[]): Promise<void> {
+    this.inputView = view;
+    this.before = await this.state(turn, "before", history, view);
+  }
+
   async afterAssembly({ turn, assembly }: Parameters<TurnLifecycle<M, I, U>["afterAssembly"]>[0]): Promise<void> {
     this.modelContext = await this.store.putRecord("ModelContextSnapshot", jsonValue({
       boundary: "ProviderModelClient.invoke", input: assembly.modelInput,
     } satisfies ModelContextSnapshot<I>));
     this.context = await this.store.putRecord("ContextAssemblyRecord", jsonValue({
       turn, manifest: this.manifest, state: this.before, modelContext: this.modelContext, trace: this.assemblyTrace,
+      ...(this.inputView ? { checkpoint: this.inputView.checkpoint } : {}),
     } satisfies ContextAssemblyRecord));
     // Root the exact input before invoking the model, including attempts that later fail or cancel.
     // This is an audit root, not a completed Step and never advances the Agent head.
@@ -233,12 +260,12 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
 
   close(): void { this.refs?.close(); }
 
-  private state(turn: number, phase: "before" | "after", history: M[]): Promise<AgentStateRef> {
+  private state(turn: number, phase: "before" | "after", history: M[], view?: StateView): Promise<AgentStateRef> {
     return this.assembler.assemble({
       agentId: this.options.agentId, trajectoryId: this.options.trajectoryId, turn, phase,
       manifest: this.manifest, predecessor: this.head, transcript: this.transcript,
       agentRevision: this.revision,
       history, observations: this.observations,
-    });
+    }, view);
   }
 }

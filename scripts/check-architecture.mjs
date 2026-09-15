@@ -1,8 +1,9 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { checkComponentBoundaries } from "./component-boundaries.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -20,10 +21,36 @@ async function sourceFiles(path) {
 
 const failures = [];
 const packageFiles = await sourceFiles("packages");
+if (await stat(new URL("plugins", root)).then(() => true, () => false)) {
+  // Ignore leftover build output, but never reintroduce a second source tree.
+  if ((await sourceFiles("plugins")).length) failures.push("plugins/: components belong in packages/, not a parallel plugin tree");
+}
 const allSourceFiles = new Set([
   ...packageFiles,
   ...await sourceFiles("services"),
 ]);
+const manifests = [];
+for (const parent of ["packages", "services", "apps"]) {
+  for (const entry of await readdir(new URL(parent, root), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const directory = `${parent}/${entry.name}`;
+    try { manifests.push({ ...JSON.parse(await readFile(new URL(`${directory}/package.json`, root), "utf8")), directory }); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+}
+const graphFiles = [...allSourceFiles, ...await sourceFiles("apps")];
+const graphSources = new Map(await Promise.all(graphFiles.map(async file => [file, await readFile(new URL(file, root), "utf8")])));
+// Existing Runner deployment coupling predates component consolidation. Freeze
+// the exact edge/files rather than exempting executor or all service imports.
+// Removing it requires a separate Runner artifact/provisioning contract migration.
+const legacyRunnerDependency = {
+  from: "@sciencediscovery/executor", to: "@sciencediscovery/runner",
+  files: ["packages/executor/package.json", ...[
+    "environment.ts", "environment.test.ts", "remote-provisioner.ts", "remote-provisioner.test.ts",
+    "remote-skill-packages.test.ts", "runner-client.ts",
+  ].map(name => `packages/executor/src/${name}`)],
+};
+failures.push(...checkComponentBoundaries(manifests, graphSources, [legacyRunnerDependency]));
 for (const file of packageFiles) {
   const source = await readFile(new URL(file, root), "utf8");
   if (/from\s+["'][^"']*(?:services|apps)\//u.test(source)) {
@@ -32,6 +59,12 @@ for (const file of packageFiles) {
   if (source.includes("@sciencediscovery/agent-runtime")) {
     failures.push(`${file}: capability packages must not depend on the compatibility facade`);
   }
+}
+
+for (const file of await sourceFiles("packages/plugin-sdk/src")) {
+  if (file.endsWith(".test.ts") || (!file.includes("/web.") && !file.endsWith("/views.ts") && !file.includes("/plugin-sdk/"))) continue;
+  const source = await readFile(new URL(file, root), "utf8");
+  if (/from\s+["']node:/u.test(source)) failures.push(`${file}: browser-facing plugin modules must not import Node builtins`);
 }
 
 for (const file of await sourceFiles("services")) {

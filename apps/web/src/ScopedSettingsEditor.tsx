@@ -27,6 +27,9 @@ import type {
   SkillSelectionMode,
 } from "@sciencediscovery/schema";
 
+import { PluginSettingsSections } from "./plugins/settings.js";
+import { normalizeSkillLibraryMounts } from "@sciencediscovery/skill/web";
+
 import { modelOptionLabel } from "./modelLabels.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
 
@@ -71,27 +74,6 @@ function effectiveModelName(
   return modelOptionLabel(model, models, t);
 }
 
-function normalizeSkillLibraryMount(mount: EnabledSkillLibrary): EnabledSkillLibrary {
-  const rawLimit = Number.isFinite(mount.limit) ? mount.limit! : 12;
-  const rawPriority = Number.isFinite(mount.priority) ? mount.priority! : 0;
-  return {
-    libraryId: mount.libraryId,
-    limit: Math.min(Math.max(Math.round(rawLimit), 1), 100),
-    priority: Math.min(Math.max(Math.round(rawPriority), -1_000_000), 1_000_000),
-    versionId: mount.versionId?.trim() || "head",
-  };
-}
-
-function normalizeSkillLibraryMounts(mounts: readonly EnabledSkillLibrary[] = [], libraries: readonly SkillLibrary[] = []): EnabledSkillLibrary[] {
-  const byId = new Map(mounts.map((mount) => [mount.libraryId, normalizeSkillLibraryMount(mount)]));
-  const ordered = libraries
-    .map((library) => byId.get(library.id))
-    .filter((mount): mount is EnabledSkillLibrary => Boolean(mount));
-  const knownIds = new Set(libraries.map((library) => library.id));
-  ordered.push(...[...byId.values()].filter((mount) => !knownIds.has(mount.libraryId)));
-  return ordered;
-}
-
 function SettingsSource({ details, field }: { details: RuntimeSettingsDetails; field: RuntimeSettingsField }) {
   const { t } = useLocale();
   return <small className="settings-source">{t("scopedSettings.effective", { source: sourceLabel(details.sources[field], t) })}</small>;
@@ -100,6 +82,7 @@ function SettingsSource({ details, field }: { details: RuntimeSettingsDetails; f
 export function globalSettingsDraft(details: RuntimeSettingsDetails): RuntimeSettingsOverrides {
   return {
     enabledConnectorIds: [...details.effective.enabledConnectorIds],
+    ...(details.effective.plugins ? { plugins: structuredClone(details.effective.plugins) } : {}),
     ...(details.effective.modelId ? { modelId: details.effective.modelId } : {}),
   };
 }
@@ -169,15 +152,6 @@ export function ScopedSettingsEditor({
     });
   }
 
-  function setArrayMode(field: "enabledConnectorIds", override: boolean): void {
-    setDraft((current) => {
-      const next = { ...current };
-      if (override) next[field] = [];
-      else delete next[field];
-      return next;
-    });
-  }
-
   /** kb-scope mode switch: override seeds from the effective set; inherit
    * drops both kb fields (an empty/absent binding makes web-only inert). */
   function setKbScopeMode(override: boolean): void {
@@ -238,9 +212,7 @@ export function ScopedSettingsEditor({
           : [...mounts, normalizeSkillLibraryMount({ libraryId: library.id })],
       };
     });
-  }
-
-  async function submit(event: FormEvent): Promise<void> {
+  }  async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     setSaving(true);
     try {
@@ -253,7 +225,6 @@ export function ScopedSettingsEditor({
     }
   }
 
-  const connectorOverride = draft.enabledConnectorIds !== undefined;
   const kbScopeOverride = draft.kbScopeKbIds !== undefined;
   const kbScopeBound = kbScopeOverride ? draft.kbScopeKbIds ?? [] : details.effective.kbScopeKbIds;
   const kbWebInheritedDenied = details.effective.kbScopeWebSearch === false;
@@ -267,9 +238,7 @@ export function ScopedSettingsEditor({
   const skillWhitelist = skillMode === "selected";
   const rawSkillLibraryMounts = draft.enabledSkillLibraries ?? details.effective.enabledSkillLibraries;
   const skillLibraryMounts = normalizeSkillLibraryMounts(rawSkillLibraryMounts, skillLibraries);
-  const skillLibraryMountsById = new Map(skillLibraryMounts.map((mount) => [mount.libraryId, normalizeSkillLibraryMount(mount)]));
-
-  return (
+  const skillLibraryMountsById = new Map(skillLibraryMounts.map((mount) => [mount.libraryId, normalizeSkillLibraryMount(mount)]));  return (
     <form className="scoped-settings" onSubmit={(event) => void submit(event)}>
       <div className="editor-heading">
         <strong>{t("settings.runtimeTitle", { scope: scopeLabel })}</strong>
@@ -289,19 +258,7 @@ export function ScopedSettingsEditor({
         {allowInheritance ? <SettingsSource details={details} field="modelId" /> : null}
       </label>
 
-      <fieldset className="settings-array" disabled={disabled || saving}>
-        <legend>{t(FIELD_LABELS.enabledConnectorIds)}</legend>
-        {allowInheritance ? <select aria-label={t("scopedSettings.connectorModeAria")} value={connectorOverride ? "override" : "inherit"} onChange={(event) => setArrayMode("enabledConnectorIds", event.target.value === "override")}>
-          <option value="inherit">{t("scopedSettings.inheritCount", { count: details.effective.enabledConnectorIds.length })}</option>
-          <option value="override">{t("scopedSettings.overrideCount", { count: draft.enabledConnectorIds?.length ?? 0 })}</option>
-        </select> : null}
-        {connectorOverride || !allowInheritance ? <div className="settings-choices">
-          {connectors.map((connector) => <label key={connector.id}><input type="checkbox" checked={draft.enabledConnectorIds?.includes(connector.id) ?? false} onChange={() => toggleArrayValue("enabledConnectorIds", connector.id)} /><span>{connector.displayName ?? connector.id}</span></label>)}
-        </div> : null}
-        {allowInheritance ? <SettingsSource details={details} field="enabledConnectorIds" /> : null}
-      </fieldset>
-
-      {skillScope === "global" || knowledgeBases === undefined ? null : <fieldset className="settings-array" disabled={disabled || saving}>
+{skillScope === "global" || knowledgeBases === undefined ? null : <fieldset className="settings-array" disabled={disabled || saving}>
         <legend>{t("settings.kbScope")}</legend>
         <small className="settings-hint">{t("settings.kbScopeHint")}</small>
         {allowInheritance ? <select aria-label="Knowledge-base scope mode" value={kbScopeOverride ? "override" : "inherit"} onChange={(event) => setKbScopeMode(event.target.value === "override")}>
@@ -382,9 +339,7 @@ export function ScopedSettingsEditor({
           {!skillLibraries.length ? <p className="settings-choice-empty">{t("settings.noSkillLibraries" as MessageKey)}</p> : null}
         </div>
         <SettingsSource details={details} field="enabledSkillLibraries" />
-      </fieldset>}
-
-      {afterFields}
+      </fieldset>}      {afterFields}
       {disabled ? <p className="settings-readonly">{t("settings.archivedReadonly")}</p> : null}
       {!showActions ? null : onCancel ? <div className="dialog-actions">
         <button className="secondary-button" disabled={saving} onClick={onCancel} type="button">{t("common.cancel")}</button>

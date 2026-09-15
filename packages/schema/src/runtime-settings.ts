@@ -19,6 +19,7 @@ import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
   | "agentMemoryBackgroundReview"
+  | "plugins"
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
   | "enabledSkillIds"
@@ -56,6 +57,8 @@ export interface RuntimeSettingsOverrides {
    *  agent-memory candidates (human review gate before prompt use). Default
    *  false — opt-in, DeepAnalyze parity. */
   agentMemoryBackgroundReview?: boolean;
+  /** Per-plugin overrides. Changes affect newly queued runs, never an active composition. */
+  plugins?: Record<string, { enabled?: boolean; config?: Record<string, import("./mcp-result.js").JsonValue> }>;
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
@@ -84,6 +87,7 @@ export interface RuntimeSettingsOverrides {
 
 export interface EffectiveRuntimeSettings {
   agentMemoryBackgroundReview?: boolean;
+  plugins?: RuntimeSettingsOverrides["plugins"];
   enabledConnectorIds: ConnectorId[];
   /** Versioned skill libraries searched at run creation/execution time. */
   enabledSkillLibraries: EnabledSkillLibrary[];
@@ -118,6 +122,8 @@ export interface ResolvedRuntimeSettings {
 
 export interface RuntimeSettingsDetails extends ResolvedRuntimeSettings {
   overrides: RuntimeSettingsOverrides;
+  /** Parent-only plugin layer, for previewing removal of an override without stale effective values. */
+  inheritedPlugins?: RuntimeSettingsOverrides["plugins"];
 }
 
 export const REVIEWER_SPECIALIST_LEVELS = ["quick", "deep"] as const;

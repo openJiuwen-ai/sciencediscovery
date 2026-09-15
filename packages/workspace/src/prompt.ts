@@ -363,6 +363,7 @@ export function buildWorkspaceSystemPrompt(
 export interface WorkspaceAgentOptions {
   localRunnerAllowed?: boolean;
   workflowInstructions?: string;
+  pluginSettings?: import("@sciencediscovery/schema").RuntimeSettingsOverrides["plugins"];
   workspaceTransfers?: WorkspaceToolOptions["workspaceTransfers"];
   shellExecutions?: WorkspaceToolOptions["shellExecutions"];
   timers?: WorkspaceToolOptions["timers"];

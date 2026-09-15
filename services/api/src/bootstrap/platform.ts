@@ -19,7 +19,9 @@ import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/dat
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
 import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
-import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { createPluginScope } from "@sciencediscovery/plugin-sdk";
+import { builtinMcpSourcePlugins } from "@sciencediscovery/mcp-sources/plugin";
 import { CustomMcpServers } from "../mcp/custom-servers.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 import { reviewerLog } from "@sciencediscovery/provenance";
@@ -66,6 +68,7 @@ import { BIOMEDICAL_SCHEMA } from "@sciencediscovery/knowledge-engine";
 import type { ServerConfig } from "./config.js";
 
 export interface ApiServerDependencies {
+  disabledConnectorPlugins?: readonly string[];
   connectorFetch?: typeof fetch;
   /** Test seam: resolve the model catalog from a fixture instead of models.dev. */
   fetchModelCatalog?: (options: { proxy?: ResolvedProxy; url: string }) => Promise<ModelsDevPayload>;
@@ -171,7 +174,9 @@ export function createPlatformServices(
     );
   };
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
-  const mcpRegistry = createBuiltinMcpSourceRegistry();
+  const mcpRegistry = createMcpSourceRegistry();
+  // Sources register before discovery. They still use the existing MCP governance broker.
+  const connectorPlugins = createPluginScope(builtinMcpSourcePlugins, dependencies.disabledConnectorPlugins);
   const customMcpServers = new CustomMcpServers(config.dataDir, mcpRegistry, (ids) => store.setCustomConnectorIds(ids), () => mcpCatalog.refresh(), (id) => store.removeCustomConnectorReferences(id));
   const mcpGateway: McpTransportClient = dependencies.mcpTransport
     ?? new McpNodeClient(() => customMcpServers.transportConfig(), customMcpServers.oauth, apiLog);
@@ -575,6 +580,7 @@ export function createPlatformServices(
   });
 
   return {
+    connectorPlugins,
     artifactManager,
     customMcpServers,
     evolutionStore,
@@ -649,6 +655,12 @@ export async function initializePlatformServices(
     store,
     webBroker,
   } = services;
+  const connectorPlugins = await services.connectorPlugins;
+  await connectorPlugins.start(new AbortController().signal);
+  for (const contribution of connectorPlugins.contributions) {
+    for (const diagnostic of contribution.diagnostics ?? []) apiLog.warn("connector_plugin_unavailable", diagnostic);
+    for (const source of contribution.sources) mcpRegistry.register(source);
+  }
   await initializeComponent("skill_catalog", () => skillCatalog.load());
   store.setAvailableSkillIds(skillCatalog.ids());
   await initializeComponent("custom_mcp_servers", () => services.customMcpServers.load());

@@ -116,6 +116,39 @@ function render(settings: RuntimeSettingsDetails): string {
   }));
 }
 
+test("settings expose only optional extension switches while retaining individual capability settings", () => {
+  const html = render(details());
+  assert.match(html, /Optional extensions/);
+  for (const id of ["skill", "mcp", "plan", "scheduler", "connector.uniprot"]) {
+    assert.ok(!html.includes(`aria-label="${id} plugin"`));
+  }
+  for (const id of ["artifact-json"]) {
+    assert.ok(html.includes(`aria-label="${id} plugin"`));
+  }
+  assert.match(html, /data-plugin="skill"/);
+  assert.match(html, /data-plugin="mcp"/);
+  assert.doesNotMatch(html, /Existing configuration disables/);
+});
+
+test("hidden internal switches still honor explicit and inherited backend configuration", () => {
+  const configured = details({ plugins: { skill: { enabled: false }, plan: { enabled: false } } });
+  configured.inheritedPlugins = { mcp: { enabled: false }, scheduler: { enabled: false } };
+  const html = render(configured);
+  assert.match(html, /Existing configuration disables built-in capabilities: skill, mcp, plan, scheduler/);
+  assert.doesNotMatch(html, /data-plugin="skill"|data-plugin="mcp"/);
+  assert.match(html, /Saving here will not re-enable them/);
+});
+
+test("built-in connector plugin overrides remain visible as diagnostics, not master switches", () => {
+  const configured = details({ plugins: { "connector.pubmed": { enabled: false } } });
+  configured.inheritedPlugins = { "connector.uniprot": { enabled: false } };
+  const html = render(configured);
+  assert.match(html, /Existing configuration disables built-in capabilities: connector.pubmed, connector.uniprot/);
+  assert.ok(!html.includes('aria-label="connector.uniprot plugin"'));
+  assert.ok(!html.includes('aria-label="connector.pubmed plugin"'));
+  assert.match(html, /data-plugin="mcp"/);
+});
+
 test("scope save stays after all additional settings sections", () => {
   const html = renderToStaticMarkup(createElement(ScopedSettingsEditor, {
     connectors: [], details: details(), models: [], skills: [], scopeLabel: "Session", onSave: () => undefined,

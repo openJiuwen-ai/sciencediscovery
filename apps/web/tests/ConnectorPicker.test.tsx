@@ -18,6 +18,10 @@ import test from "node:test";
 import type { ConnectorManifest } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { ConnectorPicker as McpPicker } from "@sciencediscovery/mcp/web";
+import type { ApiClient } from "../src/api.js";
+import { PluginWebHost } from "../src/plugins/host.js";
 
 import { ConnectorPicker, connectorName } from "../src/composer/ConnectorPicker.js";
 
@@ -25,6 +29,41 @@ const connectors = [
   { id: "pubmed", publisher: "NCBI", termsUrl: "https://www.ncbi.nlm.nih.gov/home/about/policies/" } as ConnectorManifest,
   { id: "uniprot", publisher: "UniProt Consortium", termsUrl: "https://www.uniprot.org/help/license" } as ConnectorManifest,
 ];
+
+test("scoped connector overrides filter every source and refresh through the host subscription", async (context) => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { setInterval, clearInterval } });
+  context.after(() => {
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  });
+  let plugins: Record<string, { enabled: boolean }> = { "connector.pubmed": { enabled: false } };
+  let notify: () => void = () => undefined;
+  const client = {
+    getPluginComposition: async () => ({ settings: { effective: { plugins } } }),
+    subscribePlugins: async (_scope: unknown, listener: () => void) => { notify = listener; },
+  } as unknown as ApiClient;
+  let view: ReactTestRenderer;
+  await act(async () => {
+    view = create(createElement(PluginWebHost, { client, projectId: "project", children:
+      createElement(ConnectorPicker, { connectors, enabledIds: ["pubmed", "uniprot"], onToggle: () => undefined }) }));
+  });
+  try {
+    const visibleIds = () => view.root.findByType(McpPicker).props.connectors.map((item: ConnectorManifest) => item.id);
+    assert.deepEqual(visibleIds(), ["uniprot"]);
+    assert.equal(view.root.findByType("button").props["aria-label"], "Data connectors: 1 of 1 enabled");
+    plugins = { "connector.uniprot": { enabled: false } };
+    await act(async () => notify());
+    assert.deepEqual(visibleIds(), ["pubmed"]);
+    plugins = {};
+    await act(async () => notify());
+    assert.deepEqual(visibleIds(), ["pubmed", "uniprot"]);
+    plugins = { mcp: { enabled: false } };
+    await act(async () => notify());
+    assert.equal(view.root.findAllByType(McpPicker).length, 0);
+  } finally { await act(async () => view.unmount()); }
+});
 
 test("maps connector ids to display names", () => {
   assert.equal(connectorName("pubmed"), "PubMed");

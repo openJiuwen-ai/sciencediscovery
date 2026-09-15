@@ -1,0 +1,34 @@
+{
+  "name": "@sciencediscovery/scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./plugin": {
+      "types": "./src/plugin.ts",
+      "default": "./dist/plugin.js"
+    },
+    ".": {
+      "types": "./src/plugin.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./manifest": {
+      "types": "./src/manifest.ts",
+      "default": "./dist/manifest.js"
+    }
+  },
+  "types": "./src/plugin.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sciencediscovery/plugin-sdk": "workspace:*",
+    "@sciencediscovery/workspace": "workspace:*",
+    "@sciencediscovery/runtime-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1"
+  }
+}

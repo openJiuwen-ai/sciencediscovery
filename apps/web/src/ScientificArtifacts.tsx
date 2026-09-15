@@ -1,3 +1,4 @@
+import { ArtifactViewerSlot } from "./plugins/artifact-viewers.js";
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -252,13 +253,8 @@ export function DatasetTable({ columns, rows, totalRows, truncated }: { columns:
  */
 export function JsonSourcePreview({ parsed, source, truncated }: { parsed: boolean; source: string; truncated: boolean }) {
   const { t } = useLocale();
-  return <div className="json-source-preview">
-    {parsed
-      ? null
-      : <p className="artifact-empty compact">{t("artifact.invalidJsonNote")}</p>}
-    <pre className="artifact-source-preview">{source}</pre>
-    {truncated ? <p className="dataset-table-meta">{t("artifact.previewTruncated")}</p> : null}
-  </div>;
+  return <ArtifactViewerSlot kind="json" parsed={parsed} source={source} truncated={truncated}
+    labels={{ invalidJson: t("artifact.invalidJsonNote"), truncated: t("artifact.previewTruncated") }} />;
 }
 
 /** Which view a JSON-backed dataset table is showing. */

@@ -31,7 +31,7 @@ import {
   type ToolGraphProduct,
   toolGraphSpec,
 } from "@sciencediscovery/schema";
-import type { McpSourceRegistry } from "@sciencediscovery/mcp-sources";
+import { filterEnabledMcpSources, type McpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { CasStore } from "@sciencediscovery/cas";
 
 import type {
@@ -425,7 +425,8 @@ export class McpGovernanceBroker {
     const source = this.registry.get(request.sourceId);
     const tool = this.registry.getTool(request.sourceId, request.toolId);
     const settings = this.store.resolveRuntimeSettings(request.sessionId).effective;
-    const enabledSourceIds = request.allowedSourceIds ?? settings.enabledConnectorIds;
+    // Explicit IDs belong to a frozen Run. Direct requests resolve the current composition.
+    const enabledSourceIds = request.allowedSourceIds ?? filterEnabledMcpSources(settings.enabledConnectorIds, settings.plugins);
     if (!enabledSourceIds.includes(request.sourceId)) {
       throw new Error(`MCP source ${request.sourceId} is not enabled for this session`);
     }

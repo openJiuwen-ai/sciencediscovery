@@ -29,7 +29,13 @@
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "@sciencediscovery/plugin-sdk": "workspace:*",
+    "@sciencediscovery/artifact-json": "workspace:*",
+    "@sciencediscovery/skill": "workspace:*",
+    "@sciencediscovery/mcp": "workspace:*",
+    "@sciencediscovery/plan": "workspace:*",
+    "@sciencediscovery/scheduler": "workspace:*"
   },
   "devDependencies": {
     "@types/cytoscape": "^3.31.0",

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "api": "pnpm --filter @sciencediscovery/api start",
-    "architecture:check": "node scripts/check-architecture.mjs",
+    "architecture:check": "node --test scripts/component-boundaries.test.mjs && node scripts/check-architecture.mjs",
     "binary:smoke": "node scripts/binary-release/smoke-binary.mjs",
     "binary:test": "node --test scripts/binary-release/*.test.mjs",
     "build": "pnpm --recursive build",
@@ -44,6 +44,7 @@
     "typecheck": "pnpm --recursive typecheck"
   },
   "devDependencies": {
+    "@babel/parser": "7.28.5",
     "@types/node": "26.1.1",
     "tsx": "4.23.1",
     "typescript": "7.0.2"

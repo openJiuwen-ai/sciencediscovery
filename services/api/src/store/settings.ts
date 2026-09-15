@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { validatePluginSettings } from "@sciencediscovery/plugin-sdk";
+import { installedPlugins } from "../plugins/catalog.js";
 import {
   DEFAULT_IDEA_TREE_SETTINGS,
   DEFAULT_MEMORY_GRAPH_SETTINGS,
@@ -75,6 +77,7 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
 }
 
 export const RUNTIME_SETTINGS_FIELDS = [
+  "plugins",
   "enabledConnectorIds",
   "enabledSkillLibraries",
   "enabledSkillIds",
@@ -178,6 +181,11 @@ export function normalizeRuntimeSettings(
   }
 
   const normalized: RuntimeSettingsOverrides = {};
+  if (hasOwn(value, "plugins")) {
+    // Persist the validated namespaced object in the existing settings catalog.
+    // Invalid persisted overrides fail closed, rather than enabling a disabled feature.
+    normalized.plugins = validatePluginSettings(value.plugins, installedPlugins);
+  }
   if (hasOwn(value, "enabledConnectorIds")) {
     const connectors = normalizeStringArray(
       value.enabledConnectorIds,

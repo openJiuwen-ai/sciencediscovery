@@ -22,9 +22,9 @@ import type {
   UpdateProjectRequest,
 } from "@sciencediscovery/schema";
 
-import { AuthApiClient } from "./auth.js";
+import { PluginApiClient } from "./plugins.js";
 
-export class ProjectsApiClient extends AuthApiClient {
+export class ProjectsApiClient extends PluginApiClient {
   listProjects(): Promise<Project[]> {
     return this.request("/api/projects");
   }

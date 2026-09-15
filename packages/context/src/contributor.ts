@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import type { RuntimeMessage } from "@sciencediscovery/runtime-core";
+import type { StateView } from "./state-view.js";
 
 export type AgentScope = "main" | "reviewer" | "subagent";
 
@@ -46,6 +47,7 @@ export interface ContextContribution<TMessage extends RuntimeMessage = RuntimeMe
 }
 
 export interface ContextContributionRequest<TMessage extends RuntimeMessage = RuntimeMessage> {
+  stateView?: StateView;
   contextId: string;
   history: readonly TMessage[];
   latestUserInput: string;
@@ -56,6 +58,8 @@ export interface ContextContributionRequest<TMessage extends RuntimeMessage = Ru
 
 export interface ContextContributor<TMessage extends RuntimeMessage = RuntimeMessage> {
   readonly id: string;
+  /** Declared component reads. An omitted list preserves legacy contributor compatibility. */
+  readonly stateReads?: readonly string[];
   /** Required contributors fail assembly; optional contributors are omitted with a diagnostic. */
   readonly required?: boolean;
   readonly scopes: readonly AgentScope[];
@@ -150,6 +154,7 @@ export class ContextContributorRegistry<TMessage extends RuntimeMessage = Runtim
   }
 
   async collect(input: {
+    stateView?: StateView;
     contextId: string;
     history: readonly TMessage[];
     scope: AgentScope;
@@ -160,6 +165,7 @@ export class ContextContributorRegistry<TMessage extends RuntimeMessage = Runtim
   }
 
   async collectDetailed(input: {
+    stateView?: StateView;
     contextId: string;
     history: readonly TMessage[];
     scope: AgentScope;
@@ -180,7 +186,11 @@ export class ContextContributorRegistry<TMessage extends RuntimeMessage = Runtim
     }> => {
       const startedAt = Date.now();
       try {
-        const contribution = await contributor.contribute(request);
+        const contribution = await contributor.contribute({
+          ...request,
+          ...(request.stateView
+            ? { stateView: request.stateView.restrict(contributor.stateReads ?? []) } : {}),
+        });
         return {
           contribution,
           contributor,
@@ -327,16 +337,19 @@ implements ContextContributor<TMessage> {
 export class ContextSectionContributor<TMessage extends RuntimeMessage = RuntimeMessage>
 implements ContextContributor<TMessage> {
   readonly id: string;
+  readonly stateReads?: readonly string[];
   readonly required: boolean;
   readonly scopes: readonly AgentScope[];
 
   constructor(private readonly options: {
     contribute(request: ContextContributionRequest<TMessage>): ContextContribution<TMessage> | Promise<ContextContribution<TMessage>>;
     id: string;
+    stateReads?: readonly string[];
     required?: boolean;
     scopes?: readonly AgentScope[];
   }) {
     this.id = options.id;
+    this.stateReads = options.stateReads;
     this.required = options.required ?? true;
     this.scopes = options.scopes ?? ["main", "subagent", "reviewer"];
   }

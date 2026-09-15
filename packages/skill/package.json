@@ -1,0 +1,42 @@
+{
+  "name": "@sciencediscovery/skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./web": { "types": "./src/web.tsx", "default": "./dist/web.js" },
+    "./plugin": {
+      "types": "./src/plugin.ts",
+      "default": "./dist/plugin.js"
+    },
+    ".": {
+      "types": "./src/plugin.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./manifest": {
+      "types": "./src/manifest.ts",
+      "default": "./dist/manifest.js"
+    }
+  },
+  "types": "./src/plugin.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sciencediscovery/plugin-sdk": "workspace:*",
+    "@sciencediscovery/workspace": "workspace:*",
+    "@sciencediscovery/context": "workspace:*",
+    "@sciencediscovery/runtime-core": "workspace:*",
+    "@sciencediscovery/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "react": "19.2.7"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

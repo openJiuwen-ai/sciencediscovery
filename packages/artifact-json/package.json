@@ -1,0 +1,28 @@
+{
+  "name": "@sciencediscovery/artifact-json",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./web": { "types": "./src/web.tsx", "default": "./dist/web.js" },
+    "./manifest": {
+      "types": "./src/manifest.ts",
+      "default": "./dist/manifest.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sciencediscovery/plugin-sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "react": "19.2.7"
+  },
+  "types": "./src/manifest.ts"
+}

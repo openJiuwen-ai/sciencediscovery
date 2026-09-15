@@ -1109,8 +1109,8 @@ export function assertMcpProviderResult(
   }
 }
 
-export function createPublicBiomedSources(): McpSourceAdapter[] {
-  return PUBLIC_BIOMED_SOURCE_DEFINITIONS.map((definition) => {
+export function createPublicBiomedSources(sourceIds?: readonly string[]): McpSourceAdapter[] {
+  return PUBLIC_BIOMED_SOURCE_DEFINITIONS.filter((definition) => !sourceIds || sourceIds.includes(definition.id)).map((definition) => {
     const sourceManifest = manifest(definition);
     return {
       manifest: sourceManifest,

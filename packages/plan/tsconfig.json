@@ -1,5 +1,20 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "src" },
-  "include": ["src/**/*.ts"]
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": [
+      "node",
+      "react"
+    ],
+    "jsx": "react-jsx",
+    "lib": [
+      "ES2024",
+      "DOM"
+    ]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ]
 }

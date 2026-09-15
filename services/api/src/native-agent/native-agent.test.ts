@@ -110,6 +110,29 @@ test("max parallel tool call configuration defaults and validates", () => {
   );
 });
 
+test("main, child and reviewer use the same disabled runtime contributions", async () => {
+  const options = workspace() as NativeAgentOptions;
+  options.planStore = { latest: async () => undefined, update: async () => { throw new Error("disabled"); } };
+  options.skills = [{
+    id: "fixture-skill", content: "fixture body", description: "fixture skill", hash: "a".repeat(64), revision: 1,
+    resources: [], version: "1", readResource: async () => { throw new Error("disabled"); },
+  }];
+  options.runSubagent = async () => { throw new Error("disabled"); };
+  options.mcpTools = [{ name: "fixture_lookup", description: "fixture", displayName: "fixture", inputSchema: { type: "object" },
+    sourceId: "fixture", toolId: "lookup", routing: { keywords: ["fixture"], mode: "prefer", priority: 1 }, execute: async () => "disabled" }];
+  const restore = setModelTurnStreamerForTest(async (_endpoint, prompt, _history, tools) => {
+    for (const name of ["update_plan", "read_skill", "task", "fixture_lookup"]) assert.ok(!tools.some((tool) => tool.name === name), name);
+    assert.ok(tools.some((tool) => tool.name === "list_files"));
+    assert.ok(!prompt.includes("fixture skill"));
+    return textTurn("done");
+  });
+  try {
+    for (const contextScope of ["main", "subagent", "reviewer"] as const) {
+      await createNativeAgent({ ...options, contextScope, disabledPlugins: ["plan", "skill", "mcp", "scheduler"] }).execute("fixture");
+    }
+  } finally { restore(); }
+});
+
 test("loop streams a tool round trip and returns wire-format final messages", async () => {
   const { calls, streamer } = scriptStreamer([
     (call) => {

@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@babel/parser':
+        specifier: 7.28.5
+        version: 7.28.5
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
@@ -20,9 +23,27 @@ importers:
 
   apps/web:
     dependencies:
+      '@sciencediscovery/artifact-json':
+        specifier: workspace:*
+        version: link:../../packages/artifact-json
+      '@sciencediscovery/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
+      '@sciencediscovery/plan':
+        specifier: workspace:*
+        version: link:../../packages/plan
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      '@sciencediscovery/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@sciencediscovery/skill':
+        specifier: workspace:*
+        version: link:../../packages/skill
       cytoscape:
         specifier: ^3.34.0
         version: 3.34.1
@@ -131,6 +152,19 @@ importers:
         version: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(tsx@4.23.1)(yaml@2.9.0)
 
   config: {}
+
+  packages/artifact-json:
+    dependencies:
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
 
   packages/artifact-manager:
     dependencies:
@@ -278,8 +312,39 @@ importers:
         specifier: 26.1.1
         version: 26.1.1
 
+  packages/mcp:
+    dependencies:
+      '@sciencediscovery/context':
+        specifier: workspace:*
+        version: link:../context
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
+      '@sciencediscovery/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@sciencediscovery/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+
   packages/mcp-sources:
     dependencies:
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../schema
@@ -353,6 +418,9 @@ importers:
       '@sciencediscovery/context':
         specifier: workspace:*
         version: link:../context
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
       '@sciencediscovery/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
@@ -369,6 +437,12 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
 
   packages/plan-mode:
     dependencies:
@@ -387,6 +461,22 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
+  packages/plugin-sdk:
+    dependencies:
+      '@sciencediscovery/context':
+        specifier: workspace:*
+        version: link:../context
+      '@sciencediscovery/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@sciencediscovery/tools':
+        specifier: workspace:*
+        version: link:../tools
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -432,6 +522,22 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  packages/scheduler:
+    dependencies:
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
+      '@sciencediscovery/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@sciencediscovery/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+
   packages/schema:
     dependencies:
       '@sciencediscovery/external-urls':
@@ -441,6 +547,34 @@ importers:
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
+
+  packages/skill:
+    dependencies:
+      '@sciencediscovery/context':
+        specifier: workspace:*
+        version: link:../context
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../plugin-sdk
+      '@sciencediscovery/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
+      '@sciencediscovery/schema':
+        specifier: workspace:*
+        version: link:../schema
+      '@sciencediscovery/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+    devDependencies:
+      '@types/node':
+        specifier: 26.1.1
+        version: 26.1.1
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
 
   packages/specialist:
     dependencies:
@@ -510,6 +644,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
+      '@sciencediscovery/artifact-json':
+        specifier: workspace:*
+        version: link:../../packages/artifact-json
       '@sciencediscovery/artifact-manager':
         specifier: workspace:*
         version: link:../../packages/artifact-manager
@@ -537,6 +674,9 @@ importers:
       '@sciencediscovery/knowledge-engine':
         specifier: workspace:*
         version: link:../../packages/knowledge-engine
+      '@sciencediscovery/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@sciencediscovery/mcp-sources':
         specifier: workspace:*
         version: link:../../packages/mcp-sources
@@ -558,6 +698,9 @@ importers:
       '@sciencediscovery/plan-mode':
         specifier: workspace:*
         version: link:../../packages/plan-mode
+      '@sciencediscovery/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
       '@sciencediscovery/provenance':
         specifier: workspace:*
         version: link:../../packages/provenance
@@ -570,9 +713,15 @@ importers:
       '@sciencediscovery/sandbox-capability':
         specifier: workspace:*
         version: link:../../packages/sandbox-capability
+      '@sciencediscovery/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@sciencediscovery/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@sciencediscovery/skill':
+        specifier: workspace:*
+        version: link:../../packages/skill
       '@sciencediscovery/specialist':
         specifier: workspace:*
         version: link:../../packages/specialist
@@ -653,6 +802,23 @@ importers:
         version: 7.0.2
 
 packages:
+
+  '@babel/helper-string-parser@7.29.7':
+    resolution: {integrity: sha512-Pb5ijPrZ89GDH8223L4UP8i6QApWxs04RbPQJTeWDV0/keR2E36MeKnyr6LYmUUvqRRI+Iv87SuF1W6ErINzYw==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/helper-validator-identifier@7.29.7':
+    resolution: {integrity: sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/parser@7.28.5':
+    resolution: {integrity: sha512-KKBU1VGYR7ORr3At5HAtUQ+TV3SzRCXmA/8OdDZiLDBIZxVyzXuztPjfLd3BV1PRAQGCMWWSHYhL0F8d5uHBDQ==}
+    engines: {node: '>=6.0.0'}
+    hasBin: true
+
+  '@babel/types@7.29.8':
+    resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
+    engines: {node: '>=6.9.0'}
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -2373,6 +2539,19 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@babel/helper-string-parser@7.29.7': {}
+
+  '@babel/helper-validator-identifier@7.29.7': {}
+
+  '@babel/parser@7.28.5':
+    dependencies:
+      '@babel/types': 7.29.8
+
+  '@babel/types@7.29.8':
+    dependencies:
+      '@babel/helper-string-parser': 7.29.7
+      '@babel/helper-validator-identifier': 7.29.7
 
   '@emnapi/core@1.11.1':
     dependencies:

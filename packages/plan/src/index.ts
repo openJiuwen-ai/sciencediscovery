@@ -143,7 +143,6 @@ export function createPlanBatchPolicy(): ToolBatchPolicy {
 }
 
 export function createPlanContextFactory<TMessage extends RuntimeMessage>(
-  store: PlanStore,
   scopes: readonly AgentScope[],
 ): ContextContributorFactory<TMessage> {
   return {
@@ -151,9 +150,12 @@ export function createPlanContextFactory<TMessage extends RuntimeMessage>(
     create() {
       return new ContextSectionContributor<TMessage>({
         id: "plan.state",
+        stateReads: ["plan"],
         scopes,
-        contribute: async ({ history, signal, turn }) => {
-          const snapshot = await store.latest(signal);
+        contribute: async ({ history, signal, turn, stateView }) => {
+          // A captured null is authoritative; never fall back to live latest.
+          if (!stateView) throw new Error("Plan context requires a fixed StateView");
+          const snapshot = stateView.read<PlanSnapshot | null>("plan");
           if (!snapshot?.items.length) return {};
           const observation = observePlanProgress(snapshot, history, turn);
           return {

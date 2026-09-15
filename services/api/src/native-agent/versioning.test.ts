@@ -101,6 +101,11 @@ test("production AgentRun records exact contexts, complete observations, sequent
     if (entry.type === "file") assert.deepEqual(await store.readData(entry.content), await readFile(resolve(workspace, "result.txt")));
     const modelContext = (await store.readRecord<{ input: ModelInput }>(first.modelContext, "ModelContextSnapshot")).value;
     assert.deepEqual(modelContext.input, received[0]);
+    const inputState = (await store.readRecord<AgentStateSnapshot>(first.before)).value;
+    const assembly = (await store.readRecord<ContextAssemblyRecord>(first.context)).value;
+    assert.deepEqual(assembly.checkpoint, inputState.checkpoint);
+    assert.deepEqual(inputState.checkpoint!.components.find((item) => item.id === "workspace")!.value, inputState.workspace);
+    assert.deepEqual((inputState.checkpoint!.components.find((item) => item.id === "tools")!.value as { specs: unknown }).specs, received[0]!.tools);
     const revision = (await store.readRecord<{ manifest: import("@sciencediscovery/cas").AgentStateRef }>(first.revision)).value;
     const manifest = await store.readRecord(revision.manifest, "AgentManifest");
     assert.ok(!JSON.stringify(manifest).includes("not-in-manifest"));
