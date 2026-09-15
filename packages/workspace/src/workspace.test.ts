@@ -2160,6 +2160,38 @@ test("knowledge-engine tools enforce a bound KB scope: default fill, optional sc
   assert.ok(unscopedRequired.includes("kbId"), "kbId must stay required without a scope");
 });
 
+test("list_knowledge_bases filters to the bound scope: no site-wide ids to probe with", async () => {
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [
+      { id: "kb1", name: "Bound KB", stats: { documents: 1, entities: 1, edges: 1 } },
+      { id: "kb2", name: "Someone else's KB", stats: { documents: 9, entities: 9, edges: 9 } },
+    ],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async () => ({}),
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
+  };
+  const base = { enabledConnectorIds: [] as string[], executePython: async () => { throw new Error("not used"); }, knowledgeEngine };
+  const scoped = createWorkspaceTools(process.cwd(), { ...base, knowledgeEngineScope: { kbIds: ["kb1"], singleKbId: "kb1" } });
+  const scopedListing = await scoped.find((tool) => tool.name === "list_knowledge_bases")!.execute("ke-call", {});
+  assert.deepEqual(
+    (scopedListing.details as Array<{ id: string }>).map((kb) => kb.id),
+    ["kb1"],
+    "a bound session must not see other KBs' ids/names/stats",
+  );
+
+  const unscoped = createWorkspaceTools(process.cwd(), base);
+  const unscopedListing = await unscoped.find((tool) => tool.name === "list_knowledge_bases")!.execute("ke-call", {});
+  assert.equal((unscopedListing.details as Array<{ id: string }>).length, 2, "without a scope the listing stays site-wide");
+});
+
 test("polish_report verifies fragments via verifyCitation and rewrites the file in place", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "polish-report-"));
   context.after(() => rm(root, { force: true, recursive: true }));

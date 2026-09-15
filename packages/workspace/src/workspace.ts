@@ -1349,9 +1349,25 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       keTool(
         "list_knowledge_bases",
         "List knowledge bases",
-        "List the knowledge bases built by the knowledge engine, with per-KB stats (documents, ready documents, entities, edges). Call this first to discover kbId values for the other knowledge tools.",
+        kbScope
+          ? "List the knowledge bases built by the knowledge engine, with per-KB stats (documents, ready documents, entities, edges). This conversation is bound to a knowledge-base scope: ONLY the bound knowledge bases are listed, and only their ids are accepted by the other knowledge tools — there is no site-wide listing here."
+          : "List the knowledge bases built by the knowledge engine, with per-KB stats (documents, ready documents, entities, edges). Call this first to discover kbId values for the other knowledge tools.",
         Type.Object({}),
-        () => knowledgeEngine.listKnowledgeBases(),
+        async () => {
+          const result = await knowledgeEngine.listKnowledgeBases();
+          if (!kbScope) return result;
+          // Scope isolation for discovery too: the resident summary filters by
+          // scope, and the listing must not leak other KBs' ids/names for the
+          // model to probe with — the tool layer rejects out-of-scope kbIds,
+          // but the listing itself should stay inside the scope.
+          const bound = new Set(kbScope.kbIds);
+          return Array.isArray(result)
+            ? result.filter((kb) => {
+              const id = (kb as { id?: unknown } | null)?.id;
+              return typeof id === "string" && bound.has(id);
+            })
+            : result;
+        },
         // Deployment config listing (KB names are operator-chosen), not corpus data.
         { trusted: true },
       ),
