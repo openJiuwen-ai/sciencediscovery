@@ -23,11 +23,13 @@
  * completing.
  *
  * Stage 2 (V2-C3, groundedness enforcement): verbatim-intended quote spans
- * in the draft answer must carry a verification verdict from this run
- * (verify_citation call, or evidence_ledger add+verify). Unverified spans
- * trigger one more turn with a directive to verify or paraphrase-and-label —
- * OpenScholar-style mandatory citation verification as a hard pipeline
- * stage, skill-independent.
+ * in the draft answer must carry a PASSING verification verdict from this
+ * run's tool RESULTS (verify_citation, or evidence_ledger add+verify).
+ * Coverage is result-aware: a call alone is not coverage, and a fuzzy or
+ * not-found outcome is a verdict the model must act on (paraphrase-and-
+ * label), never a pass. Uncovered spans trigger another turn with a
+ * directive to verify or paraphrase-and-label — OpenScholar-style mandatory
+ * citation verification as a hard pipeline stage, skill-independent.
  *
  * Design notes (from the C4 evaluation, handoff 2026-09-11T0100):
  * - DA enforced this via skill frontmatter plus a separate audit subagent
@@ -35,12 +37,16 @@
  *   audits against its own full trajectory, which is already in context —
  *   DA's audit read a truncated excerpt that was blind exactly where the
  *   decisive tool calls lived.
- * - Each stage fires at most once per run (this class is composed per run);
- *   the loop additionally caps continuations at MAX_FINISH_GATE_CONTINUATIONS
- *   (=3, exactly stage-1 + stage-1.5 + stage-2), so a misbehaving policy can
- *   never spin.
- * - The gate never blocks a finish: it can only ask for one extra turn per
- *   stage. The already-reviewed scan is bounded to the current run's segment
+ * - Stages 1 and 1.5 fire at most once per run (this class is composed per
+ *   run). Stage 2 re-fires on EVERY finish attempt that still ships uncovered
+ *   spans — a model that ignores the grounding directive must not be able to
+ *   wait the gate out; the loop caps continuations at
+ *   MAX_FINISH_GATE_CONTINUATIONS (=3) and reports a capped gate as a denied
+ *   finish_gate event, so a misbehaving policy can never spin and can never
+ *   ship unverified quotes silently.
+ * - The gate never blocks a finish on its own: it asks for extra turns
+ *   (stage 2 repeatedly while uncovered spans remain). The already-reviewed
+ *   scan is bounded to the current run's segment
  *   (messages after the last genuine user input), so a fresh task in the same
  *   session gets its own audit while a resume of the audited run stays silent.
  */
@@ -159,10 +165,19 @@ function normalizeForMatch(text: string): string {
   return text.toLowerCase().replaceAll(/\s+/g, " ").trim();
 }
 
-interface ToolCallRecord { argsText: string; name: string }
+interface ToolCallRecord { argsText: string; name: string; id?: string; resultText?: string }
 
-/** Pull (name, raw-args) pairs out of assistant tool_calls in the run segment. */
-function segmentToolCalls(segment: readonly { role?: string; tool_calls?: unknown }[]): ToolCallRecord[] {
+/** Segment message shape the coverage scan reads (assistant calls + tool results). */
+type SegmentMessage = { role?: string; tool_calls?: unknown; name?: unknown; content?: unknown; tool_call_id?: unknown };
+
+/**
+ * Pull (name, raw-args, paired result) records out of the run segment.
+ * Results are matched by tool_call_id when present; id-less result messages
+ * (some transports strip the id) pair with the first same-name call that has
+ * no result yet. A call with no paired result keeps resultText undefined —
+ * downstream coverage treats that as fail-closed.
+ */
+function segmentToolCalls(segment: readonly SegmentMessage[]): ToolCallRecord[] {
   const calls: ToolCallRecord[] = [];
   for (const message of segment) {
     if (!Array.isArray(message.tool_calls)) continue;
@@ -173,60 +188,137 @@ function segmentToolCalls(segment: readonly { role?: string; tool_calls?: unknow
       const name = typeof fnRecord.name === "string" ? fnRecord.name : "";
       if (!name) continue;
       const args = fnRecord.arguments;
-      calls.push({ argsText: typeof args === "string" ? args : JSON.stringify(args ?? {}), name });
+      const rawId = (raw as Record<string, unknown>).id;
+      calls.push({
+        argsText: typeof args === "string" ? args : JSON.stringify(args ?? {}),
+        id: typeof rawId === "string" ? rawId : undefined,
+        name,
+      });
     }
+  }
+  const nextByName = new Map<string, number>();
+  for (const message of segment) {
+    if (message.role !== "tool") continue;
+    const name = typeof message.name === "string" ? message.name : "";
+    const callId = typeof message.tool_call_id === "string" ? message.tool_call_id : undefined;
+    if (!name && !callId) continue;
+    const content = typeof message.content === "string" ? message.content : undefined;
+    let target: ToolCallRecord | undefined;
+    if (callId) {
+      target = calls.find((call) => call.id === callId);
+    } else {
+      for (let i = nextByName.get(name) ?? 0; i < calls.length; i += 1) {
+        if (calls[i]!.name === name && calls[i]!.resultText === undefined) {
+          nextByName.set(name, i + 1);
+          target = calls[i]!;
+          break;
+        }
+      }
+    }
+    if (target && target.resultText === undefined) target.resultText = content ?? "";
   }
   return calls;
 }
 
+function parseJsonObject(text: string | undefined): Record<string, unknown> | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Spans in the draft that have no verification coverage in this run segment.
- * Coverage = a verify_citation call whose quote arg text contains the
- * normalized span (the model may verify a longer passage containing it), or
- * an evidence_ledger add recording the span as its quote plus any
- * evidence_ledger verify call this run. A span assembled from two
- * separately-verified fragments is intentionally NOT covered — a spliced
- * quote is not verbatim and belongs in paraphrase-and-label.
+ * States that count as verification coverage. Verbatim always passes; fuzzy
+ * only under an explicit policy (default: fuzzy means the span is a
+ * paraphrase and must not be presented as a quote).
+ */
+function isCoveringState(state: unknown, allowFuzzy: boolean): boolean {
+  return state === "verbatim" || (allowFuzzy && state === "fuzzy");
+}
+
+/**
+ * Spans in the draft that have no PASSING verification verdict in this run
+ * segment. Coverage = a verify_citation call whose quote arg text contains
+ * the normalized span (the model may verify a longer passage containing it)
+ * AND whose paired tool result carries a covering state, or an
+ * evidence_ledger add recording the span as its quote plus a verify action
+ * whose RESULT carries a covering verdict for that entry. A call without a
+ * result, a not-found verdict, and (by default) a fuzzy verdict are all NOT
+ * coverage — they are verdicts the model must act on. A span assembled from
+ * two separately-verified fragments is intentionally NOT covered — a
+ * spliced quote is not verbatim and belongs in paraphrase-and-label.
  */
 export function findUnverifiedQuotes(
-  segment: readonly { role?: string; tool_calls?: unknown }[],
+  segment: readonly SegmentMessage[],
   draftText: string,
+  options: { allowFuzzy?: boolean } = {},
 ): string[] {
   const spans = extractQuotedSpans(draftText);
   if (!spans.length) return [];
+  const allowFuzzy = options.allowFuzzy === true;
   const calls = segmentToolCalls(segment);
-  const verifyArgs = calls
+
+  const verifyRecords = calls
     .filter((call) => call.name === VERIFY_CITATION_TOOL)
-    .map((call) => normalizeForMatch(call.argsText));
-  const ledgerActions = calls
-    .filter((call) => call.name === EVIDENCE_LEDGER_TOOL)
     .map((call) => {
-      try { return JSON.parse(call.argsText) as { action?: string; quote?: unknown }; } catch { return undefined; }
+      const verdict = parseJsonObject(call.resultText);
+      return { argsNeedle: normalizeForMatch(call.argsText), state: verdict?.state };
     });
-  const ledgerQuoteArgs = ledgerActions
-    .filter((args) => args?.action === "add" && typeof args.quote === "string")
-    .map((args) => normalizeForMatch(args!.quote as string));
-  const ledgerVerified = ledgerActions.some((args) => args?.action === "verify");
+
+  const ledgerVerdicts = new Map<string, unknown>();
+  const ledgerAdds: Array<{ argsNeedle: string; entryId?: string }> = [];
+  for (const call of calls) {
+    if (call.name !== EVIDENCE_LEDGER_TOOL) continue;
+    const args = parseJsonObject(call.argsText);
+    const result = parseJsonObject(call.resultText);
+    if (args?.action === "add" && typeof args.quote === "string") {
+      const entry = result?.entry;
+      ledgerAdds.push({
+        argsNeedle: normalizeForMatch(args.quote),
+        entryId: entry && typeof entry === "object" && typeof (entry as Record<string, unknown>).id === "string"
+          ? (entry as Record<string, unknown>).id as string
+          : undefined,
+      });
+    }
+    if (args?.action === "verify" && Array.isArray(result?.results)) {
+      for (const row of result.results as unknown[]) {
+        if (!row || typeof row !== "object") continue;
+        const record = row as Record<string, unknown>;
+        if (typeof record.id === "string") ledgerVerdicts.set(record.id, record.state);
+      }
+    }
+  }
+
   return spans.filter((span) => {
     const needle = normalizeForMatch(span);
-    if (verifyArgs.some((args) => args.includes(needle))) return false;
-    if (ledgerVerified && ledgerQuoteArgs.some((args) => args.includes(needle))) return false;
+    if (verifyRecords.some((record) => record.argsNeedle.includes(needle) && isCoveringState(record.state, allowFuzzy))) return false;
+    if (ledgerAdds.some((add) =>
+      add.entryId !== undefined
+      && add.argsNeedle.includes(needle)
+      && isCoveringState(ledgerVerdicts.get(add.entryId), allowFuzzy))) return false;
     return true;
   });
 }
 
 /** Stage-2 directive listing the unverified spans (bounded). */
-export function buildGroundingDirective(unverified: readonly string[]): string {
+export function buildGroundingDirective(unverified: readonly string[], repeat = false): string {
   const listed = unverified.slice(0, MAX_SPANS_IN_DIRECTIVE)
     .map((span, index) => `  ${index + 1}. "${span.length > 80 ? `${span.slice(0, 80)}…` : span}"`)
     .join("\n");
   const extra = unverified.length > MAX_SPANS_IN_DIRECTIVE ? ` (and ${unverified.length - MAX_SPANS_IN_DIRECTIVE} more)` : "";
+  const escalation = repeat
+    ? "\nThese spans were already flagged in an earlier finish attempt of this run. A verbatim quote may appear ONLY with a passing verdict recorded in this run; every other span MUST be paraphrased and labeled as paraphrase. The run cannot complete while unverified quotes remain in the answer."
+    : "";
   return (
     `${GROUNDING_DIRECTIVE_PREFIX} your draft answer presents the following quoted spans as source text, ` +
-    `but this run has no verification verdict for them:\n${listed}${extra}\n` +
+    `but this run has no passing verification verdict for them:\n${listed}${extra}\n` +
     `For EACH span: call ${VERIFY_CITATION_TOOL} with the exact quote (or record it with evidence_ledger and run its verify action). ` +
     "A span that comes back verbatim may stay quoted; fuzzy or not-found means paraphrase it and label it as paraphrase — " +
-    "do not present it as the source's words. Only then give your final answer."
+    "do not present it as the source's words. Only then give your final answer." +
+    escalation
   );
 }
 
@@ -269,6 +361,14 @@ export interface FinishGateLifecycleOptions<M extends RuntimeMessage, I, U> {
    */
   quoteVerificationAvailable?: boolean;
   /**
+   * Whether a fuzzy verify_citation verdict counts as coverage for a quoted
+   * span. Default "verbatim-only": the stage-2 directive tells the model a
+   * fuzzy outcome means paraphrase-and-label, so the gate must hold that
+   * line too. "allow-fuzzy" is an explicit operator policy for runs where
+   * near-verbatim quoting is acceptable.
+   */
+  fuzzyQuoteCoverage?: "verbatim-only" | "allow-fuzzy";
+  /**
    * Deterministic plan-pending probe (V2-C6): returns the run's unfinished
    * research_state plan items (pending/in_progress, capped), or undefined
    * when none. The assembly wires it to the workspace research-state file.
@@ -299,7 +399,7 @@ export function buildFinishGateDirective(skillIds: readonly string[], auditCompa
 
 export class FinishGateLifecycle<M extends RuntimeMessage, I, U> implements TurnLifecycle<M, I, U> {
   private auditFired = false;
-  private groundingFired = false;
+  private groundingDirectives = 0;
   private interventionFired = false;
   private readonly options: FinishGateLifecycleOptions<M, I, U>;
 
@@ -380,21 +480,26 @@ export class FinishGateLifecycle<M extends RuntimeMessage, I, U> implements Turn
       }
     }
 
-    // Stage 2 — groundedness enforcement (once per run, skill-independent):
-    // verbatim-intended quotes in the draft answer must carry a verification
-    // verdict from this run. The runtime's continuation cap (3) bounds
-    // stage-1 + stage-1.5 + stage-2 together, so this can never spin. Silent
-    // when no verification tool exists in this run's registry.
-    if (!this.groundingFired && this.options.quoteVerificationAvailable !== false) {
+    // Stage 2 — groundedness enforcement (skill-independent): verbatim-intended
+    // quotes in the draft answer must carry a PASSING verification verdict
+    // from this run's tool results. No one-shot latch: every finish attempt
+    // that still ships uncovered spans re-fires (with an escalating
+    // directive), so a model cannot wait the gate out — the runtime's
+    // continuation cap (3) bounds the retries and reports the final capped
+    // attempt as a denied finish_gate event. Silent when no verification
+    // tool exists in this run's registry.
+    if (this.options.quoteVerificationAvailable !== false) {
       const draft = typeof input.modelTurn.assistantMessage?.content === "string"
         ? input.modelTurn.assistantMessage.content as string
         : "";
-      const unverified = draft ? findUnverifiedQuotes(segment, draft) : [];
+      const unverified = draft
+        ? findUnverifiedQuotes(segment, draft, { allowFuzzy: this.options.fuzzyQuoteCoverage === "allow-fuzzy" })
+        : [];
       if (unverified.length) {
-        this.groundingFired = true;
+        this.groundingDirectives += 1;
         return Promise.resolve({
           action: "continue",
-          message: createMessage(buildGroundingDirective(unverified)),
+          message: createMessage(buildGroundingDirective(unverified, this.groundingDirectives > 1)),
         });
       }
     }

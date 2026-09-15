@@ -165,7 +165,7 @@ test("extractQuotedSpans pulls paired-quote and blockquote spans, filters noise"
   assert.deepEqual(spans, [QUOTE_A, QUOTE_B]);
 });
 
-test("stage 2 fires on unverified spans; verified spans via verify_citation args are covered", async () => {
+test("stage 2 fires on unverified spans; verified spans via verify_citation results are covered", async () => {
   const lifecycle = gate({ skills: [] });
   const history = [
     { role: "user", content: "go" },
@@ -183,13 +183,72 @@ test("stage 2 fires on unverified spans; verified spans via verify_citation args
   assert.ok(text.includes("Pre-finish grounding enforcement"));
   assert.ok(!text.includes(QUOTE_A.slice(0, 40)), "the verified span must not be listed");
   assert.ok(text.includes(QUOTE_B.slice(0, 40)), "the unverified span must be listed");
-  // Fires once: the next finish attempt passes through.
+  // No one-shot latch: the model ignored the directive and ships the same
+  // unverified span again — the gate re-fires with an escalated directive.
   const second = await lifecycle.beforeFinish({
     history: [...history, { role: "assistant", content: draft }],
     modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
     turn: 4,
   });
-  assert.equal(second, undefined);
+  assert.equal(second?.action, "continue", "a repeat finish attempt with uncovered spans must be gated again");
+  const secondText = String((second as { message?: { content?: unknown } })?.message?.content);
+  assert.ok(secondText.includes("already flagged"), "the repeat directive escalates");
+  assert.ok(!secondText.includes(QUOTE_A.slice(0, 40)));
+  assert.ok(secondText.includes(QUOTE_B.slice(0, 40)));
+});
+
+test("stage 2 coverage is result-aware: fuzzy, not-found, and missing results do not cover", async () => {
+  const lifecycle = gate({ skills: [] });
+  const draft = `Answer: “${QUOTE_A}” and “${QUOTE_B}” end.`;
+  const toolResult = (id: string, state: string) =>
+    ({ role: "tool", name: "verify_citation", tool_call_id: id, content: JSON.stringify({ state }) });
+  const history = [
+    { role: "user", content: "go" },
+    {
+      role: "assistant",
+      tool_calls: [
+        { function: { arguments: JSON.stringify({ kbId: "kb1", quote: QUOTE_A }), name: "verify_citation" }, id: "v1" },
+        { function: { arguments: JSON.stringify({ kbId: "kb1", quote: QUOTE_B }), name: "verify_citation" }, id: "v2" },
+        // v3: a call whose result message never landed — fail-closed.
+        { function: { arguments: JSON.stringify({ kbId: "kb1", quote: `${QUOTE_A} (missing)` }), name: "verify_citation" }, id: "v3" },
+      ],
+    },
+    toolResult("v1", "fuzzy"),
+    toolResult("v2", "not-found"),
+  ];
+  const decision = await lifecycle.beforeFinish({
+    history: [...history, { role: "assistant", content: draft }],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.equal(decision?.action, "continue");
+  const text = String((decision as { message?: { content?: unknown } })?.message?.content);
+  assert.ok(text.includes(QUOTE_A.slice(0, 40)), "fuzzy is a paraphrase verdict, not coverage");
+  assert.ok(text.includes(QUOTE_B.slice(0, 40)), "not-found is not coverage");
+});
+
+test("stage 2 allow-fuzzy policy counts a fuzzy verdict as coverage", async () => {
+  const lifecycle = new FinishGateLifecycle<M, unknown, never>({
+    fuzzyQuoteCoverage: "allow-fuzzy",
+    quoteVerificationAvailable: true,
+    reviewCheckpointAvailable: false,
+    skills: [],
+  });
+  const draft = `Answer: “${QUOTE_A}” and “${QUOTE_B}” end.`;
+  const decision = await lifecycle.beforeFinish({
+    history: [
+      { role: "user", content: "go" },
+      verifyCitationCall(QUOTE_A),
+      { role: "tool", name: "verify_citation", tool_call_id: "v1", content: "{\"state\":\"fuzzy\"}" },
+      { role: "assistant", content: draft },
+    ],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.equal(decision?.action, "continue");
+  const text = String((decision as { message?: { content?: unknown } })?.message?.content);
+  assert.ok(!text.includes(QUOTE_A.slice(0, 40)), "under allow-fuzzy the fuzzy verdict covers the span");
+  assert.ok(text.includes(QUOTE_B.slice(0, 40)), "the never-verified span is still listed");
 });
 
 test("stage 2 covers spans recorded in evidence_ledger when a verify action ran", async () => {
@@ -198,6 +257,8 @@ test("stage 2 covers spans recorded in evidence_ledger when a verify action ran"
     { role: "user", content: "go" },
     { role: "assistant", tool_calls: [{ function: { arguments: JSON.stringify({ action: "add", claim: "condensation", quote: QUOTE_B }), name: "evidence_ledger" }, id: "l1" }] },
     { role: "assistant", tool_calls: [{ function: { arguments: JSON.stringify({ action: "verify", kbId: "kb1" }), name: "evidence_ledger" }, id: "l2" }] },
+    { role: "tool", name: "evidence_ledger", tool_call_id: "l1", content: JSON.stringify({ entry: { id: "e1", quote: QUOTE_B }, total: 1 }) },
+    { role: "tool", name: "evidence_ledger", tool_call_id: "l2", content: JSON.stringify({ checked: 1, results: [{ id: "e1", state: "verbatim" }], skipped: 0 }) },
   ];
   const draft = `Answer: “${QUOTE_B}” end.`;
   const decision = await lifecycle.beforeFinish({
@@ -205,10 +266,30 @@ test("stage 2 covers spans recorded in evidence_ledger when a verify action ran"
     modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
     turn: 2,
   });
-  assert.equal(decision, undefined, "ledger add + verify covers the span");
+  assert.equal(decision, undefined, "ledger add + a passing verify verdict covers the span");
 });
 
-test("stage ordering: audit fires first, grounding second, then silence", async () => {
+test("stage 2: a ledger verify verdict of not-found does not cover the recorded quote", async () => {
+  const lifecycle = gate({ skills: [] });
+  const draft = `Answer: “${QUOTE_B}” end.`;
+  const decision = await lifecycle.beforeFinish({
+    history: [
+      { role: "user", content: "go" },
+      { role: "assistant", tool_calls: [{ function: { arguments: JSON.stringify({ action: "add", claim: "condensation", quote: QUOTE_B }), name: "evidence_ledger" }, id: "l1" }] },
+      { role: "assistant", tool_calls: [{ function: { arguments: JSON.stringify({ action: "verify", kbId: "kb1" }), name: "evidence_ledger" }, id: "l2" }] },
+      { role: "tool", name: "evidence_ledger", tool_call_id: "l1", content: JSON.stringify({ entry: { id: "e1", quote: QUOTE_B }, total: 1 }) },
+      { role: "tool", name: "evidence_ledger", tool_call_id: "l2", content: JSON.stringify({ checked: 1, results: [{ id: "e1", state: "not-found" }], skipped: 0 }) },
+      { role: "assistant", content: draft },
+    ],
+    modelTurn: { assistantMessage: { role: "assistant", content: draft }, toolCalls: [] },
+    turn: 2,
+  });
+  assert.equal(decision?.action, "continue", "the ledger's not-found verdict must be acted on, not treated as coverage");
+  const text = String((decision as { message?: { content?: unknown } })?.message?.content);
+  assert.ok(text.includes(QUOTE_B.slice(0, 40)));
+});
+
+test("stage ordering: audit fires first, grounding second and again while spans stay uncovered", async () => {
   const lifecycle = gate({ skills: [{ id: "systematic-review", preFinishAudit: true }] });
   const draft = `Answer: “${QUOTE_B}” end.`;
   const finishInput = () => ({
@@ -229,8 +310,11 @@ test("stage ordering: audit fires first, grounding second, then silence", async 
     turn: 2,
   });
   assert.match(String((second as { message?: { content?: unknown } })?.message?.content), /Pre-finish grounding enforcement/);
+  // Audit duty is one-shot; grounding is not — the same uncovered span on a
+  // later finish attempt re-fires (escalated), never passes through silently.
   const third = await lifecycle.beforeFinish(finishInput());
-  assert.equal(third, undefined);
+  assert.equal(third?.action, "continue");
+  assert.match(String((third as { message?: { content?: unknown } })?.message?.content), /already flagged/);
 });
 
 test("stage 2 stays silent for quotes verified in a previous run of the same session", async () => {
