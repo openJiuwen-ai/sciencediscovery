@@ -1,0 +1,8 @@
+{
+  "status": 200,
+  "headers": {
+    "content-type": "text/xml"
+  },
+  "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE eSearchResult PUBLIC \"-//NLM//DTD esearch 20060610//EN\" \"https://eutils.ncbi.nlm.nih.gov/eutils/dtd/20060610/esearch.dtd\">\n<eSearchResult><Count>0</Count><RetMax>0</RetMax><RetStart>0</RetMax><IdList></IdList></eSearchResult>",
+  "encoding": "utf8"
+}
