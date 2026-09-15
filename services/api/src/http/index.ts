@@ -3688,10 +3688,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     }
   });
   // Stop the KE job runner's 1s poll chain — every booted server leaves one
-  // ref'd timer loop running forever otherwise. (remoteCompute and the MCP
-  // gateway close via cleanup() below; a second once("close") hook would
-  // double-close the transport.)
-  server.once("close", () => keJobRunner.stop());
+  // ref'd timer loop running forever otherwise — and close the KE store's
+  // sqlite connection: leaked open connections keep WAL/-shm file handles
+  // alive after the data dir is removed and can busy-wait a final sync
+  // statement forever at process exit. (remoteCompute and the MCP gateway
+  // close via cleanup() below; a second once("close") hook would double-close
+  // the transport.)
+  server.once("close", () => {
+    keJobRunner.stop();
+    knowledgeEngineStore.close();
+  });
   let hasListened = false;
   let hasClosed = false;
   let closePromise: Promise<void> | undefined;
