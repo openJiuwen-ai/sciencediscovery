@@ -3717,16 +3717,26 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolveClose) => { resolveClosed = resolveClose; });
   const cleanup = () => cleanupPromise ??= (async () => {
-    ideaResearch.close();
-    await (await platform.connectorPlugins).dispose();
-    remoteCompute.close();
-    mcpBroker.close();
-    webBroker.close();
+    // The MCP transport teardown goes first and un-awaited-by-callers: its
+    // stdio subprocess pipes are what keep a booted process alive, and the
+    // shutdown wiring contract asserts the close call synchronously on the
+    // server close event.
     try {
       await mcpGateway.close?.();
     } catch (error) {
       apiLog.warn("mcp_shutdown_failed", { errorMessage: shortErrorMessage(error) });
     }
+    ideaResearch.close();
+    // A failing plugin dispose must not skip the remaining teardown —
+    // every step is best-effort in isolation.
+    try {
+      await (await platform.connectorPlugins).dispose();
+    } catch (error) {
+      apiLog.warn("connector_plugins_dispose_failed", { errorMessage: shortErrorMessage(error) });
+    }
+    remoteCompute.close();
+    mcpBroker.close();
+    webBroker.close();
   })();
   server.once("listening", () => { hasListened = true; });
   server.once("close", () => {
