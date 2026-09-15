@@ -3687,13 +3687,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
     }
   });
-  server.once("close", () => remoteCompute.close());
-  // Kill the stdio MCP subprocesses the platform warm-up spawned; their stdio
-  // pipes otherwise keep the process (and every test that boots this server)
-  // alive long after close.
-  server.once("close", () => { void mcpGateway.close?.().catch(() => undefined); });
   // Stop the KE job runner's 1s poll chain — every booted server leaves one
-  // ref'd timer loop running forever otherwise.
+  // ref'd timer loop running forever otherwise. (remoteCompute and the MCP
+  // gateway close via cleanup() below; a second once("close") hook would
+  // double-close the transport.)
   server.once("close", () => keJobRunner.stop());
   let hasListened = false;
   let hasClosed = false;
