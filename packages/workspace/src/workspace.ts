@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -27,7 +27,12 @@ import {
   SKILL_PACKAGES_PORTABLE_ROOT,
   skillRootAliases,
 } from "@sciencediscovery/schema";
+import type { AgentMemoryCategory, AgentMemoryEntry, AgentMemoryStatus } from "@sciencediscovery/schema";
 import { detectBinaryFile, guessMediaType, readTextFilePage } from "./file-page.js";
+import { createEvidenceLedgerPort } from "./ke-evidence-ledger.js";
+import { polishReport } from "./report-polish.js";
+import { createResearchStatePort } from "./research-state.js";
+import { computeDivergence, computeProximityPairs, rankFromVerdicts } from "./tournament-rank.js";
 import type {
   ArtifactDownloadResult,
   ArtifactReadResult,
@@ -72,7 +77,7 @@ import type {
   UninstallEnvironmentRequest,
   WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
-import { Type, type TSchema } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
@@ -208,6 +213,16 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  /** V3-C1: experiential-memory port. The wiring layer (runs/index.ts)
+   *  hardcodes candidate provenance on every write — the tool can never
+   *  self-verify. Undefined = the agent_memory tool is not registered. */
+  agentMemory?: {
+    add: (input: { category: AgentMemoryCategory; content: string }) => AgentMemoryEntry | null;
+    replace: (id: string, content: string) => AgentMemoryEntry;
+    remove: (id: string) => void;
+    supersede: (id: string, content: string, category?: AgentMemoryCategory) => AgentMemoryEntry;
+    list: (filter: { category?: AgentMemoryCategory; status?: AgentMemoryStatus }) => AgentMemoryEntry[];
+  };
   timers?: {
     create(input: { afterMs?: number; at?: string; message: string; executionId?: string }): Promise<unknown>;
     list(): unknown;
@@ -337,6 +352,48 @@ export interface WorkspaceToolOptions {
   }>;
   /** Cross-session memory-graph substring search (the `query_graph` LLM tool). */
   queryGraph?: (query: string) => Promise<MemoryGraphMatchResponse>;
+  /**
+   * Knowledge-engine consumption port (the `list_knowledge_bases` /
+   * `concept_explore` / `deep_dive` / `entity_unified_search` /
+   * `validate_entities` / `gap_candidates` LLM tools). Results are
+   * JSON-serializable; the workspace package stays agnostic of the KE
+   * domain types by design.
+   */
+  knowledgeEngine?: {
+    listKnowledgeBases: () => Promise<unknown>;
+    conceptExplore: (kbId: string, entity: string, opts: { hops?: 1 | 2; limit?: number }) => Promise<unknown>;
+    deepDive: (kbId: string, entity: string, opts: { maxEdges?: number }) => Promise<unknown>;
+    entityUnifiedSearch: (
+      kbId: string,
+      entity: string,
+      opts: { graphLimit?: number; maxEdges?: number; docTopK?: number },
+    ) => Promise<unknown>;
+    validateEntities: (kbId: string, names: string[]) => Promise<unknown>;
+    gapCandidates: (
+      kbId: string,
+      opts: { topN?: number; signals?: Array<"holes" | "conflicts" | "transfers"> },
+    ) => Promise<unknown>;
+    kbSearch: (kbId: string, query: string, opts: { topK?: number; docLimit?: number; minScoreRatio?: number }) => Promise<unknown>;
+    kbExpand: (kbId: string, anchorId: string) => Promise<unknown>;
+    docGrep: (kbId: string, pattern: string, opts: { maxMatches?: number }) => Promise<unknown>;
+    driftSearch: (
+      kbId: string,
+      query: string,
+      opts: { maxCommunities?: number; seedsPerCommunity?: number; edgesPerCommunity?: number },
+    ) => Promise<unknown>;
+    noveltyCheck: (kbId: string, claim: string) => Promise<unknown>;
+    verifyCitation: (kbId: string, quote: string) => Promise<unknown>;
+  };
+  /**
+   * Bound knowledge-base scope (phase V, V2-C1): when the session binds KBs,
+   * a single bound KB becomes the default kbId (its parameter turns optional
+   * in the tool schemas), and any kbId outside the bound set is rejected at
+   * the tool layer — scope is a mechanism, not a prompt wish.
+   */
+  knowledgeEngineScope?: {
+    kbIds: string[];
+    singleKbId?: string;
+  };
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
    * `declare_evidence` LLM tool). Returns a structured error code instead of
    * degrading. */
@@ -362,6 +419,12 @@ export interface WorkspaceToolOptions {
     signal?: AbortSignal,
     toolCallId?: string,
   ) => Promise<ReviewCheckpointResult>;
+  /**
+   * Project-ledger root for research_state (V2-C2): when set, the tool gains
+   * promote/hydrate/project-summary and auto-hydrates the project ledger on
+   * summary/get. The directory is created on first promote.
+   */
+  researchProjectRoot?: string;
   proposeSkillLibraryUpdate?: (
     input: ProposeSkillLibraryUpdateRequest,
     signal?: AbortSignal,
@@ -1228,6 +1291,648 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(declareClaim);
   }
+  if (options.knowledgeEngine) {
+    const knowledgeEngine = options.knowledgeEngine;
+    const kbScope = options.knowledgeEngineScope;
+    const keTool = <T extends TSchema>(
+      name: string,
+      label: string,
+      description: string,
+      parameters: T,
+      invoke: (params: Static<T>) => Promise<unknown>,
+      opts: { exclusive?: boolean; trusted?: boolean } = {},
+    ): AgentTool<T> => ({
+      description,
+      execute: async (_toolCallId, params) => {
+        // Bound-scope enforcement: fill the default kbId when the session
+        // binds exactly one KB, and reject out-of-scope kbIds outright.
+        let effectiveParams = params;
+        if (kbScope) {
+          const raw = (params as Record<string, unknown>).kbId;
+          const kbId = typeof raw === "string" && raw ? raw : kbScope.singleKbId;
+          if (kbId !== undefined) {
+            if (!kbScope.kbIds.includes(kbId)) {
+              throw new Error(
+                `kbId "${kbId}" is outside this session's bound knowledge-base scope (${kbScope.kbIds.join(", ")}). Use one of the bound ids, or answer from what is already in context.`,
+              );
+            }
+            if (raw !== kbId) effectiveParams = { ...params, kbId } as Static<T>;
+          }
+        }
+        const result = await invoke(effectiveParams);
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      // Every KE tool is a pure concurrent-safe store read — except the two
+      // read-modify-write tools, whose unlocked file cycles must never run
+      // concurrently with themselves (opts.exclusive): evidence_ledger and
+      // polish_report.
+      isConcurrencySafe: () => !opts.exclusive,
+      label,
+      name,
+      parameters,
+      // KB content is ingested-corpus data (attacker-influenceable via a
+      // hostile PDF), so results are nonce-fenced by default. Trust anchors
+      // (opts.trusted) — the anti-hallucination verdict tools and deployment
+      // config listings — stay unfenced so their verdicts land with full
+      // authority; they echo only short corpus-derived strings (doc titles,
+      // entity names), never passages.
+      ...(opts.trusted ? {} : { untrustedCategory: "knowledge-base" }),
+    });
+    const kbIdField = Type.String({ minLength: 1, description: "Knowledge base id (see list_knowledge_bases)." });
+    // With exactly one bound KB, kbId becomes optional everywhere (the scope
+    // fills it); without a scope the parameter stays required.
+    const kbIdParam = kbScope?.singleKbId
+      ? Type.Optional(Type.String({ minLength: 1, description: `Knowledge base id (defaults to the session-bound knowledge base; only bound ids are accepted).` }))
+      : kbIdField;
+
+    tools.push(
+      keTool(
+        "list_knowledge_bases",
+        "List knowledge bases",
+        "List the knowledge bases built by the knowledge engine, with per-KB stats (documents, ready documents, entities, edges). Call this first to discover kbId values for the other knowledge tools.",
+        Type.Object({}),
+        () => knowledgeEngine.listKnowledgeBases(),
+        // Deployment config listing (KB names are operator-chosen), not corpus data.
+        { trusted: true },
+      ),
+      keTool(
+        "concept_explore",
+        "Explore concept neighborhood",
+        "Read the neighborhood of an entity in a knowledge base's entity graph. Returns the center entity plus neighbors, each with name/type/description/support count/trust level, the relation type to the center, direction, and hop (1 = direct, 2 = via the strongest 1-hop neighbors). Name resolution: exact (normalized) → alias → substring; ambiguity returns candidates instead of guessing. LIMITATION: covers only content already extracted into the graph; truncated=true means edges remain beyond the limit. Not for: what the papers SAY (use kb_search); an entity's full evidence quotes (use deep_dive).",
+        Type.Object({
+          kbId: kbIdParam,
+          entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
+          hops: Type.Optional(Type.Union([Type.Literal(1), Type.Literal(2)])),
+          limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+        }),
+        (params) =>
+          knowledgeEngine.conceptExplore(params.kbId, params.entity, {
+            hops: params.hops ?? 1,
+            ...(params.limit === undefined ? {} : { limit: params.limit }),
+          }),
+      ),
+      keTool(
+        "deep_dive",
+        "Deep dive entity",
+        "Full detail for one entity in the knowledge graph: aliases, description, and its relation edges each with the VERBATIM evidence quote (evidenceQuote) and source document (evidenceDocId/evidenceDocName). Use it to ground claims about an entity in citable evidence. LIMITATION: covers only extracted content; truncated=true means more edges exist beyond maxEdges. Not for: browsing a neighborhood (use concept_explore); passage-level retrieval beyond this entity's edges (use kb_search).",
+        Type.Object({
+          kbId: kbIdParam,
+          entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
+          maxEdges: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+        }),
+        (params) =>
+          knowledgeEngine.deepDive(params.kbId, params.entity, {
+            ...(params.maxEdges === undefined ? {} : { maxEdges: params.maxEdges }),
+          }),
+      ),
+      keTool(
+        "entity_unified_search",
+        "Unified entity search",
+        "One call, concurrent independent sections over a knowledge base for one entity — graph (neighborhood), evidence (verbatim quotes per edge), documents (keyword-matched source documents), citations ([@rid] contexts whose sentence or resolved target mentions the entity, with intent labels). Sections are returned independently (no cross-source fusion); a failing section reports status=error without affecting the others. Ambiguous names surface merged candidates instead of guessing. Not for: a quick neighborhood lookup (use concept_explore — one section instead of four); exact-pattern text search across all documents (use doc_grep).",
+        Type.Object({
+          kbId: kbIdParam,
+          entity: Type.String({ minLength: 1, description: "Entity name (canonical, alias, or partial)" }),
+          graphLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+          maxEdges: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+          docTopK: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+        }),
+        (params) =>
+          knowledgeEngine.entityUnifiedSearch(params.kbId, params.entity, {
+            ...(params.graphLimit === undefined ? {} : { graphLimit: params.graphLimit }),
+            ...(params.maxEdges === undefined ? {} : { maxEdges: params.maxEdges }),
+            ...(params.docTopK === undefined ? {} : { docTopK: params.docTopK }),
+          }),
+      ),
+      keTool(
+        "validate_entities",
+        "Validate entity names",
+        "Anti-hallucination check: verify a list of entity names against the knowledge graph BEFORE citing them. Per name returns found (with the entity), ambiguous (with candidates), or unknown. Names that come back unknown are not in the graph — do not present them as established knowledge-base facts. Not for: verifying quotes (use verify_citation); novelty claims (use novelty_check); reading an entity's evidence (use deep_dive).",
+        Type.Object({
+          kbId: kbIdParam,
+          names: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 50 }),
+        }),
+        (params) => knowledgeEngine.validateEntities(params.kbId, params.names),
+        // Anti-hallucination trust anchor: the found/unknown verdict must land
+        // with full authority; it echoes only entity names, not passages.
+        { trusted: true },
+      ),
+      keTool(
+        "kb_search",
+        "Search knowledge-base documents",
+        "Hybrid retrieval over a knowledge base's documents, returning passage-level hits: each hit carries the document (docId/docTitle), an anchorId that resolves to the exact block in the three-level reader, the section, a snippet, matched terms, a fused score, and a relative grade — scoreRatio (fraction of the batch's best score) with a relevance tier (high >=0.8, medium >=0.5, low), so hit quality can be judged independently of the scoring scale. The keyword arm (FTS) always runs; when the deployment has an embedding provider and stored document vectors, a semantic arm joins via reciprocal-rank fusion (the result's sources field lists which arms contributed; a keyword-only note means the semantic arm was unavailable). minScoreRatio optionally drops the tail below that fraction of the best hit. Use it for questions about what the papers SAY (methods, numbers, setup) — the graph tools cover extracted entities and relations. Hits are spread across at most 2 per document; truncated=true means more matches exist. LIMITATION: paraphrase recall depends on the semantic arm being present; a miss is unknown, not evidence of absence. Not for: exact string/pattern matching (use doc_grep); reading a hit's full block in context (use kb_expand with its anchorId); graph-structure questions (use concept_explore/gap_candidates).",
+        Type.Object({
+          kbId: kbIdParam,
+          query: Type.String({ minLength: 1, description: "Free-text keyword query" }),
+          topK: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
+          docLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10 })),
+          minScoreRatio: Type.Optional(Type.Number({ minimum: 0, maximum: 1, description: "Drop hits scoring below this fraction of the batch's best hit (relative tail cut)" })),
+        }),
+        (params) =>
+          knowledgeEngine.kbSearch(params.kbId, params.query, {
+            ...(params.topK === undefined ? {} : { topK: params.topK }),
+            ...(params.docLimit === undefined ? {} : { docLimit: params.docLimit }),
+            ...(params.minScoreRatio === undefined ? {} : { minScoreRatio: params.minScoreRatio }),
+          }),
+      ),
+      keTool(
+        "kb_expand",
+        "Expand a document anchor",
+        "Read the full block behind an anchorId from kb_search (or an evidence card), plus its neighbouring before/after blocks — the passage in context instead of a snippet. Anchors have the form {docId}:{blockType}:{index}. Structured not-found reasons: document-not-found (wrong docId), document-not-parsed (no fulltext yet), anchor-not-found (block type/index does not exist in this document). Not for: discovery — search first with kb_search/doc_grep and copy the anchorId from a hit; never construct an anchorId yourself.",
+        Type.Object({
+          kbId: kbIdParam,
+          anchorId: Type.String({ minLength: 1, description: "Anchor id from kb_search hits or evidence cards" }),
+        }),
+        (params) => knowledgeEngine.kbExpand(params.kbId, params.anchorId),
+      ),
+      keTool(
+        "doc_grep",
+        "Regex search document texts",
+        "Case-insensitive regular-expression search over a knowledge base's document fulltexts, line-grained like grep: each match reports the document, a 1-based line number, and the matched line. Use it when you need an exact pattern (a measurement like 'IC50', a gene variant spelling, a table token) rather than the keyword recall of kb_search. Invalid regex returns a structured error you can fix and retry. LIMITATION: matches are per line (multi-line patterns do not span lines); truncated=true means more matches exist beyond maxMatches. Not for: fuzzy or semantic questions (use kb_search); reading blocks in context (use kb_expand).",
+        Type.Object({
+          kbId: kbIdParam,
+          pattern: Type.String({ minLength: 1, maxLength: 200, description: "JavaScript regex source (case-insensitive)" }),
+          maxMatches: Type.Optional(Type.Number({ minimum: 1, maximum: 50 })),
+        }),
+        (params) =>
+          knowledgeEngine.docGrep(params.kbId, params.pattern, {
+            ...(params.maxMatches === undefined ? {} : { maxMatches: params.maxMatches }),
+          }),
+      ),
+      keTool(
+        "novelty_check",
+        "Check a claim's novelty against the knowledge base and external indexes",
+        "Anti-hallucination check for novelty claims ('first to show…', 'novel mechanism…'): deterministic probes (entity / relation / passage) against ONE knowledge base, plus an external counter-evidence stage (Semantic Scholar → OpenAlex fallback) when configured. collision = the KB already covers this subject — reframe as building on it; partial = weak overlap; no-collision = nothing in THIS KB overlaps. The combined `novelty` verdict (novel / similar-found / inconclusive) carries the PU-principle caveat: 'novel' only means no similar item was found within the searches actually completed — unseen ≠ nonexistent. Not for: verifying a quote's wording (use verify_citation); checking entity existence (use validate_entities).",
+        Type.Object({
+          kbId: kbIdParam,
+          claim: Type.String({ minLength: 1, maxLength: 1000, description: "The candidate novelty claim, verbatim" }),
+        }),
+        (params) => knowledgeEngine.noveltyCheck(params.kbId, params.claim),
+        // Anti-hallucination trust anchor (collision verdicts).
+        { trusted: true },
+      ),
+      keTool(
+        "verify_citation",
+        "Verify a quote against the papers",
+        "Three-state verification of a quote you intend to attribute to a paper: verbatim (normalized substring in at least one scanned document — safe to quote), fuzzy (≥85% word overlap — a paraphrase, not the paper's wording), not-found (do not present it as a paper's words). Returns which documents verified it. Use BEFORE quoting any sentence in a final answer. Not for: entity existence (use validate_entities); finding which paper says X (use kb_search first).",
+        Type.Object({
+          kbId: kbIdParam,
+          quote: Type.String({ minLength: 10, maxLength: 2000, description: "The quote to verify" }),
+        }),
+        (params) => knowledgeEngine.verifyCitation(params.kbId, params.quote),
+        // Anti-hallucination trust anchor: the verbatim/fuzzy/not-found
+        // verdict must land with full authority (echoes doc titles only).
+        { trusted: true },
+      ),
+      keTool(
+        "evidence_ledger",
+        "Record and audit answer claims",
+        "A session-local audit trail for the claims you will assert: record each claim with its backing anchor/doc/quote (action=add), list them (query), re-check recorded quotes against a KB (verify — three-state verdicts), and detect internal contradictions (detect-conflicts: same claim from different sources, or negation flips). A claim recorded without an anchor or quote has nothing to verify against — verify skips it, so back your claims when you record them.",
+        Type.Object({
+          action: Type.Union([Type.Literal("add"), Type.Literal("query"), Type.Literal("verify"), Type.Literal("detect-conflicts")]),
+          claim: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: "add: the claim to record; query: substring filter" })),
+          anchorId: Type.Optional(Type.String({ minLength: 1 })),
+          docId: Type.Optional(Type.String({ minLength: 1 })),
+          quote: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+          kbId: Type.Optional(kbIdField),
+        }),
+        async (params) => {
+          const ledger = createEvidenceLedgerPort();
+          if (params.action === "add") {
+            if (!params.claim) throw new Error("evidence_ledger add requires a claim");
+            return ledger.add({
+              workspaceRoot,
+              claim: params.claim,
+              ...(params.anchorId === undefined ? {} : { anchorId: params.anchorId }),
+              ...(params.docId === undefined ? {} : { docId: params.docId }),
+              ...(params.quote === undefined ? {} : { quote: params.quote }),
+              ...(params.kbId === undefined ? {} : { kbId: params.kbId }),
+            });
+          }
+          if (params.action === "query") {
+            return ledger.query({
+              workspaceRoot,
+              ...(params.claim === undefined ? {} : { claim: params.claim }),
+            });
+          }
+          if (params.action === "verify") {
+            if (!params.kbId) throw new Error("evidence_ledger verify requires kbId");
+            return ledger.verify({
+              workspaceRoot,
+              kbId: params.kbId,
+              verifyCitation: async (kbId, quote) =>
+                knowledgeEngine.verifyCitation(kbId, quote) as Promise<{ state: string }>,
+            });
+          }
+          return ledger.conflicts({ workspaceRoot });
+        },
+        // Unlocked read-modify-write over the workspace ledger file — never
+        // schedule concurrently with itself (review P2). Fenced like the
+        // other corpus tools: recorded quotes are verbatim corpus passages
+        // (up to 2000 chars) and echo back on query/verify/detect-conflicts.
+        { exclusive: true },
+      ),
+      keTool(
+        "gap_candidates",
+        "Find gap candidates",
+        "Deterministic whitespace analysis over the entity graph — three structural signals (the LLM never decides what the candidates ARE): holes (entity pairs with ≥3 shared neighbors but no direct edge; crossCommunity=true marks the most valuable cross-community holes), conflicts (high-support contradicts/contrasts_with edges with a sample quote), transfers (method used by A where context-sharing B has no link to it). LIMITATION: analyzes the top-500 entities by support (stats.truncated reports truncation); a missing edge means unknown (possibly merely unextracted), not disproven — semantic relevance and novelty need separate verification.",
+        Type.Object({
+          kbId: kbIdParam,
+          signals: Type.Optional(
+            Type.Array(Type.Union([Type.Literal("holes"), Type.Literal("conflicts"), Type.Literal("transfers")])),
+          ),
+          topN: Type.Optional(Type.Number({ minimum: 1, maximum: 25 })),
+        }),
+        (params) =>
+          knowledgeEngine.gapCandidates(params.kbId, {
+            ...(params.topN === undefined ? {} : { topN: params.topN }),
+            ...(params.signals === undefined ? {} : { signals: params.signals }),
+          }),
+      ),
+      keTool(
+        "drift_search",
+        "Two-stage community-anchored retrieval",
+        "DRIFT-style retrieval over a knowledge base that has community reports: stage one (global) lexically matches the query against the LLM-written community report digests and selects the top communities; stage two (local) returns each selected community's query-matched seed entities (name/description hits first, then support-ranked orientation members with empty matchedTerms) and its evidence-backed intra-community relations whose quote or endpoints mention the query (matchedTerms explains every hit; evidence quotes are clamped verbatim). Use it for 'where does this topic live in this corpus' orientation before drilling in — it answers at theme level even when no single entity name matches the query wording. Requires ready reports for the CURRENT graph fingerprint: no-reports says why (never generated vs stale generation) with regeneration guidance. LIMITATION: report matching is lexical (paraphrase needs the report's own vocabulary); traversal stays INSIDE the selected communities (cross-community exploration is concept_explore/entity_unified_search); a community not selected is unmatched, not irrelevant. Not for: passage search (use kb_search); one entity's full neighborhood (use concept_explore/deep_dive).",
+        Type.Object({
+          kbId: kbIdParam,
+          query: Type.String({ minLength: 1, description: "Free-text query (theme, mechanism, question topic)" }),
+          maxCommunities: Type.Optional(Type.Number({ minimum: 1, maximum: 5 })),
+          seedsPerCommunity: Type.Optional(Type.Number({ minimum: 1, maximum: 10 })),
+          edgesPerCommunity: Type.Optional(Type.Number({ minimum: 1, maximum: 15 })),
+        }),
+        (params) =>
+          knowledgeEngine.driftSearch(params.kbId, params.query, {
+            ...(params.maxCommunities === undefined ? {} : { maxCommunities: params.maxCommunities }),
+            ...(params.seedsPerCommunity === undefined ? {} : { seedsPerCommunity: params.seedsPerCommunity }),
+            ...(params.edgesPerCommunity === undefined ? {} : { edgesPerCommunity: params.edgesPerCommunity }),
+          }),
+      ),
+      keTool(
+        "polish_report",
+        "Polish a markdown report",
+        "Deterministic post-generation cleanup of a workspace markdown report: (1) strip LLM boilerplate prefixes, (2) verify each verbatim-intended fragment against the knowledge base and mark verified ones as [n] citations with an index (unverifiable fragments are left EXACTLY as written — never re-attributed by guessing), (3) normalize heading levels. The file is rewritten in place; returns the stats and citation index. Run it on the final markdown BEFORE declare_artifact. Not for: content writing (write the report first); verifying quotes interactively (use verify_citation).",
+        Type.Object({
+          path: Type.String({ minLength: 1, description: "Workspace-relative markdown file path" }),
+          kbId: kbIdParam,
+        }),
+        async (params) => {
+          const absolute = resolveWorkspaceFile(workspaceRoot, params.path);
+          if (!/\.(md|markdown)$/i.test(params.path)) {
+            throw new Error(`polish_report only accepts markdown files (.md/.markdown) — got: ${params.path}`);
+          }
+          const raw = await readFile(absolute, "utf8");
+          // Probe: verifyCitation's full-text normalized substring check (the
+          // verbatim arm only — never fuzzy). Doc-level attribution, never
+          // guessed; covers long and cross-line fragments (review P1/P2).
+          const probe = async (fragment: string) => {
+            const result = await knowledgeEngine.verifyCitation(params.kbId, fragment) as {
+              state: string;
+              verifiedIn?: Array<{ docId: string; docTitle?: string | null; state?: string }>;
+            };
+            const first = (result.verifiedIn ?? []).find((doc) => doc.state === "verbatim");
+            return first ? { docId: first.docId, ...(first.docTitle ? { docTitle: first.docTitle } : {}) } : undefined;
+          };
+          const polished = await polishReport(raw, probe);
+          if (polished.cleaned !== raw) await writeFile(absolute, polished.cleaned, "utf8");
+          return {
+            citations: polished.citations,
+            path: params.path,
+            rewritten: polished.cleaned !== raw,
+            stats: polished.stats,
+          };
+        },
+        // File read-modify-write with awaited probes in between — never
+        // schedule concurrently with itself (review P2).
+        { exclusive: true },
+      ),
+    );
+  }
+  // Research world model + tournament ranking — always-on session tools
+  // (not KE-scoped): the state file lives under the session workspace, and
+  // the ranking math is pure computation. Ported from DeepAnalyze
+  // (research_state / tournament_rank) — see research-state.ts /
+  // tournament-rank.ts headers for semantics and deliberate divergences.
+  {
+    const researchProjectRoot = options.researchProjectRoot;
+    // Once-per-run auto-hydration latch (per tool instance = per run).
+    let autoHydrated = false;
+    const researchStateTool: AgentTool<TSchema> = {
+      description:
+        "A persistent research world model (survives context compaction): pin the research goal (set-goal), keep a plan with status lifecycle (plan-add / plan-update pending|in_progress|done|dropped), track open questions (question-add / question-resolve answered|dropped — answered may carry an evidence pointer), record ruled-out directions with reasons so dead branches stay dead (rule-out), and dedupe attempted actions (mark-tried records; check-tried is the read-only pre-flight — call it BEFORE re-running a search/retrieval action to avoid repeat work). get returns the full state; summary returns the compact anti-drift digest. Refs accept an exact id (p1/q1/r1…) or a unique case-insensitive text substring — NOTE: ids are store-local and renumbered when entries cross stores (session ↔ project ledger), so reference cross-store entries by text, never by id." +
+        (researchProjectRoot
+          ? " Project ledger: durable findings cross sessions — promote merges goal/answered-questions/ruled-out/plan-history into the project's shared ledger, hydrate merges the ledger back into this session (fill-only, never overwrites), project-summary reads the ledger digest; summary/get auto-hydrate once per run, so a new session inherits the project's world model on its first read."
+          : ""),
+      execute: async (_toolCallId, params) => {
+        const input = params as Record<string, unknown>;
+        const port = createResearchStatePort();
+        const action = String(input.action ?? "");
+        const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : undefined);
+        const projectRoot = options.researchProjectRoot;
+        const needsProject = () => {
+          if (!projectRoot) throw new Error(`action ${action} requires a project context (this run has none)`);
+          return projectRoot;
+        };
+        // Project-ledger auto-hydration on read paths: once per run (the
+        // merge is idempotent fill-only, so later reads would redo nothing),
+        // and fail-soft — a ledger hiccup must never break the anti-drift
+        // read path (review P2).
+        let hydrationNote: string | undefined;
+        if (projectRoot && !autoHydrated && (action === "summary" || action === "get")) {
+          autoHydrated = true;
+          try {
+            await port.hydrate({ projectRoot, workspaceRoot });
+          } catch (error) {
+            hydrationNote = `skipped: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+        let result: unknown;
+        switch (action) {
+          case "set-goal":
+            result = await port.setGoal({ workspaceRoot, goal: text("goal") ?? "" });
+            break;
+          case "plan-add":
+            result = await port.addPlanItems({
+              workspaceRoot,
+              items: Array.isArray(input.items) ? (input.items as unknown[]).map((item) => String(item)) : [],
+            });
+            break;
+          case "plan-update":
+            result = await port.updatePlanItem({
+              workspaceRoot,
+              ref: text("ref") ?? "",
+              status: text("status") as "pending" | "in_progress" | "done" | "dropped",
+              ...(text("note") === undefined ? {} : { note: text("note") }),
+            });
+            break;
+          case "question-add":
+            result = await port.addQuestion({ workspaceRoot, text: text("text") ?? "" });
+            break;
+          case "question-resolve":
+            result = await port.resolveQuestion({
+              workspaceRoot,
+              ref: text("ref") ?? "",
+              status: text("status") as "answered" | "dropped",
+              ...(text("answer") === undefined ? {} : { answer: text("answer") }),
+              ...(text("evidence") === undefined ? {} : { evidence: text("evidence") }),
+            });
+            break;
+          case "rule-out":
+            result = await port.addRuledOut({
+              workspaceRoot,
+              what: text("what") ?? "",
+              why: text("why") ?? "",
+              ...(text("source") === undefined ? {} : { source: text("source") }),
+            });
+            break;
+          case "mark-tried":
+            result = await port.markTried({
+              workspaceRoot,
+              action: text("tried") ?? text("text") ?? "",
+              ...(text("tool") === undefined ? {} : { tool: text("tool") }),
+              ...(text("result") === undefined ? {} : { result: text("result") }),
+            });
+            break;
+          case "check-tried":
+            result = await port.checkTried({ workspaceRoot, action: text("tried") ?? text("text") ?? "" });
+            break;
+          case "get":
+            result = await port.get({ workspaceRoot });
+            break;
+          case "summary":
+            result = await port.summary({ workspaceRoot });
+            break;
+          case "clear":
+            result = await port.clear({ workspaceRoot });
+            break;
+          case "promote":
+            result = await port.promote({ projectRoot: needsProject(), workspaceRoot });
+            break;
+          case "hydrate":
+            result = await port.hydrate({ projectRoot: needsProject(), workspaceRoot });
+            break;
+          case "project-summary":
+            result = await port.projectSummary({ projectRoot: needsProject() });
+            break;
+          default:
+            throw new Error(
+              `Unknown action: ${action}. Supported: set-goal, plan-add, plan-update, question-add, question-resolve, rule-out, mark-tried, check-tried, get, summary, clear, promote, hydrate, project-summary`,
+            );
+        }
+        if (hydrationNote && result && typeof result === "object") {
+          result = { ...(result as Record<string, unknown>), hydration: hydrationNote };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      // Read-modify-write on a single JSON file — serialize same-turn calls
+      // (the DA original used a file lock for the same reason).
+      isConcurrencySafe: () => false,
+      label: "Research state",
+      name: "research_state",
+      parameters: Type.Object({
+        action: Type.Union([
+          Type.Literal("set-goal"),
+          Type.Literal("plan-add"),
+          Type.Literal("plan-update"),
+          Type.Literal("question-add"),
+          Type.Literal("question-resolve"),
+          Type.Literal("rule-out"),
+          Type.Literal("mark-tried"),
+          Type.Literal("check-tried"),
+          Type.Literal("get"),
+          Type.Literal("summary"),
+          Type.Literal("clear"),
+          Type.Literal("promote"),
+          Type.Literal("hydrate"),
+          Type.Literal("project-summary"),
+        ]),
+        goal: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "set-goal: the research objective" })),
+        items: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), { description: "plan-add: plan step texts" })),
+        ref: Type.Optional(Type.String({ description: "plan-update/question-resolve: exact id (p1/q1/…) or unique text substring" })),
+        status: Type.Optional(
+          Type.Union(
+            [
+              Type.Literal("pending"),
+              Type.Literal("in_progress"),
+              Type.Literal("done"),
+              Type.Literal("dropped"),
+              Type.Literal("answered"),
+            ],
+            { description: "plan-update: pending|in_progress|done|dropped; question-resolve: answered|dropped" },
+          ),
+        ),
+        note: Type.Optional(Type.String({ maxLength: 1000, description: "plan-update: optional note (e.g. prune reason)" })),
+        text: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "question-add: question text; mark-tried/check-tried fallback for the action description" })),
+        answer: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "question-resolve answered: answer summary" })),
+        evidence: Type.Optional(Type.String({ maxLength: 500, description: "question-resolve answered: optional pointer to where the answer/evidence lives (anchor, doc, artifact)" })),
+        what: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "rule-out: the ruled-out direction" })),
+        why: Type.Optional(Type.String({ minLength: 1, maxLength: 1000, description: "rule-out: why it was ruled out" })),
+        source: Type.Optional(Type.String({ maxLength: 1000, description: "rule-out: optional evidence pointer" })),
+        tried: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "mark-tried/check-tried: one-line action description incl. key parameters" })),
+        tool: Type.Optional(Type.String({ description: "mark-tried: the tool used" })),
+        result: Type.Optional(Type.String({ maxLength: 1000, description: "mark-tried: one-line outcome" })),
+      }),
+    };
+    tools.push(researchStateTool);
+
+    // Agent memory (V3-C1, DeepAnalyze agent_memory port): the agent may
+    // write experiential notes about its own working methods — but every
+    // write lands as a CANDIDATE whose provenance carries requiresReview;
+    // only a human promote (web UI / API) turns it into a verified rule the
+    // system prompt may carry. The tool layer cannot bypass that gate: the
+    // port (wired in runs/index.ts) hardcodes the candidate provenance.
+    if (options.agentMemory) {
+      const port = options.agentMemory;
+      tools.push({
+        description:
+          "Long-term experiential memory about your own working methods. Actions: add a note (category + self-contained content, e.g. a tool technique that worked, a workflow ordering, a user convention, a lesson from a failure); replace a note's content; supersede a note with a better version (old one archived); remove a note; list current notes. IMPORTANT: notes you write are stored as candidates marked 待核验 (pending human review) — they do NOT affect future runs until a human promotes them in the review UI, so write notes that would still make sense to a human reviewer reading them cold. Keep content self-contained and under 200 characters. Do NOT use this for task state (use research_state) or user facts — this is only for reusable working-method experience.",
+        execute: async (_toolCallId, params) => {
+          const input = params as Record<string, unknown>;
+          const action = String(input.action ?? "");
+          const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : undefined);
+          let result: unknown;
+          switch (action) {
+            case "add":
+              result = port.add({
+                category: (text("category") ?? "lesson_learned") as AgentMemoryCategory,
+                content: text("content") ?? "",
+              });
+              if (!result) result = { deduplicated: true, note: "an identical note already exists" };
+              break;
+            case "replace":
+              result = port.replace(text("id") ?? "", text("content") ?? "");
+              break;
+            case "supersede":
+              result = port.supersede(
+                text("id") ?? "",
+                text("content") ?? "",
+                text("category") as AgentMemoryCategory | undefined,
+              );
+              break;
+            case "remove":
+              port.remove(text("id") ?? "");
+              result = { removed: text("id") ?? "" };
+              break;
+            case "list":
+              result = port.list({
+                ...(text("category") ? { category: text("category") as AgentMemoryCategory } : {}),
+                ...(text("status") ? { status: text("status") as AgentMemoryStatus } : {}),
+              });
+              break;
+            default:
+              throw new Error("Unknown action: " + action + ". Supported: add, replace, supersede, remove, list");
+          }
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        },
+        isConcurrencySafe: () => false,
+        label: "Agent memory",
+        name: "agent_memory",
+        parameters: Type.Object({
+          action: Type.Union([
+            Type.Literal("add"),
+            Type.Literal("replace"),
+            Type.Literal("supersede"),
+            Type.Literal("remove"),
+            Type.Literal("list"),
+          ]),
+          category: Type.Optional(
+            Type.Union(
+              [Type.Literal("tool_technique"), Type.Literal("workflow"), Type.Literal("convention"), Type.Literal("lesson_learned")],
+              { description: "add/supersede/list: note category (add defaults to lesson_learned)" },
+            ),
+          ),
+          content: Type.Optional(Type.String({ minLength: 5, maxLength: 400, description: "add/replace/supersede: self-contained note text, <200 chars preferred" })),
+          id: Type.Optional(Type.String({ description: "replace/supersede/remove: the note id" })),
+          status: Type.Optional(
+            Type.Union([Type.Literal("active"), Type.Literal("archived"), Type.Literal("stale")], {
+              description: "list: filter by status (default all)",
+            }),
+          ),
+        }),
+      });
+    }
+
+    const tournamentRankTool: AgentTool<TSchema> = {
+      description:
+        "Deterministic tournament ranking math (no LLM, no network). action=rank: given candidate labels (items) and pairwise verdicts (matches: a, b from items, scoreA∈[0,1] = a's score against b, 1=a wins / 0.5=tie / 0=a loses), compute each item's Elo (K=32, initial 1000), win rate, and match count, sorted by Elo descending. Pair orientation does not matter (reversed submissions flip automatically); pairs without a verdict are filled as 0.5 ties and honestly counted in autoTies; duplicate pairs are overridden by the later submission and counted in duplicatePairs. action=divergence: given texts, return the mean pairwise token-Jaccard divergence (0=identical, 1=completely different) — a heuristic for whether a set of perspective outputs actually diverges; whitespace-free text (e.g. Chinese sentences) falls back to character bigrams. action=proximity: like divergence but ALSO returns the top-3 most-similar text pairs (a/b = indices into YOUR texts array, Jaccard similarity) — the collapse suspects to merge or replace (anti-collapse check after generation and after evolution rewrites). LIMITATIONS: garbage in, garbage out — verdict quality is entirely the caller's responsibility; Elo is only comparable within the same item set; the round-robin follows the items array order (later matches weigh more) — re-run with shuffled items and aggregate if order sensitivity matters; divergence is not a semantic measure.",
+      execute: async (_toolCallId, params) => {
+        const input = params as Record<string, unknown>;
+        const action = String(input.action ?? "");
+        let result: unknown;
+        switch (action) {
+          case "rank": {
+            const items = Array.isArray(input.items) ? (input.items as unknown[]).map((item) => String(item)) : [];
+            const verdicts = Array.isArray(input.matches)
+              ? (input.matches as Array<Record<string, unknown> | null>).map((match) => ({
+                  a: String(match?.a ?? ""),
+                  b: String(match?.b ?? ""),
+                  scoreA: Number(match?.scoreA),
+                }))
+              : [];
+            // Deliberate divergence from this file's throw-on-invalid
+            // convention (mirrors the DA original): validation failures are
+            // returned as an { error } payload in a 200-style result instead
+            // of throwing — the LLM corrects and retries within the turn.
+            try {
+              result = await rankFromVerdicts(items, verdicts);
+            } catch (err) {
+              result = { error: err instanceof Error ? err.message : String(err) };
+            }
+            break;
+          }
+          case "divergence": {
+            const texts = Array.isArray(input.texts)
+              ? (input.texts as unknown[]).filter((text): text is string => typeof text === "string" && text.trim().length > 0)
+              : [];
+            if (texts.length < 2) {
+              result = { error: "divergence requires texts (at least 2 non-empty strings)." };
+            } else {
+              result = { divergence: Number(computeDivergence(texts).toFixed(3)), count: texts.length };
+            }
+            break;
+          }
+          case "proximity": {
+            // NO filtering here (review P1): mostSimilar.a/b are indices into
+            // the caller's own candidate list — dropping entries would
+            // silently shift every index after a blank text. Blank strings
+            // tokenize to the empty set and compare honestly (blank-vs-blank
+            // similarity 1).
+            const texts = Array.isArray(input.texts)
+              ? (input.texts as unknown[]).map((text) => String(text))
+              : [];
+            if (texts.length < 2) {
+              result = { error: "proximity requires texts (at least 2 entries)." };
+            } else {
+              const proximity = computeProximityPairs(texts);
+              result = { ...proximity, count: texts.length };
+            }
+            break;
+          }
+          default:
+            result = { error: `Unknown action: ${action}. Supported: rank, divergence, proximity` };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+      },
+      isConcurrencySafe: () => true,
+      label: "Tournament rank",
+      name: "tournament_rank",
+      parameters: Type.Object({
+        action: Type.Union([Type.Literal("rank"), Type.Literal("divergence"), Type.Literal("proximity")]),
+        items: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "rank: candidate labels (unique)" })),
+        matches: Type.Optional(
+          Type.Array(
+            Type.Object({
+              a: Type.String({ minLength: 1 }),
+              b: Type.String({ minLength: 1 }),
+              scoreA: Type.Number({ minimum: 0, maximum: 1 }),
+            }),
+            { description: "rank: pairwise verdicts (scoreA = a's score against b in [0,1])" },
+          ),
+        ),
+        texts: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "divergence/proximity: the set of texts (proximity pair indices refer to this array)" })),
+      }),
+    };
+    tools.push(tournamentRankTool);
+  }
+
   tools.push(...createSubagentTools(options));
   if (options.reviewCheckpoint) {
     const reviewCheckpointParameters = Type.Object({
@@ -1581,6 +2286,11 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       label: "Extract PDF",
       name: "paper_extract_pdf",
       parameters: extractPdfParameters,
+      // Extracted PDF text is attacker-influenceable document content (a
+      // hostile PDF reaches the model through this tool exactly like through
+      // the KE corpus tools) — fence it. Not tag-neutralized: verbatim
+      // fidelity of the extracted text is the point of the tool.
+      untrustedCategory: "document",
     };
     tools.push(extractPdf);
   }

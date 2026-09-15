@@ -658,3 +658,17 @@ test("complete frozen Skill package files bypass the text read limit and remain 
     await rm(dataDir, { force: true, recursive: true });
   }
 });
+
+test("resolve surfaces the skill-declared finish gate (metadata.pre-finish-audit)", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const gated = catalog.resolve(["tree-search"])[0]!;
+    assert.equal(gated.preFinishAudit, true, "tree-search declares metadata.pre-finish-audit");
+    const plain = catalog.resolve(["code-engineer"])[0]!;
+    assert.equal(plain.preFinishAudit, undefined, "skills without the declaration carry no flag");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});

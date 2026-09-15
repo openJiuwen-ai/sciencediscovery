@@ -66,22 +66,45 @@ import { parseDocument, stringify } from "yaml";
 /** Domain skills bundled with the first-party Specialist catalog. */
 export const BUNDLED_SKILL_IDS = [
   "antibody-protenix-pipeline",
+  "audit-hypothesis-tournament",
+  "audit-systematic-review",
+  "audit-tree-search",
+  "chunked-analysis",
   "assessment-screening",
   "code-engineer",
+  "comparative-analysis",
   "computation-reviewer",
   "citation-reviewer",
+  "cross-table-analysis",
+  "deep-research",
+  "document-summary",
+  "evidence-discipline",
   "creative-material-design",
   "evidence-extractor",
+  "evidence-notes",
   "evolve-design",
+  "hypothesis-tournament",
+  "idea-debate",
+  "knowledge-engine-explore",
+  "knowledge-engine-grow",
   "idea-tree-team",
   "insight-aggregator",
   "life-science-evidence-brief",
   "literature-searcher",
+  "long-form-audit",
+  "long-form-writing",
+  "precise-qa",
+  "progressive-report",
   "report-writer",
   "result-evaluator",
+  "robin-chain",
   "science-research-team",
   "skill-creator",
   "structure-pocket-inspection",
+  "systematic-review",
+  "table-analysis",
+  "tree-search",
+  "virtual-lab",
 ] as const;
 
 export const SKILL_LIMITS = {
@@ -95,22 +118,45 @@ export const SKILL_LIMITS = {
 
 const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "antibody-protenix-pipeline": "1.0.0",
+  "audit-hypothesis-tournament": "1.1.0",
+  "audit-systematic-review": "1.1.0",
+  "audit-tree-search": "1.1.0",
+  "chunked-analysis": "1.0.0",
   "assessment-screening": "1.0.0",
   "code-engineer": "1.0.0",
+  "comparative-analysis": "1.0.0",
   "computation-reviewer": "1.0.0",
   "citation-reviewer": "1.0.0",
+  "cross-table-analysis": "1.0.0",
+  "deep-research": "1.0.0",
+  "document-summary": "1.0.0",
+  "evidence-discipline": "1.0.0",
   "creative-material-design": "1.0.0",
   "evidence-extractor": "1.0.0",
+  "evidence-notes": "1.0.0",
   "evolve-design": "1.0.0",
+  "hypothesis-tournament": "1.1.0",
+  "idea-debate": "1.0.0",
+  "knowledge-engine-explore": "1.0.0",
+  "knowledge-engine-grow": "1.0.0",
   "idea-tree-team": "4.0.0",
   "insight-aggregator": "1.0.0",
   "life-science-evidence-brief": "1.1.0",
   "literature-searcher": "1.0.0",
+  "long-form-audit": "1.0.0",
+  "long-form-writing": "1.0.0",
+  "precise-qa": "1.0.0",
+  "progressive-report": "1.0.0",
   "report-writer": "1.0.0",
   "result-evaluator": "1.0.0",
+  "robin-chain": "1.1.0",
   "science-research-team": "1.0.0",
   "skill-creator": "1.3.0",
   "structure-pocket-inspection": "1.0.0",
+  "systematic-review": "1.0.0",
+  "table-analysis": "1.0.0",
+  "tree-search": "1.1.0",
+  "virtual-lab": "1.1.0",
 };
 const FRONTMATTER_KEYS = new Set([
   "allowed-tools",
@@ -170,6 +216,13 @@ export interface RuntimeSkillSnapshot {
   description: string;
   hash: string;
   id: string;
+  /**
+   * Skill-declared finish gate (frontmatter `metadata.pre-finish-audit: "true"`):
+   * the run loop injects a verification directive when the model tries to
+   * finish without a review_checkpoint call. Enforced by the native-agent
+   * finish-gate lifecycle, not here.
+   */
+  preFinishAudit?: boolean;
   readPackageFiles: () => SkillPackageFileBytes[];
   metadata: Record<string, string>;
   readResource: (path: string) => SkillResourceContent;
@@ -1920,6 +1973,7 @@ export class SkillCatalog {
         description: detail.description,
         hash: detail.hash,
         id: detail.id,
+        ...(declaresPreFinishAudit(value.detail.frontmatter) ? { preFinishAudit: true } : {}),
         metadata: { ...detail.metadata },
         readPackageFiles: () => packageFileBytes(files),
         readResource: (path: string) => resourceContent(detail, files, path),
@@ -1929,4 +1983,11 @@ export class SkillCatalog {
       };
     });
   }
+}
+
+/** Read the finish-gate declaration from preserved frontmatter metadata. */
+function declaresPreFinishAudit(frontmatter: Record<string, unknown>): boolean {
+  const metadata = frontmatter["metadata"];
+  if (typeof metadata !== "object" || metadata === null) return false;
+  return (metadata as Record<string, unknown>)["pre-finish-audit"] === "true";
 }

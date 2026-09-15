@@ -15,6 +15,7 @@
 export {
   AgentLoop,
   ExternalWaitController,
+  MAX_FINISH_GATE_CONTINUATIONS,
   RuntimeBuilder,
   reduceRunState,
   type AgentLoopOptions,
@@ -24,6 +25,7 @@ export {
   type ContextAssembler,
   type ContextAssembly,
   type ExternalWaitHandle,
+  type FinishGateDecision,
   type ModelClient,
   type ModelClientObserver,
   type ModelTurn,

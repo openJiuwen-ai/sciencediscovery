@@ -13,6 +13,7 @@ export * from "./history-window.js";
 export * from "./message-composer.js";
 export * from "./mode.js";
 export * from "./prompt-renderer.js";
+export * from "./search-index.js";
 export * from "./token-estimator.js";
 export * from "./trace.js";
 export * from "./validator.js";

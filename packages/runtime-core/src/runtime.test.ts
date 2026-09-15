@@ -409,6 +409,225 @@ test("observer failures cannot change run control flow or its terminal state", a
   assert.equal(loop.snapshot().phase, "completed");
 });
 
+test("finish gate: continue injects the directive and takes another turn, then completes", async () => {
+  const events: RunEvent<never>[] = [];
+  const order: string[] = [];
+  let modelCalls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 8,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { modelCalls += 1; return { assistantMessage: { role: "assistant", content: `answer-${modelCalls}` }, toolCalls: [] }; } },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    turnLifecycle: {
+      async beforeTurn() {},
+      async afterAssembly() {},
+      async afterTurn() { order.push("afterTurn"); },
+      async beforeFinish() {
+        order.push("beforeFinish");
+        return modelCalls === 1
+          ? { action: "continue", message: { role: "user", content: "audit first" } }
+          : undefined;
+      },
+    },
+    eventSink: (event) => events.push(event),
+  });
+  const result = await loop.run([{ role: "user", content: "go" }], new AbortController().signal, () => undefined);
+  assert.equal(modelCalls, 2);
+  assert.equal(result.turns, 2);
+  assert.deepEqual(order, ["afterTurn", "beforeFinish", "afterTurn", "beforeFinish"], "gate fires after the durable turn boundary");
+  const contents = result.history.map((message) => message.content);
+  assert.ok(contents.includes("audit first"), "injected directive is in the canonical history");
+  assert.deepEqual(
+    events.filter((event) => event.type === "finish_gate").map((event) => event.type === "finish_gate" ? event.action : ""),
+    ["continue"],
+    "an undefined verdict (no opinion) emits no finish_gate event",
+  );
+  assert.equal(loop.snapshot().phase, "completed");
+});
+
+test("finish gate: continuations are capped and never exceed maxModelTurns", async () => {
+  let modelCalls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 10,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { modelCalls += 1; return { assistantMessage: { role: "assistant" }, toolCalls: [] }; } },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    turnLifecycle: {
+      async beforeTurn() {},
+      async afterAssembly() {},
+      async afterTurn() {},
+      // A stuck gate keeps asking for one more turn; the loop must stop it.
+      async beforeFinish() { return { action: "continue", message: { role: "user", content: "again" } }; },
+    },
+  });
+  const result = await loop.run([], new AbortController().signal, () => undefined);
+  assert.equal(modelCalls, 1 + 3, "initial finish attempt plus MAX_FINISH_GATE_CONTINUATIONS (=3)");
+  assert.equal(result.turns, 4);
+  assert.equal(loop.snapshot().phase, "completed");
+
+  let smallCalls = 0;
+  const small = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 2,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { smallCalls += 1; return { assistantMessage: { role: "assistant" }, toolCalls: [] }; } },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    turnLifecycle: {
+      async beforeTurn() {},
+      async afterAssembly() {},
+      async afterTurn() {},
+      async beforeFinish() { return { action: "continue", message: { role: "user", content: "again" } }; },
+    },
+  });
+  const smallResult = await small.run([], new AbortController().signal, () => undefined);
+  assert.equal(smallCalls, 2, "the gate consumes from the same turn budget");
+  assert.equal(smallResult.turns, 2);
+});
+
+test("finish gate: never fires while the model still calls tools", async () => {
+  let gateCalls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 2,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { return { assistantMessage: { role: "assistant" }, toolCalls: [{ id: "c1", name: "noop", args: {} }] }; } },
+    toolDispatcher: { async execute(call) { return { content: "ok", isError: false, message: { role: "tool", name: call.name, tool_call_id: call.id } }; } },
+    turnLifecycle: {
+      async beforeTurn() {},
+      async afterAssembly() {},
+      async afterTurn() {},
+      async beforeFinish() { gateCalls += 1; return undefined; },
+    },
+  });
+  await loop.run([], new AbortController().signal, () => undefined);
+  assert.equal(gateCalls, 0);
+});
+
+test("finish gate: a throwing beforeFinish fails the run after the turn committed", async () => {
+  let commits = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 4,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { return { assistantMessage: { role: "assistant" }, toolCalls: [] }; } },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    turnLifecycle: {
+      async beforeTurn() {},
+      async afterAssembly() {},
+      async afterTurn() { commits += 1; },
+      async beforeFinish() { throw new Error("gate store down"); },
+    },
+  });
+  await assert.rejects(loop.run([], new AbortController().signal, () => undefined), /gate store down/);
+  assert.equal(commits, 1, "the turn is durably recorded before the gate runs");
+  assert.equal(loop.snapshot().phase, "failed");
+});
+
+test("finish gate: a capped continue is reported as denied, not finish", async () => {
+  const events: RunEvent<never>[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 10,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke() { return { assistantMessage: { role: "assistant" }, toolCalls: [] }; } },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    turnLifecycle: {
+      async beforeTurn() {},
+      async afterAssembly() {},
+      async afterTurn() {},
+      async beforeFinish() { return { action: "continue", message: { role: "user", content: "again" } }; },
+    },
+    eventSink: (event) => events.push(event),
+  });
+  await loop.run([], new AbortController().signal, () => undefined);
+  assert.deepEqual(
+    events.filter((event) => event.type === "finish_gate").map((event) => event.type === "finish_gate" ? event.action : ""),
+    ["continue", "continue", "continue", "denied"],
+  );
+});
+
+test("stall guard kicks a silent model call and the run recovers with a kick message", async () => {
+  let calls = 0;
+  const events: string[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 4,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke(_input, signal) {
+      calls += 1;
+      if (calls === 1) {
+        // Silent call: settles only if the stall guard aborts it.
+        await new Promise((_, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted by guard")), { once: true });
+        });
+      }
+      return { assistantMessage: { role: "assistant", content: "recovered" }, toolCalls: [] };
+    } },
+    stallGuard: {
+      createKickMessage: (kick, maxKicks) => ({ content: `kick ${kick}/${maxKicks}`, role: "user" }),
+      idleMs: 20,
+      maxKicks: 2,
+    },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    eventSink: (event) => { if (event.type === "stall_kick") events.push(`kick:${event.kick}`); },
+  });
+  const result = await loop.run([], new AbortController().signal, () => {});
+  assert.deepEqual(events, ["kick:1"]);
+  assert.equal(result.turns, 2);
+  const last = result.history.at(-1);
+  assert.equal((last as { content?: string }).content, "recovered");
+  assert.ok(result.history.some((message) => (message as { content?: string }).content === "kick 1/2"), "the kick message entered the history");
+});
+
+test("stall guard fails the run after maxKicks", async () => {
+  let calls = 0;
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 8,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke(_input, signal) {
+      calls += 1;
+      await new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted by guard")), { once: true });
+      });
+      throw new Error("unreachable");
+    } },
+    stallGuard: {
+      createKickMessage: (kick) => ({ content: `kick ${kick}`, role: "user" }),
+      idleMs: 15,
+      maxKicks: 2,
+    },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+  });
+  await assert.rejects(loop.run([], new AbortController().signal, () => {}), /stalled: no progress after 2 stall-guard kicks/);
+  assert.equal(loop.snapshot().phase, "failed");
+  assert.equal(calls, 3, "initial attempt + 2 kicked retries, then the stall fails the run");
+});
+
+test("an outer abort is never mistaken for a stall kick", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const events: string[] = [];
+  const loop = new AgentLoop<RuntimeMessage, Input, never>({
+    maxModelTurns: 4,
+    contextAssembler: { async assemble({ history }) { return { history: [...history], modelInput: { history: [...history] } }; } },
+    modelClient: { async invoke(_input, signal): Promise<never> {
+      calls += 1;
+      setTimeout(() => controller.abort(), 10);
+      await new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("outer abort")), { once: true });
+      });
+      // Promise<never> must not have a reachable end point (tsc strictness).
+      throw new Error("unreachable: the abort rejection is the only exit");
+    } },
+    stallGuard: {
+      createKickMessage: () => ({ content: "kick", role: "user" }),
+      idleMs: 60_000,
+      maxKicks: 3,
+    },
+    toolDispatcher: { async execute() { throw new Error("unused"); } },
+    eventSink: (event) => { if (event.type === "stall_kick") events.push("kick"); },
+  });
+  await assert.rejects(loop.run([], controller.signal, () => {}));
+  assert.equal(loop.snapshot().phase, "cancelled", "an outer abort keeps the cancellation semantics");
+  assert.equal(calls, 1, "no retry happened");
+  assert.deepEqual(events, [], "no stall kick was emitted");
+});
+
 test("model deltas carry a response identity that settles once per invoke attempt", async () => {
   const events: RunEvent<never>[] = [];
   const loop = new AgentLoop<RuntimeMessage, Input, never>({

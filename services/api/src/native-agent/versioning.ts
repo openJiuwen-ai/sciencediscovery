@@ -169,7 +169,11 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
 
   async beforeTurn({ turn, history }: Parameters<TurnLifecycle<M, I, U>["beforeTurn"]>[0]): Promise<void> {
     this.turnObservations = [];
-    this.events.clear();
+    // events is NOT cleared here: it is the unflushed buffer between durable
+    // boundaries. afterTurn flushes it into EventSegments and clears it there,
+    // so events emitted between turns (e.g. the finish_gate signal, which the
+    // loop emits after afterTurn) survive into the next turn's segment instead
+    // of being silently dropped.
     this.children = [];
     this.assemblyTrace = null;
     this.before = await this.state(turn, "before", history);
@@ -242,6 +246,10 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
       eventSegments.push({ stream, start, end, events: await this.store.putRecord("EventSegment", { stream, events }) });
       this.offsets.set(stream, end);
     }
+    // The buffer is flushed; events arriving from now on belong to the next
+    // durable boundary (or, on the final turn, are intentionally unpersisted
+    // like the terminal "completed" event itself).
+    this.events.clear();
     const after = await this.state(turn, "after", history);
     this.head = await this.coordinator.commit({
       agentId: this.options.agentId, trajectoryId: this.options.trajectoryId, turn,

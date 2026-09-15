@@ -95,6 +95,12 @@ export interface AgentRunResult {
 
 export interface MainAgentProfileInput {
   connectorIds: readonly string[];
+  /**
+   * Tools the main agent must not use (mirrored into the profile's
+   * toolPolicy.deniedToolNames — the run composer builds the registry policy
+   * from the profile alone). Used by the bound-KB scope's web ban (V2-C1).
+   */
+  deniedToolNames?: readonly string[];
   gatewayThreadId: string;
   runTimeoutMs: number;
   skills?: readonly AgentResourceRef[];
@@ -126,7 +132,7 @@ export function createMainAgentProfile(input: MainAgentProfileInput): MainAgentP
       skills: (input.skills ?? []).map((skill) => ({ ...skill })),
       ...(input.specialistId ? { specialistId: input.specialistId } : {}),
     },
-    toolPolicy: { deniedToolNames: [] },
+    toolPolicy: { deniedToolNames: [...(input.deniedToolNames ?? [])] },
     workspaceRoot: input.workspaceRoot,
   };
 }

@@ -22,6 +22,7 @@ import type {
 import type { ContextContributorFactory } from "@sciencediscovery/context";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import type { PlanStore } from "@sciencediscovery/plan";
+import type { PlanRepository } from "@sciencediscovery/plan-mode";
 
 import {
   createNativeAgent,
@@ -36,6 +37,9 @@ export interface AgentRunBindings {
   createAgent?: (options: NativeAgentOptions) => NativeAgentHandle;
   contextContributorFactories?: readonly ContextContributorFactory<AgentHistoryMessage>[];
   observer?: (event: AgentEvent) => void;
+  /** Approval-gated plan lifecycle (V3-C2, propose_plan/revise_plan). */
+  planRepository?: PlanRepository;
+  /** Model-declared plan snapshots (update_plan). Both may be present. */
   planStore?: PlanStore;
   runIdleTimeoutMs?: number;
   readVersioningAuthorities?: () => Promise<unknown>;
@@ -63,13 +67,14 @@ export function createAgentRun(
       trajectoryId: input.agentRunId,
       requestExecutionId: input.requestExecutionId,
       readAuthorities: async () => ({
-        plan: await bindings.planStore?.latest() ?? null,
+        plan: await bindings.planRepository?.latest() ?? bindings.planStore?.latest() ?? null,
         resources: profile.resources,
         toolPolicy: profile.toolPolicy,
         budget: profile.budget,
         external: await bindings.readVersioningAuthorities?.() ?? null,
       }),
     },
+    ...(bindings.planRepository ? { planRepository: bindings.planRepository } : {}),
     ...(bindings.planStore ? { planStore: bindings.planStore } : {}),
     ...(bindings.contextContributorFactories?.length
       ? { contextContributorFactories: bindings.contextContributorFactories }

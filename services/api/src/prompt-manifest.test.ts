@@ -26,6 +26,7 @@ const runtimeSettings: EffectiveRuntimeSettings = {
   enabledConnectorIds: [],
   enabledSkillLibraries: [],
   enabledSkillIds: [],
+  kbScopeKbIds: [],
   modelId: "model-a",
   semanticReviewEnabled: false,
   skillSelectionMode: "all",

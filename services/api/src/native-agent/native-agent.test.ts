@@ -1088,3 +1088,54 @@ test("an oversized execution result enters history as a head/tail preview the mo
     restore();
   }
 });
+
+test("agent_memory port reaches the model's tool list and executes through a run (forwarding parity)", async () => {
+  const added: Array<{ category: string; content: string }> = [];
+  const { streamer } = scriptStreamer([
+    () => toolTurn("agent_memory", { action: "add", category: "workflow", content: "先检索后综合" }),
+    () => textTurn("noted"),
+  ]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      agentMemory: {
+        add: (input) => {
+          added.push(input);
+          return null;
+        },
+        list: () => [],
+        remove: () => undefined,
+        replace: () => { throw new Error("not used"); },
+        supersede: () => { throw new Error("not used"); },
+      },
+    } as NativeAgentOptions);
+    await agent.execute("remember your method");
+    assert.deepEqual(added, [{ category: "workflow", content: "先检索后综合" }]);
+  } finally {
+    restore();
+  }
+});
+
+test("agentMemories and knowledgeBaseScope reach the EXECUTED system prompt, not just the manifest", async () => {
+  const { calls, streamer } = scriptStreamer([() => textTurn("done")]);
+  const restore = setModelTurnStreamerForTest(streamer);
+  try {
+    const agent = createNativeAgent({
+      ...workspace(),
+      agentMemories: [{ category: "workflow", content: "先检索后综合", reliabilityLabel: " [已核验]" }],
+      knowledgeBaseScope: {
+        droppedKbIds: [],
+        kbLabels: ["抗体库 (kb-1)"],
+        singleKbId: "kb-1",
+        webSearchEnabled: false,
+      },
+    } as NativeAgentOptions);
+    await agent.execute("hello");
+    const prompt = calls[0]!.systemPrompt;
+    assert.match(prompt, /\[workflow\] \[已核验\] 先检索后综合/, "reviewed memory entry in executed prompt");
+    assert.match(prompt, /Knowledge-base scope: this conversation is bound to 抗体库/, "kb-scope disclosure in executed prompt");
+  } finally {
+    restore();
+  }
+});

@@ -22,6 +22,13 @@ export interface RuntimeComposition<TMessage extends RuntimeMessage, TModelInput
   toolDispatcher: ToolDispatcher<TMessage>;
   waitController: ExternalWaitController;
   turnLifecycle?: TurnLifecycle<TMessage, TModelInput, TUsage>;
+  /** V2-C6 stall guard — forwarded to the loop when set (kick stalled model
+   *  attempts without losing run history or budget). */
+  stallGuard?: {
+    createKickMessage: (kick: number, maxKicks: number) => TMessage;
+    idleMs: number;
+    maxKicks: number;
+  };
 }
 
 /** API composition root: adapters are registered here, not looked up by the core. */
@@ -37,5 +44,6 @@ export function composeRuntime<TMessage extends RuntimeMessage, TModelInput, TUs
     .withTurnLifecycle(composition.turnLifecycle)
     .withMaxModelTurns(composition.maxModelTurns)
     .withMaxParallelToolCalls(composition.maxParallelToolCalls)
+    .withStallGuard(composition.stallGuard)
     .build();
 }

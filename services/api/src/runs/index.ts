@@ -13,14 +13,19 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
-import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
-import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
+import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
+import { auditCompanionIds } from "./audit-companions.js";
+import { apiLog } from "../logging.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
+
+import type { KnowledgeEngineToolPort } from "../knowledge-engine/tools.js";
+import { createKeResidentSummaryFactory } from "../knowledge-engine/contributor.js";
 import { RefStore, VersionStore, type TrajectoryStep } from "@sciencediscovery/cas";
 import { agentHeadName } from "../native-agent/versioning.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -122,7 +127,9 @@ import {
   THINKING_EFFORT_VARIANTS,
   UNTITLED_SESSION_TITLE,
 } from "@sciencediscovery/schema";
-import { reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import { agentMemoryReliabilityLabel, reviewerSpecialistSupportsLevel } from "@sciencediscovery/schema";
+import type { BackgroundReviewManager } from "../agent-memory/background-review.js";
+import type { PlanApprovalDecision, SessionPlan } from "@sciencediscovery/schema";
 import {
   createIdeaTreeTools,
   createExecutorDescriptor,
@@ -569,6 +576,7 @@ async function executeAgentRun(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  knowledgeEngineTools: KnowledgeEngineToolPort | undefined,
   notificationDelivery?: NotificationBatch,
   deliveredNotice?: RuntimeNotice,
 ): Promise<SessionRunStatus> {
@@ -717,6 +725,59 @@ async function executeAgentRun(
   if (!initialPermissionEpoch) {
     throw new ApiStatusError(500, "The session Permission Epoch is not available");
   }
+  // Bound knowledge-base scope (V2-C1): validate the configured ids against
+  // the knowledge engine — unknown ids drop with a disclosed note rather
+  // than failing the run. The tool layer enforces the scope; the prompt
+  // explains it. A KE that is absent or erroring degrades the scope to
+  // unbound-with-disclosure, never to a run-start 500 (review P3).
+  let kbToolScope: { kbIds: string[]; singleKbId?: string } | undefined;
+  let kbScopePrompt: {
+    droppedKbIds: string[];
+    kbLabels: string[];
+    singleKbId?: string;
+    webSearchEnabled: boolean;
+  } | undefined;
+  const configuredKbScope = settingsSnapshot.kbScopeKbIds;
+  if (configuredKbScope.length && knowledgeEngineTools) {
+    let known: Map<string, string> | undefined;
+    try {
+      known = new Map(
+        (await knowledgeEngineTools.listKnowledgeBases()).map((kb) => [kb.id, kb.name] as const),
+      );
+    } catch { /* fall through to the degraded path below */ }
+    if (known) {
+      const valid = configuredKbScope.filter((id) => known!.has(id));
+      const dropped = configuredKbScope.filter((id) => !known!.has(id));
+      if (valid.length) {
+        const singleKbId = valid.length === 1 ? valid[0]! : undefined;
+        kbToolScope = { kbIds: valid, ...(singleKbId ? { singleKbId } : {}) };
+        kbScopePrompt = {
+          droppedKbIds: dropped,
+          kbLabels: valid.map((id) => `${known!.get(id)} (${id})`),
+          ...(singleKbId ? { singleKbId } : {}),
+          webSearchEnabled: settingsSnapshot.kbScopeWebSearch !== false,
+        };
+      } else {
+        // Every configured id named a nonexistent KB — disclose instead of
+        // silently degrading to unbound (review P3).
+        kbScopePrompt = {
+          droppedKbIds: dropped,
+          kbLabels: [],
+          webSearchEnabled: settingsSnapshot.kbScopeWebSearch !== false,
+        };
+      }
+    } else {
+      apiLog.warn("knowledge_engine", {
+        message: "kb_scope_validation_degraded",
+        reason: "list_knowledge_bases failed at run start; scope left unenforced",
+      });
+    }
+  } else if (configuredKbScope.length && !knowledgeEngineTools) {
+    apiLog.warn("knowledge_engine", {
+      message: "kb_scope_ignored_no_engine",
+      reason: "kbScopeKbIds configured but the knowledge engine is not deployed in this stack",
+    });
+  }
   const apiToken = store.getModelApiToken(selectedModel.id);
   if (!apiToken && !store.modelAllowsMissingToken(selectedModel)) {
     throw new ApiStatusError(400, "The selected model does not have a saved API token");
@@ -764,6 +825,13 @@ async function executeAgentRun(
       ...manualSkills,
       ...librarySkills.filter((skill) => !manualSkillIds.has(skill.id)),
     ];
+    // Pre-finish audit companions (see audit-companions.ts): declaring skills
+    // get their `audit-<id>` checklist auto-selected so the finish-gate
+    // directive can point at versioned audit content.
+    const auditCompanions = auditCompanionIds(activeSkills, skillCatalog);
+    if (auditCompanions.length) {
+      activeSkills = [...activeSkills, ...skillCatalog.resolve(auditCompanions)];
+    }
   } catch (error) {
     throw new ApiStatusError(400, error instanceof Error ? error.message : "The selected skills are not available");
   }
@@ -773,12 +841,13 @@ async function executeAgentRun(
   if (skillPackagesRoot) {
     await prepareSkillSandbox(skillPackagesRoot, store.workspacePath(sessionId), activeSkills);
   }
-  const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, readResource, resources, revision, version }) => ({
+  const runtimeSkills = activeSkills.map(({ content, description, hash, id, metadata, preFinishAudit, readResource, resources, revision, version }) => ({
     content,
     description,
     hash,
     id,
     ...(skillPackagesRoot ? { packagePath: `${SKILL_PACKAGES_PORTABLE_ROOT}/${id}` } : {}),
+    ...(preFinishAudit ? { preFinishAudit } : {}),
     metadata,
     readResource,
     resources,
@@ -790,12 +859,17 @@ async function executeAgentRun(
     await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
     scientificEnvironments = store.listEnvironments();
   }
+  // V3-C1: only HUMAN-REVIEWED memories reach the prompt (SEAL-safe default
+  // — candidates await promote() and never self-inject).
+  const agentMemories = agentMemoryPromptEntries(store);
   const systemPrompt = buildWorkspaceSystemPrompt(
     runtimeSkills,
     Boolean(scientificEnvironments),
     {
       approvalMode: session.approvalMode,
       memoryGraphEnabled: memoryGraphSink.enabled,
+      ...(agentMemories.length ? { agentMemories } : {}),
+      ...(kbScopePrompt ? { knowledgeBaseScope: kbScopePrompt } : {}),
       localRunnerAllowed: store.effectiveRunnerIds(sessionId).includes("local"),
       ...(allowedRemoteHosts.length ? { remoteRunners: allowedRemoteHosts.map((host) => `${host.id}: ${host.description || host.runnerName || host.alias}`) } : {}),
       ...(sessionSpecialist ? { specialist: { description: sessionSpecialist.description, instructions: sessionSpecialist.instructions, name: sessionSpecialist.name } } : {}),
@@ -1169,6 +1243,78 @@ async function executeAgentRun(
       };
     },
   });
+  const publishPlan = async (plan: import("@sciencediscovery/schema").SessionPlan, observeGoal = false) => {
+    await emit({ plan, type: "plan.proposed" });
+    if (!observeGoal) return;
+    memoryGraphSink.observeSessionPlan({
+      sessionId,
+      goalId: `goal:session:${sessionId}`,
+      planId: plan.id,
+      scope: plan.scope,
+      domain: inferDomain(plan.scope),
+      steps: plan.steps.map((step) => ({ id: step.id, description: step.description })),
+    });
+  };
+  // V3-C2 constraint-level plan approval: ask_for_dangerous parks propose/
+  // revise in awaiting_user and BLOCKS the run until the human decides via
+  // the REST endpoint (state flip is the wake mechanism; SSE is display
+  // only). always_allow auto-approves but still logs the decision — the
+  // decision log is mode-agnostic.
+  const planApprovalGated = session.approvalMode === "ask_for_dangerous";
+  const resolvePlanApproval = async (plan: SessionPlan, toolSignal?: AbortSignal): Promise<SessionPlan> => {
+    if (!planApprovalGated) {
+      const decision = await store.recordAutoPlanApproval(plan);
+      await emit({ decision, plan, type: "plan.approval_decided" });
+      return plan;
+    }
+    let blocked = false;
+    const resume = async (reason: string) => {
+      if (!blocked) return;
+      const running = await store.updateSessionRunStatusIfCurrent(sessionId, runId, "blocked", "running");
+      if (running) await emit({ reason, run: running, status: "running", type: "run.status" });
+      blocked = false;
+    };
+    // Pause the idle watchdog for the whole human wait (review P1): without
+    // this the run is condemned as stalled after 240s of the user reading,
+    // and with the tool signal never firing the wait would wedge forever.
+    const releaseWait = mainExecution?.beginExternalWait();
+    // Race the run-level controller AND the tool-call signal — either one
+    // aborting must end the wait.
+    const waitSignal = toolSignal
+      ? AbortSignal.any([requestAbortController.signal, toolSignal])
+      : requestAbortController.signal;
+    try {
+      for (;;) {
+        const current = store.getSessionPlan(sessionId, plan.id);
+        if (!current) throw new Error("Plan disappeared while awaiting a decision");
+        if (current.state !== "awaiting_user") {
+          await resume("Plan decision received");
+          if (current.state === "abandoned") {
+            throw new Error(`Plan rejected by the user${current.abandonmentReason ? `: ${current.abandonmentReason}` : ""} — propose a new plan or continue without one`);
+          }
+          return current;
+        }
+        if (!blocked) {
+          const blockedRun = await store.updateSessionRunStatusIfCurrent(sessionId, runId, "running", "blocked");
+          if (blockedRun) {
+            blocked = true;
+            await emit({ reason: "Waiting for plan approval", run: blockedRun, status: "blocked", type: "run.status" });
+          }
+        }
+        await delay(200, undefined, { signal: waitSignal });
+      }
+    } catch (error) {
+      await resume("Plan approval wait ended");
+      throw error;
+    } finally {
+      releaseWait?.();
+    }
+  };
+  // review_checkpoint registers when the reviewer specialist is explicitly on
+  // AND requested, OR when an active skill declares a pre-finish audit
+  // (metadata.pre-finish-audit) — the finish gate's directive requires the tool
+  // in this run's registry, and a skill-declared audit is an explicit request.
+  const finishGateAuditDeclared = activeSkills.some((skill) => skill.preFinishAudit);
   const agentOptions: WorkspaceAgentOptions = {
     workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
     pluginSettings: settingsSnapshot.plugins,
@@ -1263,6 +1409,41 @@ async function executeAgentRun(
       });
       return await skillLibraryCatalog.publishProposals(input.proposalIds);
     },
+    ...(knowledgeEngineTools ? { knowledgeEngine: knowledgeEngineTools } : {}),
+    ...(kbToolScope ? { knowledgeEngineScope: kbToolScope } : {}),
+    // Project-ledger root for research_state promote/hydrate (V2-C2) — the
+    // cross-trajectory world model lives outside any session workspace.
+    researchProjectRoot: resolve(store.dataDir, "research-ledgers", session.projectId),
+    // Prompt-layer disclosures (V2-C1 kbScope line, V3-C1 memory section):
+    // the SAME values the manifest prompt uses — manifest and execution must
+    // never diverge (review P0: native-agent rebuilds its own governance).
+    ...(kbScopePrompt ? { knowledgeBaseScope: kbScopePrompt } : {}),
+    ...(agentMemories.length ? { agentMemories } : {}),
+    // V3-C1: experiential memory. Every write path hardcodes the candidate
+    // provenance — the agent can never mark its own note verified.
+    agentMemory: {
+      add: (input) =>
+        store.addAgentMemory({
+          ...input,
+          source: "agent_tool",
+          provenance: { kind: "agent_proposal", requiresReview: true, actorId: sessionId, source: runId },
+        }),
+      replace: (id, content) =>
+        store.replaceAgentMemoryContent(id, content, {
+          kind: "agent_proposal",
+          requiresReview: true,
+          actorId: sessionId,
+          source: runId,
+        }),
+      remove: (id) => store.removeAgentMemory(id),
+      supersede: (id, content, category) =>
+        store.supersedeAgentMemory(id, {
+          content,
+          ...(category ? { category } : {}),
+          provenance: { kind: "agent_proposal", requiresReview: true, actorId: sessionId, source: runId },
+        }),
+      list: (filter) => store.listAgentMemories(filter),
+    },
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -1351,7 +1532,8 @@ async function executeAgentRun(
       }
       return result;
     },
-    ...(reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent)
+    // Level gate applies either way: quick is the minimum.
+    ...((reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent) || finishGateAuditDeclared)
       && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick") ? {
       reviewCheckpoint: async (input, signal, toolCallId) => {
         const checkpointToolCallId = toolCallId ?? randomUUID();
@@ -1634,7 +1816,16 @@ async function executeAgentRun(
           const subagentProfile = createSubagentProfile({
             allowedToolNames: subagentConfig.tools ?? undefined,
             connectorIds: subagentConnectorIds,
-            deniedToolNames: subagentConfig.disallowedTools,
+            // A bound scope's web ban extends into subagents — otherwise the
+            // main agent could delegate "look it up online" and bypass the
+            // mechanism (review P2). KE scope needs no mirror: the subagent
+            // workspace never receives the knowledgeEngine port.
+            deniedToolNames: [
+              ...subagentConfig.disallowedTools,
+              ...(kbToolScope && kbScopePrompt && !kbScopePrompt.webSearchEnabled
+                ? ["web_capture", "web_fetch", "web_search", "image_search"]
+                : []),
+            ],
             gatewayThreadId: subagent.id,
             maxModelTurns: subagentConfig.maxTurns,
             presetId: subagentConfig.name,
@@ -1659,6 +1850,10 @@ async function executeAgentRun(
             config: agentConfig,
             enabledConnectorIds: subagentConnectorIds,
             ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
+            // The project ledger spans subagent trajectories too (review P1):
+            // a perspective subagent's durable findings promote into the same
+            // project world model, and it hydrates from it on first read.
+            researchProjectRoot: agentOptions.researchProjectRoot,
             ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath, subagent.id),
             ...createWorkspaceExecutionBindings({
               agentId: `subagent:${subagent.id}`,
@@ -2024,6 +2219,13 @@ async function executeAgentRun(
   };
   const mainProfile = createMainAgentProfile({
     connectorIds: settingsSnapshot.enabledConnectorIds,
+    // The bound scope's web ban must ride the PROFILE's tool policy — the run
+    // composer builds the registry policy from profile.toolPolicy alone and
+    // overrides any workspace-level policy (E2E-caught bug: a
+    // WorkspaceAgentOptions.toolPolicy here is silently overridden).
+    deniedToolNames: kbToolScope && kbScopePrompt && !kbScopePrompt.webSearchEnabled
+      ? ["web_capture", "web_fetch", "web_search", "image_search"]
+      : [],
     gatewayThreadId: sessionId,
     runTimeoutMs: timeoutSettings.gatewayTurnTimeoutMs,
     skills: runtimeSkills.map(({ id, revision, version }) => ({ id, revision, version })),
@@ -2056,6 +2258,12 @@ async function executeAgentRun(
       });
     }
     if (event.type === "turn_truncated") turnTruncated = true;
+    if (event.type === "finish_gate") {
+      void emit({ action: event.action, turn: turnNumber, type: "finish_gate" });
+    }
+    if (event.type === "stall_kick") {
+      void emit({ kick: event.kick, turn: turnNumber, type: "stall_kick" });
+    }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       assistantText += event.assistantMessageEvent.delta;
       void emit({
@@ -2104,6 +2312,53 @@ async function executeAgentRun(
       observer: observeMainEvent,
       planStore: createRunPlanStore("main"),
       readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
+      // Knowledge-engine awareness: the resident-summary contributor injects
+      // per-KB graph digests so the model knows which KBs exist and how
+      // mature they are before calling the consumption tools.
+      ...(knowledgeEngineTools
+        ? { contextContributorFactories: [createKeResidentSummaryFactory<AgentHistoryMessage>(
+            // Bound scope: the resident summary must not leak out-of-scope KB
+            // digests into context (or advertise them as available) — wrap
+            // the port so the factory only ever sees the bound KBs (review P2).
+            kbToolScope
+              ? {
+                  ...knowledgeEngineTools,
+                  listKnowledgeBases: async () =>
+                    (await knowledgeEngineTools.listKnowledgeBases())
+                      .filter((kb) => kbToolScope.kbIds.includes(kb.id)),
+                }
+              : knowledgeEngineTools,
+          )] }
+        : {}),
+      planRepository: {
+        abandon: async (input) => {
+          const plan = await store.abandonSessionPlan(sessionId, input);
+          await publishPlan(plan);
+          return plan;
+        },
+        latest: async () => store.latestSessionPlan(sessionId, runId),
+        propose: async (input, signal) => {
+          const existing = store.latestSessionPlan(sessionId, runId);
+          if (existing && existing.state !== "abandoned") throw new Error("A plan already exists for this run; call revise_plan instead");
+          let plan = await store.proposeSessionPlan(sessionId, input, runId, { awaitingUser: planApprovalGated });
+          // Let plan.scope correct the goal's fallback domain. This remains
+          // non-blocking when the optional graph sidecar is unavailable.
+          await publishPlan(plan, true);
+          plan = await resolvePlanApproval(plan, signal);
+          return plan;
+        },
+        revise: async (planId, input, signal) => {
+          let plan = await store.reviseSessionPlan(sessionId, planId, input, { markAwaitingUser: planApprovalGated });
+          await publishPlan(plan, true);
+          plan = await resolvePlanApproval(plan, signal);
+          return plan;
+        },
+        updateStep: async (input) => {
+          const plan = await store.updateSessionPlanStep(sessionId, input);
+          await publishPlan(plan);
+          return plan;
+        },
+      },
       runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
       workspace: agentOptions,
     },
@@ -2563,6 +2818,29 @@ export async function publishRunEvent(
  * after a reload; a Session that has never started a run has no timeline to
  * carry it and keeps only the Permission Epoch as its audit record.
  */
+/** V3-C2: surface a human plan decision (made via REST, outside any run
+ *  loop) on the active/latest run's event stream so the timeline renders it
+ *  in place. The blocked run's waiter polls the store and does not depend
+ *  on this event. */
+export async function publishPlanApprovalDecision(
+  store: SessionStore,
+  sessionId: string,
+  payload: { decision: PlanApprovalDecision; plan: SessionPlan },
+): Promise<SessionRunEvent | undefined> {
+  const runs = await store.listSessionRuns(sessionId);
+  // Target the run the decision belongs to (review P2): falling back to the
+  // latest run could pin the event on an unrelated timeline.
+  const target = (payload.decision.runId ? runs.find((run) => run.id === payload.decision.runId) : undefined)
+    ?? runs.findLast((run) => run.status === "running" || run.status === "blocked")
+    ?? runs.findLast((run) => run.status !== "queued");
+  if (!target) return undefined;
+  return await publishRunEvent(store, sessionId, target.id, {
+    decision: payload.decision,
+    plan: payload.plan,
+    type: "plan.approval_decided",
+  });
+}
+
 export async function publishApprovalModeChange(
   store: SessionStore,
   sessionId: string,
@@ -2917,6 +3195,31 @@ export async function createNotificationRun(store: SessionStore, skillLibraryCat
     settingsSnapshot, skillLibraryRefs, notificationDelivery: batch, automaticWake: true });
 }
 
+// --- Agent memory (V3-C1) ---------------------------------------------------
+const AGENT_MEMORY_PROMPT_LIMIT = 12;
+const AGENT_MEMORY_PROMPT_CONTENT_CHARS = 200;
+
+/** Human-reviewed memories formatted for prompt injection. Memory must
+ *  never break prompt assembly — any store hiccup degrades to no section. */
+function agentMemoryPromptEntries(store: SessionStore): Array<{ category: string; content: string; reliabilityLabel: string }> {
+  try {
+    return store.listDiverseAgentMemories(AGENT_MEMORY_PROMPT_LIMIT).map((entry) => ({
+      category: entry.category,
+      content: entry.content.slice(0, AGENT_MEMORY_PROMPT_CONTENT_CHARS),
+      reliabilityLabel: agentMemoryReliabilityLabel(entry.confidence, entry.provenance),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// Registered by the composition root (bootstrap/platform.ts); the run
+// completion hook fires recordCompletedRun fire-and-forget.
+let backgroundReviewManager: BackgroundReviewManager | null = null;
+export function setBackgroundReviewManager(manager: BackgroundReviewManager | null): void {
+  backgroundReviewManager = manager;
+}
+
 export function scheduleSessionRuns(
   store: SessionStore,
   runnerClient: RunnerClient,
@@ -2937,6 +3240,7 @@ export function scheduleSessionRuns(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  knowledgeEngineTools: KnowledgeEngineToolPort | undefined,
 ): void {
   if (scheduledSessions.has(sessionId)) return;
   scheduledSessions.add(sessionId);
@@ -3017,6 +3321,7 @@ export function scheduleSessionRuns(
             serverConfig,
             memoryGraphClient,
             evolve,
+            knowledgeEngineTools,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
             delivery ? runtimeNotice(delivery) : undefined,
           );
@@ -3038,6 +3343,10 @@ export function scheduleSessionRuns(
           const durationMs = Math.max(0, Date.now() - Date.parse(startedAt));
           if (status === "completed") {
             runLog.info("run_completed", { durationMs, runId: next.id, sessionId });
+            // V3-C1: cadence counter + offline experience extraction
+            // (fire-and-forget; gated by the agentMemoryBackgroundReview
+            // setting inside the manager).
+            backgroundReviewManager?.recordCompletedRun(sessionId);
           } else if (status === "cancelled") {
             runLog.info("run_cancelled", { durationMs, reason: "user_cancelled", runId: next.id, sessionId });
           } else {
@@ -3073,6 +3382,7 @@ export function scheduleSessionRuns(
         serverConfig,
         memoryGraphClient,
         evolve,
+        knowledgeEngineTools,
       );
     }
   })();
@@ -3123,6 +3433,17 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
         }
         for (const request of await store.cancelPendingPermissionRequests(run.id)) {
           await publishRunEvent(store, session.id, run.id, { request, type: "permission.resolved" });
+        }
+        // V3-C2: an interrupted run can never receive its plan decision —
+        // abandon any plan it left awaiting_user so the approval buttons do
+        // not stay clickable on a dead run (review P2).
+        for (const plan of store.listSessionPlans(session.id)) {
+          if (plan.runId !== run.id || plan.state !== "awaiting_user") continue;
+          await store.abandonSessionPlan(session.id, {
+            expectedVersion: plan.version,
+            planId: plan.id,
+            reason: "Run interrupted before the plan decision",
+          });
         }
         await publishRunEvent(store, session.id, run.id, {
           reason,
@@ -3220,6 +3541,7 @@ export async function streamAgentRun(
   serverConfig: ServerConfig,
   memoryGraphClient: MemoryGraphClient | null,
   evolve: EvolveRuntimeFactory | undefined,
+  knowledgeEngineTools: KnowledgeEngineToolPort | undefined,
 ): Promise<void> {
   const run = await createQueuedRun(
     store,
@@ -3250,6 +3572,7 @@ export async function streamAgentRun(
     serverConfig,
     memoryGraphClient,
     evolve,
+    knowledgeEngineTools,
   );
   request.once("close", () => {
     // Browser disconnects should not cancel queued backend work. Cancellation

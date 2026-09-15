@@ -22,7 +22,11 @@ test("public biomedical MCP manifests register every requested source and operat
   const sources = createPublicBiomedSources();
   assert.deepEqual(
     sources.map((source) => source.manifest.id),
-    ["arxiv", "pubmed", "europe-pmc", "biorxiv", "medrxiv", "pdb", "ensembl", "reactome", "clinvar", "chembl", "geo"],
+    [
+      "arxiv", "pubmed", "europe-pmc", "biorxiv", "medrxiv", "pdb", "ensembl", "reactome",
+      "clinvar", "chembl", "geo", "pubchem", "afdb", "interpro", "optimade", "string", "biogrid",
+      "gnomad", "gwas", "gtopdb", "kegg", "pride", "wikidata", "datacite",
+    ],
   );
   assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "pdb")!.manifest.tools).sort(), [
     "lookup_structure",
@@ -48,7 +52,82 @@ test("public biomedical MCP manifests register every requested source and operat
     "prepare_dataset_download",
     "search_studies",
   ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "pubchem")!.manifest.tools).sort(), [
+    "lookup",
+    "resolve",
+    "search",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "interpro")!.manifest.tools).sort(), [
+    "lookup_entry",
+    "protein_entries",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "optimade")!.manifest.tools), [
+    "query_structures",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "string")!.manifest.tools).sort(), [
+    "network",
+    "resolve",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "biogrid")!.manifest.tools), [
+    "interactions",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "gnomad")!.manifest.tools).sort(), [
+    "gene",
+    "variant",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "gwas")!.manifest.tools).sort(), [
+    "search_gene",
+    "search_trait",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "gtopdb")!.manifest.tools).sort(), [
+    "interactions",
+    "search_ligand",
+    "search_target",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "kegg")!.manifest.tools).sort(), [
+    "find",
+    "get",
+    "link",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "pride")!.manifest.tools).sort(), [
+    "files",
+    "project",
+    "search_projects",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "wikidata")!.manifest.tools).sort(), [
+    "resolve_entity",
+    "sparql",
+  ]);
+  assert.deepEqual(Object.keys(sources.find((source) => source.manifest.id === "datacite")!.manifest.tools).sort(), [
+    "lookup",
+    "search",
+  ]);
   assert.ok(sources.every((source) => source.manifest.transport.mcpServerId === "biomed"));
+});
+
+test("Z6 biodata sources never mirror into the memory graph as papers", () => {
+  const sources = createPublicBiomedSources();
+  const biodata = sources.filter((source) =>
+    [
+      "pubchem", "afdb", "interpro", "optimade", "string", "biogrid",
+      "gnomad", "gwas", "gtopdb", "kegg", "pride", "wikidata", "datacite",
+    ].includes(source.manifest.id));
+  assert.equal(biodata.length, 13);
+  for (const source of biodata) {
+    for (const tool of Object.values(source.manifest.tools)) {
+      assert.equal(tool.kind, "lookup", `${source.manifest.id}/${tool.id}`);
+      assert.equal(tool.resultType, "structured-data", `${source.manifest.id}/${tool.id}`);
+    }
+  }
+  // STRING honours its measured one-request-per-second upstream policy.
+  const string = sources.find((source) => source.manifest.id === "string")!;
+  assert.equal(string.manifest.governance.minIntervalMs, 1_000);
+  // InterPro shares the EBI rate bucket with the other www.ebi.ac.uk sources.
+  const interpro = sources.find((source) => source.manifest.id === "interpro")!;
+  assert.equal(interpro.manifest.governance.rateLimitGroup, "www.ebi.ac.uk");
+  // OPTIMADE spans multiple provider hosts, all of them allowlisted.
+  const optimade = sources.find((source) => source.manifest.id === "optimade")!;
+  assert.ok(optimade.manifest.governance.networkHosts.includes("materialsproject.org"));
 });
 
 test("arXiv governance follows the provider terms: one connection, one request every three seconds", () => {
@@ -69,7 +148,7 @@ test("arXiv governance follows the provider terms: one connection, one request e
 
 test("built-in sources explicitly opt into the existing queue and pacing guards", () => {
   const manifests = createBuiltinMcpSourceRegistry().listManifests();
-  assert.equal(manifests.length, 13);
+  assert.equal(manifests.length, 26);
   for (const manifest of manifests) {
     assert.equal(manifest.governance.maxQueueDepth, 8, manifest.id);
     assert.equal(manifest.governance.queueTimeoutMs, 20_000, manifest.id);
@@ -87,6 +166,24 @@ test("public biomedical validators reject path-like accessions and unknown field
   assert.equal(registry.get("pdb").validateInput("lookup_structure", { pdb_id: "../x" }).valid, false);
   assert.equal(registry.get("geo").validateInput("lookup_accession", { accession: "GSE1000", extra: true }).valid, false);
   assert.equal(registry.get("ensembl").validateInput("lookup_gene", { id: "ENSG00000141510" }).valid, true);
+  assert.equal(registry.get("pubchem").validateInput("lookup", { cid: "2244" }).valid, true);
+  assert.equal(registry.get("pubchem").validateInput("lookup", { cid: "aspirin" }).valid, false);
+  assert.equal(registry.get("pubchem").validateInput("resolve", { by: "smiles", value: "CC(=O)Oc1ccccc1C(=O)O" }).valid, true);
+  assert.equal(registry.get("pubchem").validateInput("resolve", { by: "formula", value: "C9H8O4" }).valid, false);
+  assert.equal(registry.get("interpro").validateInput("lookup_entry", { accession: "IPR000719" }).valid, true);
+  assert.equal(registry.get("interpro").validateInput("lookup_entry", { accession: "SMART/xx" }).valid, false);
+  assert.equal(
+    registry.get("optimade").validateInput("query_structures", { provider: "cod", formula: "LiFePO4" }).valid,
+    true,
+  );
+  assert.equal(
+    registry.get("optimade").validateInput("query_structures", { provider: "csd", formula: "LiFePO4" }).valid,
+    false,
+  );
+  assert.equal(registry.get("afdb").validateInput("lookup", { uniprot_acc: "P12345" }).valid, true);
+  assert.equal(registry.get("string").validateInput("network", { proteins: "TP53,MDM2" }).valid, true);
+  assert.equal(registry.get("string").validateInput("network", {}).valid, false);
+  assert.equal(registry.get("biogrid").validateInput("interactions", { gene: "TP53" }).valid, true);
 });
 
 test("Node normalization rejects forged MCP identities and artifact hosts", async () => {

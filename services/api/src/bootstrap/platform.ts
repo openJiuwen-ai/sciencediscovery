@@ -47,11 +47,24 @@ import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
-import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
+import { recoverSessionRuns, scheduleSessionRuns, setBackgroundReviewManager } from "../runs/index.js";
+import { BackgroundReviewManager } from "../agent-memory/background-review.js";
 import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-source";
+import { EmbeddingClient } from "../knowledge-engine/embedding.js";
+import { createGraphRootsService } from "../knowledge-engine/graph-roots.js";
+import { KeJobRunner } from "../knowledge-engine/job-runner.js";
+import { KeOrchestrator } from "../knowledge-engine/orchestrator.js";
+import { extractPdfText } from "../knowledge-engine/pdf-text.js";
+import { describeImageWithVision, type VisionEndpoint } from "../knowledge-engine/pdf-vision.js";
+import { KnowledgeEngineStore } from "../knowledge-engine/store.js";
+import { createKnowledgeEngineTools } from "../knowledge-engine/tools.js";
+import { createScholarlyRateLimiter } from "../knowledge-engine/connectors/rate-limiter.js";
+import { buildSourceChain } from "../knowledge-engine/connectors/source-chain.js";
+import { FixtureScholarlyTransport, HttpScholarlyTransport } from "../knowledge-engine/connectors/transport.js";
+import { BIOMEDICAL_SCHEMA } from "@sciencediscovery/knowledge-engine";
 import type { ServerConfig } from "./config.js";
 
 export interface ApiServerDependencies {
@@ -419,11 +432,163 @@ export function createPlatformServices(
     },
   });
 
+  // The knowledge-engine subsystem: self-contained SQLite store, scholarly
+  // connectors over the shared transport, a serial job runner, and pipeline
+  // helpers (embedding/LLM) resolved from the same model configuration the
+  // agent uses. Everything degrades cleanly: no embedding env → vectors are
+  // skipped, no default task model → extraction jobs fail with a clear error.
+  const knowledgeEngineStore = KnowledgeEngineStore.open(config.dataDir);
+  // Mocked E2E (qa/README.md three-layer model): with a fixture dir set, all
+  // scholarly traffic replays local recordings (unrecorded URLs fail loudly)
+  // and the SSRF DNS guard becomes a no-op — nothing reaches the network.
+  const keFixtureDir = process.env.SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR?.trim();
+  const keTransport = keFixtureDir
+    ? new FixtureScholarlyTransport(keFixtureDir)
+    : new HttpScholarlyTransport(createScholarlyRateLimiter());
+  const keChain = buildSourceChain({
+    transport: keTransport,
+    openalex: {
+      apiKey: process.env.SCIENCE_AGENT_KE_OPENALEX_API_KEY?.trim() || null,
+      // The mailto politeness identity is shared with Unpaywall's contact
+      // email (both identify the operator); separate them here if they diverge.
+      mailto: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null,
+    },
+    unpaywall: { email: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null },
+    coreApiKey: process.env.SCIENCE_AGENT_CORE_API_KEY?.trim() || undefined,
+  });
+  const keEmbeddingBaseUrl = process.env.SCIENCE_AGENT_KE_EMBEDDING_BASE_URL?.trim();
+  const keEmbeddingApiKey = process.env.SCIENCE_AGENT_KE_EMBEDDING_API_KEY?.trim();
+  const keEmbeddingModel = process.env.SCIENCE_AGENT_KE_EMBEDDING_MODEL?.trim();
+  const keEmbedding = keEmbeddingBaseUrl && keEmbeddingApiKey && keEmbeddingModel
+    ? new EmbeddingClient({ baseUrl: keEmbeddingBaseUrl, apiKey: keEmbeddingApiKey, model: keEmbeddingModel })
+    : undefined;
+  // Optional vision pass for image-heavy PDFs (figure plates with no
+  // embedded text lose their captions entirely without it). Opt-in:
+  // SCIENCE_AGENT_KE_VISION_BASE_URL + _API_KEY; _PROTOCOL = "openai"
+  // (default, needs _MODEL) or "minimax" (coding_plan/vlm, no model needed).
+  const keVisionBaseUrl = process.env.SCIENCE_AGENT_KE_VISION_BASE_URL?.trim();
+  const keVisionApiKey = process.env.SCIENCE_AGENT_KE_VISION_API_KEY?.trim();
+  const keVisionProtocol = process.env.SCIENCE_AGENT_KE_VISION_PROTOCOL?.trim().toLowerCase();
+  const keVisionModel = process.env.SCIENCE_AGENT_KE_VISION_MODEL?.trim();
+  let keVisionEndpoint: VisionEndpoint | undefined;
+  if (keVisionBaseUrl && keVisionApiKey) {
+    // Validate at boot: a misconfigured vision endpoint must be loud HERE,
+    // not silently degrade every ingestion to per-page warnings.
+    if (keVisionProtocol === "minimax") {
+      keVisionEndpoint = { baseUrl: keVisionBaseUrl, apiToken: keVisionApiKey, protocol: "minimax" };
+    } else if (keVisionModel) {
+      keVisionEndpoint = { baseUrl: keVisionBaseUrl, apiToken: keVisionApiKey, model: keVisionModel };
+    } else {
+      apiLog.warn("knowledge_engine", {
+        message: "ke_vision_disabled_misconfigured",
+        detail: "SCIENCE_AGENT_KE_VISION_* set but protocol is not \"minimax\" and no _MODEL given — vision pass OFF",
+      });
+    }
+  }
+  // Pipeline model endpoint (global default task model) shared by KE
+  // extraction, resolution judging, community naming and (V3-C1) the
+  // background reviewer.
+  const keResolveEndpoint = () => {
+    const modelId = store.getGlobalSettings().overrides.modelId;
+    const model = store.getModel(modelId);
+    if (!model) return undefined;
+    return {
+      baseUrl: model.baseUrl,
+      model: model.model,
+      apiToken: store.getModelApiToken(model.id),
+      ...(model.apiProtocol ? { apiProtocol: model.apiProtocol } : {}),
+      ...(model.apiVariant ? { apiVariant: model.apiVariant } : {}),
+    };
+  };
+  // V3-C1: offline experience extraction from completed runs. Gated by the
+  // layered agentMemoryBackgroundReview setting (default off); candidates
+  // always await human promote before reaching any prompt.
+  setBackgroundReviewManager(new BackgroundReviewManager({
+    store,
+    resolveEndpoint: keResolveEndpoint,
+    enabled: (sessionId) => store.resolveRuntimeSettings(sessionId).effective.agentMemoryBackgroundReview === true,
+    log: (event, detail) => apiLog.info("background_review", { event, ...detail }),
+  }));
+  const keOrchestrator = new KeOrchestrator({
+    store: knowledgeEngineStore,
+    chain: keChain,
+    transport: keTransport,
+    schema: BIOMEDICAL_SCHEMA,
+    embedding: keEmbedding,
+    resolveEndpoint: keResolveEndpoint,
+    paperText: async (pdfBytes, docId) => {
+      const extracted = await extractPdfText({
+        pythonPath: config.paperPythonPath,
+        workerPath: config.paperWorkerPath,
+        workDirRoot: resolve(config.dataDir, "knowledge-engine", "staging"),
+        pdfBytes,
+        docId,
+        // V1-Z3: warnings (scanned-without-vision, enhancement hints) must
+        // fire even when no vision endpoint is configured.
+        onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+        ...(keVisionEndpoint
+          ? {
+              describeImage: (pngBytes: Uint8Array) => describeImageWithVision(keVisionEndpoint, pngBytes),
+            }
+          : {}),
+      });
+      return { fulltext: extracted.fulltext, pdfClassification: extracted.classification };
+    },
+    // Fixture mode never touches DNS (see transport selection above).
+    ...(keFixtureDir ? { assertUrl: async () => {} } : {}),
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+  });
+  const keJobRunner = new KeJobRunner(knowledgeEngineStore, {
+    onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { message, detail }),
+  });
+  keOrchestrator.registerJobs(keJobRunner);
+  // Consumption tools (concept_explore / deep_dive / unified search /
+  // validate / gaps) — a plain port object; the agent runtime registers the
+  // LLM tools when this is present. The embedding client enables kb_search's
+  // semantic arm (RRF-fused with FTS; absent → keyword-only). The novelty
+  // sources reuse the scholarly source chain's S2/OpenAlex connectors (same
+  // rate-limited transport, fixture-replayable in mocked E2E).
+  const keNoveltyExternal = keChain.connectors
+    .filter((connector): connector is (typeof keChain.connectors)[number] =>
+      connector.name === "semantic-scholar" || connector.name === "openalex")
+    .map((connector) => ({
+      name: connector.name as "semantic-scholar" | "openalex",
+      search: async (claim: string, limit: number) => {
+        const refs = await connector.search(claim, limit);
+        return refs
+          .filter((ref) => ref.title)
+          .map((ref) => ({
+            title: ref.title,
+            year: ref.year ?? null,
+            url: ref.doi ? `https://doi.org/${ref.doi}` : ref.arxivId ? `https://arxiv.org/abs/${ref.arxivId}` : null,
+            venue: null,
+            abstract: ref.abstract ?? null,
+          }));
+      },
+    }));
+  const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore, {
+    ...(keEmbedding ? { embedding: keEmbedding } : {}),
+    noveltyExternal: keNoveltyExternal,
+    onWarn: (message) => apiLog.warn("knowledge_engine", { message }),
+  });
+  // Community roots for the progressive graph drill-down (fingerprint-cached,
+  // stale-while-revalidate, LLM-named when a pipeline model is configured).
+  const keGraphRoots = createGraphRootsService({
+    store: knowledgeEngineStore,
+    resolveEndpoint: keResolveEndpoint,
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+  });
+
   return {
     connectorPlugins,
     artifactManager,
     customMcpServers,
     evolutionStore,
+    keGraphRoots,
+    keJobRunner,
+    keOrchestrator,
+    knowledgeEngineStore,
+    knowledgeEngineTools,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -515,6 +680,9 @@ export async function initializePlatformServices(
       apiLog.warn("evolve_boot_failed", { reason: error instanceof Error ? error.message : String(error) });
     });
 
+  // Recover crash-orphaned KE jobs and resume queue processing.
+  services.keJobRunner.start();
+
   const storedNeo4jPassword = store.getMemoryGraphNeo4jPassword();
   if (storedNeo4jPassword) {
     mgLog.info("startup: pushing stored Neo4j credential to memory-graph");
@@ -555,6 +723,7 @@ export async function initializePlatformServices(
         config,
         memoryGraphClient,
         evolveRuntimeFactory,
+        services.knowledgeEngineTools,
       );
     }
   }
