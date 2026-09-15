@@ -15,4 +15,5 @@ These pages explain why the system is designed this way and how components coope
 - [ScienceMemory](science-memory.md) — task chain, citation chain, module boundary, and storage.
 - [Skill progressive disclosure](skill-progressive-disclosure.md) — catalog search and frozen-snapshot reads.
 - [Subagent orchestration](subagent-orchestration.md) — parent/child Agent contract, guardrails, and trade-offs.
+- [Knowledge engine](knowledge-engine.md) — subject knowledge graph: ingestion, resolution, growth loop, communities, and agent consumption.
 - [Content-addressable storage](cas.md) — CAS addressing, workspace change detection, writers, and lifecycle.

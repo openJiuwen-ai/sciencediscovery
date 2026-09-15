@@ -36,6 +36,7 @@ The browser is a client, not a repository service. Both HTTP services are loopba
 | `services/paper` | no | API launches `paper_worker.py` per PDF and it exits afterward |
 | deer-flow | removed | Was a Python library installed from a submodule into the gateway environment. Both the agent loop and the web providers now run inside the Node control plane, so the dependency and the submodule are gone |
 | `apps/web` | no in production | Static assets served by API; optional Vite `:5173` in development |
+| knowledge engine | in the API process | Subject knowledge graph subsystem: own SQLite domain under `<data-dir>/knowledge-engine/`, job queue, scholarly connectors; see [knowledge-engine.md](knowledge-engine.md) |
 | `services/memory-graph` | disabled by default | Experimental Python sidecar on loopback `:17674`; requires explicit enablement and external storage |
 | persistent kernels/Bubblewrap jobs | on demand | Runner children reclaimed after idle timeout |
 | Host NPU Broker jobs | on demand | Started by Runner only when `SCIENCE_AGENT_NPU_BROKER=1`; allowlisted host workloads, not a separate daemon or arbitrary command surface |

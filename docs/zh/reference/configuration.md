@@ -57,6 +57,17 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_WEB_DIR` | `apps/web/dist` | 静态 UI 资源 |
 | `SCIENCE_AGENT_PAPER_PYTHON_PATH` | `<data dir>/envs/paper/bin/python` | PDF worker Python |
 | `SCIENCE_AGENT_PAPER_WORKER_PATH` | `services/paper/paper_worker.py` | PDF worker 入口 |
+| `SCIENCE_AGENT_KE_EMBEDDING_BASE_URL` | 未设置 | 知识引擎 embedding 端点（OpenAI 兼容）；未设置则禁用 embedding（抽取/消解优雅降级） |
+| `SCIENCE_AGENT_KE_EMBEDDING_API_KEY` | 未设置 | 知识引擎 embedding API key |
+| `SCIENCE_AGENT_KE_EMBEDDING_MODEL` | 未设置 | 知识引擎 embedding 模型 id |
+| `SCIENCE_AGENT_KE_VISION_BASE_URL` | 未设置 | 知识引擎视觉端点，用于重图片 PDF 页（opt-in；与 `_API_KEY` 一起设置即启用页面视觉注释） |
+| `SCIENCE_AGENT_KE_VISION_API_KEY` | 未设置 | 知识引擎视觉 API key |
+| `SCIENCE_AGENT_KE_VISION_PROTOCOL` | `openai` | 视觉协议：`openai`（chat completions，需配 `_MODEL`）或 `minimax`（coding_plan/vlm） |
+| `SCIENCE_AGENT_KE_VISION_MODEL` | 未设置 | 视觉模型 id（仅 openai 协议需要） |
+| `SCIENCE_AGENT_KE_ENTITY_RESOLUTION` | `off` | 实体消解模式：`off`（逐字节旧行为）/ `shadow`（只审计）/ `on`（合并）。优先级：本环境变量 > ke_settings `entity_resolution_mode` > `off`——env 未设置时 ke_settings 才生效 |
+| `SCIENCE_AGENT_KE_SCHOLARLY_FIXTURE_DIR` | 未设置 | 从该目录回放录制的学术 HTTP 响应而不走网络（mocked E2E） |
+| `SCIENCE_AGENT_KE_OPENALEX_API_KEY` | 未设置 | 知识引擎源链的 OpenAlex API key |
+| `SCIENCE_AGENT_KE_UNPAYWALL_EMAIL` | 未设置 | Unpaywall 联系邮箱（启用该连接器） |
 
 Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管理员明确开启。没有 Ascend NPU、未安装 CANN/MindSpore，或不希望 Agent 调用宿主 NPU 时，请保持 `SCIENCE_AGENT_NPU_BROKER=0`；此时工具表不会包含 `run_npu_job`。本地模式启用后仍使用正常启动入口。启用 Broker 前，应先创建并验证至少一个可导入所需 CANN/MindSpore 栈的 ScienceDiscovery 包含 Python 的托管科学环境。内置 NPU workload（包括 `npu.smoke_test`）用 `environment_list` 返回的 `environment_id` 选择环境；省略时由 API 解析 Session 所选环境。API 选择该环境最新版 Revision，供 Broker 内部执行与审计；Agent 不能选择历史版本，`environment_revision_id` 会被拒绝。`SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` 留空时使用仓内默认白名单，当前包含 `npu.smoke_test` 与 `antibody.protenix.v1`；如需新增模型，提供自定义 JSON 白名单并固定 entrypoint，而不是让 Agent 传任意命令。`SCIENCE_AGENT_NPU_PYTHON` 仅保留给显式使用 `${python}` 的自定义白名单；仓内默认白名单使用 `${managedPython}`，不会读取它。修改白名单 JSON 等价于修改可执行代码入口，应作为部署变更审查；模型权重、数据库、HMMER、CANN、MindScience checkout 等站点资产不进入仓库，通常通过上面的环境变量或 workload 配置引用。
 

@@ -1,0 +1,187 @@
+{
+  "id": "novelty-triage-v1",
+  "kind": "novelty-triage",
+  "version": "2026-09-01",
+  "description": "查新判定三态分拣题集（自建）：对一条命题做查新，判定 novel / similar-found / inconclusive。题集内容与领域无关——known 题取多学科教科书级公知事实，novel 题为跨领域未见组合的构造命题。",
+  "construction": {
+    "known类（nt-001~nt-010）": "教科书级公知事实（药理、分子生物、材料、能源、医学微生物等十个不同学科各一题），公开文献与教科书广泛记载，合格的查新流程应检出大量相似条目 → gold=similar-found。",
+    "novel类（nt-011~nt-020）": "评测者构造的跨领域未见组合（把 A 领域成熟技术/对象与 B 领域问题做刻意拼接，命题在语法上成立、在常识上未被记载）。依 PU 原则无法证明绝对不存在 → gold=novel 且 goldAccept=[novel, inconclusive]（agent 证据不足判 inconclusive 同样计为正确；唯独判 similar-found 是错）。",
+    "规模局限": "20 题的小规模题集，结论为方向性；单题 95% 置信区间约 ±22pp。known/novel 各半以同时观察'漏检已有工作（false-novel）'与'误报已有工作（false-similar）'两类错误。",
+    "防污染": "novel 题为人工构造、未见于任何公开基准；后续扩充应放私有子集（--private，data/tmp/bench-eval-private/，不进版本库）。",
+    "reference sources": "sources 字段是评测者自撰的公知事实参考段落，仅供 --citation 引用预检逐字核对（验证 agent 引用的 quote 是否造假），不代表 agent 实际抓取的网页。"
+  },
+  "sources": {
+    "s-aspirin": "Aspirin exerts its antiplatelet and anti-inflammatory effects by irreversibly acetylating a serine residue (Ser530 in COX-1) in the active site of cyclooxygenase enzymes, thereby blocking prostaglandin synthesis.",
+    "s-crispr": "CRISPR-Cas9 uses a guide RNA to direct the Cas9 nuclease to a complementary target DNA sequence adjacent to a PAM motif, where Cas9 introduces a double-strand break.",
+    "s-metformin": "Metformin lowers hepatic glucose production primarily through activation of AMP-activated protein kinase (AMPK) and inhibition of mitochondrial glycerophosphate dehydrogenase, reducing gluconeogenesis.",
+    "s-graphene": "Graphene is a single layer of sp2-hybridized carbon atoms arranged in a two-dimensional honeycomb lattice, exhibiting exceptionally high carrier mobility and mechanical strength.",
+    "s-statin": "Statins lower cholesterol synthesis by competitively inhibiting HMG-CoA reductase, the rate-limiting enzyme of the mevalonate pathway in the liver.",
+    "s-photosynthesis": "In the light reactions of photosynthesis, photosystem II embedded in the thylakoid membrane splits water molecules, releasing oxygen, protons and electrons that drive ATP and NADPH production.",
+    "s-penicillin": "Penicillin kills bacteria by inhibiting the transpeptidase enzymes (penicillin-binding proteins) that cross-link peptidoglycan strands in the bacterial cell wall, leading to osmotic lysis.",
+    "s-liion": "Lithium-ion batteries store and release energy through the reversible intercalation and deintercalation of lithium ions between the cathode and anode during charge and discharge cycles.",
+    "s-alzheimer": "The brains of Alzheimer's disease patients characteristically show extracellular beta-amyloid plaque deposition and intracellular neurofibrillary tangles composed of hyperphosphorylated tau protein.",
+    "s-hpylori": "Helicobacter pylori infection of the gastric mucosa is a major cause of chronic gastritis and peptic ulcer disease, and is an established risk factor for gastric cancer."
+  },
+  "items": [
+    {
+      "id": "nt-001",
+      "claim": "阿司匹林通过乙酰化环氧化酶（COX）活性位点的丝氨酸残基，不可逆地抑制前列腺素合成。",
+      "gold": "similar-found",
+      "note": "公知题：教科书级药理学事实，文献广泛记载。",
+      "evidenceSources": ["s-aspirin"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-002",
+      "claim": "CRISPR-Cas9 系统利用向导 RNA 将 Cas9 核酸酶引导至与 PAM 相邻的互补靶序列，在该位点产生 DNA 双链断裂。",
+      "gold": "similar-found",
+      "note": "公知题：基因编辑基本机制。",
+      "evidenceSources": ["s-crispr"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-003",
+      "claim": "二甲双胍通过激活 AMPK 通路抑制肝脏糖异生，从而降低肝糖输出。",
+      "gold": "similar-found",
+      "note": "公知题：经典降糖药机制。",
+      "evidenceSources": ["s-metformin"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-004",
+      "claim": "石墨烯是由 sp2 杂化碳原子构成的单层二维蜂窝晶格材料，具有极高的载流子迁移率和力学强度。",
+      "gold": "similar-found",
+      "note": "公知题：材料学基本事实（2010 年诺贝尔物理学奖）。",
+      "evidenceSources": ["s-graphene"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-005",
+      "claim": "他汀类药物通过竞争性抑制 HMG-CoA 还原酶（甲羟戊酸途径限速酶）降低肝脏胆固醇合成。",
+      "gold": "similar-found",
+      "note": "公知题：经典降脂药机制。",
+      "evidenceSources": ["s-statin"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-006",
+      "claim": "光合作用的光反应中，定位于类囊体膜的光系统 II 裂解水分子，释放氧气并驱动 ATP 与 NADPH 的生成。",
+      "gold": "similar-found",
+      "note": "公知题：植物生理学基本事实。",
+      "evidenceSources": ["s-photosynthesis"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-007",
+      "claim": "青霉素通过抑制细菌细胞壁肽聚糖交联的转肽酶（青霉素结合蛋白）发挥杀菌作用，导致细菌渗透裂解。",
+      "gold": "similar-found",
+      "note": "公知题：抗生素作用机制经典案例。",
+      "evidenceSources": ["s-penicillin"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-008",
+      "claim": "锂离子电池通过锂离子在正负极材料之间的可逆嵌入与脱出实现充放电储能。",
+      "gold": "similar-found",
+      "note": "公知题：电化学储能基本原理（2019 年诺贝尔化学奖）。",
+      "evidenceSources": ["s-liion"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-009",
+      "claim": "阿尔茨海默病患者脑内出现细胞外 β-淀粉样蛋白斑块沉积与由过度磷酸化 tau 蛋白构成的神经原纤维缠结。",
+      "gold": "similar-found",
+      "note": "公知题：神经退行性疾病经典病理特征。",
+      "evidenceSources": ["s-alzheimer"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-010",
+      "claim": "幽门螺杆菌感染胃黏膜是慢性胃炎与消化性溃疡的主要病因，也是胃癌的既定危险因素。",
+      "gold": "similar-found",
+      "note": "公知题：医学微生物学事实（2005 年诺贝尔生理学或医学奖）。",
+      "evidenceSources": ["s-hpylori"],
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-011",
+      "claim": "利用肠道菌群代谢产物通过调控线粒体自噬逆转肌腱干细胞的衰老表型。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：肠菌代谢 × 肌腱干细胞衰老的跨域拼接，未见记载的组合。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-012",
+      "claim": "基于折纸结构的软体机器人关节用于可吸收血管支架的定向释放与形态调控。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：折纸软体机器人 × 可吸收支架的拼接。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-013",
+      "claim": "用月球风化层模拟物 3D 打印自修复混凝土，并通过微生物诱导碳酸钙矿化增强其裂纹愈合能力。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：月壤建材 × 微生物矿化自修复的三重拼接。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-014",
+      "claim": "将量子点发光材料嵌入蛛丝蛋白纤维，制备可生物降解的柔性显示基底。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：量子点 × 蛛丝蛋白 × 可降解显示的拼接。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-015",
+      "claim": "通过声遗传学手段（超声激活机械敏感离子通道）选择性调控胰岛 β 细胞的胰岛素分泌节律，用于治疗 2 型糖尿病。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：声遗传学 × 胰岛 β 细胞节律调控的拼接。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-016",
+      "claim": "回收城市建筑空调冷凝水驱动微型藻类固碳培养，并联产生物肥料。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：空调冷凝水 × 微藻固碳 × 生物肥料的拼接。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-017",
+      "claim": "用迁移学习将鸟类鸣声方言识别模型迁移到座头鲸歌声的语法结构解析。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：鸟鸣方言模型 × 鲸歌语法解析的跨物种迁移拼接。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-018",
+      "claim": "基于咖啡因分子印迹水凝胶的可穿戴传感器，用于实时监测汗液中的皮质醇浓度。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：咖啡因印迹（模板分子与目标分析物刻意错配）× 汗液皮质醇监测。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-019",
+      "claim": "将地衣共生体系（真菌-藻类）改造为火星原位固氮生物工厂。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：地衣共生改造 × 火星原位固氮的拼接。",
+      "supportsStrongClaims": false
+    },
+    {
+      "id": "nt-020",
+      "claim": "利用光纤分布式声波传感（DAS）监测珊瑚礁白化早期的钙化速率变化。",
+      "gold": "novel",
+      "goldAccept": ["novel", "inconclusive"],
+      "note": "构造题：DAS 光纤传感 × 珊瑚钙化速率监测的拼接。",
+      "supportsStrongClaims": false
+    }
+  ]
+}
