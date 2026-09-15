@@ -112,7 +112,7 @@ async function kbScopeStub(): Promise<KbScopeStub> {
  *   1. Register a journey-owned stub model; create a Project, a Session, and one knowledge base (POST /api/knowledge-engine/kbs).
  *   2. Open the session; in the composer kb-scope picker check the KB and the "knowledge bases only" toggle. Assert the trigger badge shows 1 and the session settings overrides carry kbScopeKbIds=[kb] and kbScopeWebSearch=false.
  *   3. Send one prompt. The stub's first model call probes kb_search with an out-of-scope kbId; the second call sees the rejection observation and finishes.
- *   4. Assert the run completed, the first model request's system prompt contains the bound-KB disclosure, the web ban, the context self-management guidance and the context clock line, and the second request carries the out-of-scope rejection text.
+ *   4. Assert the run completed, the first model request's system prompt contains the bound-KB disclosure, the web ban, the context self-management guidance and the context clock line, and the second request carries the out-of-scope rejection text. The first tool-bearing request's tools array must contain no web tool (web_search/web_fetch/web_capture/image_search) and must contain kb_search — the registry, not the prompt, is the backstop.
  * Environment: Isolated local stack at E2E_BASE_URL; zh-CN locale; knowledge-engine routes available with an empty KB (no documents needed).
  * Type: mocked
  * LLM: journey-owned OpenAI-compatible stub on 127.0.0.1 with two-call scripting (out-of-scope kb_search probe → final text).
@@ -199,6 +199,18 @@ test("J-KBS1 对话内绑定知识库：徽章+持久化+提示词披露+工具�
         expect(systemPrompt).toMatch(/Context clock: today is \d{4}-\d{2}-\d{2} \(UTC\)/);
         // The rejection observation reached the model on the second call.
         expect(stub.requests[1] ?? "").toContain("outside this session's bound knowledge-base scope");
+
+        // Hard assertion on the executed registry: the prompt ban is advisory,
+        // the real backstop is deniedToolNames — so the first tool-bearing
+        // request's tools array must not carry ANY web tool.
+        const firstToolRequest = stub.requests
+          .map((raw) => JSON.parse(raw) as { tools?: Array<{ function?: { name?: string } }> })
+          .find((body) => (body.tools?.length ?? 0) > 0);
+        const toolNames = (firstToolRequest?.tools ?? []).map((tool) => tool.function?.name ?? "");
+        for (const webTool of ["web_search", "web_fetch", "web_capture", "image_search"]) {
+          expect(toolNames, `web tool ${webTool} must be absent from the bound session's registry`).not.toContain(webTool);
+        }
+        expect(toolNames).toContain("kb_search");
       },
     );
   } finally {
