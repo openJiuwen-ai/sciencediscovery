@@ -35,6 +35,10 @@ export interface MarkdownRendererProps {
    * caller can open the node's detail (e.g. switch to the Memory tab and
    * select it). Chips with no handler still render but are not interactive. */
   onChipClick?: (reference: ComposerReference) => void;
+  /** Optional wrapper around a rendered chip (e.g. a hover preview). Called
+   * with the resolved reference and the chip element; must return the element
+   * to render in its place. Absent = chips render bare. */
+  wrapChip?: (reference: ComposerReference, chip: React.ReactNode) => React.ReactNode;
   /** Authenticated reader scoped by the caller to `workspaceSessionId`. */
   loadWorkspaceImage?: (path: string, signal: AbortSignal) => Promise<Blob>;
   /** Expands or focuses the Artifacts panel from an image failure state. */
@@ -355,6 +359,7 @@ export function MarkdownRenderer({
   onOpenArtifacts,
   references,
   workspaceSessionId,
+  wrapChip,
 }: MarkdownRendererProps) {
   const { t } = useLocale();
   const chipIndex = useMemo(() => buildChipIndex(references), [references]);
@@ -368,7 +373,7 @@ export function MarkdownRenderer({
           ? { id, kind: kind as ComposerReference["kind"], label: props.children as string }
           : undefined;
         const label = reference ? KIND_TO_LABEL[reference.kind] : undefined;
-        return (
+        const chip = (
           <button
             className="graph-chip"
             disabled={!onChipClick || !reference || !label}
@@ -376,6 +381,7 @@ export function MarkdownRenderer({
             type="button"
           >{props.children}</button>
         );
+        return reference && wrapChip ? wrapChip(reference, chip) : chip;
       }
       return <a {...props} href={href} rel={external ? "noreferrer" : undefined} target={external ? "_blank" : undefined} />;
     },
@@ -401,7 +407,9 @@ export function MarkdownRenderer({
         <table {...props}>{children}</table>
       </div>
     ),
-  }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, t, workspaceSessionId]);
+
+  }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, t, workspaceSessionId, wrapChip]);
+
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
       <Markdown

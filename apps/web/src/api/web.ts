@@ -27,9 +27,9 @@ import type {
   WorkbenchSearchResponse,
 } from "@sciencediscovery/schema";
 
-import { EvolveApiClient } from "./evolve.js";
+import { KnowledgeEngineApiClient } from "./knowledge-engine.js";
 
-export class WebApiClient extends EvolveApiClient {
+export class WebApiClient extends KnowledgeEngineApiClient {
   startMcpAuthorization(id: string, redirectUrl: string): Promise<McpAuthorizationStart> {
     return this.request(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, { method: "POST", body: JSON.stringify({ redirectUrl }) });
   }
@@ -63,6 +63,7 @@ export class WebApiClient extends EvolveApiClient {
   importMcpServers(body: unknown): Promise<CustomMcpServerDetails[]> {
     return this.request("/api/mcp/servers/import", { method: "POST", body: JSON.stringify(body) });
   }
+
 
   listMcpSources(): Promise<Array<{ manifest: McpSourceManifest; status: McpSourceStatus }>> {
     return this.request("/api/mcp/sources");

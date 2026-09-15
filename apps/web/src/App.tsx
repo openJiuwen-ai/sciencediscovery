@@ -74,6 +74,11 @@ import type {
   SessionArtifactOutput,
   SessionDetail,
   SessionListState,
+
+  RevisePlanRequest,
+  SessionPlan,
+
+
   SessionRunEvent,
   SessionUsageSummary,
   ScientificArtifact,
@@ -226,6 +231,7 @@ import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionTh
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
 import { EvidenceModal } from "./EvidenceModal.js";
+import { EvidenceHover } from "./EvidenceHoverCard.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { GovernedDownloadCards } from "./GovernedDownloadCards.js";
 import { isMemoryGraphVisible, MemoryGraphView, useMemorySubgraph } from "./MemoryGraphView.js";
@@ -237,7 +243,11 @@ import { EvolveRunCard } from "./evolve/EvolveRunCard.js";
 // App layer so the right-rail card can open it directly (previously the only
 // entries were the per-product modals).
 const MemoryGraphExplorer = lazy(() => import("./MemoryGraphExplorer.js").then((m) => ({ default: m.MemoryGraphExplorer })));
+
+const KnowledgeEnginePage = lazy(() => import("./knowledge-engine/KnowledgeEnginePage.js").then((m) => ({ default: m.KnowledgeEnginePage })));
+
 import { IdeaTreeView } from "./IdeaTreeView.js";
+
 import { ReviewerControlCard } from "./ReviewerControlCard.js";
 import { ConnectorPicker } from "./composer/ConnectorPicker.js";
 import { ApprovalModeToggle } from "./composer/ApprovalModeToggle.js";
@@ -276,6 +286,8 @@ import {
   type ComposerRunAction,
 } from "./composer/model.js";
 import { ModelPicker } from "./composer/ModelPicker.js";
+import { KbScopePicker, type KbScopeUpdate } from "./composer/KbScopePicker.js";
+import type { KeKb } from "./api/knowledge-engine.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -1055,6 +1067,9 @@ export function App() {
   /** Cancelling a review is independent from stopping the main Agent run. */
   const [stoppingReviewerSessionIds, setStoppingReviewerSessionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [plans, setPlans] = useState<RunPlanSnapshot[]>([]);
+  // Approval-gated session plans (V3-C2 lifecycle) — separate from the
+  // model-declared snapshot plans above.
+  const [sessionPlans, setSessionPlans] = useState<SessionPlan[]>([]);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
@@ -1081,12 +1096,23 @@ export function App() {
   // button). The snapshot is shared via useMemorySubgraph so the explorer never
   // re-fetches what the card already polled.
   const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
+
+  const [knowledgeEngineOpen, setKnowledgeEngineOpen] = useState(false);
+  // V4-C1: conversation KB scope — the KB list for the composer picker and the
+  // active session's runtime settings details (kbScopeKbIds/kbScopeWebSearch
+  // live in the settings overrides, not on the Session record).
+  const [keKbs, setKeKbs] = useState<KeKb[]>([]);
+  const [sessionSettings, setSessionSettings] = useState<RuntimeSettingsDetails>();
+  // A graph node a report chip asked to open; MemoryGraphView selects it on
+  // change, then clears the pending state. Set by handleChipClick (paper chips).
+
   // A graph node a report chip asked to open; MemoryGraphExplorer picks it
   // up as `initialNodeId` on mount (and reacts to changes while open via an
   // effect — see MemoryGraphExplorer). Set by handleChipClick (paper /
   // sourcefile chips). The label is carried for symmetry / future callers
   // that might want to scope the focus by label, but the explorer reads the
   // id directly when focusing a node.
+
   const [pendingMemoryNode, setPendingMemoryNode] = useState<{ label: MemoryGraphNodeLabel; id: string } | undefined>();
   // An Evidence chip asked to open its detail modal (shows the evidence + its
   // source Paper). Set by handleChipClick (evidence chips).
@@ -1599,6 +1625,29 @@ export function App() {
     setWorkspaceFileProvenanceTarget(undefined);
   }, [activeSessionId]);
 
+  // KB list for the conversation kb-scope picker. Best effort: an
+  // unconfigured knowledge engine just yields an empty list. Re-runs when the
+  // Knowledge Engine overlay closes so newly created KBs appear immediately.
+  useEffect(() => {
+    let cancelled = false;
+    client.listKeKbs()
+      .then((result) => { if (!cancelled) setKeKbs(result.kbs); })
+      .catch(() => { if (!cancelled) setKeKbs([]); });
+    return () => { cancelled = true; };
+  }, [client, knowledgeEngineOpen]);
+
+  // The picker badge and edit state come from the session's runtime settings
+  // (overrides + effective + sources); kbScope changes take effect next run.
+  useEffect(() => {
+    setSessionSettings(undefined);
+    if (!activeSessionId) return;
+    let cancelled = false;
+    client.getSessionSettings(activeSessionId)
+      .then((details) => { if (!cancelled) setSessionSettings(details); })
+      .catch(() => { if (!cancelled) setSessionSettings(undefined); });
+    return () => { cancelled = true; };
+  }, [activeSessionId, client]);
+
   useEffect(() => {
     const updateWorkspaceBounds = () => {
       const maxWidth = measureWorkspaceMaxWidth();
@@ -1931,6 +1980,7 @@ export function App() {
       setArtifactReviews([]);
       setReviewerAuditTasks([]);
       setPlans([]);
+      setSessionPlans([]);
       setSubagents([]);
       setRemoteJobs([]);
       setMcpInvocations([]);
@@ -2249,6 +2299,21 @@ export function App() {
     setArtifactModalName(undefined);
     setArtifactModalSessionId(undefined);
   }
+
+  // V3-C3: wrap evidence chips with the hover preview card; other chip kinds
+  // keep their bare rendering. The click path (handleChipClick → EvidenceModal)
+  // is unchanged — the card's "open details" lands on the same modal.
+  const wrapEvidenceChip = useCallback((reference: ComposerReference, chip: ReactNode): ReactNode => {
+    if (reference.kind !== "evidence" || !activeSessionId) return chip;
+    return (
+      <EvidenceHover
+        client={client}
+        evidenceId={reference.id}
+        onOpenDetails={setEvidenceDetailId}
+        sessionId={activeSessionId}
+      >{chip}</EvidenceHover>
+    );
+  }, [activeSessionId, client]);
 
   function handleMessagesScroll(): void {
     const messageContainer = messagesViewport.current;
@@ -2629,6 +2694,38 @@ export function App() {
     }
   }
 
+  /** Composer kb-scope picker writes: read-modify-write the session settings
+   * overrides (PUT replaces the whole layer, so preserve every other field).
+   * A present-but-undefined value drops the override and inherits again. */
+  async function updateSessionKbScope(update: KbScopeUpdate): Promise<void> {
+    if (!activeSessionId) return;
+    try {
+      // Fresh read, not the cached sessionSettings: the composer model/
+      // connector pickers PATCH and the settings dialog PUTs the same
+      // overrides layer without refreshing our copy — a stale base would
+      // silently roll those edits back.
+      const latest = await client.getSessionSettings(activeSessionId);
+      const overrides: RuntimeSettingsOverrides = { ...latest.overrides };
+      if ("kbScopeKbIds" in update) {
+        if (update.kbScopeKbIds === undefined) delete overrides.kbScopeKbIds;
+        else overrides.kbScopeKbIds = update.kbScopeKbIds;
+      } else if ("kbScopeWebSearch" in update) {
+        if (update.kbScopeWebSearch === undefined) delete overrides.kbScopeWebSearch;
+        else overrides.kbScopeWebSearch = update.kbScopeWebSearch;
+      }
+      // Without a binding the web-only flag is inert; drop its residue so it
+      // does not silently resurrect the next time bases get bound.
+      if (!overrides.kbScopeKbIds?.length) delete overrides.kbScopeWebSearch;
+      const details = await client.replaceSessionSettings(activeSessionId, overrides);
+      setSessionSettings(details);
+      // Keep an open scoped-settings dialog on the same session in sync.
+      if (settingsTarget?.kind === "session" && settingsTarget.id === activeSessionId) setScopedSettings(details);
+      setError(undefined);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("error.updateSession"));
+    }
+  }
+
   async function updateConversationModel(modelId: string): Promise<void> {
     const nextModel = models.find((model) => model.id === modelId);
     const currentMode = session?.thinkingMode ?? nextModel?.thinkingMode ?? "auto";
@@ -2681,6 +2778,55 @@ export function App() {
     if (!shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) return;
     setPermissionGrants(grants);
     setPermissionEpoch(epoch);
+  }
+
+  // V3-C2: plan approval decision + user edit of the plan artifact.
+  const [planActionBusy, setPlanActionBusy] = useState(false);
+
+  async function refreshPlans(sessionId: string): Promise<void> {
+    try {
+      setSessionPlans(await client.listSessionPlans(sessionId));
+    } catch {
+      // a failed refresh leaves the SSE-driven state as-is
+    }
+  }
+
+  async function decidePlanApproval(plan: SessionPlan, decision: "approve" | "reject", reason?: string): Promise<void> {
+    if (!session || planActionBusy) return;
+    setPlanActionBusy(true);
+    try {
+      const outcome = await client.decideSessionPlanApproval(session.id, plan.id, {
+        decision,
+        expectedVersion: plan.version,
+        ...(reason ? { reason } : {}),
+      });
+      setSessionPlans((current) => [...current.filter((item) => item.id !== outcome.plan.id), outcome.plan]);
+      setError(undefined);
+      pushToast(decision === "approve" ? "success" : "info", decision === "approve" ? `Plan v${outcome.decision.planVersion} approved` : "Plan rejected");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not decide the plan");
+      await refreshPlans(session.id);
+    } finally {
+      setPlanActionBusy(false);
+    }
+  }
+
+  async function revisePlanArtifact(plan: SessionPlan, body: RevisePlanRequest): Promise<boolean> {
+    if (!session || planActionBusy) return false;
+    setPlanActionBusy(true);
+    try {
+      const revised = await client.reviseSessionPlan(session.id, plan.id, body);
+      setSessionPlans((current) => [...current.filter((item) => item.id !== revised.id), revised]);
+      setError(undefined);
+      pushToast("success", `Plan revised to v${revised.version}`);
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not revise the plan");
+      await refreshPlans(session.id);
+      return false;
+    } finally {
+      setPlanActionBusy(false);
+    }
   }
 
   async function decidePermission(request: PermissionRequest, decision: PermissionDecision): Promise<void> {
@@ -3157,6 +3303,9 @@ export function App() {
         const otherPlans = current.filter((item) => item.runId !== runId || item.agentId !== plan.agentId);
         return plan.items.length ? [...otherPlans, plan] : otherPlans;
       });
+    }
+    if (streamEvent.type === "plan.approval_decided") {
+      setSessionPlans((current) => [...current.filter((item) => item.id !== streamEvent.plan.id), streamEvent.plan]);
     }
     if (streamEvent.type === "subagent.updated"
       || streamEvent.type === "subagent.step"
@@ -4046,6 +4195,17 @@ export function App() {
     const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
+
+        <OrchestrationPanel
+          busy={planActionBusy}
+          expandedCards={activityCardExpansion}
+          onDecidePlan={(plan, decision) => void decidePlanApproval(plan, decision)}
+          onRevisePlan={(plan, body) => revisePlanArtifact(plan, body)}
+          onToggleCard={toggleActivityCard}
+          plans={group.plans}
+        />
+
+
         <SubagentCards onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
@@ -4231,7 +4391,12 @@ export function App() {
         <div className="sidebar-quick-actions" aria-label={t("app.workbenchNavigation")}>
           <button type="button" onClick={() => void openGlobalSearch()}><span><SearchIcon size={16} /></span><span>{t("app.search")}</span><kbd>Ctrl K</kbd></button>
           <button type="button" className={workspaceView === "usage" ? "active" : undefined} onClick={() => void openUsageView()}><span><SparkleIcon size={16} /></span><span>{t("app.usage")}</span></button>
+
+          <button type="button" data-testid="open-knowledge-engine" onClick={() => setKnowledgeEngineOpen(true)}><span><SparkleIcon size={16} /></span><span>{t("app.knowledgeEngine")}</span></button>
+          <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); if (workspaceCollapsed) setWorkspaceCollapsed(false); else workspacePanel.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
+
           <button type="button" disabled={!activeProjectId} onClick={() => { setOpenSubagentId(undefined); openMarkdownImageArtifacts(); }}><span><FileIcon size={16} /></span><span>{t("app.files")}</span><i>{artifacts.length}</i></button>
+
         </div>
         <button className="settings-button" onClick={() => { if (showConfig) cancelSystemSettings(); else openSystemSettings(); }}>
           <span><SettingsIcon size={17} /></span><span>{t("app.systemConfiguration")}</span><span className="mode-chip">{models.length}</span>
@@ -4375,6 +4540,7 @@ export function App() {
                             content={block.message.content}
                             loadWorkspaceImage={block.message.role === "assistant" ? loadMarkdownImage : undefined}
                             onChipClick={block.message.role === "assistant" ? handleChipClick : undefined}
+                            wrapChip={block.message.role === "assistant" ? wrapEvidenceChip : undefined}
                             onOpenArtifacts={block.message.role === "assistant" ? openMarkdownImageArtifacts : undefined}
                             references={block.message.role === "assistant" ? block.message.references : undefined}
                             workspaceSessionId={block.message.role === "assistant" ? session.id : undefined}
@@ -4520,6 +4686,12 @@ export function App() {
                         disabled={isRunning || sessionArchived}
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
+                      />
+                      <KbScopePicker
+                        details={sessionSettings}
+                        disabled={isRunning || sessionArchived}
+                        kbs={keKbs}
+                        onChange={(update) => void updateSessionKbScope(update)}
                       />
                       <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
@@ -4817,6 +4989,13 @@ export function App() {
         provenance={workspaceFileProvenanceTarget.provenance}
       /> : null}
 
+      {knowledgeEngineOpen ? (
+        <ErrorBoundary label="KnowledgeEngine" onError={(message) => { reportError(message); setKnowledgeEngineOpen(false); }}>
+          <Suspense fallback={null}>
+            <KnowledgeEnginePage client={client} onClose={() => setKnowledgeEngineOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
+      ) : null}
       {memoryExplorerOpen && session && memorySubgraph ? (
         <ErrorBoundary label="ScienceMemory" onError={(message) => { reportError(message); setMemoryExplorerOpen(false); }}>
           <Suspense fallback={null}>
@@ -5057,6 +5236,7 @@ export function App() {
               details={scopedSettings}
               disabled={settingsTarget.kind === "session" && session?.id === settingsTarget.id && sessionArchived}
               key={resourceTargetKey(settingsTarget)}
+              knowledgeBases={keKbs}
               models={models}
               onSave={saveScopedSettings}
               scopeLabel={t(settingsTarget.kind === "project" ? "settings.project" : "settings.session")}

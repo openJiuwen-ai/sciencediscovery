@@ -26,6 +26,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { AgentMemoryPanel } from "./AgentMemoryPanel.js";
 import { translate, useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, TrashIcon } from "./icons.js";
 import { createSkillFolderArchive } from "./skill-folder-import.js";
@@ -154,7 +155,7 @@ export function SkillManager({
   workspaceLaunch,
 }: {
   client: ApiClient;
-  initialView?: "libraries" | "skills";
+  initialView?: "libraries" | "memory" | "skills";
   onCatalogChange: (skills: SkillDescriptor[]) => void;
   onDistillSession?: () => void;
   onError: (message: string) => void;
@@ -165,7 +166,14 @@ export function SkillManager({
   skills: SkillDescriptor[];
   workspaceLaunch?: { requestId: number; skillId?: string };
 }) {
-  const [view, setView] = useState<"libraries" | "skills">(initialView);
+  const [view, setView] = useState<"libraries" | "memory" | "skills">(initialView);
+
+  if (view === "memory") {
+    return <div className="skill-manager">
+      <SkillManagerViewTabs activeView="memory" onViewChange={setView} />
+      <AgentMemoryPanel client={client} onError={onError} />
+    </div>;
+  }
 
   if (view === "libraries") {
     return <div className="skill-manager">
@@ -194,13 +202,14 @@ function SkillManagerViewTabs({
   activeView,
   onViewChange,
 }: {
-  activeView: "libraries" | "skills";
-  onViewChange: (view: "libraries" | "skills") => void;
+  activeView: "libraries" | "memory" | "skills";
+  onViewChange: (view: "libraries" | "memory" | "skills") => void;
 }) {
   const { t } = useLocale();
   return <div aria-label={t("skillManager.viewsAria")} className="skill-manager-tabs" role="tablist">
     <button aria-selected={activeView === "skills"} className={activeView === "skills" ? "active" : ""} onClick={() => onViewChange("skills")} role="tab" type="button">{t("skillManager.tabSkills")}</button>
     <button aria-selected={activeView === "libraries"} className={activeView === "libraries" ? "active" : ""} onClick={() => onViewChange("libraries")} role="tab" type="button">{t("skillManager.tabLibraries")}</button>
+    <button aria-selected={activeView === "memory"} className={activeView === "memory" ? "active" : ""} onClick={() => onViewChange("memory")} role="tab" type="button">{t("skillManager.tabMemory")}</button>
   </div>;
 }
 
@@ -223,7 +232,7 @@ function SkillCatalogManager({
   onError: (message: string) => void;
   onOpenSession?: (sessionId: string) => void;
   onStartSkillCreation?: () => void;
-  onViewChange: (view: "libraries" | "skills") => void;
+  onViewChange: (view: "libraries" | "memory" | "skills") => void;
   onWorkspaceLaunchHandled?: (requestId: number) => void;
   sessionId?: string;
   skills: SkillDescriptor[];
@@ -598,7 +607,7 @@ function SkillLibraryManager({
 }: {
   client: ApiClient;
   onError: (message: string) => void;
-  onViewChange: (view: "libraries" | "skills") => void;
+  onViewChange: (view: "libraries" | "memory" | "skills") => void;
 }) {
   const [libraries, setLibraries] = useState<SkillLibrary[]>([]);
   const { t } = useLocale();
