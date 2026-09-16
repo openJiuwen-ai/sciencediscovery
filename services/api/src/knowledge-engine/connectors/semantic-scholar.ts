@@ -54,9 +54,10 @@ export function s2ToRef(paper: S2Paper): PaperRef | null {
   };
 }
 
-export function createSemanticScholarConnector(transport: ScholarlyTransport): PaperConnector {
+export function createSemanticScholarConnector(transport: ScholarlyTransport, apiKey?: string): PaperConnector {
+  const authHeaders = apiKey ? { "x-api-key": apiKey } : undefined;
   async function s2Get(path: string): Promise<unknown> {
-    const response = await transport.get(`${API}${path}`);
+    const response = await transport.get(`${API}${path}`, authHeaders ? { headers: authHeaders } : undefined);
     if (response.status === 404) return null;
     if (response.status !== 200) throw new Error(`Semantic Scholar API HTTP ${response.status}`);
     return response.json();

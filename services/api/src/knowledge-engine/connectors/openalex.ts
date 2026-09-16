@@ -95,6 +95,34 @@ export function createOpenAlexConnector(transport: ScholarlyTransport, config: O
     return null;
   }
 
+  function normalizeTitle(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  }
+
+  /**
+   * Resolve a ref to an OpenAlex work. Fast path: openalex id / DOI. Slow path:
+   * title search with an exact normalized-title guard — arXiv-only refs have
+   * no canonical OpenAlex id namespace (the DataCite 10.48550/arXiv.* alias
+   * does not resolve), and without this the citation fallback silently
+   * returns empty for them, defeating the S2 → OpenAlex failover.
+   */
+  async function workForRef(ref: PaperRef): Promise<OAWork | null> {
+    const key = keyFor(ref);
+    if (key) return (await oaGet(`/works/${encodeURIComponent(key)}`)) as OAWork | null;
+    if (!ref.title) return null;
+    const data = (await oaGet(`/works?search=${encodeURIComponent(ref.title)}&per-page=3`)) as {
+      results?: OAWork[];
+    } | null;
+    const wanted = normalizeTitle(ref.title);
+    // A pure-CJK/punctuation title normalizes to "" — and "" matches EVERY
+    // other non-Latin title, resolving an unrelated work's citation graph.
+    if (!wanted) return null;
+    for (const candidate of data?.results ?? []) {
+      if (candidate.title && normalizeTitle(candidate.title) === wanted) return candidate;
+    }
+    return null;
+  }
+
   return {
     name: "openalex",
 
@@ -120,9 +148,7 @@ export function createOpenAlexConnector(transport: ScholarlyTransport, config: O
     },
 
     async resolveCitations(ref: PaperRef): Promise<PaperRef[]> {
-      const key = keyFor(ref);
-      if (!key) return [];
-      const work = (await oaGet(`/works/${encodeURIComponent(key)}`)) as OAWork | null;
+      const work = await workForRef(ref);
       const ids = work?.referenced_works ?? [];
       if (ids.length === 0) return [];
       // Batch-fetch referenced works (OpenAlex filter supports up to ~50 ids).
@@ -134,9 +160,7 @@ export function createOpenAlexConnector(transport: ScholarlyTransport, config: O
     },
 
     async resolveCitingPapers(ref: PaperRef): Promise<PaperRef[]> {
-      const key = keyFor(ref);
-      if (!key) return [];
-      const work = (await oaGet(`/works/${encodeURIComponent(key)}`)) as OAWork | null;
+      const work = await workForRef(ref);
       const shortId = work?.id?.replace(/^https?:\/\/openalex\.org\//i, "");
       if (!shortId) return [];
       // Newest citers first — the forward snowball cares about recent work.
