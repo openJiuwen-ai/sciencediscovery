@@ -1910,7 +1910,7 @@ export class KnowledgeEngineStore {
    * exponential backoff; at the cap it becomes 'dead' and stops consuming
    * retries (the doom-loop guard). Only an in-flight job may fail.
    */
-  failJob(id: string, error: string, options: { backoffBaseMs?: number; deadLetter?: boolean } = {}): KeJobRow {
+  failJob(id: string, error: string, options: { backoffBaseMs?: number; deadLetter?: boolean; retryAfterMs?: number } = {}): KeJobRow {
     const job = this.getJob(id);
     if (!job) {
       throw new Error(`ke_job ${id} not found`);
@@ -1924,7 +1924,12 @@ export class KnowledgeEngineStore {
         .prepare("UPDATE ke_jobs SET status = 'dead', error = ?, updated_at = ? WHERE id = ? AND status = 'running'")
         .run(error, timestamp, id);
     } else {
-      const backoffMs = (options.backoffBaseMs ?? 5_000) * 2 ** Math.max(0, job.attempts - 1);
+      const computed = (options.backoffBaseMs ?? 5_000) * 2 ** Math.max(0, job.attempts - 1);
+      // A source-driven Retry-After wins when it is LONGER than the computed
+      // backoff: re-entering the throttle window early just burns the next
+      // attempt (the job is requeued as pending, so the serial runner's slot
+      // is free for other work in the meantime).
+      const backoffMs = Math.max(computed, options.retryAfterMs ?? 0);
       const runAfter = new Date(Date.now() + backoffMs).toISOString();
       this.database
         .prepare("UPDATE ke_jobs SET status = 'pending', error = ?, run_after = ?, updated_at = ? WHERE id = ? AND status = 'running'")

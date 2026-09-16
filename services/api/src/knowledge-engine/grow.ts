@@ -124,7 +124,10 @@ export function startGrowCycle(
     type: KE_GROW_JOB,
     payload: { kbId, cycleId, query, budget },
     dedupKey: `grow|${kbId}`,
-    maxAttempts: 3,
+    // Throttle storms are routine (keyless S2 windows), not fatal: with
+    // runner-level Retry-After deferral each attempt resumes the same cycle,
+    // so the attempt budget must cover a few storm windows.
+    maxAttempts: 6,
   });
   return {
     jobId: job.id,
@@ -163,12 +166,77 @@ export interface GrowCycleResult {
 // Job handler
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-execution wall-clock a cycle will spend SLEEPING on source throttles
+ * before it hands the wait to the job runner. One Retry-After window plus
+ * margin: short hiccups are absorbed in-cycle; a real storm is deferred by
+ * the runner (the pending requeue frees the serial job-runner's slot and the
+ * same cycle resumes via its watermarks). Sleeping longer inside the handler
+ * would starve every other KE job — the runner is deliberately serial.
+ */
+const THROTTLE_WAIT_BUDGET_MS = 90_000;
+const DEFAULT_THROTTLE_WAIT_MS = 30_000;
+/** Never sleep longer than this in one go, whatever Retry-After claims. */
+const MAX_THROTTLE_WAIT_MS = 60_000;
+
+/**
+ * Thrown inside a cycle when the shared throttle-wait budget is spent.
+ * Carries the offending RateLimitError so the top of the cycle can rethrow
+ * THAT — the job runner then requeues with run_after = Retry-After instead
+ * of the cycle finalizing on partial work (false convergence) or dying.
+ */
+class ThrottleBudgetExhaustedError extends Error {
+  constructor(readonly cause: RateLimitError) {
+    super("throttle wait budget exhausted");
+    this.name = "ThrottleBudgetExhaustedError";
+  }
+}
+
+interface ThrottleState {
+  remainingMs: number;
+}
+
+type SleepFn = (ms: number) => Promise<void>;
+const defaultSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Retry a resolver call through source throttling: honor Retry-After (clamped)
+ * and draw every sleep from the cycle-shared budget. Non-throttle errors pass
+ * through untouched; an exhausted budget raises ThrottleBudgetExhaustedError
+ * so the cycle can defer to the runner instead of dying.
+ */
+async function withThrottleBackoff<T>(
+  state: ThrottleState,
+  call: () => Promise<T>,
+  sleep: SleepFn = defaultSleep,
+): Promise<T> {
+  for (;;) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!(error instanceof RateLimitError)) throw error;
+      const wait = Math.min(Math.max(error.retryAfterMs ?? DEFAULT_THROTTLE_WAIT_MS, 1_000), MAX_THROTTLE_WAIT_MS);
+      if (wait > state.remainingMs) throw new ThrottleBudgetExhaustedError(error);
+      state.remainingMs -= wait;
+      await sleep(wait);
+    }
+  }
+}
+
+export interface GrowCycleOptions {
+  readonly sleep?: SleepFn;
+  readonly throttleWaitBudgetMs?: number;
+}
+
 export async function runGrowCycle(
   store: KnowledgeEngineStore,
   job: KeJobRow,
   deps: GrowDeps,
   onLog?: (message: string) => void,
+  options: GrowCycleOptions = {},
 ): Promise<GrowCycleResult> {
+  const sleep = options.sleep ?? defaultSleep;
+  const throttle: ThrottleState = { remainingMs: options.throttleWaitBudgetMs ?? THROTTLE_WAIT_BUDGET_MS };
   const input = job.payload as { kbId: string; cycleId: string; query?: string; budget?: Partial<CrawlBudget> };
   const kbId = input.kbId;
   const cycleId = input.cycleId;
@@ -203,7 +271,7 @@ export async function runGrowCycle(
   const phasesDone = new Set(phaseList);
   const needsSeed = phaseRaw !== null && SEED_PHASES.some((phase) => !phasesDone.has(phase));
   if (needsSeed) {
-    const seeded = await seedFrontier(store, kbId, cycleId, query, budget, deps, phasesDone, phaseKey, log);
+    const seeded = await seedFrontier(store, kbId, cycleId, query, budget, deps, phasesDone, phaseKey, log, throttle, sleep);
     if (seeded > 0) log(`seeded frontier with ${seeded} candidate(s)`);
   }
 
@@ -287,7 +355,7 @@ export async function runGrowCycle(
     // never re-admit the same parent's citations.
     if (!item.expandedAt && item.depth < budget.maxDepth) {
       try {
-        const citations = await deps.resolveCitations(ref);
+        const citations = await withThrottleBackoff(throttle, () => deps.resolveCitations(ref), sleep);
         // Persist this paper's reference dedup keys (ref_ids) so the AA
         // inverted index can score future candidates' bibliographic
         // coupling. Best-effort: a failure here must not block expansion.
@@ -320,7 +388,13 @@ export async function runGrowCycle(
         store.frontierMarkExpanded(item.id);
         if (admitted > 0) log(`admitted ${admitted}/${citations.length} candidate(s) at depth ${item.depth + 1}`);
       } catch (error) {
-        if (error instanceof RateLimitError) throw error;
+        if (error instanceof ThrottleBudgetExhaustedError) {
+          // Hand the wait to the job runner: it requeues with run_after =
+          // Retry-After (slot freed for other KE work), and the SAME cycle
+          // resumes here on the next attempt — this item stays pending and
+          // the phase watermarks/frontier rows are cycle-scoped state.
+          throw error.cause;
+        }
         log(`citation expansion failed: ${error instanceof Error ? error.message : error}`);
       }
     }
@@ -452,6 +526,8 @@ async function seedFrontier(
   phasesDone: Set<string>,
   phaseKey: string,
   log: (msg: string) => void,
+  throttle: ThrottleState,
+  sleep: SleepFn,
 ): Promise<number> {
   const allDocs = store.listDocumentsForSeeding(kbId, MAX_SEED_DOCS);
   // Drop low-quality seeds (not-ready / proven zero-yield) before resolving
@@ -506,7 +582,7 @@ async function seedFrontier(
     for (const doc of docs) {
       const ref = docRef(doc);
       try {
-        const citations = await deps.resolveCitations(ref);
+        const citations = await withThrottleBackoff(throttle, () => deps.resolveCitations(ref), sleep);
         await ensureQueryEmb(citations);
         const admitted = await admitCandidates(
           store, kbId, cycleId, null, 0, citations, queryEmb ?? null, budget, deps, SOURCE_BACKWARD,
@@ -514,7 +590,11 @@ async function seedFrontier(
         docAdmissions.set(doc.id, { admitted, total: citations.length });
         seeded += admitted;
       } catch (error) {
-        if (error instanceof RateLimitError) throw error;
+        if (error instanceof ThrottleBudgetExhaustedError) {
+          // Defer to the runner WITHOUT watermarking the phase: the next
+          // attempt resumes it (see the frontier-loop note).
+          throw error.cause;
+        }
         log(`seed expansion failed for ${doc.title.slice(0, 60)}: ${error instanceof Error ? error.message : error}`);
       }
     }
@@ -528,13 +608,13 @@ async function seedFrontier(
       for (const doc of docs.slice(0, FORWARD_SEED_DOCS)) {
         const ref = docRef(doc);
         try {
-          const citing = (await deps.resolveForward(ref)).slice(0, FORWARD_PER_DOC);
+          const citing = (await withThrottleBackoff(throttle, () => deps.resolveForward!(ref), sleep)).slice(0, FORWARD_PER_DOC);
           await ensureQueryEmb(citing);
           seeded += await admitCandidates(
             store, kbId, cycleId, null, 0, citing, queryEmb ?? null, budget, deps, SOURCE_FORWARD,
           );
         } catch (error) {
-          if (error instanceof RateLimitError) throw error;
+          if (error instanceof ThrottleBudgetExhaustedError) throw error.cause;
           log(`forward expansion failed for ${doc.title.slice(0, 60)}: ${error instanceof Error ? error.message : error}`);
         }
       }
@@ -569,13 +649,13 @@ async function seedFrontier(
       }
       for (const patchQuery of patchQueries) {
         try {
-          const results = await deps.searchPapers(patchQuery.query, PATCH_QUERY_LIMIT);
+          const results = await withThrottleBackoff(throttle, () => deps.searchPapers!(patchQuery.query, PATCH_QUERY_LIMIT), sleep);
           await ensureQueryEmb(results);
           seeded += await admitCandidates(
             store, kbId, cycleId, null, 0, results, queryEmb ?? null, budget, deps, SOURCE_ENTITY_QUERY,
           );
         } catch (error) {
-          if (error instanceof RateLimitError) throw error;
+          if (error instanceof ThrottleBudgetExhaustedError) throw error.cause;
           log(`patch query "${patchQuery.query.slice(0, 60)}" failed: ${error instanceof Error ? error.message : error}`);
         }
       }
