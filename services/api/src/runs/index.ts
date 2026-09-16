@@ -300,6 +300,7 @@ export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningSt
 }
 import { generateRefinedSessionTitle } from "../session-naming.js";
 import { notificationPrompt, runtimeNotice } from "../notification-dispatch.js";
+import { reopenSubagentForContinuation, settleSubagentContinuation } from "../subagent-continuation.js";
 import type { NotificationBatch } from "../agent-notifications.js";
 
 import { type ServerConfig } from "../bootstrap/config.js";
@@ -576,6 +577,9 @@ async function executeAgentRun(
   const continuation = notificationDelivery && notificationDelivery.agentId !== "main"
     ? store.listSubagents(sessionId).find((child) => `subagent:${child.id}` === notificationDelivery.agentId) : undefined;
   if (notificationDelivery?.agentId !== "main" && notificationDelivery && !continuation) throw new Error("Notification owner not found");
+  // How the wake turn itself ended, before the child's recorded history is
+  // folded back in; the run's own status is judged on this, not on history.
+  let continuationTurnStatus: Subagent["status"] | undefined;
   if (activeSessions.has(sessionId)) {
     throw new ApiStatusError(409, "A run is already active for this session");
   }
@@ -1469,7 +1473,7 @@ async function executeAgentRun(
       const releaseSubagentSlot = reserveSubagentSlot(subagentInput.description);
       let childId: string | undefined;
       try {
-        let subagent = continuation ? await store.updateSubagent({ ...continuation, status: "running", finishedAt: undefined, error: undefined }) : await store.createSubagent(sessionId, runId, subagentInput, {
+        let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
           model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
@@ -1993,6 +1997,11 @@ async function executeAgentRun(
             steps,
           };
         }
+        if (continuation) {
+          // The wake run reports on its own turn; the record keeps the task's history.
+          continuationTurnStatus = subagent.status;
+          subagent = settleSubagentContinuation(continuation, subagent);
+        }
         subagent = await store.updateSubagent(subagent);
         await emit({ subagent, type: "subagent.updated" });
         // Mirror the subagent's terminal state into its scope SubTask node.
@@ -2155,7 +2164,8 @@ async function executeAgentRun(
       const message = await store.appendMessage(sessionId, "assistant", `Subagent ${child.input.description}: ${child.steps.findLast((step) => step.kind === "assistant")?.content ?? child.error ?? child.status}`, selectedModel);
       await store.updateSessionRun(sessionId, runId, { assistantMessageId: message.id });
       await emit({ files: await listWorkspaceFiles(store, sessionId), message, type: "run.completed" });
-      return child.status === "completed" ? "completed" : child.status === "cancelled" ? "cancelled" : "failed";
+      const outcome = continuationTurnStatus ?? child.status;
+      return outcome === "completed" ? "completed" : outcome === "cancelled" ? "cancelled" : "failed";
     }
     lastAgentUsage = unreportedModelUsage();
     taskInvocationAttempted = true;
