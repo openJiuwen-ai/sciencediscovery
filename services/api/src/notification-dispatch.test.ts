@@ -56,8 +56,9 @@ test("a delivery is counted for the transcript and re-attached only for the mode
   let now = 1000;
   const notifications = new AgentNotifications(db, () => false, () => now);
   const owner = { sessionId: "session", agentId: "main" };
+  // Records are delivered in creation order, so each one gets its own instant.
   notifications.complete(owner, "job-one", "first execution done");
-  notifications.complete(owner, "job-two", "second execution done");
+  now = 1500; notifications.complete(owner, "job-two", "second execution done");
   const timer = notifications.createTimer(owner, { dueAt: 2000, message: "check later" });
   now = 3000; notifications.poll();
   const notice = runtimeNotice(notifications.prepareDelivery(owner)!, [
