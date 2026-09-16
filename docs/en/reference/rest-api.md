@@ -191,7 +191,9 @@ Subject knowledge bases: literature ingestion, entity/relation graph, growth cyc
 | `GET /api/knowledge-engine/kbs` | none | `200`, `{kbs}` with stats |
 | `POST /api/knowledge-engine/kbs` | `{name, description?}` | `201`, created KB |
 | `GET /api/knowledge-engine/kbs/:id` | none | `200`, KB with stats |
-| `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}` (1–25) | `202`, `{jobId, enqueued}` |
+| `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}` (1–25) or `{paperRefs}` (explicit picked list, ≤50, no search issued) | `202`, `{jobId, enqueued}` or `{enqueued}` |
+| `POST /api/knowledge-engine/kbs/:id/search-preview` | `{query, maxPapers?}` (1–25) | `200`, `{papers}`; search only, no download (first step of the pick-then-seed flow) |
+| `POST /api/knowledge-engine/kbs/:id/upload` | `application/pdf` body (≤50MB), optional `?title=` | `201`/`200` (when the content dedup is already complete), `{documentId, dedupKey, alreadyComplete}`; ingests a local PDF into the KB (extraction queued after parsing); non-PDF `415` |
 | `GET /api/knowledge-engine/kbs/:id/documents` | none | `200`, lean document list |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId` | `?level=L0\|L1\|L2` (default `L0`) | `200`, three-level read: L0 deterministic abstract (summary/tags/source), L1 anchored blocks (`{docId}:{type}:{index}`), L2 fulltext; `404` cross-KB doc |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId/anchors/:anchorId` | none | `200`, anchor block + neighbor context; `404` unknown anchor, `409` document not parsed |

@@ -23,7 +23,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { readJson } from "../http/body.js";
+import { readBytes, readJson } from "../http/body.js";
 import { sendJson } from "../http/response.js";
 import { ApiStatusError } from "../runs/index.js";
 
@@ -40,6 +40,8 @@ import {
 import type { KeOrchestrator } from "./orchestrator.js";
 import { DEFAULT_CRAWL_BUDGET, KE_GROW_JOB, type CrawlBudget } from "./grow.js";
 import type { GraphRootsService } from "./graph-roots.js";
+import type { PaperRef } from "./connectors/types.js";
+import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import type {
   KeCommunityReportRow,
   KeDocumentRow,
@@ -108,6 +110,71 @@ export async function handleKeSeed(
   kbId: string,
 ): Promise<void> {
   requireKb(store, kbId);
+  const body = await readJson<{ query?: string; maxPapers?: number; paperRefs?: unknown }>(request);
+  if (body.paperRefs !== undefined) {
+    // Explicit pick-then-seed mode (DA parity): the caller searched first and
+    // now hands over the chosen refs — no new search is issued.
+    const refs = sanitizePaperRefs(body.paperRefs);
+    const result = await orchestrator.seedPaperRefs(kbId, refs);
+    sendJson(response, 202, result);
+    return;
+  }
+  const query = typeof body.query === "string" ? body.query.trim() : "";
+  if (!query) {
+    throw new KeApiError("query is required (or pass paperRefs)", 400, "KE_INVALID_INPUT");
+  }
+  const maxPapersRaw = body.maxPapers ?? 10;
+  if (typeof maxPapersRaw !== "number" || !Number.isFinite(maxPapersRaw)) {
+    throw new KeApiError("maxPapers must be a finite number", 400, "KE_INVALID_INPUT");
+  }
+  const maxPapers = Math.min(Math.max(Math.floor(maxPapersRaw), 1), 25);
+  const result = await orchestrator.seedKb(kbId, query, maxPapers);
+  sendJson(response, 202, result);
+}
+
+/** Accepted fields for an operator-picked paper ref (DA sanitizePaperRef parity). */
+const PAPER_REF_CAP = 50;
+
+function sanitizePaperRefs(value: unknown): PaperRef[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new KeApiError("paperRefs must be a non-empty array", 400, "KE_INVALID_INPUT");
+  }
+  if (value.length > PAPER_REF_CAP) {
+    throw new KeApiError(`paperRefs is capped at ${PAPER_REF_CAP} entries`, 400, "KE_INVALID_INPUT");
+  }
+  return value.map((entry, index) => {
+    const raw = (entry ?? {}) as Record<string, unknown>;
+    const title = typeof raw["title"] === "string" ? raw["title"].trim() : "";
+    if (!title) {
+      throw new KeApiError(`paperRefs[${index}].title is required`, 400, "KE_INVALID_INPUT");
+    }
+    const optString = (key: string): string | null =>
+      typeof raw[key] === "string" && (raw[key] as string).trim() ? (raw[key] as string).trim() : null;
+    return {
+      title: title.slice(0, 500),
+      authors: Array.isArray(raw["authors"]) ? raw["authors"].filter((a): a is string => typeof a === "string") : [],
+      year: typeof raw["year"] === "number" && Number.isFinite(raw["year"]) ? Math.floor(raw["year"]) : null,
+      doi: optString("doi"),
+      arxivId: optString("arxivId"),
+      abstract: optString("abstract"),
+      pdfUrl: optString("pdfUrl"),
+      citationCount: typeof raw["citationCount"] === "number" ? raw["citationCount"] : null,
+      source: optString("source") ?? "manual",
+      sourceId: optString("sourceId") ?? optString("doi") ?? optString("arxivId") ?? `manual:${index}`,
+      venue: optString("venue"),
+    };
+  });
+}
+
+/** POST …/search-preview — search the source chain without downloading. */
+export async function handleKeSearchPreview(
+  request: IncomingMessage,
+  response: ServerResponse,
+  orchestrator: KeOrchestrator,
+  store: KnowledgeEngineStore,
+  kbId: string,
+): Promise<void> {
+  requireKb(store, kbId);
   const body = await readJson<{ query?: string; maxPapers?: number }>(request);
   const query = typeof body.query === "string" ? body.query.trim() : "";
   if (!query) {
@@ -117,9 +184,28 @@ export async function handleKeSeed(
   if (typeof maxPapersRaw !== "number" || !Number.isFinite(maxPapersRaw)) {
     throw new KeApiError("maxPapers must be a finite number", 400, "KE_INVALID_INPUT");
   }
-  const maxPapers = Math.min(Math.max(Math.floor(maxPapersRaw), 1), 25);
-  const result = await orchestrator.seedKb(kbId, query, maxPapers);
-  sendJson(response, 202, result);
+  const papers = await orchestrator.searchPapersPreview(query, maxPapersRaw);
+  sendJson(response, 200, { papers });
+}
+
+/** POST …/upload — operator-supplied PDF straight into the KB pipeline. */
+export async function handleKeUploadPdf(
+  request: IncomingMessage,
+  response: ServerResponse,
+  orchestrator: KeOrchestrator,
+  store: KnowledgeEngineStore,
+  kbId: string,
+): Promise<void> {
+  requireKb(store, kbId);
+  // RFC 9110: media types are case-insensitive.
+  if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/pdf") {
+    throw new KeApiError("upload requires application/pdf", 415, "KE_UNSUPPORTED_MEDIA");
+  }
+  const url = new URL(request.url ?? "/", "http://localhost");
+  const title = url.searchParams.get("title") ?? undefined;
+  const bytes = await readBytes(request, MAX_PAPER_PDF_BYTES, "PDF");
+  const result = await orchestrator.ingestUploadedPdf(kbId, bytes, title);
+  sendJson(response, result.alreadyComplete ? 200 : 201, result);
 }
 
 // -------------------------------------------------------------------- grow

@@ -18,7 +18,20 @@ import test from "node:test";
 
 import { ApiStatusError } from "../runs/index.js";
 
-import { handleKeGetDocument, handleKeGetDocumentAnchor, handleKeGetEntity, handleKeListKbs, KeApiError, parseKeDocumentLevel } from "./routes.js";
+import { Readable } from "node:stream";
+
+import type { KeOrchestrator } from "./orchestrator.js";
+import {
+  handleKeGetDocument,
+  handleKeGetDocumentAnchor,
+  handleKeGetEntity,
+  handleKeListKbs,
+  handleKeSearchPreview,
+  handleKeSeed,
+  handleKeUploadPdf,
+  KeApiError,
+  parseKeDocumentLevel,
+} from "./routes.js";
 import { KnowledgeEngineStore } from "./store.js";
 
 function tempRoot(name: string): string {
@@ -244,4 +257,128 @@ test("parseKeDocumentLevel defaults to L0 and rejects anything else", () => {
     (error: unknown) => error instanceof KeApiError && error.statusCode === 400 && error.code === "KE_INVALID_INPUT",
   );
   assert.throws(() => parseKeDocumentLevel("raw"), /KeApiError/);
+});
+
+// ------------------------------------------------- seed refs / preview / upload
+
+function fakeJsonRequest(body: unknown): import("node:http").IncomingMessage {
+  return Readable.from([JSON.stringify(body)]) as unknown as import("node:http").IncomingMessage;
+}
+
+function fakePdfRequest(bytes: Uint8Array, contentType = "application/pdf"): import("node:http").IncomingMessage {
+  const request = Readable.from([Buffer.from(bytes)]) as unknown as import("node:http").IncomingMessage;
+  request.headers = { "content-type": contentType };
+  return request;
+}
+
+function capturingResponse(): { captured: { status: number; body: string }; response: import("node:http").ServerResponse } {
+  const captured = { status: 0, body: "" };
+  const response = {
+    writeHead(status: number) {
+      captured.status = status;
+      return response;
+    },
+    end(body?: string) {
+      captured.body = body ?? "";
+    },
+  } as unknown as import("node:http").ServerResponse;
+  return { captured, response };
+}
+
+test("handleKeSeed paperRefs mode validates and forwards the picked list", async (context) => {
+  const root = tempRoot("ke-routes-seedrefs");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+
+  const forwarded: unknown[] = [];
+  const orchestrator = {
+    seedPaperRefs: async (_kbId: string, refs: unknown[]) => {
+      forwarded.push(refs);
+      return { enqueued: refs.length };
+    },
+  } as unknown as KeOrchestrator;
+
+  // 400s: empty array, missing title, over the cap.
+  await assert.rejects(
+    () => handleKeSeed(fakeJsonRequest({ paperRefs: [] }), capturingResponse().response, orchestrator, store, kb.id),
+    (error: unknown) => error instanceof KeApiError && error.statusCode === 400,
+  );
+  await assert.rejects(
+    () => handleKeSeed(fakeJsonRequest({ paperRefs: [{ doi: "10.1/x" }] }), capturingResponse().response, orchestrator, store, kb.id),
+    (error: unknown) => error instanceof KeApiError && error.statusCode === 400,
+  );
+  await assert.rejects(
+    () => handleKeSeed(
+      fakeJsonRequest({ paperRefs: Array.from({ length: 51 }, (_v, i) => ({ title: `T${i}` })) }),
+      capturingResponse().response,
+      orchestrator,
+      store,
+      kb.id,
+    ),
+    (error: unknown) => error instanceof KeApiError && error.statusCode === 400,
+  );
+
+  // Happy path: sanitized refs forwarded, 202 with the enqueued count.
+  const ok = capturingResponse();
+  await handleKeSeed(
+    fakeJsonRequest({ paperRefs: [{ title: "  Ebola GP  ", doi: "10.1/mab114", year: 2024.9, extra: "dropped" }] }),
+    ok.response,
+    orchestrator,
+    store,
+    kb.id,
+  );
+  assert.equal(ok.captured.status, 202);
+  const refs = forwarded[0] as Array<Record<string, unknown>>;
+  assert.equal(refs[0]?.["title"], "Ebola GP");
+  assert.equal(refs[0]?.["year"], 2024);
+  assert.equal(refs[0]?.["extra"], undefined);
+  assert.deepEqual(JSON.parse(ok.captured.body), { enqueued: 1 });
+});
+
+test("handleKeSearchPreview validates the query and returns papers", async (context) => {
+  const root = tempRoot("ke-routes-preview");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const orchestrator = {
+    searchPapersPreview: async (query: string, _limit: number) => [{ title: `Hit for ${query}` }],
+  } as unknown as KeOrchestrator;
+
+  await assert.rejects(
+    () => handleKeSearchPreview(fakeJsonRequest({ query: "  " }), capturingResponse().response, orchestrator, store, kb.id),
+    (error: unknown) => error instanceof KeApiError && error.statusCode === 400,
+  );
+  const ok = capturingResponse();
+  await handleKeSearchPreview(fakeJsonRequest({ query: "ebola" }), ok.response, orchestrator, store, kb.id);
+  assert.equal(ok.captured.status, 200);
+  assert.deepEqual(JSON.parse(ok.captured.body), { papers: [{ title: "Hit for ebola" }] });
+});
+
+test("handleKeUploadPdf enforces application/pdf and forwards bytes", async (context) => {
+  const root = tempRoot("ke-routes-upload");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const received: number[] = [];
+  const orchestrator = {
+    ingestUploadedPdf: async (_kbId: string, bytes: Uint8Array, _title?: string) => {
+      received.push(bytes.length);
+      return { alreadyComplete: false, dedupKey: "upload:abc", documentId: "doc1" };
+    },
+  } as unknown as KeOrchestrator;
+
+  // 415 on the wrong content type.
+  await assert.rejects(
+    () => handleKeUploadPdf(fakePdfRequest(new Uint8Array([1, 2, 3]), "text/plain"), capturingResponse().response, orchestrator, store, kb.id),
+    (error: unknown) => error instanceof KeApiError && error.statusCode === 415,
+  );
+  const ok = capturingResponse();
+  await handleKeUploadPdf(fakePdfRequest(new Uint8Array(100)), ok.response, orchestrator, store, kb.id);
+  assert.equal(ok.captured.status, 201);
+  assert.deepEqual(received, [100]);
+  assert.deepEqual(JSON.parse(ok.captured.body), { alreadyComplete: false, dedupKey: "upload:abc", documentId: "doc1" });
 });
