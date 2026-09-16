@@ -188,7 +188,7 @@ import { SkillManager } from "./SkillManager.js";
 import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
 import { SubagentConversation } from "./SubagentConversation.js";
-import { WakeNotice } from "./WakeNotice.js";
+import { WakeNotice, type ActivityRecordTarget } from "./WakeNotice.js";
 import {
   QuotaSettingsEditor,
   RuntimeStatusPanel,
@@ -196,7 +196,7 @@ import {
   TimeoutSettingsEditor,
 } from "./RuntimeControls.js";
 import { ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
-import { AgentActivityPanel } from "./AgentActivityPanel.js";
+import { AgentActivityPanel, type ActivityFocus } from "./AgentActivityPanel.js";
 import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
@@ -1059,6 +1059,7 @@ export function App() {
   const [plans, setPlans] = useState<RunPlanSnapshot[]>([]);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
+  const [activityFocus, setActivityFocus] = useState<ActivityFocus>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
   const [settingsRunners, setSettingsRunners] = useState<RemoteHostTarget[]>([]);
   const [remoteHosts, setRemoteHosts] = useState<RemoteHostTarget[]>([]);
@@ -3066,6 +3067,18 @@ export function App() {
 
 
 
+  /** A SubAgent is named in the conversation by the task it was given. */
+  function wakeNoticeAgentLabel(agentId: string): string {
+    return subagents.find((candidate) => `subagent:${candidate.id}` === agentId)?.input.description ?? agentId;
+  }
+
+  /** Point the workspace rail at one execution or reminder record: open the
+   * rail, the tasks folder and the record itself. */
+  function revealActivityRecord(target: ActivityRecordTarget): void {
+    setWorkspaceCollapsed(false);
+    setActivityFocus({ ...target, token: Date.now() });
+  }
+
   async function openWorkspacePath(path: string, targetSessionId = activeSessionId): Promise<void> {
     if (!targetSessionId) return;
     const file = await client.readFile(targetSessionId, path);
@@ -4388,7 +4401,7 @@ export function App() {
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
                       ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
-                        <WakeNotice notice={block.message.runtimeNotice} />
+                        <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                       ) : (
                         <article className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
                           <div className="avatar">{block.message.role === "user" ? t("app.roleYou") : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
@@ -4406,7 +4419,7 @@ export function App() {
                         </article>
                       )}
                       {block.message.kind !== "wake_notice" && block.message.runtimeNotice
-                        ? <WakeNotice notice={block.message.runtimeNotice} />
+                        ? <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                         : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
                       {renderConversationOutputs(`message:${block.message.id}`, artifactOutputAnchors.byMessage.get(block.message.id))}
@@ -4710,7 +4723,7 @@ export function App() {
               </div>
             </details> : null}
             </WorkspaceFolder>
-            <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")}>
+            <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")} reveal={activityFocus?.token}>
             {workspacePlans.length ? <details className="workspace-fold workspace-plan-section">
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
@@ -4745,7 +4758,7 @@ export function App() {
               settings={reviewerSpecialistSettings}
               stopping={stoppingReviewerSessionIds.has(session.id)}
             /></details> : null}
-            {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} sessionId={activeSessionId} /> : null}
+            {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} focus={activityFocus} sessionId={activeSessionId} /> : null}
             </WorkspaceFolder>
             {session && memoryGraphSettings?.enabled !== false && isMemoryGraphVisible(memorySubgraph, memoryHealth) ? <WorkspaceFolder key={`memory:${activeSessionId}`} name="memory" label={t("record.memory")}>
               <details className="workspace-fold"><summary>{t("settings.memoryGraph.title")}</summary><MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => {

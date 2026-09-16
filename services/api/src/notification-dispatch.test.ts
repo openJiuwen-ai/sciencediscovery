@@ -58,10 +58,22 @@ test("a delivery is counted for the transcript and re-attached only for the mode
   const owner = { sessionId: "session", agentId: "main" };
   notifications.complete(owner, "job-one", "first execution done");
   notifications.complete(owner, "job-two", "second execution done");
-  notifications.createTimer(owner, { dueAt: 2000, message: "check later" });
+  const timer = notifications.createTimer(owner, { dueAt: 2000, message: "check later" });
   now = 3000; notifications.poll();
-  const notice = runtimeNotice(notifications.prepareDelivery(owner)!);
+  const notice = runtimeNotice(notifications.prepareDelivery(owner)!, [
+    { id: "job-one", runnerId: "local", state: "completed" },
+    { id: "job-two", runnerId: "hpc", state: "failed" },
+  ]);
   assert.deepEqual({ executions: notice.executions, timers: notice.timers }, { executions: 2, timers: 1 });
+  // The UI gets what finished and how, keyed for the activity panel; it never
+  // has to parse the prompt to find that out.
+  assert.deepEqual(notice.records, [
+    { agentId: "main", kind: "execution", runnerId: "local", sourceId: "job-one", state: "completed" },
+    { agentId: "main", kind: "execution", runnerId: "hpc", sourceId: "job-two", state: "failed" },
+    { agentId: "main", kind: "timer", message: "check later", sourceId: timer.id },
+  ]);
+  const unknown = runtimeNotice(notifications.prepareDelivery(owner)!);
+  assert.deepEqual(unknown.records![0], { agentId: "main", kind: "execution", sourceId: "job-one" }, "a record without a catalog entry carries no guessed outcome");
 
   // A wake carries no user-authored body, so the transcript body stays empty
   // while the model still receives the full record set.

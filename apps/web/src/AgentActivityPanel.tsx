@@ -7,13 +7,25 @@ import { ProcessRecord } from "./ProcessRecord.js";
 import { useLocale } from "./i18n/index.js";
 import { ChevronRightIcon } from "./icons.js";
 
+/** A record another part of the page asked to see; `token` changes per request
+ * so asking for the same record twice reveals it twice. */
+export interface ActivityFocus {
+  id: string;
+  kind: "executions" | "timers";
+  token: number;
+}
+
 const active = (state: string) => ["queued", "running", "unknown"].includes(state);
-export function AgentActivityPanel({ client, sessionId }: { client: ApiClient; sessionId: string }) {
+export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiClient; focus?: ActivityFocus; sessionId: string }) {
   const { t } = useLocale();
   const [activity, setActivity] = useState<AgentActivity>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [logs, setLogs] = useState<{ id: string; text: string }>();
+  // Each fold is closed until the user opens it or a record inside it is
+  // asked for; the request is remembered so the fold opens even when the
+  // activity list has not been fetched yet.
+  const [openFolds, setOpenFolds] = useState<Record<string, boolean>>({});
   useEffect(() => {
     let disposed = false; let pending = false;
     setActivity(undefined); setLogs(undefined); setError("");
@@ -27,20 +39,33 @@ export function AgentActivityPanel({ client, sessionId }: { client: ApiClient; s
     void refresh(); const timer = setInterval(() => void refresh(), 2000);
     return () => { disposed = true; clearInterval(timer); };
   }, [client, sessionId]);
+  useEffect(() => {
+    if (focus) setOpenFolds((current) => ({ ...current, [focus.kind]: true }));
+  }, [focus]);
   async function action(operation: () => Promise<unknown>) {
     setBusy(true); setError("");
     try { await operation(); setActivity(await client.getAgentActivity(sessionId)); }
     catch (reason) { setError(reason instanceof Error ? reason.message : t("activity.actionFailed")); }
     finally { setBusy(false); }
   }
+  const fold = (kind: "executions" | "timers" | "transfers") => ({
+    open: openFolds[kind] ?? false,
+    onToggle: (event: React.SyntheticEvent<HTMLDetailsElement>) => {
+      if (event.target !== event.currentTarget) return;
+      // Read the element now: the event is gone by the time the updater runs.
+      const open = event.currentTarget.open;
+      setOpenFolds((current) => ({ ...current, [kind]: open }));
+    },
+  });
+  const reveal = (kind: "executions" | "timers", id: string) => focus?.kind === kind && focus.id === id ? focus.token : undefined;
   return <div className="agent-activity" aria-label={t("activity.sectionAria")}>
     {error ? <p role="alert">{error}</p> : null}
     {!activity && !error ? <p>{t("activity.loading")}</p> : null}
-    {activity && activity.executions.length > 0 ? <details className="workspace-fold">
+    {activity && activity.executions.length > 0 ? <details className="workspace-fold" {...fold("executions")}>
     <summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.executions")}</strong><span className="fold-meta">{activity.executions.length}</span></summary>
     <div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
-        {!activity.executions.length ? <p>{t("activity.noExecutions")}</p> : activity.executions.toReversed().map((item) => <ProcessRecord key={item.id} active={active(item.state)} failed={item.state === "failed"} label={`${item.runnerId} · ${item.agentId} · ${item.state}`}><article>
+        {!activity.executions.length ? <p>{t("activity.noExecutions")}</p> : activity.executions.toReversed().map((item) => <ProcessRecord key={item.id} active={active(item.state)} failed={item.state === "failed"} label={`${item.runnerId} · ${item.agentId} · ${item.state}`} reveal={reveal("executions", item.id)}><article>
           <header><strong>{item.runnerId} · {item.agentId}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
           <code>{item.id}</code><small>{t("activity.executionMeta", { provenance: item.provenance, workspace: item.workspaceId })}</small>
           {item.error ? <p role="alert">{item.error}</p> : null}
@@ -52,7 +77,7 @@ export function AgentActivityPanel({ client, sessionId }: { client: ApiClient; s
         </article></ProcessRecord>)}
       </>}
     </div></details> : null}
-    {activity && activity.transfers.length > 0 ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.transfers")}</strong><span className="fold-meta">{activity.transfers.length}</span></summary><div className="workspace-fold-body">
+    {activity && activity.transfers.length > 0 ? <details className="workspace-fold" {...fold("transfers")}><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.transfers")}</strong><span className="fold-meta">{activity.transfers.length}</span></summary><div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
         {!activity.transfers.length ? <p>{t("runnerWorkspaces.noTransfers")}</p> : activity.transfers.map((item) => <ProcessRecord key={item.id} active={active(item.state)} failed={item.state === "failed"} label={`${item.sourceWorkspaceId} → ${item.targetWorkspaceId} · ${item.state}`}><article>
           <header><strong>{item.sourceWorkspaceId} → {item.targetWorkspaceId}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
@@ -63,9 +88,9 @@ export function AgentActivityPanel({ client, sessionId }: { client: ApiClient; s
         </article></ProcessRecord>)}
       </>}
     </div></details> : null}
-    {activity && activity.timers.length > 0 ? <details className="workspace-fold"><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.reminders")}</strong><span className="fold-meta">{activity.timers.length}</span></summary><div className="workspace-fold-body">
+    {activity && activity.timers.length > 0 ? <details className="workspace-fold" {...fold("timers")}><summary><ChevronRightIcon className="fold-chevron" size={15} /><strong>{t("activity.reminders")}</strong><span className="fold-meta">{activity.timers.length}</span></summary><div className="workspace-fold-body">
       {!activity ? <p>{t("activity.loading")}</p> : <>
-        {!activity.timers.length ? <p>{t("activity.noReminders")}</p> : activity.timers.map((item) => <ProcessRecord key={item.id} active={item.state === "pending"} failed={false} label={`${item.message} · ${item.state}`}><article>
+        {!activity.timers.length ? <p>{t("activity.noReminders")}</p> : activity.timers.map((item) => <ProcessRecord key={item.id} active={item.state === "pending"} failed={false} label={`${item.message} · ${item.state}`} reveal={reveal("timers", item.id)}><article>
           <header><strong>{item.message}</strong><span className={`activity-badge ${item.state}`}>{item.state}</span></header>
           <small>{item.agentId} · {new Date(item.dueAt).toLocaleString()}</small>
           <button type="button" disabled={busy || item.state !== "pending"} onClick={() => void action(() => client.cancelActivity(sessionId, "timers", item.id))}>{t("activity.cancelReminder")}</button>

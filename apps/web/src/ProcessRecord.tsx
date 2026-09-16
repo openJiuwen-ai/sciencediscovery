@@ -12,19 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRightIcon } from "./icons.js";
 
-/** Active content retains its original surface; terminal records are disclosures. */
-export function ProcessRecord({ active = false, children, failed = false, label, className = "" }: {
+/** Active content retains its original surface; terminal records are disclosures.
+ * A new `reveal` token opens the record and scrolls it into view, so another
+ * part of the page can point the user at this record. */
+export function ProcessRecord({ active = false, children, failed = false, label, className = "", reveal }: {
   active?: boolean;
   children: ReactNode;
   failed?: boolean;
   label: ReactNode;
   className?: string;
+  reveal?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
-  return <details className={active ? "process-live" : `process-record ${className}${failed ? " failed" : ""}`} open={active || expanded}
+  const element = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (reveal === undefined) return;
+    setExpanded(true);
+    element.current?.scrollIntoView?.({ block: "nearest" });
+  }, [reveal]);
+  return <details className={active ? "process-live" : `process-record ${className}${failed ? " failed" : ""}`} open={active || expanded} ref={element}
     onClickCapture={(event) => {
       // Preserve a nested detail opened while active when this record becomes terminal.
       if (!active || !(event.target instanceof Element) || event.target.closest("button")) return;
@@ -40,8 +49,9 @@ export function ProcessRecord({ active = false, children, failed = false, label,
   </details>;
 }
 
-export function WorkspaceFolder({ children, label, name }: { children: ReactNode; label: string; name: string }) {
+export function WorkspaceFolder({ children, label, name, reveal }: { children: ReactNode; label: string; name: string; reveal?: number }) {
   const [expanded, setExpanded] = useState(true);
+  useEffect(() => { if (reveal !== undefined) setExpanded(true); }, [reveal]);
   return <details className="workspace-folder" data-folder={name} open={expanded}
     onToggle={(event) => {
       if (event.target === event.currentTarget) setExpanded(event.currentTarget.open);

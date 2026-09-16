@@ -3052,7 +3052,7 @@ export function scheduleSessionRuns(
             memoryGraphClient,
             evolve,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
-            delivery ? runtimeNotice(delivery) : undefined,
+            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery)) : undefined,
           );
         } catch (reason) {
           error = runFailureMessage(reason);

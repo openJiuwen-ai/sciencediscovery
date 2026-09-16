@@ -1,6 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { RuntimeNotice, SessionRun } from "@sciencediscovery/schema";
+import type { AgentShellExecution, RuntimeNotice, RuntimeNoticeRecord, SessionRun } from "@sciencediscovery/schema";
 import type { SessionStore } from "./store.js";
 import type { NotificationBatch } from "./agent-notifications.js";
 
@@ -9,11 +9,22 @@ export function notificationPrompt(batch: NotificationBatch): string {
     + JSON.stringify(batch.notifications.map(({ id, kind, sourceId, message }) => ({ id, kind, sourceId, message })));
 }
 
-/** The transcript record for a delivery: model-facing text plus the counts the
- * UI needs to summarize it without reading that text. */
-export function runtimeNotice(batch: NotificationBatch): RuntimeNotice {
-  const executions = batch.notifications.filter((notification) => notification.kind === "execution").length;
-  return { executions, prompt: notificationPrompt(batch), timers: batch.notifications.length - executions };
+/** The transcript record for a delivery: model-facing text plus what the UI
+ * shows instead of that text. `executions` is the owner's execution catalog,
+ * consulted so each execution record names its Runner and outcome. */
+export function runtimeNotice(batch: NotificationBatch, executions: readonly Pick<AgentShellExecution, "id" | "runnerId" | "state">[] = []): RuntimeNotice {
+  const records = batch.notifications.map((notification): RuntimeNoticeRecord => {
+    if (notification.kind === "timer") {
+      return { agentId: batch.agentId, kind: "timer", message: notification.message, sourceId: notification.sourceId };
+    }
+    const execution = executions.find((candidate) => candidate.id === notification.sourceId);
+    return {
+      agentId: batch.agentId, kind: "execution", sourceId: notification.sourceId,
+      ...(execution ? { runnerId: execution.runnerId, state: execution.state } : {}),
+    };
+  });
+  const executionCount = records.filter((record) => record.kind === "execution").length;
+  return { executions: executionCount, prompt: notificationPrompt(batch), records, timers: records.length - executionCount };
 }
 
 /** The inbox is the busy queue. Only an idle owner acquires a new model turn. */
