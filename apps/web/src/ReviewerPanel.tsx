@@ -123,11 +123,15 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
             <ul>
               {sourceIssues.map((record) => {
                 const assessment = record.assessment.assessment;
-                const label = "Citation contradiction";
+                const computation = record.claim.kind === "computation";
+                const label = t(computation ? "reviewer.computationContradiction" : "reviewer.citationContradiction");
+                const source = computation
+                  ? record.claim.text
+                  : record.claim.citationKeys.join(", ");
                 return (
                   <li key={record.claim.id}>
                     <b className={assessment.toLowerCase()}>{label}</b>
-                    <span>{record.claim.citationKeys.join(", ")}{record.assessment.rationale ? ` — ${record.assessment.rationale}` : ""}</span>
+                    <span>{source}{record.assessment.rationale ? ` — ${record.assessment.rationale}` : ""}</span>
                   </li>
                 );
               })}

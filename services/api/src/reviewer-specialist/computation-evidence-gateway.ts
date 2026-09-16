@@ -130,7 +130,7 @@ function locateValues<T extends { content: string; locator: object; value: strin
  * incompatible units deliberately remain unmatched instead of being guessed.
  */
 function valueMatches(source: string, claim: string): boolean {
-  if (source.includes(claim)) return true;
+  if (source.trim() === claim.trim()) return true;
   const sourcePercent = parsePercent(source);
   const claimPercent = parsePercent(claim);
   return sourcePercent !== undefined && claimPercent !== undefined

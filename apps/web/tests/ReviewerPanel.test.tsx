@@ -120,6 +120,31 @@ test("ReviewerPanel localizes review status and finding labels while retaining t
   assert.match(html, /缺少规范引用标记/);
 });
 
+test("ReviewerPanel distinguishes a computation contradiction and shows its numeric claim", () => {
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" },
+    createElement(ReviewerPanel, {
+      reviews: [review({ sourceAssessments: [{
+        assessment: { assessment: "CONTRADICTED", claimId: "computation-1", locatorIds: ["locator-1"], policyVersion: "1", rationale: "锁定数值不一致。" },
+        claim: {
+          artifactVersionId: "version-123456789",
+          citationKeys: [],
+          id: "computation-1",
+          kind: "computation",
+          requiredEvidenceLevel: "E4",
+          text: "Response was 42%.",
+        },
+        locators: [],
+        snapshots: [],
+      }] })],
+      toolCallId: "review-call",
+    }),
+  ));
+
+  assert.match(html, /计算证据存在矛盾/);
+  assert.match(html, /Response was 42%\./);
+  assert.doesNotMatch(html, /Citation contradiction/);
+});
+
 test("ReviewerPanel keeps only actionable findings and hides Deep operational incompleteness", () => {
   const finding = {
     code: "COMPUTATION_EVIDENCE_VALUE_MISMATCH",

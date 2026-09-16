@@ -66,6 +66,22 @@ test("Reviewer computation evidence gateway accepts only the unit-safe 0.42 to 4
   assert.equal(mismatch.status, "unavailable");
 });
 
+test("Reviewer computation evidence gateway refuses numeric substring matches", async () => {
+  const cases: Array<[cell: string, claim: string]> = [["142%", "42%"], ["0.42", "0.4"]];
+  for (const [cell, value] of cases) {
+    const content = `metric,value\nresponse,${cell}`;
+    const data = new Map([["data", content], ["code", "print('locked')"], ["stdout", "locked\n"]]);
+    const artifact = { createdInSessionId: "session-1", id: "data-artifact" } as ScientificArtifact;
+    const version = { artifactId: artifact.id, content: ref("data", content), executionRunIds: ["run-1"], id: "data-v2", mediaType: "text/csv", sessionId: "session-1", version: 2 } as ScientificArtifactVersion;
+    const run = { code: ref("code", "print('locked')"), finishedAt: "2026-09-10T00:00:00.000Z", id: "run-1", sessionId: "session-1", status: "succeeded", stdout: ref("stdout", "locked\n") } as ExecutionRun;
+    const gateway = new ReviewerComputationEvidenceGateway({ getArtifact: () => artifact, getArtifactVersion: () => undefined, listArtifactVersions: () => [version], listExecutionRuns: async () => [run] } as never, {
+      read: async (hash: string) => Buffer.from(data.get(hash) ?? ""), verify: async (hash: string) => data.has(hash),
+    } as never);
+    const result = await gateway.resolve("session-1", { alias: "artifact1", artifactId: artifact.id, artifactVersion: 2, excerpt: `Reported ${value} [artifact1].`, values: [value] });
+    assert.equal(result.status, "unavailable", `${value} must not match a substring of ${cell}`);
+  }
+});
+
 test("Reviewer computation evidence gateway never accepts failed or unrecorded executions", async () => {
   const artifact = { createdInSessionId: "session-1", id: "data-artifact" } as ScientificArtifact;
   const version = { artifactId: artifact.id, executionRunIds: ["failed-run"], id: "data-v1", sessionId: "session-1", version: 1 } as ScientificArtifactVersion;

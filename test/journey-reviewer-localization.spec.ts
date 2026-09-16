@@ -66,7 +66,7 @@ test("中文界面保留 Reviewer Specialist 名称并本地化审核控制项",
 
     await journey.step(
       "查看中文审核控制项",
-      "自动审核、审核级别、快速/深度档位和开始审核按钮显示中文。",
+      "自动审查、级别、快速/深入档位和运行审查按钮显示中文。",
       async () => {
         const card = page.locator(".reviewer-control-card");
         await expect(card).toContainText("内置专家");
@@ -79,12 +79,12 @@ test("中文界面保留 Reviewer Specialist 名称并本地化审核控制项",
 
     await journey.step(
       "切换为深度审核",
-      "审核级别更新后，选择框继续显示中文“深度”。",
+      "审核级别更新后，选择框继续显示中文“深入”。",
       async () => {
         const level = page.locator(".reviewer-control-card select");
         await level.selectOption("deep");
         await expect(level).toHaveValue("deep");
-        await expect(level.locator("option:checked")).toHaveText("深度");
+        await expect(level.locator("option:checked")).toHaveText("深入");
       },
     );
   } finally {
