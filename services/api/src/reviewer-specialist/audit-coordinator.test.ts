@@ -445,7 +445,7 @@ test("Session automatic-review settings skip background work but set the manual 
   await coordinator.cancelSession(session.id);
 });
 
-test("Stop review cancels a quiet-window batch before it starts", async (context) => {
+test("cancelling a quiet-window batch before Session deletion prevents a later drain", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `reviewer-stop-batch-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
   context.after(() => removeDataDir(dataDir));
@@ -466,7 +466,8 @@ test("Stop review cancels a quiet-window batch before it starts", async (context
   assert.ok(task);
   assert.equal(await coordinator.cancelSession(session.id), true);
   assert.equal((await store.listReviewerAuditTasks(session.id))[0]?.status, "cancelled");
-  await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+  await store.deleteSession(session.id, session.id);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 550));
   assert.equal(executions, 0);
 });
 

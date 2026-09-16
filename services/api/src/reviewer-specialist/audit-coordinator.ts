@@ -445,6 +445,13 @@ export class ReviewerAuditCoordinator {
           if (this.automaticTaskId === task.id) this.automaticTaskId = undefined;
         }
       }
+    } catch (error) {
+      // Session deletion cancels its Reviewer work before removing durable
+      // records, but a drain already yielded at an await boundary can resume
+      // after that removal. A deleted Session is normal lifecycle churn, not
+      // an unhandled background-worker failure.
+      if (error instanceof Error && error.message === "Session not found" && !this.store.getSession(sessionId)) return;
+      throw error;
     } finally {
       this.draining.delete(sessionId);
       const pendingWakeAt = this.pendingWakeAt.get(sessionId);

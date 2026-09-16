@@ -2269,6 +2269,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if ((await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available) {
           await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         }
+        // Cancel delayed and active Reviewer work while its durable task
+        // records still exist. Otherwise a quiet-window timer can wake after
+        // deletion and attempt to read a Session that no longer exists.
+        await reviewerAuditCoordinator.cancelSession(sessionMatch[1]!);
         const researchProjectId = store.getSession(sessionMatch[1]!)!.projectId;
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
         void ideaResearch.cleanup(researchProjectId, sessionMatch[1]!).catch(error => {
