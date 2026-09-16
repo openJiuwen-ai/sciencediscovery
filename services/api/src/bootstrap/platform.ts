@@ -56,6 +56,7 @@ import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-sourc
 import { EmbeddingClient } from "../knowledge-engine/embedding.js";
 import { createGraphRootsService } from "../knowledge-engine/graph-roots.js";
 import { KeJobRunner } from "../knowledge-engine/job-runner.js";
+import { KeLivingReviewRunner } from "../knowledge-engine/living-review-runner.js";
 import { KeOrchestrator } from "../knowledge-engine/orchestrator.js";
 import { extractPdfText } from "../knowledge-engine/pdf-text.js";
 import { describeImageWithVision, type VisionEndpoint } from "../knowledge-engine/pdf-vision.js";
@@ -455,6 +456,7 @@ export function createPlatformServices(
     },
     unpaywall: { email: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null },
     coreApiKey: process.env.SCIENCE_AGENT_CORE_API_KEY?.trim() || undefined,
+    s2ApiKey: process.env.SCIENCE_AGENT_S2_API_KEY?.trim() || undefined,
   });
   const keEmbeddingBaseUrl = process.env.SCIENCE_AGENT_KE_EMBEDDING_BASE_URL?.trim();
   const keEmbeddingApiKey = process.env.SCIENCE_AGENT_KE_EMBEDDING_API_KEY?.trim();
@@ -542,6 +544,14 @@ export function createPlatformServices(
     onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { message, detail }),
   });
   keOrchestrator.registerJobs(keJobRunner);
+  // Living review (DA cron living_review port): converged KBs are re-checked
+  // on an interval and auto-reopened with a top-up grow when they drift.
+  // Opt-in (env/ke_settings, default off) — it spends external API quota.
+  const keLivingReviewRunner = new KeLivingReviewRunner({
+    store: knowledgeEngineStore,
+    orchestrator: keOrchestrator,
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+  });
   // Consumption tools (concept_explore / deep_dive / unified search /
   // validate / gaps) — a plain port object; the agent runtime registers the
   // LLM tools when this is present. The embedding client enables kb_search's
@@ -586,6 +596,7 @@ export function createPlatformServices(
     evolutionStore,
     keGraphRoots,
     keJobRunner,
+    keLivingReviewRunner,
     keOrchestrator,
     knowledgeEngineStore,
     knowledgeEngineTools,
@@ -682,6 +693,7 @@ export async function initializePlatformServices(
 
   // Recover crash-orphaned KE jobs and resume queue processing.
   services.keJobRunner.start();
+  services.keLivingReviewRunner.start();
 
   const storedNeo4jPassword = store.getMemoryGraphNeo4jPassword();
   if (storedNeo4jPassword) {
