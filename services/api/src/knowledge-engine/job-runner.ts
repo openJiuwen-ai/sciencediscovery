@@ -125,7 +125,15 @@ export class KeJobRunner {
         // errors) nonRetryable: dead-letter immediately instead of burning
         // backoff cycles on work that can never succeed.
         const deadLetter = (error as { nonRetryable?: boolean }).nonRetryable === true;
-        this.store.failJob(job.id, message, { backoffBaseMs: this.backoffBaseMs, deadLetter });
+        // A source Retry-After (connector 429) overrides the computed backoff
+        // when longer — the requeue frees this serial runner's slot, so a
+        // throttled grow never starves extract/ingest/seed work behind it.
+        const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
+        this.store.failJob(job.id, message, {
+          backoffBaseMs: this.backoffBaseMs,
+          deadLetter,
+          ...(typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) ? { retryAfterMs } : {}),
+        });
         this.onError("ke_job_failed", { jobId: job.id, type: job.type, attempts: job.attempts, error: message });
       }
       ran = true;

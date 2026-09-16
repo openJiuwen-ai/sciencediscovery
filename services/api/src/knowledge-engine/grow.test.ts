@@ -32,7 +32,7 @@ import { KeJobRunner } from "./job-runner.js";
 import { KeOrchestrator, KE_GROW_JOB } from "./orchestrator.js";
 import { KnowledgeEngineStore } from "./store.js";
 import { buildSourceChain } from "./connectors/source-chain.js";
-import { NotFoundError, paperDedupKey, type PaperRef } from "./connectors/types.js";
+import { NotFoundError, RateLimitError, paperDedupKey, type PaperRef } from "./connectors/types.js";
 import { handleKeGetGrow, handleKeStartGrow, KeApiError } from "./routes.js";
 
 function tempRoot(name: string): string {
@@ -59,6 +59,7 @@ interface GrowStubs {
   citations: Record<string, PaperRef[]>;
   searchCalls: string[];
   downloadCalls: string[];
+  resolveCitationsOverride?: (ref: PaperRef) => Promise<PaperRef[]>;
 }
 
 interface Harness {
@@ -69,7 +70,7 @@ interface Harness {
 
 /** Orchestrator with the grow deps fully stubbed (the default sub-chain would
  *  hit the network, so every test MUST override all four metadata deps). */
-function createHarness(root: string, stubs: GrowStubs): Harness {
+function createHarness(root: string, stubs: GrowStubs, growOptions?: import("./grow.js").GrowCycleOptions): Harness {
   const store = KnowledgeEngineStore.open(root);
   const chain = buildSourceChain({ transport: { async get() { throw new Error("network disabled in grow tests"); } } });
   const orchestrator = new KeOrchestrator({
@@ -91,7 +92,9 @@ function createHarness(root: string, stubs: GrowStubs): Harness {
         });
         return { documentId: doc.id };
       },
-      resolveCitations: async (ref) => stubs.citations[ref.sourceId] ?? [],
+      resolveCitations: async (ref) => stubs.resolveCitationsOverride
+        ? stubs.resolveCitationsOverride(ref)
+        : (stubs.citations[ref.sourceId] ?? []),
       resolveForward: async () => [],
       searchPapers: async (query) => {
         stubs.searchCalls.push(query);
@@ -99,6 +102,7 @@ function createHarness(root: string, stubs: GrowStubs): Harness {
       },
       embed: async (text) => (text.includes("relevant") ? new Float32Array([1, 0]) : new Float32Array([0, 1])),
     },
+    ...(growOptions ? { growOptions } : {}),
   });
   const runner = new KeJobRunner(store);
   orchestrator.registerJobs(runner);
@@ -417,4 +421,100 @@ test("grow routes: POST validates input, starts a cycle; GET reports status", as
   assert.equal(payload.activeCycle?.cycleId, handle.cycleId);
   assert.equal(payload.activeCycle?.status, "pending");
   assert.deepEqual(payload.frontier, { total: 0, pending: 0, done: 0, failed: 0, skipped: 0 });
+});
+
+// ------------------------------------------------------ throttle robustness
+
+test("grow cycle: a 429 during seeding is slept through (Retry-After), not fatal", async (context) => {
+  const root = tempRoot("ke-grow-throttle-retry");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  let failures = 0;
+  const sleeps: number[] = [];
+  const cand = makeRef("t1", "Throttle Candidate relevant");
+  const stubs: GrowStubs = {
+    download: async () => {},
+    citations: {},
+    searchCalls: [],
+    downloadCalls: [],
+    resolveCitationsOverride: async (ref) => {
+      if (ref.sourceId === "seed1" && failures < 2) {
+        failures += 1;
+        throw new RateLimitError("api.semanticscholar.org rate limited (retry in 50ms)", 50);
+      }
+      return ref.sourceId === "seed1" ? [cand] : [];
+    },
+  };
+  const { store, orchestrator, runner } = createHarness(root, stubs, {
+    sleep: async (ms) => { sleeps.push(ms); },
+    throttleWaitBudgetMs: 10_000,
+  });
+  context.after(() => store.close());
+
+  const kb = store.createKnowledgeBase({ name: "Ebola relevant" });
+  addSeedDoc(store, kb.id, "seed1");
+  // Query must contain "relevant" so the harness embed stub maps query and
+  // candidate to the same vector (cosine 1 >= the depth-0 relevance floor).
+  const handle = orchestrator.startGrow(kb.id, "ebola relevant", { maxPapers: 10, maxDepth: 0, maxPerPaper: 5 });
+  await drain(runner);
+
+  // Two 429s were slept through (clamped to >=1s each), then the cycle recovered.
+  assert.deepEqual(sleeps, [1_000, 1_000]);
+  assert.equal(store.listJobs({ type: KE_GROW_JOB, status: "succeeded" }).length, 1);
+  const phases = JSON.parse(store.getSetting(`grow_seed_phase:${handle.cycleId}`) ?? "[]") as string[];
+  assert.ok(phases.includes("backward"));
+  assert.equal(store.frontierCounts(handle.cycleId).done, 1);
+});
+
+test("grow cycle: a 429 storm defers to the runner (slot freed) and the same cycle resumes afterwards", async (context) => {
+  const root = tempRoot("ke-grow-throttle-storm");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  let storming = true;
+  const cand = makeRef("t1", "Throttle Candidate relevant");
+  const stubs: GrowStubs = {
+    download: async () => {},
+    citations: {},
+    searchCalls: [],
+    downloadCalls: [],
+    resolveCitationsOverride: async (ref) => {
+      if (storming) throw new RateLimitError("api.semanticscholar.org rate limited (retry in 300000ms)", 300_000);
+      return ref.sourceId === "seed1" ? [cand] : [];
+    },
+  };
+  const { store, orchestrator, runner } = createHarness(root, stubs, {
+    sleep: async () => {},
+    // Tiny in-cycle budget: the first clamped 60s Retry-After already exceeds it.
+    throttleWaitBudgetMs: 1_000,
+  });
+  context.after(() => store.close());
+
+  const kb = store.createKnowledgeBase({ name: "Ebola relevant" });
+  addSeedDoc(store, kb.id, "seed1");
+  const handle = orchestrator.startGrow(kb.id, "ebola relevant", { maxPapers: 10, maxDepth: 0, maxPerPaper: 5 });
+  await runner.tick();
+
+  // Deferred, not dead and not fake-succeeded: pending with run_after pushed
+  // out by the source Retry-After (300s >> the computed 5s backoff).
+  const deferred = store.listJobs({ type: KE_GROW_JOB })[0]!;
+  assert.equal(deferred.status, "pending");
+  assert.match(deferred.error ?? "", /rate limited/);
+  const waitMs = new Date(deferred.runAfter).getTime() - Date.now();
+  assert.ok(waitMs > 240_000, `run_after should honor Retry-After, got ${waitMs}ms`);
+  // The serial runner's slot is FREE: the deferred job is not claimable early.
+  assert.equal(store.claimNextJob([KE_GROW_JOB]), undefined);
+  // The backward phase is NOT watermarked — the resume re-enters it.
+  const phases = JSON.parse(store.getSetting(`grow_seed_phase:${handle.cycleId}`) ?? "[]") as string[];
+  assert.ok(!phases.includes("backward"));
+
+  // The storm lifts; simulate the window passing by pulling run_after forward.
+  storming = false;
+  (store as unknown as { database: { prepare(sql: string): { run(...args: unknown[]): void } } })
+    .database.prepare("UPDATE ke_jobs SET run_after = ? WHERE id = ?")
+    .run(new Date().toISOString(), deferred.id);
+  await drain(runner);
+
+  // The SAME cycle completed: phase watermarked, candidate admitted + done.
+  assert.equal(store.listJobs({ type: KE_GROW_JOB, status: "succeeded" }).length, 1);
+  const after = JSON.parse(store.getSetting(`grow_seed_phase:${handle.cycleId}`) ?? "[]") as string[];
+  assert.ok(after.includes("backward"));
+  assert.equal(store.frontierCounts(handle.cycleId).done, 1);
 });
