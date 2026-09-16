@@ -23,6 +23,7 @@ import type {
   KeGrowStatus,
   KeJob,
   KeKb,
+  KePaperRef,
   KeReportsStatus,
 } from "../api/knowledge-engine.js";
 import { useLocale, type MessageKey } from "../i18n/index.js";
@@ -166,6 +167,13 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   const [newKbName, setNewKbName] = useState("");
   const [seedQuery, setSeedQuery] = useState("");
   const [seedCount, setSeedCount] = useState(10);
+  // Pick-then-seed flow: preview hits from the source chain, tick the ones to
+  // ingest, seed exactly those (no second search is issued).
+  const [previewPapers, setPreviewPapers] = useState<KePaperRef[] | undefined>(undefined);
+  const [previewSelected, setPreviewSelected] = useState<Set<number>>(new Set());
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   // Non-banner hint for transient per-endpoint refresh failures (a BUSY graph
   // query must not look fatal and must not freeze the rest of the panel).
@@ -416,6 +424,10 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                   setGraph({ entities: [], edges: [] });
                   setDocuments([]);
                   setJobs([]);
+                  // Pick-then-seed state is per-KB too: papers previewed under
+                  // the OLD kb must never be seeded into the new one.
+                  setPreviewPapers(undefined);
+                  setPreviewSelected(new Set());
                   setGrowStatus(undefined);
                   setRoots(undefined);
                   setReaderDoc(null);
@@ -494,6 +506,104 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
                     }}
                   >
                     {t("ke.seed.button")}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="ke-seed-preview"
+                    style={GHOST_BUTTON_STYLE}
+                    disabled={!seedQuery.trim() || previewBusy}
+                    title={t("ke.preview.tooltip")}
+                    onClick={() => {
+                      setPreviewBusy(true);
+                      const kbAtIssue = activeKbId;
+                      void client.searchKePapers(kbAtIssue, seedQuery.trim(), seedCount)
+                        .then((result) => {
+                          // Stale-response guard: a preview issued under a
+                          // previous KB must not land under the new one.
+                          if (!mountedRef.current || activeKbIdRef.current !== kbAtIssue) return;
+                          setPreviewPapers(result.papers);
+                          setPreviewSelected(new Set(result.papers.map((_paper, index) => index)));
+                        })
+                        .catch(reportError)
+                        .finally(() => { if (mountedRef.current) setPreviewBusy(false); });
+                    }}
+                  >
+                    {previewBusy ? t("ke.preview.busy") : t("ke.preview.button")}
+                  </button>
+                </div>
+                {previewPapers ? (
+                  <div data-testid="ke-preview-list" style={{ marginTop: 6, border: "1px solid var(--border, #e2e8f0)", borderRadius: "var(--radius-m, 8px)", padding: 6 }}>
+                    {previewPapers.length === 0 ? <p style={EXPLAINER_STYLE}>{t("ke.preview.empty")}</p> : null}
+                    {previewPapers.map((paper, index) => (
+                      <label key={`${paper.doi ?? paper.arxivId ?? index}`} style={{ display: "flex", gap: 6, fontSize: 12, margin: "3px 0", alignItems: "flex-start" }}>
+                        <input
+                          type="checkbox"
+                          checked={previewSelected.has(index)}
+                          onChange={() => setPreviewSelected((current) => {
+                            const next = new Set(current);
+                            if (next.has(index)) next.delete(index);
+                            else next.add(index);
+                            return next;
+                          })}
+                        />
+                        <span>
+                          {paper.title}
+                          <small style={{ display: "block", color: "var(--text-secondary, #475569)" }}>
+                            {[paper.year, paper.venue, paper.doi].filter(Boolean).join(" · ")}
+                          </small>
+                        </span>
+                      </label>
+                    ))}
+                    {previewPapers.length > 0 ? (
+                      <button
+                        type="button"
+                        data-testid="ke-seed-selected"
+                        style={{ ...PRIMARY_BUTTON_STYLE, marginTop: 4, width: "100%" }}
+                        disabled={previewSelected.size === 0}
+                        onClick={() => {
+                          const picked = previewPapers.filter((_paper, index) => previewSelected.has(index));
+                          void client.seedKeKbRefs(activeKbId, picked)
+                            .then(() => {
+                              if (!mountedRef.current) return;
+                              setPreviewPapers(undefined);
+                              setPreviewSelected(new Set());
+                            })
+                            .then(kickRefresh)
+                            .catch(reportError);
+                        }}
+                      >
+                        {t("ke.preview.seedSelected", { count: previewSelected.size })}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <input
+                    ref={uploadInputRef}
+                    type="file"
+                    accept="application/pdf"
+                    data-testid="ke-upload-input"
+                    style={{ display: "none" }}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      if (!file) return;
+                      setUploadBusy(true);
+                      void client.uploadKePdf(activeKbId, file)
+                        .then(kickRefresh)
+                        .catch(reportError)
+                        .finally(() => { if (mountedRef.current) setUploadBusy(false); });
+                    }}
+                  />
+                  <button
+                    type="button"
+                    data-testid="ke-upload"
+                    style={{ ...GHOST_BUTTON_STYLE, flex: 1 }}
+                    disabled={uploadBusy}
+                    title={t("ke.upload.tooltip")}
+                    onClick={() => uploadInputRef.current?.click()}
+                  >
+                    {uploadBusy ? t("ke.upload.busy") : t("ke.upload.button")}
                   </button>
                 </div>
               </section>

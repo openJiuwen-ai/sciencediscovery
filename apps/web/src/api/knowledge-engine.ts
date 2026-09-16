@@ -31,6 +31,21 @@ export interface KeKb {
   stats?: KeKbStats;
 }
 
+/** A scholarly search hit / picked seed candidate (search-preview & paperRefs seed). */
+export interface KePaperRef {
+  title: string;
+  authors?: string[];
+  year?: number | null;
+  doi?: string | null;
+  arxivId?: string | null;
+  abstract?: string | null;
+  pdfUrl?: string | null;
+  citationCount?: number | null;
+  source?: string;
+  sourceId?: string;
+  venue?: string | null;
+}
+
 export interface KeDocument {
   id: string;
   kbId: string;
@@ -241,6 +256,31 @@ export class KnowledgeEngineApiClient extends EvolveApiClient {
     return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/seed`, {
       method: "POST",
       body: JSON.stringify({ query, maxPapers }),
+    });
+  }
+
+  /** Search the source chain WITHOUT downloading (pick-then-seed preview). */
+  searchKePapers(kbId: string, query: string, maxPapers = 10): Promise<{ papers: KePaperRef[] }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/search-preview`, {
+      method: "POST",
+      body: JSON.stringify({ query, maxPapers }),
+    });
+  }
+
+  /** Seed an explicit operator-picked ref list (no new search is issued). */
+  seedKeKbRefs(kbId: string, paperRefs: KePaperRef[]): Promise<{ enqueued: number }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/seed`, {
+      method: "POST",
+      body: JSON.stringify({ paperRefs }),
+    });
+  }
+
+  /** Upload a local PDF straight into the KB ingestion pipeline. */
+  uploadKePdf(kbId: string, file: File): Promise<{ alreadyComplete: boolean; dedupKey: string; documentId: string }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/upload?title=${encodeURIComponent(file.name)}`, {
+      body: file,
+      headers: { "content-type": "application/pdf" },
+      method: "POST",
     });
   }
 

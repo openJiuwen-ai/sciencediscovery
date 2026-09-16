@@ -48,6 +48,14 @@ const DEFAULT_POLICY: ModelClientPolicy = {
   requestTimeoutMs: 300_000,
 };
 
+/** The model spent the whole output budget before finishing its answer. */
+export class PipelineLlmTruncatedError extends Error {
+  constructor(readonly maxTokens: number) {
+    super(`pipeline LLM turn truncated at max_tokens=${maxTokens} (increase maxTokens or shrink the input)`);
+    this.name = "PipelineLlmTruncatedError";
+  }
+}
+
 async function defaultInvoke(
   endpoint: ModelEndpoint,
   systemPrompt: string,
@@ -66,8 +74,9 @@ async function defaultInvoke(
   if (turn.truncated) {
     // Surface truncation explicitly — otherwise a reasoning model that spent
     // the whole budget on hidden thought reports back as "no JSON returned"
-    // and sends the reader looking for a bug in the wrong place.
-    throw new Error(`pipeline LLM turn truncated at max_tokens=${policy.maxTokens} (increase maxTokens or shrink the input)`);
+    // and sends the reader looking for a bug in the wrong place. Typed so
+    // callers (extraction) can escalate budget/input instead of dying blind.
+    throw new PipelineLlmTruncatedError(policy.maxTokens);
   }
   return extractAssistantText(turn.assistantMessage);
 }

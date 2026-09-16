@@ -19,6 +19,7 @@ import test from "node:test";
 import { BIOMEDICAL_SCHEMA } from "@sciencediscovery/knowledge-engine";
 
 import { KeJobRunner } from "./job-runner.js";
+import { PipelineLlmTruncatedError } from "./llm.js";
 import { KeOrchestrator, KE_EXTRACT_JOB, KE_INGEST_JOB, KE_SEED_JOB } from "./orchestrator.js";
 import { KnowledgeEngineStore } from "./store.js";
 import { buildSourceChain } from "./connectors/source-chain.js";
@@ -422,4 +423,128 @@ test("ingest with no full text anywhere marks the document error without retry",
   // extraction was ever enqueued for the failed document.
   assert.equal(rootStore.listJobs({ type: KE_INGEST_JOB, status: "succeeded" }).length, 1);
   assert.equal(rootStore.listJobs({ type: KE_EXTRACT_JOB }).length, 0);
+});
+
+// ---------------------------------------------------- truncation ladder
+
+test("extraction truncation ladder: a truncated turn escalates instead of dying", async (context) => {
+  const root = tempRoot("ke-orch-truncation-retry");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const transport = stubTransport([
+    { match: "/search?query=", status: 200, body: EPMC_SEARCH },
+    { match: "fullTextXML", status: 200, body: JATS },
+  ]);
+  let calls = 0;
+  const orchestrator = new KeOrchestrator({
+    store,
+    chain: buildSourceChain({ transport }),
+    transport,
+    schema: BIOMEDICAL_SCHEMA,
+    resolveEndpoint: () => ({ baseUrl: "http://stub", model: "m" }),
+    llmInvoke: async () => {
+      calls += 1;
+      if (calls === 1) throw new PipelineLlmTruncatedError(16_384);
+      return EXTRACTION_RESPONSE;
+    },
+    assertUrl: async () => {},
+  });
+  const runner = new KeJobRunner(store);
+  orchestrator.registerJobs(runner);
+
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  await orchestrator.seedKb(kb.id, "ebola glycoprotein antibody", 10);
+  await drain(runner);
+
+  // One truncation, one successful retry: the job lands instead of dying
+  // three times with the identical payload.
+  assert.equal(calls, 2);
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "succeeded" }).length, 1);
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "dead" }).length, 0);
+  assert.equal(store.listEntities(kb.id).length, 3);
+});
+
+test("extraction truncation ladder stage 3: caps are reduced when the 32k retry also truncates", async (context) => {
+  const root = tempRoot("ke-orch-truncation-caps");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const transport = stubTransport([
+    { match: "/search?query=", status: 200, body: EPMC_SEARCH },
+    { match: "fullTextXML", status: 200, body: JATS },
+  ]);
+  const prompts: string[] = [];
+  let calls = 0;
+  const orchestrator = new KeOrchestrator({
+    store,
+    chain: buildSourceChain({ transport }),
+    transport,
+    schema: BIOMEDICAL_SCHEMA,
+    resolveEndpoint: () => ({ baseUrl: "http://stub", model: "m" }),
+    llmInvoke: async (_endpoint, _system, userPrompt) => {
+      calls += 1;
+      prompts.push(userPrompt);
+      if (calls <= 2) throw new PipelineLlmTruncatedError(calls === 1 ? 16_384 : 32_768);
+      return EXTRACTION_RESPONSE;
+    },
+    assertUrl: async () => {},
+  });
+  const runner = new KeJobRunner(store);
+  orchestrator.registerJobs(runner);
+
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  await orchestrator.seedKb(kb.id, "ebola glycoprotein antibody", 10);
+  await drain(runner);
+
+  // Call 1 truncates at 16k -> escalate budget; call 2 truncates at 32k ->
+  // the third call asks for a smaller proposal (halved caps), then succeeds.
+  assert.equal(calls, 3);
+  assert.ok(prompts[0]!.includes("最多 30 个实体"));
+  assert.ok(prompts[2]!.includes("最多 15 个实体"));
+  const doc = store.listDocuments(kb.id)[0]!;
+  assert.equal(doc.sourceMeta["extraction_output_mode"], "reduced-caps");
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "succeeded" }).length, 1);
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "dead" }).length, 0);
+});
+
+test("uploaded PDF: content-addressed ingest, extraction queued, re-upload is a no-op", async (context) => {
+  const root = tempRoot("ke-orch-upload");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const transport = stubTransport([{ match: "/search?query=", status: 200, body: EPMC_SEARCH }]);
+  const orchestrator = new KeOrchestrator({
+    store,
+    chain: buildSourceChain({ transport }),
+    transport,
+    schema: BIOMEDICAL_SCHEMA,
+    resolveEndpoint: () => ({ baseUrl: "http://stub", model: "m" }),
+    llmInvoke: async () => EXTRACTION_RESPONSE,
+    paperText: async () => "uploaded local paper text ".repeat(50),
+    assertUrl: async () => {},
+  });
+  const runner = new KeJobRunner(store);
+  orchestrator.registerJobs(runner);
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+
+  const bytes = new TextEncoder().encode("%PDF-1.7 fake upload bytes");
+  const first = await orchestrator.ingestUploadedPdf(kb.id, bytes, "Local Ebola Paper");
+  assert.equal(first.alreadyComplete, false);
+  const doc = store.getDocument(first.documentId)!;
+  assert.equal(doc.status, "ready");
+  assert.equal(doc.sourceMeta["ingest_channel"], "upload");
+  assert.ok(doc.fulltext && doc.fulltext.length > 0);
+
+  await drain(runner);
+  assert.equal(store.listJobs({ type: KE_EXTRACT_JOB, status: "succeeded" }).length, 1);
+  assert.ok(doc.sourceMeta["extracted_at"] || store.getDocument(doc.id)!.sourceMeta["extracted_at"]);
+
+  // Same bytes again: nothing re-runs (content-addressed dedup).
+  const jobsBefore = store.listJobs({}).length;
+  const second = await orchestrator.ingestUploadedPdf(kb.id, bytes, "Local Ebola Paper");
+  assert.equal(second.alreadyComplete, true);
+  assert.equal(second.documentId, first.documentId);
+  assert.equal(store.listJobs({}).length, jobsBefore);
+  assert.equal(store.listDocuments(kb.id).length, 1);
 });

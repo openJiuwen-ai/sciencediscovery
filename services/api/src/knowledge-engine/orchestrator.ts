@@ -56,11 +56,12 @@ import {
   type JudgeSide,
   type JudgeVerdict,
 } from "@sciencediscovery/knowledge-engine";
+import { sha256 } from "@sciencediscovery/cas";
 import type { ModelEndpoint } from "@sciencediscovery/model";
 
 import type { PdfClassification } from "./pdf-classify.js";
 import type { EmbeddingClient } from "./embedding.js";
-import { callPipelineLlm, type PipelineInvoke } from "./llm.js";
+import { callPipelineLlm, PipelineLlmTruncatedError, type PipelineInvoke } from "./llm.js";
 import { buildResolverRepo, recordOnlineAttach, resolveEntityResolutionMode } from "./resolution.js";
 import {
   enqueueEntityResolution,
@@ -90,6 +91,7 @@ import {
   startGrowCycle,
   type CrawlBudget,
   type GrowCycleHandle,
+  type GrowCycleOptions,
   type GrowDeps,
   KE_GROW_JOB,
 } from "./grow.js";
@@ -102,6 +104,16 @@ export type { CrawlBudget, GrowCycleHandle, GrowDeps };
 
 const CORE_ENTITY_LIST_SIZE = 50;
 const MIN_EXTRACTABLE_TEXT = 200;
+/** Truncation ladder stage 2: extraction retry budget after the default 16k. */
+const EXTRACT_ESCALATED_MAX_TOKENS = 32_768;
+/**
+ * Truncation ladder stage 3: shrink the OUTPUT demand (the prompt's input is
+ * already capped at PROMPT_TEXT_CAP, so truncation pressure is output-side —
+ * long reasoning traces and oversized JSON proposals). Halved entity/relation
+ * caps bound the proposal size.
+ */
+const EXTRACT_REDUCED_MAX_ENTITIES = 15;
+const EXTRACT_REDUCED_MAX_RELATIONS = 20;
 /** C3①: total LLM rounds per extraction — one initial + bounded corrective
  *  retries feeding validator rejection reasons back to the model. */
 const MAX_EXTRACT_ATTEMPTS = 3;
@@ -139,6 +151,8 @@ export interface KeOrchestratorDeps {
   readonly assertUrl?: (url: string) => Promise<void>;
   /** Test seam: override individual grow-cycle dependencies. */
   readonly grow?: Partial<GrowDeps>;
+  /** Test seam: grow-cycle runtime options (sleep / throttle budget). */
+  readonly growOptions?: GrowCycleOptions;
   /** Test seam: override the entity-resolution mode switch (default:
    *  env SCIENCE_AGENT_KE_ENTITY_RESOLUTION → ke_settings → 'off'). */
   readonly resolutionMode?: () => EntityResolutionMode;
@@ -229,6 +243,124 @@ export class KeOrchestrator {
     const { kbId, query, maxPapers } = job.payload as { kbId: string; query: string; maxPapers?: number };
     const limit = Math.min(Math.max(maxPapers ?? 10, 1), 25);
     const refs = await this.deps.chain.search(query, limit);
+    if (refs.length === 0) {
+      throw new Error(`seed query "${query}" returned no papers from any source`);
+    }
+    const ingested = await this.ingestSeedRefs(kbId, refs);
+    this.warn("ke_seed_done", { kbId, query, papers: refs.length, ingestEnqueued: ingested });
+  }
+
+  /** Public API: search the source chain WITHOUT downloading (preview for the
+   *  pick-then-seed flow — DA's /scholarly/search equivalent). */
+  async searchPapersPreview(query: string, limit: number): Promise<PaperRef[]> {
+    return this.deps.chain.search(query, Math.min(Math.max(limit, 1), 25));
+  }
+
+  /** Public API: seed an explicit, operator-picked ref list (no search). */
+  async seedPaperRefs(kbId: string, refs: readonly PaperRef[]): Promise<{ enqueued: number }> {
+    // Same loud-empty invariant as the query seed path: a success-shaped
+    // no-op would tell automation "papers were seeded" when nothing was.
+    if (refs.length === 0) throw new Error("seedPaperRefs requires a non-empty ref list");
+    return { enqueued: await this.ingestSeedRefs(kbId, refs) };
+  }
+
+  /**
+   * Public API: ingest an operator-uploaded PDF directly into the KB (the
+   * manual-upload path — local papers that no source chain can reach). The
+   * dedup key is content-addressed, so a re-upload of the same bytes is a
+   * metadata refresh, never a duplicate. Parsing (paper worker, vision
+   * included) runs inline like the papers-upload precedent; the LLM
+   * extraction is queued as usual.
+   */
+  async ingestUploadedPdf(
+    kbId: string,
+    bytes: Uint8Array,
+    title?: string,
+  ): Promise<{ alreadyComplete: boolean; dedupKey: string; documentId: string }> {
+    if (!this.deps.paperText) throw new Error("PDF ingestion is not configured (paperText hook missing)");
+    // Same contract as the papers upload: a real PDF carries the magic header.
+    if (bytes.length < 5 || !Buffer.from(bytes.subarray(0, 5)).equals(Buffer.from("%PDF-"))) {
+      throw new Error("upload does not have a PDF signature");
+    }
+    const hash = sha256(Buffer.from(bytes));
+    const dedupKey = `upload:${hash}`;
+    const displayTitle = title?.trim() || `uploaded-${hash.slice(0, 12)}.pdf`;
+    const prior = this.deps.store.findDocumentByDedupKey(kbId, dedupKey);
+    if (prior?.status === "ready") {
+      // Already parsed: never re-run the paid paper worker on identical bytes.
+      // The only useful action left is topping up a missing extraction.
+      if (!prior.sourceMeta["extracted_at"]) this.enqueueExtraction(kbId, prior.id);
+      return { alreadyComplete: true, dedupKey, documentId: prior.id };
+    }
+    const doc = this.deps.store.upsertDocument({
+      kbId,
+      dedupKey,
+      title: displayTitle,
+      status: "pending",
+      sourceUri: `upload:${hash.slice(0, 16)}`,
+      sourceMeta: {
+        paperRef: {
+          title: displayTitle,
+          authors: [],
+          year: null,
+          doi: null,
+          arxivId: null,
+          abstract: null,
+          pdfUrl: null,
+          citationCount: null,
+          source: "upload",
+          sourceId: hash,
+        },
+        uploaded_at: new Date().toISOString(),
+      },
+    });
+    let paperResult;
+    try {
+      paperResult = await this.deps.paperText(bytes, doc.id);
+    } catch (error) {
+      // A parser crash must not leave a pending zombie: mark the doc so the
+      // operator sees the failure and a re-upload can retry cleanly.
+      this.deps.store.upsertDocument({
+        kbId,
+        dedupKey,
+        status: "error",
+        sourceMeta: { ...doc.sourceMeta, ingest_error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    const text = typeof paperResult === "string" ? paperResult : paperResult.fulltext;
+    const pdfClassification = typeof paperResult === "string" ? undefined : paperResult.pdfClassification;
+    if (text.trim().length < MIN_EXTRACTABLE_TEXT) {
+      this.deps.store.upsertDocument({
+        kbId,
+        dedupKey,
+        status: "error",
+        sourceMeta: { ...doc.sourceMeta, ingest_error: `paper worker produced too little text (${text.trim().length} chars)` },
+      });
+      throw new Error(`paper worker produced too little text (${text.trim().length} chars) for the uploaded PDF`);
+    }
+    this.deps.store.upsertDocument({
+      kbId,
+      dedupKey,
+      fulltext: text,
+      status: "ready",
+      sourceMeta: {
+        ...doc.sourceMeta,
+        ingested_at: new Date().toISOString(),
+        ingest_channel: "upload",
+        ...(pdfClassification
+          ? { pdf_class: pdfClassification.type, pdf_class_confidence: pdfClassification.confidence }
+          : {}),
+      },
+    });
+    this.enqueueExtraction(kbId, doc.id);
+    return { alreadyComplete: false, dedupKey, documentId: doc.id };
+  }
+
+  /** Shared seed-ref intake: upsert each ref (watermark-safe) and enqueue the
+   *  ingest job; ready-but-unextracted docs get an extraction top-up instead.
+   *  Returns the number of NEW ingest jobs enqueued. */
+  private async ingestSeedRefs(kbId: string, refs: readonly PaperRef[]): Promise<number> {
     let ingested = 0;
     for (const ref of refs) {
       const dedupKey = paperDedupKey(ref);
@@ -277,10 +409,7 @@ export class KeOrchestrator {
       });
       ingested += 1;
     }
-    if (refs.length === 0) {
-      throw new Error(`seed query "${query}" returned no papers from any source`);
-    }
-    this.warn("ke_seed_done", { kbId, query, papers: refs.length, ingestEnqueued: ingested });
+    return ingested;
   }
 
   // ---------------------------------------------------------------- ingest
@@ -439,7 +568,7 @@ export class KeOrchestrator {
   // ------------------------------------------------------------------ grow
 
   private async handleGrow(job: KeJobRow): Promise<unknown> {
-    return runGrowCycle(this.deps.store, job, this.buildGrowDeps(), (message) => this.warn("ke_grow", { message }));
+    return runGrowCycle(this.deps.store, job, this.buildGrowDeps(), (message) => this.warn("ke_grow", { message }), this.deps.growOptions);
   }
 
   /**
@@ -572,6 +701,15 @@ export class KeOrchestrator {
     // The BEST attempt survives (most valid entities+relations), so a good
     // partial extraction cannot be discarded by a worse retry. Final-state
     // rejects are preserved as evidence below.
+    // Truncation ladder: the failure is OUTPUT-side (reasoning trace or an
+    // oversized JSON proposal blowing the budget — the prompt input is capped
+    // at PROMPT_TEXT_CAP upstream). Escalate default → 32k tokens → 32k with
+    // halved entity/relation caps; each escalation replaces the attempt that
+    // triggered it instead of consuming one. Before this ladder the same
+    // payload was retried verbatim and died identically.
+    let maxTokens: number | undefined;
+    let reducedCaps = false;
+    let promptText = prompt;
     let best: ReturnType<typeof validateExtractionProposal> | null = null;
     let bestScore = -1;
     let attemptsUsed = 0;
@@ -581,12 +719,41 @@ export class KeOrchestrator {
         ? ""
         : `\n\n---\nCORRECTION FEEDBACK (attempt ${attempt} of ${MAX_EXTRACT_ATTEMPTS}):\n` +
           `${buildExtractionCorrectionPrompt(best ?? EMPTY_PROPOSAL_VALIDATION, this.deps.schema)}\n\nRe-emit the complete corrected JSON.`;
-      const response = await callPipelineLlm(
-        { endpoint, ...(this.deps.llmInvoke ? { invoke: this.deps.llmInvoke } : {}) },
-        EXTRACTION_SYSTEM_PROMPT,
-        `${prompt}${feedback}`,
-        signal,
-      );
+      let response: string;
+      try {
+        response = await callPipelineLlm(
+          {
+            endpoint,
+            ...(this.deps.llmInvoke ? { invoke: this.deps.llmInvoke } : {}),
+            ...(maxTokens !== undefined ? { maxTokens } : {}),
+          },
+          EXTRACTION_SYSTEM_PROMPT,
+          `${promptText}${feedback}`,
+          signal,
+        );
+      } catch (error) {
+        if (error instanceof PipelineLlmTruncatedError) {
+          if (maxTokens === undefined) {
+            maxTokens = EXTRACT_ESCALATED_MAX_TOKENS;
+            this.warn("ke_extract_truncated_escalate", { docId, stage: "max-tokens-32k" });
+            attempt -= 1;
+            continue;
+          }
+          if (!reducedCaps) {
+            reducedCaps = true;
+            promptText = buildExtractionPrompt(fulltext, {
+              schema: this.deps.schema,
+              coreEntityLines: coreLines,
+              maxEntities: EXTRACT_REDUCED_MAX_ENTITIES,
+              maxRelations: EXTRACT_REDUCED_MAX_RELATIONS,
+            });
+            this.warn("ke_extract_truncated_escalate", { docId, stage: "reduced-caps" });
+            attempt -= 1;
+            continue;
+          }
+        }
+        throw error;
+      }
       const validation = validateExtractionProposal(response, this.deps.schema);
       const score = validation.entities.length + validation.relations.length;
       if (score > bestScore) {
@@ -843,7 +1010,12 @@ export class KeOrchestrator {
     this.deps.store.upsertDocument({
       kbId: doc.kbId,
       dedupKey: doc.dedupKey,
-      sourceMeta: { ...(current?.sourceMeta ?? doc.sourceMeta), extracted_at: new Date().toISOString() },
+      sourceMeta: {
+        ...(current?.sourceMeta ?? doc.sourceMeta),
+        extracted_at: new Date().toISOString(),
+        // Honest degradation record: reduced caps extract less from the paper.
+        ...(reducedCaps ? { extraction_output_mode: "reduced-caps" } : {}),
+      },
     });
 
     // W10 citation chain + formula store (fail-soft: a citation failure never

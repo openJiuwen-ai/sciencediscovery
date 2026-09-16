@@ -182,7 +182,9 @@ curl -X POST http://127.0.0.1:4310/api/proxy/servers \
 | `GET /api/knowledge-engine/kbs` | 无 | `200`，带统计的 `{kbs}` |
 | `POST /api/knowledge-engine/kbs` | `{name, description?}` | `201`，创建的 KB |
 | `GET /api/knowledge-engine/kbs/:id` | 无 | `200`，带统计的 KB |
-| `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}`（1–25） | `202`，`{jobId, enqueued}` |
+| `POST /api/knowledge-engine/kbs/:id/seed` | `{query, maxPapers?}`（1–25）或 `{paperRefs}`（显式挑选列表，≤50，不再检索） | `202`，`{jobId, enqueued}` 或 `{enqueued}` |
+| `POST /api/knowledge-engine/kbs/:id/search-preview` | `{query, maxPapers?}`（1–25） | `200`，`{papers}`；只检索不下载（挑选播种流的第一步） |
+| `POST /api/knowledge-engine/kbs/:id/upload` | `application/pdf` 请求体（≤50MB），`?title=` 可选 | `201`/`200`（内容去重已完整时），`{documentId, dedupKey, alreadyComplete}`；本地 PDF 直接入库（解析后排队抽取）；非 PDF `415` |
 | `GET /api/knowledge-engine/kbs/:id/documents` | 无 | `200`，精简文档列表 |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId` | `?level=L0\|L1\|L2`（默认 `L0`） | `200`，三级阅读：L0 确定性摘要（summary/tags/source）、L1 带锚点块（`{docId}:{type}:{index}`）、L2 全文；跨 KB 文档 `404` |
 | `GET /api/knowledge-engine/kbs/:id/documents/:docId/anchors/:anchorId` | 无 | `200`，锚点块 + 邻块上下文；锚点不存在 `404`，文档未解析 `409` |
