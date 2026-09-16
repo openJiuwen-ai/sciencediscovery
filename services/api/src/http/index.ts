@@ -79,6 +79,8 @@ import {
   handleKeGenerateCommunityReports,
   handleKeListMerges,
   handleKeUnmerge,
+  handleKeSearchPreview,
+  handleKeUploadPdf,
   parseKeDocumentLevel,
 } from "../knowledge-engine/routes.js";
 import { AGENT_MEMORY_CATEGORIES } from "@sciencediscovery/schema";
@@ -374,6 +376,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     knowledgeEngineStore,
     knowledgeEngineTools,
     keJobRunner,
+    keLivingReviewRunner,
     evolveCandidates,
     evolveOrchestrator,
     evolveRunTokens,
@@ -2949,6 +2952,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         await handleKeSeed(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keSeedMatch[1]!));
         return;
       }
+      const keSearchPreviewMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/search-preview$/);
+      if (keSearchPreviewMatch && request.method === "POST") {
+        await handleKeSearchPreview(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keSearchPreviewMatch[1]!));
+        return;
+      }
+      const keUploadMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/upload$/);
+      if (keUploadMatch && request.method === "POST") {
+        await handleKeUploadPdf(request, response, keOrchestrator, knowledgeEngineStore, decodeURIComponent(keUploadMatch[1]!));
+        return;
+      }
       const keDocsMatch = url.pathname.match(/^\/api\/knowledge-engine\/kbs\/([^/]+)\/documents$/);
       if (keDocsMatch && request.method === "GET") {
         handleKeListDocuments(response, knowledgeEngineStore, decodeURIComponent(keDocsMatch[1]!));
@@ -3790,6 +3803,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // the transport.)
   server.once("close", () => {
     keJobRunner.stop();
+    keLivingReviewRunner.stop();
     knowledgeEngineStore.close();
   });
   let hasListened = false;
