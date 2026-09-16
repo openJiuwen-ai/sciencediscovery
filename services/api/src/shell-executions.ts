@@ -50,6 +50,12 @@ export class ShellExecutions {
     return this.snapshot(owner.sessionId).filter((item) => item.agentId === owner.agentId).map(({ resultRef: _, ...item }) => item);
   }
 
+  /** The catalog entry alone: state and timestamps without reading the result payload. */
+  find(id: string, owner: ExecutionOwner): AgentShellExecution {
+    const { resultRef: _, ...execution } = this.record(id, owner);
+    return execution;
+  }
+
   async get(id: string, owner: ExecutionOwner): Promise<AgentShellExecution> {
     const { resultRef, ...execution } = this.record(id, owner);
     if (!resultRef) return execution;

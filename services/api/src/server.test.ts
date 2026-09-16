@@ -2401,17 +2401,24 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.equal(completedExecutions.body[0]?.exitCode, 0);
   assert.equal(completedExecutions.body[0]?.status, "succeeded");
 
-  // Both completed Shells wake the model independently. Drain their bounded
-  // notification turns before switching the shared fixture to a silent user
-  // request; otherwise the cancellation assertion observes unrelated work.
+  // Only the Shell whose foreground wait ran out wakes the model: the first
+  // Shell finished inside its wait, so its result was delivered in that turn
+  // and its notice was marked read. Drain the one bounded notification turn
+  // before switching the shared fixture to a silent user request; otherwise
+  // the cancellation assertion observes unrelated work.
   const notificationDeadline = Date.now() + 10000;
   let settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
-  while ((completionNotifications !== 2 || settled.body.sessions.length !== 0) && Date.now() < notificationDeadline) {
+  while ((completionNotifications !== 1 || settled.body.sessions.length !== 0) && Date.now() < notificationDeadline) {
     await new Promise((done) => setTimeout(done, 25));
     settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
   }
-  assert.equal(completionNotifications, 2);
+  assert.equal(completionNotifications, 1);
   assert.deepEqual(settled.body.sessions, []);
+  const successfulToolRuns = await jsonRequest<Array<{ automaticWake?: boolean }>>(
+    `${origin}/api/sessions/${successfulToolSession.body.id}/runs`, { headers: authorization },
+  );
+  assert.equal(successfulToolRuns.body.some((candidate) => candidate.automaticWake), false,
+    "a result read during the foreground wait must not wake its Session again");
 
   gatewayMode = "silent";
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {

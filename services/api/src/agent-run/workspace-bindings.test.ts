@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,8 +21,10 @@ import { resolve } from "node:path";
 import { SKILL_SNAPSHOT_MANIFEST } from "../skill-sandbox.js";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "../agent-notifications.js";
+import { ShellExecutions } from "../shell-executions.js";
 
 import type { NpuJob } from "@sciencediscovery/schema";
+import { VersionStore } from "@sciencediscovery/cas";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import { SessionStore } from "../store.js";
@@ -51,6 +53,114 @@ test("one-time timer binding validates time and execution ownership without exec
   assert.equal(notifications.timers({ sessionId: "session", agentId: "main" })[0]!.state, "cancelled");
   notifications.stop("session");
   await assert.rejects(timer.create({ afterMs: 60000, message: "stopped" }), /stopped/);
+});
+
+/**
+ * The inbox as the Agent tools see it. Executions finish on demand so each test
+ * can decide whether the model reads the terminal state or is still waiting.
+ */
+async function inboxBindings(t: TestContext, agentId: string) {
+  const root = await mkdtemp(resolve(tmpdir(), "binding-inbox-"));
+  const db = new DatabaseSync(":memory:");
+  t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
+  const versions = new VersionStore(root);
+  const notifications = new AgentNotifications(db, () => false);
+  const shellExecutions = new ShellExecutions(db, versions, notifications, 1);
+  const ref = await versions.put("agent-state", "committed");
+  const result = { exitCode: 0, stdout: "done", stderr: "", workspaceSnapshot: ref };
+  // An execution ends only when the test says so; the poller may ask before or
+  // after that moment, so both orders resolve to the same completed record.
+  const finished = new Set<string>();
+  const waiters = new Map<string, () => void>();
+  const runnerClient = {
+    startShellExecution: async (request: { executionId: string; sessionId: string; agentId: string }) => (
+      { sessionId: request.sessionId, agentId: request.agentId, id: request.executionId, state: "running", queuedAt: "now" }),
+    getShellExecution: async (id: string, owner: { sessionId: string; agentId: string }) => {
+      if (!finished.has(id)) await new Promise<void>((done) => waiters.set(id, done));
+      return { ...owner, id, state: "completed", queuedAt: "now", result, version: ref };
+    },
+    shellExecutionLogs: async () => ({ chunks: [{ cursor: 1, stream: "stdout", text: "progress" }], nextCursor: 1, truncated: false, retentionTruncated: false }),
+    cancelShellExecution: async () => undefined,
+  } as unknown as RunnerClient;
+  const owner = { sessionId: "session", agentId };
+  const store = {
+    assertSessionWritable() {}, assertSessionAllowsRunner() {}, notifications, shellExecutions,
+    npuDeviceSelection: () => [], resolveSandboxEgressProxy: () => undefined,
+    workspaceIdentity: () => ({ id: `${agentId}-local` }),
+  } as unknown as SessionStore;
+  const bindings = createWorkspaceExecutionBindings({
+    agentId, executionId: "turn", sessionId: owner.sessionId, permissionScopeLabel: "test", workspaceRoot: "/workspace", store,
+    permission: { getEpoch: () => ({ id: "epoch" }), requirePrivilege: async () => undefined } as unknown as AgentPermissionRuntime,
+    provenanceRecorder: { executeShell: async (options: { executionId: string; dispatch: (request: unknown) => Promise<unknown> }) =>
+      options.dispatch({ executionId: options.executionId, ...owner }) } as unknown as ProvenanceRecorder,
+    runnerClient,
+  }).shellExecutions!;
+  const unread = () => notifications.unread(owner).map((notice) => notice.sourceId);
+  const finish = (id: string) => { finished.add(id); waiters.get(id)?.(); };
+  /** Wait for the control plane to record the terminal state; reads the catalog directly so nothing is marked delivered. */
+  const settled = async (id: string) => {
+    const deadline = Date.now() + 5_000;
+    while (["queued", "running"].includes(shellExecutions.find(id, owner).state)) {
+      if (Date.now() > deadline) throw new Error(`execution ${id} never settled`);
+      await new Promise((done) => setTimeout(done, 5));
+    }
+  };
+  return { bindings, finish, notifications, owner, settled, unread };
+}
+
+test("a terminal result returned to the model marks its completion notice read; a pending one does not", async (t) => {
+  const { bindings, finish, settled, unread } = await inboxBindings(t, "main");
+  // Foreground: the wait outlives the command, so the model reads the outcome.
+  const foreground = await bindings.start("echo fg", {});
+  assert.equal(foreground.state, "running");
+  setTimeout(() => finish(foreground.id), 5);
+  assert.equal((await bindings.wait(foreground.id, 5_000)).state, "completed");
+  assert.deepEqual(unread(), [], "nothing is left to wake the model for");
+  // Background, or a wait that ran out: the notice must stay and wake the owner.
+  const background = await bindings.start("echo bg", {});
+  assert.equal((await bindings.wait(background.id, 1)).state, "running");
+  assert.deepEqual(unread(), []);
+  finish(background.id);
+  await settled(background.id);
+  assert.deepEqual(unread(), [background.id], "a result the model has not read still wakes it");
+  assert.deepEqual(bindings.list().filter((item) => item.state === "running"), []);
+  assert.deepEqual(unread(), [], "listing the terminal record delivered it");
+  const third = await bindings.start("echo third", {});
+  finish(third.id);
+  await settled(third.id);
+  assert.deepEqual(unread(), [third.id]);
+  await bindings.logs(third.id);
+  assert.deepEqual(unread(), []);
+});
+
+test("execution_status, execution_logs and cancel deliver a terminal state per owner", async (t) => {
+  const main = await inboxBindings(t, "main");
+  const child = await inboxBindings(t, "subagent:child");
+  const own = await main.bindings.start("echo main", {});
+  const theirs = await child.bindings.start("echo child", {});
+  main.finish(own.id); child.finish(theirs.id);
+  await main.settled(own.id); await child.settled(theirs.id);
+  assert.deepEqual([main.unread(), child.unread()], [[own.id], [theirs.id]]);
+  // The child reading its own record never clears the main Agent's notice.
+  const page = await child.bindings.logs(theirs.id);
+  assert.equal(page.state, "completed", "the log page tells the model how the command ended");
+  assert.ok(page.finishedAt);
+  assert.deepEqual([main.unread(), child.unread()], [[own.id], []]);
+  assert.equal((await main.bindings.get(own.id)).state, "completed");
+  assert.deepEqual(main.unread(), []);
+  // A cancel request on a finished execution returns that terminal record too.
+  const cancelled = await main.bindings.start("echo again", {});
+  main.finish(cancelled.id);
+  await main.settled(cancelled.id);
+  assert.equal((await main.bindings.cancel(cancelled.id)).state, "completed");
+  assert.deepEqual(main.unread(), []);
+  // Logs of a command that is still running carry no outcome and keep nothing read.
+  const running = await main.bindings.start("sleep", {});
+  const runningPage = await main.bindings.logs(running.id);
+  assert.equal(runningPage.state, undefined);
+  main.finish(running.id);
+  await main.settled(running.id);
+  assert.deepEqual(main.unread(), [running.id]);
 });
 
 test("Transfer binding exposes only owned Workspaces and rechecks Runner access after permission", async () => {

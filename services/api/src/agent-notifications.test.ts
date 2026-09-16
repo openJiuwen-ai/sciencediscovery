@@ -38,6 +38,27 @@ test("completion is idempotent, scoped to its Agent, and retained until acknowle
   assert.equal(inbox.prepareDelivery(main), undefined);
 });
 
+test("a result the owner already read is marked read by source, leaving other records and owners unread", (context) => {
+  const { inbox, time } = fixture(context);
+  inbox.complete(main, "seen", "Finished while the model was waiting");
+  inbox.complete(main, "unseen", "Finished in the background");
+  inbox.complete(child, "seen", "Same execution id, different owner");
+  inbox.createTimer(main, { dueAt: 2_000, message: "Check later" });
+  time(2_000);
+  inbox.poll();
+  assert.equal(inbox.markRead(main, "execution", "seen"), true);
+  assert.equal(inbox.markRead(main, "execution", "seen"), false, "marking twice is idempotent");
+  assert.equal(inbox.markRead(main, "execution", "never-recorded"), false);
+  // The timer for the same owner and the child's own record are untouched.
+  assert.deepEqual(inbox.unread(main).map((notice) => `${notice.kind}:${notice.sourceId}`).sort(), ["execution:unseen", "timer:" + inbox.timers(main)[0]!.id].sort());
+  assert.equal(inbox.unread(child).length, 1);
+  assert.deepEqual(inbox.pendingOwners().map((owner) => owner.agentId).sort(), ["child", "main"]);
+  inbox.markRead(main, "execution", "unseen");
+  inbox.markRead(main, "timer", inbox.timers(main)[0]!.id);
+  assert.equal(inbox.prepareDelivery(main), undefined, "an owner with nothing unread is not woken");
+  assert.deepEqual(inbox.pendingOwners().map((owner) => owner.agentId), ["child"]);
+});
+
 test("stop invalidates a prepared delivery and cancels timers but retains completion records", (context) => {
   const { inbox, time } = fixture(context);
   inbox.createTimer(main, { dueAt: 2_000, message: "Check progress" });

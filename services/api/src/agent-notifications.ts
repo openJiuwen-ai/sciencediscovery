@@ -173,6 +173,14 @@ export class AgentNotifications {
     });
   }
 
+  /** The owner's model has already read this record through a tool result, so
+   * the retained notice would only wake it to read the same thing again. Marks
+   * one (owner, kind, source) as read; nothing else in the inbox is touched. */
+  markRead(owner: ExecutionOwner, kind: AgentNotification["kind"], sourceId: string): boolean {
+    return this.db.prepare("UPDATE agent_notifications SET read_at = ? WHERE session = ? AND agent = ? AND kind = ? AND source = ? AND read_at IS NULL")
+      .run(this.clock(), owner.sessionId, owner.agentId, kind, sourceId).changes > 0;
+  }
+
   complete(owner: ExecutionOwner, executionId: string, message: string): void {
     this.transaction(() => {
       this.insert(owner, "execution", executionId, message);
