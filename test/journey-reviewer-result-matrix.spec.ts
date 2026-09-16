@@ -68,7 +68,7 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
     });
     await journey.step("核对 Deep 的矛盾、降级与失败", "数值矛盾可见；来源降级不伪装成报告缺陷；失败项保留失败状态。", async () => {
       const all = page.locator(".reviewer-specialist-panel");
-      await expect(all.filter({ hasText: "deep-contradiction.md" })).toContainText("Computation evidence contradiction");
+      await expect(all.filter({ hasText: "deep-contradiction.md" })).toContainText("Computation contradiction");
       await expect(all.filter({ hasText: "deep-inconclusive.md" })).not.toContainText("Paper Reader timeout");
       await expect(all.filter({ hasText: "Review incomplete" })).toContainText("Review failed");
     });
