@@ -1986,6 +1986,16 @@ export function App() {
       }
     }));
     const subagentsByRun = subagentsByRootRun(sessionRunItems, subagentItems);
+    if (activeRun) {
+      // A wake turn reopens a child inside a later run than the one that
+      // created it. That run's replay names the child, so its lane and catalog
+      // snapshot are read for this run as well; otherwise the card would show
+      // the child starting for as long as the turn lasts.
+      const known = new Set((subagentsByRun.get(activeRun.id) ?? []).map((subagent) => subagent.id));
+      const reopened = new Set(replayEvents.flatMap((record) => record.event.type === "subagent.updated" ? [record.event.subagent.id] : []));
+      const extra = subagentItems.filter((subagent) => reopened.has(subagent.id) && !known.has(subagent.id));
+      if (extra.length) subagentsByRun.set(activeRun.id, [...(subagentsByRun.get(activeRun.id) ?? []), ...extra]);
+    }
     const childStreamEvents = await Promise.all([...subagentsByRun].flatMap(([runId, runSubagents]) =>
       runSubagents.map(async (subagent) => {
         try {

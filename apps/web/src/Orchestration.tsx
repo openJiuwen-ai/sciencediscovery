@@ -51,8 +51,11 @@ export function OrchestrationPanel(props: ActivityCardDisclosure & { plans:RunPl
 function subagentSummary(subagent: Subagent, t: Translate): string {
   if (subagent.status === "running") {
     const step = subagent.steps.findLast((candidate) => candidate.status === "running") ?? subagent.steps.at(-1);
-    return step
-      ? t("subagent.current", { label: subagentStepLabel(step, t), preview: subagentStepPreview(step, t) })
+    if (step) return t("subagent.current", { label: subagentStepLabel(step, t), preview: subagentStepPreview(step, t) });
+    // A snapshot that carries no step still says how far the work has come:
+    // a child on its second turn is running, not starting.
+    return subagent.turnCount > 0
+      ? t("subagent.current", { label: t("subagent.step.turn", { turn: subagent.turnCount }), preview: t("subagent.step.started") })
       : t("subagent.starting");
   }
   const parts = [subagent.input.subagentType ?? "general-purpose", t("subagent.turns", { count: subagent.turnCount, max: subagent.maxTurns })];
