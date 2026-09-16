@@ -59,6 +59,7 @@ test("中文界面保留 Reviewer Specialist 名称并本地化审核控制项",
         });
         expect(response.ok()).toBeTruthy();
         await openProjectSession(page, fixture);
+        await page.locator(".workspace-fold").filter({ hasText: "Reviewer Specialist" }).locator("summary").click();
         await expect(page.locator(".reviewer-control-card")).toContainText("Reviewer Specialist");
       },
     );
@@ -69,11 +70,10 @@ test("中文界面保留 Reviewer Specialist 名称并本地化审核控制项",
       async () => {
         const card = page.locator(".reviewer-control-card");
         await expect(card).toContainText("内置专家");
-        await expect(card).toContainText("自动审核");
-        await expect(card).toContainText("审核级别");
-        await expect(card.getByRole("button", { name: "开始审核", exact: true })).toBeVisible();
-        await expect(card.getByRole("option", { name: "快速", exact: true })).toBeVisible();
-        await expect(card.getByRole("option", { name: "深度", exact: true })).toBeVisible();
+        await expect(card).toContainText("自动审查");
+        await expect(card).toContainText("级别");
+        await expect(card.getByRole("button", { name: "运行审查", exact: true })).toBeVisible();
+        await expect(card.locator("select option")).toHaveText(["快速", "深入"]);
       },
     );
 
