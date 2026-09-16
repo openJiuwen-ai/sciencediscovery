@@ -48,6 +48,8 @@ export interface SourceChainConfig {
   readonly unpaywall?: UnpaywallConfig;
   /** CORE API key (env SCIENCE_AGENT_CORE_API_KEY); absent → connector skips. */
   readonly coreApiKey?: string;
+  /** Semantic Scholar API key (env SCIENCE_AGENT_S2_API_KEY); absent → keyless tier. */
+  readonly s2ApiKey?: string;
 }
 
 export interface SourceChain {
@@ -69,7 +71,7 @@ export function buildSourceChain(config: SourceChainConfig, onWarn?: (message: s
     createEuropePmcConnector(config.transport),
     createOpenAlexConnector(config.transport, config.openalex ?? {}),
     createPubMedConnector(config.transport),
-    createSemanticScholarConnector(config.transport),
+    createSemanticScholarConnector(config.transport, config.s2ApiKey),
   ];
   return {
     connectors,

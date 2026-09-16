@@ -19,10 +19,10 @@ import test from "node:test";
 
 import { normalizeArxivId, parseArxivEntries } from "./arxiv.js";
 import { epmcToRef, createEuropePmcConnector } from "./europepmc.js";
-import { deinvertAbstract, openAlexToRef } from "./openalex.js";
+import { deinvertAbstract, openAlexToRef, createOpenAlexConnector } from "./openalex.js";
 import { parsePubmedArticles } from "./pubmed.js";
 import { RateLimiter } from "./rate-limiter.js";
-import { s2ToRef } from "./semantic-scholar.js";
+import { s2ToRef, createSemanticScholarConnector } from "./semantic-scholar.js";
 import { downloadPaperPdf, searchAcrossChain } from "./source-chain.js";
 import { FixtureScholarlyTransport, fixtureFileName, type ScholarlyResponse, type ScholarlyTransport } from "./transport.js";
 import { NotFoundError, RateLimitError, paperDedupKey, type PaperConnector, type PaperRef } from "./types.js";
@@ -371,4 +371,62 @@ test("fetchPdf follows redirects manually and re-validates every hop", async () 
   // Both the initial URL AND the redirect target passed the SSRF guard.
   assert.deepEqual(asserted, ["https://a.test/p.pdf", "https://evil.test/p.pdf"]);
   assert.equal(outcome.source, "redirector");
+});
+
+test("semantic scholar sends the API key header only when configured", async () => {
+  const seen: Array<Record<string, string> | undefined> = [];
+  const transport: ScholarlyTransport = {
+    async get(url, options) {
+      seen.push(options?.headers);
+      return {
+        status: 200,
+        url,
+        header: () => null,
+        text: async () => "",
+        json: async () => ({ data: [] }),
+        bytes: async () => new Uint8Array(),
+      };
+    },
+  };
+  await createSemanticScholarConnector(transport, "secret-key").search("ebola", 1);
+  assert.equal(seen[0]?.["x-api-key"], "secret-key");
+  await createSemanticScholarConnector(transport).search("ebola", 1);
+  assert.equal(seen[1], undefined);
+});
+
+test("openalex citation fallback resolves arXiv-only refs by guarded title search", async () => {
+  const calls: string[] = [];
+  const work = {
+    id: "https://openalex.org/W3196281824",
+    title: "Mapping of Ebola virus spillover",
+    referenced_works: ["https://openalex.org/W1"],
+  };
+  const transport: ScholarlyTransport = {
+    async get(url) {
+      calls.push(url);
+      const body = url.includes("/works?search=")
+        ? { results: [work, { id: "https://openalex.org/W9", title: "Unrelated title" }] }
+        : url.includes("filter=openalex_id")
+          ? { results: [{ id: "https://openalex.org/W1", title: "Cited work" }] }
+          : work;
+      return {
+        status: 200,
+        url,
+        header: () => null,
+        text: async () => "",
+        json: async () => body,
+        bytes: async () => new Uint8Array(),
+      };
+    },
+  };
+  const connector = createOpenAlexConnector(transport, {});
+  const refs = await connector.resolveCitations!(ref({ arxivId: "1605.02833", doi: null, title: "Mapping of Ebola virus spillover" }));
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0]?.title, "Cited work");
+  // No DOI key lookup happened — the title search guarded the resolution.
+  assert.ok(calls[0]?.includes("/works?search="));
+  // A title that matches nothing yields no resolution (never the wrong paper).
+  calls.length = 0;
+  const empty = await connector.resolveCitations!(ref({ doi: null, title: "No such paper exists anywhere" }));
+  assert.deepEqual(empty, []);
 });
