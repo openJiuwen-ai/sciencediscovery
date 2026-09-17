@@ -70,21 +70,6 @@ interface ProviderDraft {
   tokenOptional: boolean;
 }
 
-function presetDraft(preset: ModelProviderPreset): ProviderDraft {
-  return {
-    apiProtocol: preset.apiProtocol,
-    apiToken: "",
-    apiVariant: preset.apiVariant,
-    baseUrl: preset.baseUrl,
-    modelDiscovery: preset.modelDiscovery,
-    name: preset.name,
-    presetId: preset.id,
-    proxyPolicy: "inherit",
-    removeToken: false,
-    tokenOptional: preset.tokenOptional === true,
-  };
-}
-
 function providerDraft(provider: ModelProvider): ProviderDraft {
   return {
     apiProtocol: provider.apiProtocol,
@@ -100,18 +85,6 @@ function providerDraft(provider: ModelProvider): ProviderDraft {
     tokenOptional: provider.tokenOptional,
   };
 }
-
-const CUSTOM_PROVIDER: ProviderDraft = {
-  apiProtocol: "openai-chat-completions",
-  apiToken: "",
-  apiVariant: "openai",
-  baseUrl: "",
-  modelDiscovery: "openai-models",
-  name: "",
-  proxyPolicy: "inherit",
-  removeToken: false,
-  tokenOptional: false,
-};
 
 function mergedFact<T>(remote: T | undefined, catalog: T | undefined): T | undefined {
   return remote !== undefined ? remote : catalog;
@@ -685,7 +658,7 @@ function ProviderEditorPanel({
   const { t } = useLocale();
   return <section className="provider-editor" aria-label={t("providers.editor.title")}>
     <div className="provider-section-heading">
-      <div><h4>{draft.providerId ? t("providers.editor.edit") : t("providers.editor.create")}</h4><p>{draft.presetId ? t("providers.editor.presetHelp") : t("providers.editor.customHelp")}</p></div>
+      <div><h4>{t("providers.editor.edit")}</h4><p>{draft.presetId ? t("providers.editor.presetHelp") : t("providers.editor.customHelp")}</p></div>
       <div className="provider-editor-actions">
         {draft.providerId ? <button className="danger-button compact-button" disabled={busy} onClick={onDelete} type="button">{t("common.delete")}</button> : null}
         <button className="secondary-button compact-button" disabled={busy} onClick={onCancel} type="button">{t("common.cancel")}</button>
@@ -758,14 +731,11 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   proxySettings,
 }, ref) {
   const { t } = useLocale();
-  const [wizardOpen, setWizardOpen] = useState(() => initialWizardOpen ?? false);
+  // 新建服务商只走连接模型向导；没有已配置项时向导默认展开，成为首启路径。
+  const [wizardOpen, setWizardOpen] = useState(() => initialWizardOpen === true || providers.length === 0);
   const [draft, setDraft] = useState<ProviderDraft>();
   const [listings, setListings] = useState<Record<string, ListingState>>({});
   const [expandedId, setExpandedId] = useState<string>();
-  // The preset dropdown and custom entry stay behind one "Add provider"
-  // button; with nothing configured yet it starts open as the first-run path,
-  // but stays closed if the wizard is initially open.
-  const [addOpen, setAddOpen] = useState(() => !providers.length && !initialWizardOpen);
   const [busy, setBusy] = useState(false);
   const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
   const listingRequests = useRef(new Map<string, number>());
@@ -773,7 +743,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   useEffect(() => {
     if (initialWizardOpen) {
       setWizardOpen(true);
-      setAddOpen(false);
     }
   }, [initialWizardOpen]);
   const draftDirty = draftFingerprint(draft) !== draftFingerprint(baselineDraft.current);
@@ -836,20 +805,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 
   function operationError(reason: unknown, fallback: string): string | Error {
     return providerOperationError(reason, fallback, t("providers.delete.referenced"));
-  }
-
-  function selectPreset(preset: ModelProviderPreset): void {
-    if (!allowDraftReplacement()) return;
-    setWizardOpen(false);
-    selectDraft(presetDraft(preset));
-    setAddOpen(false);
-  }
-
-  function selectCustomProvider(): void {
-    if (!allowDraftReplacement()) return;
-    setWizardOpen(false);
-    selectDraft({ ...CUSTOM_PROVIDER });
-    setAddOpen(false);
   }
 
   function editProvider(provider: ModelProvider): void {
@@ -1070,13 +1025,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
         <button
           aria-expanded={wizardOpen}
           className="secondary-button compact-button"
-          onClick={() => {
-            setWizardOpen((current) => {
-              const next = !current;
-              if (next) setAddOpen(false);
-              return next;
-            });
-          }}
+          onClick={() => setWizardOpen((current) => !current)}
           type="button"
         >
           {wizardOpen ? t("wizard.toggleHide") : t("wizard.toggleShow")}
@@ -1087,10 +1036,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           client={client}
           existingModels={models}
           existingProviders={providers}
-          onClose={() => {
-            setWizardOpen(false);
-            if (!providers.length) setAddOpen(true);
-          }}
           {...(onDefaultModelSet ? { onDefaultModelSet } : {})}
           onError={onError}
           onModelsChange={onModelsChange}
@@ -1128,45 +1073,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           testModel={(modelId) => client.testModel(modelId)}
         />)}
       </div> : <p className="muted">{t("providers.configured.empty")}</p>}
-      <div className="provider-add">
-        <button
-          aria-expanded={addOpen}
-          className="provider-add-button"
-          onClick={() => {
-            setAddOpen((current) => {
-              const next = !current;
-              if (next) setWizardOpen(false);
-              return next;
-            });
-          }}
-          type="button"
-        >
-          {t("providers.add.title")}
-        </button>
-        {addOpen ? <div className="provider-add-panel">
-          <select
-            aria-label={t("providers.add.title")}
-            onChange={(event) => {
-              const preset = presets.find((candidate) => candidate.id === event.target.value as ModelProviderPresetId);
-              if (preset) selectPreset(preset);
-            }}
-            value=""
-          >
-            <option value="">{t("providers.add.placeholder")}</option>
-            {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}{preset.tokenOptional ? ` · ${t("providers.token.optional")}` : ""}</option>)}
-          </select>
-          <button className="secondary-button compact-button" onClick={selectCustomProvider} type="button">{t("providers.custom.name")}</button>
-        </div> : null}
-      </div>
-      {draft && !draft.providerId ? <ProviderEditorPanel
-        busy={busy}
-        draft={draft}
-        onCancel={cancelDraft}
-        onChange={change}
-        onDelete={() => void deleteProvider()}
-        onSave={() => void saveProvider()}
-        {...(proxySettings ? { proxySettings } : {})}
-      /> : null}
     </section>
 
   </div>;

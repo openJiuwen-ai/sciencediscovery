@@ -767,8 +767,7 @@ test("validation errors: missing key prevents client API calls", async () => {
   assert.match(extractText(errorAlert), /请填写 API Key/);
 });
 
-test("renders advanced configuration button when onClose is provided and triggers callback", async () => {
-  let closed = false;
+test("advanced configuration expands fine-tuning fields in place; the wizard stays mounted", async () => {
   let renderer: ReactTestRenderer;
 
   await act(async () => {
@@ -780,19 +779,216 @@ test("renders advanced configuration button when onClose is provided and trigger
           client: createMockClient(),
           existingModels: [],
           existingProviders: [],
-          onClose: () => {
-            closed = true;
-          },
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
     );
   });
 
+  // The wizard card is present and the advanced area starts hidden.
+  assert.equal(renderer!.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
+
   const manualBtn = renderer!.root.findByProps({ className: "secondary-button compact-button" });
   assert.equal(extractText(manualBtn), "高级配置");
+  assert.equal(manualBtn.props["aria-expanded"], false);
   await act(async () => {
     manualBtn.props.onClick();
   });
-  assert.equal(closed, true);
+
+  // The wizard stays mounted; the advanced area expands inside the card.
+  assert.equal(renderer!.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 1);
+  const overrideInput = renderer!.root.findByProps({ id: "wizard-base-url-override" });
+  assert.equal(overrideInput.props.placeholder, "https://api.deepseek.com");
+  const expandedBtn = renderer!.root.findByProps({ className: "secondary-button compact-button" });
+  assert.equal(expandedBtn.props["aria-expanded"], true);
+
+  // Toggling again collapses the area; the wizard still remains.
+  await act(async () => {
+    expandedBtn.props.onClick();
+  });
+  assert.equal(renderer!.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
+});
+
+test("advanced preset fields: base URL override is honored when creating a provider", async () => {
+  let createdProviderInput: any;
+
+  const client = createMockClient({
+    createProvider: async (body: any) => {
+      createdProviderInput = body;
+      return {
+        apiProtocol: body.apiProtocol,
+        apiVariant: body.apiVariant,
+        baseUrl: body.baseUrl,
+        createdAt: "2026-09-17T00:00:00.000Z",
+        id: "provider-deepseek-1",
+        modelDiscovery: body.modelDiscovery,
+        name: body.name,
+        presetId: body.presetId,
+        proxyPolicy: body.proxyPolicy ?? "inherit",
+        tokenOptional: false,
+        updatedAt: "2026-09-17T00:00:00.000Z",
+      } as ModelProvider;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          existingModels: [],
+          existingProviders: [],
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  await act(async () => {
+    renderer!.root.findByProps({ className: "secondary-button compact-button" }).props.onClick();
+  });
+  const overrideInput = renderer!.root.findByProps({ id: "wizard-base-url-override" });
+  await act(async () => {
+    overrideInput.props.onChange({ target: { value: "https://gateway.example.test/v1" } });
+  });
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  await act(async () => {
+    keyInput.props.onChange({ target: { value: "sk-test" } });
+  });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.equal(createdProviderInput?.baseUrl, "https://gateway.example.test/v1");
+  assert.equal(createdProviderInput?.proxyPolicy, "inherit");
+});
+
+test("advanced custom fields: protocol and variant drive creation, and the listing default still applies", async () => {
+  let createdProviderInput: any;
+  let addedModelInput: any;
+
+  const client = createMockClient({
+    addProviderModel: async (providerId: string, body: any) => {
+      addedModelInput = { providerId, ...body };
+      return {
+        contextWindow: 32000,
+        id: `profile-${body.model}`,
+        model: body.model,
+        name: body.label || body.model,
+        providerId,
+      } as ModelProfile;
+    },
+    createProvider: async (body: any) => {
+      createdProviderInput = body;
+      return {
+        apiProtocol: body.apiProtocol,
+        apiVariant: body.apiVariant,
+        baseUrl: body.baseUrl,
+        createdAt: "2026-09-17T00:00:00.000Z",
+        id: "provider-custom-1",
+        modelDiscovery: body.modelDiscovery,
+        name: body.name,
+        proxyPolicy: body.proxyPolicy ?? "inherit",
+        tokenOptional: false,
+        updatedAt: "2026-09-17T00:00:00.000Z",
+      } as ModelProvider;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          existingModels: [],
+          existingProviders: [],
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  const select = renderer!.root.findByProps({ id: "wizard-provider-select" });
+  await act(async () => {
+    select.props.onChange({ target: { value: "custom" } });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "https://claude.example.test" } });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-custom" } });
+  });
+
+  // Expand advanced fields and pick Anthropic Messages.
+  await act(async () => {
+    renderer!.root.findByProps({ className: "secondary-button compact-button" }).props.onClick();
+  });
+  const protocolSelect = renderer!.root.findByProps({ id: "wizard-api-protocol" });
+  await act(async () => {
+    protocolSelect.props.onChange({ target: { value: "anthropic-messages" } });
+  });
+  // Variant follows the protocol default automatically.
+  const variantSelect = renderer!.root.findByProps({ id: "wizard-api-variant" });
+  assert.equal(variantSelect.props.value, "anthropic-adaptive");
+
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.equal(createdProviderInput?.apiProtocol, "anthropic-messages");
+  assert.equal(createdProviderInput?.apiVariant, "anthropic-adaptive");
+  assert.equal(createdProviderInput?.modelDiscovery, "anthropic-models");
+  // No explicit model identifier: the first listed model is registered.
+  assert.equal(addedModelInput?.model, "listed-model-first");
+});
+
+test("advanced area with an existing matching provider shows the reuse note instead of fields", async () => {
+  const existingDeepSeekProvider: ModelProvider = {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    hasApiToken: true,
+    id: "existing-provider-deepseek-1",
+    modelDiscovery: "openai-models",
+    name: "DeepSeek",
+    presetId: "deepseek",
+    proxyPolicy: "inherit",
+    tokenOptional: false,
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client: createMockClient(),
+          existingModels: [],
+          existingProviders: [existingDeepSeekProvider],
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  await act(async () => {
+    renderer!.root.findByProps({ className: "secondary-button compact-button" }).props.onClick();
+  });
+
+  const note = renderer!.root.findByProps({ className: "wizard-advanced-note" });
+  assert.match(extractText(note), /已在下方列表中/);
+  // No creation-time fields: the existing provider's endpoint wins.
+  assert.equal(renderer!.root.findAllByProps({ id: "wizard-base-url-override" }).length, 0);
 });

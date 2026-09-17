@@ -24,18 +24,19 @@ test.use({ locale: "zh-CN" });
 /**
  * E2E-META
  * Purpose: 模型连接（GitCode #92 / GitHub #39）：用户视角全流程覆盖
+ *   - 连接模型是唯一新建入口：注册表不再有独立的「添加 Provider」面板，空态下连接卡片默认展开；
  *   - 成功路径：通过向导配置模型并测通，自动登记服务商模型列表的第一项并切换全局默认任务模型；
  *   - 失败路径：坏 Key 鉴权失败可读报错、输入保留、临时对象回滚、不污染全局默认值；
  *   - 保护既有配置：已有 Provider 在向导中遇到坏 Key 时不被覆盖；
- *   - 预设联动：官方 Key 申请链接与按量计费提醒，不再有推荐模型展示；
- *   - 界面自检：「高级配置」单行完整显示，label 紧贴对应输入框，向导展开时不与手动「添加 Provider」面板同时铺开。
+ *   - 高级配置：在连接卡片内展开精细字段，不收起向导、不关系统设置，与「收起」/底栏关闭互不串；
+ *   - 界面自检：「高级配置」单行完整显示，label 紧贴对应输入框。
  * Steps:
- *   1. 打开系统设置并进入模型注册表，展开连接模型，验证无两张空白表单同时铺开。
+ *   1. 打开模型注册表：空态下连接模型默认展开，是唯一新建入口，无独立添加面板与常驻编辑器。
  *   2. 检查预置服务商联动、官方 Key 申请链接、计费提示，以及无推荐模型展示、按钮单行、label 贴近控件。
  *   3. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
  *   4. 成功路径：模型标识留空，填入有效凭证测试并启用，验证列表第一项测通并写入全局默认任务模型。
  *   5. 保护已有配置：对已有服务商填入坏 Key，验证原有 Provider 与 Token 未被破坏、默认模型未变。
- *   6. 切回高级配置：点击高级配置，系统设置保持打开、向导收起，原有注册表与手动面板恢复可用；底栏取消仍能关闭对话框。
+ *   6. 高级配置在卡片内展开精细字段：向导与系统设置都保持打开，服务商列表仍在；「收起」与底栏取消对照验证。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
  * Type: mocked
  * LLM: none — 使用旅程自带的本地 HTTP stub，无外部调用。
@@ -174,26 +175,26 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
 
   try {
     await journey.step(
-      "打开模型注册表并展开连接模型，验证无两张空白表单冲突",
-      "系统设置中点击模型注册表，展开连接模型；面板展开时，手动的「添加 Provider」面板保持收起，避免两张空白表单同时铺开。",
+      "打开模型注册表：空态下连接模型是唯一新建入口，无独立添加面板",
+      "系统设置中点击模型注册表；没有已配置服务商时连接模型卡片默认展开，作为唯一新建入口；注册表不再有独立的「添加 Provider」按钮、预置下拉或自定义表单，编辑器默认隐藏。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
 
-        // 点击展开连接模型
-        const wizardToggle = dialog.getByRole("button", { name: /(连接模型|快速连接)/ });
-        await expect(wizardToggle).toBeVisible();
-        await wizardToggle.click();
-
-        // 向导展示
-        const wizardSection = dialog.locator(".model-connect-wizard");
+        // 空态下向导默认展开（首启路径）；若已收起则点标题行开关展开
+        let wizardSection = dialog.locator(".model-connect-wizard");
+        if (!await wizardSection.count()) {
+          await dialog.getByRole("button", { name: /连接模型/ }).click();
+        }
+        wizardSection = dialog.locator(".model-connect-wizard");
         await expect(wizardSection).toBeVisible();
         await expect(wizardSection.getByRole("heading", { name: "连接模型" })).toBeVisible();
 
-        // 视觉自检：手动的「添加 Provider」面板必须为收起状态，不得同时展开两张空白表单
-        await expect(dialog.locator(".provider-add-panel")).toHaveCount(0);
+        // 新建入口已并入连接模型：不再有独立的添加 Provider 按钮、面板或常驻编辑器
+        await expect(dialog.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
+        await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
 
         // 密度与非遮挡自检：默认打开无需滚动，服务商、Key、申请链接及主按钮完全在对话框可见区域内，不被底栏遮挡
         const keyInput = wizardSection.locator("#wizard-api-key");
@@ -381,29 +382,52 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "切回高级配置：点击高级配置，向导收起且系统设置保持打开，注册表与手动面板恢复可用",
-      "向导内点击「高级配置」只收起向导：系统设置对话框仍在、模型注册表标题与底栏按钮都在，展示已配置服务商列表与手动添加 Provider 入口；底栏「取消并关闭」才负责关闭对话框，两者互不串。",
+      "高级配置在卡片内展开精细设置：向导与系统设置都保持打开，服务商列表仍在",
+      "连接模型卡片上点「高级配置」不会收起或关闭任何东西：卡片仍在，并在卡片内展开基础 URL 等精细字段；系统设置对话框仍在「模型注册表」，已配置服务商列表可见。标题行「收起」才负责收起向导，底栏「取消并关闭」才关闭对话框，三者互不串。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
 
-        // 点击向导内部的“高级配置”
-        const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
-        await manualBtn.click();
+        // 若向导已收起则先展开
+        if (!await wizardSection.count()) {
+          await dialog.getByRole("button", { name: /连接模型/ }).click();
+        }
 
-        // 关键回归：系统设置对话框不被关闭，仍停在模型注册表，底栏按钮完好
+        // 自定义路径填一个新名称（无既有服务商匹配），点「高级配置」
+        await wizardSection.locator("#wizard-provider-select").selectOption("custom");
+        await wizardSection.locator("#wizard-custom-name").fill(`高级配置展开检查 ${Date.now()}`);
+        await wizardSection.locator("#wizard-custom-url").fill("");
+        await wizardSection.getByRole("button", { name: "高级配置" }).click();
+
+        // 关键回归：向导卡片仍在，高级字段在卡片内展开（自定义路径的协议/变种选择器）
+        await expect(wizardSection).toBeVisible();
+        await expect(wizardSection.locator(".wizard-advanced")).toBeVisible();
+        await expect(wizardSection.locator("#wizard-api-protocol")).toBeVisible();
+
+        // 展开后卡片增高，操作按钮被滚动留在对话框可见区域内、不压底栏
+        const submitBox = await wizardSection.locator(".wizard-submit-button").boundingBox();
+        const footerBox = await dialog.locator(".system-config-footer").boundingBox();
+        expect(submitBox).not.toBeNull();
+        expect(footerBox).not.toBeNull();
+        expect(submitBox!.y + submitBox!.height).toBeLessThan(footerBox!.y);
+
+        // 系统设置保持打开，注册表与已配置列表都在，底栏按钮完好
         await expect(dialog).toBeVisible();
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
+        await expect(dialog.getByRole("heading", { name: "已配置服务商" })).toBeVisible();
         await expect(dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" })).toBeVisible();
 
-        // 向导收起
-        await expect(wizardSection).toHaveCount(0);
+        // 不再有独立的添加 Provider 入口
+        await expect(dialog.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
 
-        // 已配置的服务商列表与添加按钮可见
-        await expect(dialog.getByRole("heading", { name: "已配置服务商" })).toBeVisible();
-        await expect(dialog.getByRole("button", { name: /添加 Provider/ }).first()).toBeVisible();
+        // 对照：标题行「收起」才负责收起向导
+        await dialog.getByRole("button", { name: "收起" }).click();
+        await expect(dialog.locator(".model-connect-wizard")).toHaveCount(0);
+        await expect(dialog).toBeVisible();
 
-        // 对照：底栏「取消并关闭」才关闭对话框，证明与「高级配置」不是同一路径
+        // 再展开后，底栏「取消并关闭」才关闭对话框
+        await dialog.getByRole("button", { name: /连接模型/ }).click();
+        await expect(dialog.locator(".model-connect-wizard")).toBeVisible();
         await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         await expect(dialog).toBeHidden();
       },

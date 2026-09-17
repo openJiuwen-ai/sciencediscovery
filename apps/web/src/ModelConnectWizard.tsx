@@ -12,29 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
+  ModelApiProtocol,
+  ModelApiVariant,
   ModelConnectivityTestResult,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
   ModelProviderPresetId,
   ProviderModelList,
+  ProxyPolicy,
   ProxySettingsDetails,
   RuntimeSettingsOverrides,
+} from "@sciencediscovery/schema";
+import {
+  DEFAULT_MODEL_API_VARIANT,
+  DEFAULT_MODEL_DISCOVERY,
+  MODEL_API_VARIANTS,
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
+import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
 import { useLocale } from "./i18n/index.js";
 
 export interface ModelConnectWizardProps {
   client: SettingsApiClient;
   existingModels: ModelProfile[];
   existingProviders: ModelProvider[];
-  onClose?: () => void;
   onDefaultModelSet?: (modelId: string) => Promise<void>;
   onError?: (error: Error | string) => void;
   onModelsChange?: (models: ModelProfile[]) => void;
@@ -49,7 +57,6 @@ export function ModelConnectWizard({
   client,
   existingModels,
   existingProviders,
-  onClose,
   onDefaultModelSet,
   onError,
   onModelsChange,
@@ -57,6 +64,7 @@ export function ModelConnectWizard({
   onProvidersChange,
   onSuccess,
   presets,
+  proxySettings,
 }: ModelConnectWizardProps) {
   const { t } = useLocale();
 
@@ -66,6 +74,19 @@ export function ModelConnectWizard({
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customName, setCustomName] = useState("");
   const [customModelId, setCustomModelId] = useState("");
+  // 「高级配置」在卡片内展开精细字段，永不收起向导本身。
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const footerRef = useRef<HTMLDivElement>(null);
+  // Expanding grows the card; keep the expanded fields and the action row
+  // inside the dialog's scroll viewport instead of letting them slip under
+  // the settings footer.
+  useEffect(() => {
+    if (advancedOpen) footerRef.current?.scrollIntoView({ block: "nearest" });
+  }, [advancedOpen]);
+  const [baseUrlOverride, setBaseUrlOverride] = useState("");
+  const [customProtocol, setCustomProtocol] = useState<ModelApiProtocol>("openai-chat-completions");
+  const [customVariant, setCustomVariant] = useState<ModelApiVariant>("openai");
+  const [advancedProxyPolicy, setAdvancedProxyPolicy] = useState<ProxyPolicy>("inherit");
 
   const [testing, setTesting] = useState(false);
   const [validationError, setValidationError] = useState<string>();
@@ -80,17 +101,29 @@ export function ModelConnectWizard({
   // listing instead of any curated recommendation.
   const explicitModelId = isCustom ? customModelId.trim() : "";
   const tokenOptional = selectedPreset?.tokenOptional === true;
+  const matchingProvider = existingProviders.find((candidate) =>
+    selectedPreset
+      ? (candidate.presetId === selectedPreset.id)
+      : (candidate.name === (customName.trim() || "Custom") && candidate.baseUrl === customBaseUrl.trim())
+  );
 
   function handleProviderChange(value: string) {
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
+    setBaseUrlOverride("");
     if (value === "custom") {
       setIsCustom(true);
     } else {
       setIsCustom(false);
       setSelectedPresetId(value);
     }
+  }
+
+  function handleCustomProtocolChange(value: string) {
+    const apiProtocol = value as ModelApiProtocol;
+    setCustomProtocol(apiProtocol);
+    setCustomVariant(DEFAULT_MODEL_API_VARIANT[apiProtocol]);
   }
 
   // The model to register, test, and make the global default: the user's own
@@ -146,16 +179,12 @@ export function ModelConnectWizard({
         }
       } catch { /* ignore */ }
 
-      const matchingProvider = existingProviders.find((candidate) =>
-        selectedPreset
-          ? (candidate.presetId === selectedPreset.id)
-          : (candidate.name === (customName.trim() || "Custom") && candidate.baseUrl === customBaseUrl.trim())
-      );
-
       if (matchingProvider) {
         // Safe testing for existing provider:
         // DO NOT overwrite matchingProvider's apiToken before testing!
         // Instead, spin up a temporary testing provider with the candidate credentials.
+        // The existing provider's endpoint/protocol/proxy stay authoritative:
+        // the advanced fields only apply when creating a new provider.
         const tempInput = selectedPreset
           ? {
               apiProtocol: selectedPreset.apiProtocol,
@@ -169,14 +198,14 @@ export function ModelConnectWizard({
               tokenOptional: selectedPreset.tokenOptional === true,
             }
           : {
-              apiProtocol: "openai-chat-completions" as const,
+              apiProtocol: matchingProvider.apiProtocol,
               apiToken: apiKey.trim() || undefined,
-              apiVariant: "openai" as const,
-              baseUrl: customBaseUrl.trim(),
-              modelDiscovery: "openai-models" as const,
-              name: `${customName.trim() || "Custom"} (temp-test)`,
-              proxyPolicy: "inherit" as const,
-              tokenOptional: false,
+              apiVariant: matchingProvider.apiVariant,
+              baseUrl: matchingProvider.baseUrl,
+              modelDiscovery: matchingProvider.modelDiscovery,
+              name: `${matchingProvider.name} (temp-test)`,
+              proxyPolicy: matchingProvider.proxyPolicy || ("inherit" as const),
+              tokenOptional: matchingProvider.tokenOptional === true,
             };
 
         const tempProvider = await client.createProvider(tempInput);
@@ -254,27 +283,27 @@ export function ModelConnectWizard({
         onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
         onSuccess?.(profile, provider);
       } else {
-        // No existing provider: create directly
+        // No existing provider: create directly, honoring the advanced fields.
         const createInput = selectedPreset
           ? {
               apiProtocol: selectedPreset.apiProtocol,
               apiToken: apiKey.trim() || undefined,
               apiVariant: selectedPreset.apiVariant,
-              baseUrl: selectedPreset.baseUrl,
+              baseUrl: baseUrlOverride.trim() || selectedPreset.baseUrl,
               modelDiscovery: selectedPreset.modelDiscovery,
               name: selectedPreset.name,
               presetId: selectedPreset.id,
-              proxyPolicy: "inherit" as const,
+              proxyPolicy: advancedProxyPolicy,
               tokenOptional: selectedPreset.tokenOptional === true,
             }
           : {
-              apiProtocol: "openai-chat-completions" as const,
+              apiProtocol: customProtocol,
               apiToken: apiKey.trim() || undefined,
-              apiVariant: "openai" as const,
+              apiVariant: customVariant,
               baseUrl: customBaseUrl.trim(),
-              modelDiscovery: "openai-models" as const,
+              modelDiscovery: DEFAULT_MODEL_DISCOVERY[customProtocol],
               name: customName.trim() || "Custom",
-              proxyPolicy: "inherit" as const,
+              proxyPolicy: advancedProxyPolicy,
               tokenOptional: false,
             };
 
@@ -478,6 +507,71 @@ export function ModelConnectWizard({
           </div>
         ) : null}
 
+        {advancedOpen ? (
+          <div className="wizard-advanced">
+            {matchingProvider ? (
+              <p className="wizard-advanced-note">{t("wizard.advanced.existingNote")}</p>
+            ) : (
+              <div className="wizard-advanced-grid">
+                {selectedPreset ? (
+                  <div className="wizard-field">
+                    <label htmlFor="wizard-base-url-override">{t("wizard.customBaseUrlLabel")}</label>
+                    <input
+                      disabled={testing}
+                      id="wizard-base-url-override"
+                      onChange={(e) => setBaseUrlOverride(e.target.value)}
+                      placeholder={selectedPreset.baseUrl}
+                      type="url"
+                      value={baseUrlOverride}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="wizard-field">
+                      <label htmlFor="wizard-api-protocol">{t("settings.apiProtocol")}</label>
+                      <select
+                        disabled={testing}
+                        id="wizard-api-protocol"
+                        onChange={(e) => handleCustomProtocolChange(e.target.value)}
+                        value={customProtocol}
+                      >
+                        <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
+                        <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
+                        <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
+                      </select>
+                    </div>
+                    <div className="wizard-field">
+                      <label htmlFor="wizard-api-variant">{t("settings.apiVariant")}</label>
+                      <select
+                        disabled={testing}
+                        id="wizard-api-variant"
+                        onChange={(e) => setCustomVariant(e.target.value as ModelApiVariant)}
+                        value={customVariant}
+                      >
+                        {MODEL_API_VARIANTS[customProtocol].map((variant) => (
+                          <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+                {proxySettings ? (
+                  <div className="wizard-field">
+                    <label htmlFor="wizard-proxy-policy">{t("settings.llmProxy")}</label>
+                    <ProxyPolicySelect
+                      disabled={testing}
+                      id="wizard-proxy-policy"
+                      onChange={setAdvancedProxyPolicy}
+                      settings={proxySettings}
+                      value={advancedProxyPolicy}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : null}
+
         {validationError ? (
           <div className="wizard-alert wizard-alert-error" role="alert">
             <AlertCircleIcon size={16} />
@@ -499,7 +593,7 @@ export function ModelConnectWizard({
           </div>
         ) : null}
 
-        <div className="wizard-footer-row">
+        <div className="wizard-footer-row" ref={footerRef}>
           {/* The surrounding settings dialog closes when a press lands on its
               backdrop; a press on the wizard's own buttons must never take
               part in that gesture, even after future handler refactors. */}
@@ -524,16 +618,18 @@ export function ModelConnectWizard({
               )}
             </button>
 
-            {onClose ? (
-              <button
-                className="secondary-button compact-button"
-                disabled={testing}
-                onClick={onClose}
-                type="button"
-              >
-                {t("wizard.manualMode")}
-              </button>
-            ) : null}
+            {/* Advanced configuration expands fine-tuning fields inside the
+                card; it never unmounts the wizard. Showing/hiding the wizard
+                belongs to the registry heading toggle. */}
+            <button
+              aria-expanded={advancedOpen}
+              className="secondary-button compact-button"
+              disabled={testing}
+              onClick={() => setAdvancedOpen((open) => !open)}
+              type="button"
+            >
+              {t("wizard.manualMode")}
+            </button>
           </div>
         </div>
       </div>
