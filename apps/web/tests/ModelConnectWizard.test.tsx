@@ -221,8 +221,8 @@ test("successful flow: creates provider, adds model profile, tests connectivity,
 
   // Success alert is visible
   const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
-  assert.match(extractText(successAlert), /模型已连接并启用/);
-  assert.match(extractText(successAlert), /已成功测通 DeepSeek-V3 并设为全局默认任务模型/);
+  assert.match(extractText(successAlert), /模型已连接并保存/);
+  assert.match(extractText(successAlert), /已成功连接 DeepSeek-V3 并设为全局默认任务模型/);
   assert.match(extractText(successAlert), /88 ms/);
 });
 
@@ -556,4 +556,34 @@ test("validation errors: missing key or missing custom URL/model prevents client
   assert.equal(clientCalled, false);
   const errorAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
   assert.match(extractText(errorAlert), /请填写 API Key/);
+});
+
+test("renders advanced configuration button when onClose is provided and triggers callback", async () => {
+  let closed = false;
+  let renderer: ReactTestRenderer;
+
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client: createMockClient(),
+          existingModels: [],
+          existingProviders: [],
+          onClose: () => {
+            closed = true;
+          },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  const manualBtn = renderer!.root.findByProps({ className: "secondary-button compact-button" });
+  assert.equal(extractText(manualBtn), "高级配置");
+  await act(async () => {
+    manualBtn.props.onClick();
+  });
+  assert.equal(closed, true);
 });

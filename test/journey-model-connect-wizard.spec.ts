@@ -23,19 +23,19 @@ test.use({ locale: "zh-CN" });
 
 /**
  * E2E-META
- * Purpose: 一步式模型连接向导（GitCode #92 / GitHub #39）：用户视角全流程覆盖
+ * Purpose: 模型连接（GitCode #92 / GitHub #39）：用户视角全流程覆盖
  *   - 成功路径：通过向导配置模型并测通，自动登记推荐模型并切换全局默认任务模型；
  *   - 失败路径：坏 Key 鉴权失败可读报错、输入保留、临时对象回滚、不污染全局默认值；
  *   - 保护既有配置：已有 Provider 在向导中遇到坏 Key 时不被覆盖；
  *   - 预设联动：官方 Key 申请链接与按量计费提醒；
- *   - 界面自检：向导展开时不与手动「添加 Provider」面板同时铺开，并可平滑切回高级手动模式。
+ *   - 界面自检：向导展开时不与手动「添加 Provider」面板同时铺开，并可平滑切回高级配置。
  * Steps:
- *   1. 打开系统设置并进入模型注册表，展开一步向导，验证无两张空白表单同时铺开。
+ *   1. 打开系统设置并进入模型注册表，展开连接模型，验证无两张空白表单同时铺开。
  *   2. 检查预置服务商联动、官方 Key 申请链接与计费提示。
  *   3. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
  *   4. 成功路径：填入有效凭证测试并启用，验证自动测通并写入全局默认任务模型。
  *   5. 保护已有配置：对已有服务商填入坏 Key，验证原有 Provider 与 Token 未被破坏、默认模型未变。
- *   6. 切回高级配置：点击使用高级手动配置，向导收起，原有注册表与手动面板恢复可用。
+ *   6. 切回高级配置：点击高级配置，向导收起，原有注册表与手动面板恢复可用。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
  * Type: mocked
  * LLM: none — 使用旅程自带的本地 HTTP stub，无外部调用。
@@ -46,10 +46,10 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN
  * CostSideEffects: none
  */
-test("一步式模型连接向导成功、失败与配置保护全流程", { tag: "@mocked" }, async ({ journey, page }) => {
+test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(180_000);
   journey.scenario({
-    goal: "用户通过一步式模型连接向导配置模型：验证直达链接、计费提示、坏 Key 友好报错与回滚、有效 Key 自动设为全局默认模型、已有 Provider 凭据防覆盖保护及切回手动模式。",
+    goal: "用户通过模型连接向导配置模型：验证直达链接、计费提示、坏 Key 友好报错与回滚、有效 Key 自动设为全局默认模型、已有 Provider 凭据防覆盖保护及切回高级配置。",
     preconditions: [
       "隔离栈已启动，浏览器已持有访问令牌",
       "界面语言为 zh-CN",
@@ -137,23 +137,23 @@ test("一步式模型连接向导成功、失败与配置保护全流程", { tag
 
   try {
     await journey.step(
-      "打开模型注册表并展开一步向导，验证无两张空白表单冲突",
-      "系统设置中点击模型注册表，展开一步向导；向导展开时，手动的「添加 Provider」面板保持收起，避免两张空白表单同时铺开。",
+      "打开模型注册表并展开连接模型，验证无两张空白表单冲突",
+      "系统设置中点击模型注册表，展开连接模型；面板展开时，手动的「添加 Provider」面板保持收起，避免两张空白表单同时铺开。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
 
-        // 点击展开一步连接向导
-        const wizardToggle = dialog.getByRole("button", { name: /一步连接向导/ });
+        // 点击展开连接模型
+        const wizardToggle = dialog.getByRole("button", { name: /(连接模型|快速连接)/ });
         await expect(wizardToggle).toBeVisible();
         await wizardToggle.click();
 
         // 向导展示
         const wizardSection = dialog.locator(".model-connect-wizard");
         await expect(wizardSection).toBeVisible();
-        await expect(wizardSection.getByRole("heading", { name: "一步模型连接向导" })).toBeVisible();
+        await expect(wizardSection.getByRole("heading", { name: "连接模型" })).toBeVisible();
 
         // 视觉自检：手动的「添加 Provider」面板必须为收起状态，不得同时展开两张空白表单
         await expect(dialog.locator(".provider-add-panel")).toHaveCount(0);
@@ -247,7 +247,7 @@ test("一步式模型连接向导成功、失败与配置保护全流程", { tag
         // 验证成功提示
         const successAlert = wizardSection.locator(".wizard-alert-success");
         await expect(successAlert).toBeVisible();
-        await expect(successAlert).toContainText("模型已连接并启用");
+        await expect(successAlert).toContainText("模型已连接");
 
         // 验证全局默认值中任务模型已更新
         const navigation = dialog.getByRole("navigation", { name: "设置分组" });
@@ -271,7 +271,7 @@ test("一步式模型连接向导成功、失败与配置保护全流程", { tag
 
         // 向导若已收起则展开
         if (!await wizardSection.isVisible()) {
-          await dialog.getByRole("button", { name: /一步连接向导/ }).click();
+          await dialog.getByRole("button", { name: /(连接模型|快速连接)/ }).click();
         }
 
         // 再次选择自定义服务商，输入相同的名称与端点，但填入坏 Key
@@ -307,14 +307,14 @@ test("一步式模型连接向导成功、失败与配置保护全流程", { tag
     );
 
     await journey.step(
-      "切回高级配置：点击使用高级手动配置，向导收起，原有注册表与手动面板恢复可用",
-      "向导内点击「使用高级手动配置」可平滑收起向导，展示已配置服务商列表与手动添加 Provider 入口。",
+      "切回高级配置：点击高级配置，向导收起，原有注册表与手动面板恢复可用",
+      "向导内点击「高级配置」可平滑收起向导，展示已配置服务商列表与手动添加 Provider 入口。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
 
-        // 点击向导内部的“使用高级手动配置”
-        const manualBtn = wizardSection.getByRole("button", { name: "使用高级手动配置" });
+        // 点击向导内部的“高级配置”
+        const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
         await manualBtn.click();
 
         // 向导收起
