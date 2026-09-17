@@ -52,6 +52,7 @@ import type { SettingsApiClient } from "./api/settings.js";
 import { isAuthFailure } from "./api/auth.js";
 import { ImageIcon, SparkleIcon } from "./icons.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
+import { ModelConnectWizard } from "./ModelConnectWizard.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
 import { useLocale } from "./i18n/index.js";
 
@@ -731,7 +732,9 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   models: ModelProfile[];
   onCatalogChange?: (details: ModelCatalogDetails) => void;
   onDraftStateChange?: (dirty: boolean) => void;
+  initialWizardOpen?: boolean;
   onError: (reason: string | Error) => void;
+  onDefaultModelSet?: (modelId: string) => Promise<void>;
   onModelsChange: (models: ModelProfile[]) => void;
   onNotice: (message: string, detail?: string) => void;
   onProvidersChange: (providers: ModelProvider[]) => void;
@@ -741,8 +744,10 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 }>(function ProviderModelSettings({
   catalog,
   client,
+  initialWizardOpen,
   models,
   onCatalogChange,
+  onDefaultModelSet,
   onDraftStateChange,
   onError,
   onModelsChange,
@@ -753,6 +758,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   proxySettings,
 }, ref) {
   const { t } = useLocale();
+  const [wizardOpen, setWizardOpen] = useState(() => initialWizardOpen ?? false);
   const [draft, setDraft] = useState<ProviderDraft>();
   const [listings, setListings] = useState<Record<string, ListingState>>({});
   const [expandedId, setExpandedId] = useState<string>();
@@ -762,6 +768,10 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   const [busy, setBusy] = useState(false);
   const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
   const listingRequests = useRef(new Map<string, number>());
+
+  useEffect(() => {
+    if (initialWizardOpen) setWizardOpen(true);
+  }, [initialWizardOpen]);
   const draftDirty = draftFingerprint(draft) !== draftFingerprint(baselineDraft.current);
 
   useEffect(() => onDraftStateChange?.(draftDirty), [draftDirty, onDraftStateChange]);
@@ -1051,7 +1061,30 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     <section className="provider-registry" aria-label={t("providers.configured.title")}>
       <div className="provider-section-heading">
         <div><h4>{t("providers.configured.title")}</h4></div>
+        <button
+          aria-expanded={wizardOpen}
+          className="secondary-button compact-button"
+          onClick={() => setWizardOpen((current) => !current)}
+          type="button"
+        >
+          {wizardOpen ? t("wizard.toggleHide") : t("wizard.toggleShow")}
+        </button>
       </div>
+      {wizardOpen ? (
+        <ModelConnectWizard
+          client={client}
+          existingModels={models}
+          existingProviders={providers}
+          onClose={() => setWizardOpen(false)}
+          {...(onDefaultModelSet ? { onDefaultModelSet } : {})}
+          onError={onError}
+          onModelsChange={onModelsChange}
+          onNotice={onNotice}
+          onProvidersChange={onProvidersChange}
+          presets={presets}
+          {...(proxySettings ? { proxySettings } : {})}
+        />
+      ) : null}
       {providers.length ? <div className="provider-rows">
         {providers.map((provider) => <ProviderRow
           addedProfiles={models.filter((model) => model.providerId === provider.id)}

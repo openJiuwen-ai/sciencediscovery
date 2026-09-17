@@ -382,4 +382,10 @@ export interface ModelProviderPreset {
   name: string;
   /** Local endpoints (Ollama) work without a token. */
   tokenOptional?: boolean;
+  /** Direct link to the vendor console where users generate an API key. */
+  keyUrl?: string;
+  /** Primary recommended model identifier for one-step onboarding. */
+  recommendedModel?: string;
+  /** Friendly label for the recommended model. */
+  recommendedModelLabel?: string;
 }
