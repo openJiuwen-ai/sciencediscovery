@@ -35,7 +35,7 @@ test.use({ locale: "zh-CN" });
  *   3. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
  *   4. 成功路径：模型标识留空，填入有效凭证测试并启用，验证列表第一项测通并写入全局默认任务模型。
  *   5. 保护已有配置：对已有服务商填入坏 Key，验证原有 Provider 与 Token 未被破坏、默认模型未变。
- *   6. 切回高级配置：点击高级配置，向导收起，原有注册表与手动面板恢复可用。
+ *   6. 切回高级配置：点击高级配置，系统设置保持打开、向导收起，原有注册表与手动面板恢复可用；底栏取消仍能关闭对话框。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
  * Type: mocked
  * LLM: none — 使用旅程自带的本地 HTTP stub，无外部调用。
@@ -381,8 +381,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "切回高级配置：点击高级配置，向导收起，原有注册表与手动面板恢复可用",
-      "向导内点击「高级配置」可平滑收起向导，展示已配置服务商列表与手动添加 Provider 入口。",
+      "切回高级配置：点击高级配置，向导收起且系统设置保持打开，注册表与手动面板恢复可用",
+      "向导内点击「高级配置」只收起向导：系统设置对话框仍在、模型注册表标题与底栏按钮都在，展示已配置服务商列表与手动添加 Provider 入口；底栏「取消并关闭」才负责关闭对话框，两者互不串。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
@@ -391,12 +391,21 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
         await manualBtn.click();
 
+        // 关键回归：系统设置对话框不被关闭，仍停在模型注册表，底栏按钮完好
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
+        await expect(dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" })).toBeVisible();
+
         // 向导收起
         await expect(wizardSection).toHaveCount(0);
 
         // 已配置的服务商列表与添加按钮可见
         await expect(dialog.getByRole("heading", { name: "已配置服务商" })).toBeVisible();
         await expect(dialog.getByRole("button", { name: /添加 Provider/ }).first()).toBeVisible();
+
+        // 对照：底栏「取消并关闭」才关闭对话框，证明与「高级配置」不是同一路径
+        await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
+        await expect(dialog).toBeHidden();
       },
     );
   } finally {

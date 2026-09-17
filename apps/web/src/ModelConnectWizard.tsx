@@ -500,7 +500,10 @@ export function ModelConnectWizard({
         ) : null}
 
         <div className="wizard-footer-row">
-          <div className="wizard-actions">
+          {/* The surrounding settings dialog closes when a press lands on its
+              backdrop; a press on the wizard's own buttons must never take
+              part in that gesture, even after future handler refactors. */}
+          <div className="wizard-actions" onMouseDown={(event) => event.stopPropagation()}>
             <button
               aria-busy={testing}
               className="primary-button wizard-submit-button"

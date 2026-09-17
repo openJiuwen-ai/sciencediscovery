@@ -18,6 +18,7 @@ import test from "node:test";
 import type { ModelProfile, ModelProvider, ModelProviderPreset, ProviderModelEntry } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { SettingsApiClient } from "../src/api/settings.js";
 import { LocaleProvider } from "../src/i18n/index.js";
@@ -414,4 +415,61 @@ test("provider table actions are add for discovered models and delete for added 
   assert.match(added, /<strong>DeepSeek V4 Flash<\/strong>/);
   assert.doesNotMatch(added, /provider-model-cell-name"><strong>Old provider name · DeepSeek V4 Flash/);
   assert.match(added, />Delete<\/button>/);
+});
+
+function extractText(node: any): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (!node || !node.children) return "";
+  return node.children.map(extractText).join("");
+}
+
+test("wizard 高级配置只收起向导：服务商列表与添加入口保持可见", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const client = {
+    listProviderModels: async (providerId: string) => ({
+      fetchedAt: "2026-09-17T00:00:00.000Z",
+      models: [],
+      providerId,
+      source: "remote" as const,
+    }),
+  } as unknown as SettingsApiClient;
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ProviderModelSettings, {
+          client,
+          initialWizardOpen: true,
+          models: [profile("m1", "p1")],
+          onError: () => undefined,
+          onModelsChange: () => undefined,
+          onNotice: () => undefined,
+          onProvidersChange: () => undefined,
+          presets: PRESETS,
+          providers: [provider("p1", "DeepSeek")],
+        }),
+      ),
+    );
+  });
+
+  // Wizard starts open.
+  assert.equal(renderer!.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+
+  const manualButton = renderer!.root.findAllByType("button")
+    .find((button) => extractText(button).includes("高级配置"));
+  assert.ok(manualButton, "advanced configuration button is rendered");
+  await act(async () => {
+    manualButton!.props.onClick();
+  });
+
+  // The wizard collapses, but the registry keeps its provider row and entries.
+  assert.equal(renderer!.root.findAllByProps({ className: "model-connect-wizard" }).length, 0);
+  assert.ok(renderer!.root.findAllByProps({ className: "provider-row" }).length >= 1);
+  const buttonTexts = renderer!.root.findAllByType("button").map((button) => extractText(button));
+  assert.ok(buttonTexts.some((text) => text.includes("连接模型")), "wizard toggle survives");
+  assert.ok(buttonTexts.some((text) => text.includes("添加 Provider")), "add-provider entry survives");
 });
