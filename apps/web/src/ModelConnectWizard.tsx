@@ -373,22 +373,55 @@ export function ModelConnectWizard({
       </div>
 
       <div className="wizard-body">
-        <div className="wizard-field">
-          <label htmlFor="wizard-provider-select">{t("wizard.providerLabel")}</label>
-          <select
-            disabled={testing}
-            id="wizard-provider-select"
-            onChange={(e) => handleProviderChange(e.target.value)}
-            value={isCustom ? "custom" : selectedPresetId}
-          >
-            {presets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.name}
-                {preset.tokenOptional ? ` · ${t("providers.token.optional")}` : ""}
-              </option>
-            ))}
-            <option value="custom">{t("providers.custom.name")}</option>
-          </select>
+        <div className="wizard-inputs-row">
+          <div className="wizard-field wizard-field-provider">
+            <label htmlFor="wizard-provider-select">{t("wizard.providerLabel")}</label>
+            <select
+              disabled={testing}
+              id="wizard-provider-select"
+              onChange={(e) => handleProviderChange(e.target.value)}
+              value={isCustom ? "custom" : selectedPresetId}
+            >
+              {presets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name}
+                  {preset.tokenOptional ? ` · ${t("providers.token.optional")}` : ""}
+                </option>
+              ))}
+              <option value="custom">{t("providers.custom.name")}</option>
+            </select>
+          </div>
+
+          <div className="wizard-field wizard-field-key">
+            <label htmlFor="wizard-api-key">{t("wizard.apiKeyLabel")}</label>
+            <input
+              autoComplete="off"
+              disabled={testing}
+              id="wizard-api-key"
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setValidationError(undefined);
+              }}
+              placeholder={tokenOptional ? t("providers.token.optional") : t("wizard.apiKeyPlaceholder")}
+              type="password"
+              value={apiKey}
+            />
+            <div className="wizard-key-guide">
+              {keyUrl ? (
+                <a
+                  className="wizard-key-link"
+                  href={keyUrl}
+                  rel="noopener noreferrer"
+                  target="_blank"
+                >
+                  {t("wizard.getKeyLink", { provider: providerDisplayName })}
+                </a>
+              ) : (
+                <span className="wizard-key-generic">{t("wizard.getKeyGeneric")}</span>
+              )}
+              <span className="wizard-billing-notice">{t("wizard.billingNotice")}</span>
+            </div>
+          </div>
         </div>
 
         {isCustom ? (
@@ -429,44 +462,6 @@ export function ModelConnectWizard({
           </div>
         ) : null}
 
-        <div className="wizard-field">
-          <label htmlFor="wizard-api-key">{t("wizard.apiKeyLabel")}</label>
-          <input
-            autoComplete="off"
-            disabled={testing}
-            id="wizard-api-key"
-            onChange={(e) => {
-              setApiKey(e.target.value);
-              setValidationError(undefined);
-            }}
-            placeholder={tokenOptional ? t("providers.token.optional") : t("wizard.apiKeyPlaceholder")}
-            type="password"
-            value={apiKey}
-          />
-          <div className="wizard-key-guide">
-            {keyUrl ? (
-              <a
-                className="wizard-key-link"
-                href={keyUrl}
-                rel="noopener noreferrer"
-                target="_blank"
-              >
-                {t("wizard.getKeyLink", { provider: providerDisplayName })}
-              </a>
-            ) : (
-              <span className="wizard-key-generic">{t("wizard.getKeyGeneric")}</span>
-            )}
-            <span className="wizard-billing-notice">{t("wizard.billingNotice")}</span>
-          </div>
-        </div>
-
-        <div className="wizard-model-preview">
-          <span className="wizard-model-badge">
-            {t("wizard.recommendedModelLabel")}: <strong>{effectiveModelId}</strong>
-          </span>
-          <span className="wizard-model-hint">{t("wizard.recommendedModelDesc")}</span>
-        </div>
-
         {validationError ? (
           <div className="wizard-alert wizard-alert-error" role="alert">
             <AlertCircleIcon size={16} />
@@ -488,37 +483,46 @@ export function ModelConnectWizard({
           </div>
         ) : null}
 
-        <div className="wizard-actions">
-          <button
-            aria-busy={testing}
-            className="primary-button wizard-submit-button"
-            disabled={testing}
-            onClick={() => void handleTestAndEnable()}
-            type="button"
-          >
-            {testing ? (
-              <>
-                <SpinnerIcon className="spin" size={14} />
-                <span>{t("wizard.testingAndEnabling")}</span>
-              </>
-            ) : (
-              <>
-                <SparkleIcon size={14} />
-                <span>{t("wizard.testAndEnable")}</span>
-              </>
-            )}
-          </button>
+        <div className="wizard-footer-row">
+          <div className="wizard-model-preview">
+            <span className="wizard-model-badge">
+              {t("wizard.recommendedModelLabel")}: <strong>{effectiveModelId}</strong>
+            </span>
+            <span className="wizard-model-hint">{t("wizard.recommendedModelDesc")}</span>
+          </div>
 
-          {onClose ? (
+          <div className="wizard-actions">
             <button
-              className="secondary-button compact-button"
+              aria-busy={testing}
+              className="primary-button wizard-submit-button"
               disabled={testing}
-              onClick={onClose}
+              onClick={() => void handleTestAndEnable()}
               type="button"
             >
-              {t("wizard.manualMode")}
+              {testing ? (
+                <>
+                  <SpinnerIcon className="spin" size={13} />
+                  <span>{t("wizard.testingAndEnabling")}</span>
+                </>
+              ) : (
+                <>
+                  <SparkleIcon size={13} />
+                  <span>{t("wizard.testAndEnable")}</span>
+                </>
+              )}
             </button>
-          ) : null}
+
+            {onClose ? (
+              <button
+                className="secondary-button compact-button"
+                disabled={testing}
+                onClick={onClose}
+                type="button"
+              >
+                {t("wizard.manualMode")}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
     </section>

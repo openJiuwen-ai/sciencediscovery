@@ -157,6 +157,22 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
 
         // 视觉自检：手动的「添加 Provider」面板必须为收起状态，不得同时展开两张空白表单
         await expect(dialog.locator(".provider-add-panel")).toHaveCount(0);
+
+        // 密度与非遮挡自检：默认打开无需滚动，服务商、Key、申请链接及主按钮完全在对话框可见区域内，不被底栏遮挡
+        const keyInput = wizardSection.locator("#wizard-api-key");
+        const submitBtn = wizardSection.locator(".wizard-submit-button");
+        const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
+        await expect(keyInput).toBeVisible();
+        await expect(submitBtn).toBeVisible();
+        await expect(manualBtn).toBeVisible();
+
+        const footerBox = await dialog.locator(".system-config-footer").boundingBox();
+        const submitBox = await submitBtn.boundingBox();
+        const keyBox = await keyInput.boundingBox();
+        if (footerBox && submitBox && keyBox) {
+          expect(submitBox.y + submitBox.height).toBeLessThan(footerBox.y);
+          expect(keyBox.y + keyBox.height).toBeLessThan(footerBox.y);
+        }
       },
     );
 
