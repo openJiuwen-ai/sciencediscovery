@@ -21,6 +21,7 @@ import type {
   ModelProviderPreset,
   ModelProviderPresetId,
   ProxySettingsDetails,
+  RuntimeSettingsOverrides,
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
@@ -115,26 +116,130 @@ export function ModelConnectWizard({
 
     setTesting(true);
 
-    let provider: ModelProvider | undefined;
-    let createdProviderId: string | undefined;
-    let createdModelProfileId: string | undefined;
+    let createdTempProviderId: string | undefined;
+    let createdTempModelId: string | undefined;
+    let createdPermanentProviderId: string | undefined;
+    let createdPermanentModelId: string | undefined;
+    let initialOverrides: RuntimeSettingsOverrides = {};
 
     try {
-      // 1. Resolve or create Provider
+      try {
+        if (typeof client.getGlobalSettings === "function") {
+          const currentDetails = await client.getGlobalSettings();
+          initialOverrides = currentDetails.overrides ?? {};
+        }
+      } catch { /* ignore */ }
+
       const matchingProvider = existingProviders.find((candidate) =>
         selectedPreset
           ? (candidate.presetId === selectedPreset.id)
           : (candidate.name === (customName.trim() || "Custom") && candidate.baseUrl === customBaseUrl.trim())
       );
 
+      const label = selectedPreset?.recommendedModelLabel || effectiveModelId;
+
       if (matchingProvider) {
-        provider = matchingProvider;
+        // Safe testing for existing provider:
+        // DO NOT overwrite matchingProvider's apiToken before testing!
+        // Instead, spin up a temporary testing provider with the candidate credentials.
+        const tempInput = selectedPreset
+          ? {
+              apiProtocol: selectedPreset.apiProtocol,
+              apiToken: apiKey.trim() || undefined,
+              apiVariant: selectedPreset.apiVariant,
+              baseUrl: matchingProvider.baseUrl || selectedPreset.baseUrl,
+              modelDiscovery: selectedPreset.modelDiscovery,
+              name: `${matchingProvider.name} (temp-test)`,
+              presetId: selectedPreset.id,
+              proxyPolicy: matchingProvider.proxyPolicy || ("inherit" as const),
+              tokenOptional: selectedPreset.tokenOptional === true,
+            }
+          : {
+              apiProtocol: "openai-chat-completions" as const,
+              apiToken: apiKey.trim() || undefined,
+              apiVariant: "openai" as const,
+              baseUrl: customBaseUrl.trim(),
+              modelDiscovery: "openai-models" as const,
+              name: `${customName.trim() || "Custom"} (temp-test)`,
+              proxyPolicy: "inherit" as const,
+              tokenOptional: false,
+            };
+
+        const tempProvider = await client.createProvider(tempInput);
+        createdTempProviderId = tempProvider.id;
+
+        const tempProfile = await client.addProviderModel(tempProvider.id, {
+          label,
+          model: effectiveModelId,
+        });
+        createdTempModelId = tempProfile.id;
+
+        // Test connectivity on the temp model
+        const testOutcome = await client.testModel(tempProfile.id);
+
+        // Immediately clean up temporary test objects.
+        // If the backend auto-defaulted the global task model to the temp model,
+        // restore initialOverrides first so deleteModel is not blocked by runtime settings.
+        try {
+          if (typeof client.replaceGlobalSettings === "function") {
+            await client.replaceGlobalSettings(initialOverrides);
+          }
+        } catch { /* ignore */ }
+        try { await client.deleteModel(tempProfile.id); } catch { /* ignore */ }
+        try { await client.deleteProvider(tempProvider.id); } catch { /* ignore */ }
+        createdTempModelId = undefined;
+        createdTempProviderId = undefined;
+
+        if (!testOutcome.ok) {
+          // Failure: matchingProvider was NEVER updated. Its token and models remain intact!
+          setTestResult(testOutcome);
+          return;
+        }
+
+        // Test succeeded! Now safe to update the existing provider's credentials
+        let provider = matchingProvider;
         if (apiKey.trim()) {
           provider = await client.updateProvider(matchingProvider.id, {
             apiToken: apiKey.trim(),
           });
         }
+
+        // Ensure model profile exists on the matching provider
+        let profile = existingModels.find((m) => m.providerId === matchingProvider.id && m.model === effectiveModelId);
+        if (!profile) {
+          profile = await client.addProviderModel(matchingProvider.id, {
+            label,
+            model: effectiveModelId,
+          });
+          createdPermanentModelId = profile.id;
+        }
+
+        // Set as global default task model
+        if (onDefaultModelSet) {
+          await onDefaultModelSet(profile.id);
+        } else {
+          await client.replaceGlobalSettings({ modelId: profile.id });
+        }
+
+        try {
+          const providerList = await client.listProviders();
+          onProvidersChange?.(providerList.providers);
+        } catch { /* ignore */ }
+
+        try {
+          const modelList = await client.listModels();
+          onModelsChange?.(modelList);
+        } catch { /* ignore */ }
+
+        setSuccessInfo({
+          latencyMs: testOutcome.latencyMs,
+          modelName: profile.name,
+        });
+
+        onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
+        onSuccess?.(profile, provider);
       } else {
+        // No existing provider: create directly
         const createInput = selectedPreset
           ? {
               apiProtocol: selectedPreset.apiProtocol,
@@ -157,67 +262,80 @@ export function ModelConnectWizard({
               proxyPolicy: "inherit" as const,
               tokenOptional: false,
             };
-        provider = await client.createProvider(createInput);
-        createdProviderId = provider.id;
-      }
 
-      // 2. Resolve or add recommended ModelProfile
-      let profile = existingModels.find((m) => m.providerId === provider!.id && m.model === effectiveModelId);
-      if (!profile) {
-        const label = selectedPreset?.recommendedModelLabel || effectiveModelId;
-        profile = await client.addProviderModel(provider.id, {
+        const provider = await client.createProvider(createInput);
+        createdPermanentProviderId = provider.id;
+
+        const profile = await client.addProviderModel(provider.id, {
           label,
           model: effectiveModelId,
         });
-        createdModelProfileId = profile.id;
-      }
+        createdPermanentModelId = profile.id;
 
-      // 3. Test connectivity
-      const testOutcome = await client.testModel(profile.id);
+        const testOutcome = await client.testModel(profile.id);
 
-      if (!testOutcome.ok) {
-        // Test failed: clean up newly created objects so no broken half-finished configuration is left
-        if (createdModelProfileId) {
-          try { await client.deleteModel(createdModelProfileId); } catch { /* ignore cleanup error */ }
+        if (!testOutcome.ok) {
+          // Failed: roll back newly created model and provider.
+          // Restore settings first so deleteModel is not blocked by runtime settings.
+          try {
+            if (typeof client.replaceGlobalSettings === "function") {
+              await client.replaceGlobalSettings(initialOverrides);
+            }
+          } catch { /* ignore */ }
+          if (createdPermanentModelId) {
+            try { await client.deleteModel(createdPermanentModelId); } catch { /* ignore */ }
+          }
+          if (createdPermanentProviderId) {
+            try { await client.deleteProvider(createdPermanentProviderId); } catch { /* ignore */ }
+          }
+          createdPermanentModelId = undefined;
+          createdPermanentProviderId = undefined;
+          setTestResult(testOutcome);
+          return;
         }
-        if (createdProviderId) {
-          try { await client.deleteProvider(createdProviderId); } catch { /* ignore cleanup error */ }
+
+        // Test succeeded!
+        if (onDefaultModelSet) {
+          await onDefaultModelSet(profile.id);
+        } else {
+          await client.replaceGlobalSettings({ modelId: profile.id });
         }
-        setTestResult(testOutcome);
-        return;
+
+        try {
+          const providerList = await client.listProviders();
+          onProvidersChange?.(providerList.providers);
+        } catch { /* ignore */ }
+
+        try {
+          const modelList = await client.listModels();
+          onModelsChange?.(modelList);
+        } catch { /* ignore */ }
+
+        setSuccessInfo({
+          latencyMs: testOutcome.latencyMs,
+          modelName: profile.name,
+        });
+
+        onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
+        onSuccess?.(profile, provider);
       }
-
-      // 4. Test passed: set as global default task model!
-      if (onDefaultModelSet) {
-        await onDefaultModelSet(profile.id);
-      } else {
-        await client.replaceGlobalSettings({ modelId: profile.id });
-      }
-
-      // Refresh providers and models lists
-      try {
-        const providerList = await client.listProviders();
-        onProvidersChange?.(providerList.providers);
-      } catch { /* ignore list reload error */ }
-
-      try {
-        const modelList = await client.listModels();
-        onModelsChange?.(modelList);
-      } catch { /* ignore list reload error */ }
-
-      setSuccessInfo({
-        latencyMs: testOutcome.latencyMs,
-        modelName: profile.name,
-      });
-
-      onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
-      onSuccess?.(profile, provider);
     } catch (reason) {
-      if (createdModelProfileId) {
-        try { await client.deleteModel(createdModelProfileId); } catch { /* ignore */ }
+      try {
+        if (typeof client.replaceGlobalSettings === "function") {
+          await client.replaceGlobalSettings(initialOverrides);
+        }
+      } catch { /* ignore */ }
+      if (createdTempModelId) {
+        try { await client.deleteModel(createdTempModelId); } catch { /* ignore */ }
       }
-      if (createdProviderId) {
-        try { await client.deleteProvider(createdProviderId); } catch { /* ignore */ }
+      if (createdTempProviderId) {
+        try { await client.deleteProvider(createdTempProviderId); } catch { /* ignore */ }
+      }
+      if (createdPermanentModelId) {
+        try { await client.deleteModel(createdPermanentModelId); } catch { /* ignore */ }
+      }
+      if (createdPermanentProviderId) {
+        try { await client.deleteProvider(createdPermanentProviderId); } catch { /* ignore */ }
       }
       const message = reason instanceof Error ? reason.message : String(reason);
       setValidationError(message);

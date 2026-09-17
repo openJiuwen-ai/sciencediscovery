@@ -763,14 +763,18 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   const [listings, setListings] = useState<Record<string, ListingState>>({});
   const [expandedId, setExpandedId] = useState<string>();
   // The preset dropdown and custom entry stay behind one "Add provider"
-  // button; with nothing configured yet it starts open as the first-run path.
-  const [addOpen, setAddOpen] = useState(() => !providers.length);
+  // button; with nothing configured yet it starts open as the first-run path,
+  // but stays closed if the wizard is initially open.
+  const [addOpen, setAddOpen] = useState(() => !providers.length && !initialWizardOpen);
   const [busy, setBusy] = useState(false);
   const baselineDraft = useRef<ProviderDraft | undefined>(undefined);
   const listingRequests = useRef(new Map<string, number>());
 
   useEffect(() => {
-    if (initialWizardOpen) setWizardOpen(true);
+    if (initialWizardOpen) {
+      setWizardOpen(true);
+      setAddOpen(false);
+    }
   }, [initialWizardOpen]);
   const draftDirty = draftFingerprint(draft) !== draftFingerprint(baselineDraft.current);
 
@@ -836,12 +840,14 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 
   function selectPreset(preset: ModelProviderPreset): void {
     if (!allowDraftReplacement()) return;
+    setWizardOpen(false);
     selectDraft(presetDraft(preset));
     setAddOpen(false);
   }
 
   function selectCustomProvider(): void {
     if (!allowDraftReplacement()) return;
+    setWizardOpen(false);
     selectDraft({ ...CUSTOM_PROVIDER });
     setAddOpen(false);
   }
@@ -1064,7 +1070,13 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
         <button
           aria-expanded={wizardOpen}
           className="secondary-button compact-button"
-          onClick={() => setWizardOpen((current) => !current)}
+          onClick={() => {
+            setWizardOpen((current) => {
+              const next = !current;
+              if (next) setAddOpen(false);
+              return next;
+            });
+          }}
           type="button"
         >
           {wizardOpen ? t("wizard.toggleHide") : t("wizard.toggleShow")}
@@ -1075,7 +1087,10 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           client={client}
           existingModels={models}
           existingProviders={providers}
-          onClose={() => setWizardOpen(false)}
+          onClose={() => {
+            setWizardOpen(false);
+            if (!providers.length) setAddOpen(true);
+          }}
           {...(onDefaultModelSet ? { onDefaultModelSet } : {})}
           onError={onError}
           onModelsChange={onModelsChange}
@@ -1114,7 +1129,18 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
         />)}
       </div> : <p className="muted">{t("providers.configured.empty")}</p>}
       <div className="provider-add">
-        <button aria-expanded={addOpen} className="provider-add-button" onClick={() => setAddOpen((current) => !current)} type="button">
+        <button
+          aria-expanded={addOpen}
+          className="provider-add-button"
+          onClick={() => {
+            setAddOpen((current) => {
+              const next = !current;
+              if (next) setWizardOpen(false);
+              return next;
+            });
+          }}
+          type="button"
+        >
           {t("providers.add.title")}
         </button>
         {addOpen ? <div className="provider-add-panel">

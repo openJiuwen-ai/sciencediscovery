@@ -313,6 +313,123 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   assert.match(alertText, /Invalid API key provided/);
 });
 
+test("existing provider with bad key: does NOT update existing provider's token, deletes temp objects, keeps input and default model", async () => {
+  let updateProviderCalled = false;
+  let deletedModelId: string | undefined;
+  let deletedProviderId: string | undefined;
+  let defaultModelSetCalled = false;
+
+  const existingDeepSeekProvider: ModelProvider = {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    hasApiToken: true,
+    id: "existing-provider-deepseek-1",
+    modelDiscovery: "openai-models",
+    name: "DeepSeek",
+    presetId: "deepseek",
+    proxyPolicy: "inherit",
+    tokenOptional: false,
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+
+  const existingDeepSeekModel: ModelProfile = {
+    contextWindow: 64000,
+    id: "existing-profile-deepseek-chat",
+    model: "deepseek-chat",
+    name: "DeepSeek-V3",
+    providerId: "existing-provider-deepseek-1",
+  };
+
+  const client = createMockClient({
+    addProviderModel: async (providerId: string, body: any) => ({
+      contextWindow: 64000,
+      id: `temp-profile-on-${providerId}`,
+      model: body.model,
+      name: "DeepSeek-V3",
+      providerId,
+    } as ModelProfile),
+    createProvider: async (body: any) => ({
+      apiProtocol: body.apiProtocol,
+      apiVariant: body.apiVariant,
+      baseUrl: body.baseUrl,
+      createdAt: "2026-09-17T00:00:00.000Z",
+      id: "temp-testing-provider",
+      modelDiscovery: body.modelDiscovery,
+      name: body.name,
+      presetId: body.presetId,
+      proxyPolicy: "inherit",
+      tokenOptional: false,
+      updatedAt: "2026-09-17T00:00:00.000Z",
+    } as ModelProvider),
+    deleteModel: async (modelId: string) => {
+      deletedModelId = modelId;
+      return { deleted: modelId };
+    },
+    deleteProvider: async (providerId: string) => {
+      deletedProviderId = providerId;
+      return { deleted: providerId };
+    },
+    testModel: async () => authFailResult,
+    updateProvider: async () => {
+      updateProviderCalled = true;
+      throw new Error("Should not update existing provider when test fails!");
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          existingModels: [existingDeepSeekModel],
+          existingProviders: [existingDeepSeekProvider],
+          onDefaultModelSet: async () => {
+            defaultModelSetCalled = true;
+          },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  // Enter invalid API Key
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  await act(async () => {
+    keyInput.props.onChange({ target: { value: "sk-bad-key-should-not-override" } });
+  });
+
+  // Click "测试并启用"
+  const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  await act(async () => {
+    await submitButton.props.onClick();
+  });
+
+  // Existing provider's token must NOT be updated!
+  assert.equal(updateProviderCalled, false);
+
+  // Temporary objects must be cleaned up
+  assert.equal(deletedProviderId, "temp-testing-provider");
+  assert.equal(deletedModelId, "temp-profile-on-temp-testing-provider");
+
+  // Global default model was NOT changed
+  assert.equal(defaultModelSetCalled, false);
+
+  // User input preserved
+  const recheckKeyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  assert.equal(recheckKeyInput.props.value, "sk-bad-key-should-not-override");
+
+  // Error alert rendered
+  const errorAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
+  const alertText = extractText(errorAlert);
+  assert.match(alertText, /鉴权失败/);
+  assert.match(alertText, /401/);
+});
+
 test("custom provider flow: creates custom provider with custom baseUrl and modelId", async () => {
   let createdProviderInput: any;
   let addedModelInput: any;
