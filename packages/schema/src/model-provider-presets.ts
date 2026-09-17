@@ -32,8 +32,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://platform.deepseek.com/api_keys",
     modelDiscovery: "openai-models",
     name: "DeepSeek",
-    recommendedModel: "deepseek-chat",
-    recommendedModelLabel: "DeepSeek-V3",
   },
   {
     // K2.5/K2.6 use the DeepSeek-style thinking toggle. K3 is materialized
@@ -46,8 +44,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://platform.moonshot.cn/console/api-keys",
     modelDiscovery: "openai-models",
     name: "Moonshot Kimi",
-    recommendedModel: "moonshot-v1-auto",
-    recommendedModelLabel: "Kimi Auto",
   },
   {
     // GLM also uses `thinking.type` + `reasoning_content`. Both bigmodel.cn
@@ -63,8 +59,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://open.bigmodel.cn/usercenter/apikeys",
     modelDiscovery: "openai-models",
     name: "智谱 GLM",
-    recommendedModel: "glm-4-plus",
-    recommendedModelLabel: "GLM-4 Plus",
   },
   {
     // The same GLM models on Zhipu's international host. It is a separate
@@ -80,8 +74,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     // Same as bigmodel.cn: `GET /models` answers 401, so the route is there.
     modelDiscovery: "openai-models",
     name: "Z.AI",
-    recommendedModel: "glm-4-plus",
-    recommendedModelLabel: "GLM-4 Plus (Z.AI)",
   },
   {
     apiProtocol: "openai-chat-completions",
@@ -92,8 +84,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
     modelDiscovery: "openai-models",
     name: "MiniMax",
-    recommendedModel: "MiniMax-Text-01",
-    recommendedModelLabel: "MiniMax-Text-01",
   },
   {
     apiProtocol: "openai-chat-completions",
@@ -104,8 +94,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://bailian.console.aliyun.com/",
     modelDiscovery: "openai-models",
     name: "Alibaba Cloud Model Studio",
-    recommendedModel: "qwen-plus",
-    recommendedModelLabel: "Qwen Plus",
   },
   {
     apiProtocol: "openai-responses",
@@ -116,8 +104,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://platform.openai.com/api-keys",
     modelDiscovery: "openai-models",
     name: "OpenAI",
-    recommendedModel: "gpt-4o",
-    recommendedModelLabel: "GPT-4o",
   },
   {
     apiProtocol: "anthropic-messages",
@@ -128,8 +114,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://console.anthropic.com/settings/keys",
     modelDiscovery: "anthropic-models",
     name: "Anthropic",
-    recommendedModel: "claude-3-5-sonnet-latest",
-    recommendedModelLabel: "Claude 3.5 Sonnet",
   },
   {
     apiProtocol: "openai-chat-completions",
@@ -140,8 +124,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://aistudio.google.com/app/apikey",
     modelDiscovery: "openai-models",
     name: "Google Gemini",
-    recommendedModel: "gemini-2.5-flash",
-    recommendedModelLabel: "Gemini 2.5 Flash",
   },
   {
     apiProtocol: "openai-chat-completions",
@@ -152,8 +134,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://cloud.siliconflow.cn/account/ak",
     modelDiscovery: "openai-models",
     name: "SiliconFlow",
-    recommendedModel: "deepseek-ai/DeepSeek-V3",
-    recommendedModelLabel: "DeepSeek-V3 (SiliconFlow)",
   },
   {
     apiProtocol: "openai-chat-completions",
@@ -164,8 +144,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://openrouter.ai/keys",
     modelDiscovery: "openai-models",
     name: "OpenRouter",
-    recommendedModel: "deepseek/deepseek-chat",
-    recommendedModelLabel: "DeepSeek-V3 (OpenRouter)",
   },
   {
     apiProtocol: "openai-chat-completions",
@@ -176,8 +154,6 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     keyUrl: "https://ollama.com",
     modelDiscovery: "openai-models",
     name: "Ollama",
-    recommendedModel: "qwen2.5:latest",
-    recommendedModelLabel: "Qwen 2.5 (Ollama)",
     tokenOptional: true,
   },
 ];

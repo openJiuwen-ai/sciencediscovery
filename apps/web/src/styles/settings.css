@@ -613,6 +613,9 @@
 .wizard-inputs-row { display: grid; grid-template-columns: minmax(135px, 180px) minmax(0, 1fr); gap: 10px; align-items: start; }
 .wizard-field { display: grid; gap: 2px; min-width: 0; }
 .wizard-field label { color: var(--text-heading); font-size: 11px; font-weight: 700; line-height: 1.15; }
+/* The dialog-wide `.config-panel label` bottom margin would detach each label
+   from its control; wizard fields keep their own tight grid rhythm instead. */
+.model-connect-wizard .wizard-field > label { margin-bottom: 0; }
 .wizard-field input, .wizard-field select { width: 100%; min-height: 30px; height: 30px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text-heading); padding: 4px 8px; font-size: 12px; }
 .wizard-custom-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .wizard-key-guide { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; margin-top: 2px; font-size: 10.5px; line-height: 1.25; }
@@ -620,14 +623,12 @@
 .wizard-key-link:hover { color: var(--accent-hover); }
 .wizard-key-generic { color: var(--muted); font-size: 10.5px; }
 .wizard-billing-notice { color: var(--text-faint); font-size: 10px; }
-.wizard-footer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }
-.wizard-model-preview { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 10.5px; }
-.wizard-model-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 10.5px; font-weight: 600; background: var(--surface-track); padding: 1.5px 6px; border-radius: 4px; }
-.wizard-model-badge strong { color: var(--text-heading); font-family: var(--font-mono); font-size: 10.5px; }
-.wizard-model-hint { color: var(--muted); font-size: 10px; }
+.wizard-footer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; }
 .wizard-actions { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
-.wizard-submit-button { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; height: 29px; padding: 4px 13px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
-.wizard-actions .compact-button { min-height: 29px; height: 29px; padding: 4px 10px; font-size: 11px; }
+/* Buttons never wrap their caption: they grow with the label text instead of
+   folding it into two lines, so `height` stays a floor, not a ceiling. */
+.wizard-submit-button { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; padding: 4px 13px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.wizard-actions .compact-button { flex: none; min-height: 29px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
 .wizard-alert { display: flex; align-items: flex-start; gap: 8px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.35; }
 .wizard-alert-error { border: 1px solid var(--danger-border, #fca5a5); background: var(--danger-soft, #fef2f2); color: var(--danger, #b91c1c); }
 .wizard-alert-success { border: 1px solid var(--success-border, #86efac); background: var(--success-soft, #f0fdf4); color: var(--success, #15803d); }

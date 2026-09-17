@@ -79,6 +79,14 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
     deleteModel: async (_modelId: string) => ({ deleted: _modelId }),
     deleteProvider: async (_providerId: string) => ({ deleted: _providerId }),
     listModels: async () => [],
+    // The first entry deliberately differs from any preset's former
+    // recommended model, so tests prove the listing order is what wins.
+    listProviderModels: async (providerId: string) => ({
+      fetchedAt: "2026-09-17T00:00:00.000Z",
+      models: [{ id: "listed-model-first" }, { id: "listed-model-second" }],
+      providerId,
+      source: "remote" as const,
+    }),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
     testModel: async () => successResult,
@@ -114,6 +122,9 @@ test("renders preset provider selection, official registration link, and billing
   const zhNotice = zhRenderer!.root.findByProps({ className: "wizard-billing-notice" });
   assert.match(extractText(zhNotice), /调用模型将按服务商标准计费/);
 
+  // No recommended-model badge or equivalent copy anywhere in the wizard.
+  assert.ok(!extractText(zhRenderer!.root).includes("推荐模型"));
+
   let enRenderer: ReactTestRenderer;
   await act(async () => {
     enRenderer = create(
@@ -138,20 +149,21 @@ test("renders preset provider selection, official registration link, and billing
   assert.match(extractText(enNotice), /Calls will be billed according to the provider's standard rates/);
 });
 
-test("successful flow: creates provider, adds model profile, tests connectivity, and sets global default model", async () => {
+test("successful flow: creates provider, registers the first listed model, tests connectivity, and sets global default model", async () => {
   let createdProviderInput: any;
   let addedModelInput: any;
   let testedModelId: string | undefined;
   let defaultModelSetId: string | undefined;
+  let listingProviderId: string | undefined;
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => {
       addedModelInput = { providerId, ...body };
       return {
         contextWindow: 64000,
-        id: "profile-deepseek-chat",
+        id: `profile-${body.model}`,
         model: body.model,
-        name: "DeepSeek-V3",
+        name: body.label || body.model,
         providerId,
       } as ModelProfile;
     },
@@ -170,6 +182,15 @@ test("successful flow: creates provider, adds model profile, tests connectivity,
         tokenOptional: false,
         updatedAt: "2026-09-17T00:00:00.000Z",
       } as ModelProvider;
+    },
+    listProviderModels: async (providerId: string) => {
+      listingProviderId = providerId;
+      return {
+        fetchedAt: "2026-09-17T00:00:00.000Z",
+        models: [{ id: "listed-model-first" }, { id: "deepseek-chat" }],
+        providerId,
+        source: "remote" as const,
+      };
     },
     testModel: async (modelId: string) => {
       testedModelId = modelId;
@@ -202,7 +223,7 @@ test("successful flow: creates provider, adds model profile, tests connectivity,
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
 
-  // Click "测试并启用"
+  // Click "保存并连接"
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
@@ -213,16 +234,19 @@ test("successful flow: creates provider, adds model profile, tests connectivity,
   assert.equal(createdProviderInput?.apiToken, "sk-deepseek-test-123");
   assert.equal(createdProviderInput?.baseUrl, "https://api.deepseek.com");
 
+  // The provider's own listing was consulted, and its first entry wins —
+  // not any preset recommendation (deepseek-chat sits second on purpose).
+  assert.equal(listingProviderId, "provider-deepseek-1");
   assert.equal(addedModelInput?.providerId, "provider-deepseek-1");
-  assert.equal(addedModelInput?.model, "deepseek-chat");
+  assert.equal(addedModelInput?.model, "listed-model-first");
 
-  assert.equal(testedModelId, "profile-deepseek-chat");
-  assert.equal(defaultModelSetId, "profile-deepseek-chat");
+  assert.equal(testedModelId, "profile-listed-model-first");
+  assert.equal(defaultModelSetId, "profile-listed-model-first");
 
   // Success alert is visible
   const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
   assert.match(extractText(successAlert), /模型已连接并保存/);
-  assert.match(extractText(successAlert), /已成功连接 DeepSeek-V3 并设为全局默认任务模型/);
+  assert.match(extractText(successAlert), /已成功连接 listed-model-first 并设为全局默认任务模型/);
   assert.match(extractText(successAlert), /88 ms/);
 });
 
@@ -430,10 +454,11 @@ test("existing provider with bad key: does NOT update existing provider's token,
   assert.match(alertText, /401/);
 });
 
-test("custom provider flow: creates custom provider with custom baseUrl and modelId", async () => {
+test("custom provider flow: creates custom provider with custom baseUrl and modelId, listing not consulted", async () => {
   let createdProviderInput: any;
   let addedModelInput: any;
   let defaultModelSetId: string | undefined;
+  let listingCalled = false;
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => {
@@ -460,6 +485,15 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
         tokenOptional: false,
         updatedAt: "2026-09-17T00:00:00.000Z",
       } as ModelProvider;
+    },
+    listProviderModels: async (providerId: string) => {
+      listingCalled = true;
+      return {
+        fetchedAt: "2026-09-17T00:00:00.000Z",
+        models: [{ id: "listed-model-first" }],
+        providerId,
+        source: "remote" as const,
+      };
     },
   });
 
@@ -519,10 +553,185 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   assert.equal(createdProviderInput?.baseUrl, "http://localhost:8000/v1");
   assert.equal(createdProviderInput?.apiToken, "sk-custom-key");
   assert.equal(addedModelInput?.model, "qwen-2.5-72b");
+  assert.equal(listingCalled, false);
   assert.equal(defaultModelSetId, "profile-custom-model");
 });
 
-test("validation errors: missing key or missing custom URL/model prevents client API calls", async () => {
+test("custom provider without model id: falls back to the first listed model", async () => {
+  let addedModelInput: any;
+  let defaultModelSetId: string | undefined;
+
+  const client = createMockClient({
+    addProviderModel: async (providerId: string, body: any) => {
+      addedModelInput = { providerId, ...body };
+      return {
+        contextWindow: 32000,
+        id: `profile-${body.model}`,
+        model: body.model,
+        name: body.label || body.model,
+        providerId,
+      } as ModelProfile;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          existingModels: [],
+          existingProviders: [],
+          onDefaultModelSet: async (modelId: string) => {
+            defaultModelSetId = modelId;
+          },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  const select = renderer!.root.findByProps({ id: "wizard-provider-select" });
+  await act(async () => {
+    select.props.onChange({ target: { value: "custom" } });
+  });
+
+  const urlInput = renderer!.root.findByProps({ id: "wizard-custom-url" });
+  await act(async () => {
+    urlInput.props.onChange({ target: { value: "http://localhost:8000/v1" } });
+  });
+
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  await act(async () => {
+    keyInput.props.onChange({ target: { value: "sk-custom-key" } });
+  });
+
+  // Model identifier intentionally left empty: the listing decides.
+  const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  await act(async () => {
+    await submitButton.props.onClick();
+  });
+
+  assert.equal(addedModelInput?.model, "listed-model-first");
+  assert.equal(defaultModelSetId, "profile-listed-model-first");
+
+  const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
+  assert.match(extractText(successAlert), /listed-model-first/);
+});
+
+test("empty model listing: readable error, provider rolled back, default untouched", async () => {
+  let deletedProviderId: string | undefined;
+  let addModelCalled = false;
+  let defaultModelSetCalled = false;
+
+  const client = createMockClient({
+    addProviderModel: async () => {
+      addModelCalled = true;
+      throw new Error("should not register a model when the listing is empty");
+    },
+    deleteProvider: async (providerId: string) => {
+      deletedProviderId = providerId;
+      return { deleted: providerId };
+    },
+    listProviderModels: async (providerId: string) => ({
+      fetchedAt: "2026-09-17T00:00:00.000Z",
+      models: [],
+      providerId,
+      source: "remote" as const,
+    }),
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          existingModels: [],
+          existingProviders: [],
+          onDefaultModelSet: async () => {
+            defaultModelSetCalled = true;
+          },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  await act(async () => {
+    keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
+  });
+
+  const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  await act(async () => {
+    await submitButton.props.onClick();
+  });
+
+  // Readable error, no half-created provider, no model registration, no default change.
+  const errorAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
+  assert.match(extractText(errorAlert), /未返回任何可用模型/);
+  assert.equal(deletedProviderId, "created-provider-1");
+  assert.equal(addModelCalled, false);
+  assert.equal(defaultModelSetCalled, false);
+});
+
+test("model listing failure: readable error with detail, provider rolled back, default untouched", async () => {
+  let deletedProviderId: string | undefined;
+  let defaultModelSetCalled = false;
+
+  const client = createMockClient({
+    deleteProvider: async (providerId: string) => {
+      deletedProviderId = providerId;
+      return { deleted: providerId };
+    },
+    listProviderModels: async () => {
+      throw new Error("The provider model list request failed with status 401");
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          existingModels: [],
+          existingProviders: [],
+          onDefaultModelSet: async () => {
+            defaultModelSetCalled = true;
+          },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  await act(async () => {
+    keyInput.props.onChange({ target: { value: "sk-bad-key" } });
+  });
+
+  const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  await act(async () => {
+    await submitButton.props.onClick();
+  });
+
+  const errorAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
+  const alertText = extractText(errorAlert);
+  assert.match(alertText, /无法获取该服务商的模型列表/);
+  assert.match(alertText, /401/);
+  assert.equal(deletedProviderId, "created-provider-1");
+  assert.equal(defaultModelSetCalled, false);
+});
+
+test("validation errors: missing key prevents client API calls", async () => {
   let clientCalled = false;
   const client = createMockClient({
     createProvider: async () => {

@@ -24,16 +24,16 @@ test.use({ locale: "zh-CN" });
 /**
  * E2E-META
  * Purpose: 模型连接（GitCode #92 / GitHub #39）：用户视角全流程覆盖
- *   - 成功路径：通过向导配置模型并测通，自动登记推荐模型并切换全局默认任务模型；
+ *   - 成功路径：通过向导配置模型并测通，自动登记服务商模型列表的第一项并切换全局默认任务模型；
  *   - 失败路径：坏 Key 鉴权失败可读报错、输入保留、临时对象回滚、不污染全局默认值；
  *   - 保护既有配置：已有 Provider 在向导中遇到坏 Key 时不被覆盖；
- *   - 预设联动：官方 Key 申请链接与按量计费提醒；
- *   - 界面自检：向导展开时不与手动「添加 Provider」面板同时铺开，并可平滑切回高级配置。
+ *   - 预设联动：官方 Key 申请链接与按量计费提醒，不再有推荐模型展示；
+ *   - 界面自检：「高级配置」单行完整显示，label 紧贴对应输入框，向导展开时不与手动「添加 Provider」面板同时铺开。
  * Steps:
  *   1. 打开系统设置并进入模型注册表，展开连接模型，验证无两张空白表单同时铺开。
- *   2. 检查预置服务商联动、官方 Key 申请链接与计费提示。
+ *   2. 检查预置服务商联动、官方 Key 申请链接、计费提示，以及无推荐模型展示、按钮单行、label 贴近控件。
  *   3. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
- *   4. 成功路径：填入有效凭证测试并启用，验证自动测通并写入全局默认任务模型。
+ *   4. 成功路径：模型标识留空，填入有效凭证测试并启用，验证列表第一项测通并写入全局默认任务模型。
  *   5. 保护已有配置：对已有服务商填入坏 Key，验证原有 Provider 与 Token 未被破坏、默认模型未变。
  *   6. 切回高级配置：点击高级配置，向导收起，原有注册表与手动面板恢复可用。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
@@ -61,7 +61,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
   let authValid = false;
   let receivedAuthHeaders: string[] = [];
 
-  // Local model stub server for connectivity testing
+  // Local model stub server for connectivity testing and model listing
   const stubServer: Server = createServer((req, res) => {
     const authHeader = req.headers["authorization"] || "";
     receivedAuthHeaders.push(authHeader);
@@ -81,6 +81,22 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         return;
       }
 
+      // Model discovery listing: the wizard enables the first listed entry.
+      // Note the API sorts listing entries by id, so "stub-model-alpha" is the
+      // effective first item; the explicit-id steps use "stub-model-1", which
+      // deliberately does not appear here.
+      if (req.method === "GET" && req.url?.endsWith("/models")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          data: [
+            { id: "stub-model-omega", object: "model" },
+            { id: "stub-model-alpha", object: "model" },
+          ],
+          object: "list",
+        }));
+        return;
+      }
+
       // Valid OpenAI chat completion response
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
@@ -95,7 +111,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
           },
         ],
         id: "chatcmpl-e2e-wizard-stub",
-        model: "stub-model-1",
+        model: "stub-model-alpha",
         object: "chat.completion",
       }));
     });
@@ -112,13 +128,34 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
       });
       if (!res.ok()) return;
       const data = await res.json() as { providers: Array<{ id: string; name: string }> };
-      for (const p of data.providers) {
-        if (p.name.includes("E2E 向导测试")) {
-          await page.request.fetch(`${apiBaseUrl()}/api/providers/${p.id}`, {
-            headers: authorizationHeader(),
-            method: "DELETE",
-          });
+      const victims = data.providers.filter((p) => p.name.includes("E2E 向导测试"));
+      if (!victims.length) return;
+      // A provider whose model is the global default cannot be deleted, so
+      // clear the overrides first, then remove the models before the provider.
+      await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+        data: {},
+        headers: authorizationHeader(),
+        method: "PUT",
+      });
+      const modelsRes = await page.request.fetch(`${apiBaseUrl()}/api/models`, {
+        headers: authorizationHeader(),
+      });
+      if (modelsRes.ok()) {
+        const models = await modelsRes.json() as Array<{ id: string; providerId: string }>;
+        for (const model of models) {
+          if (victims.some((victim) => victim.id === model.providerId)) {
+            await page.request.fetch(`${apiBaseUrl()}/api/models/${model.id}`, {
+              headers: authorizationHeader(),
+              method: "DELETE",
+            });
+          }
         }
+      }
+      for (const p of victims) {
+        await page.request.fetch(`${apiBaseUrl()}/api/providers/${p.id}`, {
+          headers: authorizationHeader(),
+          method: "DELETE",
+        });
       }
     } catch { /* ignore */ }
   };
@@ -177,8 +214,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "检查预置服务商联动、官方 Key 申请链接与计费提示",
-      "默认选中 DeepSeek，展示官方注册链接与计费说明；切换至智谱后链接与推荐模型同步更新。",
+      "检查预置服务商联动、官方 Key 申请链接、计费提示与面板排版",
+      "默认选中 DeepSeek，展示官方注册链接与计费说明；面板没有推荐模型展示，「高级配置」单行完整显示，每个 label 紧贴自己的输入框；切换至智谱后链接同步更新。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
@@ -189,14 +226,32 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(keyLink).toHaveAttribute("href", "https://platform.deepseek.com/api_keys");
         await expect(keyLink).toContainText("前往 DeepSeek 获取 API Key");
         await expect(wizardSection.locator(".wizard-billing-notice")).toContainText("调用模型将按服务商标准计费");
-        await expect(wizardSection.locator(".wizard-model-preview")).toContainText("deepseek-chat");
+
+        // 不再有推荐模型徽章或等价展示
+        await expect(wizardSection).not.toContainText("推荐模型");
+        await expect(wizardSection.locator(".wizard-model-preview")).toHaveCount(0);
+
+        // 「高级配置」单行完整显示：高度保持单行（折行会把按钮撑到两行高），宽度足以放下四个字
+        const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
+        const manualBox = await manualBtn.boundingBox();
+        expect(manualBox).not.toBeNull();
+        expect(manualBox!.height).toBeLessThanOrEqual(32);
+        expect(manualBox!.width).toBeGreaterThan(50);
+
+        // label 紧贴对应控件：API Key 与服务商的 label 下缘到输入框上缘的间距一眼能看出从属
+        for (const controlId of ["wizard-api-key", "wizard-provider-select"]) {
+          const labelBox = await wizardSection.locator(`label[for="${controlId}"]`).boundingBox();
+          const controlBox = await wizardSection.locator(`#${controlId}`).boundingBox();
+          expect(labelBox).not.toBeNull();
+          expect(controlBox).not.toBeNull();
+          expect(controlBox!.y - (labelBox!.y + labelBox!.height)).toBeLessThan(10);
+        }
 
         // 切换至智谱 GLM
         const select = wizardSection.locator("#wizard-provider-select");
         await select.selectOption("zhipu");
         await expect(keyLink).toHaveAttribute("href", "https://open.bigmodel.cn/usercenter/apikeys");
         await expect(keyLink).toContainText("前往 智谱 GLM 获取 API Key");
-        await expect(wizardSection.locator(".wizard-model-preview")).toContainText("glm-4-plus");
       },
     );
 
@@ -250,13 +305,15 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "成功路径：填入有效凭据测试并启用，验证自动测通并写入全局默认任务模型",
-      "换填有效 Key 后提交，向导自动完成测通，展示包含延迟的成功提示，并直接将模型设为全局默认任务模型。",
+      "成功路径：模型标识留空，填入有效凭据测试并启用，验证列表第一项写入全局默认任务模型",
+      "清空模型标识、换填有效 Key 后提交，向导自动从服务商模型列表取第一项完成测通，展示包含延迟的成功提示，并直接将该模型设为全局默认任务模型。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
 
         authValid = true;
+        // 模型标识留空：向导应登记该服务商模型列表的第一项（stub 返回 alpha 在前）
+        await wizardSection.locator("#wizard-custom-model").fill("");
         await wizardSection.locator("#wizard-api-key").fill("valid-key-pass");
         await wizardSection.locator(".wizard-submit-button").click();
 
@@ -264,14 +321,15 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         const successAlert = wizardSection.locator(".wizard-alert-success");
         await expect(successAlert).toBeVisible();
         await expect(successAlert).toContainText("模型已连接");
+        await expect(successAlert).toContainText("stub-model-alpha");
 
-        // 验证全局默认值中任务模型已更新
+        // 验证全局默认值中任务模型已更新为列表第一项
         const navigation = dialog.getByRole("navigation", { name: "设置分组" });
         await navigation.getByRole("button", { name: /^全局默认值/ }).click();
 
         const taskModelSelect = dialog.getByLabel("任务模型", { exact: false });
         await expect(taskModelSelect).toBeVisible();
-        await expect(taskModelSelect).toContainText("stub-model-1");
+        await expect(taskModelSelect).toContainText("stub-model-alpha");
 
         // 回到模型注册表
         await navigation.getByRole("button", { name: /^模型注册表/ }).click();

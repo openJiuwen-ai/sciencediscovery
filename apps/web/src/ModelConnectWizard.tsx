@@ -20,6 +20,7 @@ import type {
   ModelProvider,
   ModelProviderPreset,
   ModelProviderPresetId,
+  ProviderModelList,
   ProxySettingsDetails,
   RuntimeSettingsOverrides,
 } from "@sciencediscovery/schema";
@@ -65,7 +66,6 @@ export function ModelConnectWizard({
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customName, setCustomName] = useState("");
   const [customModelId, setCustomModelId] = useState("");
-  const [modelIdOverride, setModelIdOverride] = useState("");
 
   const [testing, setTesting] = useState(false);
   const [validationError, setValidationError] = useState<string>();
@@ -75,9 +75,10 @@ export function ModelConnectWizard({
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
   const providerDisplayName = isCustom ? (customName.trim() || t("wizard.customNamePlaceholder")) : (selectedPreset?.name ?? selectedPresetId);
-  const effectiveModelId = isCustom
-    ? customModelId.trim()
-    : (modelIdOverride.trim() || selectedPreset?.recommendedModel || "gpt-4o");
+  // A model identifier the user typed by hand (custom provider only). When it
+  // is empty the wizard enables the first entry of the provider's own model
+  // listing instead of any curated recommendation.
+  const explicitModelId = isCustom ? customModelId.trim() : "";
   const tokenOptional = selectedPreset?.tokenOptional === true;
 
   function handleProviderChange(value: string) {
@@ -89,8 +90,27 @@ export function ModelConnectWizard({
     } else {
       setIsCustom(false);
       setSelectedPresetId(value);
-      setModelIdOverride("");
     }
+  }
+
+  // The model to register, test, and make the global default: the user's own
+  // identifier when given, otherwise the first model the provider lists.
+  // Throws a readable, already-translated error when the listing cannot
+  // supply one; the caller's rollback path treats it like any other failure.
+  async function resolveDefaultModelId(providerId: string): Promise<string> {
+    if (explicitModelId) return explicitModelId;
+    let listing: ProviderModelList;
+    try {
+      listing = await client.listProviderModels(providerId);
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      throw new Error(t("wizard.error.listingFailed", { detail }));
+    }
+    const first = listing.models[0]?.id?.trim();
+    if (!first) {
+      throw new Error(t("wizard.error.noModels"));
+    }
+    return first;
   }
 
   async function handleTestAndEnable(): Promise<void> {
@@ -101,10 +121,6 @@ export function ModelConnectWizard({
     if (isCustom) {
       if (!customBaseUrl.trim()) {
         setValidationError(t("wizard.error.missingBaseUrl"));
-        return;
-      }
-      if (!customModelId.trim()) {
-        setValidationError(t("wizard.error.missingModel"));
         return;
       }
     }
@@ -136,8 +152,6 @@ export function ModelConnectWizard({
           : (candidate.name === (customName.trim() || "Custom") && candidate.baseUrl === customBaseUrl.trim())
       );
 
-      const label = selectedPreset?.recommendedModelLabel || effectiveModelId;
-
       if (matchingProvider) {
         // Safe testing for existing provider:
         // DO NOT overwrite matchingProvider's apiToken before testing!
@@ -168,9 +182,10 @@ export function ModelConnectWizard({
         const tempProvider = await client.createProvider(tempInput);
         createdTempProviderId = tempProvider.id;
 
+        const modelId = await resolveDefaultModelId(tempProvider.id);
         const tempProfile = await client.addProviderModel(tempProvider.id, {
-          label,
-          model: effectiveModelId,
+          ...(explicitModelId ? { label: explicitModelId } : {}),
+          model: modelId,
         });
         createdTempModelId = tempProfile.id;
 
@@ -205,11 +220,11 @@ export function ModelConnectWizard({
         }
 
         // Ensure model profile exists on the matching provider
-        let profile = existingModels.find((m) => m.providerId === matchingProvider.id && m.model === effectiveModelId);
+        let profile = existingModels.find((m) => m.providerId === matchingProvider.id && m.model === modelId);
         if (!profile) {
           profile = await client.addProviderModel(matchingProvider.id, {
-            label,
-            model: effectiveModelId,
+            ...(explicitModelId ? { label: explicitModelId } : {}),
+            model: modelId,
           });
           createdPermanentModelId = profile.id;
         }
@@ -266,9 +281,10 @@ export function ModelConnectWizard({
         const provider = await client.createProvider(createInput);
         createdPermanentProviderId = provider.id;
 
+        const modelId = await resolveDefaultModelId(provider.id);
         const profile = await client.addProviderModel(provider.id, {
-          label,
-          model: effectiveModelId,
+          ...(explicitModelId ? { label: explicitModelId } : {}),
+          model: modelId,
         });
         createdPermanentModelId = profile.id;
 
@@ -484,13 +500,6 @@ export function ModelConnectWizard({
         ) : null}
 
         <div className="wizard-footer-row">
-          <div className="wizard-model-preview">
-            <span className="wizard-model-badge">
-              {t("wizard.recommendedModelLabel")}: <strong>{effectiveModelId}</strong>
-            </span>
-            <span className="wizard-model-hint">{t("wizard.recommendedModelDesc")}</span>
-          </div>
-
           <div className="wizard-actions">
             <button
               aria-busy={testing}
