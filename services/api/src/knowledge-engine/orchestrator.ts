@@ -433,6 +433,18 @@ export class KeOrchestrator {
       // NotFound is definitive (no full text anywhere): performIngest already
       // marked the doc — the job completes without burning retries.
       if (error instanceof NotFoundError) return;
+      if (job.attempts >= job.maxAttempts) {
+        // The runner is about to dead-letter the job (claim already spent the
+        // last attempt) — mark the document too, or it stays a "pending"
+        // zombie in the KB forever (observed live: S2 throttle storms killed
+        // ingests whose documents then never moved again).
+        this.deps.store.upsertDocument({
+          kbId: doc.kbId,
+          dedupKey: doc.dedupKey,
+          status: "error",
+          sourceMeta: { ...doc.sourceMeta, ingest_error: errorMessage(error) },
+        });
+      }
       throw error;
     }
   }
