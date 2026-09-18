@@ -477,9 +477,14 @@ test("bubblewrap runner exposes only the workspace and denies network", async (c
     code: [
       "import socket",
       "import ctypes",
+      "import os",
       "from pathlib import Path",
       "Path('result.txt').write_text('isolated')",
-      "print(f'host_passwd={Path(\"/etc/passwd\").exists()}')",
+      "passwd_entries = Path('/etc/passwd').read_text().splitlines()",
+      "identity = passwd_entries[0].split(':')",
+      "print(f'identity_entries={len(passwd_entries)}')",
+      "print(f'identity_matches={identity[2] == str(os.getuid()) and identity[3] == str(os.getgid())}')",
+      "print(f'identity_home={identity[5]}')",
       "libc = ctypes.CDLL(None, use_errno=True)",
       "print(f'no_new_privs={libc.prctl(39, 0, 0, 0, 0)}')",
       "ctypes.set_errno(0)",
@@ -499,7 +504,9 @@ test("bubblewrap runner exposes only the workspace and denies network", async (c
   assert.equal(result.sandbox, "bubblewrap");
   assert.equal(result.cgroupMode, RESOURCE_LIMIT_MODE);
   assert.equal(result.networkPolicy, "none");
-  assert.match(result.stdout, /host_passwd=False/);
+  assert.match(result.stdout, /identity_entries=1/);
+  assert.match(result.stdout, /identity_matches=True/);
+  assert.match(result.stdout, /identity_home=\/tmp/);
   assert.match(result.stdout, /no_new_privs=1/);
   assert.match(result.stdout, /unshare=-1:1/);
   assert.match(result.stdout, /network=denied/);

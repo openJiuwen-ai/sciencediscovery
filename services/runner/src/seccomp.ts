@@ -90,8 +90,12 @@ function seccompProfile(architecture: string) {
   return profile;
 }
 
-/** `network` allows the socket-family syscalls the baseline denies. */
-export type SeccompVariant = "baseline" | "network";
+/**
+ * `network` allows socket-family syscalls for the audited egress bridge.
+ * `npu` allows the same calls for CANN/TE Python-module initialization, but the
+ * sandbox keeps its private network namespace and receives no egress bridge.
+ */
+export type SeccompVariant = "baseline" | "network" | "npu";
 
 function deniedSyscalls(architecture: string, variant: SeccompVariant): readonly number[] {
   const profile = seccompProfile(architecture);
@@ -130,7 +134,9 @@ export async function ensureSeccompFilter(
   const runtimeDirectory = resolve(dataDir, "runner-runtime");
   const path = resolve(
     runtimeDirectory,
-    variant === "baseline" ? profile.filename : profile.filename.replace("seccomp-", "seccomp-network-"),
+    variant === "baseline"
+      ? profile.filename
+      : profile.filename.replace("seccomp-", `seccomp-${variant}-`),
   );
   await mkdir(runtimeDirectory, { recursive: true });
   // Every execution of the same variant publishes to this one path, and each
