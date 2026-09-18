@@ -196,6 +196,44 @@ interface ThrottleState {
   remainingMs: number;
 }
 
+/**
+ * Hard wall-clock cap for one frontier item's download+parse. The connector
+ * layer bounds every individual fetch, but a pathological item (stalling
+ * host across mirrors, wedged worker) must never park the serial cycle
+ * forever — observed live as a zero-CPU, zero-socket, zero-timer stall that
+ * only a process restart cleared. The timeout converts any such invisible
+ * hang into an ordinary transient item failure (attempts bump, the crawl
+ * moves on). The abandoned inner promise is catch-guarded so a late
+ * rejection can never surface as an unhandled rejection.
+ */
+const ITEM_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+
+/** The per-item hard cap fired. Distinct type so the loop defers re-picking
+ *  the item for the rest of the run (same treatment as a rate-limited one):
+ *  a download that hung for five minutes will not succeed on an immediate
+ *  in-cycle retry, it would just burn another cap. */
+class ItemDownloadTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(`${label} exceeded ${ms}ms hard cap`);
+    this.name = "ItemDownloadTimeoutError";
+  }
+}
+
+async function withItemTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  work.catch(() => {});
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new ItemDownloadTimeoutError(label, ms)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type SleepFn = (ms: number) => Promise<void>;
 const defaultSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -226,6 +264,8 @@ async function withThrottleBackoff<T>(
 export interface GrowCycleOptions {
   readonly sleep?: SleepFn;
   readonly throttleWaitBudgetMs?: number;
+  /** Test seam: shrink the per-item download hard cap. */
+  readonly itemDownloadTimeoutMs?: number;
 }
 
 export async function runGrowCycle(
@@ -236,6 +276,7 @@ export async function runGrowCycle(
   options: GrowCycleOptions = {},
 ): Promise<GrowCycleResult> {
   const sleep = options.sleep ?? defaultSleep;
+  const itemDownloadTimeoutMs = options.itemDownloadTimeoutMs ?? ITEM_DOWNLOAD_TIMEOUT_MS;
   const throttle: ThrottleState = { remainingMs: options.throttleWaitBudgetMs ?? THROTTLE_WAIT_BUDGET_MS };
   const input = job.payload as { kbId: string; cycleId: string; query?: string; budget?: Partial<CrawlBudget> };
   const kbId = input.kbId;
@@ -312,7 +353,7 @@ export async function runGrowCycle(
     let downloadOk = false;
     let documentId: string | null = null;
     try {
-      const outcome = await deps.download(kbId, ref);
+      const outcome = await withItemTimeout(deps.download(kbId, ref), itemDownloadTimeoutMs, "frontier download");
       documentId = outcome.documentId;
       downloadOk = true;
     } catch (error) {
@@ -331,10 +372,17 @@ export async function runGrowCycle(
         // metadata/search rate limits still escalate to whole-cycle
         // backoff via the connector chain.
         const attempts = store.frontierBumpAttempts(item.id);
-        if (error instanceof RateLimitError) deferredRateLimited.add(item.id);
+        // Defer re-pick for the rest of this run on rate limits AND on the
+        // download hard cap: a wedged download retried in-cycle would just
+        // burn another full cap and starve the remaining frontier.
+        if (error instanceof RateLimitError || error instanceof ItemDownloadTimeoutError) deferredRateLimited.add(item.id);
         if (attempts >= MAX_ITEM_ATTEMPTS) store.frontierMarkStatus(item.id, "failed");
         consecutiveFailures += 1;
-        const kind = error instanceof RateLimitError ? "download rate limited" : "download failed";
+        const kind = error instanceof RateLimitError
+          ? "download rate limited"
+          : error instanceof ItemDownloadTimeoutError
+            ? "download timed out"
+            : "download failed";
         log(`${kind} (${consecutiveFailures} consecutive): ${error instanceof Error ? error.message : error}`);
         if (consecutiveFailures >= DOOM_LOOP_LIMIT) {
           // Systemic failure (network/sources down): persist what we know
