@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# UT / ST / E2E on GitHub-hosted Linux runners. The jobs only call the
-# repository entry points documented in .ci/README.md, so CI cannot drift into
-# a second, GitHub-only test definition. Every layer is hermetic: no model
+# UT / ST / E2E plus the two distribution gates (binary release, Docker image)
+# on GitHub-hosted Linux runners. The test jobs only call the repository entry
+# points documented in .ci/README.md, so CI cannot drift into a second,
+# GitHub-only test definition; the distribution jobs build the artifacts a user
+# actually receives and then exercise them. Every layer is hermetic: no model
 # credentials, no live endpoints, no NPU. The opt-in live layers
 # (ci:st:real, ci:e2e:real, ci:st:npu, ci:e2e:legacy) stay out of this file.
 
@@ -286,3 +288,134 @@ jobs:
           path: dist/binary-release
           if-no-files-found: warn
           retention-days: 7
+
+  # Nothing else in this repository builds the product image, and that gap is
+  # not hypothetical: a workspace package was renamed and `docker compose build`
+  # stayed broken for hundreds of commits, because the only thing that would
+  # have noticed was somebody running it by hand.
+  #
+  # scripts/docker-build-context.test.mjs runs in UT and fails on a Dockerfile
+  # COPY source that no longer exists. This job covers what no static read can:
+  # the dependency install, the application build, and whether the image that
+  # comes out actually serves.
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # The documented default. Kept in a variable so the same commands can be
+      # replayed against a spare port on a machine that already runs a stack.
+      SD_PORT: "4310"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Deliberately uncached. A user's first build is cold, and a cold build is
+      # what this job exists to protect; a warm layer cache would hide a broken
+      # early stage for as long as the cache survived.
+      #
+      # The build reaches npm, PyPI, the pinned micromamba release and
+      # https://models.dev/api.json. The model catalog snapshot is a hard
+      # failure by design, so an outage there stops this job — read the failing
+      # stage before assuming the repository broke.
+      - name: Build the product image
+        run: docker compose build
+
+      # The documented first-run sequence: create the bind mount as the invoking
+      # user, then start. Without the mkdir, Docker creates it as root and the
+      # entry point exits on an unwritable data directory.
+      - name: Start the stack
+        run: |
+          mkdir -p data
+          docker compose up -d
+
+      - name: Wait for the control API
+        run: |
+          for _ in $(seq 1 60); do
+            curl -fsS "http://127.0.0.1:${SD_PORT}/health" >/dev/null 2>&1 && break
+            sleep 5
+          done
+          curl -fsS "http://127.0.0.1:${SD_PORT}/health" > "${RUNNER_TEMP}/health.json"
+          jq . "${RUNNER_TEMP}/health.json"
+
+      # Each check below guards a property the deployment depends on and that a
+      # successful build says nothing about.
+      - name: Check the deployment contract
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+
+          # Compose must derive the container name from the project name. A
+          # pinned container_name collides with a second instance on the host.
+          name=$(docker compose ps --format '{{.Name}}')
+          case "$name" in
+            *-sciencediscovery-1) echo "container name: $name" ;;
+            *) fail "container name is not project-derived: ${name:-<none>}" ;;
+          esac
+
+          # The API answering is not enough; the runner behind it has to be up
+          # and report the bubblewrap sandbox.
+          health_json="${RUNNER_TEMP}/health.json"
+          jq -e '.status == "ok"' "$health_json" >/dev/null || fail "API status is not ok"
+          jq -e '.runner.status == "ok"' "$health_json" >/dev/null || fail "runner status is not ok"
+          jq -e '.runner.sandbox == "bubblewrap"' "$health_json" >/dev/null || fail "runner does not report the bubblewrap sandbox"
+
+          # Compose's own health check, which is what `docker compose ps` shows
+          # an operator. start_period is 60s, so allow for it.
+          for _ in $(seq 1 40); do
+            health=$(docker compose ps --format '{{.Health}}')
+            [ "$health" = "healthy" ] && break
+            sleep 5
+          done
+          [ "$health" = "healthy" ] || fail "compose health check never reached healthy (last: ${health:-<none>})"
+          echo "compose health: $health"
+
+          # The container is configured by the Compose environment block, never
+          # by a .env inside the image. Keys offered by .env.docker.example that
+          # nobody forwards are silently dead, so prove one arrived.
+          docker compose exec -T sciencediscovery sh -c '[ -n "${SCIENCE_AGENT_CONTEXT_MODE:-}" ]' \
+            || fail ".env.docker.example keys are not reaching the container environment"
+
+          # Seeded from the image into the bind-mounted data directory, at the
+          # path the Docker guides name.
+          test -x data/scientific-envs/bin/micromamba \
+            || fail "micromamba was not seeded to data/scientific-envs/bin/micromamba"
+
+          # The real sandbox gate: the argument set packages/sandbox-capability
+          # probes with. The outer sh -c is required — as the first process of
+          # an exec session bwrap cannot bring up loopback, which fails for
+          # reasons unrelated to sandbox capability.
+          docker compose exec -T sciencediscovery sh -c '
+            bwrap --unshare-all --unshare-user --die-with-parent \
+              --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
+              --symlink usr/lib64 /lib64 --proc /proc /usr/bin/true' \
+            || fail "the bubblewrap probe failed inside the container"
+
+          echo "deployment contract OK"
+
+      - name: Report the image
+        if: always()
+        run: |
+          {
+            echo "### Docker image"
+            echo
+            echo '```'
+            docker images sciencediscovery --format '{{.Repository}}:{{.Tag}} {{.Size}}' 2>/dev/null
+            docker compose ps 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect the container logs
+        if: always()
+        run: docker compose logs --no-color > "${RUNNER_TEMP}/compose-logs.txt" 2>&1 || true
+
+      - name: Upload the container logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-compose-logs
+          path: ${{ runner.temp }}/compose-logs.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down
