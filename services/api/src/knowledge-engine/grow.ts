@@ -212,10 +212,10 @@ const ITEM_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
  *  the item for the rest of the run (same treatment as a rate-limited one):
  *  a download that hung for five minutes will not succeed on an immediate
  *  in-cycle retry, it would just burn another cap. */
-class ItemDownloadTimeoutError extends Error {
+class HardCapTimeoutError extends Error {
   constructor(label: string, ms: number) {
     super(`${label} exceeded ${ms}ms hard cap`);
-    this.name = "ItemDownloadTimeoutError";
+    this.name = "HardCapTimeoutError";
   }
 }
 
@@ -226,7 +226,7 @@ async function withItemTimeout<T>(work: Promise<T>, ms: number, label: string): 
     return await Promise.race([
       work,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new ItemDownloadTimeoutError(label, ms)), ms);
+        timer = setTimeout(() => reject(new HardCapTimeoutError(label, ms)), ms);
       }),
     ]);
   } finally {
@@ -242,15 +242,21 @@ const defaultSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolv
  * and draw every sleep from the cycle-shared budget. Non-throttle errors pass
  * through untouched; an exhausted budget raises ThrottleBudgetExhaustedError
  * so the cycle can defer to the runner instead of dying.
+ *
+ * The call itself is raced against a hard cap: every transport fetch is
+ * individually bounded, yet a stalled body stream once parked a resolver
+ * await forever (zero CPU/sockets/timers — invisible to every watchdog).
+ * A serial pipeline must contain NO unbounded await, whoever leaks it.
  */
 async function withThrottleBackoff<T>(
   state: ThrottleState,
   call: () => Promise<T>,
   sleep: SleepFn = defaultSleep,
+  callTimeoutMs: number = RESOLVER_CALL_TIMEOUT_MS,
 ): Promise<T> {
   for (;;) {
     try {
-      return await call();
+      return await withItemTimeout(call(), callTimeoutMs, "resolver call");
     } catch (error) {
       if (!(error instanceof RateLimitError)) throw error;
       const wait = Math.min(Math.max(error.retryAfterMs ?? DEFAULT_THROTTLE_WAIT_MS, 1_000), MAX_THROTTLE_WAIT_MS);
@@ -261,11 +267,17 @@ async function withThrottleBackoff<T>(
   }
 }
 
+/** Hard cap for one resolver call (chain walk included): a handful of
+ *  20s-bounded connector calls plus slack. */
+const RESOLVER_CALL_TIMEOUT_MS = 180_000;
+
 export interface GrowCycleOptions {
   readonly sleep?: SleepFn;
   readonly throttleWaitBudgetMs?: number;
   /** Test seam: shrink the per-item download hard cap. */
   readonly itemDownloadTimeoutMs?: number;
+  /** Test seam: shrink the per-resolver-call hard cap. */
+  readonly resolverCallTimeoutMs?: number;
 }
 
 export async function runGrowCycle(
@@ -277,6 +289,7 @@ export async function runGrowCycle(
 ): Promise<GrowCycleResult> {
   const sleep = options.sleep ?? defaultSleep;
   const itemDownloadTimeoutMs = options.itemDownloadTimeoutMs ?? ITEM_DOWNLOAD_TIMEOUT_MS;
+  const resolverCallTimeoutMs = options.resolverCallTimeoutMs ?? RESOLVER_CALL_TIMEOUT_MS;
   const throttle: ThrottleState = { remainingMs: options.throttleWaitBudgetMs ?? THROTTLE_WAIT_BUDGET_MS };
   const input = job.payload as { kbId: string; cycleId: string; query?: string; budget?: Partial<CrawlBudget> };
   const kbId = input.kbId;
@@ -312,7 +325,7 @@ export async function runGrowCycle(
   const phasesDone = new Set(phaseList);
   const needsSeed = phaseRaw !== null && SEED_PHASES.some((phase) => !phasesDone.has(phase));
   if (needsSeed) {
-    const seeded = await seedFrontier(store, kbId, cycleId, query, budget, deps, phasesDone, phaseKey, log, throttle, sleep);
+    const seeded = await seedFrontier(store, kbId, cycleId, query, budget, deps, phasesDone, phaseKey, log, throttle, sleep, resolverCallTimeoutMs);
     if (seeded > 0) log(`seeded frontier with ${seeded} candidate(s)`);
   }
 
@@ -375,12 +388,12 @@ export async function runGrowCycle(
         // Defer re-pick for the rest of this run on rate limits AND on the
         // download hard cap: a wedged download retried in-cycle would just
         // burn another full cap and starve the remaining frontier.
-        if (error instanceof RateLimitError || error instanceof ItemDownloadTimeoutError) deferredRateLimited.add(item.id);
+        if (error instanceof RateLimitError || error instanceof HardCapTimeoutError) deferredRateLimited.add(item.id);
         if (attempts >= MAX_ITEM_ATTEMPTS) store.frontierMarkStatus(item.id, "failed");
         consecutiveFailures += 1;
         const kind = error instanceof RateLimitError
           ? "download rate limited"
-          : error instanceof ItemDownloadTimeoutError
+          : error instanceof HardCapTimeoutError
             ? "download timed out"
             : "download failed";
         log(`${kind} (${consecutiveFailures} consecutive): ${error instanceof Error ? error.message : error}`);
@@ -403,7 +416,7 @@ export async function runGrowCycle(
     // never re-admit the same parent's citations.
     if (!item.expandedAt && item.depth < budget.maxDepth) {
       try {
-        const citations = await withThrottleBackoff(throttle, () => deps.resolveCitations(ref), sleep);
+        const citations = await withThrottleBackoff(throttle, () => deps.resolveCitations(ref), sleep, resolverCallTimeoutMs);
         // Persist this paper's reference dedup keys (ref_ids) so the AA
         // inverted index can score future candidates' bibliographic
         // coupling. Best-effort: a failure here must not block expansion.
@@ -576,6 +589,7 @@ async function seedFrontier(
   log: (msg: string) => void,
   throttle: ThrottleState,
   sleep: SleepFn,
+  callTimeoutMs: number,
 ): Promise<number> {
   const allDocs = store.listDocumentsForSeeding(kbId, MAX_SEED_DOCS);
   // Drop low-quality seeds (not-ready / proven zero-yield) before resolving
@@ -630,7 +644,7 @@ async function seedFrontier(
     for (const doc of docs) {
       const ref = docRef(doc);
       try {
-        const citations = await withThrottleBackoff(throttle, () => deps.resolveCitations(ref), sleep);
+        const citations = await withThrottleBackoff(throttle, () => deps.resolveCitations(ref), sleep, callTimeoutMs);
         await ensureQueryEmb(citations);
         const admitted = await admitCandidates(
           store, kbId, cycleId, null, 0, citations, queryEmb ?? null, budget, deps, SOURCE_BACKWARD,
@@ -656,7 +670,7 @@ async function seedFrontier(
       for (const doc of docs.slice(0, FORWARD_SEED_DOCS)) {
         const ref = docRef(doc);
         try {
-          const citing = (await withThrottleBackoff(throttle, () => deps.resolveForward!(ref), sleep)).slice(0, FORWARD_PER_DOC);
+          const citing = (await withThrottleBackoff(throttle, () => deps.resolveForward!(ref), sleep, callTimeoutMs)).slice(0, FORWARD_PER_DOC);
           await ensureQueryEmb(citing);
           seeded += await admitCandidates(
             store, kbId, cycleId, null, 0, citing, queryEmb ?? null, budget, deps, SOURCE_FORWARD,
@@ -697,7 +711,7 @@ async function seedFrontier(
       }
       for (const patchQuery of patchQueries) {
         try {
-          const results = await withThrottleBackoff(throttle, () => deps.searchPapers!(patchQuery.query, PATCH_QUERY_LIMIT), sleep);
+          const results = await withThrottleBackoff(throttle, () => deps.searchPapers!(patchQuery.query, PATCH_QUERY_LIMIT), sleep, callTimeoutMs);
           await ensureQueryEmb(results);
           seeded += await admitCandidates(
             store, kbId, cycleId, null, 0, results, queryEmb ?? null, budget, deps, SOURCE_ENTITY_QUERY,

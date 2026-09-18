@@ -558,3 +558,38 @@ test("grow cycle: a wedged download hits the hard cap and the crawl moves on", a
   assert.equal(counts.pending, 1);
   assert.equal(counts.failed, 0);
 });
+
+test("grow cycle: a wedged resolver call in seeding is capped and skipped", async (context) => {
+  const root = tempRoot("ke-grow-wedged-resolver");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  // The seeding phases' resolver calls must be bounded too: a stalled await
+  // here once parked a cycle before the frontier even existed.
+  const stubs: GrowStubs = {
+    download: async () => {},
+    citations: { seed2: [makeRef("t1", "Healthy Candidate relevant")] },
+    searchCalls: [],
+    downloadCalls: [],
+    resolveCitationsOverride: async (ref) => {
+      if (ref.sourceId === "seed1") return new Promise<never>(() => {}); // never settles
+      return stubs.citations[ref.sourceId] ?? [];
+    },
+  };
+  const { store, orchestrator, runner } = createHarness(root, stubs, {
+    sleep: async () => {},
+    resolverCallTimeoutMs: 50,
+  });
+  context.after(() => store.close());
+
+  const kb = store.createKnowledgeBase({ name: "Ebola relevant" });
+  addSeedDoc(store, kb.id, "seed1");
+  addSeedDoc(store, kb.id, "seed2");
+  const handle = orchestrator.startGrow(kb.id, "ebola relevant", { maxPapers: 10, maxDepth: 0, maxPerPaper: 5 });
+  await drain(runner);
+
+  // The wedged seed was skipped (logged), the healthy one seeded the
+  // frontier, and the cycle completed with the phase watermarked.
+  assert.equal(store.listJobs({ type: KE_GROW_JOB, status: "succeeded" }).length, 1);
+  const phases = JSON.parse(store.getSetting(`grow_seed_phase:${handle.cycleId}`) ?? "[]") as string[];
+  assert.ok(phases.includes("backward"));
+  assert.equal(store.frontierCounts(handle.cycleId).total, 1);
+});
