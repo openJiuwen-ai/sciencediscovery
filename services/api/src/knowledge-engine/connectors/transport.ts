@@ -57,6 +57,38 @@ export interface ScholarlyTransport {
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
+/** Extra grace for the body-read race beyond the request timeout (capped so
+ *  short-timeout callers — and tests — keep a short total budget). */
+const BODY_READ_GRACE_MS = 10_000;
+
+/**
+ * Read a response body with its own clock. The request's AbortSignal covers
+ * the fetch lifecycle, but a body stream that stalls after headers (or whose
+ * socket dies quietly — observed live with a bandwidth-throttled arxiv.org)
+ * can leave arrayBuffer() pending forever with no handle, no timer and no
+ * rejection: an invisible, restart-only hang. Race it instead.
+ */
+async function readBodyWithTimeout(response: {
+  arrayBuffer(): Promise<ArrayBuffer>;
+}, timeoutMs: number, url: string): Promise<Uint8Array> {
+  const read = response.arrayBuffer();
+  read.catch(() => {}); // a late rejection after the race lost is handled
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const buffer = await Promise.race([
+      read,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`body read timed out after ${timeoutMs}ms: ${url.slice(0, 120)}`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+    return new Uint8Array(buffer);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export class HttpScholarlyTransport implements ScholarlyTransport {
   constructor(
@@ -67,17 +99,20 @@ export class HttpScholarlyTransport implements ScholarlyTransport {
   async get(url: string, options: ScholarlyRequest = {}): Promise<ScholarlyResponse> {
     const host = new URL(url).host;
     await this.limiter.throttle(host);
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const response = await fetch(url, {
       headers: { "user-agent": this.userAgent, ...options.headers },
       redirect: options.redirect ?? "follow",
-      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (response.status === 429) {
       const wait = this.limiter.respectRetryAfter(host, response.headers.get("retry-after"));
       throw new RateLimitError(`${host} rate limited (retry in ${wait}ms)`, wait);
     }
-    // Buffer once so text/json/bytes are all safe to call repeatedly.
-    const body = new Uint8Array(await response.arrayBuffer());
+    // Buffer once so text/json/bytes are all safe to call repeatedly. The
+    // body read gets its own race: a stalled body can outlive the request
+    // abort (see readBodyWithTimeout).
+    const body = await readBodyWithTimeout(response, timeoutMs + Math.min(BODY_READ_GRACE_MS, timeoutMs), url);
     return {
       status: response.status,
       url,
