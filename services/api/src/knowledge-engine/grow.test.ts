@@ -518,3 +518,43 @@ test("grow cycle: a 429 storm defers to the runner (slot freed) and the same cyc
   assert.ok(after.includes("backward"));
   assert.equal(store.frontierCounts(handle.cycleId).done, 1);
 });
+
+test("grow cycle: a wedged download hits the hard cap and the crawl moves on", async (context) => {
+  const root = tempRoot("ke-grow-wedged-download");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  // Live-observed failure mode: a throttled host (or a wedged worker) parks
+  // the download await with zero CPU/sockets/timers — invisible forever.
+  const cursed = makeRef("t-cursed", "Cursed Hanging relevant");
+  const good = makeRef("t-good", "Good Paper relevant");
+  const stubs: GrowStubs = {
+    download: async (title) => {
+      if (title === cursed.title) await new Promise(() => {}); // never settles
+    },
+    citations: { seed1: [cursed, good] },
+    searchCalls: [],
+    downloadCalls: [],
+  };
+  const { store, orchestrator, runner } = createHarness(root, stubs, {
+    sleep: async () => {},
+    itemDownloadTimeoutMs: 50,
+  });
+  context.after(() => store.close());
+
+  const kb = store.createKnowledgeBase({ name: "Ebola relevant" });
+  addSeedDoc(store, kb.id, "seed1");
+  const handle = orchestrator.startGrow(kb.id, "ebola relevant", { maxPapers: 10, maxDepth: 0, maxPerPaper: 5 });
+  await drain(runner);
+
+  // The cycle completed instead of parking forever…
+  assert.equal(store.listJobs({ type: KE_GROW_JOB, status: "succeeded" }).length, 1);
+  // …the healthy paper made it, and the wedged one was attempted once,
+  // deferred (not re-picked to burn cap after cap), and left pending for a
+  // future cycle.
+  assert.ok(stubs.downloadCalls.includes(cursed.title));
+  assert.equal(stubs.downloadCalls.filter((t) => t === cursed.title).length, 1);
+  const counts = store.frontierCounts(handle.cycleId);
+  assert.equal(counts.total, 2);
+  assert.equal(counts.done, 1);
+  assert.equal(counts.pending, 1);
+  assert.equal(counts.failed, 0);
+});
