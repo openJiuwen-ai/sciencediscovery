@@ -425,6 +425,48 @@ test("ingest with no full text anywhere marks the document error without retry",
   assert.equal(rootStore.listJobs({ type: KE_EXTRACT_JOB }).length, 0);
 });
 
+test("ingest exhausting its last attempt marks the document error (no pending zombie)", async (context) => {
+  const root = tempRoot("ke-orch-ingest-dead");
+  context.after(() => rm(root, { force: true, recursive: true }));
+  // PDF download succeeds, then the paper worker blows up with a retryable
+  // error; maxAttempts=1 makes the first failure the final one. Observed live
+  // (S2 throttle storms): the job dead-lettered but the document stayed
+  // "pending" forever.
+  const transport = stubTransport([{ match: "/pdf/", status: 200, body: "%PDF-1.7 fake" }]);
+  const store = KnowledgeEngineStore.open(root);
+  context.after(() => store.close());
+  const orchestrator = new KeOrchestrator({
+    store,
+    chain: buildSourceChain({ transport }),
+    transport,
+    schema: BIOMEDICAL_SCHEMA,
+    resolveEndpoint: () => ({ baseUrl: "http://stub", model: "m" }),
+    llmInvoke: async () => EXTRACTION_RESPONSE,
+    assertUrl: async () => {},
+    paperText: async () => {
+      throw new Error("paper worker boom");
+    },
+  });
+  const runner = new KeJobRunner(store);
+  orchestrator.registerJobs(runner);
+
+  const kb = store.createKnowledgeBase({ name: "Ebola" });
+  const doc = store.upsertDocument({
+    kbId: kb.id,
+    dedupKey: "manual|zombie-check",
+    title: "Some paper",
+    status: "pending",
+    sourceMeta: { paperRef: { title: "Some paper", arxivId: "2609.90001" } },
+  });
+  store.enqueueJob({ type: KE_INGEST_JOB, payload: { kbId: kb.id, docId: doc.id }, maxAttempts: 1 });
+  await drain(runner);
+
+  const after = store.getDocument(doc.id);
+  assert.equal(after?.status, "error");
+  assert.match(String(after?.sourceMeta["ingest_error"]), /paper worker boom/);
+  assert.equal(store.listJobs({ type: KE_INGEST_JOB, status: "dead" }).length, 1);
+});
+
 // ---------------------------------------------------- truncation ladder
 
 test("extraction truncation ladder: a truncated turn escalates instead of dying", async (context) => {
