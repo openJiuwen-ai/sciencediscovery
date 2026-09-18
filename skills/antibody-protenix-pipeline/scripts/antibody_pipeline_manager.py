@@ -13,18 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Workspace-first manager for the real antibody design pipeline.
+"""Workspace-first manager for the sandboxed antibody design pipeline.
 
-This helper is intended to be copied into a ScienceDiscovery session workspace.
-It does not assume one fixed server layout. It discovers model code and
-environment paths from config, environment variables, workspace-local clones,
-and common shared locations.
+The manager runs directly from the frozen, read-only Skill package. Scientific
+inputs, model code, checkpoints and outputs must live in the selected Runner's
+workspace; Python comes from the selected managed scientific environment.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -38,11 +38,42 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-COMMON_MINDSCIENCE_ROOTS = [
-    "/data/mindscience",
-    "/opt/mindscience",
-    "/opt/antibody_pipeline/models/mindscience",
-]
+MINDSCIENCE_REPO_URL = "https://gitcode.com/mindspore/mindscience.git"
+MINDSCIENCE_REF = "971c015b0111d229608ff05b9e77704dbb0793b4"
+RF_DIFFUSION_CKPT = {
+    "url": "https://tools.mindspore.cn/dataset/workspace/mindspore_ckpt/ckpt/RFdiffusion/RFdiffusion_Ab.ckpt",
+    "size": 480_719_938,
+    "sha256": "19432e2789016d3e25543771c69147ea7a1a8bbc2099d7c93678090e63e7e581",
+}
+PROTENIX_CKPT = {
+    "url": "https://tools.mindspore.cn/dataset/workspace/mindspore_ckpt/ckpt/Protenix/ms_model_v0.5.0.ckpt",
+    "size": 1_472_707_161,
+    "sha256": "b0944db8b3ecf48db7c73c4538194bda86b9ce8b036812e0a1c950bebc26fde0",
+}
+
+
+WORKSPACE_PATH_KEYS = {
+    "workspace",
+    "models_dir",
+    "mindscience_root",
+    "app_dir",
+    "rf_diffusion_dir",
+    "proteinmpnn_dir",
+    "protenix_dir",
+    "ckpt",
+    "protenix_ckpt",
+    "hmmer_home",
+    "target_pdb",
+    "framework_pdb",
+    "run_dir",
+}
+
+SANDBOX_FORBIDDEN_CONFIG_KEYS = {
+    "python",
+    "pipeline_env",
+    "cann_set_env",
+    "scripts_dir",
+}
 
 
 def posix_path(value: Any) -> str:
@@ -102,18 +133,48 @@ def executable_file(path: str) -> bool:
     return bool(path) and Path(path).is_file() and os.access(path, os.X_OK)
 
 
-def first_existing_dir(candidates: list[str]) -> str:
-    for item in candidates:
-        if item and Path(item).is_dir():
-            return posix_path(item)
-    return ""
+def workspace_root_path(workspace_root: Path | None = None) -> Path:
+    """Return the current Runner workspace root used by this execution."""
+    return (workspace_root or Path.cwd()).resolve()
 
 
-def first_existing_file(candidates: list[str]) -> str:
-    for item in candidates:
-        if item and Path(item).is_file():
-            return posix_path(item)
-    return ""
+def resolve_workspace_value(value: Any, workspace_root: Path) -> str:
+    """Resolve one Agent-authored path against the selected Runner workspace."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    path = Path(text)
+    if not path.is_absolute():
+        path = workspace_root / path
+    return posix_path(path.resolve())
+
+
+def sandbox_config_errors(
+    raw: dict[str, Any],
+    cfg: dict[str, Any],
+    *,
+    workspace_root: Path | None = None,
+) -> list[str]:
+    """Reject host paths and config fields owned by the Runner/runtime."""
+    root = workspace_root_path(workspace_root)
+    errors = [
+        f"{key} is runtime-owned and must not be set in config.json"
+        for key in sorted(SANDBOX_FORBIDDEN_CONFIG_KEYS)
+        if key in raw and str(raw.get(key, "")).strip()
+    ]
+    for key in sorted(WORKSPACE_PATH_KEYS):
+        raw_value = raw.get(key)
+        if raw_value is not None and str(raw_value).strip() and Path(str(raw_value)).is_absolute():
+            errors.append(f"{key} must be relative to the selected Runner workspace: {raw_value}")
+            continue
+        resolved = str(cfg.get(key, "")).strip()
+        if not resolved:
+            continue
+        try:
+            Path(resolved).resolve().relative_to(root)
+        except ValueError:
+            errors.append(f"{key} escapes the selected Runner workspace: {raw_value or resolved}")
+    return errors
 
 
 def discover_python() -> str:
@@ -124,7 +185,7 @@ def discover_python() -> str:
     SCIENCE_AGENT_MANAGED_PYTHON/PYTHON_BIN explicitly, so keep those aliases.
     Never fall back to host pipeline venvs.
     """
-    for name in ("SCIENCE_AGENT_MANAGED_PYTHON", "SCIENCE_ENV_PYTHON", "PYTHON_BIN", "ANTIBODY_PIPELINE_PYTHON"):
+    for name in ("SCIENCE_ENV_PYTHON", "SCIENCE_AGENT_MANAGED_PYTHON", "PYTHON_BIN", "ANTIBODY_PIPELINE_PYTHON"):
         configured = env_or_empty(name)
         if executable_file(configured):
             return configured
@@ -148,10 +209,6 @@ def require_managed_env() -> bool:
     return env_truthy("ANTIBODY_REQUIRE_SCIENCEAGENT_ENV", True)
 
 
-def broker_host_python_allowed(cfg: dict[str, Any]) -> bool:
-    return bool(cfg.get("broker_mode")) or env_truthy("ANTIBODY_ALLOW_HOST_NPU_PYTHON", False) or env_truthy("SCIENCE_AGENT_NPU_BROKER", False)
-
-
 def managed_python_errors(cfg: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     python_bin = str(cfg.get("python", "")).strip()
@@ -160,8 +217,6 @@ def managed_python_errors(cfg: dict[str, Any]) -> list[str]:
             "python is unresolved; select/create a ScienceDiscovery scientific environment "
             "and use the runner-injected SCIENCE_ENV_PYTHON or PATH python"
         ]
-    if broker_host_python_allowed(cfg):
-        return []
     py_text = posix_path(python_bin)
     pipeline_home = env_or_empty("ANTIBODY_PIPELINE_HOME")
     blocked_fragments = ["/antibody_pipeline/venv/", "/antibody_pipeline/python_user/"]
@@ -189,84 +244,66 @@ def managed_pipeline_env_errors(cfg: dict[str, Any]) -> list[str]:
     return []
 
 
-OPERATOR_ONLY_CONFIG_KEYS = {
-    "ckpt",
-    "models_dir",
-    "protenix_ckpt",
-    "protenix_ckpt_url",
-    "protenix_dir",
-}
+def resolve_config(cfg: dict[str, Any], *, workspace_root: Path | None = None) -> dict[str, Any]:
+    root = workspace_root_path(workspace_root)
+    workspace = resolve_workspace_value(cfg.get("workspace", "antibody_pipeline"), root)
+    models_dir = resolve_workspace_value(cfg.get("models_dir") or join_path(workspace, "models"), root)
 
-
-def operator_only_config_errors(cfg: dict[str, Any]) -> list[str]:
-    if not require_managed_env():
-        return []
-    return [
-        f"{key} is operator-only in Broker mode; configure it through deployment environment, not config.json"
-        for key in sorted(OPERATOR_ONLY_CONFIG_KEYS)
-        if key in cfg and str(cfg.get(key, "")).strip()
-    ]
-
-
-def resolve_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    workspace = posix_path(cfg.get("workspace", "antibody_pipeline"))
-    models_dir = posix_path(env_or_empty("ANTIBODY_MODELS_DIR") or join_path(workspace, "models"))
-
-    mindscience_root = cfg.get("mindscience_root") or env_or_empty("MINDSCIENCE_ROOT")
-    if not mindscience_root:
-        mindscience_root = first_existing_dir([join_path(models_dir, "mindscience"), *COMMON_MINDSCIENCE_ROOTS])
-    app_dir = cfg.get("app_dir") or env_or_empty("MINDSCIENCE_APP_DIR")
+    mindscience_root = cfg.get("mindscience_root") or join_path(models_dir, "mindscience")
+    mindscience_root = resolve_workspace_value(mindscience_root, root)
+    app_dir = cfg.get("app_dir")
     if not app_dir and mindscience_root:
         app_dir = join_path(mindscience_root, "MindSPONGE", "applications")
-    app_dir = posix_path(app_dir) if app_dir else ""
+    app_dir = resolve_workspace_value(app_dir, root)
 
     rf_dir = cfg.get("rf_diffusion_dir") or (join_path(app_dir, "rf_diffusion") if app_dir else "")
     proteinmpnn_dir = cfg.get("proteinmpnn_dir") or (join_path(app_dir, "proteinmpnn") if app_dir else "")
-    protenix_dir = env_or_empty("PROTENIX_APP_DIR") or (join_path(app_dir, "protenix") if app_dir else "")
+    protenix_dir = cfg.get("protenix_dir") or (join_path(app_dir, "protenix") if app_dir else "")
+    rf_dir = resolve_workspace_value(rf_dir, root)
+    proteinmpnn_dir = resolve_workspace_value(proteinmpnn_dir, root)
+    protenix_dir = resolve_workspace_value(protenix_dir, root)
 
     python_bin = discover_python() or cfg.get("python")
-    pipeline_env = cfg.get("pipeline_env")
-    if pipeline_env is None:
-        pipeline_env = env_or_empty("ANTIBODY_PIPELINE_ENV")
-    rf_ckpt = env_or_empty("RF_DIFFUSION_CKPT") or (join_path(rf_dir, "models", "RFdiffusion_Ab.ckpt") if rf_dir else "")
-    protenix_ckpt = env_or_empty("PROTENIX_CKPT") or (
+    pipeline_env = cfg.get("pipeline_env", "")
+    rf_ckpt = cfg.get("ckpt") or (join_path(rf_dir, "models", "RFdiffusion_Ab.ckpt") if rf_dir else "")
+    protenix_ckpt = cfg.get("protenix_ckpt") or (
         join_path(protenix_dir, "release_data", "checkpoint", "ms_model_v0.5.0.ckpt") if protenix_dir else ""
     )
-    protenix_ckpt_url = env_or_empty("PROTENIX_CKPT_URL")
-    hmmer_home = cfg.get("hmmer_home") or env_or_empty("HMMER_HOME")
-    cann_set_env = cfg.get("cann_set_env") or env_or_empty("CANN_SET_ENV")
+    rf_ckpt = resolve_workspace_value(rf_ckpt, root)
+    protenix_ckpt = resolve_workspace_value(protenix_ckpt, root)
+    hmmer_home = resolve_workspace_value(cfg.get("hmmer_home", ""), root)
+    cann_set_env = cfg.get("cann_set_env", "")
 
-    target_pdb = cfg.get("target_pdb", "")
-    framework_pdb = cfg.get("framework_pdb", "")
+    target_pdb = resolve_workspace_value(cfg.get("target_pdb", ""), root)
+    framework_pdb = resolve_workspace_value(cfg.get("framework_pdb", ""), root)
 
     run_name = cfg.get("run_name") or f"antibody_custom_{cfg.get('num_designs', 0)}_{time.strftime('%Y%m%d_%H%M%S')}"
-    run_dir = cfg.get("run_dir") or join_path(workspace, "runs", run_name)
+    run_dir = resolve_workspace_value(cfg.get("run_dir") or join_path(workspace, "runs", run_name), root)
 
     resolved = dict(cfg)
     resolved.update({
         "workspace": workspace,
         "scripts_dir": posix_path(cfg.get("scripts_dir") or default_scripts_dir()),
         "models_dir": models_dir,
-        "mindscience_root": posix_path(mindscience_root) if mindscience_root else "",
+        "mindscience_root": mindscience_root,
         "app_dir": app_dir,
-        "rf_diffusion_dir": posix_path(rf_dir) if rf_dir else "",
-        "proteinmpnn_dir": posix_path(proteinmpnn_dir) if proteinmpnn_dir else "",
-        "protenix_dir": posix_path(protenix_dir) if protenix_dir else "",
+        "rf_diffusion_dir": rf_dir,
+        "proteinmpnn_dir": proteinmpnn_dir,
+        "protenix_dir": protenix_dir,
         "python": posix_path(python_bin),
         "pipeline_env": posix_path(pipeline_env) if pipeline_env else "",
-        "ckpt": posix_path(rf_ckpt) if rf_ckpt else "",
-        "protenix_ckpt": posix_path(protenix_ckpt) if protenix_ckpt else "",
-        "protenix_ckpt_url": protenix_ckpt_url,
-        "hmmer_home": posix_path(hmmer_home) if hmmer_home else "",
+        "ckpt": rf_ckpt,
+        "protenix_ckpt": protenix_ckpt,
+        "hmmer_home": hmmer_home,
         "cann_set_env": posix_path(cann_set_env) if cann_set_env else "",
-        "target_pdb": posix_path(target_pdb) if target_pdb else "",
-        "framework_pdb": posix_path(framework_pdb) if framework_pdb else "",
+        "target_pdb": target_pdb,
+        "framework_pdb": framework_pdb,
         "run_name": run_name,
-        "run_dir": posix_path(run_dir),
+        "run_dir": run_dir,
         "hotspots": normalize_hotspots(cfg.get("hotspots")),
         "design_loops": cfg.get("design_loops") or "[H1:8,H2:6,H3:16]",
         "num_designs": int(cfg.get("num_designs", 0)),
-        "npus": str(cfg.get("npus", env_or_empty("ASCEND_RT_VISIBLE_DEVICES") or "0,1,2,3,4,5,6,7")),
+        "npus": str(cfg.get("npus", "0")),
         "workers_per_npu": int(cfg.get("workers_per_npu", 2)),
         "final_step": int(cfg.get("final_step", 160)),
         "diffuser_t": int(cfg.get("diffuser_t", 200)),
@@ -330,57 +367,165 @@ def validate_paths(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
 
 def print_clone_hint(cfg: dict[str, Any]) -> None:
     dst = join_path(cfg["models_dir"], "mindscience")
-    print("Clone missing model code, after user approval:")
+    print("Clone the pinned MindScience source into the Runner workspace:")
     print("  mkdir -p " + shlex.quote(cfg["models_dir"]))
-    print("  git clone https://gitcode.com/mindspore/mindscience.git " + shlex.quote(dst))
+    print("  git clone " + shlex.quote(MINDSCIENCE_REPO_URL) + " " + shlex.quote(dst))
 
 
-def download_file(url: str, destination: Path) -> None:
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_matches(path: Path, *, size: int, sha256: str) -> bool:
+    return path.is_file() and path.stat().st_size == size and sha256_file(path) == sha256
+
+
+def download_file(url: str, destination: Path, *, size: int, sha256: str) -> None:
+    if file_matches(destination, size=size, sha256=sha256):
+        print(f"Verified existing checkpoint: {destination}")
+        return
     destination.parent.mkdir(parents=True, exist_ok=True)
-    tmp = destination.with_suffix(destination.suffix + ".tmp")
+    tmp = destination.with_suffix(destination.suffix + ".part")
+    tmp.unlink(missing_ok=True)
     print(f"Downloading {url} -> {destination}")
-    with urllib.request.urlopen(url) as response, tmp.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-    tmp.replace(destination)
+    try:
+        with urllib.request.urlopen(url) as response, tmp.open("wb") as handle:
+            shutil.copyfileobj(response, handle, length=1024 * 1024)
+        actual_size = tmp.stat().st_size
+        actual_sha256 = sha256_file(tmp)
+        if actual_size != size or actual_sha256 != sha256:
+            raise RuntimeError(
+                f"checkpoint verification failed for {url}: "
+                f"size={actual_size} sha256={actual_sha256}"
+            )
+        tmp.replace(destination)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def clone_mindscience(destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Cloning MindScience {MINDSCIENCE_REF} into workspace: {destination}")
+    subprocess.run(
+        [
+            "git", "clone", "--filter=blob:none", "--no-checkout",
+            MINDSCIENCE_REPO_URL, str(destination),
+        ],
+        check=True,
+    )
+    ensure_mindscience_checkout(destination)
+
+
+def ensure_mindscience_checkout(destination: Path) -> None:
+    """Verify an existing checkout and leave it detached at the pinned ref."""
+    if not destination.is_dir():
+        raise RuntimeError(f"MindScience path exists but is not a directory: {destination}")
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(destination), "rev-parse", "--is-inside-work-tree"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        current = subprocess.run(
+            ["git", "-C", str(destination), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f"existing MindScience path is not a valid Git checkout: {destination}"
+        ) from error
+
+    if inside != "true":
+        raise RuntimeError(f"existing MindScience path is not a Git worktree: {destination}")
+    detached = subprocess.run(
+        ["git", "-C", str(destination), "symbolic-ref", "-q", "HEAD"],
+        text=True,
+        capture_output=True,
+    ).returncode != 0
+    if current == MINDSCIENCE_REF and detached:
+        print(f"Verified existing MindScience checkout: {destination} @ {current}")
+        return
+
+    has_pin = subprocess.run(
+        ["git", "-C", str(destination), "cat-file", "-e", f"{MINDSCIENCE_REF}^{{commit}}"],
+        text=True,
+        capture_output=True,
+    ).returncode == 0
+    if not has_pin:
+        print(f"Fetching pinned MindScience revision {MINDSCIENCE_REF}")
+        subprocess.run(
+            [
+                "git", "-C", str(destination), "fetch", "--depth", "1",
+                MINDSCIENCE_REPO_URL, MINDSCIENCE_REF,
+            ],
+            check=True,
+        )
+    print(f"Checking out pinned MindScience revision: {current} -> {MINDSCIENCE_REF}")
+    subprocess.run(
+        ["git", "-C", str(destination), "checkout", "--detach", MINDSCIENCE_REF],
+        check=True,
+    )
+    verified = subprocess.run(
+        ["git", "-C", str(destination), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    if verified != MINDSCIENCE_REF:
+        raise RuntimeError(
+            f"MindScience checkout verification failed: expected {MINDSCIENCE_REF}, got {verified}"
+        )
 
 
 def prepare_cmd(args: argparse.Namespace) -> int:
     cfg_path = args.config
     raw = read_json(cfg_path)
     cfg = resolve_config(raw)
-    errors = operator_only_config_errors(raw) + validate_format(cfg) + validate_paths(cfg)[0]
+    errors = sandbox_config_errors(raw, cfg) + validate_format(cfg) + validate_paths(cfg)[0]
     app_missing = any("app_dir" in item or "rf_diffusion_dir" in item or "proteinmpnn_dir" in item or "protenix_dir" in item for item in errors)
 
     if app_missing and args.clone_missing:
         clone_dst = Path(join_path(cfg["models_dir"], "mindscience"))
         if clone_dst.exists():
-            print(f"MindScience clone already exists: {clone_dst}")
+            ensure_mindscience_checkout(clone_dst)
         else:
             clone_dst.parent.mkdir(parents=True, exist_ok=True)
-            print(f"Cloning MindScience into workspace: {clone_dst}")
-            subprocess.run(
-                ["git", "clone", "https://gitcode.com/mindspore/mindscience.git", str(clone_dst)],
-                check=True,
-            )
-        raw["mindscience_root"] = posix_path(clone_dst)
+            clone_mindscience(clone_dst)
+        raw["mindscience_root"] = clone_dst.resolve().relative_to(workspace_root_path()).as_posix()
         write_json(cfg_path, raw)
         cfg = resolve_config(raw)
-        errors = operator_only_config_errors(raw) + validate_format(cfg) + validate_paths(cfg)[0]
+        errors = sandbox_config_errors(raw, cfg) + validate_format(cfg) + validate_paths(cfg)[0]
     elif app_missing:
         print_clone_hint(cfg)
 
-    ckpt_missing = any(item.startswith("protenix_ckpt ") for item in errors)
-    if ckpt_missing and args.download_missing:
-        if not cfg.get("protenix_ckpt_url"):
-            print("Protenix checkpoint is missing and no protenix_ckpt_url/PROTENIX_CKPT_URL was provided.")
-        else:
-            download_file(cfg["protenix_ckpt_url"], Path(cfg["protenix_ckpt"]))
-            cfg = resolve_config(raw)
-            errors = operator_only_config_errors(raw) + validate_format(cfg) + validate_paths(cfg)[0]
-
-    if args.write_resolved:
-        write_json(args.write_resolved, cfg)
-        print(f"Wrote resolved config: {args.write_resolved}")
+    missing_checkpoints = {
+        "ckpt": RF_DIFFUSION_CKPT,
+        "protenix_ckpt": PROTENIX_CKPT,
+    }
+    if args.download_missing:
+        for key, metadata in missing_checkpoints.items():
+            destination = Path(cfg[key])
+            if not file_matches(
+                destination,
+                size=int(metadata["size"]),
+                sha256=str(metadata["sha256"]),
+            ):
+                download_file(
+                    str(metadata["url"]),
+                    destination,
+                    size=int(metadata["size"]),
+                    sha256=str(metadata["sha256"]),
+                )
+        cfg = resolve_config(raw)
+        errors = sandbox_config_errors(raw, cfg) + validate_format(cfg) + validate_paths(cfg)[0]
 
     if errors:
         print("Prepare did not complete; remaining errors:")
@@ -427,6 +572,46 @@ def command_for_full_run(cfg: dict[str, Any]) -> list[str]:
     return cmd
 
 
+def quarantine_incompatible_numpy_caches(
+    cfg: dict[str, Any], *, numpy_major: int | None = None,
+) -> list[tuple[Path, Path]]:
+    """Move NumPy-2 RFdiffusion pickles aside when the selected env uses NumPy 1.
+
+    RFdiffusion stores IGSO3 schedules beside its model code. Those files are
+    derived caches, but a NumPy-2 pickle imports ``numpy._core`` and fails under
+    the NumPy-1 environment required by this pipeline. Preserve the original
+    with a descriptive suffix and let RFdiffusion rebuild the active cache.
+    """
+    if numpy_major is None:
+        try:
+            import numpy as np
+            numpy_major = int(np.__version__.split(".", 1)[0])
+        except (ImportError, ValueError):
+            return []
+    if numpy_major >= 2:
+        return []
+    schedules = Path(cfg["rf_diffusion_dir"]) / "schedules"
+    moved: list[tuple[Path, Path]] = []
+    for cache in sorted(schedules.glob(f"T_{cfg['diffuser_t']}_*.pkl")):
+        # Quarantines deliberately retain the incompatible pickle for audit and
+        # rollback. Do not quarantine those files again on every run merely
+        # because their names still match the broad RFdiffusion cache pattern.
+        if ".numpy2-incompatible" in cache.stem:
+            continue
+        with cache.open("rb") as handle:
+            incompatible = any(b"numpy._core" in chunk for chunk in iter(lambda: handle.read(1024 * 1024), b""))
+        if not incompatible:
+            continue
+        quarantine = cache.with_name(f"{cache.stem}.numpy2-incompatible.pkl")
+        if quarantine.exists():
+            quarantine = cache.with_name(
+                f"{cache.stem}.numpy2-incompatible-{time.strftime('%Y%m%d-%H%M%S')}.pkl"
+            )
+        cache.replace(quarantine)
+        moved.append((cache, quarantine))
+    return moved
+
+
 def init_cmd(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace)
     (workspace / "helpers").mkdir(parents=True, exist_ok=True)
@@ -454,7 +639,7 @@ def validate_cmd(args: argparse.Namespace) -> int:
     cfg = resolve_config(raw)
     format_errors = validate_format(cfg)
     path_errors, warnings = validate_paths(cfg)
-    errors = operator_only_config_errors(raw) + format_errors + path_errors
+    errors = sandbox_config_errors(raw, cfg) + format_errors + path_errors
     print("Antibody pipeline validation")
     print(f"  valid: {not errors}")
     for key in ["workspace", "scripts_dir", "mindscience_root", "app_dir", "rf_diffusion_dir", "proteinmpnn_dir", "protenix_dir", "python", "pipeline_env", "ckpt", "protenix_ckpt", "target_pdb", "framework_pdb", "run_dir", "protenix_use_msa", "protenix_n_sample", "protenix_seeds"]:
@@ -469,32 +654,31 @@ def validate_cmd(args: argparse.Namespace) -> int:
             print(f"  - {item}")
         if any("app_dir" in item or "rf_diffusion_dir" in item for item in errors):
             print_clone_hint(cfg)
-    if args.write_resolved:
-        write_json(args.write_resolved, cfg)
-        print(f"Wrote resolved config: {args.write_resolved}")
     return 0 if not errors else 2
 
 
-def write_runner_cmd(args: argparse.Namespace) -> int:
+def run_cmd(args: argparse.Namespace) -> int:
     raw = read_json(args.config)
     cfg = resolve_config(raw)
-    errors = operator_only_config_errors(raw) + validate_format(cfg) + validate_paths(cfg)[0]
+    path_errors, warnings = validate_paths(cfg)
+    errors = sandbox_config_errors(raw, cfg) + validate_format(cfg) + path_errors
+    for item in warnings:
+        print(f"WARNING: {item}", file=sys.stderr)
     if errors:
         for item in errors:
             print(f"ERROR: {item}", file=sys.stderr)
         return 2
-    runner = Path(cfg["workspace"]) / "run_real_pipeline.sh"
-    log = join_path(cfg["run_dir"], "pipeline.nohup.log")
+    for cache, quarantine in quarantine_incompatible_numpy_caches(cfg):
+        print(
+            f"WARNING: moved NumPy-2 RFdiffusion cache {cache} to {quarantine}; "
+            "the selected environment will rebuild it",
+            file=sys.stderr,
+        )
     cmd = command_for_full_run(cfg)
-    script = "#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p " + shlex.quote(cfg["run_dir"]) + "\n"
-    script += "nohup " + " ".join(shlex.quote(x) for x in cmd) + " > " + shlex.quote(log) + " 2>&1 &\n"
-    script += "echo \"RUN_DIR=" + cfg["run_dir"] + "\"\n"
-    script += "echo \"LOG=" + log + "\"\n"
-    runner.write_text(script, encoding="utf-8")
-    print(f"Wrote runner: {runner}")
-    print("Run with:")
-    print("  bash " + shlex.quote(str(runner)))
-    return 0
+    print("Launching sandbox pipeline:", flush=True)
+    print("  " + " ".join(shlex.quote(item) for item in cmd), flush=True)
+    os.execvp(cmd[0], cmd)
+    return 127
 
 
 ERROR_PATTERNS = (
@@ -588,20 +772,6 @@ def infer_stage(counts: dict[str, int], expected: int, reports_ok: bool) -> str:
     return "complete"
 
 
-def pipeline_processes_running(run_dir: str) -> list[str]:
-    try:
-        result = subprocess.run(
-            ["bash", "-lc", f"ps -ef | grep -E 'run_full_antibody_pipeline|run_after_rfdiffusion|inference.py|proteinmpnn|protenix' | grep -F {shlex.quote(run_dir)} | grep -v grep || true"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return []
-    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    return lines[:20]
-
-
 def read_tail(path: Path, max_bytes: int = 12000) -> str:
     if not path.is_file():
         return ""
@@ -613,7 +783,7 @@ def read_tail(path: Path, max_bytes: int = 12000) -> str:
 
 def scan_logs_for_errors(run: Path, limit: int = 12) -> list[dict[str, str]]:
     hits: list[dict[str, str]] = []
-    log_roots = [run / "pipeline.nohup.log", run / "logs", run / "01_rfdiffusion" / "logs", run / "04_protenix_output" / "logs"]
+    log_roots = [run / "logs", run / "01_rfdiffusion" / "logs", run / "04_protenix_output" / "logs"]
     files: list[Path] = []
     for root in log_roots:
         if root.is_file():
@@ -637,15 +807,13 @@ def scan_logs_for_errors(run: Path, limit: int = 12) -> list[dict[str, str]]:
     return hits
 
 
-def recovery_hints(errors: list[dict[str, str]], cfg: dict[str, Any], stage: str, procs: list[str]) -> list[str]:
+def recovery_hints(errors: list[dict[str, str]], stage: str) -> list[str]:
     hints: list[str] = []
     blob = "\n".join(item.get("snippet", "") for item in errors).lower()
-    managed_python = cfg.get("python", "SCIENCE_AGENT_MANAGED_PYTHON")
-    if not procs and stage != "complete":
+    if stage != "complete":
         hints.append(
-            f"Pipeline process not found while stage={stage}. Relaunch with the ScienceDiscovery managed "
-            f"environment Python ({managed_python}) and do not source host env.sh: "
-            f"bash {join_path(cfg['workspace'], 'run_real_pipeline.sh')}"
+            f"Pipeline outputs stopped before stage={stage} completed. Inspect the original managed "
+            "Shell Execution status and logs; do not replay a running or unknown execution."
         )
     if "no module named" in blob or "modulenotfounderror" in blob or "importerror" in blob:
         hints.append(
@@ -672,7 +840,6 @@ def collect_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     reports = report_paths(run)
     reports_ok = all(path.exists() for path in reports)
     stage = infer_stage(counts, expected, reports_ok)
-    procs = pipeline_processes_running(cfg["run_dir"])
     errors = scan_logs_for_errors(run)
     complete = stage == "complete"
     progress = {
@@ -687,12 +854,8 @@ def collect_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
         "counts": counts,
         "progress": progress,
         "reports": [{"path": posix_path(path), "ok": path.exists()} for path in reports],
-        "processes": procs,
-        "process_count": len(procs),
         "errors": errors,
-        "recovery_hints": recovery_hints(errors, cfg, stage, procs),
-        "nohup_log": posix_path(run / "pipeline.nohup.log"),
-        "nohup_tail": read_tail(run / "pipeline.nohup.log", 4000),
+        "recovery_hints": recovery_hints(errors, stage),
     }
 
 
@@ -701,7 +864,6 @@ def print_snapshot(snap: dict[str, Any], *, quiet: bool = False) -> None:
     print(f"  run_dir: {snap['run_dir']}")
     print(f"  stage: {snap['stage']}")
     print(f"  expected: {snap['expected']}")
-    print(f"  process_count: {snap['process_count']}")
     for key, meta in snap["progress"].items():
         print(f"  {key}: {meta['have']}/{meta['expected']} ({meta['pct']}%)")
     print(f"  complete: {snap['complete']}")
@@ -709,10 +871,6 @@ def print_snapshot(snap: dict[str, Any], *, quiet: bool = False) -> None:
         print("  reports:")
         for item in snap["reports"]:
             print(f"    {'OK' if item['ok'] else 'MISSING'} {item['path']}")
-        if snap["processes"]:
-            print("  processes:")
-            for line in snap["processes"][:5]:
-                print(f"    {line}")
     if snap["errors"]:
         print("  recent_errors:")
         for item in snap["errors"][:3]:
@@ -723,10 +881,6 @@ def print_snapshot(snap: dict[str, Any], *, quiet: bool = False) -> None:
         print("  recovery_hints:")
         for hint in snap["recovery_hints"]:
             print(f"    - {hint}")
-    if (not quiet) and snap.get("nohup_tail"):
-        print("  nohup_tail:")
-        for line in snap["nohup_tail"].strip().splitlines()[-8:]:
-            print(f"    {line}")
 
 
 def status_cmd(args: argparse.Namespace) -> int:
@@ -736,84 +890,6 @@ def status_cmd(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(snap, indent=2))
     return 0 if snap["complete"] else 1
-
-
-def apply_safe_heals(cfg: dict[str, Any], snap: dict[str, Any]) -> list[str]:
-    """Best-effort safe fixes that do not modify shared CANN/conda."""
-    actions: list[str] = []
-    blob = "\n".join(item.get("snippet", "") for item in snap.get("errors", [])).lower()
-    workspace = cfg["workspace"]
-    env_sh = join_path(workspace, "env.sh")
-    if not Path(env_sh).is_file():
-        pipeline_home = os.environ.get("ANTIBODY_PIPELINE_HOME", "").rstrip("/")
-        env_sh = f"{pipeline_home}/env.sh" if pipeline_home else ""
-    py = cfg.get("python") or discover_python()
-
-    if "hmmscan" in blob and "not found" in blob:
-        actions.append(
-            "hmmscan_missing: install HMMER into tools/hmmer after user approval if not already installed"
-        )
-    marker = Path(workspace) / "logs" / "watch_heal_attempts.json"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    history = []
-    if marker.is_file():
-        try:
-            history = json.loads(marker.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            history = []
-    history.append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "stage": snap["stage"], "actions": actions})
-    marker.write_text(json.dumps(history[-20:], indent=2), encoding="utf-8")
-    return actions
-
-
-def watch_cmd(args: argparse.Namespace) -> int:
-    cfg = resolve_config(read_json(args.config))
-    deadline = time.time() + max(0, args.timeout)
-    last_signature = ""
-    last_heartbeat = 0.0
-    heartbeat_every = max(args.interval * 6, 1800)  # quiet heartbeat at most ~every 6 polls / 30m
-    while True:
-        snap = collect_snapshot(cfg)
-        # Ignore process_count churn; only stage/counts/errors matter for printing.
-        signature = json.dumps(
-            {
-                "stage": snap["stage"],
-                "counts": snap["counts"],
-                "errors": [item["log"] for item in snap["errors"][:3]],
-            },
-            sort_keys=True,
-        )
-        now = time.time()
-        changed = signature != last_signature
-        if changed or args.verbose:
-            print(f"\n=== watch {time.strftime('%F %T')} ===")
-            print_snapshot(snap, quiet=not args.verbose)
-            last_signature = signature
-            last_heartbeat = now
-        elif now - last_heartbeat >= heartbeat_every:
-            # One short line so long quiet runs are not silent forever.
-            counts = snap.get("counts") or {}
-            print(
-                f"[watch {time.strftime('%F %T')}] stage={snap['stage']} "
-                f"counts={counts} procs={snap['process_count']} (no change)"
-            )
-            last_heartbeat = now
-        if snap["complete"]:
-            print("Watch finished: run complete.")
-            return 0
-        if snap["errors"] and args.auto_heal:
-            actions = apply_safe_heals(cfg, snap)
-            if actions:
-                print("Auto-heal attempts:")
-                for action in actions:
-                    print(f"  - {action}")
-        if args.once:
-            print("Watch snapshot complete flag is false; exiting 0 so the Agent can continue polling later.")
-            return 0
-        if now >= deadline:
-            print("Watch finished: timeout reached before completion.", file=sys.stderr)
-            return 2
-        time.sleep(max(30, args.interval))
 
 
 def main() -> int:
@@ -829,19 +905,17 @@ def main() -> int:
 
     p = sub.add_parser("validate")
     p.add_argument("--config", type=Path, required=True)
-    p.add_argument("--write-resolved", type=Path)
     p.set_defaults(func=validate_cmd)
 
     p = sub.add_parser("prepare")
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--clone-missing", action="store_true")
     p.add_argument("--download-missing", action="store_true")
-    p.add_argument("--write-resolved", type=Path)
     p.set_defaults(func=prepare_cmd)
 
-    p = sub.add_parser("write-runner")
+    p = sub.add_parser("run")
     p.add_argument("--config", type=Path, required=True)
-    p.set_defaults(func=write_runner_cmd)
+    p.set_defaults(func=run_cmd)
 
     p = sub.add_parser("status")
     p.add_argument("--config", type=Path, required=True)
@@ -853,14 +927,6 @@ def main() -> int:
     p.add_argument("--output", type=Path)
     p.set_defaults(func=artifact_manifest_cmd)
 
-    p = sub.add_parser("watch")
-    p.add_argument("--config", type=Path, required=True)
-    p.add_argument("--interval", type=int, default=300, help="Seconds between polls (default 300)")
-    p.add_argument("--timeout", type=int, default=86400, help="Max seconds to watch")
-    p.add_argument("--once", action="store_true", help="Single poll then exit")
-    p.add_argument("--auto-heal", action="store_true", help="Attempt safe dependency fixes")
-    p.add_argument("--verbose", action="store_true", help="Print full snapshot every change")
-    p.set_defaults(func=watch_cmd)
     args = parser.parse_args()
     return args.func(args)
 

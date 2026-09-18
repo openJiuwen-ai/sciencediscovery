@@ -1,226 +1,244 @@
 ---
 name: antibody-protenix-pipeline
-description: Prepare, submit, monitor, and summarize the real RFdiffusion to ProteinMPNN to Protenix antibody pipeline through the ScienceDiscovery Runner NPU Broker, including custom workspace-local antigen PDBs and chain-labelled epitopes.
+description: Prepare, launch, monitor, and summarize the real RFdiffusion to ProteinMPNN to Protenix antibody pipeline on a local or remote ScienceDiscovery Runner with sandboxed Ascend NPUs.
 ---
 
-# Real Ascend Antibody Protenix Pipeline - Broker only
+# Sandboxed Ascend antibody Protenix pipeline
 
-Use this skill for the Protenix-backed antibody workflow. All model/NPU execution goes through `run_npu_job` with workload `antibody.protenix.v1`.
+Run the model pipeline as one managed background Shell Execution. Use the same
+Runner and managed scientific environment for preparation, validation, launch,
+monitoring, and output transfer.
 
-## Non-negotiable rules
+## Execution contract
 
-- Never use `host_bridge`, `host_launch_request.json`, `run_shell`, a persistent kernel, `nohup`, or device passthrough to launch model/NPU work.
-- This skill is authoritative for a Protenix Broker run. If legacy antibody/host-setup skills are also selected, do not follow their host-shell launch, polling, or artifact workflow; use only the Broker workflow in this file.
-- `run_shell` may create or inspect small workspace files/directories, write `config.json`, probe imports with `python -c` in a selected `environment_id`, run the read-only progress probe in step 5, and run the single sleep TICK in step 5. Never use it to launch model/NPU work or reconstruct bundled scripts/PDB examples. Each call uses a fresh process; select the same local Runner and environment ID for these operations. Environment ID selects the latest state, not a historical Revision.
-- Although the complete frozen package is visible under `$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline`, do not execute or copy files from its `scripts/` / `resources/`; those package files are for the Broker adapter and operator deployment path, not for Agent-authored execution.
-- There is no default antigen/framework PDB. If the user has not provided `target_pdb`, `framework_pdb`, or chain-labelled `hotspots`, stop and ask for the missing scientific input. Do not run a bundled example.
-- Do not place or guess host paths for MindScience, RFdiffusion, ProteinMPNN, Protenix, checkpoints, HMMER, CANN, Python, or PDB files in `config.json`. Operator assets are injected by the Broker; scientific PDB inputs must be Session workspace-local relative paths. In particular, never set `models_dir`, `protenix_dir`, `protenix_ckpt`, `protenix_ckpt_url`, or `ckpt`; the manager treats these as operator-only and rejects them in Broker mode.
-- Do not edit the operator-provided Protenix checkout for Python 3.12 compatibility. The deployed `protenix_py312_compat.py` entrypoint handles integral float bounds such as `random.randint(0, 1e6)` inside the Protenix process.
-- Submit exactly once. If the job reaches `failed`, `cancelled`, or `interrupted`, do not edit paths and do not submit a replacement job in the same run. Return the job ID, exact error, failed stage, and next repair action to the user.
-- Keep monitoring in the main Agent until the Broker job reaches a terminal state. Submitting the job and then ending the turn while it is still `queued` or `running` is an incomplete run, not a successful handoff. Do not delegate an NPU job to `task` or another subagent, because subagents have private workspaces and cannot safely create or declare files in the parent workspace.
-- Immediately after a successful submit, write the returned Broker job ID to `antibody_pipeline/broker_job.json` with `run_shell`. This small workspace-local checkpoint is mandatory for long runs because the Agent context may be compacted while the NPU job continues. Before every later `run_npu_job(status/logs/result/cancel)` call, verify that the `job_id` argument is the exact UUID returned by submit or read from `antibody_pipeline/broker_job.json`; if you are uncertain, read that file first. Never call `run_npu_job(status/logs/result/cancel)` with a placeholder job ID such as `JOB_ID_PLACEHOLDER` / `__JOB_ID_PLACEHOLDER__`, and never resubmit just to recover a job ID.
-- Workspace files never establish completion. Only Broker `status`/`logs` can say the job is terminal. A progress probe that sees `05_screening` files, expected CIF/PDB counts, or quiet logs is a reason to call `status` next, not a reason to write a report or declare artifacts.
-- After Broker `status` returns `succeeded`, the **next tool call** must be `run_npu_job(operation="result", job_id="<job-id>")`. This is the only call that automatically declares Broker `createdFiles` as Project Artifacts (all of them when there are 50 or fewer; the first 50 when there are more). `status=succeeded` does not declare files. Do not call `run_shell`, `declare_artifact`, write any summary/report file, or produce a final answer between successful terminal status and this `result` call. If more than 50 files were created, the final response MUST tell the user that Project Artifacts only show the first 50 files and that the rest are in the Session workspace.
-- If `result` returns that the job is not terminal, the completion check was wrong: return to step 5 monitoring. Do not declare artifacts and do not write a summary.
-- Before `result` succeeds, do not read generated structure/result file contents, do not read screening CSV/Markdown files, do not write any summary/report file under any name, do not call `declare_artifact` or `list_artifacts`, and do not reconstruct a final stage-count report. The one allowed write before `result` is the job-ID checkpoint in step 4.
-- After `result`, treat `result.job.createdFiles`, `result.job.createdFiles.length`, and `result.artifacts` as the source of truth. Do not create an extra pipeline report. Do not replace `result` with a handful of manual `declare_artifact` calls. If `result.artifacts` is missing or empty after a succeeded job, report that artifact registration did not run; do not try to recover by declaring only screening Markdown/CSV.
-- Report Protenix device placement only from explicit `device_target` / `device_id` lines in the Broker log. Never infer CPU or Ascend from duration, token counts, or a post-completion `npu-smi` snapshot.
-- Do not switch to `antibody.pipeline.v1`. AlphaFold3 requests use the separate `antibody-real-pipeline` skill.
+- Launch model/NPU work only with `run_shell(background=true)` and the bundled
+  `scripts/run_sandbox_pipeline.sh`. Do not use `run_npu_job`, a host bridge,
+  `nohup`, a persistent kernel, or an Agent-authored copy of the bundled scripts.
+- Select `runner_id` from the Runners authorized for the Session. Do not hardcode
+  `local`. A remote Runner has an independent workspace and independent managed
+  environments.
+- Retain the returned Shell Execution ID. Monitor it with
+  `execution_status` and `execution_logs`; these calls do not take the workspace
+  write lock. Never submit the pipeline again because a wait ended or an
+  execution is `unknown`.
+- Model code, checkpoints, input PDBs, and outputs must resolve inside the
+  selected Runner workspace. Put model assets below
+  `antibody_pipeline/models/`. Config paths are workspace-relative. Do not use
+  host absolute paths, symlink escapes, `python`, `scripts_dir`, `pipeline_env`,
+  or `cann_set_env` in `config.json`.
+- Python packages belong to the selected Runner's managed scientific
+  environment. Install or update them through `environment_*`, never with pip,
+  conda, or an environment activation script inside `run_shell`.
+- The NPU cards selected for a Runner are exposed inside the sandbox as logical
+  devices `0..N-1`. `npus` uses those sandbox-local IDs, not the host's physical
+  card numbers. If one card is selected, use `"0"`.
+- There is no default antigen or antibody framework. Require a target PDB,
+  framework PDB, and chain-labelled hotspots such as `[B45,B46,B49]`.
+- Treat a missing target, framework, or hotspot list as missing user input. Stop
+  and ask for that input; do not infer an epitope, launch a SubAgent, search the
+  web, or choose residues from geometry without an explicit user request.
+- On first use in a Session, prepare model code and checkpoints inside the
+  selected Runner workspace with the bundled `--prepare-only` entrypoint. It
+  uses pinned official sources, verifies checkpoint size and SHA-256, and
+  reuses verified files on later runs in the same Session. Do not invent mirror
+  URLs, scan unrelated host paths, or copy assets from another Session.
 
-## Inputs
+## 1. Choose and prepare the Runner
 
-Confirm only missing scientific/run inputs:
+Use the Runner catalog in the `run_shell` / `environment_list` tool schema and
+the Session settings. Choose the machine requested by the user, or the single
+authorized NPU Runner. Keep its ID as `<runner-id>` for every Runner-scoped call.
 
-- custom workspace-local target antigen PDB;
-- custom workspace-local antibody framework PDB;
-- one target-PDB epitope list using the original PDB chain label and residue numbers, for example `B45,B46,B49` or `[B45,B46,B49]`;
-- design count;
-- run name, using only letters, digits, dot, underscore, and hyphen;
-- NPU selection and workers per NPU;
-- overwrite permission when reusing a run name.
+For a remote Runner:
 
-For a minimal e2e test use one design, NPU `0`, one worker, user-provided PDB inputs under `antibody_pipeline/inputs/`, and no overwrite unless explicitly requested.
+1. Call `sync_remote_workspace(operation="list", runner_id="<runner-id>")`.
+2. Push only missing local inputs with `operation="push"`. Model repositories
+   and checkpoints already present in this Session's remote workspace should
+   stay there; do not copy them back and forth.
+3. Use remote-workspace paths in `config.json`. Local file tools cannot inspect
+   remote-only files.
 
-## Required workflow
+Before preparation, check the three required user inputs. If one is missing,
+ask once and stop this run. The first preparation needs outbound access to the
+official `gitcode.com`, `tools.mindspore.cn`, and
+`af3-dev.tos-cn-beijing.volces.com` domains. The last domain is used by
+Protenix for its CCD cache. If the Session sandbox network policy does not
+allow these domains, report the required allowlist change before launching the
+download. Do not switch the sandbox to unrestricted network access.
 
-1. Call:
+The user or operator must select usable Ascend cards for that Runner in system
+settings before launch. The sandbox receives only those cards and renumbers
+them from zero.
 
-```text
-run_npu_job(operation="list_workloads")
-```
+## 2. Select and probe the managed environment
 
-Stop if `antibody.protenix.v1` is absent. Do not attempt an alternative host execution path.
-
-2. Resolve the Python environment before creating the job:
-
-- Use the complete pip package list from `requirements.txt` when preparing the environment: `mindspore==2.7.2`, `numpy==1.26.4`, `pandas`, `biopython==1.83`, `scipy`, `scikit-learn`, `pyyaml`, `hydra-core`, `omegaconf`, `ml-collections`, `dm-tree==0.1.8`, `optree`, `tqdm`, `attrs`, `decorator`, `matplotlib==3.9.2`, `safetensors`, `sympy`, `rdkit==2024.3.5`, `biotite==1.4.0`.
-- Call `environment_list(runner_id="local")`, skip starter/non-scientific environments, and probe candidate environment IDs through `run_shell(runner_id="local", environment_id="<environment-id>", command=...)` using the small Python probe below. `currentRevisionId` is audit information, not a selectable execution parameter.
-- Prefer candidates whose environment name clearly identifies the antibody NPU managed environment, especially `antibody-npu-managed-clean`; do not choose an older similarly named environment until the clean/current candidate has been probed.
-- If a candidate probe fails, record the missing package/version, then continue probing the next candidate. A single failed `run_shell` probe is not terminal.
-- Reuse only an environment whose latest state passes the probe and prints `MANAGED_ENV_OK`.
-- If every candidate fails, call `environment_create` for a named Python environment on the local Runner, then call `environment_install` with its `environmentId`, `manager="pip"`, and the complete package list above. Probe the same environment ID again. Never use `pip`, `pip --user`, a host venv, or `run_shell` for dependency installation.
-- The deployed MindScience Protenix checkout requires `biotite==1.4.0` and `biotite.structure.io.pdbx.convert.PDBX_BOND_TYPE_ID_TO_TYPE`. Always run the inline probe below after installation. If a candidate has an older/incompatible Biotite, use `environment_install` with the complete package list from `requirements.txt`, not only the Biotite entry, so the required package versions are validated together. Installation updates the environment in place and records an audit Revision; it does not clone a new execution environment. Do not patch the Protenix checkout or fall back to a host Biotite package.
-- Keep the passing environment ID as `<environment-id>`. Submit resolves its latest state again; avoid changing dependencies between probe and submit, and re-probe after any managed update. A missing/incompatible package is an environment setup task, not a reason to submit the NPU job early. Do not pass `environment_revision_id` to submit; it is rejected.
-
-Use this command with `run_shell`, setting `runner_id="local"` and `environment_id="<environment-id>"`; dependency discovery must not depend on host `PYTHONPATH`:
+Call `environment_list(runner_id="<runner-id>")`. Probe a candidate environment
+on the same Runner with a short foreground `run_shell` call and keep its
+environment ID. The environment must provide the packages in `requirements.txt`.
+Validate that complete, single-source dependency manifest with the selected
+environment's Python:
 
 ```sh
-python - <<'PY'
-from importlib import import_module
-from importlib.metadata import version
-for module in ["mindspore", "numpy", "pandas", "Bio", "scipy", "sklearn", "yaml", "hydra", "omegaconf", "ml_collections", "tree", "optree", "tqdm", "attrs", "decorator", "matplotlib", "safetensors", "sympy", "rdkit", "biotite"]:
-    import_module(module)
-for distribution, expected in {"mindspore": "2.7.2", "numpy": "1.26.4", "dm-tree": "0.1.8", "rdkit": "2024.3.5", "biotite": "1.4.0"}.items():
-    assert version(distribution) == expected, (distribution, version(distribution), expected)
-from biotite.structure.io.pdbx import convert as pdbx_convert
-assert hasattr(pdbx_convert, "PDBX_BOND_TYPE_ID_TO_TYPE")
-print("MANAGED_ENV_OK")
-PY
+python "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/scripts/validate_managed_environment.py" \
+  "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/requirements.txt"
 ```
 
-3. Create only `antibody_pipeline/config.json`. The minimal form requires explicit workspace-local PDB inputs:
+The validator reads every dependency and exact pin directly from
+`requirements.txt`; do not maintain a separate partial package list.
+
+If no environment passes, create or update one on the same Runner with
+`environment_create` / `environment_install`, then probe it again. For a remote
+Runner, push any workspace-local wheel before installing it.
+
+## 3. Prepare workspace models and config
+
+Recommended layout on the selected Runner:
+
+```text
+antibody_pipeline/
+  config.json
+  inputs/
+    target_antigen.pdb
+    antibody_framework.pdb
+  models/
+    mindscience/
+      MindSPONGE/applications/{rf_diffusion,proteinmpnn,protenix}/
+  runs/
+```
+
+The default checkpoint locations are:
+
+```text
+antibody_pipeline/models/mindscience/MindSPONGE/applications/rf_diffusion/models/RFdiffusion_Ab.ckpt
+antibody_pipeline/models/mindscience/MindSPONGE/applications/protenix/release_data/checkpoint/ms_model_v0.5.0.ckpt
+```
+
+Create `antibody_pipeline/config.json` from
+`references/real_pipeline_config.example.json`. A minimal config is:
 
 ```json
 {
   "workspace": "antibody_pipeline",
+  "mindscience_root": "antibody_pipeline/models/mindscience",
   "target_pdb": "antibody_pipeline/inputs/target_antigen.pdb",
   "framework_pdb": "antibody_pipeline/inputs/antibody_framework.pdb",
   "hotspots": "[B45,B46,B49]",
-  "num_designs": 4,
+  "num_designs": 1,
   "run_name": "custom-antigen-protenix",
-  "npus": "0,1,2,3",
+  "npus": "0",
   "workers_per_npu": 1,
+  "protenix_use_msa": false,
+  "protenix_n_sample": 1,
+  "protenix_seeds": "42",
   "final_step": 160,
   "diffuser_t": 200,
   "force": false
 }
 ```
 
-Paths authored by the Agent must be relative to the Session workspace. Upload PDB inputs under `antibody_pipeline/inputs/` and set `target_pdb` / `framework_pdb` to those relative paths. Do not add host asset paths or `python`.
+Keep the user's original target-PDB chain labels and residue numbers in
+`hotspots`. Keep `diffuser_t >= 15`. Reusing a run name with `force=true`
+deletes that run's existing stage outputs, so require explicit overwrite intent.
 
-`npus` is the comma-separated physical Ascend device list requested by the user, for example `"0"` for a one-card smoke test or `"0,1,2,3"` for a four-card run. For normal throughput tests on a four-card Ascend host, prefer `"npus": "0,1,2,3"` with `num_designs` at least `4`; for a quick smoke test only, reduce to `"npus": "0"` and `"num_designs": 1`. `workers_per_npu` controls RFdiffusion shard concurrency per listed NPU. Protenix inference runs one concurrent JSON job per listed NPU and batches the remaining JSON files round-robin across that list.
-
-Use exactly one `hotspots` field for both RFdiffusion and screening. Keep the user's original target-PDB chain label and residue numbers; do not create `screen_hotspots`, rename the chain to `T`, or convert the residue numbers yourself. The pipeline writes an original-PDB-to-Protenix chain/residue map for each Protenix input and maps the requested residues to Protenix sequence positions internally; if mapping is missing or ambiguous, screening marks the row as a mapping failure instead of reporting zero contacts.
-If every screened design has a hotspot mapping error, the screening step exits non-zero and the Broker job fails; report the exact `hotspot_mapping_error` instead of summarizing the run as a completed design.
-`hotspots` accepts either `B45,B46,B49` or RFdiffusion bracket form `[B45,B46,B49]`; the manager normalizes it before launch. Keep `diffuser_t` at least `15` because RFdiffusion rejects smaller schedules.
-
-For example, when the uploaded antigen is `antibody_pipeline/inputs/custom_antigen.pdb`, the uploaded framework is `antibody_pipeline/inputs/custom_framework.pdb`, its target chain is `B`, and the requested epitope is `B45,B46,B49`, use:
-
-```json
-{
-  "workspace": "antibody_pipeline",
-  "target_pdb": "antibody_pipeline/inputs/custom_antigen.pdb",
-  "framework_pdb": "antibody_pipeline/inputs/custom_framework.pdb",
-  "hotspots": "[B45,B46,B49]",
-  "num_designs": 4,
-  "run_name": "custom-antigen-protenix",
-  "npus": "0,1,2,3",
-  "workers_per_npu": 1,
-  "final_step": 160,
-  "diffuser_t": 200,
-  "force": false
-}
-```
-
-4. Submit once:
+Run first-use preparation as a managed background Shell Execution on the same
+Runner and managed environment:
 
 ```text
-run_npu_job(
-  operation="submit",
-  workload_id="antibody.protenix.v1",
-  config_path="antibody_pipeline/config.json",
-  environment_id="<environment-id>"
+run_shell(
+  scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/scripts/run_sandbox_pipeline.sh",
+  arguments=["--prepare-only", "--config", "antibody_pipeline/config.json"],
+  runner_id="<runner-id>",
+  environment_id="<environment-id>",
+  background=true
 )
 ```
 
-Record the returned job ID. Do not submit another job until this job reaches a terminal state; if it fails, this run must stop.
+Retain the returned Execution ID and wait with `execution_status` while reading
+incremental `execution_logs`. Never resubmit preparation because one wait
+expired. Preparation checks out the pinned MindScience revision and downloads
+the official RFdiffusion and Protenix checkpoints to their default locations.
+An existing MindScience Git checkout is verified and moved to the same detached
+pin when necessary; a non-Git directory is rejected instead of silently reused.
+Each download uses a `.part` file and becomes visible only after its expected
+size and SHA-256 match. Existing verified checkpoints are reused. A fresh
+Session has a fresh Workspace and therefore downloads once again; sharing model
+assets across Sessions is outside this Skill.
 
-Immediately checkpoint the returned job ID with `run_shell` on the same local Runner and environment ID (replace the placeholders with the returned values):
+After preparation completes with exit code 0, run foreground validation below.
+If preparation fails, report its Execution ID and the network, Git, disk-space,
+or checksum error from its log. Do not search unrelated mount points or replace
+the official URLs.
 
-```sh
-python - <<'PY'
-import json, os
-record = {
-    "job_id": "<returned-job-id>",
-    "workload_id": "antibody.protenix.v1",
-    "config_path": "antibody_pipeline/config.json",
-    "run_name": "<run_name>"
-}
-os.makedirs("antibody_pipeline", exist_ok=True)
-with open("antibody_pipeline/broker_job.json", "w", encoding="utf-8") as fh:
-    json.dump(record, fh, indent=2)
-PY
-```
+## 4. Validate and launch once
 
-This is a state checkpoint, not a result summary. It is allowed before the terminal `result` call. If later monitoring context loses the job ID, read `antibody_pipeline/broker_job.json` and continue monitoring the recorded job. Before typing any later Broker `job_id`, check that it is a real UUID from this checkpoint or the submit response. Do not use `JOB_ID_PLACEHOLDER` / `__JOB_ID_PLACEHOLDER__`, do not guess the job ID, and do not submit a replacement job.
-
-5. Monitor continuously until Broker `status` is terminal.
-
-A monitoring cycle is:
-
-1. `run_npu_job(operation="status", job_id="<job-id>")` — required every cycle.
-2. Optionally `run_npu_job(operation="logs", job_id="<job-id>")`.
-3. Optionally one short read-only `run_shell` progress probe (for example, bounded `python -c` output in the same environment).
-4. If state is still `queued` or `running`, wait with one sleep TICK, then start the next cycle.
-
-Do not skip `status` for several cycles and decide completion from workspace files. Keep calling `status` until it returns one of:
-
-- `succeeded`
-- `failed`
-- `cancelled`
-- `interrupted`
-
-**Sleep TICK (normal wait).** Use one dedicated `run_shell` call for a single sleep and TICK. Do not put this sleep in the progress probe, and do not wrap it in `for`/`while`:
+Run a foreground validation on the selected Runner and environment:
 
 ```text
-run_shell(runner_id="local", environment_id="<environment-id>",
-          command="python -c 'import time; time.sleep(100); print(\"TICK\", flush=True)'",
-          wait_ms=30000)
+run_shell(
+  scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/scripts/run_sandbox_pipeline.sh",
+  arguments=["--validate-only", "--config", "antibody_pipeline/config.json"],
+  runner_id="<runner-id>",
+  environment_id="<environment-id>",
+  wait_ms=30000
+)
 ```
 
-If the wait returns `running`, retain that Shell Execution ID and use `execution_status(execution_id=..., wait_ms=30000)` until terminal; the wait deadline does not stop the sleep. Do not submit a second TICK while the first is running or unknown. After a completed TICK, start the next Broker status cycle. Shell Execution IDs and Broker job IDs are different; never exchange them.
+For the actual run, remove `--validate-only`, use `background=true`, and omit
+`wait_ms`. The wrapper validates every input before replacing itself with the
+pipeline process. Retain the returned `<execution-id>`.
 
-Forbidden wait patterns: `for`/`while` plus `sleep` inside one tool call; shell `sleep … &&` a progress probe or model launch; `tail -f`; `watch`; combining Broker status/probe/sleep into one `run_shell`. One TICK per cycle is the correct wait.
+For a smoke test, use one design, one selected card, `npus="0"`, and one RF
+worker. For a multi-card run, select the cards on that Runner first and use the
+corresponding sandbox-local sequence such as `"0,1,2,3"`.
 
-**Progress probe (optional, for stage detail).** It may print file existence, paths, counts, log mtimes, per-stage output counts, and short log tails. It may list generated `*.pdb` / `*.cif` / `*.json` names. It must not open or print those files' contents, must not make scientific quality claims, and must not create/edit/delete/declare/launch anything. Reuse the same probe when that is the clearest comparison.
+## 5. Monitor the existing execution
 
-If a probe looks finished (`05_screening` present, expected design counts, logs stopped growing), the next tool call is still `status`. Do not write a summary, do not call `declare_artifact`, and do not give a final answer from the probe.
+Use only the management channel while the workspace-owning execution runs:
 
-The Agent must not send a final answer while the job is still `queued` or `running`. During a long run, report Broker state, active stage, output counts, and a short log excerpt. One unchanged check is not a failure; TICK and check again.
+```text
+execution_status(execution_id="<execution-id>", wait_ms=30000)
+execution_logs(execution_id="<execution-id>", cursor=<nextCursor>)
+```
 
-For long end-to-end validation, external harnesses may also poll the Broker job, but the ScienceDiscovery skill itself remains responsible for monitoring its submitted job to terminal state.
+Continue from the returned `nextCursor`. Status `queued` or `running` means the
+same command is alive; wait on it again with the positive `wait_ms` shown above.
+This blocking management wait is designed to repeat for jobs longer than five
+minutes. The framework also emits a completion notification, but inspect the
+recorded status after that notice.
 
-6. At terminal state:
+Terminal handling:
 
-- `succeeded`: the next tool call is `run_npu_job(operation="result", job_id="<job-id>")`. That call declares Project Artifacts from `createdFiles`: every file when there are 50 or fewer, otherwise the first 50. Summarize stage counts from `result.job.createdFiles` / `result.job.createdFiles.length`, and report how many entries in `result.artifacts` have `ok:true`. If `createdFiles.length` is greater than 50, or `result.artifacts` contains a truncated entry, the final response MUST include this reminder: only 50 files are registered as Project Artifacts; the remaining files are in the Session workspace under `antibody_pipeline/runs/<run_name>/`, and `antibody_pipeline/artifact_manifest.txt` lists them. Tell the user to open the workspace files to find the rest, not only the artifact list. If `result` says the job is not terminal, return to step 5. Do not read screening CSV/Markdown from the workspace before `result`. Do not write any extra summary/report file. After `result` returns, you may read declared screening report/CSV artifacts for top-candidate details.
-- `failed`, `cancelled`, or `interrupted`: stop immediately; do not rewrite config/scripts/PDB files and do not resubmit.
+- `completed`: require `provenance="committed"` and exit code 0, then inspect
+  `result.createdFiles` and the final logs.
+- `failed` or `cancelled`: report the Execution ID, failing stage, exit code,
+  and short error log. Do not launch a replacement automatically.
+- `unknown`: list this Agent's executions with `execution_status()` and inspect
+  logs. Unknown does not authorize replay. If cancellation is needed, call
+  `execution_cancel` and keep checking until terminal.
 
-## Success criteria
+Do not launch a second Shell to poll files during the run: the active execution
+owns the workspace write lease. Stage changes and counts are already printed to
+the managed execution log.
 
-- Broker state is `succeeded`.
-- `run_npu_job(operation="result")` was called after that succeeded status and returned `result.artifacts`.
-- RFdiffusion, ProteinMPNN, Protenix input/output counts equal `num_designs`.
-- Screening reports exist below `antibody_pipeline/runs/<run_name>/05_screening/`.
-- Screening rows contain non-empty `target_chain` / `binder_chain`, positive target/binder token counts, and the mapped `hotspot_sequence_positions`.
-- Project Artifacts include the Broker `createdFiles` up to the 50-file declaration cap (all of them when there are 50 or fewer).
-- When more than 50 files were created, the final response reminds the user that the remaining files are in the Session workspace, not missing.
-- The final response is based on `run_npu_job(operation="result")`; it must not be based on an Agent-authored workspace scan or a separately written summary artifact.
+## 6. Return outputs
 
-Zero candidates passing the scientific screen is a valid result if all pipeline stages and reports completed.
+After a local execution completes, declare the screening report, summary CSV,
+and selected result structures from `result.createdFiles` with
+`declare_artifact`.
 
-## Failure interpretation
+After a remote execution completes, pull only the outputs the user needs with
+`sync_remote_workspace(operation="pull", runner_id="<runner-id>", paths=[...])`,
+verify the transfer result, and then declare those local files as artifacts.
+Remote files are not artifacts until they are pulled and declared.
 
-| Symptom | Meaning | Required action |
-|---|---|---|
-| `run_npu_job` missing or workload absent | Broker disabled or wrong stack | Stop and report deployment mismatch |
-| no managed environment passes the dependency probe | Scientific environment is absent or incomplete | Create/update it with `environment_create` / `environment_install`, then probe the environment ID's latest state before submission |
-| missing target/framework PDB | User has not provided the required scientific PDB input, or the Agent did not write it into the Session workspace | Stop and ask the user for the missing PDB; do not run a default example |
-| workspace input path error for a custom PDB | Agent-authored custom input is missing or escapes the Session workspace | Stop and report the offending relative input |
-| hotspot is absent or insertion-code ambiguous | The requested original PDB residue cannot be mapped safely | Stop and ask the user to correct the target chain/residue list; do not guess a replacement residue |
-| target chain or CIF atom mapping is empty/ambiguous | Screening cannot identify the Protenix target structure safely | Treat the job as failed and return the exact mapping error; do not report zero contacts |
-| operator asset variable/path error | Server deployment configuration is incomplete | Stop and report the named variable/path to the operator |
-| `Container ID verify failed` | Model was launched inside bwrap instead of Broker | Stop; report incorrect execution path |
-| `Protenix jobs failed: ... launched X/Y, completed N, skipped M` | One or more parallel Protenix design jobs failed; fail-fast may have intentionally skipped unlaunched designs | Stop; return the failed design names, completed/skipped counts, job ID, stage, and short logs without resubmitting |
-| workload exit code / model traceback | Host pipeline or model failure | Stop; return job ID, stage, and short logs without resubmitting |
-| `result` says the job is not terminal | Status/probe completion check was early | Return to step 5; do not declare artifacts |
-| succeeded job but `result` was never called, or `result.artifacts` is missing/empty | Automatic artifact declaration did not run | Call `result`; do not recover by declaring only screening Markdown/CSV |
+Success requires equal RFdiffusion, ProteinMPNN, Protenix-input, and Protenix-
+confidence counts for `num_designs`, plus both files below:
+
+```text
+antibody_pipeline/runs/<run_name>/05_screening/protenix_screening_report.md
+antibody_pipeline/runs/<run_name>/05_screening/protenix_screening_summary.csv
+```
+
+Zero candidates passing the scientific screen is valid when every pipeline
+stage and both screening reports completed. A hotspot mapping error is a failed
+screening run, not zero contacts.

@@ -1,5 +1,6 @@
 {
   "workspace": "antibody_pipeline",
+  "mindscience_root": "antibody_pipeline/models/mindscience",
   "target_pdb": "antibody_pipeline/inputs/target_antigen.pdb",
   "framework_pdb": "antibody_pipeline/inputs/antibody_framework.pdb",
   "hotspots": "[B45,B46,B49]",
