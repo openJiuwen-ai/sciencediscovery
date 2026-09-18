@@ -187,6 +187,27 @@ test("rate limiter blocks after a 429 until Retry-After elapses", async () => {
   assert.ok(Date.now() - start >= 900, `expected to wait ~1s, waited ${Date.now() - start}ms`);
 });
 
+test("HttpScholarlyTransport races a stalled body read instead of hanging forever", async (context) => {
+  // Live-observed on a bandwidth-throttled arxiv.org: headers arrive, the
+  // body stalls, the socket dies quietly and arrayBuffer() never settles —
+  // an invisible hang with zero handles. The transport must bound it.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      new ReadableStream({ start() {/* never enqueues */} }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const { HttpScholarlyTransport } = await import("./transport.js");
+  const transport = new HttpScholarlyTransport(new RateLimiter(100, 1));
+  await assert.rejects(
+    () => transport.get("https://stalled.test/body", { timeoutMs: 30 }),
+    /body read timed out/,
+  );
+});
+
 // ----------------------------------------------------------- source chain
 
 /** A scriptable transport for source-chain tests. */
