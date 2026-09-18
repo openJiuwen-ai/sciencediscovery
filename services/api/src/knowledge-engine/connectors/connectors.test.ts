@@ -280,6 +280,43 @@ test("downloadPaperPdf returns the first working pdf in chain order", async () =
   assert.deepEqual([...outcome.bytes], [...PDF_BYTES]);
 });
 
+test("downloadPaperPdf never re-fetches a URL a previous connector already killed", async () => {
+  // CORE/EuropePMC/OpenAlex routinely resolve the SAME pdf URL; when the host
+  // stalls, per-connector refetching multiplied one 120s timeout by seven
+  // (observed live with a throttled arxiv.org).
+  const shared = "https://dead.test/paper.pdf";
+  const mk = (name: string): PaperConnector => ({
+    name,
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => shared,
+  });
+  const transport = fakeTransport({ [shared]: { status: 404 } });
+  await assert.rejects(
+    () => downloadPaperPdf([mk("a"), mk("b"), mk("c")], ref(), { transport, assertUrl: async () => {} }),
+    /No downloadable PDF/,
+  );
+  assert.deepEqual(transport.calls, [shared]);
+});
+
+test("downloadPaperPdf mirror-expands arXiv pdf URLs from any connector", async () => {
+  // A non-arXiv connector resolving an arxiv.org/pdf/<id> URL must get the
+  // same mirror fallback as the arXiv connector itself.
+  const coreLike: PaperConnector = {
+    name: "core",
+    search: async () => [],
+    fetchMetadata: async () => null,
+    resolvePdf: async () => "https://arxiv.org/pdf/0706.1062",
+  };
+  const transport = fakeTransport({
+    "https://arxiv.org/pdf/0706.1062": { status: 404 },
+    "https://cn.arxiv.org/pdf/0706.1062": { status: 200, body: PDF_BYTES },
+  });
+  const outcome = await downloadPaperPdf([coreLike], ref(), { transport, assertUrl: async () => {} });
+  assert.equal(outcome.url, "https://cn.arxiv.org/pdf/0706.1062");
+  assert.equal(outcome.source, "core");
+});
+
 test("downloadPaperPdf: transient failure outranks definitive misses", async () => {
   const flaky: PaperConnector = {
     name: "flaky",

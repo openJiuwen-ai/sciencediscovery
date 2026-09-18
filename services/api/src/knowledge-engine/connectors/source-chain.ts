@@ -138,19 +138,25 @@ export async function downloadPaperPdf(
 ): Promise<DownloadOutcome> {
   const transientErrors: Error[] = [];
   const assertUrl = options.assertUrl ?? assertSafeUrl;
+  // One bad URL must not be re-fetched per connector: CORE/EuropePMC/OpenAlex
+  // routinely resolve the SAME arXiv/publisher PDF, and a hanging host
+  // otherwise burns its full fetch timeout once per connector (observed live:
+  // a throttled arxiv.org cost 7 × 120s for a single paper).
+  const deadUrls = new Set<string>();
 
   for (const connector of chain) {
     const candidateUrls: string[] = [];
     try {
       const url = await connector.resolvePdf(ref);
       if (url) {
-        if (connector.name === "arxiv") {
-          const id = ref.arxivId ?? /(\d{4}\.\d{4,5})/.exec(url)?.[1];
-          if (id) {
-            candidateUrls.push(...arxivPdfMirrors(id));
-          } else {
-            candidateUrls.push(url);
-          }
+        // Mirror-expand ANY arXiv PDF URL, not just the arXiv connector's own:
+        // other connectors regularly resolve arXiv-hosted papers to
+        // arxiv.org/pdf/<id>, and a throttled/blackholed mirror must not be
+        // the only shot we take.
+        const arxivMatch = /^https?:\/\/(?:[\w-]+\.)?arxiv\.org\/pdf\/(\d{4}\.\d{4,5})/.exec(url);
+        const arxivId = ref.arxivId ?? arxivMatch?.[1];
+        if (arxivId && (connector.name === "arxiv" || arxivMatch)) {
+          candidateUrls.push(...arxivPdfMirrors(arxivId));
         } else {
           candidateUrls.push(url);
         }
@@ -162,12 +168,16 @@ export async function downloadPaperPdf(
     }
 
     for (const url of candidateUrls) {
+      if (deadUrls.has(url)) continue;
       try {
         const bytes = await fetchPdf(url, options.transport, assertUrl);
         if (bytes) return { bytes, url, source: connector.name };
-        // null = definitive miss (404 / not a PDF) — try next candidate.
+        // null = definitive miss (404 / not a PDF) — try next candidate. A
+        // duplicate resolution from a later connector would miss identically.
+        deadUrls.add(url);
       } catch (error) {
         if (error instanceof RateLimitError) throw error;
+        deadUrls.add(url); // transient too: never re-burn a 120s stall on a duplicate
         transientErrors.push(error instanceof Error ? error : new Error(String(error)));
         onWarn?.(`[source-chain] download failed from ${url}: ${errMsg(error)}`);
       }
