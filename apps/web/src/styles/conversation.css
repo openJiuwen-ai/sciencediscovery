@@ -46,6 +46,10 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .subagent-session-bar { flex-wrap: nowrap; }
 .subagent-session-bar-title { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
 .subagent-session-bar-title > .session-bar-title { flex-wrap: nowrap; }
+.subagent-session-bar-title .session-bar-project { cursor: pointer; }
+.subagent-session-bar-title .subagent-parent-session { border: 0; background: transparent; padding: 0; cursor: pointer; text-align: left; }
+.subagent-session-bar-title .subagent-parent-session:hover,
+.subagent-session-bar-title .subagent-parent-session:focus-visible { color: var(--accent-strong); }
 .subagent-back-button { width: 30px; height: 30px; flex: 0 0 auto; }
 .subagent-back-button svg { transform: rotate(180deg); }
 .subagent-parent-session { max-width: min(220px, 24vw); overflow: hidden; flex: 0 1 auto; color: var(--muted); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
