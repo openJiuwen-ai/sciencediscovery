@@ -1034,8 +1034,6 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
       {wizardOpen ? (
         <ModelConnectWizard
           client={client}
-          existingModels={models}
-          existingProviders={providers}
           {...(onDefaultModelSet ? { onDefaultModelSet } : {})}
           onError={onError}
           onModelsChange={onModelsChange}

@@ -47,6 +47,21 @@ const authFailResult: ModelConnectivityTestResult = {
   testedAt: "2026-09-17T00:00:01.000Z",
 };
 
+const existingDeepSeekProvider: ModelProvider = {
+  apiProtocol: "openai-chat-completions",
+  apiVariant: "deepseek",
+  baseUrl: "https://api.deepseek.com",
+  createdAt: "2026-09-01T00:00:00.000Z",
+  hasApiToken: true,
+  id: "existing-provider-deepseek-1",
+  modelDiscovery: "openai-models",
+  name: "DeepSeek",
+  presetId: "deepseek",
+  proxyPolicy: "inherit",
+  tokenOptional: false,
+  updatedAt: "2026-09-01T00:00:00.000Z",
+};
+
 function extractText(node: any): string {
   if (typeof node === "string") return node;
   if (typeof node === "number") return String(node);
@@ -107,8 +122,6 @@ test("renders preset provider selection, official registration link, and billing
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client: createMockClient(),
-          existingModels: [],
-          existingProviders: [],
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
@@ -133,8 +146,6 @@ test("renders preset provider selection, official registration link, and billing
         { initialLocale: "en" },
         createElement(ModelConnectWizard, {
           client: createMockClient(),
-          existingModels: [],
-          existingProviders: [],
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
@@ -206,8 +217,6 @@ test("successful flow: creates provider, registers the first listed model, tests
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           onDefaultModelSet: async (modelId: string) => {
             defaultModelSetId = modelId;
           },
@@ -295,8 +304,6 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           onDefaultModelSet: async () => {
             defaultModelSetCalled = true;
           },
@@ -337,34 +344,11 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   assert.match(alertText, /Invalid API key provided/);
 });
 
-test("existing provider with bad key: does NOT update existing provider's token, deletes temp objects, keeps input and default model", async () => {
+test("bad key with an existing provider: new provider is rolled back, existing row and its token stay untouched", async () => {
   let updateProviderCalled = false;
   let deletedModelId: string | undefined;
   let deletedProviderId: string | undefined;
   let defaultModelSetCalled = false;
-
-  const existingDeepSeekProvider: ModelProvider = {
-    apiProtocol: "openai-chat-completions",
-    apiVariant: "deepseek",
-    baseUrl: "https://api.deepseek.com",
-    createdAt: "2026-09-01T00:00:00.000Z",
-    hasApiToken: true,
-    id: "existing-provider-deepseek-1",
-    modelDiscovery: "openai-models",
-    name: "DeepSeek",
-    presetId: "deepseek",
-    proxyPolicy: "inherit",
-    tokenOptional: false,
-    updatedAt: "2026-09-01T00:00:00.000Z",
-  };
-
-  const existingDeepSeekModel: ModelProfile = {
-    contextWindow: 64000,
-    id: "existing-profile-deepseek-chat",
-    model: "deepseek-chat",
-    name: "DeepSeek-V3",
-    providerId: "existing-provider-deepseek-1",
-  };
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => ({
@@ -395,10 +379,11 @@ test("existing provider with bad key: does NOT update existing provider's token,
       deletedProviderId = providerId;
       return { deleted: providerId };
     },
+    listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [existingDeepSeekProvider] }),
     testModel: async () => authFailResult,
     updateProvider: async () => {
       updateProviderCalled = true;
-      throw new Error("Should not update existing provider when test fails!");
+      throw new Error("Should never update an existing provider from the wizard!");
     },
   });
 
@@ -410,8 +395,6 @@ test("existing provider with bad key: does NOT update existing provider's token,
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [existingDeepSeekModel],
-          existingProviders: [existingDeepSeekProvider],
           onDefaultModelSet: async () => {
             defaultModelSetCalled = true;
           },
@@ -433,10 +416,10 @@ test("existing provider with bad key: does NOT update existing provider's token,
     await submitButton.props.onClick();
   });
 
-  // Existing provider's token must NOT be updated!
+  // No existing provider is ever updated from the wizard!
   assert.equal(updateProviderCalled, false);
 
-  // Temporary objects must be cleaned up
+  // The newly created objects are cleaned up on failure
   assert.equal(deletedProviderId, "temp-testing-provider");
   assert.equal(deletedModelId, "temp-profile-on-temp-testing-provider");
 
@@ -505,8 +488,6 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           onDefaultModelSet: async (modelId: string) => {
             defaultModelSetId = modelId;
           },
@@ -582,8 +563,6 @@ test("custom provider without model id: falls back to the first listed model", a
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           onDefaultModelSet: async (modelId: string) => {
             defaultModelSetId = modelId;
           },
@@ -651,8 +630,6 @@ test("empty model listing: readable error, provider rolled back, default untouch
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           onDefaultModelSet: async () => {
             defaultModelSetCalled = true;
           },
@@ -702,8 +679,6 @@ test("model listing failure: readable error with detail, provider rolled back, d
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           onDefaultModelSet: async () => {
             defaultModelSetCalled = true;
           },
@@ -748,8 +723,6 @@ test("validation errors: missing key prevents client API calls", async () => {
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
@@ -777,8 +750,6 @@ test("advanced configuration expands fine-tuning fields in place; the wizard sta
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client: createMockClient(),
-          existingModels: [],
-          existingProviders: [],
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
@@ -842,8 +813,6 @@ test("advanced preset fields: base URL override is honored when creating a provi
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
@@ -909,8 +878,6 @@ test("advanced custom fields: protocol and variant drive creation, and the listi
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
           client,
-          existingModels: [],
-          existingProviders: [],
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
@@ -951,22 +918,7 @@ test("advanced custom fields: protocol and variant drive creation, and the listi
   assert.equal(addedModelInput?.model, "listed-model-first");
 });
 
-test("advanced area with an existing matching provider shows the reuse note instead of fields", async () => {
-  const existingDeepSeekProvider: ModelProvider = {
-    apiProtocol: "openai-chat-completions",
-    apiVariant: "deepseek",
-    baseUrl: "https://api.deepseek.com",
-    createdAt: "2026-09-01T00:00:00.000Z",
-    hasApiToken: true,
-    id: "existing-provider-deepseek-1",
-    modelDiscovery: "openai-models",
-    name: "DeepSeek",
-    presetId: "deepseek",
-    proxyPolicy: "inherit",
-    tokenOptional: false,
-    updatedAt: "2026-09-01T00:00:00.000Z",
-  };
-
+test("advanced area always shows creation fields, even when the same preset already exists", async () => {
   let renderer: ReactTestRenderer;
   await act(async () => {
     renderer = create(
@@ -974,9 +926,9 @@ test("advanced area with an existing matching provider shows the reuse note inst
         LocaleProvider,
         { initialLocale: "zh-CN" },
         createElement(ModelConnectWizard, {
-          client: createMockClient(),
-          existingModels: [],
-          existingProviders: [existingDeepSeekProvider],
+          client: createMockClient({
+            listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [existingDeepSeekProvider] }),
+          }),
           presets: MODEL_PROVIDER_PRESETS,
         }),
       ),
@@ -987,8 +939,85 @@ test("advanced area with an existing matching provider shows the reuse note inst
     renderer!.root.findByProps({ className: "secondary-button compact-button" }).props.onClick();
   });
 
-  const note = renderer!.root.findByProps({ className: "wizard-advanced-note" });
-  assert.match(extractText(note), /已在下方列表中/);
-  // No creation-time fields: the existing provider's endpoint wins.
-  assert.equal(renderer!.root.findAllByProps({ id: "wizard-base-url-override" }).length, 0);
+  // Duplicate adds are allowed: no "reuse the existing one" note anywhere,
+  // and the display-name plus base-URL fields stay editable.
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced-note" }).length, 0);
+  const nameInput = renderer!.root.findByProps({ id: "wizard-preset-name" });
+  assert.equal(nameInput.props.placeholder, "DeepSeek");
+  assert.ok(renderer!.root.findByProps({ id: "wizard-base-url-override" }));
+  const fullText = extractText(renderer!.root);
+  assert.ok(!fullText.includes("仅更新密钥"));
+});
+
+test("same preset can be added again with its own name and key; the existing row is never updated", async () => {
+  let createdProviderInput: any;
+  let updateProviderCalled = false;
+  let providersAfter: ModelProvider[] | undefined;
+
+  const createdProvider: ModelProvider = {
+    ...existingDeepSeekProvider,
+    createdAt: "2026-09-17T00:00:00.000Z",
+    id: "created-provider-work-deepseek",
+    name: "工作 DeepSeek",
+    updatedAt: "2026-09-17T00:00:00.000Z",
+  };
+
+  const client = createMockClient({
+    createProvider: async (body: any) => {
+      createdProviderInput = body;
+      return createdProvider;
+    },
+    listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [existingDeepSeekProvider, createdProvider] }),
+    updateProvider: async () => {
+      updateProviderCalled = true;
+      throw new Error("The wizard must never update an existing provider");
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          onProvidersChange: (providers) => {
+            providersAfter = providers;
+          },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  // Rename in advanced fields, then connect.
+  await act(async () => {
+    renderer!.root.findByProps({ className: "secondary-button compact-button" }).props.onClick();
+  });
+  const nameInput = renderer!.root.findByProps({ id: "wizard-preset-name" });
+  await act(async () => {
+    nameInput.props.onChange({ target: { value: "工作 DeepSeek" } });
+  });
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  await act(async () => {
+    keyInput.props.onChange({ target: { value: "sk-second-key" } });
+  });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  // A fresh provider is created with the user's own display name and key.
+  assert.equal(createdProviderInput?.name, "工作 DeepSeek");
+  assert.equal(createdProviderInput?.apiToken, "sk-second-key");
+  assert.equal(createdProviderInput?.presetId, "deepseek");
+  assert.equal(updateProviderCalled, false);
+  // The refreshed list carries both rows.
+  assert.equal(providersAfter?.length, 2);
+  assert.ok(providersAfter?.some((provider) => provider.id === "existing-provider-deepseek-1"));
+  assert.ok(providersAfter?.some((provider) => provider.id === "created-provider-work-deepseek"));
+
+  // Success alert shows for the new connection.
+  const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
+  assert.match(extractText(successAlert), /模型已连接并保存/);
 });

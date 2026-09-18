@@ -34,8 +34,8 @@ test.use({ locale: "zh-CN" });
  *   1. 打开模型注册表：空态下连接模型默认展开，是唯一新建入口，无独立添加面板与常驻编辑器。
  *   2. 检查预置服务商联动、官方 Key 申请链接、计费提示，以及无推荐模型展示、按钮单行、label 贴近控件。
  *   3. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
- *   4. 成功路径：模型标识留空，填入有效凭证测试并启用，验证列表第一项测通并写入全局默认任务模型。
- *   5. 保护已有配置：对已有服务商填入坏 Key，验证原有 Provider 与 Token 未被破坏、默认模型未变。
+ *   4. 成功路径与重复添加：模型标识留空测通列表第一项并写入全局默认；同一服务商改名换 Key 再连一次得到第二行。
+ *   5. 保护已有配置：对已有服务商填入坏 Key，本次新建整体回滚，两行已有 Provider 与 Token 未被破坏、默认模型未变。
  *   6. 高级配置在卡片内展开精细字段：向导与系统设置都保持打开，服务商列表仍在；「收起」与底栏取消对照验证。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
  * Type: mocked
@@ -306,8 +306,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "成功路径：模型标识留空，填入有效凭据测试并启用，验证列表第一项写入全局默认任务模型",
-      "清空模型标识、换填有效 Key 后提交，向导自动从服务商模型列表取第一项完成测通，展示包含延迟的成功提示，并直接将该模型设为全局默认任务模型。",
+      "成功路径与重复添加：模型标识留空测通列表第一项，改名再连一次得到第二行",
+      "清空模型标识、换填有效 Key 后提交，向导自动从服务商模型列表取第一项完成测通并写入全局默认任务模型；同一服务商换个名字再连一次，列表出现第二行，第一行保持不变。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
@@ -332,14 +332,37 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(taskModelSelect).toBeVisible();
         await expect(taskModelSelect).toContainText("stub-model-alpha");
 
-        // 回到模型注册表
+        // 回到模型注册表；分组切换会重挂注册表视图，向导随之收起，需重新展开
         await navigation.getByRole("button", { name: /^模型注册表/ }).click();
+
+        // 同一服务商允许再加一次：改名字、换 Key，再「保存并连接」
+        let wizardAgain = dialog.locator(".model-connect-wizard");
+        if (!await wizardAgain.count()) {
+          await dialog.getByRole("button", { name: /连接模型/ }).click();
+          wizardAgain = dialog.locator(".model-connect-wizard");
+        }
+        await wizardAgain.locator("#wizard-provider-select").selectOption("custom");
+        await wizardAgain.locator("#wizard-custom-name").fill("E2E 向导测试服务商二号");
+        await wizardAgain.locator("#wizard-custom-url").fill(stubBaseUrl);
+        // 模型标识留空：同样登记列表第一项
+        await wizardAgain.locator("#wizard-api-key").fill("valid-key-pass-2");
+        await wizardAgain.locator(".wizard-submit-button").click();
+        await expect(wizardAgain.locator(".wizard-alert-success")).toBeVisible();
+
+        // 列表出现两行，第一行名字与凭据不变
+        const res = await page.request.fetch(`${apiBaseUrl()}/api/providers`, {
+          headers: authorizationHeader(),
+        });
+        const providerData = await res.json() as { providers: Array<{ name: string; hasApiToken?: boolean }> };
+        const journeyProviders = providerData.providers.filter((p) => p.name.includes("E2E 向导测试服务商"));
+        expect(journeyProviders.length).toBe(2);
+        expect(journeyProviders.every((p) => p.hasApiToken)).toBe(true);
       },
     );
 
     await journey.step(
-      "保护已有配置：对已有服务商填入坏 Key，验证原有 Provider 与 Token 未被破坏",
-      "针对已配置好的服务商再次填入错误 Key 测试，测试失败后原有 Provider 的有效 Token 和模型配置不受任何污染。",
+      "保护已有配置：对已有服务商填入坏 Key，新建回滚且原有 Provider 与 Token 未被破坏",
+      "针对已配置好的服务商再次填入错误 Key 提交：本次新建在测通失败后整体回滚，列表仍只有之前两行，原有 Provider 的有效 Token 和模型配置不受任何污染。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
@@ -363,14 +386,14 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         // 验证失败提示
         await expect(wizardSection.locator(".wizard-alert-error")).toContainText("鉴权失败 (401)");
 
-        // 验证已存在的 Provider 依然健康存在
+        // 验证两行已有服务商依然健康存在，失败的新建已整体回滚（不会多出一行）
         const res = await page.request.fetch(`${apiBaseUrl()}/api/providers`, {
           headers: authorizationHeader(),
         });
         const providerData = await res.json() as { providers: Array<{ id: string; name: string; hasApiToken?: boolean }> };
-        const existing = providerData.providers.find((p) => p.name === "E2E 向导测试服务商");
-        expect(existing).toBeDefined();
-        expect(existing?.hasApiToken).toBe(true);
+        const journeyProviders = providerData.providers.filter((p) => p.name.includes("E2E 向导测试服务商"));
+        expect(journeyProviders.length).toBe(2);
+        expect(journeyProviders.every((p) => p.hasApiToken)).toBe(true);
 
         // 验证全局默认任务模型仍然指向有效的模型
         const settingsRes = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {

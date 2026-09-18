@@ -643,7 +643,6 @@
 .model-catalog-status button { flex: 0 0 auto; }
 .wizard-advanced { border-top: 1px dashed var(--border); padding-top: 7px; }
 .wizard-advanced-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
-.wizard-advanced-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .provider-add-model-toggle { justify-self: start; min-height: 30px; border: 1px dashed var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--accent-ink); padding: 4px 10px; cursor: pointer; font-size: 11px; font-weight: 750; }
 .provider-add-model-toggle::before { content: "+ "; font-weight: 800; }
 .provider-add-model-toggle[aria-expanded="true"]::before { content: "− "; }

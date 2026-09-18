@@ -41,8 +41,6 @@ import { useLocale } from "./i18n/index.js";
 
 export interface ModelConnectWizardProps {
   client: SettingsApiClient;
-  existingModels: ModelProfile[];
-  existingProviders: ModelProvider[];
   onDefaultModelSet?: (modelId: string) => Promise<void>;
   onError?: (error: Error | string) => void;
   onModelsChange?: (models: ModelProfile[]) => void;
@@ -55,8 +53,6 @@ export interface ModelConnectWizardProps {
 
 export function ModelConnectWizard({
   client,
-  existingModels,
-  existingProviders,
   onDefaultModelSet,
   onError,
   onModelsChange,
@@ -84,6 +80,7 @@ export function ModelConnectWizard({
     if (advancedOpen) footerRef.current?.scrollIntoView({ block: "nearest" });
   }, [advancedOpen]);
   const [baseUrlOverride, setBaseUrlOverride] = useState("");
+  const [presetNameOverride, setPresetNameOverride] = useState("");
   const [customProtocol, setCustomProtocol] = useState<ModelApiProtocol>("openai-chat-completions");
   const [customVariant, setCustomVariant] = useState<ModelApiVariant>("openai");
   const [advancedProxyPolicy, setAdvancedProxyPolicy] = useState<ProxyPolicy>("inherit");
@@ -101,17 +98,13 @@ export function ModelConnectWizard({
   // listing instead of any curated recommendation.
   const explicitModelId = isCustom ? customModelId.trim() : "";
   const tokenOptional = selectedPreset?.tokenOptional === true;
-  const matchingProvider = existingProviders.find((candidate) =>
-    selectedPreset
-      ? (candidate.presetId === selectedPreset.id)
-      : (candidate.name === (customName.trim() || "Custom") && candidate.baseUrl === customBaseUrl.trim())
-  );
 
   function handleProviderChange(value: string) {
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
     setBaseUrlOverride("");
+    setPresetNameOverride("");
     if (value === "custom") {
       setIsCustom(true);
     } else {
@@ -165,8 +158,6 @@ export function ModelConnectWizard({
 
     setTesting(true);
 
-    let createdTempProviderId: string | undefined;
-    let createdTempModelId: string | undefined;
     let createdPermanentProviderId: string | undefined;
     let createdPermanentModelId: string | undefined;
     let initialOverrides: RuntimeSettingsOverrides = {};
@@ -179,203 +170,94 @@ export function ModelConnectWizard({
         }
       } catch { /* ignore */ }
 
-      if (matchingProvider) {
-        // Safe testing for existing provider:
-        // DO NOT overwrite matchingProvider's apiToken before testing!
-        // Instead, spin up a temporary testing provider with the candidate credentials.
-        // The existing provider's endpoint/protocol/proxy stay authoritative:
-        // the advanced fields only apply when creating a new provider.
-        const tempInput = selectedPreset
-          ? {
-              apiProtocol: selectedPreset.apiProtocol,
-              apiToken: apiKey.trim() || undefined,
-              apiVariant: selectedPreset.apiVariant,
-              baseUrl: matchingProvider.baseUrl || selectedPreset.baseUrl,
-              modelDiscovery: selectedPreset.modelDiscovery,
-              name: `${matchingProvider.name} (temp-test)`,
-              presetId: selectedPreset.id,
-              proxyPolicy: matchingProvider.proxyPolicy || ("inherit" as const),
-              tokenOptional: selectedPreset.tokenOptional === true,
-            }
-          : {
-              apiProtocol: matchingProvider.apiProtocol,
-              apiToken: apiKey.trim() || undefined,
-              apiVariant: matchingProvider.apiVariant,
-              baseUrl: matchingProvider.baseUrl,
-              modelDiscovery: matchingProvider.modelDiscovery,
-              name: `${matchingProvider.name} (temp-test)`,
-              proxyPolicy: matchingProvider.proxyPolicy || ("inherit" as const),
-              tokenOptional: matchingProvider.tokenOptional === true,
-            };
+      // Always create a fresh provider: the same vendor may be added several
+      // times with its own name and key. Existing rows stay untouched —
+      // failure rolls back only what this attempt created.
+      const createInput = selectedPreset
+        ? {
+            apiProtocol: selectedPreset.apiProtocol,
+            apiToken: apiKey.trim() || undefined,
+            apiVariant: selectedPreset.apiVariant,
+            baseUrl: baseUrlOverride.trim() || selectedPreset.baseUrl,
+            modelDiscovery: selectedPreset.modelDiscovery,
+            name: presetNameOverride.trim() || selectedPreset.name,
+            presetId: selectedPreset.id,
+            proxyPolicy: advancedProxyPolicy,
+            tokenOptional: selectedPreset.tokenOptional === true,
+          }
+        : {
+            apiProtocol: customProtocol,
+            apiToken: apiKey.trim() || undefined,
+            apiVariant: customVariant,
+            baseUrl: customBaseUrl.trim(),
+            modelDiscovery: DEFAULT_MODEL_DISCOVERY[customProtocol],
+            name: customName.trim() || "Custom",
+            proxyPolicy: advancedProxyPolicy,
+            tokenOptional: false,
+          };
 
-        const tempProvider = await client.createProvider(tempInput);
-        createdTempProviderId = tempProvider.id;
+      const provider = await client.createProvider(createInput);
+      createdPermanentProviderId = provider.id;
 
-        const modelId = await resolveDefaultModelId(tempProvider.id);
-        const tempProfile = await client.addProviderModel(tempProvider.id, {
-          ...(explicitModelId ? { label: explicitModelId } : {}),
-          model: modelId,
-        });
-        createdTempModelId = tempProfile.id;
+      const modelId = await resolveDefaultModelId(provider.id);
+      const profile = await client.addProviderModel(provider.id, {
+        ...(explicitModelId ? { label: explicitModelId } : {}),
+        model: modelId,
+      });
+      createdPermanentModelId = profile.id;
 
-        // Test connectivity on the temp model
-        const testOutcome = await client.testModel(tempProfile.id);
+      const testOutcome = await client.testModel(profile.id);
 
-        // Immediately clean up temporary test objects.
-        // If the backend auto-defaulted the global task model to the temp model,
-        // restore initialOverrides first so deleteModel is not blocked by runtime settings.
+      if (!testOutcome.ok) {
+        // Failed: roll back newly created model and provider.
+        // Restore settings first so deleteModel is not blocked by runtime settings.
         try {
           if (typeof client.replaceGlobalSettings === "function") {
             await client.replaceGlobalSettings(initialOverrides);
           }
         } catch { /* ignore */ }
-        try { await client.deleteModel(tempProfile.id); } catch { /* ignore */ }
-        try { await client.deleteProvider(tempProvider.id); } catch { /* ignore */ }
-        createdTempModelId = undefined;
-        createdTempProviderId = undefined;
-
-        if (!testOutcome.ok) {
-          // Failure: matchingProvider was NEVER updated. Its token and models remain intact!
-          setTestResult(testOutcome);
-          return;
+        if (createdPermanentModelId) {
+          try { await client.deleteModel(createdPermanentModelId); } catch { /* ignore */ }
         }
-
-        // Test succeeded! Now safe to update the existing provider's credentials
-        let provider = matchingProvider;
-        if (apiKey.trim()) {
-          provider = await client.updateProvider(matchingProvider.id, {
-            apiToken: apiKey.trim(),
-          });
+        if (createdPermanentProviderId) {
+          try { await client.deleteProvider(createdPermanentProviderId); } catch { /* ignore */ }
         }
-
-        // Ensure model profile exists on the matching provider
-        let profile = existingModels.find((m) => m.providerId === matchingProvider.id && m.model === modelId);
-        if (!profile) {
-          profile = await client.addProviderModel(matchingProvider.id, {
-            ...(explicitModelId ? { label: explicitModelId } : {}),
-            model: modelId,
-          });
-          createdPermanentModelId = profile.id;
-        }
-
-        // Set as global default task model
-        if (onDefaultModelSet) {
-          await onDefaultModelSet(profile.id);
-        } else {
-          await client.replaceGlobalSettings({ modelId: profile.id });
-        }
-
-        try {
-          const providerList = await client.listProviders();
-          onProvidersChange?.(providerList.providers);
-        } catch { /* ignore */ }
-
-        try {
-          const modelList = await client.listModels();
-          onModelsChange?.(modelList);
-        } catch { /* ignore */ }
-
-        setSuccessInfo({
-          latencyMs: testOutcome.latencyMs,
-          modelName: profile.name,
-        });
-
-        onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
-        onSuccess?.(profile, provider);
-      } else {
-        // No existing provider: create directly, honoring the advanced fields.
-        const createInput = selectedPreset
-          ? {
-              apiProtocol: selectedPreset.apiProtocol,
-              apiToken: apiKey.trim() || undefined,
-              apiVariant: selectedPreset.apiVariant,
-              baseUrl: baseUrlOverride.trim() || selectedPreset.baseUrl,
-              modelDiscovery: selectedPreset.modelDiscovery,
-              name: selectedPreset.name,
-              presetId: selectedPreset.id,
-              proxyPolicy: advancedProxyPolicy,
-              tokenOptional: selectedPreset.tokenOptional === true,
-            }
-          : {
-              apiProtocol: customProtocol,
-              apiToken: apiKey.trim() || undefined,
-              apiVariant: customVariant,
-              baseUrl: customBaseUrl.trim(),
-              modelDiscovery: DEFAULT_MODEL_DISCOVERY[customProtocol],
-              name: customName.trim() || "Custom",
-              proxyPolicy: advancedProxyPolicy,
-              tokenOptional: false,
-            };
-
-        const provider = await client.createProvider(createInput);
-        createdPermanentProviderId = provider.id;
-
-        const modelId = await resolveDefaultModelId(provider.id);
-        const profile = await client.addProviderModel(provider.id, {
-          ...(explicitModelId ? { label: explicitModelId } : {}),
-          model: modelId,
-        });
-        createdPermanentModelId = profile.id;
-
-        const testOutcome = await client.testModel(profile.id);
-
-        if (!testOutcome.ok) {
-          // Failed: roll back newly created model and provider.
-          // Restore settings first so deleteModel is not blocked by runtime settings.
-          try {
-            if (typeof client.replaceGlobalSettings === "function") {
-              await client.replaceGlobalSettings(initialOverrides);
-            }
-          } catch { /* ignore */ }
-          if (createdPermanentModelId) {
-            try { await client.deleteModel(createdPermanentModelId); } catch { /* ignore */ }
-          }
-          if (createdPermanentProviderId) {
-            try { await client.deleteProvider(createdPermanentProviderId); } catch { /* ignore */ }
-          }
-          createdPermanentModelId = undefined;
-          createdPermanentProviderId = undefined;
-          setTestResult(testOutcome);
-          return;
-        }
-
-        // Test succeeded!
-        if (onDefaultModelSet) {
-          await onDefaultModelSet(profile.id);
-        } else {
-          await client.replaceGlobalSettings({ modelId: profile.id });
-        }
-
-        try {
-          const providerList = await client.listProviders();
-          onProvidersChange?.(providerList.providers);
-        } catch { /* ignore */ }
-
-        try {
-          const modelList = await client.listModels();
-          onModelsChange?.(modelList);
-        } catch { /* ignore */ }
-
-        setSuccessInfo({
-          latencyMs: testOutcome.latencyMs,
-          modelName: profile.name,
-        });
-
-        onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
-        onSuccess?.(profile, provider);
+        createdPermanentModelId = undefined;
+        createdPermanentProviderId = undefined;
+        setTestResult(testOutcome);
+        return;
       }
+
+      // Test succeeded!
+      if (onDefaultModelSet) {
+        await onDefaultModelSet(profile.id);
+      } else {
+        await client.replaceGlobalSettings({ modelId: profile.id });
+      }
+
+      try {
+        const providerList = await client.listProviders();
+        onProvidersChange?.(providerList.providers);
+      } catch { /* ignore */ }
+
+      try {
+        const modelList = await client.listModels();
+        onModelsChange?.(modelList);
+      } catch { /* ignore */ }
+
+      setSuccessInfo({
+        latencyMs: testOutcome.latencyMs,
+        modelName: profile.name,
+      });
+
+      onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
+      onSuccess?.(profile, provider);
     } catch (reason) {
       try {
         if (typeof client.replaceGlobalSettings === "function") {
           await client.replaceGlobalSettings(initialOverrides);
         }
       } catch { /* ignore */ }
-      if (createdTempModelId) {
-        try { await client.deleteModel(createdTempModelId); } catch { /* ignore */ }
-      }
-      if (createdTempProviderId) {
-        try { await client.deleteProvider(createdTempProviderId); } catch { /* ignore */ }
-      }
       if (createdPermanentModelId) {
         try { await client.deleteModel(createdPermanentModelId); } catch { /* ignore */ }
       }
@@ -509,11 +391,20 @@ export function ModelConnectWizard({
 
         {advancedOpen ? (
           <div className="wizard-advanced">
-            {matchingProvider ? (
-              <p className="wizard-advanced-note">{t("wizard.advanced.existingNote")}</p>
-            ) : (
-              <div className="wizard-advanced-grid">
-                {selectedPreset ? (
+            <div className="wizard-advanced-grid">
+              {selectedPreset ? (
+                <>
+                  <div className="wizard-field">
+                    <label htmlFor="wizard-preset-name">{t("wizard.customNameLabel")}</label>
+                    <input
+                      disabled={testing}
+                      id="wizard-preset-name"
+                      onChange={(e) => setPresetNameOverride(e.target.value)}
+                      placeholder={selectedPreset.name}
+                      type="text"
+                      value={presetNameOverride}
+                    />
+                  </div>
                   <div className="wizard-field">
                     <label htmlFor="wizard-base-url-override">{t("wizard.customBaseUrlLabel")}</label>
                     <input
@@ -525,50 +416,50 @@ export function ModelConnectWizard({
                       value={baseUrlOverride}
                     />
                   </div>
-                ) : (
-                  <>
-                    <div className="wizard-field">
-                      <label htmlFor="wizard-api-protocol">{t("settings.apiProtocol")}</label>
-                      <select
-                        disabled={testing}
-                        id="wizard-api-protocol"
-                        onChange={(e) => handleCustomProtocolChange(e.target.value)}
-                        value={customProtocol}
-                      >
-                        <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
-                        <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
-                        <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
-                      </select>
-                    </div>
-                    <div className="wizard-field">
-                      <label htmlFor="wizard-api-variant">{t("settings.apiVariant")}</label>
-                      <select
-                        disabled={testing}
-                        id="wizard-api-variant"
-                        onChange={(e) => setCustomVariant(e.target.value as ModelApiVariant)}
-                        value={customVariant}
-                      >
-                        {MODEL_API_VARIANTS[customProtocol].map((variant) => (
-                          <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </>
-                )}
-                {proxySettings ? (
+                </>
+              ) : (
+                <>
                   <div className="wizard-field">
-                    <label htmlFor="wizard-proxy-policy">{t("settings.llmProxy")}</label>
-                    <ProxyPolicySelect
+                    <label htmlFor="wizard-api-protocol">{t("settings.apiProtocol")}</label>
+                    <select
                       disabled={testing}
-                      id="wizard-proxy-policy"
-                      onChange={setAdvancedProxyPolicy}
-                      settings={proxySettings}
-                      value={advancedProxyPolicy}
-                    />
+                      id="wizard-api-protocol"
+                      onChange={(e) => handleCustomProtocolChange(e.target.value)}
+                      value={customProtocol}
+                    >
+                      <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
+                      <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
+                      <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
+                    </select>
                   </div>
-                ) : null}
-              </div>
-            )}
+                  <div className="wizard-field">
+                    <label htmlFor="wizard-api-variant">{t("settings.apiVariant")}</label>
+                    <select
+                      disabled={testing}
+                      id="wizard-api-variant"
+                      onChange={(e) => setCustomVariant(e.target.value as ModelApiVariant)}
+                      value={customVariant}
+                    >
+                      {MODEL_API_VARIANTS[customProtocol].map((variant) => (
+                        <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+              {proxySettings ? (
+                <div className="wizard-field">
+                  <label htmlFor="wizard-proxy-policy">{t("settings.llmProxy")}</label>
+                  <ProxyPolicySelect
+                    disabled={testing}
+                    id="wizard-proxy-policy"
+                    onChange={setAdvancedProxyPolicy}
+                    settings={proxySettings}
+                    value={advancedProxyPolicy}
+                  />
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
 
