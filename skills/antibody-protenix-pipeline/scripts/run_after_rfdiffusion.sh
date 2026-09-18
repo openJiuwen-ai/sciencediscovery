@@ -41,7 +41,7 @@ Options:
   --protenix-seeds LIST      Pass through to inference.py --seeds. Default: PROTENIX_SEEDS or 42
   --hmmer-home DIR           HMMER home for Protenix MSA. Default: HMMER_HOME or ANTIBODY_PIPELINE_HOME/tools/hmmer
   --pipeline-env FILE        Optional extra env file. Disabled by default in ScienceDiscovery managed-env mode; do not use host env.sh
-  --cann-set-env FILE        Ascend toolkit set_env.sh. Default: CANN_SET_ENV or /usr/local/Ascend/ascend-toolkit/set_env.sh
+  --cann-set-env FILE        Optional legacy Ascend set_env.sh. Sandbox execution leaves this unset.
   --hotspots LIST            Chain-labelled target residues to screen. Required.
   --force                    Remove downstream output directories before running.
   -h, --help                 Show this help.
@@ -87,7 +87,7 @@ truthy_env() {
 require_managed_python() {
   if [[ -z "${PYTHON_BIN:-}" || ! -x "$PYTHON_BIN" ]]; then
     echo "error: --python must be a valid ScienceDiscovery scientific-env revision Python" >&2
-    echo "       expected: .../data/scientific-envs/revisions/<env>/<rev>/bin/python, python3, or python3.x" >&2
+    echo "       expected: /opt/science-env/bin/python or a scientific-env revision Python" >&2
     exit 2
   fi
   if [[ -n "${PIPELINE_HOME:-}" ]]; then
@@ -101,10 +101,10 @@ require_managed_python() {
   fi
   if truthy_env "${ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV:-${ANTIBODY_REQUIRE_SCIENCEAGENT_ENV:-1}}"; then
     case "$PYTHON_BIN" in
-      */scientific-envs/revisions/*/bin/python|*/scientific-envs/revisions/*/bin/python3|*/scientific-envs/revisions/*/bin/python3.*) ;;
+      /opt/science-env/bin/python|/opt/science-env/bin/python3|/opt/science-env/bin/python3.*|*/scientific-envs/revisions/*/bin/python|*/scientific-envs/revisions/*/bin/python3|*/scientific-envs/revisions/*/bin/python3.*) ;;
       *)
         echo "error: Python is not from a ScienceDiscovery scientific environment revision: $PYTHON_BIN" >&2
-        echo "       expected: .../data/scientific-envs/revisions/<env>/<rev>/bin/python, python3, or python3.x" >&2
+        echo "       expected: /opt/science-env/bin/python or a scientific-env revision Python" >&2
         exit 2
         ;;
     esac
@@ -131,7 +131,7 @@ PROTENIX_USE_MSA="${PROTENIX_USE_MSA:-false}"
 PROTENIX_N_SAMPLE="${PROTENIX_N_SAMPLE:-1}"
 PROTENIX_SEEDS="${PROTENIX_SEEDS:-42}"
 HMMER_HOME="${HMMER_HOME:-}"
-CANN_SET_ENV="${CANN_SET_ENV:-/usr/local/Ascend/ascend-toolkit/set_env.sh}"
+CANN_SET_ENV="${CANN_SET_ENV:-}"
 PIPELINE_ENV="${ANTIBODY_PIPELINE_ENV:-}"
 # ScienceDiscovery managed-env mode does not auto-source host pipeline env.sh.
 HOTSPOTS=""
@@ -335,6 +335,9 @@ run_proteinmpnn_inline() (
 )
 
 source_cann_env() {
+  if [[ -z "$CANN_SET_ENV" ]]; then
+    return 0
+  fi
   if [[ -f "$CANN_SET_ENV" ]]; then
     set +u
     # shellcheck disable=SC1090
