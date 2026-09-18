@@ -88,7 +88,7 @@ export function ModelConnectWizard({
   const [testing, setTesting] = useState(false);
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
-  const [successInfo, setSuccessInfo] = useState<{ latencyMs: number; modelName: string }>();
+  const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();
 
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
@@ -119,12 +119,12 @@ export function ModelConnectWizard({
     setCustomVariant(DEFAULT_MODEL_API_VARIANT[apiProtocol]);
   }
 
-  // The model to register, test, and make the global default: the user's own
-  // identifier when given, otherwise the first model the provider lists.
+  // The models to register on this provider: the user's own identifier when
+  // given, otherwise every entry of the provider's own model listing.
   // Throws a readable, already-translated error when the listing cannot
-  // supply one; the caller's rollback path treats it like any other failure.
-  async function resolveDefaultModelId(providerId: string): Promise<string> {
-    if (explicitModelId) return explicitModelId;
+  // supply any; the caller's rollback path treats it like any other failure.
+  async function resolveModelIds(providerId: string): Promise<string[]> {
+    if (explicitModelId) return [explicitModelId];
     let listing: ProviderModelList;
     try {
       listing = await client.listProviderModels(providerId);
@@ -132,11 +132,13 @@ export function ModelConnectWizard({
       const detail = reason instanceof Error ? reason.message : String(reason);
       throw new Error(t("wizard.error.listingFailed", { detail }));
     }
-    const first = listing.models[0]?.id?.trim();
-    if (!first) {
+    const ids = listing.models
+      .map((entry) => entry.id?.trim())
+      .filter((id): id is string => Boolean(id));
+    if (!ids.length) {
       throw new Error(t("wizard.error.noModels"));
     }
-    return first;
+    return ids;
   }
 
   async function handleTestAndEnable(): Promise<void> {
@@ -158,8 +160,8 @@ export function ModelConnectWizard({
 
     setTesting(true);
 
-    let createdPermanentProviderId: string | undefined;
-    let createdPermanentModelId: string | undefined;
+    let createdProviderId: string | undefined;
+    const createdModelIds: string[] = [];
     let initialOverrides: RuntimeSettingsOverrides = {};
 
     try {
@@ -168,6 +170,14 @@ export function ModelConnectWizard({
           const currentDetails = await client.getGlobalSettings();
           initialOverrides = currentDetails.overrides ?? {};
         }
+      } catch { /* ignore */ }
+
+      // Whether the system already has models BEFORE this connect decides the
+      // default: only the first model ever becomes the global default. When
+      // the list cannot be read, stay conservative and leave the default alone.
+      let hadModels = true;
+      try {
+        hadModels = (await client.listModels()).length > 0;
       } catch { /* ignore */ }
 
       // Always create a fresh provider: the same vendor may be added several
@@ -197,42 +207,51 @@ export function ModelConnectWizard({
           };
 
       const provider = await client.createProvider(createInput);
-      createdPermanentProviderId = provider.id;
+      createdProviderId = provider.id;
 
-      const modelId = await resolveDefaultModelId(provider.id);
-      const profile = await client.addProviderModel(provider.id, {
+      // Register the first model and prove the wire before registering more.
+      const modelIds = await resolveModelIds(provider.id);
+      const firstProfile = await client.addProviderModel(provider.id, {
         ...(explicitModelId ? { label: explicitModelId } : {}),
-        model: modelId,
+        model: modelIds[0]!,
       });
-      createdPermanentModelId = profile.id;
+      createdModelIds.push(firstProfile.id);
 
-      const testOutcome = await client.testModel(profile.id);
+      const testOutcome = await client.testModel(firstProfile.id);
 
       if (!testOutcome.ok) {
-        // Failed: roll back newly created model and provider.
+        // Failed: roll back everything this attempt created.
         // Restore settings first so deleteModel is not blocked by runtime settings.
         try {
           if (typeof client.replaceGlobalSettings === "function") {
             await client.replaceGlobalSettings(initialOverrides);
           }
         } catch { /* ignore */ }
-        if (createdPermanentModelId) {
-          try { await client.deleteModel(createdPermanentModelId); } catch { /* ignore */ }
+        for (const id of createdModelIds) {
+          try { await client.deleteModel(id); } catch { /* ignore */ }
         }
-        if (createdPermanentProviderId) {
-          try { await client.deleteProvider(createdPermanentProviderId); } catch { /* ignore */ }
+        createdModelIds.length = 0;
+        if (createdProviderId) {
+          try { await client.deleteProvider(createdProviderId); } catch { /* ignore */ }
         }
-        createdPermanentModelId = undefined;
-        createdPermanentProviderId = undefined;
+        createdProviderId = undefined;
         setTestResult(testOutcome);
         return;
       }
 
-      // Test succeeded!
-      if (onDefaultModelSet) {
-        await onDefaultModelSet(profile.id);
-      } else {
-        await client.replaceGlobalSettings({ modelId: profile.id });
+      // Wire proven: register the rest of the listing.
+      for (const modelId of modelIds.slice(1)) {
+        const profile = await client.addProviderModel(provider.id, { model: modelId });
+        createdModelIds.push(profile.id);
+      }
+
+      // Only the first model ever in the system becomes the global default.
+      if (!hadModels) {
+        if (onDefaultModelSet) {
+          await onDefaultModelSet(firstProfile.id);
+        } else {
+          await client.replaceGlobalSettings({ modelId: firstProfile.id });
+        }
       }
 
       try {
@@ -245,24 +264,32 @@ export function ModelConnectWizard({
         onModelsChange?.(modelList);
       } catch { /* ignore */ }
 
+      const count = createdModelIds.length;
+      const defaultChanged = !hadModels;
+      const successDesc = defaultChanged
+        ? t("wizard.successDesc", { count, model: firstProfile.name })
+        : t("wizard.successDescKeepDefault", { count });
+
       setSuccessInfo({
+        count,
+        defaultChanged,
         latencyMs: testOutcome.latencyMs,
-        modelName: profile.name,
+        modelName: firstProfile.name,
       });
 
-      onNotice?.(t("wizard.successTitle"), t("wizard.successDesc", { model: profile.name }));
-      onSuccess?.(profile, provider);
+      onNotice?.(t("wizard.successTitle"), successDesc);
+      onSuccess?.(firstProfile, provider);
     } catch (reason) {
       try {
         if (typeof client.replaceGlobalSettings === "function") {
           await client.replaceGlobalSettings(initialOverrides);
         }
       } catch { /* ignore */ }
-      if (createdPermanentModelId) {
-        try { await client.deleteModel(createdPermanentModelId); } catch { /* ignore */ }
+      for (const id of createdModelIds) {
+        try { await client.deleteModel(id); } catch { /* ignore */ }
       }
-      if (createdPermanentProviderId) {
-        try { await client.deleteProvider(createdPermanentProviderId); } catch { /* ignore */ }
+      if (createdProviderId) {
+        try { await client.deleteProvider(createdProviderId); } catch { /* ignore */ }
       }
       const message = reason instanceof Error ? reason.message : String(reason);
       setValidationError(message);
@@ -479,7 +506,12 @@ export function ModelConnectWizard({
             <CheckIcon size={16} />
             <div className="wizard-alert-content">
               <strong>{t("wizard.successTitle")}: </strong>
-              <span>{t("wizard.successDesc", { model: successInfo.modelName })} ({successInfo.latencyMs} ms)</span>
+              <span>
+                {successInfo.defaultChanged
+                  ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
+                  : t("wizard.successDescKeepDefault", { count: successInfo.count })}
+                {" "}({successInfo.latencyMs} ms)
+              </span>
             </div>
           </div>
         ) : null}

@@ -160,16 +160,16 @@ test("renders preset provider selection, official registration link, and billing
   assert.match(extractText(enNotice), /Calls will be billed according to the provider's standard rates/);
 });
 
-test("successful flow: creates provider, registers the first listed model, tests connectivity, and sets global default model", async () => {
+test("successful flow: creates provider, registers ALL listed models, tests the first, and sets it as global default on an empty system", async () => {
   let createdProviderInput: any;
-  let addedModelInput: any;
+  const registeredModels: string[] = [];
   let testedModelId: string | undefined;
   let defaultModelSetId: string | undefined;
   let listingProviderId: string | undefined;
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => {
-      addedModelInput = { providerId, ...body };
+      registeredModels.push(body.model);
       return {
         contextWindow: 64000,
         id: `profile-${body.model}`,
@@ -243,20 +243,89 @@ test("successful flow: creates provider, registers the first listed model, tests
   assert.equal(createdProviderInput?.apiToken, "sk-deepseek-test-123");
   assert.equal(createdProviderInput?.baseUrl, "https://api.deepseek.com");
 
-  // The provider's own listing was consulted, and its first entry wins —
-  // not any preset recommendation (deepseek-chat sits second on purpose).
+  // Every listing entry is registered (deepseek-chat sits second on purpose,
+  // proving the order comes from the listing, not any preset recommendation).
   assert.equal(listingProviderId, "provider-deepseek-1");
-  assert.equal(addedModelInput?.providerId, "provider-deepseek-1");
-  assert.equal(addedModelInput?.model, "listed-model-first");
+  assert.deepEqual(registeredModels, ["listed-model-first", "deepseek-chat"]);
 
   assert.equal(testedModelId, "profile-listed-model-first");
   assert.equal(defaultModelSetId, "profile-listed-model-first");
 
-  // Success alert is visible
+  // Success alert is visible, reports the count and the new default
   const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
   assert.match(extractText(successAlert), /模型已连接并保存/);
-  assert.match(extractText(successAlert), /已成功连接 listed-model-first 并设为全局默认任务模型/);
+  assert.match(extractText(successAlert), /登记 2 个模型；listed-model-first 已设为全局默认任务模型/);
   assert.match(extractText(successAlert), /88 ms/);
+});
+
+test("successful flow with existing models: registers all listed models but leaves the global default alone", async () => {
+  const registeredModels: string[] = [];
+  let defaultModelSetCalled = false;
+  let replaceSettingsCalledWithModel = false;
+
+  const existingModelProfile: ModelProfile = {
+    contextWindow: 64000,
+    id: "existing-profile-1",
+    model: "existing-model",
+    name: "Existing Model",
+    providerId: "some-other-provider",
+  };
+
+  const client = createMockClient({
+    addProviderModel: async (providerId: string, body: any) => {
+      registeredModels.push(body.model);
+      return {
+        contextWindow: 64000,
+        id: `profile-${body.model}`,
+        model: body.model,
+        name: body.label || body.model,
+        providerId,
+      } as ModelProfile;
+    },
+    // The system already has a model before this connect.
+    listModels: async () => [existingModelProfile],
+    replaceGlobalSettings: async (body: any) => {
+      if (body && body.modelId) replaceSettingsCalledWithModel = true;
+      return {} as any;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          onDefaultModelSet: async () => {
+            defaultModelSetCalled = true;
+          },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  await act(async () => {
+    keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
+  });
+
+  const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  await act(async () => {
+    await submitButton.props.onClick();
+  });
+
+  // All listing entries registered…
+  assert.deepEqual(registeredModels, ["listed-model-first", "listed-model-second"]);
+  // …but the existing default is untouched.
+  assert.equal(defaultModelSetCalled, false);
+  assert.equal(replaceSettingsCalledWithModel, false);
+
+  // Success copy says the default was kept.
+  const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
+  assert.match(extractText(successAlert), /登记 2 个模型；全局默认任务模型保持不变/);
 });
 
 test("failure flow: rollbacks temporary model and provider on test failure, shows readable error, keeps key input", async () => {
@@ -538,13 +607,13 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   assert.equal(defaultModelSetId, "profile-custom-model");
 });
 
-test("custom provider without model id: falls back to the first listed model", async () => {
-  let addedModelInput: any;
+test("custom provider without model id: registers every listed model", async () => {
+  const registeredModels: string[] = [];
   let defaultModelSetId: string | undefined;
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => {
-      addedModelInput = { providerId, ...body };
+      registeredModels.push(body.model);
       return {
         contextWindow: 32000,
         id: `profile-${body.model}`,
@@ -593,7 +662,7 @@ test("custom provider without model id: falls back to the first listed model", a
     await submitButton.props.onClick();
   });
 
-  assert.equal(addedModelInput?.model, "listed-model-first");
+  assert.deepEqual(registeredModels, ["listed-model-first", "listed-model-second"]);
   assert.equal(defaultModelSetId, "profile-listed-model-first");
 
   const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
@@ -840,11 +909,11 @@ test("advanced preset fields: base URL override is honored when creating a provi
 
 test("advanced custom fields: protocol and variant drive creation, and the listing default still applies", async () => {
   let createdProviderInput: any;
-  let addedModelInput: any;
+  const registeredModels: string[] = [];
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => {
-      addedModelInput = { providerId, ...body };
+      registeredModels.push(body.model);
       return {
         contextWindow: 32000,
         id: `profile-${body.model}`,
@@ -914,8 +983,8 @@ test("advanced custom fields: protocol and variant drive creation, and the listi
   assert.equal(createdProviderInput?.apiProtocol, "anthropic-messages");
   assert.equal(createdProviderInput?.apiVariant, "anthropic-adaptive");
   assert.equal(createdProviderInput?.modelDiscovery, "anthropic-models");
-  // No explicit model identifier: the first listed model is registered.
-  assert.equal(addedModelInput?.model, "listed-model-first");
+  // No explicit model identifier: every listed model is registered.
+  assert.deepEqual(registeredModels, ["listed-model-first", "listed-model-second"]);
 });
 
 test("advanced area always shows creation fields, even when the same preset already exists", async () => {

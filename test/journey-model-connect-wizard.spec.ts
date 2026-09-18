@@ -25,7 +25,7 @@ test.use({ locale: "zh-CN" });
  * E2E-META
  * Purpose: 模型连接（GitCode #92 / GitHub #39）：用户视角全流程覆盖
  *   - 连接模型是唯一新建入口：注册表不再有独立的「添加 Provider」面板，空态下连接卡片默认展开；
- *   - 成功路径：通过向导配置模型并测通，自动登记服务商模型列表的第一项并切换全局默认任务模型；
+ *   - 成功路径：通过向导配置模型并测通，自动登记该服务商模型列表的全部模型；系统里还没有模型时第一个设为全局默认任务模型；
  *   - 失败路径：坏 Key 鉴权失败可读报错、输入保留、临时对象回滚、不污染全局默认值；
  *   - 保护既有配置：已有 Provider 在向导中遇到坏 Key 时不被覆盖；
  *   - 高级配置：在连接卡片内展开精细字段，不收起向导、不关系统设置，与「收起」/底栏关闭互不串；
@@ -34,7 +34,7 @@ test.use({ locale: "zh-CN" });
  *   1. 打开模型注册表：空态下连接模型默认展开，是唯一新建入口，无独立添加面板与常驻编辑器。
  *   2. 检查预置服务商联动、官方 Key 申请链接、计费提示，以及无推荐模型展示、按钮单行、label 贴近控件。
  *   3. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
- *   4. 成功路径与重复添加：模型标识留空测通列表第一项并写入全局默认；同一服务商改名换 Key 再连一次得到第二行。
+ *   4. 成功路径与重复添加：模型标识留空测通后全量登记该服务商模型；系统首个模型才设全局默认；同一服务商改名换 Key 再连一次得到第二行且默认不变。
  *   5. 保护已有配置：对已有服务商填入坏 Key，本次新建整体回滚，两行已有 Provider 与 Token 未被破坏、默认模型未变。
  *   6. 高级配置在卡片内展开精细字段：向导与系统设置都保持打开，服务商列表仍在；「收起」与底栏取消对照验证。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
@@ -306,31 +306,42 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "成功路径与重复添加：模型标识留空测通列表第一项，改名再连一次得到第二行",
-      "清空模型标识、换填有效 Key 后提交，向导自动从服务商模型列表取第一项完成测通并写入全局默认任务模型；同一服务商换个名字再连一次，列表出现第二行，第一行保持不变。",
+      "成功路径与重复添加：全量登记模型，改名再连一次得到第二行且默认模型不变",
+      "清空模型标识、换填有效 Key 后提交，向导自动把该服务商模型列表的全部模型登记进来，列表第一项测通并（在系统首个模型时）写入全局默认任务模型；同一服务商换个名字再连一次，列表出现第二行且同样全量登记，但全局默认保持不变。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
 
         authValid = true;
-        // 模型标识留空：向导应登记该服务商模型列表的第一项（stub 返回 alpha 在前）
+        // 模型标识留空：向导应登记该服务商模型列表的全部模型（stub 返回 alpha 与 omega 两项）
         await wizardSection.locator("#wizard-custom-model").fill("");
         await wizardSection.locator("#wizard-api-key").fill("valid-key-pass");
         await wizardSection.locator(".wizard-submit-button").click();
 
-        // 验证成功提示
+        // 验证成功提示：全量登记数量 + 设为默认（系统首个模型）
         const successAlert = wizardSection.locator(".wizard-alert-success");
         await expect(successAlert).toBeVisible();
         await expect(successAlert).toContainText("模型已连接");
-        await expect(successAlert).toContainText("stub-model-alpha");
+        await expect(successAlert).toContainText("登记 2 个模型");
+        await expect(successAlert).toContainText("已设为全局默认任务模型");
 
-        // 验证全局默认值中任务模型已更新为列表第一项
+        // 全量登记：该服务商行显示已添加 2/2
+        const firstRow = dialog.locator(".provider-row").filter({ hasText: "E2E 向导测试服务商" }).first();
+        await expect(firstRow).toContainText("已添加 2/2");
+
+        // 验证全局默认值中任务模型已更新为列表第一项，并记录该 profile id
         const navigation = dialog.getByRole("navigation", { name: "设置分组" });
         await navigation.getByRole("button", { name: /^全局默认值/ }).click();
 
         const taskModelSelect = dialog.getByLabel("任务模型", { exact: false });
         await expect(taskModelSelect).toBeVisible();
         await expect(taskModelSelect).toContainText("stub-model-alpha");
+
+        const firstSettingsRes = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+          headers: authorizationHeader(),
+        });
+        const firstDefault = (await firstSettingsRes.json() as { effective: { modelId?: string } }).effective.modelId;
+        expect(firstDefault).toBeDefined();
 
         // 回到模型注册表；分组切换会重挂注册表视图，向导随之收起，需重新展开
         await navigation.getByRole("button", { name: /^模型注册表/ }).click();
@@ -344,12 +355,16 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await wizardAgain.locator("#wizard-provider-select").selectOption("custom");
         await wizardAgain.locator("#wizard-custom-name").fill("E2E 向导测试服务商二号");
         await wizardAgain.locator("#wizard-custom-url").fill(stubBaseUrl);
-        // 模型标识留空：同样登记列表第一项
+        // 模型标识留空：同样全量登记
         await wizardAgain.locator("#wizard-api-key").fill("valid-key-pass-2");
         await wizardAgain.locator(".wizard-submit-button").click();
-        await expect(wizardAgain.locator(".wizard-alert-success")).toBeVisible();
+        const secondSuccess = wizardAgain.locator(".wizard-alert-success");
+        await expect(secondSuccess).toBeVisible();
+        // 系统已有模型：提示登记数量且默认保持不变
+        await expect(secondSuccess).toContainText("登记 2 个模型");
+        await expect(secondSuccess).toContainText("全局默认任务模型保持不变");
 
-        // 列表出现两行，第一行名字与凭据不变
+        // 列表出现两行，第一行名字与凭据不变；全局默认模型 id 未变
         const res = await page.request.fetch(`${apiBaseUrl()}/api/providers`, {
           headers: authorizationHeader(),
         });
@@ -357,6 +372,12 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         const journeyProviders = providerData.providers.filter((p) => p.name.includes("E2E 向导测试服务商"));
         expect(journeyProviders.length).toBe(2);
         expect(journeyProviders.every((p) => p.hasApiToken)).toBe(true);
+
+        const secondSettingsRes = await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+          headers: authorizationHeader(),
+        });
+        const secondDefault = (await secondSettingsRes.json() as { effective: { modelId?: string } }).effective.modelId;
+        expect(secondDefault).toBe(firstDefault);
       },
     );
 
