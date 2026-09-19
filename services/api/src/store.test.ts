@@ -63,6 +63,7 @@ interface PersistedCatalog {
     settingsOverrides: Record<string, unknown>;
     title: string;
   }>;
+  webConnectorMigrated?: boolean;
 }
 
 test("remote environment audit revisions never replace the local catalog or disappear on refresh", async (context) => {
@@ -186,6 +187,54 @@ async function readPersistedCatalog(tempRoot: string): Promise<PersistedCatalog>
   database.close();
   return JSON.parse(row.json) as PersistedCatalog;
 }
+
+test("SessionStore seeds web connector on first load of a pre-migration catalog and never re-seeds", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `web-connector-migration-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  // Build a catalog the way older versions did: globalSettings carries an
+  // explicit enabledConnectorIds list (possibly empty) but no webConnectorMigrated flag.
+  const seedStore = new SessionStore(tempRoot);
+  await seedStore.load();
+  await seedStore.replaceGlobalSettings({ enabledConnectorIds: [] });
+
+  // Simulate a pre-migration persisted catalog: strip the migrated flag so the
+  // next load sees an old catalog that never carried it.
+  const stripDb = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const stripRow = stripDb.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
+  const stripped = JSON.parse(stripRow.json) as PersistedCatalog;
+  delete stripped.webConnectorMigrated;
+  stripDb.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(stripped));
+  stripDb.close();
+
+  const seeded = await readPersistedCatalog(tempRoot);
+  assert.equal(seeded.webConnectorMigrated, undefined);
+  assert.deepEqual(seeded.globalSettings.enabledConnectorIds, []);
+
+  // Reload: the migration should seed "web" and set the migrated flag.
+  const migrated = new SessionStore(tempRoot);
+  await migrated.load();
+  assert.deepEqual(migrated.getGlobalSettings().effective.enabledConnectorIds, ["web"]);
+  const afterMigration = await readPersistedCatalog(tempRoot);
+  assert.equal(afterMigration.webConnectorMigrated, true);
+
+  // Reload again: the flag is persisted, so "web" must NOT be re-seeded even
+  // though the persisted list still contains it. Simulate a user who removes
+  // "web" at the global layer to prove the flag prevents re-seeding.
+  const db = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  const row = db.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
+  const edited = JSON.parse(row.json) as PersistedCatalog;
+  edited.globalSettings.enabledConnectorIds = [];
+  db.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(edited));
+  db.close();
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getGlobalSettings().effective.enabledConnectorIds, []);
+  const afterReopen = await readPersistedCatalog(tempRoot);
+  assert.equal(afterReopen.webConnectorMigrated, true);
+});
 
 test("late execution provenance retains history without rolling back the latest business revision", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `publication-order-${randomUUID()}`);

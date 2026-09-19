@@ -96,6 +96,10 @@ export interface Catalog {
   webSettings: WebSettings;
   workspaceFileRecords: WorkspaceFileRecord[];
   workspaceFileRevisions: WorkspaceFileRevision[];
+  /** One-time migration flag: set once the "web" connector id is seeded into
+   *  globalSettings.enabledConnectorIds so that the seed never repeats after a
+   *  user explicitly removes it. */
+  webConnectorMigrated?: boolean;
 }
 
 export function emptyCatalog(
@@ -112,7 +116,7 @@ export function emptyCatalog(
     environmentSourceSettings: structuredClone(DEFAULT_ENVIRONMENT_SOURCE_SETTINGS),
     // Skill selection starts at the Project layer, so Global carries no skill fields.
     globalSettings: {
-      enabledConnectorIds: [],
+      enabledConnectorIds: ["web"],
       semanticReviewEnabled: true,
     },
     ideaTreeSettings: structuredClone(DEFAULT_IDEA_TREE_SETTINGS),

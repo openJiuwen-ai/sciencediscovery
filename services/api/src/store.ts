@@ -750,6 +750,18 @@ export class SessionStore {
     const globalSettings = normalizedGlobalSettings === undefined
       ? defaultGlobalSettings
       : normalizedGlobalSettings;
+    // One-time backward-compat migration: "web" (web_search / web_fetch) was an
+    // unconditional base tool before this version. On first load of a persisted
+    // catalog that has not yet been migrated, seed "web" into global
+    // enabledConnectorIds so existing deployments keep web access by default.
+    // The webConnectorMigrated flag ensures the seed runs exactly once; a user
+    // who later removes "web" at the global layer will not have it re-added.
+    const webConnectorMigrated = saved.webConnectorMigrated === true;
+    if (!webConnectorMigrated
+      && Array.isArray(globalSettings.enabledConnectorIds)
+      && !globalSettings.enabledConnectorIds.includes("web")) {
+      globalSettings.enabledConnectorIds = [...globalSettings.enabledConnectorIds, "web"];
+    }
     const memoryGraphSettings = normalizeMemoryGraphSettings(saved.memoryGraphSettings);
     // Per-Runner NPU selections. Unknown shapes are dropped rather than
     // trusted: a malformed entry would otherwise reach a sandbox launch.
@@ -775,7 +787,8 @@ export class SessionStore {
     }));
     const migratedHierarchicalSettings = saved.globalSettings === undefined
       || JSON.stringify(globalSettings) !== JSON.stringify(saved.globalSettings)
-      || JSON.stringify(projects) !== JSON.stringify(saved.projects ?? []);
+      || JSON.stringify(projects) !== JSON.stringify(saved.projects ?? [])
+      || !webConnectorMigrated;
     const environments = Array.isArray(saved.environments) ? saved.environments : [];
     const savedEnvironmentRevisions = Array.isArray(saved.environmentRevisions) && saved.environmentRevisions.length
       ? saved.environmentRevisions
@@ -1087,6 +1100,7 @@ export class SessionStore {
       webSettings,
       workspaceFileRecords,
       workspaceFileRevisions,
+      webConnectorMigrated: true,
     };
     for (const session of sessions) this.syncSessionCompatibility(session);
     const migratedSessionOverrides = JSON.stringify(sessions) !== JSON.stringify(savedSessions);

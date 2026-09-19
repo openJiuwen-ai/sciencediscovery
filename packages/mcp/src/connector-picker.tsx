@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConnectorId, ConnectorManifest } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -31,6 +31,7 @@ export function connectorName(id: ConnectorId): string {
     pubmed: "PubMed",
     reactome: "Reactome",
     uniprot: "UniProt",
+    web: "Web",
   })[id] ?? id;
 }
 
@@ -70,6 +71,14 @@ export function ConnectorPicker({
 
   const enabledCount = connectors.filter((connector) => enabledIds.includes(connector.id)).length;
   const summary = `${t("connectors.title")}: ${t("connectors.summary", { enabled: enabledCount, total: connectors.length })}`;
+  const builtinConnectors = connectors.filter((connector) => !connector.id.startsWith("custom-") && connector.id !== "web");
+  const customConnectors = connectors.filter((connector) => connector.id.startsWith("custom-"));
+  const webConnectors = connectors.filter((connector) => connector.id === "web");
+  const groups: Array<{ label: string; items: ConnectorManifest[] }> = [
+    { label: "connectors.groupBuiltin", items: builtinConnectors },
+    ...(webConnectors.length ? [{ label: "connectors.groupWeb", items: webConnectors }] : []),
+    ...(customConnectors.length ? [{ label: "connectors.groupCustom", items: customConnectors }] : []),
+  ];
   return <div className="connector-picker" ref={rootRef}>
     <button
       aria-expanded={open}
@@ -85,30 +94,33 @@ export function ConnectorPicker({
     </button>
     {open ? <div aria-label={t("connectors.title")} className="connector-picker-popover" role="dialog">
       <div className="connector-picker-heading"><strong>{t("connectors.title")}</strong><span>{t("connectors.enabled", { enabled: enabledCount, total: connectors.length })}</span></div>
-      <ul>
-        {connectors.map((connector) => {
-          const name = connector.displayName ?? connectorName(connector.id);
-          const policyLabel = t("connectors.providerPolicy", { name });
-          return <li key={connector.id}>
-            <label>
-              <input
-                checked={enabledIds.includes(connector.id)}
-                disabled={disabled}
-                onChange={() => onToggle(connector.id)}
-                type="checkbox"
-              />
-              <span><strong>{name}</strong><small>{connector.publisher}</small></span>
-            </label>
-            {connector.termsUrl ? <a
-              aria-label={policyLabel}
-              href={connector.termsUrl}
-              rel="noreferrer"
-              target="_blank"
-              title={policyLabel}
-            >{icons.external}</a> : null}
-          </li>;
-        })}
-      </ul>
+      {groups.map((group) => group.items.length ? <div key={group.label} className="connector-picker-group">
+        <small className="connector-picker-group-label">{t(group.label as "connectors.groupBuiltin")}</small>
+        <ul>
+          {group.items.map((connector) => {
+            const name = connector.displayName ?? connectorName(connector.id);
+            const policyLabel = t("connectors.providerPolicy", { name });
+            return <li key={connector.id}>
+              <label>
+                <input
+                  checked={enabledIds.includes(connector.id)}
+                  disabled={disabled}
+                  onChange={() => onToggle(connector.id)}
+                  type="checkbox"
+                />
+                <span><strong>{name}</strong><small>{connector.publisher}</small></span>
+              </label>
+              {connector.termsUrl ? <a
+                aria-label={policyLabel}
+                href={connector.termsUrl}
+                rel="noreferrer"
+                target="_blank"
+                title={policyLabel}
+              >{icons.external}</a> : null}
+            </li>;
+          })}
+        </ul>
+      </div> : null)}
       <p className="connector-picker-note">{t("connectors.note")}</p>
     </div> : null}
   </div>;

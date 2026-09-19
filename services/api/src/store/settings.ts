@@ -60,6 +60,7 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
     "chembl",
     "geo",
     "llm-wiki",
+    "web",
   ]);
 }
 

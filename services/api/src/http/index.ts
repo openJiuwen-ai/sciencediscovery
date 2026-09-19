@@ -431,11 +431,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             permission, projectId: session.projectId, registry: mcpRegistry, sessionId: task.sessionId, store,
             suppressMemoryGraphMirror: true, turnId: task.toolCallId,
           }),
-          ...createWebWorkspaceTools({
+          ...(reviewerConnectorIds.includes("web") ? createWebWorkspaceTools({
             broker: webBroker,
             context: { forceRefresh: false, projectId: session.projectId, sessionId: task.sessionId, turnId: task.toolCallId },
             permission,
-          }),
+          }) : {}),
           approvalMode: session.approvalMode,
           skills: reviewerSkills,
           workspaceRoot: store.workspacePath(task.sessionId),
@@ -1435,7 +1435,31 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/connectors") {
-        sendJson(response, 200, mcpRegistry.listManifests().map(mcpConnectorManifest));
+        const webConnector: import("@sciencediscovery/schema").ConnectorManifest = {
+          attributionTemplate: "",
+          cacheTtlSeconds: 0,
+          citationTemplate: "",
+          codeHash: "web-builtin",
+          commercialUseConstraints: "",
+          dataClassification: "public",
+          displayName: "Web",
+          enabledByDefault: true,
+          id: "web",
+          inputSchemaVersion: "1",
+          license: "",
+          maxResponseBytes: 0,
+          networkHosts: [],
+          publisher: "ScienceDiscovery",
+          redirectPolicy: "deny",
+          requestedCapabilities: [],
+          requestedSecrets: [],
+          schemaVersion: "1",
+          signature: null,
+          termsUrl: "",
+          trustLevel: "bundled",
+          version: "1",
+        };
+        sendJson(response, 200, [...mcpRegistry.listManifests().map(mcpConnectorManifest), webConnector]);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/skills") {
