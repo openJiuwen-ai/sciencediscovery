@@ -20,7 +20,6 @@ import {
   type ScientificArtifact,
   type ScientificArtifactKind,
   type SessionArtifactOutput,
-  type WorkspaceFile,
 } from "@sciencediscovery/schema";
 
 import {
@@ -63,22 +62,17 @@ function ArtifactOutputIcon({ artifact }: { artifact: Pick<ScientificArtifact, "
 export function ConversationArtifactList({
   outputs,
   onOpen,
-  currentFiles = [],
-  onOpenCurrentFile,
 }: {
   onOpen: (artifact: ScientificArtifact, version: SessionArtifactOutput["version"]) => void;
   outputs: readonly SessionArtifactOutput[];
-  currentFiles?: readonly WorkspaceFile[];
-  onOpenCurrentFile?: (file: WorkspaceFile) => void;
 }): ReactNode {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
-  const count = outputs.length + currentFiles.length;
+  const count = outputs.length;
   if (!count) return null;
   const visibleOutputs = expanded ? outputs : outputs.slice(0, 5);
-  const visibleFiles = expanded ? currentFiles : currentFiles.slice(0, Math.max(0, 5 - outputs.length));
   const canToggle = count > 5;
-  const heading = outputs.length ? t("artifact.runOutputs") : t("record.currentFiles");
+  const heading = t("artifact.runOutputs");
   return <section aria-label={heading} className="conversation-artifact-list">
     <header>
       <span><strong>{heading}</strong><small>{count}</small></span>
@@ -102,11 +96,6 @@ export function ConversationArtifactList({
           </button>
         </li>;
       })}
-      {visibleFiles.map((file) => <li key={`current:${file.path}`}><button type="button"
-        aria-label={t("record.openCurrentFile", { name: file.path })} onClick={() => onOpenCurrentFile?.(file)} title={file.path}>
-        <FileIcon size={14} /><span><strong>{file.path}</strong><small>{t("record.currentFile")}</small></span>
-        <ChevronRightIcon className="conversation-artifact-open-icon" size={16} />
-      </button></li>)}
     </ul>
     {canToggle ? <footer>
       <button

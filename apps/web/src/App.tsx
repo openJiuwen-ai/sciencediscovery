@@ -3960,23 +3960,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     displayedMessageIds,
     replayedRunIds,
   });
-  const visibleOutputs = [...artifactOutputAnchors.activeTimeline,
-    ...[...artifactOutputAnchors.byMessage.values()].flat(), ...[...artifactOutputAnchors.byReplayTimeline.values()].flat()];
-  const registeredPaths = new Set(visibleOutputs.filter((output) => output.version.sessionId === session?.id)
-    .map((output) => output.version.sourcePath).filter(Boolean));
-  const currentPreviewFiles = files.filter((file, index) => !registeredPaths.has(file.path)
-    && (file.previewKind || /\.(md|markdown|html|csv|json|ipynb|png|jpg|jpeg|svg|pdf)$/i.test(file.path))
-    && files.findIndex((other) => other.path === file.path) === index);
-  // Current bytes are shown once, never presented as an old Run's snapshot.
-  const latestOutputRun = selectSessionReplayRun(sessionRuns.filter((run) => isTerminalRunStatus(run.status)));
-  const outputMessageId = latestOutputRun?.assistantMessageId ?? latestOutputRun?.userMessageId;
-  const currentFileSlot = latestOutputRun?.id === activeTimelineRunId && runTimeline.length ? "active"
-    : latestOutputRun && replayedRunIds.has(latestOutputRun.id) ? `run:${latestOutputRun.id}`
-      : outputMessageId && displayedMessageIds.has(outputMessageId) ? `message:${outputMessageId}` : "tail";
-  function renderConversationOutputs(slot: string, outputs: readonly SessionArtifactOutput[] = []): ReactNode {
-    return <ConversationArtifactList outputs={outputs} onOpen={openArtifactVersion}
-      currentFiles={currentFileSlot === slot ? currentPreviewFiles : []}
-      onOpenCurrentFile={(file) => void openWorkspacePath(file.path).catch((reason: Error) => setError(reason))} />;
+  function renderConversationOutputs(outputs: readonly SessionArtifactOutput[] = []): ReactNode {
+    return <ConversationArtifactList outputs={outputs} onOpen={openArtifactVersion} />;
   }
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
@@ -4469,7 +4454,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         ? <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                         : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
-                      {renderConversationOutputs(`message:${block.message.id}`, artifactOutputAnchors.byMessage.get(block.message.id))}
+                      {renderConversationOutputs(artifactOutputAnchors.byMessage.get(block.message.id))}
                     </Fragment>
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
@@ -4482,7 +4467,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
                             renderRunActivityGroup(group, replayTimelineSubagentIds.get(block.runId)))}
-                          {renderConversationOutputs(`run:${block.runId}`, artifactOutputAnchors.byReplayTimeline.get(block.runId))}
+                          {renderConversationOutputs(artifactOutputAnchors.byReplayTimeline.get(block.runId))}
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
@@ -4520,7 +4505,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
-                      {renderConversationOutputs("active", artifactOutputAnchors.activeTimeline)}
+                      {renderConversationOutputs(artifactOutputAnchors.activeTimeline)}
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
@@ -4552,7 +4537,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     reviewerLevel={session.reviewerSpecialistLevel}
                     workspaceSessionId={session.id}
                   />
-                  {renderConversationOutputs("tail")}
+                  {renderConversationOutputs()}
                   {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
                   {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
