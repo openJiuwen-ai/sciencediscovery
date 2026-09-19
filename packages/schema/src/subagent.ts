@@ -94,6 +94,13 @@ export interface Subagent {
   handoff?: SubagentHandoff;
   id: string;
   input: SubagentInput;
+  /**
+   * The terminal status is a placeholder, not a reported outcome: the API process
+   * exited while this child was still working. The delegated task can still be
+   * resumed from the committed context, and the turn that finishes it records the
+   * real outcome.
+   */
+  interruptedByRestart?: boolean;
   maxTurns: number;
   model?: ModelRunInfo;
   parentTurnId: string;

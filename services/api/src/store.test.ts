@@ -2765,6 +2765,7 @@ test("SessionStore recovers flushed running subagents as failed after restart", 
   const [recovered] = reopened.listSubagents(session.id);
   assert.equal(recovered?.status, "failed");
   assert.match(recovered?.error ?? "", /interrupted by API restart/i);
+  assert.equal(recovered?.interruptedByRestart, true, "the task was cut off, so this status is a placeholder");
   assert.ok(recovered?.finishedAt);
   assert.equal(recovered?.turnCount, 2);
   assert.ok(recovered?.steps.some((step) => step.content.includes("Partial analysis survived")));
@@ -2773,6 +2774,11 @@ test("SessionStore recovers flushed running subagents as failed after restart", 
     subagents: Array<{ status: string }>;
   };
   assert.equal(persisted.subagents[0]?.status, "failed");
+
+  // The next restart must still see a placeholder rather than a reported failure.
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.equal(reloaded.listSubagents(session.id)[0]?.interruptedByRestart, true);
 });
 
 test("SessionStore gates privileged actions with Session-scoped matching grants and per-action authorizations", async (context) => {

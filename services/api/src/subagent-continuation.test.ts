@@ -36,6 +36,32 @@ test("a wake turn that closes normally does not turn a failed task into a clean 
   }
 });
 
+test("reopening an interrupted child drops the placeholder the API exit left behind", () => {
+  const interrupted = subagent({
+    error: "API process exited before this child finished", finishedAt: "2026-09-16T01:00:00.000Z",
+    interruptedByRestart: true, status: "failed", turnCount: 1,
+  });
+  const reopened = reopenSubagentForContinuation(interrupted);
+  assert.equal(reopened.status, "running");
+  assert.equal(reopened.error, undefined, "the placeholder reason is not an outcome to preserve");
+  assert.equal(reopened.finishedAt, undefined, "the task has not ended yet");
+  assert.equal(reopened.interruptedByRestart, undefined);
+  assert.equal(reopened.turnCount, 1, "the committed part of the task is kept");
+  assert.equal(reopened.input.description, "Check the run");
+});
+
+test("a continuation that finishes an interrupted child records what that turn concluded", () => {
+  const interrupted = subagent({
+    error: "API process exited before this child finished", finishedAt: "2026-09-16T01:00:00.000Z",
+    interruptedByRestart: true, status: "failed",
+  });
+  const finished = subagent({ status: "completed", finishedAt: "2026-09-16T02:00:00.000Z", turnCount: 3 });
+  assert.deepEqual(settleSubagentContinuation(interrupted, finished), finished);
+  // A continuation that fails on its own terms still reports its own failure.
+  const failedTurn = subagent({ status: "failed", error: "Provider rejected request", finishedAt: "2026-09-16T02:00:00.000Z" });
+  assert.deepEqual(settleSubagentContinuation(interrupted, failedTurn), failedTurn);
+});
+
 test("a wake turn's own failure and a completed task's normal wake turn are recorded as they happened", () => {
   const completed = subagent({ status: "completed", finishedAt: "2026-09-16T01:00:00.000Z" });
   const failedTurn = subagent({ status: "failed", error: "Provider rejected request", finishedAt: "2026-09-16T02:00:00.000Z" });

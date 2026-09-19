@@ -300,7 +300,7 @@ export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningSt
 }
 import { generateRefinedSessionTitle } from "../session-naming.js";
 import { notificationPrompt, runtimeNotice } from "../notification-dispatch.js";
-import { reopenSubagentForContinuation, settleSubagentContinuation } from "../subagent-continuation.js";
+import { reopenSubagentForContinuation, settleSubagentContinuation, SUBAGENT_RESTART_PLACEHOLDER_ERROR } from "../subagent-continuation.js";
 import type { NotificationBatch } from "../agent-notifications.js";
 
 import { type ServerConfig } from "../bootstrap/config.js";
@@ -3118,7 +3118,7 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
       // A crashed child has no live process holding its busy state. Recover only
       // closed, committed turn context; never replay the unfinished model/tool call.
       for (const child of store.listSubagents(session.id)) {
-        if (child.status !== "running" && child.error !== "Subagent interrupted by API restart before completion") continue;
+        if (child.status !== "running" && !child.interruptedByRestart) continue;
         const versions = new VersionStore(store.dataDir);
         const refs = await RefStore.open(versions);
         try {
@@ -3131,8 +3131,11 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
             await refs.commit(versions, name, refs.head(name), contextRef);
             child.contextRef = contextRef;
           }
+          // "failed" is the closest terminal status this record can carry, but it
+          // stands for an unfinished task, not a reported one: the flag says so,
+          // and a continuation that finishes the task replaces both.
           await store.updateSubagent({ ...child, status: "failed", finishedAt: new Date().toISOString(),
-            error: "API process exited before this child finished; committed context retained, unfinished commands are not replayed" });
+            interruptedByRestart: true, error: SUBAGENT_RESTART_PLACEHOLDER_ERROR });
         } finally { refs.close(); }
       }
       for (const run of await store.listSessionRuns(session.id)) {
