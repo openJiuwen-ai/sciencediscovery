@@ -81,6 +81,13 @@ services:
       SCIENCE_AGENT_PACKAGE_CACHE_DIR: "${SCIENCE_AGENT_PACKAGE_CACHE_DIR:-}"
       SCIENCE_AGENT_BWRAP_PATH: "${SCIENCE_AGENT_BWRAP_PATH:-/usr/bin/bwrap}"
       SCIENCE_AGENT_SSH_CONFIG_PATH: "${SCIENCE_AGENT_SSH_CONFIG_PATH:-}"
+      # Usage-dashboard currency conversion. The default source is a public
+      # rate API; a host that cannot reach it disables the conversion here or
+      # names a mirror. Empty keeps the application's built-in default.
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED:-}"
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL:-}"
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS:-}"
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS:-}"
     volumes:
       # Bind mount only — no named volume. Point SCIENCE_AGENT_DATA_HOST_DIR at
       # another host path to keep container state away from a host-side data/
