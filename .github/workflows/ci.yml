@@ -320,11 +320,21 @@ jobs:
       - name: Build the product image
         run: docker compose build
 
-      # The documented first-run sequence: create the bind mount as the invoking
-      # user, then start. Without the mkdir, Docker creates it as root and the
-      # entry point exits on an unwritable data directory.
+      # The documented first-run sequence: copy the example .env, name the
+      # invoking user's ids in it (a hosted runner is not uid 1000, and the
+      # container writes the bind mount as the ids .env names), create the bind
+      # mount as that user, then start. Without the mkdir, Docker creates the
+      # directory as root and the entry point exits on an unwritable data
+      # directory. SD_PORT goes into the same file so a replay on another port
+      # publishes where the job polls.
       - name: Start the stack
         run: |
+          cp .env.docker.example .env
+          sed -i \
+            -e "s/^SCIENCE_AGENT_UID=.*/SCIENCE_AGENT_UID=$(id -u)/" \
+            -e "s/^SCIENCE_AGENT_GID=.*/SCIENCE_AGENT_GID=$(id -g)/" \
+            -e "s/^SCIENCE_AGENT_PUBLISH_PORT=.*/SCIENCE_AGENT_PUBLISH_PORT=${SD_PORT}/" \
+            .env
           mkdir -p data
           docker compose up -d
 
