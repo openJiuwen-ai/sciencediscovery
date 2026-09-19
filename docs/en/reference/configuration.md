@@ -81,29 +81,46 @@ In `GET /health`, `workspace.maxFileBytes`, `maxRequestBytes`, and `maxWorkspace
 
 ## Docker environment variables
 
-Compose reads the root `.env` and interpolates these keys into `docker-compose.yml`:
+Compose reads the root `.env` (template: `.env.docker.example`) and interpolates the keys below into `docker-compose.yml`. They form two layers: the orchestration layer only affects how Compose starts the container; the container layer is forwarded into the container, key by key, through the service's `environment` block, and an empty value means the built-in default. Procedures and the layering are explained under [Docker deployment](../how-to/deployment.md#docker-deployment).
+
+### Orchestration layer
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | Container uid/gid; must write host `./data` |
+| `COMPOSE_PROJECT_NAME` | current directory name | Prefix of the container and default network names; what keeps several instances apart, equivalent to `docker compose -p` |
+| `SCIENCE_AGENT_IMAGE` | `sciencediscovery:local` | Image tag that is built and run |
+| `SCIENCE_AGENT_DATA_HOST_DIR` | `./data` | Host directory bind-mounted at `/app/data`; create it first |
+| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | Container uid/gid; must be able to write the host data directory |
 | `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | Host interface publishing the UI/API |
 | `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | Host port mapped to container `4310` |
-| `SCIENCE_AGENT_AUTH_TOKEN` | generated on first start | Browser/API bearer token; unset means the value stored in `<data-dir>/secrets/auth-token` |
+
+### Container layer
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SCIENCE_AGENT_AUTH_TOKEN` | generated on first start | Browser/API bearer token; unset means the value stored in `/app/data/secrets/auth-token` (`./data/secrets/auth-token` on the host) |
+| `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | Operational log threshold (`DEBUG` / `INFO` / `WARNING` / `ERROR`) |
+| `SCIENCE_AGENT_LOG_DIR` | `/app/data/logs` | Log directory; the default keeps logs inside the data directory |
+| `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | Maximum bytes per log category before rotation |
+| `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | Rotated files kept per category |
+| `SCIENCE_AGENT_CONTEXT_MODE` | `dynamic` | Context-assembly mode; `legacy` and `shadow` exist for debugging and regression comparison |
+| `SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS`, `…_SECTION_MAX_CHARS`, `…_DATA_BUDGET_CHARS`, `…_ATTACHMENT_MAX_CHARS`, `…_CONTRIBUTED_MESSAGE_BUDGET_CHARS`, `…_MAX_CONTRIBUTED_MESSAGES`, `…_WINDOW_MESSAGES`, `…_WINDOW_ROUNDS`, `…_WINDOW_TOKENS` | see `.env.docker.example` | Context-assembly budgets and windows; see [Context assembly](../../architecture/context-assembly.md) |
+| `SCIENCE_AGENT_CONTEXT_TRACE` / `SCIENCE_AGENT_CONTEXT_TRACE_DIR` | `0` / `/app/data/context-traces` | Context-assembly tracing switch and output directory |
 | `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API-to-runner token on container loopback |
-| `SCIENTIFIC_ENVS` | `1` | Managed Python/R environments and persistent kernels |
+| `SCIENTIFIC_ENVS` | `1` | Managed Python/R environments and persistent kernels; the first start creates the starter Python automatically |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | Sandbox wall-clock timeout |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | Persistent-kernel idle timeout (minimum 1000 ms) |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated channel allowlist |
-| `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator micromamba path |
-| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | Optional mirror directory URL for installations that cannot reach the upstream release host; the pinned SHA-256 still applies |
+| `SCIENCE_AGENT_PROVISIONER_PATH` | — | Optional administrator micromamba path; empty uses the verified copy baked into the image and seeded into the data directory |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | Optional pre-populated offline cache |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | Bubblewrap in the image |
+| `SCIENCE_AGENT_SSH_CONFIG_PATH` | — | SSH configuration for remote runners (a container path); files under host `./data/ssh` are already visible at `/app/data/ssh` |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | Enables usage-dashboard display currency conversion; disabled keeps each model's original estimate currency |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | USD/CNY source for the usage dashboard; default is no-key Frankfurter; custom URLs are labeled by their host |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | Usage-dashboard exchange-rate cache TTL; defaults to 6 hours |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | Usage-dashboard exchange-rate request timeout |
 
-The API explicitly listens on `0.0.0.0:4310` **inside the container**, while runner `4311` remains on container loopback. Only the API port is published, and its host-side default is `127.0.0.1`. See [Docker deployment](../how-to/deployment.md#docker-deployment).
+Values fixed in the image are not changed through `.env`: `SCIENCE_AGENT_DATA_DIR=/app/data`, `SCIENCE_AGENT_HOST=0.0.0.0`, `SCIENCE_AGENT_PORT=4310`, `SCIENCE_AGENT_RUNNER_HOST=127.0.0.1`, `SCIENCE_AGENT_RUNNER_PORT=4311`, `SCIENCE_AGENT_RUNNER_URL`, and the paths of the baked Python environments, the model catalog snapshot, and the micromamba seed. The API listens on `0.0.0.0:4310` **inside the container**, while runner `4311` remains on container loopback; only the API port is published. Local mode's `SCIENCE_AGENT_MICROMAMBA_BASE_URL` is not needed under Docker: the image carries and seeds the pinned micromamba, so nothing is downloaded at run time. Other local-mode variables (such as `HTTP_PROXY`) are not forwarded; add them to the service's `environment` block in a `docker-compose.override.yml` when needed.
 
 ## Storage layout
 

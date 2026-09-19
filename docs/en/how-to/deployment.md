@@ -164,51 +164,111 @@ Ascend host NPU workloads use the same local-mode entry point. The Runner expose
 
 ## Docker deployment
 
-One image contains the complete stack. `docker-entrypoint.sh` wraps `scripts/start-stack.sh --mode docker` and starts the same gateway, runner, and control API/Web UI processes in one container; Docker-specific checks run only in this mode. The builder uses pnpm and uv. The runtime image contains Node, prebuilt service Python environments, Bubblewrap, and a fixed micromamba selected and verified for `TARGETARCH`. The host needs only Docker.
+One image contains the complete stack. The container entry point `docker-entrypoint.sh` wraps `scripts/start-stack.sh --mode docker`, which starts the Bubblewrap runner and the control API with the Web UI in one container in the same order as local mode; the bundled Python MCP servers are launched by the API on demand, and Docker-specific checks run only in this mode. The builder uses pnpm and uv. The runtime image contains Node, prebuilt service Python environments, Bubblewrap, and a fixed micromamba selected and verified for `TARGETARCH`. The host needs only Docker.
+
+This section walks through prepare → build → start → connect in the browser → configure a model, followed by day-to-day management, the data directory, several instances, environment variables, sandbox requirements, and frequently asked questions. Run every command from the repository root.
 
 ### Prerequisites
 
-- A Linux x86_64 or aarch64 host with Docker Engine 24+ and the Compose v2 plugin. The runner needs usable host-kernel user namespaces.
-- Unprivileged user namespaces available to the container, which the Bubblewrap sandbox depends on. **The gate is the probe the product actually runs, not the value of any sysctl**: both the container entry point and the runner build a minimal sandbox at startup and decide from the result. Confirm it positively once the stack is up:
+- A Linux x86_64 or aarch64 host with Docker Engine 24+ (which ships BuildKit) and the Compose v2 plugin; `docker compose version` should print `v2` or newer. The build relies on BuildKit's `TARGETARCH`: the legacy `docker-compose` v1, or a build with BuildKit disabled, fails with `TARGETARCH is required`. Docker Desktop on macOS or Windows is unsupported because the sandbox depends on Linux kernel user namespaces.
+- Disk: the image is about 1.8 GB and the build cache takes several more GB; the starter Python scientific environment created automatically on first start writes about 2 GB into the data directory.
+- Network: the **build** reaches Docker Hub (the `node:22-bookworm` base images), `ghcr.io` (the uv image), the Debian apt mirrors, the npm registry, PyPI, GitHub Releases (micromamba), and `models.dev` (the model catalog snapshot). At **run time** the services inside the image need no network, but the first start creates the starter Python environment in the background, which needs conda-forge or a mirror of it; model APIs and paper sources are reached directly from the container — see [Frequently asked questions](#frequently-asked-questions) when they must go through a proxy.
+- Unprivileged user namespaces available to the container, which the Bubblewrap sandbox depends on. **The gate is the probe the product actually runs, not the value of any sysctl**: both the container entry point and the runner build a minimal sandbox at startup and decide from the result. Confirm it positively with the probe under [Step 3](#step-3-start-and-confirm-health) once the stack is up; if it fails, see [Sandbox and host requirements](#sandbox-and-host-requirements).
 
-  ```bash
-  docker compose exec sciencediscovery sh -c '
-    bwrap --unshare-all --unshare-user --die-with-parent \
-      --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
-      --symlink usr/lib64 /lib64 --proc /proc /usr/bin/true' \
-    && echo "sandbox probe passed"
-  ```
-
-  These are the arguments `packages/sandbox-capability` probes with. Keep the outer `sh -c`: when `docker compose exec` makes `bwrap` the session's first process it cannot bring up loopback, which fails for reasons unrelated to sandbox capability. If the probe fails, see [Sandbox and host requirements](#sandbox-and-host-requirements).
-
-### Build and start
+### Step 1: prepare the configuration and the data directory
 
 ```bash
 cp .env.docker.example .env   # or merge its keys into an existing .env
-mkdir -p data                 # host directory for all runtime state
-docker compose build
-docker compose up -d
-curl -fsS http://127.0.0.1:4310/health
+id -u; id -g                  # when not 1000, set SCIENCE_AGENT_UID / SCIENCE_AGENT_GID in .env
+mkdir -p data                 # host directory for all runtime state; create it before `up`
 ```
 
-Check the container logs (`docker compose logs`) for the `Open to sign in` URL and local service access token, then open the sign-in URL in a browser to authenticate and save the token automatically. If opening <http://127.0.0.1:4310> directly, paste the local service access token into the Connection guide. When `SCIENCE_AGENT_AUTH_TOKEN` is set, that configured token is used. The first build compiles the Web UI, resolves both service Python environments, and downloads micromamba, so it takes longer and needs network access. Starting services and obtaining micromamba from the completed image do not. The package-network boundary for managed starter Python is described under [Limitations](#limitations).
+`.env` is read only by Compose, which interpolates it into `docker-compose.yml`; the container does not read a `.env` from inside the image. The defaults already run: the UI is published on `127.0.0.1:4310` and the token is generated on first start. The `data` directory has to exist and belong to you before the first `up`: when a bind-mount source is missing, Docker creates it as root, the container's `node` user cannot write it, and the entry point exits at once with a "not writable" message.
 
-BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/sciencediscovery/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **runtime**.
+### Step 2: build the image
 
 ```bash
-docker compose logs -f        # startup order: runner -> API
-docker compose ps             # status and health result
-docker compose down           # remove the container; preserve ./data
-docker compose up -d --build  # rebuild and restart after updating source
+docker compose build
 ```
+
+The result is `sciencediscovery:local` (`SCIENCE_AGENT_IMAGE` changes the tag). The first build installs the workspace dependencies, compiles the Web UI, resolves both service Python environments, and downloads micromamba and the model catalog snapshot, so it needs network access throughout; with an empty cache it takes a few minutes on an ordinary x86_64 machine, longer on a slow connection. Later rebuilds that only change application source reuse the dependency layers.
+
+BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/sciencediscovery/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **run time**.
+
+### Step 3: start and confirm health
+
+```bash
+docker compose up -d
+curl -fsS http://127.0.0.1:4310/health
+docker compose ps
+```
+
+Within a few seconds of `up -d`, `/health` returns JSON: `"status":"ok"` together with `"runner":{"status":"ok",…}` means both the control API and the sandbox runner are ready. `"status":"degraded"` or `"runner":{"status":"unavailable"}` means the runner did not come up; read `docker compose logs`. The status column of `docker compose ps` shows `health: starting` for up to 60 seconds after start and then `healthy`; that is the Compose health-check window, not a failure.
+
+Once the runner is up, confirm the sandbox positively:
+
+```bash
+docker compose exec sciencediscovery sh -c '
+  bwrap --unshare-all --unshare-user --die-with-parent \
+    --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
+    --symlink usr/lib64 /lib64 --proc /proc /usr/bin/true' \
+  && echo "sandbox probe passed"
+```
+
+These are the arguments `packages/sandbox-capability` probes with. Keep the outer `sh -c`: when `docker compose exec` makes `bwrap` the session's first process it cannot bring up loopback, which fails for reasons unrelated to sandbox capability.
+
+The first start also does two things, both confined to the data directory: it seeds the image's micromamba to `./data/scientific-envs/bin/micromamba`, and it creates the starter Python scientific environment in the background (resolved and downloaded from conda-forge, about 2 GB, usually a few minutes). The Web UI and chat are usable meanwhile; only executions that need the managed environment wait for it. It is finished when `runner.scientificEnvs.startersReady` in `/health` turns `true`. Set `SCIENTIFIC_ENVS=0` when managed environments are not wanted.
+
+### Step 4: connect in the browser
+
+The startup output contains a sign-in URL and the local service access token:
+
+```bash
+docker compose logs | grep -A 2 'Open to sign in'
+```
+
+```
+Open to sign in: http://127.0.0.1:4310/#token=<token>
+Local service access token (generated on first start): <token>
+  Stored in /app/data/secrets/auth-token.
+```
+
+Open that URL in a browser: the page reads the token from the URL fragment, saves it in the browser's local storage, removes it from the address bar, and lands on the workspace home. **The port in the URL is always the container port 4310.** If `.env` changes `SCIENCE_AGENT_PUBLISH_PORT` (say to 4410), replace `4310` in the URL with the published port before opening it.
+
+Without the URL, open <http://127.0.0.1:4310> directly: the page shows the Connection guide under System configuration. Paste the token into the "Local service access token" field, click Save, then Save and close. The token has two sources: the container log, or the host file `./data/secrets/auth-token` (owned by the container uid, mode 600). When `SCIENCE_AGENT_AUTH_TOKEN` is set, that value is used and the file is not written. Restarting the container does not change the token.
+
+The sign-in URL and the token are equivalent to a password: keep them private. They are not an external model API key.
+
+When the stack runs on a remote machine, do not publish the port on `0.0.0.0`; forward it over SSH from your own machine and open it the same way:
+
+```bash
+ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>   # then open http://127.0.0.1:4310 locally
+```
+
+### Step 5: configure a model and start the first task
+
+The image ships no model. The "Configure a model" entry on the home page leads to **System configuration → Model registry**: create a model connection, enter the provider's API key, save it, and select it as the task model under **Global defaults**. Then create a project and start the first session; see the [Quick Start tutorial](../tutorial/01-quick-start.md). The container reaches the model provider directly; see [Frequently asked questions](#frequently-asked-questions) when it must go through a proxy or when the model server runs on the host itself.
+
+### Day-to-day management
+
+| Action | Command | Notes |
+|---|---|---|
+| Logs | `docker compose logs -f` | Startup order runner → API; the sign-in URL and sandbox warnings appear here |
+| Status | `docker compose ps` | Includes the health-check result |
+| Stop | `docker compose down` | Removes the container and network; `./data` survives |
+| Restart | `docker compose restart` | Without rebuilding the image |
+| After updating the source | `docker compose up -d --build` | Rebuilds the image and recreates the container; data and token survive |
+| After editing `.env` | `docker compose up -d` | Compose notices the changed service configuration and recreates the container |
+| Shell in the container | `docker compose exec sciencediscovery sh` | As the `node` user, in `/app` |
+| Full reset | `docker compose down && rm -rf data` | Deletes every project, session, token, and model credential |
 
 ### Data directory
 
-The host `./data` bind mount maps to `/app/data` and is the only persistent location. Its layout matches [Storage layout](../reference/configuration.md#storage-layout). There are **no Docker named volumes**: projects, sessions, workspaces, credentials, and audit records are ordinary host files that can be inspected, backed up, and removed, and survive `docker compose down` and image rebuilds.
+The host `./data` bind mount maps to `/app/data` and is the only persistent location. Its layout matches [Storage layout](../reference/configuration.md#storage-layout). There are **no Docker named volumes**: projects, sessions, workspaces, credentials, and audit records are ordinary host files that can be inspected, backed up, and removed, and survive `docker compose down` and image rebuilds. Backing up means backing up the whole directory.
 
-To separate container state from an existing local `data/`, set `SCIENCE_AGENT_DATA_HOST_DIR` in `.env`, for example `SCIENCE_AGENT_DATA_HOST_DIR=./docker-data`. Editing `docker-compose.yml` is not needed.
+To separate container state from an existing local `data/`, set `SCIENCE_AGENT_DATA_HOST_DIR` in `.env`, for example `SCIENCE_AGENT_DATA_HOST_DIR=./docker-data`. Editing `docker-compose.yml` is not needed; the new directory needs the same `mkdir -p` first.
 
-The container runs as uid/gid `1000:1000`. If the account IDs differ, set `SCIENCE_AGENT_UID` and `SCIENCE_AGENT_GID` (`id -u`, `id -g`) in `.env` and rebuild. Otherwise, the entry point exits immediately with an explicit unwritable-directory error.
+The container runs as uid/gid `1000:1000`. If your account IDs differ, set `SCIENCE_AGENT_UID` and `SCIENCE_AGENT_GID` (`id -u`, `id -g`) in `.env` and recreate the container. Otherwise the entry point exits immediately with an explicit unwritable-directory error instead of failing deeper in.
 
 Two locations differ from a host installation:
 
@@ -222,6 +282,7 @@ A single instance needs nothing extra: `docker compose up -d` uses the current d
 To run a second instance on the same host, give it its own **Compose project name**, **published port**, and **data directory**. The service sets no `container_name`, so the container and default network names are derived from the project name and changing it is enough to keep two instances apart:
 
 ```bash
+mkdir -p data-b               # the second instance's data directory must exist too, or Docker creates it as root
 COMPOSE_PROJECT_NAME=sciencediscovery-b \
 SCIENCE_AGENT_PUBLISH_PORT=4320 \
 SCIENCE_AGENT_DATA_HOST_DIR=./data-b \
@@ -239,11 +300,52 @@ docker compose --env-file .env.b down
 Notes:
 
 - The project name determines the container name (`<project>-sciencediscovery-1`) and the default network name; `docker compose -p <project> ...` is equivalent to `COMPOSE_PROJECT_NAME`.
-- Every instance needs its own `SCIENCE_AGENT_DATA_HOST_DIR`. The data directory holds all state, and sharing one makes two instances overwrite each other.
-- Every instance needs its own `SCIENCE_AGENT_PUBLISH_PORT`; host ports cannot repeat.
+- Every instance needs its own `SCIENCE_AGENT_DATA_HOST_DIR`. The data directory holds all state, and sharing one makes two instances overwrite each other; each instance also generates its own token.
+- Every instance needs its own `SCIENCE_AGENT_PUBLISH_PORT`; a repeated host port makes `up` fail with `port is already allocated`.
 - When two instances are built from different checkouts, give each its own `SCIENCE_AGENT_IMAGE` so the later build does not overwrite a shared tag.
 - Every later management command needs the same project name or env file, or `docker compose ps` / `down` acts on the other instance.
 - Running several instances neither needs nor justifies weakening security settings: keep the three `security_opt` entries below and do not switch to `privileged`.
+
+### Environment variables
+
+Docker variables live in three layers; a variable set in the wrong layer silently does nothing.
+
+**Orchestration layer**: read only by Compose, decides how the container is started, never enters the container environment.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `COMPOSE_PROJECT_NAME` | current directory name | Prefix of the container and network names (`<project>-sciencediscovery-1`); what keeps several instances apart |
+| `SCIENCE_AGENT_IMAGE` | `sciencediscovery:local` | Image tag that is built and run |
+| `SCIENCE_AGENT_DATA_HOST_DIR` | `./data` | Host directory bind-mounted at `/app/data` |
+| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | uid/gid of the container processes; must be able to write the data directory |
+| `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | Host interface the UI/API is published on; `0.0.0.0` exposes it to the network |
+| `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | Host port mapped to container port 4310 |
+
+**Container layer**: the remaining keys of `.env.docker.example`, each forwarded into the container by the `environment` block of `docker-compose.yml`; an empty value means the built-in default. The complete list with defaults is in [Docker environment variables](../reference/configuration.md#docker-environment-variables); the ones most often changed:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SCIENCE_AGENT_AUTH_TOKEN` | generated on first start | Local service access token for the browser and the API |
+| `SCIENTIFIC_ENVS` | `1` | Managed scientific environments, including the starter Python created on first start; `0` disables them |
+| `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | Comma-separated conda channels the managed environments may use |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | empty | Pre-populated offline package cache; once set, environment creation stays offline |
+| `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | Wall-clock limit of one sandboxed execution |
+| `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | Operational log level; logs land in `./data/logs/` |
+| `SCIENCE_AGENT_CONTEXT_*` | built-in defaults | Context-assembly mode and budgets, see [Context assembly](../../architecture/context-assembly.md) |
+| `SCIENCE_AGENT_SSH_CONFIG_PATH` | empty | SSH configuration for remote runners (a container path; placing it under `./data/ssh` needs no extra mount) |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | Currency conversion on the usage dashboard; disable it where the public rate source is unreachable |
+
+**Image layer**: values fixed in the `Dockerfile` that `.env` must not change — `SCIENCE_AGENT_DATA_DIR=/app/data`, `SCIENCE_AGENT_HOST=0.0.0.0`, `SCIENCE_AGENT_PORT=4310`, the runner on `127.0.0.1:4311`, and the paths of the baked Python environments, the model catalog snapshot, and micromamba. Change the host port through `SCIENCE_AGENT_PUBLISH_PORT`, never through `SCIENCE_AGENT_PORT`.
+
+Any other variable (for example `HTTP_PROXY` or `SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS`) does not enter the container by itself. When needed, add it to the service's `environment` block in a `docker-compose.override.yml`, which Compose merges automatically:
+
+```yaml
+services:
+  sciencediscovery:
+    environment:
+      HTTPS_PROXY: "http://proxy.example:3128"
+      NO_PROXY: "127.0.0.1,localhost"
+```
 
 ### Sandbox and host requirements
 
@@ -273,11 +375,44 @@ Work through these in order; do not skip the first two and change a kernel switc
    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0   # only once the probe is known to fail because of it
    ```
 
+### Frequently asked questions
+
+**`docker compose build` fails with `TARGETARCH is required to select the managed micromamba release`.** The build did not go through BuildKit: the legacy `docker-compose` v1 was used, or `DOCKER_BUILDKIT=0` is set. Use the `docker compose` plugin that ships with Docker 24+, or run `DOCKER_BUILDKIT=1 docker compose build`.
+
+**The build fails or crawls while downloading.** Look at which stage failed: the `micromamba` stage reaches GitHub Releases, the `model-catalog` stage reaches `models.dev` (when it is unreachable the stage fails at `test -s`, which looks like a broken repository but is the network), the `builder` stage reaches the npm registry and PyPI, and the `runtime` stage reaches the Debian apt mirrors. Rerun once the network is back; finished layers are reused. A proxy needs no change to the `Dockerfile`: `docker compose build --build-arg HTTP_PROXY=http://proxy.example:3128 --build-arg HTTPS_PROXY=http://proxy.example:3128` (BuildKit's predefined arguments), or a `proxies` entry in the Docker client configuration.
+
+**The container exits immediately and the log says `The data directory /app/data is not writable by uid …, gid …`.** The container's uid/gid cannot write the host data directory. Two common causes: your account ID is not 1000 — put `id -u` / `id -g` into `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` in `.env`; or Docker created the directory as root during `up` because the bind-mount source did not exist — remove it and `mkdir -p data` first. Then run `docker compose up -d` so Compose recreates the container. `restart: on-failure:3` retries three times before `docker compose ps` shows `Exited`.
+
+**`up` fails with `Bind for 127.0.0.1:4310 failed: port is already allocated`.** The host port is taken, typically by another ScienceDiscovery on the same machine. Change `SCIENCE_AGENT_PUBLISH_PORT` in `.env` rather than stopping the other service, and substitute the new port in the sign-in URL.
+
+**The sign-in URL or the token cannot be found.** The log has rolled over or the container has restarted: `docker compose logs | grep -A 2 'Open to sign in'`, or read `./data/secrets/auth-token` on the host. The token lives in the data directory and survives container restarts (the log then says `restored from local storage`); only deleting the data directory or switching `SCIENCE_AGENT_DATA_HOST_DIR` generates a new one.
+
+**The browser says "Local service access token rejected".** The pasted value is not this instance's current token: a model API key was pasted, or the token came from another instance or another data directory, or the data directory was recreated. Paste the current content of `./data/secrets/auth-token`.
+
+**`/health` returns `"status":"degraded"` with `runner.status` `unavailable`.** The runner did not start or has exited. Read the first error in `docker compose logs`; when any process in the container exits, the entry point stops the whole stack with that exit status and Compose restarts it under `on-failure`.
+
+**The log shows `WARNING: bubblewrap cannot create a sandbox in this container`.** The sandbox probe failed: the API and UI work, but every `run_shell` / `run_python` fails. Follow the order in [Sandbox and host requirements](#sandbox-and-host-requirements) — the three `security_opt` entries, then the host AppArmor profiles, and only then the kernel switches; never switch to `privileged`.
+
+**The runner startup log says it fell back to binding the container's `/proc`.** `systempaths=unconfined` is missing from the Compose service (typical for hand-written `docker run` commands or Kubernetes manifests). Executions still run, but the sandbox sees the container's process list; adding the entry back restores the private procfs.
+
+**The model cannot be reached: timeouts, `ECONNREFUSED`, or a mandatory proxy.** Three options: add a `custom_url` proxy under **System configuration → Network proxies** and make it the global default, which needs no container restart; or inject `HTTPS_PROXY` and friends through the `docker-compose.override.yml` shown above, run `up -d`, and choose the `environment` proxy type in the same settings (see [Configure a network proxy](configure-network-proxy.md)). When the model server runs on the host itself (a local Ollama, for example), `127.0.0.1` inside the container is the container: add `extra_hosts: ["host.docker.internal:host-gateway"]` to the service in the override file and use `http://host.docker.internal:<port>` as the model address, or use the host's LAN IP.
+
+**After the first start the CPU stays busy, `./data` grows to about 2 GB, and `micromamba` shows up in the process list.** Expected: the starter Python scientific environment is being created in the background; `runner.scientificEnvs.startersReady` in `/health` turns `true` when it is done. When conda-forge is slow, point `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` at a mirror; for an offline host, pre-populate `SCIENCE_AGENT_PACKAGE_CACHE_DIR`; when managed environments are not needed at all, set `SCIENTIFIC_ENVS=0`.
+
+**`docker compose ps` stays at `health: starting` for a long time, or turns `unhealthy`.** The health check is `curl http://127.0.0.1:4310/health` inside the container with a `start_period` of 60 seconds; still unhealthy after that means the API did not come up — read the log. On a very slow host (an emulated architecture, for instance) the entry point's 60-second wait for the runner may be too short; raise `SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS` through an override file.
+
+**The second instance does not start.** Check against [Several instances on one host](#several-instances-on-one-host): was its data directory created with `mkdir -p` first (otherwise the "not writable" case above), is the published port unique, is the project name different from the first, and do the management commands carry the same project name.
+
+**The runner version shows `unknown`.** Expected: the build context carries no Git metadata, so `pnpm build` cannot record a commit. It does not affect functionality, only the version comparison hint for remote runners.
+
+**Images and build cache fill the disk.** `docker image ls sciencediscovery` lists the images, `docker builder prune` clears the build cache, and `docker image prune` removes dangling images; unused environment revisions under `./data/scientific-envs/` can be deleted from System configuration.
+
 ### Limitations
 
 - This is a single-user trust model: one static bearer token, no TLS, and no multi-user accounts. The port is published only on `127.0.0.1` by default because Docker-published ports bypass many host firewall rules. Set `SCIENCE_AGENT_PUBLISH_HOST=0.0.0.0` only on a trusted network and replace the token first.
 - The image contains no API tokens, model credentials, or host `.sciencediscovery-data/` content. `.dockerignore` excludes `.sciencediscovery-data/`, `.env`, `node_modules/`, build outputs, and local caches. Credentials enter only through Compose variables and the bind-mounted data directory.
 - The image includes fixed micromamba and does not access GitHub for it at runtime, but this iteration does **not** bundle starter Python/R environments or a conda package cache. First-time starter Python creation still needs permitted package channels. Package resolution becomes offline only after an administrator populates and selects `SCIENCE_AGENT_PACKAGE_CACHE_DIR`.
+- The image carries neither the memory-graph nor the evolve Python sidecar environment, and `start-stack.sh --mode docker` does not start them: the ScienceMemory graph stays off in Docker (`memoryGraph` in `/health` is `disabled` and only becomes `degraded` when switched on), and an evolution search cannot start. Use local mode or the binary deployment for those two features.
 - The image is a convenience package, not a hardened multi-tenant deployment. Containerization does not change the security boundaries of a static bearer token, no TLS, and no runner CPU/memory quotas.
 
 ### Build micromamba packages for both architectures

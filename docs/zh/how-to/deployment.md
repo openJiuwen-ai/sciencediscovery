@@ -186,49 +186,109 @@ SSH 自动部署使用自带 Node runtime 的 Runner SEA 单文件，不要求�
 
 ## Docker 部署
 
-单个镜像承载完整技术栈，并通过 `docker-entrypoint.sh` 兼容包装调用 `scripts/start-stack.sh --mode docker`。共用入口在一个容器内启动与本地模式相同的两个进程：bubblewrap runner，以及带 Web UI 的控制 API；Docker 专属预检仍只在该模式执行。builder 阶段使用 pnpm 与 uv；运行镜像携带 Node、预构建的服务 Python 环境、bubblewrap，以及按 `TARGETARCH` 下载并校验的固定版本 micromamba，宿主机只需要 Docker。
+单个镜像承载完整技术栈：容器入口 `docker-entrypoint.sh` 转调 `scripts/start-stack.sh --mode docker`，在一个容器内按与本地模式相同的顺序启动 bubblewrap runner 和带 Web UI 的控制 API，随包的 Python MCP server 由 API 按需拉起；Docker 专属预检只在该模式执行。builder 阶段使用 pnpm 与 uv；运行镜像携带 Node、预构建的服务 Python 环境、bubblewrap，以及按 `TARGETARCH` 下载并校验的固定版本 micromamba。宿主机只需要 Docker。
+
+本节按「准备 → 构建 → 启动 → 浏览器连接 → 配置模型」给出完整步骤，之后是日常管理、数据目录、多实例、环境变量、沙箱要求与常见问题。命令都在仓库根目录执行。
 
 ### 前置条件
 
-- Linux x86_64 或 aarch64 宿主机，安装 Docker Engine 24+ 与 Compose v2 插件；runner 需要宿主内核提供可用的用户命名空间。
-- 容器内可用的无特权用户命名空间——bubblewrap 沙箱依赖它。**判据是产品实际跑的 bwrap 探针，不是某个 sysctl 的取值**：容器入口和 runner 启动时都会真正构建一次最小沙箱，据此决定沙箱能否工作。起栈之后按这条命令正面复核：
+- Linux x86_64 或 aarch64 宿主机，Docker Engine 24+（自带 BuildKit）与 Compose v2 插件；`docker compose version` 应输出 `v2` 或更高。构建依赖 BuildKit 的 `TARGETARCH`，旧的 `docker-compose` v1 或关闭 BuildKit 的构建会以 `TARGETARCH is required` 失败。macOS / Windows 上的 Docker Desktop 不支持：沙箱依赖 Linux 内核的用户命名空间。
+- 磁盘：镜像约 1.8 GB，构建缓存另占数 GB；首次启动自动创建的 starter Python 科学环境会向数据目录写入约 2 GB。
+- 网络：**构建期**需要访问 Docker Hub（`node:22-bookworm` 基础镜像）、`ghcr.io`（uv 镜像）、Debian apt 源、npm registry、PyPI、GitHub Releases（micromamba）与 `models.dev`（模型目录快照）。**运行期**镜像内的服务本身不再联网，但首次启动会在后台创建 starter Python 环境，需要访问 conda-forge 或其镜像；模型 API、文献源等由容器直接出站，需要走代理时见[常见问题](#常见问题)。
+- 容器内可用的无特权用户命名空间——bubblewrap 沙箱依赖它。**判据是产品实际跑的 bwrap 探针，不是某个 sysctl 的取值**：容器入口和 runner 启动时都会真正构建一次最小沙箱，据此决定沙箱能否工作。起栈之后按[第 3 步](#第-3-步启动并确认健康)的探针命令正面复核；探针失败后的排查项见[沙箱与宿主要求](#沙箱与宿主要求)。
 
-  ```bash
-  docker compose exec sciencediscovery sh -c '
-    bwrap --unshare-all --unshare-user --die-with-parent \
-      --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
-      --symlink usr/lib64 /lib64 --proc /proc /usr/bin/true' \
-    && echo "沙箱探针通过"
-  ```
-
-  这就是 `packages/sandbox-capability` 探测时使用的参数组合。请保留外层 `sh -c`：`docker compose exec` 直接把 `bwrap` 作为会话首进程时无法建立回环网络，会给出与沙箱能力无关的误报。探针失败后的排查项见[沙箱与宿主要求](#沙箱与宿主要求)。
-
-### 构建与启动
+### 第 1 步：准备配置与数据目录
 
 ```bash
-cp .env.docker.example .env   # 或把其中的键合并进已有 .env
-mkdir -p data                 # 承载全部运行时状态的宿主目录
+cp .env.docker.example .env   # 已有 .env 时把其中的键合并进去
+id -u; id -g                  # 不是 1000 时改 .env 里的 SCIENCE_AGENT_UID / SCIENCE_AGENT_GID
+mkdir -p data                 # 承载全部运行时状态的宿主目录，必须在 up 之前创建
+```
+
+`.env` 只被 Compose 读取，用于向 `docker-compose.yml` 插值；容器不读镜像内的 `.env`。默认值即可运行：发布在 `127.0.0.1:4310`，令牌首次启动自动生成。`data` 目录必须先建好并归当前用户所有：bind mount 的宿主路径不存在时 Docker 会以 root 创建它，容器里的 `node` 用户随即写不进去，入口脚本会立即退出并提示目录不可写。
+
+### 第 2 步：构建镜像
+
+```bash
 docker compose build
+```
+
+产物是 `sciencediscovery:local`（可用 `SCIENCE_AGENT_IMAGE` 改 tag）。首次构建会安装 workspace 依赖、编译 Web UI、解析两个服务 Python 环境、下载 micromamba 与模型目录快照，全程需要外网；缓存全空时在一台普通 x86_64 机器上约需两三分钟，网络慢时更长。之后只改源码的重建会复用依赖层缓存。
+
+Docker 构建会根据 BuildKit 的 `TARGETARCH` 选择 `linux/amd64` 或 `linux/arm64` 对应的 micromamba，并用 Runner 共用的发布清单校验 SHA256。二进制保存在镜像的 `/opt/sciencediscovery/provisioner/micromamba`；容器首次面对空的 `/app/data` bind mount 时把它复制到默认托管路径，Runner 随后再次按同一清单校验。这个流程不需要在**运行时**访问 GitHub。
+
+### 第 3 步：启动并确认健康
+
+```bash
 docker compose up -d
 curl -fsS http://127.0.0.1:4310/health
+docker compose ps
 ```
 
-通过容器日志（`docker compose logs`）查看启动输出的 `Open to sign in` 链接与本地服务访问令牌，在浏览器中打开该链接即可自动认证并保存令牌；若直接打开 <http://127.0.0.1:4310>，可在连接引导中粘贴本地服务访问令牌保存。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该指定令牌。首次构建会编译 Web UI、解析两个服务 Python 环境并下载 micromamba，耗时较长且需要外网；之后启动镜像内服务和取得 micromamba 不再需要联网。托管 starter Python 的软件包网络边界见下方“限制”。
+`up -d` 后几秒内 `/health` 即应返回 JSON：`"status":"ok"` 且 `"runner":{"status":"ok",…}` 表示控制 API 与沙箱 runner 都已就绪；`"status":"degraded"` 或 `"runner":{"status":"unavailable"}` 说明 runner 没起来，看 `docker compose logs`。`docker compose ps` 的状态列在启动后最多 60 秒内显示 `health: starting`，随后变为 `healthy`；这是 Compose 健康检查的观察窗口，不是故障。
 
-Docker 构建会根据 BuildKit 的 `TARGETARCH` 选择 `linux/amd64` 或 `linux/arm64` 对应的 micromamba，并用 Runner 共用的发布清单校验 SHA256。二进制保存在镜像的 `/opt/sciencediscovery/provisioner/micromamba`；容器首次面对空的 `/app/data` bind mount 时，会把它复制到默认托管路径，Runner 随后再次按同一清单校验。这个流程不需要在**运行时**访问 GitHub。
+runner 就绪后再正面复核一次沙箱：
 
 ```bash
-docker compose logs -f        # 跟踪启动顺序：runner → API
-docker compose ps             # 容器状态，含健康检查结果
-docker compose down           # 停止并删除容器；./data 保留
-docker compose up -d --build  # 拉取新代码后重建并重启
+docker compose exec sciencediscovery sh -c '
+  bwrap --unshare-all --unshare-user --die-with-parent \
+    --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
+    --symlink usr/lib64 /lib64 --proc /proc /usr/bin/true' \
+  && echo "沙箱探针通过"
 ```
+
+这就是 `packages/sandbox-capability` 探测时使用的参数组合。请保留外层 `sh -c`：`docker compose exec` 直接把 `bwrap` 作为会话首进程时无法建立回环网络，会给出与沙箱能力无关的误报。
+
+首次启动还会做两件事，都只写数据目录：把镜像内的 micromamba 播种到 `./data/scientific-envs/bin/micromamba`；然后在后台创建 starter Python 科学环境（从 conda-forge 解析并下载，约 2 GB，通常需要几分钟）。创建期间 Web 与对话已可使用，只有依赖托管环境的执行要等它完成；`/health` 里 `runner.scientificEnvs.startersReady` 变为 `true` 即完成。不需要托管环境时设 `SCIENTIFIC_ENVS=0`。
+
+### 第 4 步：在浏览器中连接
+
+启动输出里有一条登录链接和一条本地服务访问令牌：
+
+```bash
+docker compose logs | grep -A 2 'Open to sign in'
+```
+
+```
+Open to sign in: http://127.0.0.1:4310/#token=<令牌>
+Local service access token (generated on first start): <令牌>
+  Stored in /app/data/secrets/auth-token.
+```
+
+在浏览器打开这条链接即可：页面读取 URL 片段里的令牌并保存到浏览器本地存储，随即从地址栏移除，直接进入工作台首页。**链接里的端口永远是容器内端口 4310**——若在 `.env` 里改了 `SCIENCE_AGENT_PUBLISH_PORT`（例如 4410），请把链接里的 `4310` 换成发布端口再打开。
+
+不用链接时也可以直接打开 <http://127.0.0.1:4310>：页面会弹出「系统设置 → 连接」引导，把令牌粘贴到「本地服务访问令牌」输入框，点「保存」，再点「保存并关闭」。令牌有两处来源：容器日志，或宿主上的文件 `./data/secrets/auth-token`（属主为容器 uid，权限 600）。设置了 `SCIENCE_AGENT_AUTH_TOKEN` 时使用该指定值，不再写这个文件。容器重启不会更换令牌。
+
+登录链接与令牌等同于密码，请勿分享；它不是外部模型的 API Key。
+
+服务跑在远程机器上时，不要把端口发布到 `0.0.0.0`，在本地终端做 SSH 转发后按同样方式打开：
+
+```bash
+ssh -N -L 4310:127.0.0.1:4310 <用户>@<远程主机>   # 然后在本地浏览器打开 http://127.0.0.1:4310
+```
+
+### 第 5 步：配置模型并开始第一次任务
+
+镜像不内置任何模型。首页的「配置模型」入口指向 **系统设置 → 模型注册表**：新建一个模型连接、填入服务商 API Key 并保存，再在 **全局默认值** 中把它设为任务模型。之后创建项目、发起第一次会话，见[快速开始教程](../tutorial/01-quick-start.md)。容器直接向模型服务商出站；需要经代理访问或模型服务跑在宿主机上时，见[常见问题](#常见问题)。
+
+### 日常管理
+
+| 操作 | 命令 | 说明 |
+|---|---|---|
+| 看日志 | `docker compose logs -f` | 启动顺序 runner → API；登录链接与沙箱告警都在这里 |
+| 看状态 | `docker compose ps` | 含健康检查结果 |
+| 停止 | `docker compose down` | 删除容器与网络；`./data` 保留 |
+| 重启 | `docker compose restart` | 不重建镜像 |
+| 更新代码后 | `docker compose up -d --build` | 重建镜像并重建容器；数据与令牌保留 |
+| 改了 `.env` 后 | `docker compose up -d` | Compose 发现服务配置变化会自动重建容器 |
+| 进入容器 | `docker compose exec sciencediscovery sh` | 以 `node` 用户进入 `/app` |
+| 完全重置 | `docker compose down && rm -rf data` | 删除全部项目、会话、令牌与模型凭证 |
 
 ### 数据目录
 
-宿主目录 `./data` 以 bind mount 挂载到 `/app/data`，是唯一的持久化位置，布局与宿主机安装的[存储布局](../reference/configuration.md#存储布局)一致。**不使用任何 Docker 命名卷**：每个 project、session、工作区、凭证与审计记录都是宿主上的普通文件，可直接查看、备份与删除，并且在 `docker compose down` 和镜像重建后依然存在。
+宿主目录 `./data` 以 bind mount 挂载到 `/app/data`，是唯一的持久化位置，布局与宿主机安装的[存储布局](../reference/configuration.md#存储布局)一致。**不使用任何 Docker 命名卷**：每个 project、session、工作区、凭证与审计记录都是宿主上的普通文件，可直接查看、备份与删除，并且在 `docker compose down` 和镜像重建后依然存在。备份就是备份整个目录。
 
-如果宿主机上已有用于本地安装的 `data/`，想让容器状态与之分开，在 `.env` 中设置 `SCIENCE_AGENT_DATA_HOST_DIR` 即可，例如 `SCIENCE_AGENT_DATA_HOST_DIR=./docker-data`，不需要改 `docker-compose.yml`。
+如果宿主机上已有用于本地安装的 `data/`，想让容器状态与之分开，在 `.env` 中设置 `SCIENCE_AGENT_DATA_HOST_DIR` 即可，例如 `SCIENCE_AGENT_DATA_HOST_DIR=./docker-data`，不需要改 `docker-compose.yml`；新目录同样要先 `mkdir -p`。
 
 容器默认以 uid/gid `1000:1000` 运行。如果你的账号 id 不同，请在 `.env` 中设置 `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID`（`id -u`、`id -g`）并重建容器；否则入口脚本会立即以明确的「目录不可写」提示退出，而不是在更深处失败。
 
@@ -244,6 +304,7 @@ docker compose up -d --build  # 拉取新代码后重建并重启
 要在同一台机器上再跑一个实例，给它自己的 **Compose 项目名**、**发布端口**和**数据目录**即可。服务没有写死 `container_name`，容器名与默认网络名都由项目名派生，所以改项目名就能把两个实例隔开：
 
 ```bash
+mkdir -p data-b               # 第二个实例的数据目录也要先建，否则 Docker 会以 root 创建它
 COMPOSE_PROJECT_NAME=sciencediscovery-b \
 SCIENCE_AGENT_PUBLISH_PORT=4320 \
 SCIENCE_AGENT_DATA_HOST_DIR=./data-b \
@@ -261,11 +322,52 @@ docker compose --env-file .env.b down
 注意：
 
 - 项目名决定容器名（`<项目名>-sciencediscovery-1`）和默认网络名；`docker compose -p <项目名> ...` 与 `COMPOSE_PROJECT_NAME` 等价。
-- 每个实例必须有自己的 `SCIENCE_AGENT_DATA_HOST_DIR`。数据目录承载全部状态，两个实例共用会互相覆盖。
-- 每个实例必须有自己的 `SCIENCE_AGENT_PUBLISH_PORT`，宿主端口不能重复。
+- 每个实例必须有自己的 `SCIENCE_AGENT_DATA_HOST_DIR`。数据目录承载全部状态，两个实例共用会互相覆盖；令牌也按实例各自生成。
+- 每个实例必须有自己的 `SCIENCE_AGENT_PUBLISH_PORT`，宿主端口重复时 `up` 会报 `port is already allocated`。
 - 两个实例从不同代码树构建时，分别设置 `SCIENCE_AGENT_IMAGE`，避免后构建的镜像覆盖同一个 tag。
 - 后续所有管理命令都要带同一个项目名或同一个 env 文件，否则 `docker compose ps` / `down` 操作的是另一个实例。
 - 多实例不需要、也不应该放宽任何安全配置：`security_opt` 保持下表三项，不要改用 `privileged`。
+
+### 环境变量
+
+Docker 部署的变量分三层；放错层就会「设了没效果」。
+
+**编排层**：只被 Compose 读取，决定容器怎么起，不进入容器环境。
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `COMPOSE_PROJECT_NAME` | 当前目录名 | 容器名与网络名的前缀（`<项目名>-sciencediscovery-1`）；同机多实例靠它隔离 |
+| `SCIENCE_AGENT_IMAGE` | `sciencediscovery:local` | 构建并运行的镜像 tag |
+| `SCIENCE_AGENT_DATA_HOST_DIR` | `./data` | bind mount 到 `/app/data` 的宿主目录 |
+| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | 容器进程的 uid/gid，必须能写数据目录 |
+| `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | 发布到的宿主网卡；`0.0.0.0` 会把服务暴露到网络 |
+| `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | 映射到容器 4310 的宿主端口 |
+
+**容器层**：`.env.docker.example` 里其余的键，由 `docker-compose.yml` 的 `environment` 块逐个转发进容器；留空等于使用内置默认值。完整清单与默认值见[配置参考的 Docker 环境变量](../reference/configuration.md#docker-环境变量)，最常用的几项：
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器 / API 的本地服务访问令牌 |
+| `SCIENTIFIC_ENVS` | `1` | 托管科学环境，含首次启动的 starter Python 创建；`0` 关闭 |
+| `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 托管环境允许的 conda 渠道，逗号分隔 |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | 空 | 预置的离线包缓存；设置后环境创建不再联网 |
+| `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | 单次沙箱执行的墙钟上限 |
+| `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | 运行日志级别；日志落在 `./data/logs/` |
+| `SCIENCE_AGENT_CONTEXT_*` | 内置默认 | 上下文装配的模式与预算，见[上下文装配](../../architecture/context-assembly.md) |
+| `SCIENCE_AGENT_SSH_CONFIG_PATH` | 空 | 远程 runner 的 SSH 配置文件（容器内路径，放在 `./data/ssh` 下即可） |
+| `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板的汇率换算；无法访问公网汇率源的部署可关闭 |
+
+**镜像层**：`Dockerfile` 固定、不应通过 `.env` 改的值——`SCIENCE_AGENT_DATA_DIR=/app/data`、`SCIENCE_AGENT_HOST=0.0.0.0`、`SCIENCE_AGENT_PORT=4310`、runner 的 `127.0.0.1:4311`，以及镜像内 Python 环境、模型目录快照与 micromamba 的路径。要换宿主端口改 `SCIENCE_AGENT_PUBLISH_PORT`，不要改 `SCIENCE_AGENT_PORT`。
+
+其他没有列出的变量（例如 `HTTP_PROXY`、`SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS`）不会自动进入容器。需要时新建 `docker-compose.override.yml`，把它们追加到服务的 `environment` 块，Compose 会自动合并：
+
+```yaml
+services:
+  sciencediscovery:
+    environment:
+      HTTPS_PROXY: "http://proxy.example:3128"
+      NO_PROXY: "127.0.0.1,localhost"
+```
 
 ### 沙箱与宿主要求
 
@@ -295,11 +397,44 @@ docker compose --env-file .env.b down
    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0   # 确认探针确实因它失败后再执行
    ```
 
+### 常见问题
+
+**`docker compose build` 报 `TARGETARCH is required to select the managed micromamba release`。** 构建没有走 BuildKit：用的是旧的 `docker-compose` v1，或设置了 `DOCKER_BUILDKIT=0`。改用 Docker 24+ 自带的 `docker compose`，或显式 `DOCKER_BUILDKIT=1 docker compose build`。
+
+**构建在下载阶段失败或极慢。** 先看失败的是哪个 stage：`micromamba` 阶段访问 GitHub Releases，`model-catalog` 阶段访问 `models.dev`（不可达时该阶段会以 `test -s` 失败，看起来像仓库坏了，其实是网络），`builder` 阶段访问 npm registry 与 PyPI，`runtime` 阶段访问 Debian apt 源。网络恢复后直接重跑，已完成的层会复用。需要代理时不用改 `Dockerfile`：`docker compose build --build-arg HTTP_PROXY=http://proxy.example:3128 --build-arg HTTPS_PROXY=http://proxy.example:3128`（BuildKit 预定义参数），或在 Docker 客户端配置文件里配置 `proxies`。
+
+**容器启动即退出，日志是 `The data directory /app/data is not writable by uid …, gid …`。** 容器进程的 uid/gid 写不进宿主数据目录。两种常见原因：你的账号 id 不是 1000，把 `id -u` / `id -g` 写进 `.env` 的 `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID`；或者数据目录是 Docker 在 `up` 时以 root 自动创建的（bind mount 源不存在），删掉它后 `mkdir -p data` 再来。改完执行 `docker compose up -d` 让 Compose 重建容器。`restart: on-failure:3` 会先重试三次，之后 `docker compose ps` 显示 `Exited`。
+
+**`up` 报 `Bind for 127.0.0.1:4310 failed: port is already allocated`。** 宿主端口已被占用，常见于同一台机器已经跑着另一个 ScienceDiscovery。改 `.env` 的 `SCIENCE_AGENT_PUBLISH_PORT`，不要去停别人的服务；之后登录链接里的端口也相应替换。
+
+**找不到登录链接或令牌。** 日志被滚掉或容器已重启过：`docker compose logs | grep -A 2 'Open to sign in'`，或直接在宿主上 `cat ./data/secrets/auth-token`。令牌保存在数据目录里，重启容器不会更换（日志会写 `restored from local storage`）；删除数据目录或换 `SCIENCE_AGENT_DATA_HOST_DIR` 才会重新生成。
+
+**浏览器提示「本地服务访问令牌被拒绝」。** 粘贴的不是这个实例当前的令牌：填成了模型 API Key，或复制自另一个实例 / 另一个数据目录，或数据目录重建后令牌已变。以 `./data/secrets/auth-token` 的内容为准重新粘贴。
+
+**`/health` 返回 `"status":"degraded"`，`runner.status` 为 `unavailable`。** runner 没起来或已退出。看 `docker compose logs` 里第一条错误；容器内任一进程退出时入口会带着它的状态码停掉整个栈，Compose 再按 `on-failure` 重启。
+
+**日志出现 `WARNING: bubblewrap cannot create a sandbox in this container`。** 沙箱探针失败：API 与 UI 正常，但每次 `run_shell` / `run_python` 都会失败。按[沙箱与宿主要求](#沙箱与宿主要求)的顺序排查——`security_opt` 三项、宿主 AppArmor profile、最后才是内核开关；不要改用 `privileged`。
+
+**runner 启动日志说回退为绑定容器的 `/proc`。** Compose 里缺了 `systempaths=unconfined`（常见于自己改写的 `docker run` 或 K8s 清单）。执行仍能进行，但沙箱能看到容器的进程列表；加回该项即可恢复独立 procfs。
+
+**模型连不上：超时、`ECONNREFUSED`，或必须经代理。** 三种做法：在 **系统设置 → 网络代理** 添加一条 `custom_url` 代理并设为全局默认，不用重启容器；或者用上面的 `docker-compose.override.yml` 给容器注入 `HTTPS_PROXY` 等变量，`up -d` 后在代理设置里选 `environment` 类型（详见[配置网络代理](configure-network-proxy.md)）。模型服务跑在宿主机本身（例如本机的 Ollama）时，容器里的 `127.0.0.1` 指向容器自己：在 override 文件里给服务加 `extra_hosts: ["host.docker.internal:host-gateway"]`，模型地址填 `http://host.docker.internal:<端口>`，或者直接填宿主的局域网 IP。
+
+**首次启动后 CPU 一直很高，`./data` 涨到约 2 GB，进程里有 `micromamba`。** 正常：starter Python 科学环境正在后台创建，完成后 `/health` 的 `runner.scientificEnvs.startersReady` 变为 `true`。conda-forge 访问慢时把 `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` 指向镜像站（内置的清华、中科大镜像地址 Runner 始终接受）；离线环境预先填充 `SCIENCE_AGENT_PACKAGE_CACHE_DIR`；完全不需要托管环境就设 `SCIENTIFIC_ENVS=0`。
+
+**`docker compose ps` 长时间 `health: starting`，或变成 `unhealthy`。** 健康检查是容器内的 `curl http://127.0.0.1:4310/health`，`start_period` 为 60 秒，超过后仍不健康说明 API 没起来，看日志。宿主特别慢（例如 QEMU 模拟的架构）时入口等待 runner 的 60 秒上限可能不够，用 override 文件设置 `SCIENCE_DISCOVERY_HEALTH_TIMEOUT_SECONDS` 加大。
+
+**第二个实例起不来。** 逐项对照[同机运行多个实例](#同机运行多个实例)：它的数据目录是否先 `mkdir -p`（否则同上面的「目录不可写」）、发布端口是否重复、项目名是否与第一个不同；管理命令是否带了同一个项目名。
+
+**Runner 版本显示 `unknown`。** 预期行为：镜像构建上下文不含 Git 元数据，`pnpm build` 写不出 commit 标识。不影响功能，只影响远程 runner 的版本对比提示。
+
+**磁盘被镜像和构建缓存占满。** `docker image ls sciencediscovery` 查看镜像，`docker builder prune` 清构建缓存，`docker image prune` 清悬空镜像；`./data` 里的 `scientific-envs/` 可通过系统设置删除不再使用的环境版本。
+
 ### 限制
 
 - 单用户，信任模型与宿主机安装一致：一个静态 bearer token、无 TLS、无多用户账号。默认只发布到 `127.0.0.1`，因为 Docker 发布的端口会绕过宿主上大多数防火墙规则；只有在可信网络中才设置 `SCIENCE_AGENT_PUBLISH_HOST=0.0.0.0`，并请先更换 token。
 - 镜像中不含任何 API token、模型凭证或宿主 `.sciencediscovery-data/` 内容——`.dockerignore` 排除了 `.sciencediscovery-data/`、`.env`、`node_modules/`、构建产物与本地缓存。凭证只通过 Compose 环境变量和 bind mount 的数据目录进入容器。
 - 镜像已包含固定版本 micromamba，运行时不再为该二进制访问 GitHub；但本迭代**没有**打包 starter Python/R 科学环境或 conda package cache。首次创建 starter Python 仍需访问允许的软件包渠道；只有另行填充并设置 `SCIENCE_AGENT_PACKAGE_CACHE_DIR` 后，软件包解析才可离线进行。
+- 镜像不含 memory-graph 与 evolve 两个 Python 边车的环境，`start-stack.sh --mode docker` 也不会启动它们：ScienceMemory 图谱在 Docker 中保持关闭（`/health` 的 `memoryGraph` 为 `disabled`，开启后只会变成 `degraded`），进化搜索无法启动。需要这两项功能时使用本地模式或二进制部署。
 - 该镜像是便捷封装，不是经过加固的多租户部署；单静态 bearer token、无 TLS、runner 无 CPU/内存配额等安全边界不因容器化而改变。
 
 ### 生成 micromamba 双架构发布包

@@ -81,29 +81,46 @@ Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管
 
 ## Docker 环境变量
 
-Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.yml`：
+Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把下面的键插值到 `docker-compose.yml`。它们分两层：编排层只影响 Compose 如何启动容器；容器层由服务的 `environment` 块逐个转发进容器，留空等于使用内置默认值。操作步骤与分层说明见[Docker 部署](../how-to/deployment.md#docker-部署)。
+
+### 编排层
 
 | 变量 | 默认值 | 作用 |
 |---|---|---|
-| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | 容器 uid/gid；必须能写宿主的 `./data` |
+| `COMPOSE_PROJECT_NAME` | 当前目录名 | 容器名与默认网络名的前缀；同机多实例靠它隔离，与 `docker compose -p` 等价 |
+| `SCIENCE_AGENT_IMAGE` | `sciencediscovery:local` | 构建并运行的镜像 tag |
+| `SCIENCE_AGENT_DATA_HOST_DIR` | `./data` | bind mount 到容器 `/app/data` 的宿主目录，须先创建 |
+| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | 容器 uid/gid；必须能写宿主数据目录 |
 | `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | UI/API 在宿主上发布到的网卡 |
 | `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | 映射到容器 `4310` 的宿主端口 |
-| `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `<数据目录>/secrets/auth-token` 中保存的值 |
+
+### 容器层
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `/app/data/secrets/auth-token`（宿主 `./data/secrets/auth-token`）中保存的值 |
+| `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | 运行日志级别阈值（`DEBUG` / `INFO` / `WARNING` / `ERROR`） |
+| `SCIENCE_AGENT_LOG_DIR` | `/app/data/logs` | 日志目录；保持默认即随数据目录持久化 |
+| `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | 单个类别日志滚动前的最大字节数 |
+| `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | 每个类别保留的滚动历史文件数 |
+| `SCIENCE_AGENT_CONTEXT_MODE` | `dynamic` | 上下文装配模式；`legacy` 与 `shadow` 仅用于调试和回归对比 |
+| `SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS`、`…_SECTION_MAX_CHARS`、`…_DATA_BUDGET_CHARS`、`…_ATTACHMENT_MAX_CHARS`、`…_CONTRIBUTED_MESSAGE_BUDGET_CHARS`、`…_MAX_CONTRIBUTED_MESSAGES`、`…_WINDOW_MESSAGES`、`…_WINDOW_ROUNDS`、`…_WINDOW_TOKENS` | 见 `.env.docker.example` | 上下文装配的预算与窗口，含义见[上下文装配](../../architecture/context-assembly.md) |
+| `SCIENCE_AGENT_CONTEXT_TRACE` / `SCIENCE_AGENT_CONTEXT_TRACE_DIR` | `0` / `/app/data/context-traces` | 上下文装配追踪开关与输出目录 |
 | `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API→runner token（仅容器回环） |
-| `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核 |
+| `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核；首次启动自动创建 starter Python |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | 单次沙箱执行的墙钟上限 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单 |
-| `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验副本 |
-| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，供无法访问上游发布地址的部署使用；SHA-256 仍按固定版本校验 |
+| `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验、并播种到数据目录的副本 |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
+| `SCIENCE_AGENT_SSH_CONFIG_PATH` | — | 远程 runner 的 SSH 配置文件（容器内路径）；放在宿主 `./data/ssh` 下即已在 `/app/data/ssh` 可见 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板展示币种换算开关；关闭后费用只显示各模型原始币种 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | 用量看板 USD/CNY 汇率源，默认使用无需 API key 的 Frankfurter；自定义 URL 时汇率来源按 URL host 标注 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | 用量看板汇率缓存 TTL，默认 6 小时 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | 用量看板汇率请求超时 |
 
-API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。操作步骤与沙箱放权边界见[Docker 部署](../how-to/deployment.md#docker-部署)。
+镜像内固定的值不经 `.env` 修改：`SCIENCE_AGENT_DATA_DIR=/app/data`、`SCIENCE_AGENT_HOST=0.0.0.0`、`SCIENCE_AGENT_PORT=4310`、`SCIENCE_AGENT_RUNNER_HOST=127.0.0.1`、`SCIENCE_AGENT_RUNNER_PORT=4311`、`SCIENCE_AGENT_RUNNER_URL`，以及镜像内 Python 环境、模型目录快照与 micromamba 种子的路径。API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。本地模式的 `SCIENCE_AGENT_MICROMAMBA_BASE_URL` 在 Docker 中不需要：镜像已内置并播种固定版本的 micromamba，运行时不再下载。其余本地模式变量（如 `HTTP_PROXY`）未被转发，需要时通过 `docker-compose.override.yml` 追加到服务的 `environment` 块。
 
 ## 存储布局
 
