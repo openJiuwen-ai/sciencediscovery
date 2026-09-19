@@ -1,54 +1,100 @@
+<div align="center">
+
 # ScienceDiscovery
 
-ScienceDiscovery is a one‑stop AI research workspace built specifically for scientific research. Leveraging this platform, researchers can efficiently complete the highly cumbersome research exploration workflow of "literature review, hypothesis formulation, code development, experimental trial‑and‑error, and parameter tuning" in a single unified environment.
+**The one-stop AI research workspace, built for scientists.**
 
-English | [中文](README_zh.md)
+Literature review, hypothesis, code, experiments and tuning — in one environment, with every step on the record.
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-1f6feb?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/badge/Release-0.2.0-1f6feb?style=flat-square)](https://github.com/openJiuwen-ai/sciencediscovery/releases/tag/0.2.0)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-6e7781?style=flat-square)](#requirements)
+[![Docs](https://img.shields.io/badge/Docs-EN%20%7C%20ZH-6e7781?style=flat-square)](docs/README.md)
+
+[Download](#installation) · [Quick start](docs/en/tutorial/01-quick-start.md) · [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) · [中文](README_zh.md)
+
+<img src="docs/images/task.png" width="920" alt="The ScienceDiscovery workspace: project and session navigation, the composer, and the artifact, reviewer and provenance panels" />
+
+</div>
+
+## Overview
+
+ScienceDiscovery is a locally run research workspace: an agent reads the literature, writes and runs code inside a sandbox, and records the origin of every result. Everything executes on your own machine, against your own files, with your own model keys.
+
+## Installation
+
+Download the build for your architecture from [release 0.2.0](https://github.com/openJiuwen-ai/sciencediscovery/releases/tag/0.2.0):
+
+```bash
+curl -LO https://github.com/openJiuwen-ai/sciencediscovery/releases/download/0.2.0/ScienceDiscovery-0.2.0-linux-x86_64
+chmod +x ScienceDiscovery-0.2.0-linux-x86_64
+./ScienceDiscovery-0.2.0-linux-x86_64 serve
+```
+
+Open the **`Open to sign in`** URL that `serve` prints. The browser stores the local service access token automatically, so there is nothing to copy. That token is distinct from a model API key, and the URL grants access to this machine's workspace — keep it private. The web interface is served at <http://127.0.0.1:4310>; the terminal window only runs the service.
+
+For arm64, use [`ScienceDiscovery-0.2.0-linux-aarch64`](https://github.com/openJiuwen-ai/sciencediscovery/releases/download/0.2.0/ScienceDiscovery-0.2.0-linux-aarch64). Bubblewrap is the only host dependency. Source mode (Linux and macOS) and Docker are covered in the [deployment guide](docs/en/how-to/deployment.md).
+
+## Configure a model
+
+ScienceDiscovery does not bundle a model; you connect your own API. Open **System configuration** at the bottom of the left sidebar and complete two sections:
+
+1. **Model registry** — select a preset provider or enter a **Base URL** manually, provide the **API key**, then add the model you intend to use.
+2. **Global defaults** — set the model added in the previous step as the **task model**.
+
+Field definitions, and which of them an environment variable can set instead, are in the [configuration reference](docs/en/reference/configuration.md).
+
+## First task
+
+Create a Project and a Session, drop a CSV or a PDF into the workspace, and describe the analysis you want. A permission card appears before the first code execution; once approved, tool calls and artifacts are shown in the timeline. For a step-by-step walkthrough, see the [Quick Start tutorial](docs/en/tutorial/01-quick-start.md).
+
+## Capabilities
+
+| Capability | Description | Reference |
+|---|---|---|
+| **Literature and data access** | Built-in connectors reach paper and data repositories; PDFs are parsed into citable evidence | [Literature research case](docs/en/how-to/literature-research-case-guide.md) · [Custom MCP servers](docs/en/how-to/configure-custom-mcp.md) |
+| **Sandboxed code execution** | The agent writes, debugs and runs Python, R and shell inside a fail-closed sandbox | [Sandbox execution](docs/en/explanation/sandbox-execution.md) |
+| **Task decomposition** | Planning and multi-agent orchestration distribute a task across sub-agents and a cross-domain skill library | [Subagent orchestration](docs/en/explanation/subagent-orchestration.md) · [Skills](docs/en/explanation/skill-progressive-disclosure.md) |
+| **End-to-end provenance** | Code, environment, logs and cited evidence are recorded per deliverable; the optional memory graph makes the chain navigable | [Review and provenance](docs/en/explanation/review-provenance.md) · [ScienceMemory](docs/en/how-to/science-memory-setup.md) |
+
+## Command line
+
+A running `serve` can also be driven from the terminal:
+
+```bash
+./ScienceDiscovery run "Summarize these results" > answer.md
+cat prompt.txt | ./ScienceDiscovery run --stdin --auto-approve | jq .
+```
+
+`run` connects to the same control plane as the browser and reads the access token from the data directory, so sharing a `--data-dir` with `serve` requires no further configuration. Run directly in a terminal, it writes the answer to stdout and progress to stderr; in a pipe it emits JSONL, and a non-interactive run must pass `--auto-approve`, since it cannot answer permission prompts. For the full option list, run `./ScienceDiscovery run --help`.
+
+## Requirements
+
+| Path | Host requirements |
+|---|---|
+| **Prepackaged binary** | Linux x86_64/aarch64, Bubblewrap |
+| **Local source mode** | Linux x86_64/aarch64 or macOS x64/arm64; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git; Bubblewrap on Linux, built-in Seatbelt on macOS |
+| **Docker** | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, unprivileged user namespaces |
+
+Managed scientific environments run on a pinned micromamba, so no system Python, R or conda is required.
+
+## Architecture
+
+A browser UI communicates with a Node control API. Each agent run is driven by a Python Gateway, while workspace tools, sandbox execution, scientific connectors, PDF extraction, permissions, provenance and review checks are enforced by the Node control plane.
 
 > [!WARNING]
 > ScienceDiscovery is not a multi-user production service. The API, runner, and gateway listen on loopback by default; the API uses one bearer token and does not terminate TLS. Exposing the API on another interface must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed platform sandbox (Bubblewrap on Linux and Seatbelt in macOS source mode); the control API, gateway, PDF worker, and outbound model/provider calls run outside that sandbox as trusted control-plane operations.
 
-## Project positioning
+## Documentation
 
-A browser UI communicates with a Node control API. Each agent run is driven by a Python Gateway, while workspace tools, sandbox execution, scientific connectors, PDF extraction, permissions, provenance, and review checks are enforced by the Node control plane. The product is intended for trusted local or workstation use, not hosted multi-tenant use.
-
-## Features
-
-- **One‑click configuration and high‑efficiency access to massive resources**: The platform’s built‑in research‑database Connector enables one‑click rapid setup of literature and data repositories, granting quick access to vast volumes of cutting‑edge papers and core experimental datasets.
-- **Autonomous code exploration within a secure sandbox**: Agents are empowered to independently write, debug and run Python, R or Shell code inside a securely isolated sandbox, delivering a stable runtime for complex scientific data processing.
-- **Automatic decomposition and dynamic execution of sophisticated research tasks**: Powered by robust task‑planning and multi‑agent collaboration capabilities, the system automatically breaks down complex research assignments, and dynamically orchestrates and invokes over 300 cross‑domain Skills.
-- **Full‑chain traceability for research workflows**: The platform visualizes the complete end‑to‑end workflow and provides traceability of all deliverables including codes, environments and logs, ensuring high credibility across the entire research lifecycle.
-
-## Related documents
-
-- [Documentation](docs/README.md) — complete English and Chinese Tutorial / How-to / Reference / Explanation indexes.
-- [Contributing](CONTRIBUTING.md) — development setup and test commands.
-
-## Requirements
-
-The prepackaged binary is the primary user path. Other deployment modes are documented separately.
-
-| Path | Host requirements |
+| Section | Guides |
 |---|---|
-| Prepackaged binary | Linux x86_64/aarch64 and bubblewrap |
-| Local source mode | Linux x86_64/aarch64 or macOS x64/arm64, Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, and Git; Linux also needs Bubblewrap, while macOS uses the built-in Seatbelt sandbox |
-| Docker | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, and host support for unprivileged user namespaces |
+| **Tutorial** | [Quick start](docs/en/tutorial/01-quick-start.md) |
+| **How-to** | [Deployment](docs/en/how-to/deployment.md) · [Custom MCP](docs/en/how-to/configure-custom-mcp.md) · [Network proxy](docs/en/how-to/configure-network-proxy.md) · [ScienceMemory](docs/en/how-to/science-memory-setup.md) |
+| **Reference** | [Configuration](docs/en/reference/configuration.md) · [REST API](docs/en/reference/rest-api.md) · [Built-in tools](docs/en/reference/builtin-tools.md) · [Runtime behavior](docs/en/reference/runtime-behavior.md) |
+| **Explanation** | [Architecture](docs/en/explanation/architecture.md) and the [full index](docs/en/explanation/README.md) |
 
-The Gateway requires Python 3.12 in source mode; `uv` installs it into the service environment when needed. Managed scientific environments use the application's pinned micromamba and do not require system Python, R, or conda. Prepackaged binaries and Docker remain Linux-only; local source mode also supports macOS as described in the deployment guide.
-
-## Installation
-
-Prepare a ScienceDiscovery executable for the host architecture. Binary packaging, source mode, and Docker procedures are documented in the [deployment guide](docs/en/how-to/deployment.md).
-
-## Quick start
-
-From the directory containing the `ScienceDiscovery` executable, start the stack:
-
-```bash
-chmod +x ./ScienceDiscovery
-./ScienceDiscovery serve
-```
-
-In another terminal, run `curl -fsS http://127.0.0.1:4310/health`. Then open the `Open to sign in` URL from the startup output; the browser saves the local service access token automatically. This is separate from an external model API Key. Keep that URL private. Next, configure a task model under **System configuration → Global defaults**. See the [Quick Start tutorial](docs/en/tutorial/01-quick-start.md) for the first task; see the [deployment guide](docs/en/how-to/deployment.md) for binary packaging, source mode, and Docker.
+The complete English and Chinese indexes are in [docs/README.md](docs/README.md); development setup and test commands are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

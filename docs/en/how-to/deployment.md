@@ -80,6 +80,7 @@ To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; 
 
 ```text
 ScienceDiscovery serve [options]       Start the Web UI, control API and sandbox runner
+ScienceDiscovery run [input] [options] Run an agent task against a running serve, as a CLI client
 ScienceDiscovery extract --to <dir>    Extract the embedded runtime without starting it
 ScienceDiscovery version               Print the version and embedded Node, CPython, and micromamba versions
 ScienceDiscovery help                  Show help
@@ -97,6 +98,21 @@ ScienceDiscovery help                  Show help
 | `--no-scientific-envs` | off | Do not initialize managed scientific environments |
 
 The variables in [Configuration reference](../reference/configuration.md#environment-variables-local-mode) also apply and can be exported or placed in `--env-file`. The API and the runner bind to loopback by default. To expose the API, first replace `SCIENCE_AGENT_AUTH_TOKEN`, then explicitly use `--host 0.0.0.0` only on a trusted, protected network.
+
+### The run subcommand (CLI client)
+
+The Web UI is the recommended surface for interactive work (open `http://127.0.0.1:4310` and sign in with the token `serve` printed). `run` is the command-line front end to that same `serve`: identical behaviour, meant for driving a task straight from a terminal or from a pipe or script. It loads the same token as `serve` (from `.env` or `--data-dir`), so nothing has to be passed explicitly. Files the agent produces land under `projects/<id>/sessions/<id>/workspace/` inside `--data-dir`, not in the current working directory; reach them there or through the Artifact panel in the Web UI.
+
+Start `serve` first, then run the client from a second terminal:
+
+```bash
+./ScienceDiscovery serve                        # terminal 1: the resident stack
+./ScienceDiscovery run "Write me a quicksort"   # terminal 2: one agent task as a client
+```
+
+It connects to `http://127.0.0.1:4310` by default and reads the token `serve` generated from `--data-dir` (default `./.sciencediscovery-data`), so sharing a `--data-dir` between `run` and `serve` needs no further setup. Typed directly at a terminal it defaults to **text mode** — the answer on stdout, progress on stderr, and a 1/2/3 choice when a permission card appears. In a pipe or a script it defaults to **jsonl mode** and requires an explicit `--auto-approve`, because a non-interactive run cannot answer a permission prompt and refuses to start instead. Full options: `./ScienceDiscovery run --help`.
+
+> In local source mode there is no `ScienceDiscovery` binary; run the client as `node services/launcher/dist/main.js run ...`, pointed at the `serve` that `start-stack.sh` started (same default address and data directory, so again no extra configuration). In Docker mode, do not run `run` inside the container; from the host, pass `--data-dir ./data` to point at the bind-mounted data directory (or give `--token` explicitly), and leave the rest at their defaults.
 
 ### What the binary contains
 

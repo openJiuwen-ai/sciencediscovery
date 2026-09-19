@@ -77,7 +77,7 @@ Once Neo4j is running, all configuration happens in System configuration → Mem
 ### 2.1 Open settings
 
 1. Open the ScienceDiscovery Web UI (default <http://127.0.0.1:4310>) and sign in.
-2. Click the System configuration button (top right) to open the settings dialog.
+2. Click the System configuration button at the bottom of the left sidebar to open the settings dialog.
 3. Select Memory in the left-hand group list.
 
 ### 2.2 Fill in the fields
