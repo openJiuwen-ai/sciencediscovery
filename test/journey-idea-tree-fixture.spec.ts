@@ -4,6 +4,15 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { ideaResearchModel } from "./helpers/idea-research-model.ts";
 
+// This journey reads the research surface in Chinese throughout — the settings
+// selects, the control card, the progress list and every status word below.
+// Those strings used to be hardcoded in the components and matched in any
+// locale; they are message-catalogue entries now, so the locale has to be
+// stated rather than assumed. Without this, Chromium's default `en-US` makes
+// `detectLocale()` pick `en` and the very first select is looked up under a
+// label the page never renders.
+test.use({ locale: "zh-CN" });
+
 /**
  * E2E-META
  * Purpose: Start autonomous research, pause an in-flight design, manually continue three rounds, inspect persisted results and end another research.

@@ -477,7 +477,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           const editor = dialog.getByRole("region", { name: "服务商编辑器" });
           const draftName = `J7 目录刷新草稿 ${Date.now()}`;
           await editor.getByLabel("服务商名称").fill(draftName);
-          await editor.getByLabel("LLM API 令牌").fill("j7-catalog-draft-token");
+          await editor.getByLabel("外部模型 API Key").fill("j7-catalog-draft-token");
           await editor.getByLabel("基础 URL").fill(stub.baseUrl);
 
           simulatedRefresh = {
@@ -488,7 +488,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           await expect(page.getByText("无法刷新模型目录，仍在使用上一次的目录数据")).toBeVisible();
           await expect(status).toContainText("最近更新于 2026/8/26 02:00:00");
           await expect(editor.getByLabel("服务商名称")).toHaveValue(draftName);
-          await expect(editor.getByLabel("LLM API 令牌")).toHaveValue("j7-catalog-draft-token");
+          await expect(editor.getByLabel("外部模型 API Key")).toHaveValue("j7-catalog-draft-token");
           await expect(editor.getByLabel("基础 URL")).toHaveValue(stub.baseUrl);
 
           // 丢弃未保存草稿，恢复干净的注册表视图继续后续步骤。
@@ -510,7 +510,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await openAddPanel(dialog);
         await choosePreset("minimax");
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
-        await editor.getByLabel("LLM API 令牌").fill("j7-minimax-local-token");
+        await editor.getByLabel("外部模型 API Key").fill("j7-minimax-local-token");
 
         let confirmationType = "";
         let confirmationMessage = "";
@@ -523,7 +523,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(confirmationType).toBe("confirm");
         expect(confirmationMessage).toContain("放弃尚未保存的服务商修改");
         await expect(dialog).toBeVisible();
-        await expect(editor.getByLabel("LLM API 令牌")).toHaveValue("j7-minimax-local-token");
+        await expect(editor.getByLabel("外部模型 API Key")).toHaveValue("j7-minimax-local-token");
 
         let originalBody: Record<string, unknown> | undefined;
         const providerRoute = async (route: Route) => {
@@ -575,7 +575,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await choosePreset("zhipu");
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await expect(editor.locator("details.provider-advanced")).toHaveJSProperty("open", false);
-        await editor.getByLabel("LLM API 令牌").fill("j7-zhipu-local-token");
+        await editor.getByLabel("外部模型 API Key").fill("j7-zhipu-local-token");
         // 预设的真实端点是 open.bigmodel.cn，而列表现在一定会被真的请求。像
         // MiniMax 那样把创建改写到 loopback stub，既能断言界面送出的是预设的
         // 真实连接参数，又不会让 E2E 打到厂商。
@@ -674,7 +674,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await addCustomProvider(dialog);
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await editor.getByLabel("服务商名称").fill(customName);
-        await editor.getByLabel("LLM API 令牌").fill("j7-custom-local-token");
+        await editor.getByLabel("外部模型 API Key").fill("j7-custom-local-token");
         await editor.getByLabel("基础 URL").fill(stub.baseUrl);
         await editor.getByLabel("基础接口").selectOption("openai-chat-completions");
         await editor.getByLabel("接口变种").selectOption("deepseek");
