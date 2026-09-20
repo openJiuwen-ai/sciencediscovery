@@ -768,13 +768,13 @@ async function executeAgentRun(
       }
     } else {
       apiLog.warn("knowledge_engine", {
-        message: "kb_scope_validation_degraded",
+        text: "kb_scope_validation_degraded",
         reason: "list_knowledge_bases failed at run start; scope left unenforced",
       });
     }
   } else if (configuredKbScope.length && !knowledgeEngineTools) {
     apiLog.warn("knowledge_engine", {
-      message: "kb_scope_ignored_no_engine",
+      text: "kb_scope_ignored_no_engine",
       reason: "kbScopeKbIds configured but the knowledge engine is not deployed in this stack",
     });
   }

@@ -527,7 +527,7 @@ export function createPlatformServices(
         docId,
         // V1-Z3: warnings (scanned-without-vision, enhancement hints) must
         // fire even when no vision endpoint is configured.
-        onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+        onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
         ...(keVisionEndpoint
           ? {
               describeImage: (pngBytes: Uint8Array) => describeImageWithVision(keVisionEndpoint, pngBytes),
@@ -538,10 +538,10 @@ export function createPlatformServices(
     },
     // Fixture mode never touches DNS (see transport selection above).
     ...(keFixtureDir ? { assertUrl: async () => {} } : {}),
-    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
   });
   const keJobRunner = new KeJobRunner(knowledgeEngineStore, {
-    onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { message, detail }),
+    onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { text: message, detail }),
   });
   keOrchestrator.registerJobs(keJobRunner);
   // Living review (DA cron living_review port): converged KBs are re-checked
@@ -550,7 +550,7 @@ export function createPlatformServices(
   const keLivingReviewRunner = new KeLivingReviewRunner({
     store: knowledgeEngineStore,
     orchestrator: keOrchestrator,
-    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
   });
   // Consumption tools (concept_explore / deep_dive / unified search /
   // validate / gaps) — a plain port object; the agent runtime registers the
@@ -579,14 +579,14 @@ export function createPlatformServices(
   const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore, {
     ...(keEmbedding ? { embedding: keEmbedding } : {}),
     noveltyExternal: keNoveltyExternal,
-    onWarn: (message) => apiLog.warn("knowledge_engine", { message }),
+    onWarn: (message) => apiLog.warn("knowledge_engine", { text: message }),
   });
   // Community roots for the progressive graph drill-down (fingerprint-cached,
   // stale-while-revalidate, LLM-named when a pipeline model is configured).
   const keGraphRoots = createGraphRootsService({
     store: knowledgeEngineStore,
     resolveEndpoint: keResolveEndpoint,
-    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
   });
 
   return {
