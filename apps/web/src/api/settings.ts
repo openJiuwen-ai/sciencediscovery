@@ -26,6 +26,7 @@ import type {
   ModelThinkingEffort,
   ModelThinkingMode,
   ProviderModelList,
+  ProviderModelPreview,
   McpProxyPolicies,
   ProxyServer,
   ProxySettingsDetails,
@@ -351,6 +352,12 @@ export class SettingsApiClient extends ArtifactsApiClient {
   listProviderModels(providerId: string, refresh = false): Promise<ProviderModelList> {
     const query = refresh ? "?refresh=1" : "";
     return this.request(`/api/providers/${encodeURIComponent(providerId)}/models${query}`);
+  }
+
+  /** List the models of a provider configuration that is not saved yet; the
+   *  server fetches from the body's endpoint and persists nothing. */
+  previewProviderModels(body: CreateModelProviderRequest): Promise<ProviderModelPreview> {
+    return this.request("/api/providers/preview-models", { body: JSON.stringify(body), method: "POST" });
   }
 
   addProviderModel(

@@ -596,27 +596,100 @@
 .credential-remove { width: fit-content; min-height: 34px; margin: -8px 0 18px; border: 1px solid var(--danger-border); border-radius: 8px; background: var(--surface); color: var(--danger); padding: 6px 11px; cursor: pointer; font-size: 12px; font-weight: 650; }
 .credential-remove:hover, .credential-remove.pending { background: var(--danger-soft); }
 
-.provider-settings { display: grid; gap: 22px; min-width: 0; }
+.provider-settings { display: grid; gap: 12px; min-width: 0; }
 .provider-settings h4, .provider-settings p { margin: 0; }
-.provider-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.provider-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .provider-section-heading h4, .provider-registry > h4 { color: var(--text-heading); font-size: 14px; }
 .provider-section-heading p { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .provider-registry, .provider-editor { display: grid; gap: 12px; min-width: 0; }
+
+/* Model connection wizard */
+.model-connect-wizard { display: grid; gap: 8px; border: 1px solid var(--accent-border-soft); border-radius: 8px; background: linear-gradient(135deg, var(--accent-softer), var(--surface) 65%); padding: 10px 12px; box-shadow: 0 2px 10px rgba(15, 23, 42, .04); }
+.wizard-header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.wizard-header-title { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-ink); flex-shrink: 0; }
+.wizard-header-title h4 { margin: 0; color: var(--text-heading); font-size: 13px; font-weight: 750; }
+.wizard-header-desc { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.wizard-body { display: grid; gap: 7px; }
+.wizard-inputs-row { display: grid; grid-template-columns: minmax(135px, 180px) minmax(0, 1fr); gap: 10px; align-items: start; }
+.wizard-field { display: grid; gap: 2px; min-width: 0; }
+.wizard-field label { color: var(--text-heading); font-size: 11px; font-weight: 700; line-height: 1.15; }
+/* The dialog-wide `.config-panel label` bottom margin would detach each label
+   from its control; wizard fields keep their own tight grid rhythm instead. */
+.model-connect-wizard .wizard-field > label { margin-bottom: 0; }
+.wizard-field input, .wizard-field select { width: 100%; min-height: 30px; height: 30px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text-heading); padding: 4px 8px; font-size: 12px; }
+.wizard-custom-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.wizard-key-guide { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; margin-top: 2px; font-size: 10.5px; line-height: 1.25; }
+.wizard-key-link { color: var(--accent-ink); text-decoration: underline; font-weight: 600; white-space: nowrap; }
+.wizard-key-link:hover { color: var(--accent-hover); }
+.wizard-key-generic { color: var(--muted); font-size: 10.5px; }
+.wizard-billing-notice { color: var(--text-faint); font-size: 10px; }
+.wizard-footer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }
+.wizard-actions { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
+/* Buttons never wrap their caption: they grow with the label text instead of
+   folding it into two lines, so `height` stays a floor, not a ceiling. */
+.wizard-submit-button { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; padding: 4px 13px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.wizard-actions .compact-button { flex: none; min-height: 29px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+.wizard-alert { display: flex; align-items: flex-start; gap: 8px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.35; }
+.wizard-alert-error { border: 1px solid var(--danger-border, #fca5a5); background: var(--danger-soft, #fef2f2); color: var(--danger, #b91c1c); }
+.wizard-alert-success { border: 1px solid var(--success-border, #86efac); background: var(--success-soft, #f0fdf4); color: var(--success, #15803d); }
+.wizard-alert-content { display: grid; gap: 2px; min-width: 0; }
+.wizard-alert-detail { color: var(--text-secondary); font-size: 10px; overflow-wrap: anywhere; }
 /* Catalog freshness sits above the provider list: it applies to every provider,
    not to whichever one happens to be selected. */
-.model-catalog-status { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); padding: 10px 12px; }
+.model-catalog-status { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); padding: 7px 11px; }
 .model-catalog-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; min-width: 0; }
 .model-catalog-status strong { color: var(--text-heading); font-size: 12px; white-space: nowrap; }
 .model-catalog-status small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .model-catalog-status button { flex: 0 0 auto; }
-.provider-add { display: grid; justify-items: start; gap: 8px; }
-.provider-add-button { min-height: 34px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--accent-ink); padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 750; }
-.provider-add-button::before { content: "+ "; font-weight: 800; }
-.provider-add-button[aria-expanded="true"]::before { content: "− "; }
-.provider-add-button:hover { border-color: var(--accent-border); background: var(--accent-soft); }
-.provider-add-panel { display: flex; align-items: center; gap: 8px; }
-.provider-add-panel button { white-space: nowrap; }
-.provider-add-panel select { max-width: 240px; min-height: 34px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text-heading); padding: 6px 9px; font-size: 12px; }
+/* The registry mirrors the global default task model (same globalSettings.modelId
+   as 全局默认值 → 任务模型) inline in the 已配置服务商 heading row. */
+.registry-default-inline { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; justify-content: flex-end; }
+.provider-settings .registry-default-inline label { color: var(--muted); font-size: 11px; white-space: nowrap; margin-bottom: 0; }
+.registry-default-inline select { flex: 1 1 auto; min-width: 0; min-height: 27px; height: 27px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text-heading); padding: 3px 8px; font-size: 11px; }
+.wizard-advanced { display: grid; gap: 9px; border-top: 1px dashed var(--border); padding-top: 7px; }
+.wizard-advanced-section { display: grid; gap: 6px; min-width: 0; }
+.wizard-section-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.wizard-section-title { margin: 0; color: var(--text-heading); font-size: 11px; font-weight: 750; white-space: nowrap; }
+.wizard-plan-summary { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
+.wizard-section-heading .compact-button { flex: none; min-height: 27px; padding: 3px 9px; font-size: 11px; white-space: nowrap; }
+.wizard-advanced-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+/* The model plan sits on the action row itself: the fetch button is directly
+   clickable next to Save & connect, with the plan summary beside it. */
+.wizard-fetch-side { display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin: 0; }
+.wizard-fetch-side .wizard-fetch-models { flex: none; min-height: 27px; padding: 3px 9px; font-size: 11px; white-space: nowrap; }
+/* Listed models to tick: one row per model, the same name/id cell and fact
+   badges as the registry table, with the checkbox as the whole row's hit area. */
+.wizard-model-table { display: grid; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--surface); }
+/* Each row is a <label>; the dialog-wide `.config-panel label` / `label > span`
+   block rules would stack the checkbox above the name, so the row's own grid
+   is stated with the card's specificity. */
+.model-connect-wizard .wizard-model-row { display: grid; grid-template-columns: 16px minmax(140px, 1.2fr) minmax(0, 2fr); align-items: center; gap: 8px; min-width: 0; margin: 0; border-bottom: 1px solid var(--border); padding: 5px 9px; cursor: pointer; font-size: 11px; }
+.model-connect-wizard .wizard-model-row:last-child { border-bottom: 0; }
+.model-connect-wizard .wizard-model-row:nth-child(even) { background: var(--surface-subtle); }
+.model-connect-wizard .wizard-model-row:hover { background: var(--accent-soft); }
+.model-connect-wizard .wizard-model-row input[type="checkbox"] { width: 14px; min-width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.model-connect-wizard .wizard-model-row > span { display: grid; margin: 0; color: inherit; font-size: inherit; font-weight: inherit; }
+.model-connect-wizard .wizard-model-row > .provider-model-row-facts { display: flex; }
+.model-connect-wizard .wizard-model-row .provider-model-cell-name strong { font-size: 11.5px; }
+.model-connect-wizard .wizard-model-row-all { grid-template-columns: 16px minmax(0, 1fr); background: var(--surface-subtle); }
+.model-connect-wizard .wizard-model-row-all > span { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.model-connect-wizard .wizard-model-row-all strong { color: var(--text-heading); font-size: 11px; }
+.model-connect-wizard .wizard-model-row-all small { color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.wizard-models-empty { margin: 0; font-size: 11px; }
+.wizard-manual-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.wizard-manual-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; border: 1px dashed var(--border-strong); border-radius: 7px; background: var(--surface); padding: 4px 9px; font-size: 11px; }
+.wizard-manual-item em { color: var(--accent-ink); font-size: 10px; font-style: normal; font-weight: 700; white-space: nowrap; }
+.wizard-manual-item .compact-button { min-height: 25px; padding: 2px 8px; font-size: 10.5px; white-space: nowrap; }
+/* The manual form inside the connect card follows the card's compact rhythm
+   rather than the roomier registry-row sizing. */
+.model-connect-wizard .provider-add-model-toggle { min-height: 27px; padding: 3px 9px; font-size: 11px; }
+.model-connect-wizard .provider-manual-form { gap: 6px 8px; padding-top: 8px; }
+.model-connect-wizard .provider-manual-form label { gap: 2px; }
+.model-connect-wizard .provider-manual-form label > span { font-size: 10.5px; }
+.model-connect-wizard .provider-manual-form input { min-height: 30px; padding: 4px 8px; }
+.model-connect-wizard .provider-manual-form .provider-manual-vision { min-height: 30px; }
+.model-connect-wizard .provider-manual-form .provider-manual-vision input { min-height: 16px; height: 16px; width: 16px; min-width: 16px; }
+.model-connect-wizard .provider-manual-submit { min-height: 29px; padding: 4px 10px; font-size: 11px; }
 .provider-add-model-toggle { justify-self: start; min-height: 30px; border: 1px dashed var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--accent-ink); padding: 4px 10px; cursor: pointer; font-size: 11px; font-weight: 750; }
 .provider-add-model-toggle::before { content: "+ "; font-weight: 800; }
 .provider-add-model-toggle[aria-expanded="true"]::before { content: "− "; }

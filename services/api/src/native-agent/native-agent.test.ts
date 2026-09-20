@@ -1007,7 +1007,7 @@ test("evolve tools appear on the first model step only when a runtime is registe
   // the ToolRegistry constructor. Asserted against what the model is actually
   // handed on its first step rather than against a builder's return value —
   // being in the array and being visible are different failures, and only the
-  // second one is what "/evolve is unreachable" means. When it breaks the model
+  // second one is what "/evolve-design is unreachable" means. When it breaks the model
   // does not report a missing tool; it hand-rolls a search instead.
   const runtime = {
     createEvolveRun: async () => ({ refusedBecause: "probe" }),

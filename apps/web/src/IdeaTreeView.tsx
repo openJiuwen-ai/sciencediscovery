@@ -74,14 +74,14 @@ function LegacyIdeaTreeView({
       setHasIdeaTreeRun(result.hasIdeaTreeRun);
       setTreeIds((current) => sameTreeIds(current, result.treeIds) ? current : result.treeIds);
     } catch (error) {
-      if (sequence === requestSequence.current) setLoadError(error instanceof Error ? error.message : "Could not load Idea Tree");
+      if (sequence === requestSequence.current) setLoadError(error instanceof Error ? error.message : t("ideaTree.view.loadError"));
       if (sequence === requestSequence.current && reportFailure) {
-        onError(error instanceof Error ? error : "Could not load Idea Tree");
+        onError(error instanceof Error ? error : t("ideaTree.view.loadError"));
       }
     } finally {
       if (showLoading && loadingSequence.current === sequence) setLoading(false);
     }
-  }, [client, onError, sessionId]);
+  }, [client, onError, sessionId, t]);
 
   useEffect(() => {
     requestSequence.current += 1;
@@ -106,7 +106,7 @@ function LegacyIdeaTreeView({
     return () => clearInterval(timer);
   }, [hasIdeaTreeRun, load]);
 
-  if (loadError) return <div role="alert">{loadError} <button className="secondary-button compact-button" type="button" onClick={() => void load(selectedTreeId.current)}>Retry Idea Tree</button></div>;
+  if (loadError) return <div role="alert">{loadError} <button className="secondary-button compact-button" type="button" onClick={() => void load(selectedTreeId.current)}>{t("ideaTree.view.retry")}</button></div>;
   if (!graph) return null;
   const completed = graph.nodes.filter((node) => node.status === "done").length;
   const running = graph.nodes.filter((node) => node.status === "running").length;
@@ -114,13 +114,13 @@ function LegacyIdeaTreeView({
   return <>
     <button className="idea-tree-view" onClick={() => setOpen(true)} type="button">
       <span className="idea-tree-view-header">
-        <span><StructureIcon size={16} /><strong>Idea Tree</strong></span>
-        <em>revision {graph.revision}</em>
+        <span><StructureIcon size={16} /><strong>{t("ideaTree.explorer.title")}</strong></span>
+        <em>{t("ideaTree.explorer.revision", { revision: graph.revision })}</em>
       </span>
       <span className="idea-tree-view-objective">{graph.objective}</span>
       <span className="idea-tree-view-stats">
-        {graph.nodes.length} nodes · {graph.edges.length} branches · {completed} done
-        {running ? <i>{running} running</i> : null}
+        {t("ideaTree.view.stats", { nodes: graph.nodes.length, branches: graph.edges.length, done: completed })}
+        {running ? <i>{t("ideaTree.view.running", { count: running })}</i> : null}
       </span>
       <span className="idea-tree-view-action">{t("ideaTree.viewArchived")}</span>
     </button>

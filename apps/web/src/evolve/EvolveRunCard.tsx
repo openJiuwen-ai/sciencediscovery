@@ -15,7 +15,7 @@
 /**
  * The workspace card: the only persistent handle a search has.
  *
- * `/evolve` is intercepted in the composer and never creates a chat run, so a
+ * `/evolve-design` is intercepted in the composer and never creates a chat run, so a
  * search leaves no trace in the session timeline. Close the panel and a search
  * that has been running for half an hour would be unreachable — this card is
  * what makes it findable again, which is why it stays after the panel closes and
@@ -31,6 +31,7 @@ import { isEvolveRunActive } from "@sciencediscovery/schema";
 import { useState } from "react";
 
 import { useLocale } from "../i18n/LocaleProvider.js";
+import { evolveShortTitle } from "./model.js";
 
 /** How many finished runs the card lists before folding the rest away. Running
  *  ones are always shown: a search nobody can see is the thing this card exists
@@ -79,7 +80,7 @@ export function EvolveRunCard({ onOpenRun, runs }: EvolveRunCardProps) {
           <span className={`evolve-status evolve-status-${run.status}`}>
             {isEvolveRunActive(run.status) ? t("evolve.status.live") : t(statusKey(run.status))}
           </span>
-          <span className="evolve-run-statement">{run.goal.statement}</span>
+          <span className="evolve-run-statement">{evolveShortTitle(run.goal.statement)}</span>
           <span className="evolve-run-meta">
             {t("evolve.card.expansions", { done: run.candidates, total: run.goal.budget.expansions })}
           </span>

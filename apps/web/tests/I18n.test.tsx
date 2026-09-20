@@ -85,3 +85,53 @@ test("renders Chinese messages when the provider starts in zh-CN", () => {
   const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(Probe)));
   assert.match(html, /zh-CN:系统设置/);
 });
+
+test("skill library copy never exposes internal recall or git-head jargon", () => {
+  // The settings picker and the library cards are user-facing in both
+  // locales; “M1” pipeline names and a git “Head” ref are implementation
+  // detail the reader cannot act on (issue #98).
+  for (const key of ["settings.skillLibrariesPickerHint", "settings.skillLibraryHead", "skillLibrary.head"] as const) {
+    assert.ok(zhCN[key], `${key} needs a zh-CN message`);
+    for (const locale of ["en", "zh-CN"] as const) {
+      const message = translate(locale, key);
+      assert.doesNotMatch(message, /M1|Head\s|\bHead\b/i, `${locale} ${key} leaks internal jargon: ${message}`);
+    }
+  }
+  assert.equal(translate("en", "settings.skillLibraryHead", { version: "8a87052b" }), "Latest version 8a87052b");
+  assert.equal(translate("zh-CN", "settings.skillLibraryHead", { version: "8a87052b" }), "最新版本 8a87052b");
+});
+
+test("the zh-CN catalogue covers every locale-sensitive chrome string this fix touched", () => {
+  const keys = [
+    "settings.loadingProxies",
+    "error.saveIdeaTree",
+    "error.saveAnnotation",
+    "error.webPageContentUnavailable",
+    "error.webPageContentLoadFailed",
+    "timeline.replayTextTruncated",
+    "timeline.replayStepTruncated",
+    "timeline.historyTruncated",
+    "timeline.runStatusFallback",
+    "ideaTree.view.loadError",
+    "ideaTree.view.retry",
+    "ideaTree.view.stats",
+    "ideaTree.view.running",
+    "ideaTree.canvas.depth",
+    "ideaTree.canvas.depthScore",
+    "ideaTree.search.active",
+    "ideaTree.search.pruned",
+    "artifact.loadingJson",
+    "reviewer.sourceIssuesAria",
+    "usage.runLabel",
+    "usage.standaloneInvocations",
+  ] as const;
+  for (const key of keys) {
+    assert.ok(zhCN[key], `${key} needs a zh-CN message`);
+  }
+});
+
+test("idea tree statuses render as words instead of raw enum tokens", () => {
+  assert.equal(translate("en", "ideaTree.status.needs_retry"), "Needs retry");
+  assert.equal(translate("zh-CN", "ideaTree.status.needs_retry"), "需重试");
+  assert.equal(translate("zh-CN", "ideaTree.status.running"), "执行中");
+});

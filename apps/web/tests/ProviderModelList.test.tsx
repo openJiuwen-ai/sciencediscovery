@@ -18,6 +18,7 @@ import test from "node:test";
 import type { ModelProfile, ModelProvider, ModelProviderPreset, ProviderModelEntry } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { SettingsApiClient } from "../src/api/settings.js";
 import { LocaleProvider } from "../src/i18n/index.js";
@@ -268,14 +269,14 @@ function renderSettings(locale: "en" | "zh-CN"): string {
   ));
 }
 
-test("the registry opens without a preset wall or a resident editor", () => {
+test("the registry opens as a read-only list: no add-provider entry, no resident editor", () => {
   const html = renderSettings("en");
 
-  // Adding sits below the list behind one "Add provider" button; the preset
-  // dropdown and custom button only appear after opening it.
-  assert.match(html, /aria-expanded="false" class="provider-add-button"/);
+  // The standalone add-provider entry is gone for good: creation lives in the
+  // connect wizard card, which stays closed by default when providers exist.
+  assert.doesNotMatch(html, /provider-add-button/);
   assert.doesNotMatch(html, /provider-add-panel/);
-  assert.doesNotMatch(html, />Custom provider<\/button>/);
+  assert.doesNotMatch(html, /model-connect-wizard/);
   // No preset cards are laid out.
   assert.doesNotMatch(html, /provider-preset-card/);
   // The provider editor stays hidden until the user asks for it.
@@ -285,9 +286,12 @@ test("the registry opens without a preset wall or a resident editor", () => {
   assert.match(html, /aria-expanded="false"/);
   assert.match(html, /1 added/);
   assert.match(html, /Data source: models\.dev/);
+  // The wizard toggle is the only creation entry.
+  assert.match(html, /Connect model/);
 
   const chinese = renderSettings("zh-CN");
-  assert.match(chinese, /添加 Provider/);
+  assert.doesNotMatch(chinese, /添加 Provider/);
+  assert.match(chinese, /连接模型/);
   assert.match(chinese, /已添加 1/);
   assert.match(chinese, /数据来源：models\.dev/);
   assert.doesNotMatch(chinese, /provider-editor/);
@@ -414,4 +418,120 @@ test("provider table actions are add for discovered models and delete for added 
   assert.match(added, /<strong>DeepSeek V4 Flash<\/strong>/);
   assert.doesNotMatch(added, /provider-model-cell-name"><strong>Old provider name · DeepSeek V4 Flash/);
   assert.match(added, />Delete<\/button>/);
+});
+
+function extractText(node: any): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (!node || !node.children) return "";
+  return node.children.map(extractText).join("");
+}
+
+test("wizard 高级配置在卡片内展开精细字段：向导与服务商列表都保持可见", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const client = {
+    listProviderModels: async (providerId: string) => ({
+      fetchedAt: "2026-09-17T00:00:00.000Z",
+      models: [],
+      providerId,
+      source: "remote" as const,
+    }),
+  } as unknown as SettingsApiClient;
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ProviderModelSettings, {
+          client,
+          initialWizardOpen: true,
+          models: [profile("m1", "p1")],
+          onError: () => undefined,
+          onModelsChange: () => undefined,
+          onNotice: () => undefined,
+          onProvidersChange: () => undefined,
+          presets: PRESETS,
+          providers: [provider("p1", "DeepSeek")],
+        }),
+      ),
+    );
+  });
+
+  // Wizard starts open.
+  assert.equal(renderer!.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
+
+  const manualButton = renderer!.root.findAllByType("button")
+    .find((button) => extractText(button).includes("高级配置"));
+  assert.ok(manualButton, "advanced configuration button is rendered");
+  await act(async () => {
+    manualButton!.props.onClick();
+  });
+
+  // The wizard stays mounted and expands its advanced area in place…
+  assert.equal(renderer!.root.findAllByProps({ className: "model-connect-wizard" }).length, 1);
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 1);
+  // …while the registry list stays right below it.
+  assert.ok(renderer!.root.findAllByProps({ className: "provider-row" }).length >= 1);
+  // There is no separate add-provider entry anywhere.
+  const buttonTexts = renderer!.root.findAllByType("button").map((button) => extractText(button));
+  assert.ok(buttonTexts.some((text) => text.includes("收起")), "wizard toggle survives");
+  assert.ok(!buttonTexts.some((text) => text.includes("添加 Provider")), "no add-provider entry");
+});
+
+test("注册表内的全局默认任务模型选择器与全局默认值页写同一设置项", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let setTo: string | undefined | null = null;
+  const client = {
+    listProviderModels: async (providerId: string) => ({
+      fetchedAt: "2026-09-20T00:00:00.000Z",
+      models: [],
+      providerId,
+      source: "remote" as const,
+    }),
+  } as unknown as SettingsApiClient;
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ProviderModelSettings, {
+          client,
+          defaultModelId: "m1",
+          models: [profile("m1", "p1"), { ...profile("m2", "p1"), model: "deepseek-v4-pro", name: "工作 DeepSeek · DeepSeek V4 Pro" }],
+          onDefaultModelSet: async (modelId) => {
+            setTo = modelId;
+          },
+          onError: () => undefined,
+          onModelsChange: () => undefined,
+          onNotice: () => undefined,
+          onProvidersChange: () => undefined,
+          presets: PRESETS,
+          providers: [provider("p1", "DeepSeek")],
+        }),
+      ),
+    );
+  });
+
+  // The selector mirrors the current global default and offers every profile.
+  const select = renderer!.root.findByProps({ id: "registry-default-model" });
+  assert.equal(select.props.value, "m1");
+  const optionValues = select.findAllByType("option").map((option) => option.props.value);
+  assert.deepEqual(optionValues, ["", "m1", "m2"]);
+
+  // Changing it writes the same globalSettings.modelId the global page edits.
+  await act(async () => {
+    select.props.onChange({ target: { value: "m2" } });
+  });
+  assert.equal(setTo, "m2");
+
+  // Choosing 未配置 clears the same key (undefined), not a session-level pick.
+  await act(async () => {
+    select.props.onChange({ target: { value: "" } });
+  });
+  assert.equal(setTo, undefined);
 });

@@ -134,7 +134,7 @@ const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "creative-material-design": "1.0.0",
   "evidence-extractor": "1.0.0",
   "evidence-notes": "1.0.0",
-  "evolve-design": "1.0.0",
+  "evolve-design": "1.1.0",
   "hypothesis-tournament": "1.1.0",
   "idea-debate": "1.0.0",
   "knowledge-engine-explore": "1.0.0",

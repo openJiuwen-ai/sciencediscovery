@@ -516,3 +516,48 @@ def test_every_code_template_asks_for_one_change_not_a_rewrite():
     # scores zero — the advice would be wrong there, so it must stay out.
     judged = mutation_prompt(**common, rubric="Make it clearer")
     assert "does not run scores 0" not in judged
+
+
+SLOW_EVALUATOR = '''
+import time
+time.sleep(60)
+'''
+
+
+@live
+def test_a_stop_ends_an_evaluation_in_flight_and_reports_it_as_stopped_not_broken():
+    # An evaluator can run for minutes. Pressing stop used to wait it out, and
+    # then wait out every evaluation the workers started after the flag was set.
+    import threading
+    import time
+
+    stop = threading.Event()
+    slow = script_domain(
+        scorecard=CARD, script=SLOW_EVALUATOR, capability=detect_local_capability(),
+        statement="Get the length right", baseline_code=BAD, candidate_timeout=120.0,
+        should_stop=stop.is_set,
+    )
+    threading.Timer(1.0, stop.set).start()
+    started = time.monotonic()
+    valid, metrics, error = slow.evaluate(GOOD, [0, 1, 2, 3])
+    assert time.monotonic() - started < 6.0
+    # Invalid, not raised: a ScriptError here would fail the run as "the
+    # evaluator is broken", which is the opposite of what happened.
+    assert valid is False
+    assert metrics["score"] == float("-inf")
+    assert error == "the search was stopped"
+
+
+@live
+def test_once_stopped_no_further_evaluation_is_started():
+    import time
+
+    slow = script_domain(
+        scorecard=CARD, script=SLOW_EVALUATOR, capability=detect_local_capability(),
+        statement="Get the length right", baseline_code=BAD, candidate_timeout=120.0,
+        should_stop=lambda: True,
+    )
+    started = time.monotonic()
+    valid, _metrics, error = slow.evaluate(GOOD, [0, 1, 2, 3])
+    assert time.monotonic() - started < 2.0
+    assert (valid, error) == (False, "the search was stopped")

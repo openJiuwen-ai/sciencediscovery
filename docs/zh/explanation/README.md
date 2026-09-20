@@ -14,7 +14,7 @@
 - [科研连接器](science-connectors.md) — 科研 MCP 的治理链、审计和引用。
 - [MCP 工具与协议设计](mcp-tool-protocol.md) — Source Manifest、工具协议、Agent Loop、权限、审计与控制面接口。
 - [网络代理机制](network-proxy.md) — 代理策略解析、出站接入与安全边界。
-- [程序演进](evolve.md) — `/evolve`：搜索是什么、四种打分模式、两个引擎、三分数据与判别力探针。
+- [程序演进](evolve.md) — `/evolve-design`：搜索是什么、四种打分模式、两个引擎、三分数据与判别力探针。
 - [演进侧车：架构、引擎与独立部署](evolve-standalone.md) — PUCT 与 OpenEvolve 的算法差异，以及把侧车作为独立后端运行的耦合点。
 - [评审与溯源](review-provenance.md) — 完整性检查、语义评审、claims/evidence 和 Prompt Manifest。
 - [科学记忆](science-memory.md) — 任务链、引用链、模块边界和存储。

@@ -119,7 +119,7 @@ function CompletedReview({ review }: { review: ArtifactReviewRun }) {
           </ul>
         ) : null}
         {sourceIssues.length ? (
-          <section aria-label="Source verification notes" className="reviewer-source-issues">
+           <section aria-label={t("reviewer.sourceIssuesAria")} className="reviewer-source-issues">
             <ul>
               {sourceIssues.map((record) => {
                 const assessment = record.assessment.assessment;

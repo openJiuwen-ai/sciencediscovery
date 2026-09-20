@@ -2,7 +2,7 @@
 name: evolve-design
 description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve-design`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Runs a short checkpointed design conversation, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Designing an evolution search
@@ -14,30 +14,20 @@ scoring that cannot shows up as a flat run, not as an error.
 
 ## How to run this
 
-**First: which algorithm?** The user's `/evolve-design` command may carry
-`--algorithm puct` or `--algorithm openevolve`. If unset,
-ask which they want.
-
-- **PUCT** (flat-PUCT tree) — ranks candidates by a PUCT score over a tree.
-- **OpenEvolve** (MAP-Elites islands + ring migration) — ranks candidates by
-  fitness in a multi-island archive with diversity-based cells.
-
-Both algorithms use the **same four-step design flow** below and the **same four
-scoring modes** (dataset_metric / test_gate / custom_script / llm_judge). The
-only difference is how candidates are ranked and selected — PUCT uses a tree,
-OpenEvolve uses islands. Design the scorecard, the split, and the starting point
-exactly the same way regardless of algorithm; just set `algorithm` in
-`create_evolve_run` to `"puct"` or `"openevolve"`.
+**Algorithm first.** The user's `/evolve-design` command may carry `--algorithm puct` or
+`--algorithm openevolve`; if unset, ask. PUCT ranks candidates over a tree, OpenEvolve over
+MAP-Elites islands. The four steps and the four scoring modes are identical for both, so design
+the scorecard, the split and the starting point the same way and only set `algorithm` in
+`create_evolve_run`.
 
 Four checkpoints. **Do the work for a step, show the result, wait for the user, then go on.**
-
-A checkpoint is a glance, not a form. Show a few lines they can wave through — never a list of
-fields to fill in. Recommend a default for every open question so "looks right" is always a
-valid answer. Do the work between checkpoints yourself; do not narrate it.
+A checkpoint is a glance, not a form: a few lines they can wave through, with a recommended
+default for every open question so "looks right" is always a valid answer. Do the work between
+checkpoints yourself; do not narrate it.
 
 If the user says "you decide" or "just go", state your choices for the remaining steps in one
-message and run them without stopping. If they correct something, apply it and re-show that
-step only.
+message and run them without stopping. If they correct something, apply it and re-show that step
+only.
 
 Do not design the whole thing in one thinking pass. Ask, write files, run them, then decide the
 numbers — a turn spent planning it all produces no candidate and no result.
@@ -46,220 +36,125 @@ numbers — a turn spent planning it all produces no candidate and no result.
 
 ## Step 1 — Agree what "better" means
 
-Read what is free first: this conversation, the workspace, science memory.
-
-Settle three things:
+Read what is free first: this conversation, the workspace, science memory. Settle three things:
 
 1. **The measurable criterion.** "More accurate" — which error measure? "Less AI-sounding" —
-   which specific tic? "Cleaner protocol" — fewer steps, or fewer failure modes? It must separate
-   the complaint from its opposite. "Well-structured and readable" fails: true of any document.
+   which specific tic? It must separate the complaint from its opposite: "well-structured and
+   readable" fails, because it is true of any document.
 2. **What must not change.** Inputs unavailable when the thing actually runs, files that define
    the score, hard limits (budget, runtime, memory, safety).
-3. **The starting point.** Use what is in the workspace. Otherwise write **the simplest thing
-   that already does the job badly** — a dozen lines, no tuning, no edge cases. A strong seed is
-   not an advantage: it spends the search space before the search begins.
+3. **The starting point.** Use what is in the workspace. Otherwise write **the simplest thing that
+   already does the job badly** — a dozen lines, no tuning, no edge cases. A strong seed spends
+   the search space before the search begins.
 
-   But "simplest" means simplest *of the right kind*: the seed has to contain the mechanism the
-   search is supposed to improve, in its feeblest form. A seed with no mechanism forces every
-   candidate to invent one from nothing, and a from-scratch implementation fails far more often
-   than an edit does. Measured on two real runs: a cache task seeded with a working LRU climbed
-   0.2218 → 0.9396, its candidates swapping in ARC, LIRS and TinyLFU on top of a policy that was
-   already there; a compression task seeded with identity encoding — which "works" and compresses
-   nothing — spent ten expansions on whole compressors written from scratch, seven of which did
-   not run at all, and finished at 0.226. Seed the RLE, not the identity function.
+   But simplest *of the right kind*: the seed must contain the mechanism the search is meant to
+   improve, in its feeblest form. A seed with no mechanism makes every candidate invent one from
+   nothing, and from-scratch code fails far more often than an edit. Measured: a compression task
+   seeded with identity encoding spent ten expansions on whole compressors written from scratch,
+   seven of which did not run; seed the RLE, not the identity function. A good seed is necessary,
+   not sufficient — candidates may still replace the whole mechanism.
 
-   **The seed is necessary and not sufficient**, so do not treat this as solved by a good one.
-   A later compression run seeded with a working RLE-plus-Huffman at 0.62 still drew eleven
-   candidates that each replaced the whole mechanism — arithmetic coding, LZ77, range coding,
-   written from nothing in one reply — and ten did not run. The half that was missing was in
-   the prompt, not the seed, and is fixed there now.
+   **Do not steer by naming the mechanism.** "Add a longer match window to the existing RLE" takes
+   the search's own job away and leaves the run tuning your algorithm. The task says what "better"
+   is measured as, never which approach reaches it. A run that finds nothing above the seed is a
+   *result*. What is yours to reconsider is the **scoring** — do the cases reward what you care
+   about, is the corpus wide enough to separate approaches — not the approach you would like.
 
-   **Do not fix it by naming the mechanism.** "Add a longer match window to the existing RLE"
-   reads like a helpful narrowing and is the search's own job taken away from it: the human
-   picks the algorithm and the run is left tuning it. The objective is the score, always — the
-   task says what "better" is measured as, never which approach to reach it by. If a run comes
-   back with nothing above the seed, that is a *result*: on this scoring, these variations do
-   not beat the starting point. What is legitimately yours to reconsider is the **scoring** —
-   whether the cases actually reward what you care about, whether the corpus is wide enough to
-   separate approaches — not the approach you would like the candidates to take.
-
-> **Checkpoint 1.** Say back, in a few lines: what will be measured, what is frozen, and what
-> the starting point is. Ask only for what you genuinely could not infer — all of it at once.
+> **Checkpoint 1.** Say back, in a few lines: what will be measured, what is frozen, and what the
+> starting point is. Ask only for what you genuinely could not infer — all of it at once.
 
 ## Step 2 — Build the scoring; the probe proves it
 
-Write the starting point and the evaluator, then run the evaluator **once**, against the
-starting point, with `run_shell` (for example, `python evaluator.py`, selecting a Python-capable `environment_id`). You are checking that the thing you just wrote executes and
-emits a number — a typo, a missing import, a result file never written. That is authoring
-hygiene, and it is the whole of the local check.
+Write the starting point and the evaluator, then run the evaluator **once**, against the starting
+point, with `run_shell` (for example `python evaluator.py`, selecting a Python-capable
+`environment_id`). You are checking that it executes and emits a number — a typo, a missing
+import, a result file never written. That is the whole of the local check.
 
 **Do not score a broken copy locally.** The server's discrimination probe does exactly that, on
-the real shards, in the real sandbox, and hands you both numbers when the run starts. Doing it
-yourself as well buys nothing and costs something real: your selected `run_shell` environment and the
-candidate sandbox are different places, and your shard indices are not the ones the run uses, so
-the two numbers can legitimately differ. Watched one session where they did — local 0.3853,
-server 0.0000 — and the turn went into reconciling them instead of into the search.
+the real shards in the real sandbox, and hands you both numbers when the run starts. Your
+`run_shell` environment and the candidate sandbox are different places with different shard
+indices, so the numbers can legitimately differ (one session saw local 0.3853, server 0.0000, and
+spent the turn reconciling them). **When they disagree, the server's is true** — do not
+investigate the gap. A probe refusal costs four sandbox evaluations and no model calls, so it is
+cheap to be wrong here.
 
-**When your local number and the server's disagree, the server's is the one that is true.** It
-measured the real thing. Do not investigate the gap; read the server's two numbers and act on
-those.
+Aim for a starting point in **0.3–0.7**: 0 is a floor, solved is a ceiling. The probe reports
+where it actually landed.
 
-Aim for a starting point in **0.3–0.7**: 0 is a floor and solved is a ceiling. That is a design
-target for the seed, not a local measurement to defend — the probe reports where it actually
-landed.
+**The evaluator must survive bad candidates — including at import.** Most candidates are broken,
+and the probe deliberately scores a broken one. Guard `import candidate` itself (a hollowed-out
+module can leave a name as `None` or raise before any per-case `try/except` can reach it) and
+each individual call. On an import failure score every shard **worst**: 0.0 on a larger-is-better
+scale, not 1.0 — an inverted guard made one live run's winner a module that does not load, at a
+perfect 1.0000. It is the evaluator that must be robust, never the candidate. If the script
+itself crashes, nothing runs and the whole run is refused.
 
-**The evaluator must survive bad candidates — including at import.** Most candidates in a search
-are broken, and the probe deliberately scores a broken one, so this is the normal path rather
-than an edge case. Guard two places: `import candidate` itself (a hollowed-out module can leave
-a module-level name as `None` or raise outright, and that happens *before* any case, where a
-per-case `try/except` cannot reach it — on failure score every shard **worst**, which on a
-larger-is-better scale means 0.0 and not 1.0; a guard written the right shape with the score
-inverted makes the search converge on candidates that do not load, and one live run's winner was
-exactly that, at a perfect 1.0000), and each individual call. It is the evaluator that has to be robust, never the
-candidate: being broken is what the probe's damaged copy is for. If the script itself crashes, nothing
-runs and the whole run is refused.
-
-**You are checking the ruler, not looking for the answer.** Do not go looking for a candidate
-that beats the starting point — "let me first confirm a better heuristic exists" is the search's
-entire job, done by hand, at the cost of the turn. And succeeding is worse than failing: you then
-either throw the answer away or seed it, and a strong seed spends the search space before the
-search begins. A starting point that no obvious variation beats is a *good* starting point, not a
-problem to solve first.
-
-A probe refusal costs four sandbox evaluations and no model calls, so it is cheap to be wrong
-here — cheaper than a second local check that can disagree with it.
+**You are checking the ruler, not looking for the answer.** Do not go looking for a candidate that
+beats the starting point — that is the search's entire job, done by hand at the cost of the turn,
+and succeeding is worse than failing: you then throw the answer away or seed it, and a strong seed
+spends the search space. A starting point no obvious variation beats is a *good* one.
 
 > **Checkpoint 2.** Show one number — what the starting point scored — plus whether the evaluator
 > ran, and one sentence on what the scoring rewards. This is where a criterion that measures the
-> wrong thing gets caught, so make it easy to disagree with: name what a candidate could do to
-> score higher, and let the user say whether that is actually what they want.
+> wrong thing gets caught, so make it easy to disagree: name what a candidate could do to score
+> higher, and let the user say whether that is what they want.
 
 ## Step 3 — Size the run
 
 1. **What is one unit?** Whatever one measurement consumes: rows, a test case, a document
    section, one input scenario, one grading pass.
 2. **How big must one be to be stable?** Enough that the same candidate scores the same twice.
-   Averaged measures get noisier as units shrink; a unit holding a single item is nearly always
-   too small.
+   A single item is worse than noisy: it makes the unit **binary**, and the search skips proposing
+   on a unit it already solves, so every unit at full marks spends an expansion and yields no
+   candidate (measured: one record per unit, eleven of sixteen at 1.0, a run planned for 20
+   expansions made 5). Put enough in one unit that a good candidate lands between the floor and
+   the ceiling — a few dozen items averaged, not one.
+3. **How many in the gate — and make it the biggest of the three.** Every candidate's score, the
+   one the tree ranks and selects on, is measured on the **gate**. Too few and the tree ranks on
+   noise for the whole run, and the reported improvement does not survive a re-run. Deterministic
+   scoring 8–12 units; anything with randomness 16–24. **Rollout** drives the search's own
+   trajectory: four or more, never one (five candidates all scoring exactly 0.6000 was one), and
+   no more than the gate. **Test** never takes part and is read once at the end: 4–8.
+4. **Does the candidate learn from data?** If it fits before it produces, the fitting volume must
+   match the evaluation volume. Skip when nothing is fitted.
 
-   A single item is worse than noisy — it makes the unit's score **binary**, and that quietly
-   costs expansions. The search skips proposing on a unit it already solves, so every unit
-   scoring full marks spends a slot of the run's budget and produces no candidate. Measured: a
-   record-matching run whose units held one record each scored 0 or 1 with nothing between,
-   eleven of sixteen came out at 1.0, and a run planned for 20 expansions made 5. Put enough in
-   one unit that a good candidate lands *between* the floor and the ceiling — a few dozen items
-   averaged, not one.
-3. **How many in the gate — and make it the biggest of the three.** Every candidate's score,
-   the one the tree ranks and selects on, is measured on the **gate** units. Nothing else decides
-   which candidate wins. So the gate is where a shortage hurts most: too few and the tree ranks
-   on noise, silently, for the whole run, and the improvement it reports does not survive a
-   re-run. Deterministic scoring 8–12 units; anything with randomness 16–24. More is better here
-   in a way it is not elsewhere.
-
-   Rollout comes next — it drives the search's own trajectory, and one unit means every
-   comparison rests on a single measurement. Observed: five candidates, all exactly 0.6000,
-   budget spent, no signal. Four or more, never one, and no more than the gate.
-
-   Test is what never takes part at all, read once at the end. 4–8 is plenty; it buys confidence
-   in the final number, not progress during the run.
-4. **Does the candidate learn from data?** If it fits before it produces, the fitting volume
-   must match the evaluation volume. Skip when nothing is fitted.
-
-If the total will not fit, shrink each unit — do not cut the gate. A run that measures a few
-units carefully beats one that measures many units badly, and cutting the gate is cutting the
-only number the search actually steers by.
+If the total will not fit, shrink each unit — do not cut the gate, which is the only number the
+search steers by.
 
 `expansions` must be at least `4 × workers`, or the first sweep forks only the root and the tree
 is flat. By search space: a known defect 4–6; swapping approach or restructuring 12–20; writing
-something from scratch 20+.
+something from scratch 20+. **Thinking off unless asked** — with it on, one whole-candidate
+rewrite can exceed the proxy limit and return nothing.
 
-**Thinking off unless asked** — with it on, one whole-candidate rewrite can exceed the proxy
-limit and return nothing.
+**`search` — leave it out unless this task argues against the defaults.** They are upstream's and
+usually right; the parameter descriptions on `create_evolve_run` carry the ranges and what each
+does. Set one only for a reason you can give in a line:
 
-### How the search spends its budget — `search`
-
-Omit this and you get the defaults, which are upstream's and are usually right. Set it when
-something about *this* task argues against them, and say in one line what that something is.
-
-The rule picking the next candidate to expand is
-`rank + cPuct · P(node) · √totalVisits / (1 + visits)`. `rank` is the candidate's position among
-all nodes, normalised to `[0, 1]` — that is the exploitation half, and it is the only place the
-score enters. Everything you can set here belongs to the other half.
-
-**`cPuct` — how much the exploration term is worth.** At one visit it is worth roughly
-`cPuct / √nodes`, against a rank that spans a full 1.0. So it decides between candidates the
-ranking has left close together and never overturns a clear one; treat it as a tie-break weight,
-not as a dial between "greedy" and "random".
-
-- Leave it at **1.0** unless one of the next two is true.
-- **0.3–0.7** when the gate is large enough that you believe its ordering, and the budget is
-  small. Few expansions and a trustworthy ranking is the case for climbing the lineage that is
-  already working instead of sampling around it.
-- **1.5–2.5** when the ranking is not telling you much: a noisy or coarse score, or candidates
-  that keep landing on the same number. If three of five candidates tie exactly, the rank
-  ordering between them is an artefact of insertion order, and spreading the budget is better
-  than trusting it.
-
-Above 10 is refused. Note that a coarse score is a *scoring* problem first — widen the gate
-before reaching for `cPuct`.
-
-**`priorExponent` — how much the model's own reading of a direction aims the search.**
-Default `0`, which is upstream: every node gets an equal share of the exploration budget and
-nothing is asked of the model. AlphaZero fills this slot with a policy network; a program search
-has none — but the model writing the candidates is somebody to ask, and it answers in the reply
-the search was already paying for.
-
-Above zero, the mutation prompt gains one line asking the model to end its reply with
-`PROMISE: <n>` — 1 to 10, **how far this approach could go after further work**, not how good
-this draft is. That distinction is the whole point: asked the other way the rating collapses into
-the score the evaluator already produces, and what a prior is for is separating "weak today,
-right idea" from "fine today, finished".
-
-- **`0`** — the default, and a fine answer. Take it when you have no reason to think the model
-  can tell a promising direction from a dead end on this task.
-- **`2`** — upstream's own non-zero setting. A candidate rated 8 against a mean of 5.5 gets
-  2.12x the exploration term and a dead end rated 2 gets 0.13x. At `1` those would be 1.45x and
-  0.36x — that is widening exploration; the square is *aiming* it.
-- Above `4` is refused: the rating would override the measured ranking rather than break its
-  ties.
-
-**Reach for it when the failure you expect is a whole-mechanism rewrite.** Measured on a
-compression run: five of eighteen candidates replaced a working RLE+Huffman with a from-scratch
-arithmetic coder, every one ran fine and every one lost data, and each scored exactly 0 — the
-tree learned the same thing five times. A model asked "how far can this approach go" rates those
-low before the search spends the expansion.
-
-**Two things make it safe.** The rating cannot move the reported score — that comes from the
-sandbox on held-out shards — and a reply with no rating is not a zero: the search gives it the
-mean of the rated nodes, so a direction the model forgot to rate is not thereby abandoned.
-Upstream measured ratings arriving on 25 replies out of 30.
+- `cPuct` — lower when the gate is large enough to trust and the budget is small; higher when the
+  score is noisy or coarse or candidates keep tying. A coarse score is a *scoring* problem first:
+  widen the gate before reaching for it.
+- `priorExponent` — when the failure you expect is a whole-mechanism rewrite (five of eighteen
+  compression candidates replaced a working RLE+Huffman with a from-scratch arithmetic coder, and
+  each scored 0). It cannot move the reported score; that comes from held-out shards.
 
 > **Checkpoint 3.** Show the shape in a few lines: what one unit is, how much is held out, how
 > many expansions with how many workers, and roughly what that costs in time and model calls.
-> Mention `search` only if you set it, in one line saying why — "scoring is coarse, so spread the
-> budget", "whole rewrites are the failure mode here, so let the model rate the direction" — and
-> leave it out of the glance entirely when you did not.
-> This is the last point before real money is spent — say so plainly, and default to the smaller
-> option when unsure.
+> Mention `search` only if you set it, in one line saying why; otherwise leave it out. This is the
+> last point before real money is spent — say so plainly, and default to the smaller option when
+> unsure.
 
 ## Step 4 — Start it, then report
 
-Call `create_evolve_run`.
+Call `create_evolve_run`. Set `algorithm` to what the user chose. `howScored` is **one sentence**
+for the user: what it measures, how much is held out. `risks`: at most two, only ones that change
+a decision; empty is fine.
 
-Set `algorithm` to what the user chose (`"puct"` or `"openevolve"`).
-
-`howScored` is **one sentence** for the user: what it measures, how much is held out.
-`risks`: at most two, only ones that change a decision. Empty is fine.
-
-> **Checkpoint 4.** Report what came back — the probe's two numbers and what the search will do
-> — and then **end the turn**. Do not wait for it, do not call `get_evolve_run` to check on it,
-> do not loop until it finishes. The search runs for minutes to hours; its card appears in the
-> session and the panel behind that card streams live progress, which is where the user watches
-> it. Sitting on the turn shows them nothing they cannot already see and burns the run's own
-> budget.
->
-> `get_evolve_run` is for **later**, when the user asks how it went — then read it and report the
-> actual numbers, never an improvement you have not read.
+> **Checkpoint 4.** Report what came back — the probe's two numbers and what the search will do —
+> and then **end the turn**. Do not wait for it, do not call `get_evolve_run` to check on it, do
+> not loop. The search runs for minutes to hours; its card streams live progress, and sitting on
+> the turn shows the user nothing they cannot already see and burns the run's own budget.
+> `get_evolve_run` is for **later**, when the user asks how it went — then report the actual
+> numbers, never an improvement you have not read.
 
 A refusal is design feedback, not an error. "Cannot discriminate" means the scoring needs harder
 cases or a more mechanical rubric; "no slope" means the starting point is too strong. Fix it and
@@ -269,58 +164,28 @@ call again — do not hand the user the server's refusal text as a work order.
 
 ## Choosing a scoring mode (during step 2)
 
-Work down this list and take the first that fits. **`custom_script` is the fallback, not the
-default** — it is the one where you write and maintain the measuring apparatus yourself, so
-every mistake in it is yours. The two above it are cheaper to get right because the framework
-already handles the splitting and the freezing.
+Take the first that fits. **`custom_script` is the fallback, not the default**: you write and
+maintain the measuring apparatus yourself, so every mistake in it is yours. Judge by what the task
+*is*, not by what is in the workspace right now — "there is no table yet" is not a reason to skip
+`dataset_metric` when the task is to predict a column; write the table, then use it.
 
-Judge by what the task *is*, not by what you happen to have in the workspace right now: "there
-is no table yet" is not a reason to skip `dataset_metric` when the task is to predict a column —
-write the table, then use it.
-
-- **Cases with known answers, and a number to minimise or maximise** → `dataset_metric`.
-  Deterministic and cheapest, and the framework owns the split so you cannot get it wrong.
-  Metrics: accuracy / mae / r2 / rmse / seconds; larger-is-better after normalisation. Generate
-  the data if it does not exist yet — that is still this mode.
+- **Cases with known answers, and a number to move** → `dataset_metric`. Deterministic and
+  cheapest, and the framework owns the split so you cannot get it wrong. Metrics: accuracy / mae /
+  r2 / rmse / seconds.
 - **Correctness pinned down by tests** → `test_gate`. Take it whenever the user says "write
   tests", "make these cases pass", or describes behaviour case by case. The failure text is the
-  learning signal, which is richer than a number, and `frozenGlobs` **must** include the test
-  paths, or the shortest path to a higher score is to weaken the tests. Shards ≤ half the case
-  count.
-- **Neither fits** → `custom_script`, which you write. Simulations, optimisation heuristics,
-  anything whose quality is a computation with no natural table and no test suite. Contract: import the candidate as `candidate`; score only the shards in
-  `SCIENCE_AGENT_SHARDS` (comma-separated); write `{"valid": true, "metrics": {"score": 0.83}}`
-  to the path in `SCIENCE_AGENT_RESULT` (a file, not stdout — the candidate prints too); score
-  0–1, larger-is-better. The module docstring is the contract the search sees when rewriting
-  candidates. **The `error` field is the feedback channel to the model writing the next
-  candidate, and for a crash it has to say *where*, not just what.** Use a trimmed
-  `traceback.format_exc()`, so the text carries a file and a line — **the probe refuses an
-  evaluator that reports an exception without one.** `type(e).__name__` says nothing at all;
-  even `repr(e)`, a real message like `ValueError('byte must be in range(0, 256)')`, leaves the
-  next author hunting 200 lines for which of a dozen appends it was, so it discards the whole
-  approach and re-rolls with a fresh bug. Measured: five candidates crashed in one run, the
-  repair pass fired four times and landed once, and two of the five were the same one-line bug
-  found from scratch each time. A *semantic* failure needs no line — "round trip does not
-  match", "budget exhausted on 3 of 6" — and the gate does not ask for one. Write the field
-  even when the candidate is valid; that is how the next one learns to stop.
-
-  **How it runs:** as a script, with `__name__ == "__main__"` (`runpy.run_path`), and the
-  scratch directory first on `sys.path`. So top-level code runs, a `if __name__ == "__main__":`
-  guard runs, and `import candidate` resolves. You do not need to reverse-engineer this.
-
-  **The evaluator runs alone and reads nothing.** It gets a scratch directory containing itself
-  and the candidate — not the workspace, not the file you read while designing, and there is no
-  way to ship it one. A shard is an *index*, and what index `i` means is the evaluator's choice:
-  it **builds** case `i` — an equation with a known analytic solution, a generated input, a
-  corpus drawn from a fixed seed, a property to check. Anything it opens by path fails on every
-  candidate. If the material genuinely lives in a file, that is `dataset_metric`, which owns the
-  splitting as well.
-- **Only another model can judge it** → `llm_judge`. For prose, explanations, anything whose
-  quality is a reading. Most gameable and the only non-deterministic option; ask once whether it
+  learning signal, and `frozenGlobs` **must** include the test paths, or the shortest way to a
+  higher score is to weaken the tests. Shards ≤ half the case count.
+- **Neither fits** → `custom_script`, which you write: simulations, optimisation heuristics,
+  anything whose quality is a computation with no natural table and no test suite. **Read
+  `references/custom-script.md` before writing the evaluator** — it holds the contract, how it
+  runs, and the `error` rule the probe enforces (a crash must say *where*, not just what).
+- **Only another model can judge it** → `llm_judge`. For prose and explanations, anything whose
+  quality is a reading. The most gameable and the only non-deterministic mode; ask once whether it
   could be a `custom_script` instead.
 
 **Score on a gradient, not a cliff.** For hard limits prefer "stop and score what you have" over
-"violation scores zero" — zeroing lands every failure on the same 0 and leaves nothing to climb.
+"violation scores zero": zeroing lands every failure on the same 0 and leaves nothing to climb.
 
 **Never reward a property the candidate can fake.** Rewarding "gives specific numbers" produces
 invented numbers; reward agreement with the given source instead.

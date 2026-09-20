@@ -24,8 +24,8 @@ test.use({ locale: "zh-CN" });
  * Purpose: 以服务商为中心的注册表：添加控件与编辑器分组紧凑可扫读；行内模型表（一行一模型）可扫读；
  *   手动登记支持逗号分隔的强度档声明；保存失败保留 Provider 草稿；旧的独立“模型卡片”入口已删除；桌面与窄屏可用。
  * Steps:
- *   1. 打开系统设置并进入模型注册表：空态、添加控件收在列表下「添加 Provider」按钮后（预置下拉+自定义按钮）、编辑器默认隐藏；旧独立模型入口不再出现。
- *   2. 显式选择自定义服务商：编辑器按分组展开，协议与变种同行紧凑；保存后服务商行自动展开并预载模型列表。
+ *   1. 打开系统设置并进入模型注册表：空态下连接模型默认展开且是唯一新建入口；不再有独立的「添加 Provider」按钮或自定义表单；编辑器默认隐藏；旧独立模型入口不再出现。
+ *   2. 编辑已有自定义服务商：编辑器按分组展开，协议与变种同行紧凑。
  *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；视觉紧跟强度、与它同行底对齐，价格另起一行；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
  *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；模型自身名称无服务商前缀，已添加行提供删除；最后一行悬停详情逃出设置对话框裁切链且完整位于视口。
@@ -61,13 +61,24 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
   let createdModelId: string | undefined;
   const geometryModelIds = new Set<string>();
 
-  // The add panel starts open when nothing is configured yet (first-run
-  // path) and stays closed once a provider exists; only click when needed.
-  const openAddPanel = async (dialog: ReturnType<typeof page.getByRole>) => {
-    if (!await dialog.locator(".provider-add-panel").count()) {
-      await dialog.getByRole("button", { name: /添加 Provider/ }).first().click();
-    }
-    return dialog.locator(".provider-add-panel");
+  // 新建服务商已并入连接模型卡片；编辑器只服务已有服务商，由 API 直接预置。
+  const seedProvider = async () => {
+    const response = await page.request.fetch(`${apiBaseUrl()}/api/providers`, {
+      data: {
+        apiProtocol: "openai-chat-completions",
+        apiToken: demoToken,
+        apiVariant: "openai",
+        baseUrl: "http://127.0.0.1:4321/v1",
+        modelDiscovery: "openai-models",
+        name: providerName,
+        proxyPolicy: "inherit",
+        tokenOptional: false,
+      },
+      headers: authorizationHeader(),
+      method: "POST",
+    });
+    expect(response.ok(), "seed provider should be created").toBe(true);
+    createdProviderId = ((await response.json()) as { id: string }).id;
   };
 
   const openModelRegistry = async () => {
@@ -87,21 +98,19 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
 
   try {
     await journey.step(
-      "打开模型注册表：空态、添加控件与编辑器默认隐藏",
-      "注册表入口高亮；右侧出现标题与说明；还没有服务商时给出“添加预置或自定义”的空态引导。"
-      + "添加收在列表下「添加 Provider」按钮后（点开才有预置下拉与自定义按钮），编辑器只在显式选择后出现；旧的高级独立模型入口不再存在。",
+      "打开模型注册表：空态下连接模型是唯一新建入口，编辑器默认隐藏",
+      "注册表入口高亮；右侧出现标题与说明；还没有服务商时给出指向连接模型的空态引导，连接卡片默认展开作为唯一新建入口。"
+      + "不再有独立的「添加 Provider」按钮、预置下拉或自定义表单；编辑器默认隐藏；旧的高级独立模型入口不再存在。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
         await expect(dialog.getByText("管理运行时设置可用的模型配置和凭证。")).toBeVisible();
-        await expect(dialog.getByText("还没有服务商——点击下方“添加 Provider”选择预置或自定义服务商。")).toBeVisible();
-        await expect(dialog.getByRole("button", { name: /添加 Provider/ }).first()).toBeVisible();
-        // 空态即首启路径：添加面板默认已展开，不能再点（那会把面板收起）。
-        await expect(dialog.locator(".provider-add-panel")).toBeVisible();
-        await expect(dialog.locator(".provider-add-panel").getByLabel("添加 Provider", { exact: true })).toBeVisible();
-        await expect(dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
+        await expect(dialog.getByText("还没有服务商——先在上方「连接模型」里选择服务商并填入 API Key。")).toBeVisible();
+        // 空态即首启路径：连接卡片默认展开，且是唯一的新建表单
+        await expect(dialog.locator(".model-connect-wizard")).toBeVisible();
+        await expect(dialog.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
         await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
         await expect(dialog.getByRole("region", { name: "模型元数据目录" })).toBeVisible();
         // 九条 4：高级独立模型配置已删除——不再有“+ 添加模型”入口或模型卡片。
@@ -114,13 +123,17 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     );
 
     await journey.step(
-      "显式选择自定义服务商：编辑器分组紧凑可扫读",
-      "点“自定义服务商”后才出现编辑器——打开注册表绝不自动选中任何服务商。"
-      + "主区是名称与密钥；高级连接默认展开：基础 URL 独占一行，接口协议、接口变种与 LLM 网络代理服务器同一行，不再单独选择模型列表策略。",
+      "编辑已有自定义服务商：编辑器分组紧凑可扫读",
+      "服务商行点「编辑」后才出现编辑器。主区是名称与密钥；高级连接默认展开：基础 URL 独占一行，接口协议、接口变种与 LLM 网络代理服务器同一行，不再单独选择模型列表策略。",
       async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await openAddPanel(dialog);
-        await dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ }).click();
+        // 新建已并入连接模型卡片；编辑器只服务已有服务商，这里先用 API 预置一个。
+        await seedProvider();
+        await page.reload();
+        const dialog = await openModelRegistry();
+        const row = dialog.locator(".provider-row").filter({ hasText: providerName });
+        await expect(row).toBeVisible();
+        await row.locator(".provider-row-summary").click();
+        await row.getByRole("button", { name: "编辑", exact: true }).click();
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await expect(editor).toBeVisible();
         await expect(editor.getByLabel("服务商名称")).toBeVisible();
@@ -154,24 +167,16 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     );
 
     await journey.step(
-      "保存自定义服务商并手动登记模型，选最强思考",
-      "填写本地端点、令牌、DeepSeek 变种与“手动 ID 与维护目录”后保存；服务商行立即展开并预载。"
-      + "行内手动表单收在「添加模型」按钮后；用逗号分隔的原文强度档（如 max）声明可接受思考强度，"
+      "行内手动登记模型，选最强思考",
+      "服务商行展开后，行内手动表单收在「添加模型」按钮后；用逗号分隔的原文强度档（如 max）声明可接受思考强度，"
       + "支持视觉紧跟思考强度且不与价格一组；不提供强度时默认省略思考参数。登记后出现“已添加”计数与行内模型行，操作变为删除。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
-        await editor.getByLabel("服务商名称").fill(providerName);
-        await editor.getByLabel("外部模型 API Key").fill(demoToken);
-        await editor.getByLabel("基础 URL").fill("http://127.0.0.1:4321/v1");
-        await editor.getByLabel("接口变种").selectOption("deepseek");
-        const providerSave = page.waitForResponse((response) =>
-          response.request().method() === "POST" && new URL(response.url()).pathname === "/api/providers");
-        await editor.getByRole("button", { name: "保存", exact: true }).click();
-        const saved = await (await providerSave).json() as { id: string; name: string };
-        createdProviderId = saved.id;
-
         const row = dialog.locator(".provider-row").filter({ hasText: providerName });
+        await expect(row).toBeVisible();
+        if (!await row.locator(".provider-row-detail").count()) {
+          await row.locator(".provider-row-summary").click();
+        }
         await expect(row.locator(".provider-row-detail")).toBeVisible();
         // 手动表单收在“添加模型”按钮后，不常驻。
         await expect(row.locator(".provider-manual-form")).toHaveCount(0);

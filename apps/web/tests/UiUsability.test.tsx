@@ -96,7 +96,10 @@ test("configured providers render one expandable row each with an inline model t
   assert.match(settings, /\.provider-model-row \{[^}]*grid-template-columns: minmax\(140px, 1\.2fr\) minmax\(0, 2fr\) auto;/);
   assert.match(settings, /\.provider-manual-form \{[^}]*display: grid;/);
   assert.match(settings, /\.provider-manual-form \.provider-manual-vision \{[^}]*align-self: end;/);
-  assert.match(settings, /\.provider-add-panel select \{[^}]*max-width: 240px;/);
+  // The standalone "Add provider" entry is gone: creation lives in the connect
+  // wizard card, and its advanced fields share the wizard grid.
+  assert.doesNotMatch(settings, /provider-add-panel/);
+  assert.match(settings, /\.wizard-advanced-grid \{[^}]*display: grid;/);
   assert.match(settings, /\.provider-editor-actions \{[^}]*flex-wrap: nowrap;/);
   // The preset wall and the resident editor are gone for good.
   assert.doesNotMatch(settings, /provider-preset-card/);

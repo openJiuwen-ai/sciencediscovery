@@ -1,6 +1,6 @@
-# Program evolution (`/evolve`)
+# Program evolution (`/evolve-design`)
 
-`/evolve` improves something by repeated search rather than by one edit. You describe what
+`/evolve-design` improves something by repeated search rather than by one edit. You describe what
 "better" means as a number; the product writes dozens of variants, scores each one, keeps what
 scores higher, and hands back the best version alongside the one it started from.
 
@@ -39,7 +39,7 @@ available to both engines.
 | `custom_script` | A scorer the drafting model writes | Deterministic goals with no table and no suite — "split these addresses into four fields, as accurately as possible" |
 | `llm_judge` | A judge model reading against a frozen rubric | Prose, prompts, protocols, plans — anything with nothing to execute and nothing to measure |
 
-`llm_judge` is what makes `/evolve` work on things that are not programs over tables. It is also
+`llm_judge` is what makes `/evolve-design` work on things that are not programs over tables. It is also
 the only non-deterministic mode, which is why the rubric is frozen and why its runs need more
 units per measurement than the others.
 

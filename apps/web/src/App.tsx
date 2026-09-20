@@ -1093,12 +1093,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [usageAnalytics, setUsageAnalytics] = useState<ModelUsageAnalyticsSummary>();
   const [usageFilters, setUsageFilters] = useState<UsageAnalyticsUiFilters>({});
   const [workspaceView, setWorkspaceView] = useState<"session" | "usage">(() => initialView.view === "usage" ? "usage" : "session");
-  // `/evolve` runs for the active session, plus which one the panel shows. The
+  // `/evolve-design` runs for the active session, plus which one the panel shows. The
   // card is the only persistent handle a search has (the command never creates
   // a chat run), so the list is kept even when the panel is closed.
   const [evolveRuns, setEvolveRuns] = useState<EvolveRun[]>([]);
   const [openEvolveRunId, setOpenEvolveRunId] = useState<string>();
-  /** The sentence a `/evolve` command carried, while its wizard is open. */
+  /** The sentence a `/evolve-design` command carried, while its wizard is open. */
   const [evolveRefreshKey, setEvolveRefreshKey] = useState(0);
   // The right-rail MemoryGraphView card opens the full-screen explorer directly
   // (previously the explorer was only reachable from a product's "View chain"
@@ -1544,12 +1544,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   // Preserve the typed error until routing: a local 401 belongs only to the
   // Connection prompt. Network faults and other HTTP errors still get a toast.
+  // `t` is a dependency so a locale switch re-binds the toast title instead of
+  // replaying the previous language on the next failure.
   const setError = useCallback((reason?: string | Error) => {
     if (isAuthFailure(reason)) return;
     const message = reason instanceof Error ? reason.message : reason;
     setErrorState(message);
     if (message) pushToast("error", t("error.request"), message);
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   const refreshUsageData = useCallback(async (): Promise<void> => {
     const filters = usageAnalyticsFilters(usageFilters);
@@ -2630,7 +2632,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       setIdeaTreeSettingsEdit(undefined);
       pushToast("success", t("ideaTree.saved"));
     } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason : "Could not save Idea Tree settings");
+      reportSystemSettingsError(reason instanceof Error ? reason : t("error.saveIdeaTree"));
       throw reason;
     }
   }
@@ -2647,9 +2649,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setTokenEdit(undefined);
   }
 
-  function openSystemSettings(group?: SystemSettingsGroup): void {
+  const [modelWizardRequested, setModelWizardRequested] = useState(false);
+
+  function openSystemSettings(group?: SystemSettingsGroup, options?: { wizard?: boolean }): void {
     reportSystemSettingsError();
     if (group) setSystemSettingsGroup(group);
+    setModelWizardRequested(options?.wizard === true);
     setShowConfig(true);
   }
 
@@ -2662,6 +2667,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     clearSystemSettingsDrafts();
     reportSystemSettingsError();
     setSkillWorkspaceLaunch(undefined);
+    setModelWizardRequested(false);
     setShowConfig(false);
   }
 
@@ -4766,7 +4772,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     event.currentTarget.form?.requestSubmit();
                   }} placeholder={sessionArchived ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />
                   {composerRunAction.noModelReason ? <ComposerNoModelNotice
-                    onOpenModelSettings={() => openSystemSettings("models")}
+                    onOpenModelSettings={() => openSystemSettings("models", { wizard: true })}
                     reason={composerRunAction.noModelReason}
                   /> : null}
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
@@ -4778,7 +4784,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       controls={activeThinkingControls}
                       disabled={isRunning || sessionArchived}
                       models={models}
-                      onOpenSettings={() => openSystemSettings("models")}
+                      onOpenSettings={() => openSystemSettings("models", { wizard: true })}
                       onSelect={(modelId) => void updateConversationModel(modelId)}
                       onThinkingChange={(update) => void updateSessionSettings(update)}
                       providers={modelProviders}
@@ -5207,8 +5213,24 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 <ProviderModelSettings
                   catalog={modelCatalog}
                   client={client}
+                  defaultModelId={globalSettings?.effective.modelId}
+                  initialWizardOpen={modelWizardRequested}
                   models={models}
                   onCatalogChange={applyModelCatalog}
+                  onDefaultModelSet={async (modelId) => {
+                    // One setting, written from the wizard and from the
+                    // registry's default-model row alike; keep every other
+                    // global override instead of replacing the whole object.
+                    const overrides = { ...(globalSettings?.overrides ?? {}) };
+                    if (modelId) overrides.modelId = modelId;
+                    else delete overrides.modelId;
+                    const updated = await client.replaceGlobalSettings(overrides);
+                    setGlobalSettings(updated);
+                    if (activeProjectId) {
+                      setProjectSettings(await client.getProjectSettings(activeProjectId));
+                      await refreshVisibleSessions();
+                    }
+                  }}
                   onDraftStateChange={setProviderDraftDirty}
                   onError={reportSystemSettingsError}
                   onModelsChange={setModels}
@@ -5239,7 +5261,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       settings={proxySettings}
                       webProxyPolicy={(webSettingsEdit?.values ?? webSettings)?.proxyPolicy ?? "inherit"}
                     />
-                  : <p className="muted">Loading proxy settings…</p>
+                   : <p className="muted">{t("settings.loadingProxies")}</p>
               ) : null}
               {systemSettingsGroup === "web" ? (
                 webSettings && proxySettings

@@ -17,7 +17,13 @@ import test from "node:test";
 
 import { strFromU8, unzipSync } from "fflate";
 
-import { createSkillFolderArchive } from "../src/skill-folder-import.js";
+import { setActiveLocale, translate } from "../src/i18n/index.js";
+import {
+  createSkillFolderArchive,
+  MAX_SKILL_FOLDER_ARCHIVE_BYTES,
+  MAX_SKILL_FOLDER_EXTRACTED_BYTES,
+  MAX_SKILL_FOLDER_FILES,
+} from "../src/skill-folder-import.js";
 
 function folderFile(path: string, content: string): File {
   const file = new File([content], path.split("/").at(-1)!, { type: "text/plain" });
@@ -51,4 +57,39 @@ test("rejects folders without a root SKILL.md or with multiple roots", async () 
     folderFile("first/SKILL.md", "first"),
     folderFile("second/guide.md", "second"),
   ]), /exactly one Skill folder/);
+});
+
+test("tells a Chinese reader why a folder was refused, in Chinese", async (context) => {
+  setActiveLocale("zh-CN");
+  context.after(() => setActiveLocale("en"));
+  // The file name is what the reader has to act on, so it survives translation.
+  await assert.rejects(
+    createSkillFolderArchive([folderFile("portable-skill/references/guide.md", "Reference text")]),
+    (error: Error) => error.message === "所选文件夹的根目录下必须有 SKILL.md。",
+  );
+  await assert.rejects(createSkillFolderArchive([
+    folderFile("first/SKILL.md", "first"),
+    folderFile("second/guide.md", "second"),
+  ]), (error: Error) => error.message === "请只选择一个 Skill 文件夹。");
+  await assert.rejects(
+    createSkillFolderArchive([]),
+    (error: Error) => error.message === "请选择要导入的 Skill 文件夹。",
+  );
+});
+
+test("states the folder limits with the numbers the code enforces", () => {
+  for (const locale of ["en", "zh-CN"] as const) {
+    assert.match(
+      translate(locale, "skillFolder.tooManyFiles", { count: MAX_SKILL_FOLDER_FILES }),
+      new RegExp(String(MAX_SKILL_FOLDER_FILES)),
+    );
+    assert.match(
+      translate(locale, "skillFolder.extractedTooLarge", { size: MAX_SKILL_FOLDER_EXTRACTED_BYTES / (1024 * 1024) }),
+      /50 MiB/,
+    );
+    assert.match(
+      translate(locale, "skillFolder.archiveTooLarge", { size: MAX_SKILL_FOLDER_ARCHIVE_BYTES / (1024 * 1024) }),
+      /25 MiB/,
+    );
+  }
 });

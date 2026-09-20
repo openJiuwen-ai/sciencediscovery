@@ -48,7 +48,7 @@ export const NODE_COLORS: Record<MemoryGraphNodeLabel, string> = {
   Claim: "#F05006",        // burnt orange
   Code: "#9862A2",         // amethyst purple
   Artifact: "#25998F",     // teal green
-  // /evolve search graph. SearchNode/SearchCell are excluded from the session
+  // /evolve-design search graph. SearchNode/SearchCell are excluded from the session
   // subgraph, so these mostly render inside the search view itself.
   SearchRun: "#c0a98a",    // muted ochre
   SearchNode: "#bfb08f",   // pale straw
@@ -75,7 +75,7 @@ export const EDGE_COLORS: Record<MemoryGraphEdgeType, string> = {
   supersedes: "#818790",
   input: "#818790",
   contains: "#818790",
-  // The /evolve search graph's own edges, on the same muted grey: they are
+  // The /evolve-design search graph's own edges, on the same muted grey: they are
   // structure, not emphasis.
   searches: "#818790",
   root: "#818790",

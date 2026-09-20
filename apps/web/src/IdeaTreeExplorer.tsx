@@ -2,11 +2,21 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { IdeaTreeGraph, IdeaTreeNode } from "@sciencediscovery/schema";
 
+import { ideaTreeSearchStatusLabel, ideaTreeStatusLabel } from "./IdeaResearchLabels.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
 import { CloseIcon } from "./icons.js";
 import { IDEA_TREE_STATUS_COLORS, IdeaTreeCanvas } from "./IdeaTreeCanvas.js";
@@ -32,46 +42,46 @@ function formatValue(value: unknown): string {
 function IdeaTreeNodeDetail({ node, autonomous, onOpenArtifact, onOpenSubagent }: { node?: IdeaTreeNode; autonomous?: boolean; onOpenArtifact?: (id: string) => void; onOpenSubagent?: (id: string) => void }) {
   const { t } = useLocale();
   if (!node) return <div className="idea-tree-detail-empty">
-    <strong>Select a tree node</strong>
-    <p>Click a node to inspect its hypothesis, result, score, execution state, and artifacts.</p>
+    <strong>{t("ideaTree.explorer.emptyTitle")}</strong>
+    <p>{t("ideaTree.explorer.emptyHelp")}</p>
   </div>;
   const fields: Array<[string, unknown]> = autonomous ? [
     [t("ideaTree.node.kind"), node.kind === "direction" ? t("ideaTree.kind.direction") : t("ideaTree.kind.candidate")],
     [t("ideaTree.node.depth"), node.depth], [t("ideaTree.node.score"), node.score], [t("ideaTree.node.parent"), node.parentId],
     [t("ideaTree.node.children"), node.childrenIds],
   ] : [
-    ["Status", node.status],
-    ["Search", node.searchStatus],
-    ["Depth", node.depth],
-    ["Priority", node.priority],
-    ["Score", node.score],
-    ["Attempts", node.attemptCount],
-    ["Parent", node.parentId],
-    ["Children", node.childrenIds],
-    ["Artifacts", node.artifactRefs],
-    ["Active execution", node.activeExecutionId],
-    ["Last execution", node.lastExecutionId],
-    ["Result handle", node.completedResultHandle],
-    ["Updated", node.updatedAt],
+    [t("ideaTree.node.status"), ideaTreeStatusLabel(t, node.status)],
+    [t("ideaTree.node.search"), ideaTreeSearchStatusLabel(t, node.searchStatus)],
+    [t("ideaTree.node.depth"), node.depth],
+    [t("ideaTree.node.priority"), node.priority],
+    [t("ideaTree.node.score"), node.score],
+    [t("ideaTree.node.attempts"), node.attemptCount],
+    [t("ideaTree.node.parent"), node.parentId],
+    [t("ideaTree.node.children"), node.childrenIds],
+    [t("ideaTree.node.artifacts"), node.artifactRefs],
+    [t("ideaTree.node.activeExecution"), node.activeExecutionId],
+    [t("ideaTree.node.lastExecution"), node.lastExecutionId],
+    [t("ideaTree.node.resultHandle"), node.completedResultHandle],
+    [t("ideaTree.node.updated"), node.updatedAt],
   ];
   return <article className="idea-tree-detail">
     <header>
       <span className="idea-tree-detail-id">{node.id}</span>
-      <span className="idea-tree-status" style={{ borderColor: IDEA_TREE_STATUS_COLORS[node.status], color: IDEA_TREE_STATUS_COLORS[node.status] }}>{node.kind === "direction" ? t("ideaTree.kind.direction") : node.status}</span>
+      <span className="idea-tree-status" style={{ borderColor: IDEA_TREE_STATUS_COLORS[node.status], color: IDEA_TREE_STATUS_COLORS[node.status] }}>{node.kind === "direction" ? t("ideaTree.kind.direction") : ideaTreeStatusLabel(t, node.status)}</span>
     </header>
     <section>
-      <h3>Hypothesis</h3>
+      <h3>{t("ideaTree.section.hypothesis")}</h3>
       <p>{node.hypothesis}</p>
     </section>
-    {node.insight ? <section><h3>Insight</h3><p>{node.insight}</p></section> : null}
-    {!autonomous && node.result ? <section><h3>Result</h3><p>{node.result}</p></section> : null}
+    {node.insight ? <section><h3>{t("ideaTree.section.insight")}</h3><p>{node.insight}</p></section> : null}
+    {!autonomous && node.result ? <section><h3>{t("ideaTree.section.result")}</h3><p>{node.result}</p></section> : null}
     {autonomous && Object.entries(node.stages ?? {}).map(([role, result]) => <section key={role}>
       <h3>{ASSESSOR_KEYS[role] ? t(ASSESSOR_KEYS[role]!) : role}{result.score === undefined ? "" : ` · ${result.score}`}</h3>
       <p>{result.text}</p>
     </section>)}
-    {node.pruneReason ? <section><h3>Prune reason</h3><p>{node.pruneReason}</p></section> : null}
-    <section>{node.artifactRefs.map(id => <button key={id} type="button" onClick={() => onOpenArtifact?.(id)}>Artifact {id}</button>)}</section>
-    <section>{node.subagentIds?.map((id, index) => <button key={id} type="button" onClick={() => onOpenSubagent?.(id)}>Subagent {index + 1}</button>)}</section>
+    {node.pruneReason ? <section><h3>{t("ideaTree.section.pruneReason")}</h3><p>{node.pruneReason}</p></section> : null}
+    <section>{node.artifactRefs.map(id => <button key={id} type="button" onClick={() => onOpenArtifact?.(id)}>{t("ideaTree.explorer.artifactButton", { id })}</button>)}</section>
+    <section>{node.subagentIds?.map((id, index) => <button key={id} type="button" onClick={() => onOpenSubagent?.(id)}>{t("ideaTree.explorer.subagentButton", { index: index + 1 })}</button>)}</section>
     <dl>
       {fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{formatValue(value)}</dd></div>)}
     </dl>
@@ -99,6 +109,7 @@ export function IdeaTreeExplorer({
   onSelectTree: (treeId: string) => void;
   treeIds: string[];
 }) {
+  const { t } = useLocale();
   const [selectedId, setSelectedId] = useState<string>("ROOT");
   const [query, setQuery] = useState("");
   const [visibleStatuses, setVisibleStatuses] = useState<ReadonlySet<IdeaTreeNode["status"]>>(new Set(STATUSES));
@@ -133,23 +144,23 @@ export function IdeaTreeExplorer({
   };
 
   return <div className="idea-tree-explorer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section aria-label="Idea Tree explorer" aria-modal={true} className="idea-tree-explorer-panel" role="dialog">
+    <section aria-label={t("ideaTree.explorer.aria")} aria-modal={true} className="idea-tree-explorer-panel" role="dialog">
       <header className="idea-tree-explorer-header">
         <div>
-          <span className="eyebrow">Agent search</span>
-          <h2>Idea Tree</h2>
+          <span className="eyebrow">{t("ideaTree.explorer.eyebrow")}</span>
+          <h2>{t("ideaTree.explorer.title")}</h2>
           <p title={graph.objective}>{graph.objective}</p>
         </div>
         <div className="idea-tree-explorer-controls">
           {treeIds.length > 1 ? <label>
-            <span>Tree</span>
+            <span>{t("ideaTree.explorer.tree")}</span>
             <select disabled={loading} onChange={(event) => onSelectTree(event.target.value)} value={graph.treeId}>
-              {treeIds.map((treeId, index) => <option key={treeId} value={treeId}>{index === 0 ? "Latest · " : ""}{treeId}</option>)}
+              {treeIds.map((treeId, index) => <option key={treeId} value={treeId}>{index === 0 ? t("ideaTree.explorer.latestTree") : ""}{treeId}</option>)}
             </select>
           </label> : null}
-          <span>{graph.nodes.length} nodes</span>
-          {!autonomous && <span>revision {graph.revision}</span>}
-          <button aria-label="Close Idea Tree" className="icon-button" onClick={onClose} type="button"><CloseIcon size={20} /></button>
+          <span>{t("ideaTree.explorer.nodeCount", { count: graph.nodes.length })}</span>
+          {!autonomous && <span>{t("ideaTree.explorer.revision", { revision: graph.revision })}</span>}
+          <button aria-label={t("ideaTree.explorer.closeAria")} className="icon-button" onClick={onClose} type="button"><CloseIcon size={20} /></button>
         </div>
       </header>
       {controls}
@@ -158,17 +169,17 @@ export function IdeaTreeExplorer({
         <main className="idea-tree-explorer-graph">
           <div className="idea-tree-toolbar">
             <label className="idea-tree-search">
-              <span>Find</span>
-              <input onChange={(event) => setQuery(event.target.value)} placeholder="Node id, hypothesis, insight…" value={query} />
+              <span>{t("ideaTree.explorer.find")}</span>
+              <input onChange={(event) => setQuery(event.target.value)} placeholder={t("ideaTree.explorer.findPlaceholder")} value={query} />
             </label>
-            <div className="idea-tree-filter-chips" aria-label="Filter node statuses">
+            <div className="idea-tree-filter-chips" aria-label={t("ideaTree.explorer.filterAria")}>
               {STATUSES.filter((status) => statusCounts.has(status)).map((status) => <button
                 aria-pressed={visibleStatuses.has(status)}
                 className={visibleStatuses.has(status) ? "active" : ""}
                 key={status}
                 onClick={() => toggleStatus(status)}
                 type="button"
-              ><i style={{ background: IDEA_TREE_STATUS_COLORS[status] }} />{status}<em>{statusCounts.get(status)}</em></button>)}
+              ><i style={{ background: IDEA_TREE_STATUS_COLORS[status] }} />{ideaTreeStatusLabel(t, status)}<em>{statusCounts.get(status)}</em></button>)}
             </div>
           </div>
           <div className="idea-tree-canvas-host">
@@ -179,8 +190,8 @@ export function IdeaTreeExplorer({
               selectedId={selectedId}
               visibleStatuses={visibleStatuses}
             />
-            {loading ? <div className="idea-tree-loading">Loading tree…</div> : null}
-            <p className="idea-tree-canvas-hint">Auto layout · click to inspect · drag background to pan · scroll to zoom</p>
+            {loading ? <div className="idea-tree-loading">{t("ideaTree.explorer.loading")}</div> : null}
+            <p className="idea-tree-canvas-hint">{t("ideaTree.explorer.canvasHint")}</p>
           </div>
         </main>
       </div>

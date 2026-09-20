@@ -14,16 +14,31 @@
 
 import type { RunFailureCode } from "@sciencediscovery/schema";
 
+import type { MessageKey } from "./i18n/index.js";
+import { translateActive } from "./i18n/index.js";
+
+/** Plain-language cause and recovery action per stable failure class. */
+const FAILURE_MESSAGE_KEYS: Record<RunFailureCode, MessageKey> = {
+  "rate-limited": "runFailure.rate-limited",
+  "semantic-error": "runFailure.semantic-error",
+  "server-error": "runFailure.server-error",
+  timeout: "runFailure.timeout",
+  "transport-error": "runFailure.transport-error",
+  unauthorized: "runFailure.unauthorized",
+};
+
 /**
- * Render a failed run for the user: the stable class, then the original error.
+ * Render a failed run for the user: a plain-language cause and recovery
+ * action first, then the original error text after a separator.
  *
- * The code is locale-neutral on purpose — it is the same token the API and the
- * logs use, so a user can quote it in a report. The provider's own text is
- * never dropped or summarized; diagnosing a failure needs what actually came
- * back from the endpoint.
+ * The provider's own text is never dropped or summarized — diagnosing a
+ * failure needs what actually came back from the endpoint — but it is no
+ * longer the first thing the user reads. A failure without a class (older
+ * records, or the class never being assigned) degrades to the raw text.
  */
 export function formatRunFailure(code: RunFailureCode | undefined, error: string): string {
   const detail = error.trim();
   if (!code) return detail;
-  return detail ? `[${code}] ${detail}` : `[${code}]`;
+  const plain = translateActive(FAILURE_MESSAGE_KEYS[code]);
+  return detail ? `${plain} · ${detail}` : plain;
 }

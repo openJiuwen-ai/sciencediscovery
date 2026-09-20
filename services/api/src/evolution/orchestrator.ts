@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * The `/evolve` run lifecycle: start a search, persist what it emits, fan it
+ * The `/evolve-design` run lifecycle: start a search, persist what it emits, fan it
  * out to browsers, and make sure every run reaches a terminal state.
  *
  * ```
