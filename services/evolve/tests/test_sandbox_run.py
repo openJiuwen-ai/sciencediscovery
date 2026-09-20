@@ -27,17 +27,19 @@ import pytest
 
 from sciencediscovery_evolve.candidates import run_candidate
 from sciencediscovery_evolve.sandbox_run import RunStopped, run_killable
-from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
+from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
 
 SLEEP = [sys.executable, "-c", "import time; time.sleep(60)"]
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
+    """Whether the process is still running.
+
+    Not `os.kill(pid, 0)`: that succeeds for a zombie, and in a container whose
+    PID 1 does not reap children a killed process stays a zombie forever.
+    """
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 def test_a_finished_process_returns_its_output(tmp_path: Path) -> None:
@@ -103,9 +105,11 @@ def test_without_a_stop_predicate_it_behaves_like_subprocess_run(tmp_path: Path)
 
 
 def test_run_candidate_reports_a_stop_as_a_stopped_candidate_not_a_crash() -> None:
+    # No sandbox needed: a stopped search never gets as far as preparing one, so
+    # this runs on hosts without bubblewrap, and would fail there if it did.
     payload = run_candidate(
         "def train_and_predict(train, test, rows):\n    return [0.0] * rows\n", [sys.executable, "-c", "pass"],
-        capability=detect_local_capability(), timeout=10.0, should_stop=lambda: True,
+        capability=SandboxCapability(), timeout=10.0, should_stop=lambda: True,
     )
     assert payload["ok"] is False
     assert payload["error"] == "the search was stopped"

@@ -100,6 +100,9 @@ def run_candidate(
     appended here — the caller decides *what* measures the candidate, this
     decides *how* it is confined.
     """
+    if should_stop is not None and should_stop():
+        # Before the scratch directory and the sandbox are even prepared.
+        return {"ok": False, "error": "the search was stopped", "seconds": 0.0}
     valid, reason = validate_source(code, max_length=max_length)
     if not valid:
         # The gate is not the boundary (the sandbox is), but it turns the
