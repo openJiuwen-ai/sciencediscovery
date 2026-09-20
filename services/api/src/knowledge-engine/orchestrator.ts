@@ -580,7 +580,7 @@ export class KeOrchestrator {
   // ------------------------------------------------------------------ grow
 
   private async handleGrow(job: KeJobRow): Promise<unknown> {
-    return runGrowCycle(this.deps.store, job, this.buildGrowDeps(), (message) => this.warn("ke_grow", { message }), this.deps.growOptions);
+    return runGrowCycle(this.deps.store, job, this.buildGrowDeps(), (message) => this.warn("ke_grow", { text: message }), this.deps.growOptions);
   }
 
   /**
