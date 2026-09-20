@@ -882,6 +882,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.queryGraph ? { queryGraph: options.queryGraph } : {}),
     ...(options.knowledgeEngine ? { knowledgeEngine: options.knowledgeEngine } : {}),
     ...(options.knowledgeEngineScope ? { knowledgeEngineScope: options.knowledgeEngineScope } : {}),
+    ...(options.knowledgeEngineObserver ? { knowledgeEngineObserver: options.knowledgeEngineObserver } : {}),
     ...(options.researchProjectRoot ? { researchProjectRoot: options.researchProjectRoot } : {}),
     ...(options.agentMemory ? { agentMemory: options.agentMemory } : {}),
     ...(options.declareEvidence ? { declareEvidence: options.declareEvidence } : {}),

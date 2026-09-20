@@ -54,6 +54,12 @@ const DB_RECORD_TOOLS = [
   "mcp__chembl__search_activities",
   "mcp__chembl__similarity_search",
   "mcp__geo__search_studies",
+  // Knowledge-engine retrieval tools: KB documents ride the DbRecord shape
+  // (source="kb", identifier=docId) so graph records dedup per document and
+  // can deep-link back into the knowledge base.
+  "kb_search",
+  "kb_expand",
+  "doc_grep",
 ];
 const CODE_TOOLS = ["run_shell", "run_npu_job"];
 
@@ -104,7 +110,7 @@ test("unregistered tools return undefined", () => {
 });
 
 test("registry size matches expectation", () => {
-  assert.equal(Object.keys(TOOL_GRAPH_REGISTRY).length, 21);
+  assert.equal(Object.keys(TOOL_GRAPH_REGISTRY).length, 24);
 });
 
 test("every registry key is a string", () => {

@@ -212,6 +212,19 @@ function summarizeSubagentResult(subagent: Subagent): {
   };
 }
 
+/** One knowledge-engine tool invocation, reported to the optional
+ * `knowledgeEngineObserver` after a successful invoke. `result` is the raw
+ * structured payload (the same object the tool returns as `details`). */
+export interface KnowledgeEngineToolActivity {
+  readonly toolName: string;
+  /** The effective kbId after scope-filling. Present whenever a bound scope
+   *  fills the default — including for kbId-less tools like
+   *  list_knowledge_bases, whose scope fill is a no-op the tool ignores;
+   *  absent only when neither params nor scope provide one. */
+  readonly kbId?: string;
+  readonly result: unknown;
+}
+
 export interface WorkspaceToolOptions {
   /** V3-C1: experiential-memory port. The wiring layer (runs/index.ts)
    *  hardcodes candidate provenance on every write — the tool can never
@@ -394,6 +407,15 @@ export interface WorkspaceToolOptions {
     kbIds: string[];
     singleKbId?: string;
   };
+  /**
+   * Post-invoke observer for knowledge-engine tools (graph mirroring). Fires
+   * synchronously after a SUCCESSFUL invoke with the effective (scope-filled)
+   * kbId and the raw structured result; the workspace stays agnostic of what
+   * the observer does with it (the registry gate and product mapping live in
+   * the services layer). Must never throw — a throwing observer would break
+   * the tool, so the wrapper swallows observer errors.
+   */
+  knowledgeEngineObserver?: (activity: KnowledgeEngineToolActivity) => void;
   /** Create an Evidence node + extracts edge, Paper → Evidence (the
    * `declare_evidence` LLM tool). Returns a structured error code instead of
    * degrading. */
@@ -1320,6 +1342,24 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           }
         }
         const result = await invoke(effectiveParams);
+        // Graph-mirror hook (registered KE tools only — the registry gate
+        // lives in the services-layer observer). Only successful invokes
+        // mirror: a thrown error means nothing was retrieved, matching the
+        // broker's "failed invocations never mirror" rule. Observer errors
+        // are swallowed — mirroring must never break the tool.
+        const observer = options.knowledgeEngineObserver;
+        if (observer) {
+          try {
+            const activityKbId = (effectiveParams as Record<string, unknown>).kbId;
+            observer({
+              toolName: name,
+              ...(typeof activityKbId === "string" && activityKbId ? { kbId: activityKbId } : {}),
+              result,
+            });
+          } catch {
+            // never propagate
+          }
+        }
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
       },
       // Every KE tool is a pure concurrent-safe store read — except the two

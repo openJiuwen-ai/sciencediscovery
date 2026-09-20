@@ -2160,6 +2160,65 @@ test("knowledge-engine tools enforce a bound KB scope: default fill, optional sc
   assert.ok(unscopedRequired.includes("kbId"), "kbId must stay required without a scope");
 });
 
+test("knowledge-engine observer fires on success with the scope-filled kbId, never on failure", async () => {
+  const activities: Array<{ toolName: string; kbId?: string; result: unknown }> = [];
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async (kbId: string, query: string) => ({ kbId, query, hits: [{ docId: "doc1" }], truncated: false }),
+    kbExpand: async () => { throw new Error("store exploded"); },
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+    driftSearch: async () => ({}),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineScope: { kbIds: ["kb1"], singleKbId: "kb1" },
+    knowledgeEngineObserver: (activity) => activities.push(activity),
+  });
+
+  // Scope-filled kbId rides along, and the raw result is the tool's payload.
+  const search = tools.find((tool) => tool.name === "kb_search")!;
+  await search.execute("ke-call", { query: "mAb114" });
+  assert.equal(activities.length, 1);
+  assert.equal(activities[0]!.toolName, "kb_search");
+  assert.equal(activities[0]!.kbId, "kb1");
+  assert.deepEqual((activities[0]!.result as { hits: unknown[] }).hits, [{ docId: "doc1" }]);
+
+  // A throwing invoke reports nothing (the broker rule: failed calls never mirror).
+  const expand = tools.find((tool) => tool.name === "kb_expand")!;
+  await assert.rejects(expand.execute("ke-call", { anchorId: "doc1:paragraph:0" }), /store exploded/);
+  assert.equal(activities.length, 1, "failed invokes must not be observed");
+
+  // A throwing observer must not break the tool.
+  const guarded = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineObserver: () => { throw new Error("observer exploded"); },
+  });
+  const guardedSearch = guarded.find((tool) => tool.name === "kb_search")!;
+  const outcome = await guardedSearch.execute("ke-call", { kbId: "kb1", query: "mAb114" });
+  assert.equal((outcome.details as { truncated: boolean }).truncated, false);
+
+  // kbId-less tools (list_knowledge_bases) still report the scope-filled kbId —
+  // the fill is uniform, and the services-side registry gate decides what
+  // mirrors, so the activity just reports what was effective.
+  const before = activities.length;
+  const list = tools.find((tool) => tool.name === "list_knowledge_bases")!;
+  await list.execute("ke-call", {});
+  assert.equal(activities.length, before + 1);
+  assert.equal(activities.at(-1)!.toolName, "list_knowledge_bases");
+  assert.equal(activities.at(-1)!.kbId, "kb1");
+});
+
 test("list_knowledge_bases filters to the bound scope: no site-wide ids to probe with", async () => {
   const knowledgeEngine = {
     listKnowledgeBases: async () => [

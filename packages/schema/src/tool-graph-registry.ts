@@ -84,6 +84,14 @@ export const TOOL_GRAPH_REGISTRY: Record<string, ToolGraphSpec> = {
   "mcp__chembl__search_activities": { type: "search", product: "db_record" },
   "mcp__chembl__similarity_search": { type: "search", product: "db_record" },
   "mcp__geo__search_studies": { type: "search", product: "db_record" },
+  // ── 知识引擎检索工具 ──
+  // KB 文档作为 DbRecord 入图：source="kb"、identifier=docId（发射器在
+  // services/api/src/knowledge-engine/graph-mirror.ts）。复用 db_record
+  // 而不是新增产物形状：sidecar 的 MERGE 键 (session_id, source, identifier)
+  // 天然按文档去重，库内跳转所需的 kbId 由 url 字段（kb:// 伪协议）携带。
+  kb_search: { type: "search", product: "db_record" },
+  kb_expand: { type: "search", product: "db_record" },
+  doc_grep: { type: "search", product: "db_record" },
 };
 // 暂缓（附录 B/E），启用时加行 + 需要的话加产出形状：
 // - db_lookup     数据库精确查询 → DbRecord / WebPage

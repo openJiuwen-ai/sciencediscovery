@@ -417,6 +417,9 @@ export interface WorkspaceAgentOptions {
   knowledgeEngine?: WorkspaceToolOptions["knowledgeEngine"];
   /** Bound knowledge-base scope for the KE tools (see WorkspaceToolOptions). */
   knowledgeEngineScope?: WorkspaceToolOptions["knowledgeEngineScope"];
+  /** Post-invoke observer for KE tools (memory-graph mirroring; see
+   *  WorkspaceToolOptions.knowledgeEngineObserver). */
+  knowledgeEngineObserver?: WorkspaceToolOptions["knowledgeEngineObserver"];
   /** Project-ledger root for research_state promote/hydrate (see WorkspaceToolOptions). */
   agentMemory?: WorkspaceToolOptions["agentMemory"];
   /** V3-C1: human-reviewed memories for prompt injection (advisory part). */
