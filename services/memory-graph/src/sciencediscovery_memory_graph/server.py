@@ -16,7 +16,7 @@
 
 Routes:
 
-- ``GET /health`` → ``{status}`` (healthy/degraded/disabled/needs-password)
+- ``GET /health`` → ``{status}`` (healthy/degraded/disabled/needs-password) + ``backend`` (local/neo4j)
 - ``POST /observe/execution`` (Bearer) → upsert one execution's nodes + edges
 - ``POST /observe/tool-call`` (Bearer) → unified upsert ticket for any tool
   call's ToolCall + Paper/WebPage/DbRecord products (broker/recorder are the
@@ -55,7 +55,7 @@ from pydantic import BaseModel, Field
 from .auth import require_internal_token
 from .constraints import ensure_schema
 from .logging_config import get_logger
-from .neo4j_driver import handle
+from .backend import handle
 from .persistence import (
     _normalize_link,
     declare_claim,
@@ -122,6 +122,12 @@ def _error(code: str, http: int, message: str, instruction: str | None = None) -
 @app.get("/health")
 def health() -> dict[str, str]:
     driver = handle()
+    if driver.kind == "local":
+        reachable = driver.is_reachable()
+        status = "healthy" if reachable else "degraded"
+        log.info("health: local file store %s, memory graph %s",
+                 "available" if reachable else "unavailable", status)
+        return {"status": status, "backend": "local"}
     if not driver.has_password:
         log.info("health: no Neo4j password yet, waiting for the API to push one")
         return {"status": "needs-password"}
@@ -129,7 +135,7 @@ def health() -> dict[str, str]:
     status = "healthy" if reachable else "degraded"
     log.info("health: Neo4j %s, memory graph %s",
              "reachable" if reachable else "unreachable", status)
-    return {"status": status}
+    return {"status": status, "backend": "neo4j"}
 
 
 # --- Write: observeExecution ------------------------------------------------
@@ -1460,6 +1466,12 @@ class Neo4jPasswordRequest(BaseModel):
     user: str | None = None
 
 
+class BackendRequest(BaseModel):
+    """Which store backs the memory graph, pushed by the Node control API."""
+
+    backend: Literal["local", "neo4j"]
+
+
 class SearchProgressRequest(BaseModel):
     """One batch of a search's events.
 
@@ -1545,6 +1557,14 @@ def read_search_graph(req: SearchGraphRequest) -> dict[str, Any]:
     if result.get("reason") == "search_not_found":
         _error("search_not_found", 404, f"no search graph for {req.search_id}")
     return result
+
+
+@app.post("/internal/backend", dependencies=[Depends(require_internal_token)])
+def set_backend(req: BackendRequest) -> dict[str, str]:
+    driver = handle()
+    driver.set_backend(req.backend)
+    log.info("backend in: %s", req.backend)
+    return health()
 
 
 @app.post("/internal/neo4j-password", dependencies=[Depends(require_internal_token)])

@@ -30,6 +30,7 @@ test("research availability stays unknown until loading succeeds; initial errors
     await act(async () => reject(new Error("list unavailable")));
     assert.deepEqual(availability, []);
     assert.match(JSON.stringify(renderer.root.findByProps({ role: "alert" }).children.map(c => typeof c === "string" ? c : "")), /list unavailable/);
+    assert.equal(renderer.root.findByType("button").props.className, "secondary-button compact-button");
     await act(async () => renderer.root.findByType("button").props.onClick());
     assert.deepEqual(availability, [false]);
     assert.equal(renderer.toJSON(), null);

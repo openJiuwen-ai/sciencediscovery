@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from .logging_config import get_logger
-from .neo4j_driver import handle
+from .backend import handle
 
 log = get_logger("search_graph")
 

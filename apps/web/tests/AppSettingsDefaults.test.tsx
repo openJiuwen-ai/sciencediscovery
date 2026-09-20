@@ -28,10 +28,13 @@ import {
   messageForSessionTitle,
   remoteCredentialDraftSaveError,
   resourceLabelWithDraft,
+  RUNNER_SETTINGS_GROUPS,
   runSessionCreationOnce,
+  SYSTEM_SETTINGS_GROUPS,
   SystemSettingsFooter,
   SystemSettingsLayout,
 } from "../src/App.js";
+import { en, type MessageKey } from "../src/i18n/messages.js";
 
 test("new Session requests inherit settings unless a model override is explicit", () => {
   assert.deepEqual(buildCreateSessionRequest(""), {});
@@ -59,7 +62,7 @@ test("a failed Session creation restores pending state and blocks duplicate subm
     fallbackError: "Could not create session",
     isInFlight: () => inFlight,
     onCreated: () => undefined,
-    onError: (message: string) => errors.push(message),
+    onError: (reason: string | Error) => errors.push(reason instanceof Error ? reason.message : reason),
     setInFlight: (value: boolean) => { inFlight = value; },
     setPending: (value: boolean) => pendingStates.push(value),
   };
@@ -253,6 +256,26 @@ test("renders System settings groups beside the selected details", () => {
   assert.match(html, />Runners</);
   assert.match(html, /aria-current="page" class="active"[^>]*>.*Model registry/);
   assert.match(html, /class="settings-group-detail"><p>Selected details<\/p>/);
+});
+
+test("every System settings group is reachable from the navigation tree", () => {
+  // The categories are hand-written and the group list is separate, so a new
+  // or renamed group reaches `SystemSettingsGroup` — and renders its pane —
+  // while no navigation entry ever selects it. "idea-tree" shipped that way:
+  // the pane, the group id and both locales' labels existed, and the tree had
+  // no button for it, so Idea Tree settings could only be reached by URL.
+  const html = renderToStaticMarkup(createElement(SystemSettingsLayout, {
+    activeGroup: "global",
+    children: createElement("p", null, "Selected details"),
+    onSelect: () => undefined,
+  }));
+  const runnerReached: readonly string[] = RUNNER_SETTINGS_GROUPS;
+  const unreachable = SYSTEM_SETTINGS_GROUPS
+    .map((group) => group.id)
+    .filter((id) => !runnerReached.includes(id))
+    .filter((id) => !html.includes(`<strong>${en[`settings.groups.${id}.label` as MessageKey]}</strong>`));
+
+  assert.deepEqual(unreachable, [], `settings groups with no navigation entry: ${unreachable.join(", ")}`);
 });
 
 test("renders the shared System settings commit and discard actions", () => {

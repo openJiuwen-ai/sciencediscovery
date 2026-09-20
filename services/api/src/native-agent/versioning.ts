@@ -11,6 +11,7 @@ import {
 } from "@sciencediscovery/cas";
 import type { RuntimeMessage, RuntimeToolCall, RunEvent, TurnLifecycle } from "@sciencediscovery/runtime-core";
 import type { StateCheckpoint, StateView, StateProvider } from "@sciencediscovery/context";
+import type { AgentEventEvidence, RunStreamEvent } from "@sciencediscovery/schema";
 
 export interface AgentVersioningOptions {
   agentId: string;
@@ -18,6 +19,8 @@ export interface AgentVersioningOptions {
   requestExecutionId: string;
   /** Authority adapter, not a reconstruction from truncated model messages. */
   readAuthorities?: () => Promise<unknown>;
+  /** The host's existing persisted Run stream, not a second trajectory log. */
+  recordEvent?: (event: RunStreamEvent) => Promise<void>;
 }
 
 export interface AgentManifest {
@@ -39,6 +42,7 @@ export interface ModelContextSnapshot<I = unknown> {
 }
 
 export interface ContextAssemblyRecord {
+  capturedAt?: string;
   checkpoint?: StateCheckpoint;
   turn: number;
   manifest: AgentStateRef;
@@ -133,14 +137,17 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
   private head: AgentStateRef | null = null;
   private before!: AgentStateRef;
   private modelContext!: AgentStateRef;
+  private modelAction?: AgentStateRef;
   private context!: AgentStateRef;
+  private activeContext?: AgentStateRef;
   private transcript: M[] = [];
   private observations: AgentStateRef[] = [];
   private turnObservations: { sequence: number; ref: AgentStateRef }[] = [];
-  private events = new Map<string, unknown[]>();
-  private offsets = new Map<string, number>();
   private children: AgentStateRef[] = [];
   private assemblyTrace: unknown = null;
+  private currentTurn = 0;
+  private responseId?: string;
+  private pending = Promise.resolve();
   private readonly assembler: AgentStateAssembler;
   private inputView?: StateView;
 
@@ -165,15 +172,14 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     const initialState = await this.state(0, "before", history);
     const start = await this.store.putRecord("TrajectoryStart", { revision: this.revision, initialState });
     await this.refs.commit(this.store, `trajectories/${encodeURIComponent(this.options.trajectoryId)}/start`, null, start);
+    await this.refs.commit(this.store, `agents/${encodeURIComponent(this.options.agentId)}/trajectories/${encodeURIComponent(this.options.trajectoryId)}`, null, start);
   }
 
   async beforeTurn({ turn, history }: Parameters<TurnLifecycle<M, I, U>["beforeTurn"]>[0]): Promise<void> {
     this.turnObservations = [];
-    // events is NOT cleared here: it is the unflushed buffer between durable
-    // boundaries. afterTurn flushes it into EventSegments and clears it there,
-    // so events emitted between turns (e.g. the finish_gate signal, which the
-    // loop emits after afterTurn) survive into the next turn's segment instead
-    // of being silently dropped.
+    this.currentTurn = turn;
+    this.activeContext = undefined;
+    this.responseId = undefined;
     this.children = [];
     this.assemblyTrace = null;
     this.before = await this.state(turn, "before", history);
@@ -198,9 +204,12 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
   }
 
   async afterAssembly({ turn, assembly }: Parameters<TurnLifecycle<M, I, U>["afterAssembly"]>[0]): Promise<void> {
+    // The new response ID is allocated by the loop after assembly, including retries.
+    this.responseId = undefined;
     this.modelContext = await this.store.putRecord("ModelContextSnapshot", jsonValue({
       boundary: "ProviderModelClient.invoke", input: assembly.modelInput,
     } satisfies ModelContextSnapshot<I>));
+    this.modelAction = undefined;
     this.context = await this.store.putRecord("ContextAssemblyRecord", jsonValue({
       turn, manifest: this.manifest, state: this.before, modelContext: this.modelContext, trace: this.assemblyTrace,
       ...(this.inputView ? { checkpoint: this.inputView.checkpoint } : {}),
@@ -211,6 +220,8 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     // keeps both attempts while the live audit ref tracks the latest input.
     const name = `attempts/${encodeURIComponent(this.options.trajectoryId)}/${turn}`;
     await this.refs.commit(this.store, name, this.refs.head(name), this.context);
+    this.activeContext = this.context;
+    await this.record("context.captured", undefined, this.before);
   }
 
   async recordObservation(input: { call: RuntimeToolCall; content: string; details?: unknown; isError: boolean; sequence: number }): Promise<void> {
@@ -219,11 +230,21 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     this.turnObservations.push({ sequence: input.sequence, ref });
   }
 
-  event(event: RunEvent<U>): void {
-    const stream = event.type === "tool_execution_start" || event.type === "tool_execution_end"
-      ? `tool:${event.call.id}` : this.options.agentId;
-    const values = this.events.get(stream) ?? [];
-    values.push(jsonValue(event)); this.events.set(stream, values);
+  event(event: RunEvent<U>): AgentEventEvidence {
+    if (event.type === "turn_start") this.currentTurn = event.turn;
+    if (event.type === "response_start") this.responseId = event.responseId;
+    if (event.type === "context_recovery") {
+      void this.record("context_recovery", jsonValue(event));
+    }
+    return this.evidence();
+  }
+
+  async modelCompleted(result: unknown): Promise<void> {
+    await this.pending;
+    // Persist the authoritative action once, before tools run (including failures).
+    // Both the Run event and the committed Step reference this same object.
+    this.modelAction = await this.store.putRecord("ModelAction", jsonValue({ modelContext: this.modelContext, result }));
+    await this.record("model.completed", undefined, undefined, this.evidence(), this.modelAction);
   }
 
   childCompleted(agentId: string): void {
@@ -235,27 +256,44 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     this.transcript.push(structuredClone(modelTurn.assistantMessage), ...results.map((result) => structuredClone(result.message)));
     const raw = this.turnObservations.sort((a, b) => a.sequence - b.sequence).map((item) => item.ref);
     this.observations.push(...raw);
-    const actions: AgentStateRef[] = [await this.store.putRecord("ModelAction", jsonValue({ modelContext: this.modelContext, result: modelTurn }))];
+    const actions: AgentStateRef[] = [this.modelAction ?? await this.store.putRecord("ModelAction", jsonValue({ modelContext: this.modelContext, result: modelTurn }))];
     for (const [index, call] of modelTurn.toolCalls.entries()) {
       actions.push(await this.store.putRecord("ToolAction", jsonValue({ call, result: results[index], observation: raw[index] ?? null })));
     }
     const eventSegments: TrajectoryStep["eventSegments"] = [];
-    for (const [stream, events] of this.events) {
-      const start = this.offsets.get(stream) ?? 0;
-      const end = start + events.length;
-      eventSegments.push({ stream, start, end, events: await this.store.putRecord("EventSegment", { stream, events }) });
-      this.offsets.set(stream, end);
-    }
-    // The buffer is flushed; events arriving from now on belong to the next
-    // durable boundary (or, on the final turn, are intentionally unpersisted
-    // like the terminal "completed" event itself).
-    this.events.clear();
     const after = await this.state(turn, "after", history);
     this.head = await this.coordinator.commit({
       agentId: this.options.agentId, trajectoryId: this.options.trajectoryId, turn,
       parent: this.head, revision: this.revision, before: this.before, after,
       context: this.context, modelContext: this.modelContext, actions, childTrajectories: this.children, eventSegments,
     });
+    await this.record("state.committed", undefined, after);
+  }
+
+  private evidence(): AgentEventEvidence {
+    return { agentId: this.options.agentId, agentRunId: this.options.trajectoryId,
+      requestExecutionId: this.options.requestExecutionId, recordedAt: new Date().toISOString(), turn: this.currentTurn,
+      ...(this.responseId ? { responseId: this.responseId } : {}),
+      ...(this.activeContext ? { contextRef: this.activeContext, stateRef: this.before } : {}) };
+  }
+
+  private record(name: Extract<RunStreamEvent, { type: "agent.record" }>["name"], payload?: unknown,
+    stateRef?: AgentStateRef, evidence = this.evidence(), existingPayload?: AgentStateRef): Promise<void> {
+    if (!this.options.recordEvent) return Promise.resolve();
+    const value = structuredClone(payload);
+    this.pending = this.pending.then(async () => {
+      const payloadRef = existingPayload ?? (value === undefined ? undefined : await this.store.putRecord("AgentEventPayload", value));
+      await this.options.recordEvent!({ type: "agent.record", name, evidence: { ...evidence, ...(stateRef ? { stateRef } : {}) },
+        ...(payloadRef ? { payloadRef } : {}) });
+    });
+    // Synchronous loop notifications are drained at the next awaited boundary.
+    void this.pending.catch(() => undefined);
+    return this.pending;
+  }
+
+  /** Drain supplemental records even after failure, without advancing the Agent head. */
+  async flushEvents(): Promise<void> {
+    await this.pending;
   }
 
   close(): void { this.refs?.close(); }

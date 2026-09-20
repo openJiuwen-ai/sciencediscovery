@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { detectStructureFormat, isStructureJson } from "../src/molecular.js";
+import { cifTrajectoryFormat, detectStructureFormat, isStructureJson } from "../src/molecular.js";
 
 test("detects molecular formats from the artifact filename", () => {
   assert.equal(detectStructureFormat({ name: "complex.pdb" }), "pdb");
@@ -42,4 +42,49 @@ test("does not treat the platform structure JSON as a 3D structure format", () =
   assert.equal(isStructureJson(json), true);
   assert.equal(detectStructureFormat({ content: json }), undefined);
   assert.equal(detectStructureFormat({ name: "model.structure.json", content: json }), undefined);
+});
+
+const NACL_CORE_CIF = `data_NaCl
+_symmetry_space_group_name_H-M 'F m -3 m'
+_cell_length_a 5.6402
+_cell_length_b 5.6402
+_cell_length_c 5.6402
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+loop_
+_symmetry_equiv_pos_as_xyz
+'x, y, z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+Na1 Na 0.0 0.0 0.0
+Cl1 Cl 0.5 0.5 0.5
+`;
+
+const MMCIF = `data_1TQN
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+ATOM 1 N N 10.0 12.0 14.0
+`;
+
+test("picks the CIF core parser for crystallographic files and mmCIF otherwise", () => {
+  // A crystallographic CIF parsed as mmCIF yields zero models ("No models found").
+  assert.equal(cifTrajectoryFormat(NACL_CORE_CIF), "cifCore");
+  assert.equal(cifTrajectoryFormat(NACL_CORE_CIF.replace(/_atom_site_fract_x/, "_ATOM_SITE_FRACT_X")), "cifCore");
+  assert.equal(cifTrajectoryFormat(MMCIF), "mmcif");
+  // A file carrying both keeps the Cartesian (mmCIF) reading.
+  assert.equal(cifTrajectoryFormat(`${MMCIF}\n_atom_site.fract_x\n`), "mmcif");
+  assert.equal(cifTrajectoryFormat(""), "mmcif");
+  // Format detection itself still calls both of them "cif".
+  assert.equal(detectStructureFormat({ name: "NaCl_Fm-3m.cif", content: NACL_CORE_CIF }), "cif");
 });

@@ -70,7 +70,7 @@ export function useMemorySubgraph(
   client: ApiClient,
   sessionId: string | undefined,
   refreshKey: string,
-  onError: (message: string) => void,
+  onError: (reason: string | Error) => void,
   active: boolean,
 ): { subgraph: MemorySubgraph | null; health: string } {
   const [subgraph, setSubgraph] = useState<MemorySubgraph | null>(null);
@@ -93,7 +93,7 @@ export function useMemorySubgraph(
     let alive = true;
     void client.getMemorySubgraph(sessionId)
       .then((result) => { if (alive) setSubgraph(result); })
-      .catch((error: Error) => { if (alive) onError(error.message); });
+      .catch((error: Error) => { if (alive) onError(error); });
     void client.getMemoryHealth()
       .then((result) => { if (alive) setHealth(result.memoryGraph ?? "unknown"); })
       .catch(() => { if (alive) setHealth("unknown"); });

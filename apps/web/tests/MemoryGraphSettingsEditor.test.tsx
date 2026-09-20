@@ -24,6 +24,7 @@ import {
 
 const settings = {
   enabled: false,
+  backend: "local",
   hasNeo4jPassword: true,
   memoryGraphStatus: "ready",
   neo4jHttp: "http://127.0.0.1:7474",
@@ -39,6 +40,7 @@ test("keeps write-only Memory Graph credentials in a deferred request", () => {
     password: "  replacement  ",
   }), {
     enabled: true,
+    backend: "local",
     neo4jHttp: settings.neo4jHttp,
     neo4jPassword: "replacement",
     neo4jUser: settings.neo4jUser,
@@ -49,8 +51,11 @@ test("keeps write-only Memory Graph credentials in a deferred request", () => {
     removePassword: true,
   }), {
     enabled: false,
+    backend: "local",
     neo4jHttp: settings.neo4jHttp,
     neo4jPassword: null,
     neo4jUser: settings.neo4jUser,
   });
+
+  assert.equal(memoryGraphSettingsRequest({ ...draft, backend: "neo4j" }).backend, "neo4j");
 });

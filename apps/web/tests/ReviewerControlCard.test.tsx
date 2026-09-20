@@ -19,6 +19,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ReviewerControlCard } from "../src/ReviewerControlCard.js";
+import { LocaleProvider } from "../src/i18n/index.js";
 
 test("Reviewer control card exposes Session automatic review and its Quick/Deep level", () => {
   const html = renderToStaticMarkup(createElement(ReviewerControlCard, {
@@ -92,4 +93,26 @@ test("Reviewer control card is absent when settings are off", () => {
   }));
 
   assert.equal(html, "");
+});
+
+test("Reviewer control card localizes controls while retaining the Reviewer Specialist name", () => {
+  const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" },
+    createElement(ReviewerControlCard, {
+      automaticReviewEnabled: true,
+      busy: false,
+      level: "deep",
+      onAutomaticReviewChange: () => undefined,
+      onLevelChange: () => undefined,
+      onRun: () => undefined,
+      onStop: () => undefined,
+      settings: { enabled: true },
+    }),
+  ));
+
+  assert.match(html, /Reviewer Specialist/);
+  assert.match(html, /内置专家/);
+  assert.match(html, /自动审查/);
+  assert.match(html, /级别/);
+  assert.match(html, /<option value="deep" selected="">深入<\/option>/);
+  assert.match(html, />运行审查</);
 });

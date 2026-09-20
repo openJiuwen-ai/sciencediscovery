@@ -187,6 +187,46 @@ export function countFoldedProducesMembers(
 }
 
 /**
+ * "Expand all": keep pulling in folded produces/citation neighbours, layer by
+ * layer, until nothing is left to reveal. Equivalent to double-clicking every
+ * visible node repeatedly. Scope and aggregate nodes are skipped (they expand
+ * through their own paths). Returns the new owner→members map and the set of
+ * nodes that have appeared, ready to hand to the two state setters.
+ *
+ * `visibleIds` is the node set currently on screen (including anything a scope
+ * expansion just brought in); `isOwner` filters out nodes that must not act as
+ * produces owners.
+ */
+export function expandAllProduces(
+  subgraph: MemorySubgraph,
+  visibleIds: ReadonlySet<string>,
+  expandedNodeMap: ReadonlyMap<string, ReadonlySet<string>>,
+  appearedIds: ReadonlySet<string>,
+  isOwner: (node: MemorySubgraph["nodes"][number]) => boolean = () => true,
+): { expandedNodeMap: Map<string, Set<string>>; appearedIds: Set<string> } {
+  const nodesById = new Map(subgraph.nodes.map((n) => [n.id, n]));
+  const visible = new Set(visibleIds);
+  const nextMap = new Map<string, Set<string>>();
+  for (const [k, v] of expandedNodeMap) nextMap.set(k, new Set(v));
+  const appeared = new Set(appearedIds);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const id of [...visible]) {
+      const node = nodesById.get(id);
+      if (!node || !isOwner(node)) continue;
+      const fresh = expandProducesOwner(subgraph, id, visible);
+      if (fresh.size === 0) continue;
+      const owned = nextMap.get(id) ?? new Set<string>();
+      for (const f of fresh) { owned.add(f); visible.add(f); appeared.add(f); }
+      nextMap.set(id, owned);
+      grew = true;
+    }
+  }
+  return { expandedNodeMap: nextMap, appearedIds: appeared };
+}
+
+/**
  * 折叠 ownerId：仿 `collapseNode`，**只删 ownerId 亲手拉进来的子节点**
  * （记录在 `expandedNodeMap[ownerId]` 名下的），递归删它们各自名下的孙节点
  * （整棵）。这是「谁展开谁折叠」的边为中心模型——折叠一个节点不动它没拉

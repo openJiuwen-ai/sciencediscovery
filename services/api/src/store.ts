@@ -818,6 +818,14 @@ export class SessionStore {
         "INSERT INTO memory_graph_secret (id, encrypted_password) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET encrypted_password = excluded.encrypted_password",
       ).run(this.encryptModelApiToken("memory-graph:neo4j", this.initialNeo4jPassword));
     }
+    // Upgrade path: catalogs written before the `backend` setting carry no such
+    // key. Someone who already saved a Neo4j password was using Neo4j, so keep
+    // them there instead of silently switching to the (empty) local store.
+    const savedGraphSettings = saved.memoryGraphSettings;
+    const hadBackendSetting = isRecord(savedGraphSettings) && savedGraphSettings.backend !== undefined;
+    if (!hadBackendSetting && this.database!.prepare("SELECT 1 FROM memory_graph_secret WHERE id = 1").get()) {
+      memoryGraphSettings.backend = "neo4j";
+    }
     const projects = (Array.isArray(saved.projects) ? saved.projects : []).map((project) => ({
       ...project,
       remoteRunnerHostIds: Array.isArray(project.remoteRunnerHostIds)

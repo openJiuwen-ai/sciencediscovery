@@ -2,14 +2,14 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import type { ModelUsage } from "@sciencediscovery/model";
-import type { SubagentUsage } from "@sciencediscovery/schema";
+import type { AgentEventEvidence, SubagentUsage } from "@sciencediscovery/schema";
 import type { AgentToolResult } from "@sciencediscovery/tools";
 
 export type AssistantMessageEvent =
   | { delta: string; responseId: string; type: "text_delta" }
   | { delta: string; responseId: string; type: "thinking_delta" };
 
-export type AgentEvent =
+export type AgentEvent = { evidence?: AgentEventEvidence } & (
   | { type: "turn_start" }
   /** One actual model invoke attempt begins; its text/thinking deltas carry the
    *  same `responseId`. Legacy compatibility belongs to stored Run events. */
@@ -29,7 +29,7 @@ export type AgentEvent =
   | { action: "continue" | "denied" | "finish"; turn: number; type: "finish_gate" }
   /** The stall guard restarted a silent model call (V2-C6): kick N fired.
    *  Consumers that ignore it behave exactly as before. */
-  | { kick: number; turn: number; type: "stall_kick" };
+  | { kick: number; turn: number; type: "stall_kick" });
 
 export interface Agent {
   abort(): void;

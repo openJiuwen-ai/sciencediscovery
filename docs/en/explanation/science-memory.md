@@ -1,6 +1,6 @@
 # ScienceMemory (Task and Citation Chains)
 
-ScienceMemory is an experimental, disabled-by-default option that records a Session's execution and argumentation as a Neo4j graph. Its value is making "where did this conclusion come from" traceable and clickable: from the research goal, to each task, the code run, the files produced, down to each cited Claim in the final report and its supporting Evidence.
+ScienceMemory is an experimental, disabled-by-default option that records a Session's execution and argumentation as a graph, kept as local text files by default or in Neo4j when selected. Its value is making "where did this conclusion come from" traceable and clickable: from the research goal, to each task, the code run, the files produced, down to each cited Claim in the final report and its supporting Evidence.
 
 Two core chains in the graph:
 
@@ -16,13 +16,13 @@ ScienceMemory spans four layers, each with its own responsibility:
 - **Frontend `apps/web`**: read-only. Renders the graph (thumbnail card + full-screen explorer), turns `[alias]` in reports into clickable chips, and dispatches clicks to evidence/artifact/node details. Does not connect to the graph directly; all read requests go through the Node API.
 - **Shared packages `packages`**: `schema` defines cross-package types (nodes/edges, Declare inputs, ComposerReference, report-version references); `agent-runtime` defines the LLM-callable tools (`query_graph` / `declare_*`) and injects the declare flow into the system prompt when the feature is enabled. Together they keep the frontend, Node, and tools from drifting.
 - **Control plane `services/api` (Node)**: the only client that connects to the graph directly. Two jobs — ① fire-and-forget mirror writes on execution events and receive LLM tool callbacks for declare; ② reverse-proxy `/api/memory/*` read requests for the browser. Drains chip references onto the report version at persistence time.
-- **Graph sidecar `services/memory-graph` (Python)**: FastAPI service on loopback `:17674`, Bearer-authenticated. Turns Node's writes into Neo4j nodes/edges (`persistence.py`) and answers read queries (`query.py`). Degrades silently when Neo4j is unreachable, without throwing.
+- **Graph sidecar `services/memory-graph` (Python)**: FastAPI service on loopback `:17674`, Bearer-authenticated. Turns Node's writes into graph nodes/edges (`persistence.py`) and answers read queries (`query.py`). Both go through one storage seam (`backend.py`) with two implementations: the default local JSONL store (`local_graph.py`, driven by a small Cypher interpreter in `_cypher.py`) and Neo4j. Degrades silently when the selected Neo4j is unreachable, without throwing.
 
 Four-layer flow (separate write and read paths, both via the Node API):
 
 ```
-[write] execution event / LLM tool callback ──trigger──> Node API ──fire-and-forget write──> Python sidecar ──Cypher──> Neo4j
-[read]  browser ────────────────────────────> Node API ──reverse proxy──────────> Python sidecar ──Cypher──> Neo4j
+[write] execution event / LLM tool callback ──trigger──> Node API ──fire-and-forget write──> Python sidecar ──Cypher──> local files / Neo4j
+[read]  browser ────────────────────────────> Node API ──reverse proxy──────────> Python sidecar ──Cypher──> local files / Neo4j
 
 bypass: agent-runtime defines LLM tools, schema defines cross-package types (constrains tools/types, does not participate in data flow directly)
 ```
@@ -175,6 +175,7 @@ ScienceMemory adds three kinds of HTTP interfaces: **sidecar native routes** (Py
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper (Paper missing → 422 `source_paper_not_found`) |
 | `POST /persist/claim` | CREATE Claim + supports (Evidence/Artifact→Claim) + optional produces + optional stated_in; returns `chip_map`. No supporting target → 422 `no_cites_target` (triggered before the degrade branch, reported even if the graph is down) |
 | `POST /persist/stated_in` | MERGE stated_in (Claim→report Artifact); the Artifact may not be mirrored yet, polls and waits up to 10×0.3s |
+| `POST /internal/backend` | Selects the storage backend (`local` or `neo4j`) |
 | `POST /internal/neo4j-password` | Pushes the Neo4j password + ensure_schema |
 
 **Read / query**
@@ -235,7 +236,7 @@ These tools are grouped in `RunTimeline` under `GRAPH_TOOL_NAMES = {query_graph,
 
 ## 4. Storage
 
-ScienceMemory's own data lives in Neo4j, but to support chip rendering and surviving refreshes, the existing Node-side storage model was extended with fields:
+ScienceMemory's own data lives in the graph store (local JSONL files by default, or Neo4j), but to support chip rendering and surviving refreshes, the existing Node-side storage model was extended with fields:
 
 ### 4.1 Node-side file-storage extensions
 
@@ -257,6 +258,6 @@ Connection, auth, and log variables for the sidecar and Node client:
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | Sidecar Bearer token; verified by both Node and sidecar |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | Log level shared by the sidecar and the Node side (propagated) |
 
-> Enabling ScienceMemory, plus the Neo4j connection address, user, and password, are all managed in **System Settings → ScienceMemory** (single toggle; no `.env` edit or stack restart needed).
+> Enabling ScienceMemory, the storage backend (Local files or Neo4j), and, for Neo4j, the connection address, user, and password are all managed in **System Settings → ScienceMemory** (single toggle; no `.env` edit or stack restart needed).
 
 Startup: `scripts/start-stack.sh` unconditionally launches the sidecar with `.sciencediscovery-data/envs/memory-graph/bin/python -m sciencediscovery_memory_graph.server` (the environment is provisioned unconditionally with the stack) and `wait_healthy` waits for `http://127.0.0.1:17674/health`. When the toggle is off the sidecar runs idle; sink writes and read paths short-circuit to return `memory_graph_disabled`.

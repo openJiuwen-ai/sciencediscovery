@@ -142,12 +142,12 @@ test("explicit environment tokens keep their existing meaning", async (context) 
   await assert.rejects(stat(bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)), /ENOENT/);
 });
 
-test("startup output shows a managed token and hides an operator-supplied one", async (context) => {
+test("startup output offers sign-in links for generated and operator-supplied tokens", async (context) => {
   const dataDir = await temporaryDataDir(context, "bootstrap-banner");
   const managed = loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir });
 
   const shown = accessTokenBanner(managed).join("\n");
-  const hidden = accessTokenBanner(loadServerConfig({
+  const explicit = accessTokenBanner(loadServerConfig({
     SCIENCE_AGENT_AUTH_TOKEN: "operator-token",
     SCIENCE_AGENT_DATA_DIR: dataDir,
   })).join("\n");
@@ -155,6 +155,17 @@ test("startup output shows a managed token and hides an operator-supplied one", 
   assert.equal(shown.includes(managed.authToken), true);
   assert.match(shown, /generated on first start/);
   assert.equal(shown.includes(bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)), true);
-  assert.equal(hidden.includes("operator-token"), false);
-  assert.match(hidden, /SCIENCE_AGENT_AUTH_TOKEN/);
+  assert.equal(explicit.includes("#token=operator-token"), true);
+  assert.match(explicit, /SCIENCE_AGENT_AUTH_TOKEN/);
 });
+
+for (const [host, expectedHost] of [["0.0.0.0", "127.0.0.1"], ["::", "127.0.0.1"], ["::1", "[::1]"]]) {
+  test(`startup link formats the bind address ${host}`, () => {
+    const token = "local+token/with?reserved=&字符";
+    const lines = accessTokenBanner({ host: host!, port: 54321, dataDir: "data", authToken: token });
+    const url = new URL(lines[0]!.replace("Open to sign in: ", ""));
+    assert.equal(url.host, `${expectedHost}:54321`);
+    assert.equal(url.search, "");
+    assert.equal(new URLSearchParams(url.hash.slice(1)).get("token"), token);
+  });
+}

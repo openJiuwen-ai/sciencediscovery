@@ -695,8 +695,20 @@ export async function initializePlatformServices(
   services.keJobRunner.start();
   services.keLivingReviewRunner.start();
 
+  const startupSettings = store.getMemoryGraphSettings();
+  // The sidecar starts on `local`, so only a Neo4j choice needs pushing.
+  if (startupSettings.backend === "neo4j") {
+    await memoryGraphClient
+      .pushBackend(startupSettings.backend)
+      .catch((error) => {
+        mgLog.warn(
+          "startup: backend push failed (non-fatal): %s",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+  }
   const storedNeo4jPassword = store.getMemoryGraphNeo4jPassword();
-  if (storedNeo4jPassword) {
+  if (startupSettings.backend === "neo4j" && storedNeo4jPassword) {
     mgLog.info("startup: pushing stored Neo4j credential to memory-graph");
     const connection = store.getMemoryGraphSettings();
     await memoryGraphClient
@@ -709,7 +721,7 @@ export async function initializePlatformServices(
         );
       });
   } else {
-    mgLog.info("startup: no stored Neo4j password, skipping push (set it in System Settings → Memory graph)");
+    mgLog.info("startup: memory graph backend is %s, no Neo4j credential to push", startupSettings.backend);
   }
 
   for (const project of store.listProjects()) {

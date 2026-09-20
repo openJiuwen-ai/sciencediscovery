@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
 import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
-import { ideaResearchPhaseLabel, IDEA_RESEARCH_STATUSES } from "./IdeaResearchLabels.js";
+import { useLocale } from "./i18n/index.js";
+import { ideaResearchActivityStatusLabel, ideaResearchPhaseLabel, ideaResearchStatusLabel } from "./IdeaResearchLabels.js";
 
-export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (message: string) => void; onResearchAvailability?: (available: boolean) => void}) {
+export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (reason: string | Error) => void; onResearchAvailability?: (available: boolean) => void}) {
+  const { t } = useLocale();
   const element = useRef<HTMLElement>(null);
   const [items, setItems] = useState<IdeaResearchView[]>([]);
   const [selected, setSelected] = useState<string>();
@@ -48,39 +50,39 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     try {
       await client.ideaResearchCommand(sessionId, {operation, researchId});
       setConfirmEnd(undefined); await load();
-    } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { onError(e instanceof Error ? e : String(e)); }
     finally {setBusy(false);}
   }
   const view = items.find(i => i.research.id === selected) ?? items[0];
-  if (!view) return error ? <p role="alert">{error} <button type="button" onClick={() => void load()}>重试</button></p> : null;
+  if (!view) return error ? <p role="alert">{error} <button className="secondary-button compact-button" type="button" onClick={() => void load()}>{t("ideaResearch.retry")}</button></p> : null;
   const r = view.research;
-  return <section ref={element} className="idea-research-panel" aria-label="Idea Tree 研究控制">
-    {error && <p role="alert">{error} <button type="button" onClick={() => { void load(); setReconnect(n => n + 1); }}>重新连接</button></p>}
+  return <section ref={element} className="idea-research-panel" aria-label={t("ideaResearch.controlsAria")}>
+    {error && <p role="alert">{error} <button className="secondary-button compact-button" type="button" onClick={() => { void load(); setReconnect(n => n + 1); }}>{t("ideaResearch.reconnect")}</button></p>}
     <button className="idea-tree-view" type="button" onClick={() => setOpen(true)}>
-      <span className="idea-tree-view-header"><strong>Idea Tree</strong><em>{IDEA_RESEARCH_STATUSES[r.status] ?? r.status}</em></span>
+      <span className="idea-tree-view-header"><strong>Idea Tree</strong><em>{ideaResearchStatusLabel(t, r.status)}</em></span>
       <span className="idea-tree-view-objective">{r.objective}</span>
-      <span className="idea-tree-view-stats">第 {r.round} / {r.settings.maxRounds} 轮 · {view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length} 个候选已完成</span>
-      <span className="idea-tree-view-stats">{r.activities?.filter(a => a.status === "running").map(a => ideaResearchPhaseLabel(r, a.role)).join(" · ") || ideaResearchPhaseLabel(r, r.phase)}</span>
-      <span className="idea-tree-view-action">查看研究进度 →</span>
+      <span className="idea-tree-view-stats">{t("ideaResearch.round", {round: r.round, total: r.settings.maxRounds})} · {t("ideaResearch.candidatesDone", {count: view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length})}</span>
+      <span className="idea-tree-view-stats">{r.activities?.filter(a => a.status === "running").map(a => ideaResearchPhaseLabel(t, r, a.role)).join(" · ") || ideaResearchPhaseLabel(t, r, r.phase)}</span>
+      <span className="idea-tree-view-action">{t("ideaResearch.viewProgress")}</span>
     </button>
     {open && <IdeaTreeExplorer autonomous graph={view.graph} treeIds={items.map(i => i.research.id)} onClose={() => setOpen(false)} onSelectTree={setSelected}
       controls={<div className="idea-research-progress">
-        <p>{IDEA_RESEARCH_STATUSES[r.status] ?? r.status} · 第 {r.round} / {r.settings.maxRounds} 轮 · 本轮完成 {r.batchCompleted} / {r.batch.length || r.batchCompleted}</p>
-        <p>{ideaResearchPhaseLabel(r, r.phase)} · 已评估 {view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length} 个候选 · tokens {r.usageKnown ? r.tokens : `${r.tokens}（部分用量未知）`}</p>
+        <p>{ideaResearchStatusLabel(t, r.status)} · {t("ideaResearch.round", {round: r.round, total: r.settings.maxRounds})} · {t("ideaResearch.batchProgress", {completed: r.batchCompleted, total: r.batch.length || r.batchCompleted})}</p>
+        <p>{ideaResearchPhaseLabel(t, r, r.phase)} · {t("ideaResearch.candidatesEvaluated", {count: view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length})} · {t(r.usageKnown ? "ideaResearch.tokens" : "ideaResearch.tokensPartial", {count: r.tokens})}</p>
         {r.reason && <p>{r.reason}</p>}
-        <ol aria-label="研究执行进度">
+        <ol aria-label={t("ideaResearch.progressAria")}>
           {(r.activities ?? []).slice(-12).map((activity, index) => <li key={`${activity.startedAt}-${activity.role}-${index}`}>
-            {ideaResearchPhaseLabel(r, activity.role)}{activity.nodeId ? ` · 节点 ${activity.nodeId}` : ""} · {{running: "执行中", completed: "已完成", stopped: "已停止", failed: "失败"}[activity.status]}
-            {" · "}{Math.max(0, Math.round(((activity.finishedAt ? Date.parse(activity.finishedAt) : clock) - Date.parse(activity.startedAt)) / 1000))} 秒
+            {ideaResearchPhaseLabel(t, r, activity.role)}{activity.nodeId ? ` · ${t("ideaResearch.node", {id: activity.nodeId})}` : ""} · {ideaResearchActivityStatusLabel(t, activity.status)}
+            {" · "}{t("ideaResearch.duration", {seconds: Math.max(0, Math.round(((activity.finishedAt ? Date.parse(activity.finishedAt) : clock) - Date.parse(activity.startedAt)) / 1000))})}
             {activity.error && <p role="alert">{activity.error}</p>}
           </li>)}
         </ol>
         <div className="idea-research-actions">
-          {r.status === "running" && <button className="secondary-button" type="button" disabled={busy} onClick={() => void command("pause", r.id)}>暂停</button>}
-          {["paused", "interrupted"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => void command("continue", r.id)}>继续</button>}
-          {!["completed", "ended"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmEnd(r.id)}>结束研究</button>}
+          {r.status === "running" && <button className="secondary-button" type="button" disabled={busy} onClick={() => void command("pause", r.id)}>{t("ideaResearch.pause")}</button>}
+          {["paused", "interrupted"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => void command("continue", r.id)}>{t("ideaResearch.continue")}</button>}
+          {!["completed", "ended"].includes(r.status) && <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmEnd(r.id)}>{t("ideaResearch.end")}</button>}
         </div>
-        {confirmEnd === r.id && <div role="alert">结束后不能继续，已有结果会保留。<div className="idea-research-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => void command("end", r.id)}>确认结束</button><button className="secondary-button" type="button" onClick={() => setConfirmEnd(undefined)}>取消</button></div></div>}
+        {confirmEnd === r.id && <div role="alert">{t("ideaResearch.endWarning")}<div className="idea-research-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => void command("end", r.id)}>{t("ideaResearch.endConfirm")}</button><button className="secondary-button" type="button" onClick={() => setConfirmEnd(undefined)}>{t("ideaResearch.endCancel")}</button></div></div>}
       </div>} />}
   </section>;
 }

@@ -39,13 +39,37 @@ export async function ideaResearchModel() {
     }
     let answer: object;
     if (payload.maximumCandidates) {
-      answer = { candidates: [{ direction: `Direction ${payload.round % 2}`, refinements: Array.from({length: Math.max(0, payload.maxDepth - 2)}, (_, i) => `Refinement ${i + 1}`), hypothesis: `Candidate ${payload.round}: reduce metal leaching` }], reason: "Compare alternatives and improve prior weaknesses" };
+      // Propose under a branch the engine actually selected this round. Only
+      // the first round selects ROOT; later rounds hand over existing
+      // directions, and a proposal that ignores `selectedParentIds` is
+      // rejected with "Proposed parent was not selected for expansion".
+      const parentId = payload.selectedParentIds?.[0] ?? "ROOT";
+      const parentDepth = (payload.nodes ?? []).find((node: any) => node.id === parentId)?.depth ?? 0;
+      // Naming the parent explicitly means the engine attaches the path to it
+      // and the `direction` label costs no level of its own (it is still
+      // required for a ROOT proposal). Size the refinements from the parent's
+      // depth so the candidate leaf always lands exactly on maxDepth.
+      const refinements = Math.max(0, payload.maxDepth - parentDepth - 1);
+      answer = { candidates: [{ parentId, direction: `Direction ${payload.round % 2}`, refinements: Array.from({length: refinements}, (_, i) => `Refinement ${i + 1}`), hypothesis: `Candidate ${payload.round}: reduce metal leaching` }], reason: "Compare alternatives and improve prior weaknesses" };
     } else if (payload.perspective) {
       answer = { text: `${payload.perspective}: assess uncertainty`, score: 7 };
     } else if (payload.children) {
       answer = { text: "Shared insight: improve recovery and verify metal leaching." };
     } else if (payload.assessments) {
-      answer = { text: "Candidate is promising; test leaching and recycling before experiments." };
+      // The aggregate role is validated structurally, not just as prose: six
+      // arrays of non-empty strings plus a confidence in [0, 1]. A bare `text`
+      // is rejected twice and interrupts the run with
+      // "strengths must be an array of non-empty strings".
+      answer = {
+        text: "Candidate is promising; test leaching and recycling before experiments.",
+        strengths: ["Low-cost Fe/Mn pair on a recyclable support"],
+        failureModes: ["Metal leaching near neutral pH"],
+        uncertainties: ["Long-run stability is unmeasured"],
+        evidenceGaps: ["No recovery rate in the supplied materials"],
+        recommendedNextMoves: ["Measure leaching before any scale-up"],
+        constraintFlags: ["No cobalt"],
+        confidence: 0.6,
+      };
     } else {
       answer = { text: "Fe/Mn catalyst on recyclable support; supplied evidence only." };
     }

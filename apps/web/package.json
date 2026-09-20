@@ -6,10 +6,11 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "tsx --test tests/*.test.tsx",
+    "test": "tsx --test tests/*.test.ts tests/*.test.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sciencediscovery/trajectory": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",
     "cytoscape": "^3.34.0",
     "cytoscape-dagre": "^4.0.0",
@@ -18,7 +19,7 @@
     "d3-selection": "^3.0.0",
     "d3-transition": "^3.0.1",
     "d3-zoom": "^3.0.0",
-    "fflate": "0.8.2",
+    "fflate": "0.8.3",
     "katex": "^0.16.47",
     "lucide-react": "1.26.0",
     "molstar": "^5.11.0",

@@ -121,6 +121,8 @@ import {
 const EVOLVE_CARD_POLL_MS = 3_000;
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
+import { isAuthFailure } from "./api/auth.js";
+import { TrajectoryViewer } from "@sciencediscovery/trajectory/web";
 import { createSessionActivity } from "./run-stream/session-activity.js";
 import { groupArtifactsBySession, upsertArtifactSession } from "./artifact-session-groups.js";
 import { mergePermissionRequestSnapshot } from "./permission-state.js";
@@ -192,7 +194,7 @@ import { SkillManager } from "./SkillManager.js";
 import { RunnerEnvironmentSettings } from "./RunnerEnvironmentSettings.js";
 import { OrchestrationPanel, SpecialistManager, SubagentCards } from "./Orchestration.js";
 import { SubagentConversation } from "./SubagentConversation.js";
-import { WakeNotice } from "./WakeNotice.js";
+import { WakeNotice, type ActivityRecordTarget } from "./WakeNotice.js";
 import {
   QuotaSettingsEditor,
   RuntimeStatusPanel,
@@ -200,7 +202,7 @@ import {
   TimeoutSettingsEditor,
 } from "./RuntimeControls.js";
 import { ProjectRemoteSettings, RemoteHostManager, RemoteJobsPanel, SessionRemoteSettings } from "./RemoteCompute.js";
-import { AgentActivityPanel } from "./AgentActivityPanel.js";
+import { AgentActivityPanel, type ActivityFocus } from "./AgentActivityPanel.js";
 import { RunUsageInline, UsagePage, type UsageAnalyticsUiFilters } from "./UsagePage.js";
 import { formatCompactTokenValue, usageInOutLabel } from "./usageFormat.js";
 import { ArtifactModal } from "./ScientificArtifacts.js";
@@ -719,7 +721,7 @@ export type SystemSettingsGroup =
   | "timeouts"
   | "web";
 
-const SYSTEM_SETTINGS_GROUPS: Array<{
+export const SYSTEM_SETTINGS_GROUPS: Array<{
   id: SystemSettingsGroup;
 }> = [
   { id: "global" },
@@ -774,10 +776,17 @@ function findResourceTarget(
   return session ? { id: session.id, kind, label: session.title } : undefined;
 }
 
+/**
+ * Groups the "Runners" category reaches instead of listing them by label: the
+ * category renders one entry per registered Runner (`runner:<id>`) and these
+ * are the panes those entries and the `+` button open.
+ */
+export const RUNNER_SETTINGS_GROUPS = ["remote", "environments", "runner-add"] as const;
+
 const SETTINGS_CATEGORIES = [
   { id: "general", groups: ["global", "language"] },
   { id: "runners", groups: [] },
-  { id: "capabilities", groups: ["models", "mcp", "web", "memory-graph", "skills", "specialists"] },
+  { id: "capabilities", groups: ["models", "mcp", "web", "memory-graph", "idea-tree", "skills", "specialists"] },
   { id: "access", groups: ["proxies", "sandbox-network", "permissions", "connection"] },
   { id: "resources", groups: ["timeouts", "quotas", "runtime"] },
 ] as const;
@@ -791,7 +800,8 @@ export function SystemSettingsLayout({ activeGroup, children, onSelect, runners 
   const { t } = useLocale();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [navigationOpen, setNavigationOpen] = useState(false);
-  const runnerGroup = activeGroup.startsWith("runner:") || ["remote", "environments", "runner-add"].includes(activeGroup);
+  const runnerGroup = activeGroup.startsWith("runner:")
+    || (RUNNER_SETTINGS_GROUPS as readonly string[]).includes(activeGroup);
   useEffect(() => {
     const category = SETTINGS_CATEGORIES.find((item) => item.id === "runners" ? runnerGroup : (item.groups as readonly string[]).includes(activeGroup));
     if (category) setCollapsed((current) => ({ ...current, [category.id]: false }));
@@ -972,7 +982,7 @@ export async function runSessionCreationOnce<T>({
   fallbackError: string;
   isInFlight: () => boolean;
   onCreated: (created: T) => Promise<void> | void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   setInFlight: (value: boolean) => void;
   setPending: (value: boolean) => void;
 }): Promise<boolean> {
@@ -982,7 +992,7 @@ export async function runSessionCreationOnce<T>({
   try {
     await onCreated(await create());
   } catch (reason) {
-    onError(reason instanceof Error ? reason.message : fallbackError);
+    onError(reason instanceof Error ? reason : fallbackError);
   } finally {
     setInFlight(false);
     setPending(false);
@@ -1001,12 +1011,9 @@ function shouldRefreshUsageForEvent(workspaceView: "session" | "usage", event: R
   return workspaceView === "usage" && event.type === "run.status" && isTerminalRunStatus(event.status);
 }
 
-export function App() {
+export function App({ initialToken }: { initialToken?: string } = {}) {
   const { locale, setLocale, t } = useLocale();
-  // No built-in fallback token: the server generates one on its first start and
-  // prints it, so a browser that has never been given a token starts empty, is
-  // rejected with 401, and is handed the Connection settings dialog.
-  const [token, setToken] = useState(() => readRenamedStorageItem(localStorage, TOKEN_STORAGE_KEY) ?? "");
+  const [token, setToken] = useState(() => initialToken ?? readRenamedStorageItem(localStorage, TOKEN_STORAGE_KEY) ?? "");
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [modelProviders, setModelProviders] = useState<ModelProvider[]>([]);
   const [modelProviderPresets, setModelProviderPresets] = useState<ModelProviderPreset[]>([]);
@@ -1029,6 +1036,7 @@ export function App() {
   // The URL is parsed once at mount: it seeds the initial view and queues the
   // Project/Session selection until the lists arrive (see the load effects).
   const [initialView] = useState(() => parseViewState(window.location.pathname, window.location.search));
+  const [trajectorySession, setTrajectorySession] = useState<{ id: string; title: string } | undefined>(() => initialView.trajectory && initialView.sessionId ? { id: initialView.sessionId, title: "" } : undefined);
   const [sessionListState, setSessionListState] = useState<SessionListState>(() => initialView.sessionFilter ?? "active");
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [activeSessionId, setActiveSessionId] = useState<string>();
@@ -1072,6 +1080,7 @@ export function App() {
   const [sessionPlans, setSessionPlans] = useState<SessionPlan[]>([]);
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [openSubagentId, setOpenSubagentId] = useState<string>();
+  const [activityFocus, setActivityFocus] = useState<ActivityFocus>();
   const [remoteJobs, setRemoteJobs] = useState<RemoteJob[]>([]);
   const [settingsRunners, setSettingsRunners] = useState<RemoteHostTarget[]>([]);
   const [remoteHosts, setRemoteHosts] = useState<RemoteHostTarget[]>([]);
@@ -1157,8 +1166,8 @@ export function App() {
   const [globalSearchHasMore, setGlobalSearchHasMore] = useState(false);
   const [globalSearchTotal, setGlobalSearchTotal] = useState(0);
   const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
-  const [showConfig, setShowConfig] = useState(() => initialView.settingsKind === "system");
-  const [systemSettingsGroup, setSystemSettingsGroup] = useState<SystemSettingsGroup>(() => isSystemSettingsGroup(initialView.settingsGroup) ? initialView.settingsGroup : "global");
+  const [showConfig, setShowConfig] = useState(() => !token || initialView.settingsKind === "system");
+  const [systemSettingsGroup, setSystemSettingsGroup] = useState<SystemSettingsGroup>(() => !token ? "connection" : isSystemSettingsGroup(initialView.settingsGroup) ? initialView.settingsGroup : "global");
   const [skillWorkspaceLaunch, setSkillWorkspaceLaunch] = useState<{ requestId: number; skillId?: string }>();
   const skillWorkspaceLaunchRevision = useRef(0);
   const [globalSettings, setGlobalSettings] = useState<RuntimeSettingsDetails>();
@@ -1287,8 +1296,11 @@ export function App() {
   // Survives token changes and re-renders, so the "one dialog per rejected
   // token" rule holds across the whole session rather than per client instance.
   const authPromptGate = useRef(createAuthTokenPromptGate());
+  const activeTokenRef = useRef(token);
+  activeTokenRef.current = token;
   const promptForToken = useCallback(() => {
-    setTokenRejected(true);
+    if (activeTokenRef.current !== token) return; // Ignore a late verdict on the previous credential.
+    setTokenRejected(Boolean(token));
     if (!authPromptGate.current.shouldPrompt(token)) return;
     setSystemSettingsGroup("connection");
     setShowConfig(true);
@@ -1373,10 +1385,14 @@ export function App() {
     });
   }, []);
   const { dismiss: dismissToast, push: pushToast, toasts } = useToasts();
-  const reportSystemSettingsError = useCallback((message?: string) => {
+  const reportSystemSettingsError = useCallback((reason?: string | Error) => {
+    if (isAuthFailure(reason)) return; // Connection owns authentication feedback.
+    const message = reason instanceof Error ? reason.message : reason;
     setSystemSettingsErrors((current) => updateInlineErrors(current, message));
   }, []);
-  const reportScopedSettingsError = useCallback((message?: string) => {
+  const reportScopedSettingsError = useCallback((reason?: string | Error) => {
+    if (isAuthFailure(reason)) return;
+    const message = reason instanceof Error ? reason.message : reason;
     setScopedSettingsErrors((current) => updateInlineErrors(current, message));
   }, []);
   const settingsErrorRouter = useMemo(() => createSettingsErrorRouter({
@@ -1388,7 +1404,9 @@ export function App() {
   /** Persisted Reviewer checkpoints survive a browser refresh; do not rely only on local request state. */
   const reviewerCheckpointRunning = Boolean(session?.messages.some((message) =>
     message.kind === "reviewer_checkpoint" && message.reviewerCheckpoint?.status === "running"));
-  const reviewerAuditRunning = reviewerAuditTasks.some((task) => task.status === "queued" || task.status === "running");
+  /** Queued work must keep polling, but is not yet a cancellable review. */
+  const reviewerAuditPending = reviewerAuditTasks.some((task) => task.status === "queued" || task.status === "running");
+  const reviewerAuditRunning = reviewerAuditTasks.some((task) => task.status === "running");
   const reviewerTaskDiscoveryVersionIds = session?.id
     ? reviewerTaskDiscoveryVersions[session.id] ?? EMPTY_STRING_ARRAY
     : EMPTY_STRING_ARRAY;
@@ -1473,7 +1491,7 @@ export function App() {
         maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
       });
     }).catch((reason: Error) => {
-      if (active) reportSystemSettingsError(reason.message);
+      if (active) reportSystemSettingsError(reason);
     });
     return () => { active = false; };
   }, [client, reportSystemSettingsError, showConfig]);
@@ -1482,7 +1500,7 @@ export function App() {
     let active = true;
     void client.getReviewerSpecialistSettings()
       .then((settings) => { if (active) setReviewerSpecialistSettings(settings); })
-      .catch((reason: Error) => { if (active) setError(reason.message); });
+      .catch((reason: Error) => { if (active) setError(reason); });
     return () => { active = false; };
   }, [client, showConfig]);
 
@@ -1516,12 +1534,11 @@ export function App() {
   }
 
 
-  // Request errors surface as top-right notification toasts. The state is kept
-  // for the connection indicator. Identical concurrent failures — every startup
-  // call answering "Unauthorized" to a rejected token, say — collapse into one
-  // toast in the queue, so the notification column cannot grow past the dialog
-  // the user needs to fix the problem with.
-  const setError = useCallback((message?: string) => {
+  // Preserve the typed error until routing: a local 401 belongs only to the
+  // Connection prompt. Network faults and other HTTP errors still get a toast.
+  const setError = useCallback((reason?: string | Error) => {
+    if (isAuthFailure(reason)) return;
+    const message = reason instanceof Error ? reason.message : reason;
     setErrorState(message);
     if (message) pushToast("error", t("error.request"), message);
   }, [pushToast]);
@@ -1551,7 +1568,7 @@ export function App() {
 
   // Long-lived panels keep these in effect dependencies, so they must not be
   // re-created on every render of this component.
-  const reportError = useCallback((message: string) => setError(message || undefined), [setError]);
+  const reportError = useCallback((reason: string | Error) => setError(reason || undefined), [setError]);
 
   // One polled snapshot shared by the right-rail card and the full-screen
   // explorer (lifted from MemoryGraphView so opening the explorer doesn't
@@ -1584,7 +1601,7 @@ export function App() {
     if (!activeSessionId) return;
     let active = true;
     const refresh = () => refreshGovernedDownloads(activeSessionId).catch((reason: Error) => {
-      if (active) reportError(reason.message);
+      if (active) reportError(reason);
     });
     void refresh();
     const timer = window.setInterval(() => void refresh(), 2_000);
@@ -1679,6 +1696,7 @@ export function App() {
     if (!projectsLoaded || !sessionsLoaded) return;
     const view: ViewState = {
       artifact: artifactModalName,
+      trajectory: trajectorySession && trajectorySession.id === activeSessionId ? true : undefined,
       projectId: activeProjectId,
       sessionFilter: sessionListState,
       sessionId: activeSessionId,
@@ -1707,7 +1725,14 @@ export function App() {
     const url = `${next}${window.location.hash}`;
     if (replace) window.history.replaceState(null, "", url);
     else window.history.pushState(null, "", url);
-  }, [activeProjectId, activeSessionId, artifactModalName, projectsLoaded, sessionListState, sessionsLoaded, settingsTarget, showConfig, systemSettingsGroup, urlEpoch, workspaceCollapsed, workspaceView]);
+  }, [activeProjectId, activeSessionId, artifactModalName, trajectorySession, projectsLoaded, sessionListState, sessionsLoaded, settingsTarget, showConfig, systemSettingsGroup, urlEpoch, workspaceCollapsed, workspaceView]);
+
+  // Leaving a Session closes its inline trajectory view: switching back must
+  // not silently reopen it and rewrite the path. The activeSessionId guard
+  // keeps deep links working — it is only known once the lists have loaded.
+  useEffect(() => {
+    if (activeSessionId && trajectorySession && trajectorySession.id !== activeSessionId) setTrajectorySession(undefined);
+  }, [activeSessionId, trajectorySession]);
 
   // URL → main view: browser back/forward re-applies the encoded view. Invalid
   // ids degrade to the loaded lists' defaults instead of a blank screen.
@@ -1720,6 +1745,7 @@ export function App() {
       pendingSettingsRef.current = null;
       if (view.workspaceOpen !== undefined) setWorkspaceCollapsed(!view.workspaceOpen);
       setArtifactModalName(view.artifact);
+      setTrajectorySession(view.trajectory && view.sessionId ? { id: view.sessionId, title: "" } : undefined);
       setArtifactModalVersion(undefined);
       setArtifactModalSessionId(undefined);
       if (view.settingsKind === "system") openSystemSettings();
@@ -1870,15 +1896,15 @@ export function App() {
       // A cold start directly into System settings is an explicit settings
       // load operation, so its failure belongs to that dialog. Other startup
       // failures remain global even if a dialog opens later.
-      if (initialView.settingsKind === "system") reportSystemSettingsError(reason.message);
-      else setError(reason.message);
+      if (initialView.settingsKind === "system") reportSystemSettingsError(reason);
+      else setError(reason);
     }).finally(() => setProjectsLoaded(true));
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
 
   useEffect(() => {
-    void client.searchWorkbench().then((response) => setWorkbenchIndex(response.results)).catch((reason: Error) => setError(reason.message));
-    void client.listSpecialists().then(setSpecialists).catch((reason: Error) => setError(reason.message));
-    void client.listPermissionGrants().then(setPermissionGrants).catch((reason: Error) => setError(reason.message));
+    void client.searchWorkbench().then((response) => setWorkbenchIndex(response.results)).catch((reason: Error) => setError(reason));
+    void client.listSpecialists().then(setSpecialists).catch((reason: Error) => setError(reason));
+    void client.listPermissionGrants().then(setPermissionGrants).catch((reason: Error) => setError(reason));
   }, [client]);
 
   useEffect(() => {
@@ -1898,7 +1924,7 @@ export function App() {
       }).catch((reason: Error) => {
         if (globalSearchRequestId.current !== requestId) return;
         setGlobalSearchLoading(false);
-        setError(reason.message);
+        setError(reason);
       });
     }, globalSearchQuery.trim() ? GLOBAL_SEARCH_DEBOUNCE_MS : 0);
     return () => {
@@ -1958,7 +1984,7 @@ export function App() {
         if (target) void openScopedSettings(target);
       }
     }).catch((reason: Error) => {
-      if (!cancelled) setError(reason.message);
+      if (!cancelled) setError(reason);
     }).finally(() => {
       if (!cancelled) setSessionsLoaded(true);
     });
@@ -2022,6 +2048,16 @@ export function App() {
       }
     }));
     const subagentsByRun = subagentsByRootRun(sessionRunItems, subagentItems);
+    if (activeRun) {
+      // A wake turn reopens a child inside a later run than the one that
+      // created it. That run's replay names the child, so its lane and catalog
+      // snapshot are read for this run as well; otherwise the card would show
+      // the child starting for as long as the turn lasts.
+      const known = new Set((subagentsByRun.get(activeRun.id) ?? []).map((subagent) => subagent.id));
+      const reopened = new Set(replayEvents.flatMap((record) => record.event.type === "subagent.updated" ? [record.event.subagent.id] : []));
+      const extra = subagentItems.filter((subagent) => reopened.has(subagent.id) && !known.has(subagent.id));
+      if (extra.length) subagentsByRun.set(activeRun.id, [...(subagentsByRun.get(activeRun.id) ?? []), ...extra]);
+    }
     const childStreamEvents = await Promise.all([...subagentsByRun].flatMap(([runId, runSubagents]) =>
       runSubagents.map(async (subagent) => {
         try {
@@ -2119,7 +2155,7 @@ export function App() {
   // small state until terminal, so background audits never block the chat.
   useEffect(() => {
     const sessionId = session?.id;
-    if (!sessionId || (!reviewerCheckpointRunning && !reviewerAuditRunning && !reviewerTaskDiscoveryPending)) return;
+    if (!sessionId || (!reviewerCheckpointRunning && !reviewerAuditPending && !reviewerTaskDiscoveryPending)) return;
     let active = true;
     let discoveryMisses = 0;
     const refreshReviewerCheckpoint = () => {
@@ -2155,7 +2191,7 @@ export function App() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [client, reviewerAuditRunning, reviewerCheckpointRunning, reviewerTaskDiscoveryPending, reviewerTaskDiscoveryVersionIds, session?.id]);
+  }, [client, reviewerAuditPending, reviewerCheckpointRunning, reviewerTaskDiscoveryPending, reviewerTaskDiscoveryVersionIds, session?.id]);
 
   useEffect(() => {
     const visibleSessionId = activeSessionId;
@@ -2165,7 +2201,7 @@ export function App() {
     setIsFollowingOutput(true);
     setMarkdownDocument(undefined);
     void refreshSession(visibleSessionId).catch((reason: Error) => {
-      if (shouldApplySessionScopedUpdate(visibleSessionId, activeSessionIdRef.current)) setError(reason.message);
+      if (shouldApplySessionScopedUpdate(visibleSessionId, activeSessionIdRef.current)) setError(reason);
     });
   }, [activeSessionId, client]);
 
@@ -2362,7 +2398,7 @@ export function App() {
       setSessionsExpanded(true);
       pushToast("success", t("app.projectCreated"), project.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.createProject"));
+      setError(reason instanceof Error ? reason : t("error.createProject"));
     }
   }
 
@@ -2456,7 +2492,7 @@ export function App() {
       setError(undefined);
       pushToast("success", target.kind === "project" ? t("app.projectRenamed") : t("app.sessionRenamed"), name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : target.kind === "project" ? t("error.renameProject") : t("error.renameSession"));
+      setError(reason instanceof Error ? reason : target.kind === "project" ? t("error.renameProject") : t("error.renameSession"));
     } finally {
       renameSavesInFlight.current.delete(key);
       setRenameSavingKeys((current) => {
@@ -2477,7 +2513,7 @@ export function App() {
       setError(undefined);
       pushToast("success", t("app.proxyServerAdded"), input.name.trim());
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.addProxyServer"));
+      setError(reason instanceof Error ? reason : t("error.addProxyServer"));
       throw reason;
     }
   }
@@ -2491,7 +2527,7 @@ export function App() {
       setError(undefined);
       pushToast("success", t("app.proxyServerUpdated"), saved.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.updateProxyServer"));
+      setError(reason instanceof Error ? reason : t("error.updateProxyServer"));
       throw reason;
     }
   }
@@ -2507,7 +2543,7 @@ export function App() {
       setError(undefined);
       pushToast("success", t("app.proxyServerDeleted"), server.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.deleteProxyServer"));
+      setError(reason instanceof Error ? reason : t("error.deleteProxyServer"));
     }
   }
 
@@ -2517,7 +2553,7 @@ export function App() {
       setError(undefined);
       pushToast("success", t("app.proxyDefaultUpdated"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.updateProxyDefault"));
+      setError(reason instanceof Error ? reason : t("error.updateProxyDefault"));
     }
   }
 
@@ -2530,7 +2566,7 @@ export function App() {
       setError(undefined);
       pushToast("success", t("app.mcpProxyPolicyUpdated"), serverId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.updateMcpProxyPolicy"));
+      setError(reason instanceof Error ? reason : t("error.updateMcpProxyPolicy"));
     }
   }
 
@@ -2549,8 +2585,7 @@ export function App() {
       setWebSettings(saved);
       pushToast("success", t("app.webSettingsUpdated"));
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : t("error.saveWeb");
-      reportSystemSettingsError(message);
+      reportSystemSettingsError(reason instanceof Error ? reason : t("error.saveWeb"));
       throw reason;
     }
   }
@@ -2562,7 +2597,7 @@ export function App() {
       setMemoryGraphSettings(saved);
       pushToast("success", t("app.memoryGraphSettingsUpdated"));
     } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : t("error.saveMemoryGraph"));
+      reportSystemSettingsError(reason instanceof Error ? reason : t("error.saveMemoryGraph"));
       throw reason;
     }
   }
@@ -2575,7 +2610,7 @@ export function App() {
       setIdeaTreeSettingsEdit(undefined);
       pushToast("success", t("ideaTree.saved"));
     } catch (reason) {
-      reportSystemSettingsError(reason instanceof Error ? reason.message : "Could not save Idea Tree settings");
+      reportSystemSettingsError(reason instanceof Error ? reason : "Could not save Idea Tree settings");
       throw reason;
     }
   }
@@ -2614,7 +2649,7 @@ export function App() {
     if (!showConfig) return;
     let disposed = false;
     void client.listRunners().then((items) => { if (!disposed) setSettingsRunners(items); })
-      .catch((error: Error) => { if (!disposed) reportSystemSettingsError(error.message); });
+      .catch((error: Error) => { if (!disposed) reportSystemSettingsError(error); });
     return () => { disposed = true; };
   }, [client, showConfig]);
 
@@ -2642,6 +2677,25 @@ export function App() {
     reportSystemSettingsError();
     setSystemSettingsSaving(true);
     try {
+      if (tokenEdit !== undefined) {
+        const candidate = tokenEdit.trim();
+        try {
+          // Validate before persisting or closing; retrying the same wrong
+          // value must still leave the user at the single recovery prompt.
+          await new ApiClient(candidate).listProjects();
+        } catch (reason) {
+          if (isAuthFailure(reason)) {
+            setTokenRejected(Boolean(candidate));
+            setSystemSettingsGroup("connection");
+          } else {
+            reportSystemSettingsError(reason instanceof Error ? reason : t("error.request"));
+          }
+          return;
+        }
+        localStorage.setItem(TOKEN_STORAGE_KEY, candidate);
+        setToken(candidate);
+        setTokenRejected(false);
+      }
       // The footer saves every edited section retained while navigating.
       // Persist every edited section, including drafts retained while the user
       // navigated elsewhere in the dialog. A failed request keeps the dialog
@@ -2658,7 +2712,6 @@ export function App() {
         if (!saved) return;
       }
       if (localeEdit) setLocale(localeEdit);
-      if (tokenEdit !== undefined) setToken(tokenEdit);
       clearSystemSettingsDrafts();
       if (closeAfterSave) {
         reportSystemSettingsError();
@@ -2690,7 +2743,7 @@ export function App() {
       }
       setError(undefined);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.updateSession"));
+      setError(reason instanceof Error ? reason : t("error.updateSession"));
     }
   }
 
@@ -2855,7 +2908,7 @@ export function App() {
         return;
       }
       if (request.sessionId) await refreshPermissionState(request.sessionId).catch(() => undefined);
-      setError(reason instanceof Error ? reason.message : t("error.permission"));
+      setError(reason instanceof Error ? reason : t("error.permission"));
     }
   }
 
@@ -2890,7 +2943,7 @@ export function App() {
       } : item));
       setError(undefined);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.updateReviewerSettings"));
+      setError(reason instanceof Error ? reason : t("error.updateReviewerSettings"));
     } finally {
       setReviewerSessionSettingsBusy(false);
     }
@@ -2925,6 +2978,12 @@ export function App() {
       setError(undefined);
       pushToast("info", t("app.reviewStarted"), t("app.reviewStartedDetail"));
     } catch (reason) {
+      if (isAuthFailure(reason)) {
+        setSession((current) => current?.id === targetSessionId
+          ? { ...current, messages: current.messages.filter((item) => item.id !== messageId) }
+          : current);
+        return;
+      }
       const detail = reason instanceof Error ? reason.message : t("error.runReviewer");
       if (shouldApplySessionScopedUpdate(targetSessionId, activeSessionIdRef.current)) {
         setSession((current) => current?.id === targetSessionId ? {
@@ -2957,6 +3016,7 @@ export function App() {
       setError(undefined);
       pushToast("info", t("app.reviewStopped"), t("app.reviewStoppedDetail"));
     } catch (reason) {
+      if (isAuthFailure(reason)) return;
       const detail = reason instanceof Error ? reason.message : t("error.stopReviewer");
       pushToast("error", t("error.stopReview"), detail);
     } finally {
@@ -2978,7 +3038,7 @@ export function App() {
       setError(updated.error);
       if (!updated.error) pushToast(decision === "deny" ? "info" : "success", decision === "deny" ? t("app.remoteJobDeclined") : t("app.remoteJobApproved"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.decideRemoteJob"));
+      setError(reason instanceof Error ? reason : t("error.decideRemoteJob"));
     }
   }
 
@@ -2990,7 +3050,7 @@ export function App() {
       if (updated.outputRecords.some((output) => output.localPath)) setFiles(await client.listFiles(activeSessionId));
       setError(updated.error);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.refreshRemoteJob"));
+      setError(reason instanceof Error ? reason : t("error.refreshRemoteJob"));
     }
   }
 
@@ -3107,7 +3167,7 @@ export function App() {
       setError(undefined);
       pushToast("success", action === "archive" ? t("app.sessionArchivedToast") : t("app.sessionRestoredToast"));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : action === "archive" ? t("error.archiveSession") : t("error.restoreSession"));
+      setError(reason instanceof Error ? reason : action === "archive" ? t("error.archiveSession") : t("error.restoreSession"));
     } finally {
       setLifecycleBusy(false);
     }
@@ -3123,7 +3183,7 @@ export function App() {
         : await client.getSessionDeletionImpact(target.id));
     } catch (reason) {
       setDeletionTarget(undefined);
-      setError(reason instanceof Error ? reason.message : t("error.previewDeletion"));
+      setError(reason instanceof Error ? reason : t("error.previewDeletion"));
     }
   }
 
@@ -3156,7 +3216,7 @@ export function App() {
       setError(undefined);
       pushToast("success", deletionTarget.kind === "project" ? t("app.projectDeleted") : t("app.sessionDeleted"), deletionTarget.label);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.deleteResource"));
+      setError(reason instanceof Error ? reason : t("error.deleteResource"));
     } finally {
       setLifecycleBusy(false);
     }
@@ -3198,6 +3258,18 @@ export function App() {
   }
 
 
+
+  /** A SubAgent is named in the conversation by the task it was given. */
+  function wakeNoticeAgentLabel(agentId: string): string {
+    return subagents.find((candidate) => `subagent:${candidate.id}` === agentId)?.input.description ?? agentId;
+  }
+
+  /** Point the workspace rail at one execution or reminder record: open the
+   * rail, the tasks folder and the record itself. */
+  function revealActivityRecord(target: ActivityRecordTarget): void {
+    setWorkspaceCollapsed(false);
+    setActivityFocus({ ...target, token: Date.now() });
+  }
 
   async function openWorkspacePath(path: string, targetSessionId = activeSessionId): Promise<void> {
     if (!targetSessionId) return;
@@ -3264,7 +3336,7 @@ export function App() {
     });
     if (routing.toast) pushToast(routing.toast.tone, routing.toast.title, routing.toast.detail);
     if (shouldRefreshUsageForEvent(workspaceViewRef.current, streamEvent)) {
-      void refreshUsageData().catch((reason: Error) => setError(reason.message));
+      void refreshUsageData().catch((reason: Error) => setError(reason));
     }
     if (!routing.updatesSessionView) return;
     if (streamEvent.type === "run.status" && isTerminalRunStatus(streamEvent.status)) {
@@ -3403,7 +3475,7 @@ export function App() {
       if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) await refreshSession(sessionId);
     }).catch((reason) => {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : t("error.resumeRunEvents"));
+        setError(reason instanceof Error ? reason : t("error.resumeRunEvents"));
       }
     }).finally(() => {
       if (runAbortControllers.current.get(sessionId) === controller) {
@@ -3433,7 +3505,7 @@ export function App() {
         setMessage("");
         setError(undefined);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : t("error.loadWebUsage"));
+        setError(reason instanceof Error ? reason : t("error.loadWebUsage"));
       }
       return;
     }
@@ -3465,6 +3537,11 @@ export function App() {
     );
     if (!queuedBehindActiveRun) runAbortControllers.current.set(submittedSessionId, controller);
 
+    const savedContent = content;
+    const savedReferences = composerReferences;
+    const savedAnnotations = pendingAnnotations;
+    const optimisticMessageId = `optimistic-${Date.now()}`;
+
     setMessage("");
     setComposerReferences([]);
     setPendingAnnotations([]);
@@ -3487,7 +3564,7 @@ export function App() {
         messages: [...current.messages, {
           content,
           createdAt: new Date().toISOString(),
-          id: `optimistic-${Date.now()}`,
+          id: optimisticMessageId,
           ...(references.length ? { references } : {}),
           ...(annotations.length ? { annotations } : {}),
           role: "user",
@@ -3511,10 +3588,25 @@ export function App() {
         }
         applySessionRunEvent(submittedSessionId, runSessionTitle, streamRunId, streamEvent, sequence);
       }, controller.signal);
-      if (shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) await refreshSession(submittedSessionId);
+      if (shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
+        try {
+          await refreshSession(submittedSessionId);
+        } catch (refreshReason) {
+          if (!isAbortError(refreshReason) && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
+            setError(refreshReason instanceof Error ? refreshReason : t("error.runFailed"));
+          }
+        }
+      }
     } catch (reason) {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : t("error.runFailed"));
+        setError(reason instanceof Error ? reason : t("error.runFailed"));
+        setMessage(savedContent);
+        setComposerReferences(savedReferences);
+        setPendingAnnotations(savedAnnotations);
+        setSession((current) => current ? {
+          ...current,
+          messages: current.messages.filter((item) => item.role !== "user" || item.id !== optimisticMessageId),
+        } : current);
         if (autoNameFirstMessage) {
           void refreshSession(submittedSessionId).catch(() => undefined);
         }
@@ -3548,12 +3640,12 @@ export function App() {
       pushToast(toast.tone, toast.title, toast.detail);
       if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) {
         void refreshSession(run.sessionId).catch((reason: Error) => {
-          if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) setError(reason.message);
+          if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) setError(reason);
         });
       }
     } catch (reason) {
       if (shouldApplySessionScopedUpdate(run.sessionId, activeSessionIdRef.current)) {
-        setError(reason instanceof Error ? reason.message : t("error.cancelQueuedRun"));
+        setError(reason instanceof Error ? reason : t("error.cancelQueuedRun"));
       }
     } finally {
       setCancellingQueuedRunIds((current) => {
@@ -3587,8 +3679,7 @@ export function App() {
       pushToast("info", t("app.skillProposalQueued"), t("app.skillProposalQueuedDetail", { id: run.id.slice(0, 8) }));
       await refreshSession(session.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : t("error.queueSkillEvolution");
-      setError(message);
+      setError(reason instanceof Error ? reason : t("error.queueSkillEvolution"));
     } finally {
       setSkillEvolutionSourceRunIds((current) => {
         if (!current.has(run.id)) return current;
@@ -3618,7 +3709,7 @@ export function App() {
     try {
       await openWorkspacePath(file.path);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.openFile"));
+      setError(reason instanceof Error ? reason : t("error.openFile"));
     }
   }
 
@@ -3726,6 +3817,7 @@ export function App() {
         if (!version) throw new Error(translateActive("error.artifactNoVersion"));
         return { artifact, name, version };
       }));
+      if (metadataResults.some((result) => result.status === "rejected" && isAuthFailure(result.reason))) return;
       const metadata = metadataResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
       let skipped = metadataResults.length - metadata.length;
       const archiveNames = new Set<string>();
@@ -3750,6 +3842,7 @@ export function App() {
         const blob = await client.readProjectArtifactVersion(activeProjectId, version.id);
         return { content: new Uint8Array(await blob.arrayBuffer()), name };
       }));
+      if (contentResults.some((result) => result.status === "rejected" && isAuthFailure(result.reason))) return;
       const entries = contentResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
       skipped += contentResults.length - entries.length;
       if (!entries.length) {
@@ -3770,7 +3863,7 @@ export function App() {
       if (skipped) pushToast("info", t("artifact.archiveReady"), t("artifact.archiveSkipped", { count: skipped }));
       else pushToast("success", t("artifact.archiveReady"), t("app.selectedArtifacts", { count: entries.length }));
     } catch (reason) {
-      pushToast("error", t("artifact.archiveFailed"), reason instanceof Error ? reason.message : undefined);
+      if (!isAuthFailure(reason)) pushToast("error", t("artifact.archiveFailed"), reason instanceof Error ? reason.message : undefined);
     } finally {
       setArtifactArchiveBusy(false);
     }
@@ -3791,7 +3884,7 @@ export function App() {
     if (workspaceView !== "usage") return;
     let active = true;
     void refreshUsageData().catch((reason: Error) => {
-      if (active) setError(reason instanceof Error ? reason.message : t("error.loadModelUsage"));
+      if (active) setError(reason instanceof Error ? reason : t("error.loadModelUsage"));
     });
     return () => { active = false; };
   }, [refreshUsageData, setError, workspaceView]);
@@ -3818,7 +3911,7 @@ export function App() {
       setActiveSessionId(sessionId);
       await refreshSession(sessionId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.openSessionFromUsage"));
+      setError(reason instanceof Error ? reason : t("error.openSessionFromUsage"));
     }
   }
 
@@ -3840,7 +3933,7 @@ export function App() {
         setArtifactModalName(result.path);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("error.openSearchResult"));
+      setError(reason instanceof Error ? reason : t("error.openSearchResult"));
     }
   }
 
@@ -3922,7 +4015,7 @@ export function App() {
         syncSessionSummary(updated);
         setError(undefined);
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : t("error.updateSession")))
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason : t("error.updateSession")))
       .finally(() => {
         if (thinkingNormalizationInFlight.current === key) thinkingNormalizationInFlight.current = undefined;
       });
@@ -4036,23 +4129,8 @@ export function App() {
     displayedMessageIds,
     replayedRunIds,
   });
-  const visibleOutputs = [...artifactOutputAnchors.activeTimeline,
-    ...[...artifactOutputAnchors.byMessage.values()].flat(), ...[...artifactOutputAnchors.byReplayTimeline.values()].flat()];
-  const registeredPaths = new Set(visibleOutputs.filter((output) => output.version.sessionId === session?.id)
-    .map((output) => output.version.sourcePath).filter(Boolean));
-  const currentPreviewFiles = files.filter((file, index) => !registeredPaths.has(file.path)
-    && (file.previewKind || /\.(md|markdown|html|csv|json|ipynb|png|jpg|jpeg|svg|pdf)$/i.test(file.path))
-    && files.findIndex((other) => other.path === file.path) === index);
-  // Current bytes are shown once, never presented as an old Run's snapshot.
-  const latestOutputRun = selectSessionReplayRun(sessionRuns.filter((run) => isTerminalRunStatus(run.status)));
-  const outputMessageId = latestOutputRun?.assistantMessageId ?? latestOutputRun?.userMessageId;
-  const currentFileSlot = latestOutputRun?.id === activeTimelineRunId && runTimeline.length ? "active"
-    : latestOutputRun && replayedRunIds.has(latestOutputRun.id) ? `run:${latestOutputRun.id}`
-      : outputMessageId && displayedMessageIds.has(outputMessageId) ? `message:${outputMessageId}` : "tail";
-  function renderConversationOutputs(slot: string, outputs: readonly SessionArtifactOutput[] = []): ReactNode {
-    return <ConversationArtifactList outputs={outputs} onOpen={openArtifactVersion}
-      currentFiles={currentFileSlot === slot ? currentPreviewFiles : []}
-      onOpenCurrentFile={(file) => void openWorkspacePath(file.path).catch((reason: Error) => setError(reason.message))} />;
+  function renderConversationOutputs(outputs: readonly SessionArtifactOutput[] = []): ReactNode {
+    return <ConversationArtifactList outputs={outputs} onOpen={openArtifactVersion} />;
   }
   const sessionArchived = Boolean(session?.archivedAt);
   const sessionPending = Boolean(activeSessionId) && session?.id !== activeSessionId;
@@ -4153,7 +4231,7 @@ export function App() {
       });
       await refreshGovernedDownloads(session.id);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : t("error.prepareDownload"));
+      reportError(error instanceof Error ? error : t("error.prepareDownload"));
     }
   }
 
@@ -4164,7 +4242,7 @@ export function App() {
       else await client.retryMcpArtifactJob(session.id, job.id);
       await refreshGovernedDownloads(session.id);
     } catch (error) {
-      reportError(error instanceof Error ? error.message : action === "cancel" ? t("error.cancelArtifactJob") : t("error.retryArtifactJob"));
+      reportError(error instanceof Error ? error : action === "cancel" ? t("error.cancelArtifactJob") : t("error.retryArtifactJob"));
     }
   }
 
@@ -4408,7 +4486,7 @@ export function App() {
           <UsagePage
             analytics={usageAnalytics}
             filters={usageFilters}
-            onExport={(format, displayCurrency) => void exportUsageAnalytics(format, displayCurrency).catch((reason: Error) => setError(reason.message))}
+            onExport={(format, displayCurrency) => void exportUsageAnalytics(format, displayCurrency).catch((reason: Error) => setError(reason))}
             onFiltersChange={(filters) => {
               setUsageFilters(filters);
               setUsageAnalytics(undefined);
@@ -4479,6 +4557,7 @@ export function App() {
                 ) : null}
               </div>
               <div className="session-bar-meta">
+                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: session.title })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
                 {session ? <span className="session-runner-target" title={selectedRunnerIds.length
                   ? t("app.runnerSelectionTooltip", { hosts: selectedRunnerNames.join(", ") })
                   : t("app.runnerSelectionEmpty")}>
@@ -4507,6 +4586,14 @@ export function App() {
                   <li><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
                 </ol>
               </div>
+            ) : trajectorySession && session.id === trajectorySession.id ? (
+              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={session.title} port={client.trajectory} locale={locale} onClose={() => {
+                setTrajectorySession(undefined);
+                // The inline view lives in the document flow, so on narrow stacked
+                // layouts the page may sit scrolled past the session bar; bring the
+                // conversation toggle back into view after the messages remount.
+                requestAnimationFrame(() => document.querySelector(".session-trajectory-button")?.scrollIntoView({ block: "nearest" }));
+              }} />
             ) : (
               <>
                 <div className="messages" ref={messagesViewport} onScroll={handleMessagesScroll}>
@@ -4531,7 +4618,7 @@ export function App() {
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
                       ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
-                        <WakeNotice notice={block.message.runtimeNotice} />
+                        <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                       ) : (
                         <article className={`message ${block.message.role}${block.message.kind === "review_notice" ? " review-notice" : block.message.kind === "timeout_notice" ? " timeout-notice" : ""}`}>
                           <div className="avatar">{block.message.role === "user" ? t("app.roleYou") : block.message.kind === "review_notice" ? <CheckIcon size={16} /> : <BrandIcon size={19} />}</div>
@@ -4550,10 +4637,10 @@ export function App() {
                         </article>
                       )}
                       {block.message.kind !== "wake_notice" && block.message.runtimeNotice
-                        ? <WakeNotice notice={block.message.runtimeNotice} />
+                        ? <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                         : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
-                      {renderConversationOutputs(`message:${block.message.id}`, artifactOutputAnchors.byMessage.get(block.message.id))}
+                      {renderConversationOutputs(artifactOutputAnchors.byMessage.get(block.message.id))}
                     </Fragment>
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
@@ -4566,7 +4653,7 @@ export function App() {
                           <RunUsageInline run={runUsageByRunId.get(block.runId)} />
                           {(activityGroupsByTimelineRun.get(block.runId) ?? []).map((group) =>
                             renderRunActivityGroup(group, replayTimelineSubagentIds.get(block.runId)))}
-                          {renderConversationOutputs(`run:${block.runId}`, artifactOutputAnchors.byReplayTimeline.get(block.runId))}
+                          {renderConversationOutputs(artifactOutputAnchors.byReplayTimeline.get(block.runId))}
                         </>}
                         isRunning={false}
                         loadWorkspaceImage={loadMarkdownImage}
@@ -4604,7 +4691,7 @@ export function App() {
                     footer={<>
                       <RunUsageInline run={activeTimelineRunId ? runUsageByRunId.get(activeTimelineRunId) : undefined} />
                       {tailActivityGroups.map((group) => renderRunActivityGroup(group, activeTimelineSubagentIds))}
-                      {renderConversationOutputs("active", artifactOutputAnchors.activeTimeline)}
+                      {renderConversationOutputs(artifactOutputAnchors.activeTimeline)}
                     </>}
                     isRunning={isRunning}
                     loadWorkspaceImage={loadMarkdownImage}
@@ -4636,7 +4723,7 @@ export function App() {
                     reviewerLevel={session.reviewerSpecialistLevel}
                     workspaceSessionId={session.id}
                   />
-                  {renderConversationOutputs("tail")}
+                  {renderConversationOutputs()}
                   {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
                   {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
@@ -4753,11 +4840,11 @@ export function App() {
                 event.preventDefault();
                 setDragActive(false);
                 if (event.dataTransfer.files.length) {
-                  void upload(event.dataTransfer.files).catch((reason: Error) => setError(reason.message));
+                  void upload(event.dataTransfer.files).catch((reason: Error) => setError(reason));
                 }
               }}>
                 <input multiple type="file" onChange={(event) => {
-                  if (event.target.files?.length) void upload(event.target.files).catch((reason: Error) => setError(reason.message));
+                  if (event.target.files?.length) void upload(event.target.files).catch((reason: Error) => setError(reason));
                   event.target.value = "";
                 }} />
                 <span className="upload-icon"><UploadIcon size={19} /></span>
@@ -4860,7 +4947,7 @@ export function App() {
               </div>
             </details> : null}
             </WorkspaceFolder>
-            <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")}>
+            <WorkspaceFolder key={`tasks:${activeSessionId}`} name="tasks" label={t("record.tasks")} reveal={activityFocus?.token}>
             {workspacePlans.length ? <details className="workspace-fold workspace-plan-section">
               <summary>
                 <ChevronRightIcon className="fold-chevron" size={15} />
@@ -4895,7 +4982,7 @@ export function App() {
               settings={reviewerSpecialistSettings}
               stopping={stoppingReviewerSessionIds.has(session.id)}
             /></details> : null}
-            {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} sessionId={activeSessionId} /> : null}
+            {activeSessionId ? <AgentActivityPanel key={activeSessionId} client={client} focus={activityFocus} sessionId={activeSessionId} /> : null}
             </WorkspaceFolder>
             {session && memoryGraphSettings?.enabled !== false && isMemoryGraphVisible(memorySubgraph, memoryHealth) ? <WorkspaceFolder key={`memory:${activeSessionId}`} name="memory" label={t("record.memory")}>
               <details className="workspace-fold"><summary>{t("settings.memoryGraph.title")}</summary><MemoryGraphView subgraph={memorySubgraph} health={memoryHealth} onOpenExplorer={() => {
@@ -5171,9 +5258,11 @@ export function App() {
               /> : null}
               {systemSettingsGroup === "connection" ? <>
                 <div className="settings-detail-header"><span className="eyebrow">{t("settings.localAccess")}</span><h3>{t("settings.connection")}</h3><p>{t("settings.connectionHelp")}</p></div>
-                {tokenRejected ? <InlineErrorAlert detail={t("settings.tokenRejected")} title={t("settings.tokenRejectedTitle")} /> : null}
-                <label><span>{t("settings.localToken")}</span><input autoFocus={tokenRejected} value={tokenEdit ?? token} onChange={(event) => setTokenEdit(event.target.value)} /></label>
-                <div className="config-note">The token is stored in this browser and sent with local API requests. It must match the server's configured authentication token.</div>
+                {tokenRejected
+                  ? <InlineErrorAlert detail={t("settings.tokenHelp")} title={t("settings.tokenRejectedTitle")} />
+                  : <div className="config-note" role="status">{t("settings.tokenHelp")}</div>}
+                <label><span>{t("settings.localToken")}</span><input autoComplete="off" autoFocus={!token || tokenRejected} type="password" value={tokenEdit ?? token} onChange={(event) => setTokenEdit(event.target.value)} /></label>
+                <div className="config-note">{t("settings.tokenStorageHelp")}</div>
               </> : null}
             </SystemSettingsLayout>
             <SystemSettingsFooter

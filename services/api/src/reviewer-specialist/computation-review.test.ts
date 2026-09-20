@@ -101,6 +101,23 @@ test("Quick computation review reports numeric claims cited without an Evidence 
   assert.match(findings[0]?.message ?? "", /39\.7%/u);
 });
 
+test("Quick computation review recognises Chinese author-year and PMID citations", () => {
+  const findings = quickNumericEvidenceCoverageReview(
+    Buffer.from("TP53 mutation frequency was 39.7%（张三等(2024, PMID: 12345678)）。"),
+    version(),
+  );
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0]?.code, "COMPUTATION_NUMERIC_CLAIM_EVIDENCE_MISSING");
+});
+
+test("Quick computation review ignores unavailable quantitative fields", () => {
+  const findings = quickNumericEvidenceCoverageReview(
+    Buffer.from("All pooled odds ratios, 95% CIs, and I² values are not extractable because the abstract is unavailable."),
+    version(),
+  );
+  assert.deepEqual(findings, []);
+});
+
 test("Quick computation review accepts a numeric claim with a local Evidence mapping", () => {
   const findings = quickNumericEvidenceCoverageReview(
     Buffer.from("TP53 mutation frequency was 39.7% [1] [ev1]."),
@@ -188,7 +205,7 @@ test("Quick computation review reports missing and broken Artifact provenance", 
   assert.equal(broken.findings[0]?.severity, "critical");
 });
 
-test("Quick computation review distinguishes graph unavailability from a bad Artifact", async () => {
+test("Quick computation review treats graph unavailability as inconclusive", async () => {
   const result = await quickComputationReview(
     version(),
     async () => completeTrace({
@@ -198,14 +215,15 @@ test("Quick computation review distinguishes graph unavailability from a bad Art
       startNode: null,
     }),
   );
-  assert.equal(result.findings[0]?.code, "COMPUTATION_PROVENANCE_QUERY_FAILED");
-  assert.equal(result.findings[0]?.severity, "warning");
+  assert.deepEqual(result.findings, []);
+  assert.equal(result.inconclusive, true);
 
   const thrown = await quickComputationReview(
     version(),
     async () => { throw new Error("temporary graph failure"); },
   );
-  assert.equal(thrown.findings[0]?.code, "COMPUTATION_PROVENANCE_QUERY_FAILED");
+  assert.deepEqual(thrown.findings, []);
+  assert.equal(thrown.inconclusive, true);
 });
 
 test("Quick computation review accepts an older node from the same Artifact version lineage", async () => {

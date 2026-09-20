@@ -47,32 +47,32 @@ export function IdeaTreeSettingsEditor({
     <div className="settings-detail-header">
       <span className="eyebrow">{t("settings.groups.idea-tree.label" as MessageKey)}</span>
       <h3>{t("ideaTree.settings" as MessageKey)}</h3>
-      <p>选择科研模板和探索强度。目标与证据在启动研究时填写。</p>
+      <p>{t("ideaTree.templateHelp")}</p>
     </div>
     <div className="idea-tree-grid">
       <label className="idea-tree-field">
-        <span>科研模板</span>
+        <span>{t("ideaTree.template")}</span>
         <select
           onChange={(event) => onChange({ ...draft, templateId: event.target.value as IdeaTreeSettingsDraft["templateId"] })}
           value={draft.templateId}
         >
-          <option value="scientific-hypothesis-general/v1">通用科研假设探索</option>
-          <option value="water-treatment-materials/v1">水处理材料设计</option>
+          <option value="scientific-hypothesis-general/v1">{t("ideaTree.template.hypothesisGeneral")}</option>
+          <option value="water-treatment-materials/v1">{t("ideaTree.template.waterTreatment")}</option>
         </select>
       </label>
       <label className="idea-tree-field">
-        <span>探索强度</span>
+        <span>{t("ideaTree.intensity")}</span>
         <select
           onChange={(event) => onChange({ ...draft, explorationIntensity: event.target.value as IdeaTreeSettingsDraft["explorationIntensity"] })}
           value={draft.explorationIntensity}
         >
-          <option value="quick">快速：少量路径，快速判断</option>
-          <option value="standard">标准：平衡探索与验证</option>
-          <option value="deep">深入：更多分支和验证轮次</option>
+          <option value="quick">{t("ideaTree.intensity.quick")}</option>
+          <option value="standard">{t("ideaTree.intensity.standard")}</option>
+          <option value="deep">{t("ideaTree.intensity.deep")}</option>
         </select>
       </label>
     </div>
-    <p className="config-note">模板会在研究启动时保存快照，后续模板更新不会改变正在运行的研究。</p>
+    <p className="config-note">{t("ideaTree.templateSnapshot")}</p>
     <div className="settings-actions">
       <button className="primary-button" disabled={saving} onClick={onSave} type="button">
         {saving ? t("common.saving" as MessageKey) : t("common.save" as MessageKey)}

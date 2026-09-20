@@ -22,6 +22,22 @@ function assertRoundTrip(view: ViewState): void {
   assert.deepEqual(parseViewState(pathname, search), view, `${pathname}${search}`);
 }
 
+test("inline trajectory view owns a path segment and participates in back/forward", () => {
+  const base: ViewState = { projectId: "p1", sessionId: "s1", workspaceOpen: false };
+  assertRoundTrip({ ...base, trajectory: true });
+  assert.equal(serializeViewState({ ...base, trajectory: true }).pathname, "/projects/p1/sessions/s1/trajectory");
+  assert.equal(serializeViewState({ ...base, trajectory: true }).search, "?panel=collapsed");
+  assert.equal(isPrimaryViewChange(base, { ...base, trajectory: true }), true);
+  // The legacy query form still parses and normalizes to the path segment.
+  assert.deepEqual(parseViewState("/projects/p1/sessions/s1", "?trajectory=open").trajectory, true);
+  assert.deepEqual(parseViewState("/", "?trajectory=open"), {});
+  assert.equal(serializeViewState({ trajectory: true }).pathname, "/");
+  assert.equal(parseViewState("/projects/p1/sessions/s1", "?trajectory=wrong").trajectory, undefined);
+  assert.equal(parseViewState("/projects/p1/sessions/s1/trajectory", "").trajectory, true);
+  // The settings layer wins the path; the trajectory flag only applies below a Session.
+  assert.equal(serializeViewState({ ...base, trajectory: true, settingsKind: "session", settingsTargetId: "s1" }).pathname, "/projects/p1/sessions/s1/settings");
+});
+
 test("the full path table serializes and parses back", () => {
   assert.equal(serializeViewState({}).pathname, "/");
   assert.equal(serializeViewState({ view: "usage" }).pathname, "/usage");

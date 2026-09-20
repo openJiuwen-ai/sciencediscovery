@@ -9,7 +9,7 @@
   },
   "scripts": {
     "api": "pnpm --filter @sciencediscovery/api start",
-    "architecture:check": "node --test scripts/component-boundaries.test.mjs && node scripts/check-architecture.mjs",
+    "architecture:check": "node --test scripts/*.test.mjs && node scripts/check-architecture.mjs",
     "binary:smoke": "node scripts/binary-release/smoke-binary.mjs",
     "binary:test": "node --test scripts/binary-release/*.test.mjs",
     "build": "pnpm --recursive build",

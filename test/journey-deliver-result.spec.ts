@@ -33,7 +33,7 @@ import {
  * Steps:
  *   1. Prepare a local stub model and an isolated Project/Session; confirm the Artifact catalog is empty.
  *   2. Ask for an analysis whose Python step creates a scratch CSV and a declared Markdown summary.
- *   3. Inspect marked tool I/O, preview/download the report, and inspect its working-directory/process provenance.
+ *   3. Inspect marked tool I/O, preview/download the report, check desktop/mobile tab alignment, and inspect its working-directory/process provenance.
  *   4. Ask for an update of the same report and verify one Artifact has two switchable versions.
  *   5. Verify @ suggestions include only the declared report while the separate workspace-file tree also exposes the scratch CSV.
  * Environment: Isolated local stack at E2E_BASE_URL with managed Python ready and a journey-owned Project/Session.
@@ -153,6 +153,24 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
         await tree.catalog.getByRole("button", { name: "Open results/summary.md" }).click();
         const modal = page.getByRole("dialog", { name: "Artifact: results/summary.md" });
         await expect(modal.locator(".manuscript-preview")).toContainText("mean=42.0");
+        const originalViewport = page.viewportSize()!;
+        for (const viewport of [originalViewport, { width: 390, height: 844 }]) {
+          await page.setViewportSize(viewport);
+          const tabs = modal.locator(":scope > .artifact-mode-tabs");
+          await expect(tabs.getByRole("button", { name: "Preview", exact: true })).toBeVisible();
+          // Measure in one frame so the dialog entrance animation cannot skew comparisons.
+          await expect.poll(() => tabs.evaluate((nav) => {
+            const panel = nav.closest(".artifact-modal-panel")!;
+            const title = panel.querySelector("h2")!.getBoundingClientRect();
+            const [preview, provenance] = [...nav.querySelectorAll("button")].map((button) => button.getBoundingClientRect());
+            return {
+              aligned: Math.abs(preview!.x - title.x) <= 1,
+              sameRow: Math.abs(preview!.y - provenance!.y) <= 1,
+              contained: provenance!.right <= panel.getBoundingClientRect().right,
+            };
+          })).toEqual({ aligned: true, sameRow: true, contained: true });
+        }
+        await page.setViewportSize(originalViewport);
         const downloadPromise = page.waitForEvent("download");
         await modal.getByRole("button", { name: "Download current version" }).click();
         const download = await downloadPromise;
@@ -212,10 +230,11 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
     );
 
     await journey.step(
-      "打开「查看工作区文件」核对中间文件确实存在",
+      "打开「工作区文件」核对中间文件确实存在",
       "中间文件本身没有丢：在这棵独立的工作区文件树里能看到它，它只是没有资格进入产物目录。",
       async () => {
         await tree.openPhysicalFiles();
+        await expect(page.locator("details.physical-files > summary strong")).toHaveText("Workspace files");
         await expect(tree.physicalFiles.filter({ hasText: "summary.md" })).toHaveCount(1);
         await expect(tree.physicalFiles.filter({ hasText: "intermediate.csv" })).toHaveCount(1);
         await expect(page.getByRole("button", { name: "Open scratch/intermediate.csv" })).toBeVisible();

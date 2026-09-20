@@ -21,6 +21,7 @@ import type {
 } from "./artifact-provenance.js";
 import type { ConnectorId } from "./connectors.js";
 import type { EvolveRun } from "./evolution.js";
+import type { ManagedExecution } from "./execution.js";
 import type { ModelRunInfo, ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { IdeaTreePhase, IdeaTreeRunSettingsSnapshot } from "./idea-tree.js";
 import type { PermissionRequest } from "./permission.js";
@@ -120,13 +121,29 @@ export interface ComposerReference {
   version?: number;
 }
 
+/** One retained record behind a runtime wake, in the shape the UI presents:
+ * what finished and how, never the model-facing text about it. `sourceId` is
+ * the Execution or timer id the activity panel can be pointed at. */
+export interface RuntimeNoticeRecord {
+  agentId: string;
+  kind: "execution" | "timer";
+  /** Reminder text the owner wrote for itself; timers only. */
+  message?: string;
+  runnerId?: string;
+  sourceId: string;
+  /** Outcome recorded when the notice was delivered; executions only. */
+  state?: ManagedExecution["state"];
+}
+
 /** Runtime-originated records delivered with a turn: completed background
  * Executions and fired timers. `prompt` is model-facing text and is never the
- * user-visible message body; the counts let the UI summarize it without
- * parsing that text. */
+ * user-visible message body; the counts and `records` let the UI summarize
+ * it without parsing that text. `records` is absent on notices persisted
+ * before it existed. */
 export interface RuntimeNotice {
   executions: number;
   prompt: string;
+  records?: RuntimeNoticeRecord[];
   timers: number;
 }
 
@@ -366,7 +383,23 @@ export interface SessionRun {
   webForceRefresh?: boolean;
 }
 
-export type RunStreamEvent =
+/** Producer identity and immutable evidence; createdAt on the envelope is storage time. */
+export interface AgentEventEvidence {
+  agentId: string;
+  agentRunId: string;
+  requestExecutionId: string;
+  recordedAt: string;
+  endedAt?: string;
+  turn: number;
+  responseId?: string;
+  contextRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
+  stateRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
+}
+
+export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
+  /** Evidence with no chat equivalent. Bodies remain in immutable CAS objects. */
+  | { type: "agent.record"; name: "context.captured" | "state.committed" | "model.completed" | "context_recovery";
+      payloadRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string } }
   | { model: ModelRunInfo; runId: string; settings: EffectiveRuntimeSettings; type: "run.started" }
   | { session: Session; type: "session.updated" }
   /**
@@ -442,7 +475,7 @@ export type RunStreamEvent =
   | { message: ChatMessage; type: "reviewer_checkpoint.updated" }
   | { files: WorkspaceFile[]; message: ChatMessage; type: "run.completed" }
   | { reason: string; type: "run.cancelled" }
-  | { error: string; errorCode: RunFailureCode; type: "run.failed" };
+  | { error: string; errorCode: RunFailureCode; type: "run.failed" });
 
 /**
  * Stable failure classes for a run. The classification accompanies the original

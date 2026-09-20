@@ -4,11 +4,20 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { ideaResearchModel } from "./helpers/idea-research-model.ts";
 
+// This journey reads the research surface in Chinese throughout — the settings
+// selects, the control card, the progress list and every status word below.
+// Those strings used to be hardcoded in the components and matched in any
+// locale; they are message-catalogue entries now, so the locale has to be
+// stated rather than assumed. Without this, Chromium's default `en-US` makes
+// `detectLocale()` pick `en` and the very first select is looked up under a
+// label the page never renders.
+test.use({ locale: "zh-CN" });
+
 /**
  * E2E-META
  * Purpose: Start autonomous research, pause an in-flight design, manually continue three rounds, inspect persisted results and end another research.
  * Steps:
- *   1. Configure tree budgets in system settings and start from the composer without an input dialog.
+ *   1. Choose the research template and exploration intensity in system settings, then start from the composer without an input dialog.
  *   2. Pause during design and verify no assessments start from the late response.
  *   3. Continue manually and inspect three rounds, independent assessments and persisted ROOT insight after reload.
  *   4. End another research using the confirmation control.
@@ -35,19 +44,31 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   };
   journey.scenario({goal: "从给定材料自主探索多个方向，暂停后手动继续，并完成多轮改进", preconditions: ["隔离 API 与 Python evolve 服务", "本地模拟模型，实际主 Agent 工具交接、Python 后端与文件持久化，无 Subagent 或 Neo4j"]});
   try {
-    await journey.step("在系统设置配置研究", "保存三轮预算和设计提示词，再从会话启动，不创建输入弹窗或聊天计划", async () => {
+    await journey.step("在系统设置选定研究模板与探索强度", "选水处理材料模板与标准强度（预设 3 轮），再从会话启动，不创建输入弹窗或聊天计划", async () => {
       fixture = await createProjectAndSession(page, {model: {...stub, name: `Idea engine ${Date.now()}`}, projectName: `Idea engine ${Date.now()}`, sessionTitle: "自主催化剂探索"});
       await openProjectSession(page, fixture);
+      // `maxDepth` and the design prompt are not on the template/intensity pane
+      // and no intensity preset touches them, so they are pinned through the
+      // settings API: they set this run up, they are not what the step checks.
+      const pinned = await page.request.put(`${apiBaseUrl()}/api/settings/idea-tree`, {
+        data: {designSystemPrompt: "DESIGN-OVERRIDE: design from supplied materials only.", maxDepth: 4},
+        headers: authorizationHeader(),
+      });
+      expect(pinned.ok()).toBe(true);
       await page.getByRole("button", {name: /^(System configuration|系统设置)/}).click();
       const dialog = page.getByRole("dialog", {name: /System configuration|系统设置/});
       await dialog.getByRole("button", {name: /^Idea Tree/}).click();
       const settings = dialog.locator(".idea-tree-settings");
-      await settings.getByLabel(/Maximum exploration rounds|最多探索轮数/).fill("3");
-      await settings.getByLabel(/Candidates per round|每轮最多候选/).fill("1");
-      await settings.getByLabel(/Max depth|最大深度/).fill("4");
-      await settings.locator("textarea").nth(0).fill("DESIGN-OVERRIDE: design from supplied materials only.");
+      // Both choices are load-bearing for the rest of the journey. The
+      // assessors it walks through — 活性 / 稳定性 / 可持续性 — exist only in the
+      // water-treatment template, and `apply_intensity` derives the round
+      // budget from the intensity, so `标准` is what makes this a three-round
+      // run. Neither can be set as a number any more.
+      await settings.getByLabel("科研模板").selectOption("water-treatment-materials/v1");
+      await settings.getByLabel("探索强度").selectOption("standard");
       await settings.getByRole("button", {name: /Save|保存/}).click();
-      await expect.poll(async () => (await (await page.request.get(`${apiBaseUrl()}/api/settings/idea-tree`, {headers: authorizationHeader()})).json()).candidatesPerRound).toBe(1);
+      await expect.poll(async () => (await (await page.request.get(`${apiBaseUrl()}/api/settings/idea-tree`, {headers: authorizationHeader()})).json()))
+        .toMatchObject({explorationIntensity: "standard", maxDepth: 4, templateId: "water-treatment-materials/v1"});
       await dialog.getByRole("button", {name: /close|关闭/}).first().click();
       await page.locator("form.composer").getByRole("textbox").fill("/idea-tree Skip literature retrieval for this demo. Compare low-cost Fe and Mn catalysts; no cobalt. User supplied: near-neutral water, recovery and leaching matter.");
       await page.getByRole("button", {name: /^(Run analysis|运行分析)$/}).click();
@@ -75,7 +96,11 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       stub.holdAssessments();
       await panel.getByRole("button", {name: "继续", exact: true}).click();
       const progress = panel.getByRole("list", {name: "研究执行进度"});
-      for (const role of ["活性评估", "稳定性评估", "可持续性评估"]) {
+      // The assessors come from the template now, and the progress list names
+      // each one with the template's own label — water-treatment-materials/v1
+      // labels its three with their ids. (The explorer's stage heading maps the
+      // same ids to 活性评估 / 稳定性评估 / 可持续性评估 through its own table.)
+      for (const role of ["activity", "stability", "sustainability"]) {
         await expect(progress.getByRole("listitem").filter({hasText: role})).toContainText("执行中");
       }
       // Reload while model calls are still waiting: the stream starts with the
@@ -86,6 +111,12 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       stub.releaseAssessments();
       await expect.poll(async () => (await read())[0].research.status, {timeout: 30_000}).toBe("completed");
       const [{graph, research}] = await read();
+      // Three rounds because `标准` maps to maxRounds 3; one candidate per round
+      // because the journey's own stub answers each ideation with a single
+      // proposal and the engine takes `candidates[:maximumCandidates]`. The
+      // intensity also raises candidatesPerRound to 3, so this run additionally
+      // shows the engine accepting fewer candidates than it asked for. Three
+      // candidates times the template's three assessors is the 9 below.
       expect(research.round).toBe(3);
       expect(graph.nodes.filter((n: any) => n.kind === "candidate").map((n: any) => n.score)).toEqual([7, 7, 7]);
       const assessments = stub.requests.filter(r => r.payload.perspective);

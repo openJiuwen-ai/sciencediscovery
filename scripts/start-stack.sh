@@ -132,8 +132,44 @@ wait_healthy() { # <name> <url>
   return 1
 }
 
-require_command() { # <command> <failure message>
-  command -v "$1" >/dev/null || { echo "$2" >&2; exit 1; }
+# A missing dependency is the first thing a new user meets, so the report says
+# what is missing, what was found, and one concrete way to fix it — the same
+# shape the binary launcher already prints for bubblewrap (BWRAP_INSTALL_HINT in
+# services/launcher/src/preflight.ts). Problems are collected rather than
+# fatal on sight: a bare host learns everything it needs from one run instead
+# of discovering the list one failed start at a time.
+dependency_problems=()
+
+note_dependency_problem() { # <headline> <remedy line>...
+  local entry="$1"
+  shift
+  local line
+  for line in "$@"; do entry+=$'\n'"    $line"; done
+  dependency_problems+=("$entry")
+}
+
+# Records rather than exits, so `set -e` call sites stay plain statements and
+# every missing dependency reaches the same report.
+require_command() { # <command> <headline> <remedy line>...
+  command -v "$1" >/dev/null && return 0
+  shift
+  note_dependency_problem "$@"
+}
+
+report_dependency_problems() {
+  [[ "${#dependency_problems[@]}" -eq 0 ]] && return 0
+  {
+    echo "ScienceDiscovery cannot start from source: ${#dependency_problems[@]} host dependency problem(s)."
+    echo
+    local problem
+    for problem in "${dependency_problems[@]}"; do
+      echo "  - $problem"
+      echo
+    done
+    echo "  Requirements table: README.md#requirements"
+    echo "  Local source mode:  docs/en/how-to/deployment.md#local-mode-host-processes"
+  } >&2
+  exit 1
 }
 
 # The repository default moved from `data` to `.sciencediscovery-data`. Move an
@@ -209,15 +245,28 @@ prepare_local() {
     export SCIENCE_DISCOVERY_DATA_DIR
   fi
 
-  require_command node "Node.js 22.19+ is required."
-  if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
-    echo "Node.js 22.19+ is required; found $(node --version)." >&2
-    exit 1
+  require_command node \
+    "Node.js 22.19+ is required for the control API and the runner, but no 'node' is on PATH." \
+    "Install it with a version manager (nvm install 22) or your distribution's nodejs package."
+  if command -v node >/dev/null && ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)'; then
+    note_dependency_problem \
+      "Node.js 22.19+ is required; found $(node --version)." \
+      "Upgrade it, for example: nvm install 22 && nvm use 22"
   fi
-  require_command pnpm "pnpm 11.1.2 is required."
-  require_command python3 "Python 3 is required for workspace analysis."
-  require_command uv "uv 0.9+ is required for the Python service environments."
-  require_command curl "curl is required for local service startup checks."
+  require_command pnpm \
+    "pnpm 11.1.2 is required to install and build the workspace, but no 'pnpm' is on PATH." \
+    "Enable it through the bundled corepack: corepack enable && corepack prepare pnpm@11.1.2 --activate" \
+    "Or install it globally: npm install -g pnpm@11.1.2"
+  require_command python3 \
+    "Python 3 is required for workspace analysis, but no 'python3' is on PATH." \
+    "Install your distribution's python3 package (Debian/Ubuntu: sudo apt-get install -y python3)."
+  require_command uv \
+    "uv 0.9+ is required to build the Python service environments, but no 'uv' is on PATH." \
+    "Install it: curl -LsSf https://astral.sh/uv/install.sh | sh" \
+    "It is needed only for source mode; the prepackaged binary fetches its own."
+  require_command curl \
+    "curl is required for the local service startup checks, but no 'curl' is on PATH." \
+    "Install your distribution's curl package (Debian/Ubuntu: sudo apt-get install -y curl)."
 
   export SCIENCE_AGENT_PYTHON_PATH="${SCIENCE_AGENT_PYTHON_PATH:-$(command -v python3)}"
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -236,7 +285,17 @@ prepare_local() {
   fi
   case "$sandbox_provider" in
     bubblewrap)
-      require_command "${SCIENCE_AGENT_BWRAP_PATH:-bwrap}" "bubblewrap is required for isolated Linux execution."
+      # The package is called bubblewrap; the executable it installs is bwrap.
+      # Naming only one of the two sends people searching for the wrong thing.
+      require_command "${SCIENCE_AGENT_BWRAP_PATH:-bwrap}" \
+        "bubblewrap is required for isolated Linux execution, but its 'bwrap' executable is not on PATH." \
+        "Install the bubblewrap package — the binary it provides is named bwrap:" \
+        "  Debian / Ubuntu   sudo apt-get install -y bubblewrap" \
+        "  Fedora / RHEL     sudo dnf install -y bubblewrap" \
+        "  openEuler         sudo dnf install -y bubblewrap" \
+        "  Arch              sudo pacman -S bubblewrap" \
+        "  Alpine            sudo apk add bubblewrap" \
+        "Already installed elsewhere? Point SCIENCE_AGENT_BWRAP_PATH at it."
       ;;
     seatbelt)
       if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -244,10 +303,15 @@ prepare_local() {
         exit 1
       fi
       require_command "${SCIENCE_AGENT_SEATBELT_PATH:-/usr/bin/sandbox-exec}" \
-        "macOS sandbox-exec is required for isolated execution."
+        "macOS Seatbelt is required for isolated execution, but sandbox-exec was not found." \
+        "sandbox-exec ships with macOS, so this usually means the current terminal or a" \
+        "parent sandbox is blocking it rather than something to install." \
+        "See docs/en/how-to/deployment.md#local-mode-host-processes"
       ;;
     *) echo "SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt." >&2; exit 1 ;;
   esac
+
+  report_dependency_problems
 
   data_dir="$(absolute_from_repository "${SCIENCE_DISCOVERY_DATA_DIR:-.sciencediscovery-data}")"
   migrate_legacy_data_dir "$data_dir"
@@ -428,11 +492,14 @@ EOF
         /usr/bin/true >/dev/null 2>&1; then
     cat >&2 <<'EOF'
 WARNING: bubblewrap cannot create a sandbox in this container. run_python /
-run_shell will fail; the API and UI are unaffected. Check that the Compose
-service keeps security_opt seccomp=unconfined and apparmor=unconfined, and that
-the host allows unprivileged user namespaces:
-  sysctl kernel.unprivileged_userns_clone            # 1 where the knob exists
-  sysctl kernel.apparmor_restrict_unprivileged_userns # 0 on Ubuntu 24.04+
+run_shell will fail; the API and UI are unaffected. Check, in this order:
+  1. The Compose service still sets all three security_opt entries:
+     seccomp=unconfined, apparmor=unconfined, systempaths=unconfined.
+  2. The host AppArmor configuration. Ubuntu 24.04+ restricts unprivileged user
+     namespaces per profile, so a host can allow them without changing a sysctl.
+  3. Only then the kernel switches, which need root and do not persist:
+       sysctl kernel.unprivileged_userns_clone             # 1 where the knob exists
+       sysctl kernel.apparmor_restrict_unprivileged_userns # read with step 2, not alone
 EOF
   fi
   runner_command=(node services/runner/dist/server.js)

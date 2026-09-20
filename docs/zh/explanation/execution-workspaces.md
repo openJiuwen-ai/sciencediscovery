@@ -33,6 +33,6 @@ Session 文件面板的 **Executions & reminders** 展示执行、日志、复�
 
 ## 完成、提醒与停止
 
-任务完成后，空闲的所属 Agent 开新回合，忙碌时通知留在持久队列。子 Agent 用原 ID、原上下文、原 Workspace 续跑，不把通知转给主 Agent。`timer_create` 的 `after_ms` 与带时区的 `at` 二选一；`timer_list`、`timer_cancel` 查询和取消一次性提醒。关联 `execution_id` 后，完成事件取消尚未触发的提醒。提醒只投递文本，不执行命令、不取 Workspace 写锁；不提供循环定时器。
+任务完成后，空闲的所属 Agent 开新回合，忙碌时通知留在持久队列。所属 Agent 已经通过工具调用读到的结果（前台 `run_shell` 等到了终态，或对已结束的执行调用 `execution_status` / `execution_logs`）会在那一刻标记为已读，不再开新回合；只有它没看过的结果（`background: true` 提交、等待用尽、提醒到期）才会唤醒它。子 Agent 用原 ID、原上下文、原 Workspace 续跑，不把通知转给主 Agent；唤醒回合也不会改写子 Agent 原任务的终态。`timer_create` 的 `after_ms` 与带时区的 `at` 二选一；`timer_list`、`timer_cancel` 查询和取消一次性提醒。关联 `execution_id` 后，完成事件取消尚未触发的提醒。提醒只投递文本，不执行命令、不取 Workspace 写锁；不提供循环定时器。
 
 Stop 关闭对应唤醒门；Session Stop 和 Archive 关闭整个 Session 门并取消待触发定时器。结果和通知保留。用户新请求恢复 Session，汇总主 Agent 未读通知但不重放命令；被单独停止的子 Agent 需要用户显式 Resume。恢复归档本身不重开自动化，旧定时器不会复活。

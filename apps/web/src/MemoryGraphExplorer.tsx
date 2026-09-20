@@ -21,7 +21,7 @@ import { CloseIcon } from "./icons.js";
 import { useLocale } from "./i18n/index.js";
 import type { MessageKey } from "./i18n/messages.js";
 import { aggregateOwnerScope, EDGE_COLORS, graphNodeDisplayNames, graphNodeName, isAggregateNode, isChildNode, isScopeNode, isSurrogateEdge, MemoryGraphCanvas, NODE_COLORS } from "./MemoryGraphCanvas.js";
-import { collapseProducesOwner, countFoldedProducesMembers, expandProducesOwner, mainChainNodeIds, projectToCanvas, producesMembersOf } from "./memoryGraphBackbone.js";
+import { collapseProducesOwner, countFoldedProducesMembers, expandAllProduces, expandProducesOwner, mainChainNodeIds, projectToCanvas, producesMembersOf } from "./memoryGraphBackbone.js";
 import { MeaningBubble, type LegendKind, type LegendId } from "./MemoryGraphLegend.js";
 import { MemoryGraphTour } from "./MemoryGraphTour.js";
 import { MemoryGraphNodeDetail, useResolvedArtifactName } from "./MemoryGraphProduct.js";
@@ -678,6 +678,27 @@ export function countScopeChildren(
 }
 
 /**
+ * Visible-versus-total node and edge counts for the explorer header. Both sides
+ * skip the synthetic pieces (aggregate stacks, surrogate edges) so a fully
+ * expanded graph reads ``N / N``.
+ */
+export function countVisibleAndTotal(
+  visible: { nodes: readonly MemoryGraphNode[]; edges: readonly MemorySubgraph["edges"][number][] },
+  total: { nodes: readonly MemoryGraphNode[]; edges: readonly MemorySubgraph["edges"][number][] },
+): { visibleNodes: number; totalNodes: number; visibleEdges: number; totalEdges: number } {
+  const real = (nodes: readonly MemoryGraphNode[]) => nodes.filter((n) => !isAggregateNode(n));
+  const realEdges = (edges: readonly MemorySubgraph["edges"][number][]) => edges.filter((e) => !isSurrogateEdge(e));
+  const totalNodes = real(total.nodes).length;
+  const totalEdges = realEdges(total.edges).length;
+  return {
+    visibleNodes: Math.min(real(visible.nodes).length, totalNodes),
+    totalNodes,
+    visibleEdges: Math.min(realEdges(visible.edges).length, totalEdges),
+    totalEdges,
+  };
+}
+
+/**
  * Build the scope→child-count map once per raw folded read, so the canvas
  * badge reads the true child total regardless of which scopes are expanded.
  * Pure over the node set; called with the pre-merge folded subgraph.
@@ -754,7 +775,7 @@ export function MemoryGraphExplorer({
    * ``shouldFocusEntryNode``. */
   autoChain?: boolean;
   onClose: () => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onPendingAnnotation?: (annotation: ArtifactAnnotation) => void;
   sessionId: string;
   subgraph: MemorySubgraph;
@@ -1022,6 +1043,11 @@ export function MemoryGraphExplorer({
     return counts;
   }, [graph, subgraph]);
 
+  // Header counts: what is drawn now versus everything the session holds.
+  // Virtual aggregate stacks and scope surrogate edges are view hints, not
+  // stored nodes/edges, so they count on neither side.
+  const graphCounts = useMemo(() => countVisibleAndTotal(graph, subgraph), [graph, subgraph]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -1279,7 +1305,7 @@ export function MemoryGraphExplorer({
           { shown: onScreen, total: result.hits.length })
         : t("memory.search.noMatches"));
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("memory.search.failed"));
+      onError(error instanceof Error ? error : t("memory.search.failed"));
     } finally {
       setSearching(false);
     }
@@ -1337,7 +1363,7 @@ export function MemoryGraphExplorer({
       setActiveLabels(new Set());
       setActiveEdges(new Set());
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("chain.loadFailed"));
+      onError(error instanceof Error ? error : t("chain.loadFailed"));
     } finally {
       setChainLoading(false);
     }
@@ -1538,6 +1564,49 @@ export function MemoryGraphExplorer({
     });
   }, [subgraph, graph, t]);
 
+  // One-click "expand all" / "collapse all". Subagent scopes and aggregate
+  // stacks load their members first (they fetch); then every folded produces /
+  // citation neighbour is pulled in, layer by layer, until nothing is left to
+  // reveal — the same result as double-clicking every node in turn.
+  const [expandingAll, setExpandingAll] = useState(false);
+  const expandAll = useCallback(async () => {
+    setExpandingAll(true);
+    try {
+      for (const n of graph.nodes) {
+        if (isScopeNode(n) && (scopeChildCounts.get(n.id) ?? 0) > 0 && !expandedScopes.has(n.id)) {
+          await toggleScope(n.id);
+        } else if (isAggregateNode(n) && !expandedGroups.has(n.id)) {
+          await toggleGroup(n.id);
+        }
+      }
+      const visible = new Set(graph.nodes.map((n) => n.id));
+      // Children of the scopes opened above are visible now.
+      for (const n of subgraph.nodes) if (isChildNode(n)) visible.add(n.id);
+      const expanded = expandAllProduces(
+        subgraph, visible, expandedNodeMap, appearedIds,
+        (n) => !isScopeNode(n) && !isAggregateNode(n),
+      );
+      setExpandedNodeMap(expanded.expandedNodeMap);
+      setAppearedIds(expanded.appearedIds);
+    } finally {
+      setExpandingAll(false);
+    }
+  }, [graph, subgraph, scopeChildCounts, expandedScopes, expandedGroups, expandedNodeMap, appearedIds, toggleScope, toggleGroup]);
+  const collapseAll = useCallback(() => {
+    setExpandedNodeMap(new Map());
+    setAppearedIds(new Set());
+    setExpandedScopes(new Set());
+    setExpandedGroups(new Set());
+    setScopeNotes(new Map());
+  }, []);
+  const canExpandAll = useMemo(() => {
+    for (const count of foldedProducesCounts.values()) if (count > 0) return true;
+    return graph.nodes.some((n) =>
+      (isScopeNode(n) && (scopeChildCounts.get(n.id) ?? 0) > 0 && !expandedScopes.has(n.id))
+      || (isAggregateNode(n) && !expandedGroups.has(n.id)));
+  }, [graph, foldedProducesCounts, scopeChildCounts, expandedScopes, expandedGroups]);
+  const canCollapseAll = expandedNodeMap.size > 0 || expandedScopes.size > 0 || expandedGroups.size > 0;
+
   // Clicking a surrogate edge (scope→product) jumps to the responsible child:
   // expand the owning scope and select the child that via_child points at
   // (the real child→product edge then renders in the merged graph). This is
@@ -1611,8 +1680,8 @@ export function MemoryGraphExplorer({
             {matchIds ? <button onClick={clearSearch} type="button">{t("memory.search.clear")}</button> : null}
           </form>
           {searchNote ? <span className="memory-search-note">{searchNote}</span> : null}
-          <span>{graph.nodes.length} {t("memory.stats.nodes")}</span>
-          <span>{graph.edges.length} {t("memory.stats.edges")}</span>
+          <span>{t("memory.stats.visibleOfTotal", { visible: graphCounts.visibleNodes, total: graphCounts.totalNodes })} {t("memory.stats.nodes")}</span>
+          <span>{t("memory.stats.visibleOfTotal", { visible: graphCounts.visibleEdges, total: graphCounts.totalEdges })} {t("memory.stats.edges")}</span>
           {graph.truncated ? <span className="memory-truncated" title={t("memory.truncated.title")}>{t("memory.truncated.badge")}</span> : null}
           <button aria-label={t("memory.explorer.close")} className="icon-button" onClick={onClose} title={t("memory.explorer.close")} type="button"><CloseIcon size={20} /></button>
         </div>
@@ -1747,6 +1816,10 @@ export function MemoryGraphExplorer({
           </div> : null}
 
           <div className="memory-explorer-canvas">
+            <div className="memory-explorer-actions">
+              <button disabled={!canExpandAll || expandingAll} onClick={() => void expandAll()} type="button">{t("memory.action.expandAll")}</button>
+              <button disabled={!canCollapseAll || expandingAll} onClick={collapseAll} type="button">{t("memory.action.collapseAll")}</button>
+            </div>
             <MemoryGraphCanvas
               interactive
               matchIds={chainNodeIds ?? (focusNodeId ? new Set([focusNodeId, ...(selectedId && selectedId !== focusNodeId ? [selectedId] : [])]) : matchIds)}
@@ -1793,7 +1866,7 @@ export function MemoryGraphExplorer({
             <p className="memory-explorer-hint">
               {selected
                 ? t("memory.hint.selected", { name: displayNames.get(selected.id) ?? graphNodeName(selected) })
-                : t("memory.hint.inspect")} · {t("memory.hint.panZoom")}
+                : t("memory.hint.inspect")} · {t("memory.hint.expand")} · {t("memory.hint.panZoom")}
             </p>
           </div>
 

@@ -437,7 +437,7 @@ export function RuntimeStatusPanel({
   onNotice,
 }: {
   client: ApiClient;
-  onError: (message?: string) => void;
+  onError: (reason?: string | Error) => void;
   onNotice: (message: string) => void;
 }) {
   const { t } = useLocale();
@@ -448,7 +448,7 @@ export function RuntimeStatusPanel({
     try {
       setStatus(await client.getRuntimeStatus());
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("runtime.status.loadFailed"));
+      onError(error instanceof Error ? error : t("runtime.status.loadFailed"));
     }
   }, [client, onError]);
 
@@ -469,7 +469,7 @@ export function RuntimeStatusPanel({
         : t("runtime.status.kernelInactive", { id: kernelId }));
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("runtime.status.teardownFailed"));
+      onError(error instanceof Error ? error : t("runtime.status.teardownFailed"));
     } finally {
       setTearingDownKernelId(undefined);
     }

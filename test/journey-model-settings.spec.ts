@@ -124,7 +124,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await expect(editor).toBeVisible();
         await expect(editor.getByLabel("服务商名称")).toBeVisible();
-        await expect(editor.getByLabel("LLM API 令牌")).toBeVisible();
+        await expect(editor.getByLabel("外部模型 API Key")).toBeVisible();
         await expect(editor.getByLabel("基础 URL")).toBeVisible();
         await expect(editor.getByLabel("基础接口")).toBeVisible();
         await expect(editor.getByLabel("接口变种")).toBeVisible();
@@ -162,7 +162,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const editor = dialog.getByRole("region", { name: "服务商编辑器" });
         await editor.getByLabel("服务商名称").fill(providerName);
-        await editor.getByLabel("LLM API 令牌").fill(demoToken);
+        await editor.getByLabel("外部模型 API Key").fill(demoToken);
         await editor.getByLabel("基础 URL").fill("http://127.0.0.1:4321/v1");
         await editor.getByLabel("接口变种").selectOption("deepseek");
         const providerSave = page.waitForResponse((response) =>

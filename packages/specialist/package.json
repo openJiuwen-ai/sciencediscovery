@@ -12,7 +12,7 @@
     "@sciencediscovery/provenance": "workspace:*",
     "@sciencediscovery/schema": "workspace:*",
     "@sciencediscovery/workspace": "workspace:*",
-    "fflate": "0.8.2",
+    "fflate": "0.8.3",
     "yaml": "2.9.0"
   },
   "devDependencies": { "@types/node": "26.1.1" }

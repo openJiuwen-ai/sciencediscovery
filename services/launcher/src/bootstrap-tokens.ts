@@ -97,18 +97,20 @@ export function resolveServeCredentials(dataDir: string, env: NodeJS.ProcessEnv)
   };
 }
 
-/**
- * Ready-banner lines for the token the user pastes into the Web UI. A managed
- * token is printed in full because nothing else reveals it; an operator-supplied
- * one is only named, so `serve` never echoes a secret they already hold.
- */
-export function accessTokenBanner(dataDir: string, credentials: ServeCredentials): string[] {
+/** Startup credentials and a browser-only sign-in fragment. */
+export function accessTokenBanner(
+  dataDir: string,
+  credentials: ServeCredentials,
+  baseUrl: string,
+): string[] {
   const { source, token } = credentials.authToken;
-  if (source === "environment") {
-    return ["  Access token: from SCIENCE_AGENT_AUTH_TOKEN (not printed)."];
-  }
+  const url = new URL(baseUrl);
+  url.hash = new URLSearchParams({ token }).toString();
   return [
-    `  Access token (${source === "generated" ? "generated on first start" : "restored from local storage"}): ${token}`,
-    `  Stored in ${bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)}; paste it into the Web UI when asked.`,
+    `  Open to sign in: ${url.href}`,
+    `  Local service access token (${source === "environment" ? "SCIENCE_AGENT_AUTH_TOKEN" : source === "generated" ? "generated on first start" : "restored from local storage"}): ${token}`,
+    ...(source === "environment" ? [] : [`  Stored in ${bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)}.`]),
+    "  Open the sign-in URL to save the token in this browser, or paste it into Connection and click Save.",
+    "  This is not an external model API Key. Keep the sign-in URL private.",
   ];
 }

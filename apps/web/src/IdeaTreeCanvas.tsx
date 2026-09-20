@@ -8,6 +8,8 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
 
 import type { IdeaTreeGraph, IdeaTreeNode } from "@sciencediscovery/schema";
 
+import { useLocale } from "./i18n/index.js";
+
 const NODE_WIDTH = 244;
 const NODE_HEIGHT = 108;
 const HORIZONTAL_LEVEL_GAP = 92;
@@ -148,6 +150,7 @@ export function IdeaTreeCanvas({
   selectedId?: string;
   visibleStatuses?: ReadonlySet<IdeaTreeNode["status"]>;
 }) {
+  const { t } = useLocale();
   const hostRef = useRef<HTMLDivElement>(null);
   const pointerRef = useRef<PointerState | undefined>(undefined);
   const [size, setSize] = useState({ height: 640, width: 900 });
@@ -294,7 +297,7 @@ export function IdeaTreeCanvas({
               x={NODE_WIDTH - 91}
               y="10"
             />
-            <text className="idea-tree-node-status" fill={IDEA_TREE_STATUS_COLORS[node.status]} textAnchor="middle" x={NODE_WIDTH - 52} y="24">{node.kind === "direction" ? "方向" : node.status.replace("_", " ")}</text>
+            <text className="idea-tree-node-status" fill={IDEA_TREE_STATUS_COLORS[node.status]} textAnchor="middle" x={NODE_WIDTH - 52} y="24">{node.kind === "direction" ? t("ideaTree.direction") : node.status.replace("_", " ")}</text>
             <foreignObject height="40" width={NODE_WIDTH - 40} x="20" y="38">
               <div className="idea-tree-node-title" title={node.hypothesis}>{node.hypothesis}</div>
             </foreignObject>

@@ -21,6 +21,8 @@ from fastapi.testclient import TestClient
 # --- fixtures (mirror test_smoke.py / test_webpage_evidence.py) -----------
 
 def _live_neo4j_config() -> tuple[str, str] | None:
+    if os.environ.get("SCIENCE_AGENT_MEMORY_GRAPH_TEST_BACKEND") == "local":
+        return "local", ""
     http_uri = os.environ.get("SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J")
     password = os.environ.get("SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J_PASSWORD")
     if http_uri and password:
@@ -35,7 +37,7 @@ needs_neo4j = pytest.mark.skipif(
 
 
 def _wipe_session(session_id: str) -> None:
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
     if not handle().is_reachable():
         return
     with handle().session() as s:
@@ -43,7 +45,7 @@ def _wipe_session(session_id: str) -> None:
 
 
 def _cypher(query: str, **params: Any) -> list[dict[str, Any]]:
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
     with handle().session() as s:
         result = s.run(query, **params)
         return [dict(r.items()) for r in result]
@@ -55,6 +57,8 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     if cfg is None:
         pytest.skip("needs a live Neo4j")
     http_uri, password = cfg
+    if http_uri == "local":
+        monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_BACKEND", "local")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_ENABLED", "1")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN", "test-token")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP", http_uri)

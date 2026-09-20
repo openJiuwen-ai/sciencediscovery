@@ -210,7 +210,19 @@ def sandbox_command(
                        else ("--bind", "/proc", "/proc"))
         command.extend([
             "--dev", "/dev",
-            "--tmpfs", "/tmp",
+            # No `--tmpfs /tmp` here, deliberately. A tmpfs over `/tmp` is a
+            # *writable* filesystem outside the scratch bind, so it breaks the
+            # only two promises this profile makes, in both directions at once.
+            # Writes: anything under `/tmp` succeeded, landing in a throwaway
+            # mount the host never sees — `tests/test_puct_sandbox.py` caught
+            # exactly that, because pytest's `tmp_path` lives under `/tmp`.
+            # Reads: it also hid every host path under `/tmp`, so a dataset
+            # staged there — again the default for anything temporary —
+            # vanished, and a candidate failed with `FileNotFoundError` on its
+            # own training data rather than on its own logic. The read-only
+            # root above already supplies `/tmp`; leaving it alone keeps reads
+            # uniformly open and writes uniformly denied. `TMPDIR` points at
+            # the scratch bind, so `tempfile` still has somewhere to go.
             "--bind", str(scratch), str(scratch),
             "--unshare-net",
             "--die-with-parent",

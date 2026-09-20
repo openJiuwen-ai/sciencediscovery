@@ -42,7 +42,7 @@ from __future__ import annotations
 from typing import Any
 
 from .logging_config import get_logger
-from .neo4j_driver import handle
+from .backend import handle
 
 log = get_logger("constraints")
 
@@ -240,6 +240,10 @@ def ensure_schema() -> None:
     """Run each schema statement. Failures are logged but non-fatal so a
     partially-reachable DB doesn't wedge the boot path."""
     driver = handle()
+    if driver.kind == "local":
+        # The local store keys nodes on the MERGE keys and indexes property
+        # equality itself; there is no server-side schema to bootstrap.
+        return
     if not driver.is_reachable():
         log.info("schema bootstrap skipped: Neo4j not reachable")
         return

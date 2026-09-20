@@ -33,8 +33,8 @@ test("falls back to the complete English table when a Chinese key is missing", (
 });
 
 test("uses neutral workspace-file wording in both locales", () => {
-  assert.equal(translate("en", "app.physicalFiles"), "View workspace files");
-  assert.equal(translate("zh-CN", "app.physicalFiles"), "查看工作区文件");
+  assert.equal(translate("en", "app.physicalFiles"), "Workspace files");
+  assert.equal(translate("zh-CN", "app.physicalFiles"), "工作区文件");
   assert.doesNotMatch(translate("en", "app.physicalFilesHelp"), /developer|physical/i);
   assert.doesNotMatch(translate("zh-CN", "app.physicalFilesHelp"), /开发者|物理/);
 });

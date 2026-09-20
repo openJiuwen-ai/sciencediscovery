@@ -23,7 +23,9 @@ import {
   citationClaimExcerpt,
   literatureCitationCandidates,
   quantitativeEvidenceClaims,
+  quantitativeArtifactClaims,
   semanticReviewFingerprint,
+  validatedComputationAssessment,
 } from "@sciencediscovery/provenance";
 
 test("Literature candidates split a bibliography into stable individual tasks", () => {
@@ -187,6 +189,29 @@ test("Quantitative claim extraction accepts the full-name [evidenceN] alias form
     { alias: "ev1", excerpt: "Rate 39.7% [ev1], also [evidence2].", values: ["39.7%"] },
     { alias: "evidence2", excerpt: "Rate 39.7% [ev1], also [evidence2].", values: ["39.7%"] },
   ]);
+});
+
+test("Computation claim extraction accepts only declared generated-Artifact chips", () => {
+  const claims = quantitativeArtifactClaims("Response was 42% [artifact1].", {
+    ...version(),
+    references: [{ id: "data-1", kind: "artifact", label: "artifact1", version: 2 }],
+  });
+  assert.deepEqual(claims, [{
+    alias: "artifact1", artifactId: "data-1", artifactVersion: 2,
+    excerpt: "Response was 42% [artifact1].", values: ["42%"],
+  }]);
+  assert.deepEqual(quantitativeArtifactClaims("Response was 42% [artifact1].", version()), []);
+});
+
+test("E4 rejects a strong model verdict that omits code or execution evidence", () => {
+  const claim = { artifactVersionId: "report-v1", citationKeys: [], id: "computation-1", kind: "computation" as const, requiredEvidenceLevel: "E4" as const, text: "Response was 42%." };
+  const locators = ["artifact", "code", "execution"].map((sourceType) => ({ id: `locator-${sourceType}`, snapshotId: `snapshot-${sourceType}` }));
+  const snapshots = ["artifact", "code", "execution"].map((sourceType) => ({ id: `snapshot-${sourceType}`, sourceType }));
+  const result = validatedComputationAssessment(claim, {
+    assessment: "CONTRADICTED", locatorIds: ["locator-artifact"], rationale: "Model saw one field.",
+  }, locators as never, snapshots as never);
+  assert.equal(result.assessment, "INCONCLUSIVE");
+  assert.match(result.rationale, /Artifact, code, and execution/u);
 });
 
 test("artifactEvidenceAliases accepts both [evN] and [evidenceN] formats", () => {

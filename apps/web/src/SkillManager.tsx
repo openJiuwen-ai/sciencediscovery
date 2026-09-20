@@ -158,7 +158,7 @@ export function SkillManager({
   initialView?: "libraries" | "memory" | "skills";
   onCatalogChange: (skills: SkillDescriptor[]) => void;
   onDistillSession?: () => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onOpenSession?: (sessionId: string) => void;
   onStartSkillCreation?: () => void;
   onWorkspaceLaunchHandled?: (requestId: number) => void;
@@ -229,7 +229,7 @@ function SkillCatalogManager({
   client: ApiClient;
   onCatalogChange: (skills: SkillDescriptor[]) => void;
   onDistillSession?: () => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onOpenSession?: (sessionId: string) => void;
   onStartSkillCreation?: () => void;
   onViewChange: (view: "libraries" | "memory" | "skills") => void;
@@ -273,7 +273,7 @@ function SkillCatalogManager({
         if (!active) return;
         setReviewDrafts(next);
       } catch (reason) {
-        if (active) onError(reason instanceof Error ? reason.message : t("skillManager.error.loadDrafts"));
+        if (active) onError(reason instanceof Error ? reason : t("skillManager.error.loadDrafts"));
       }
     }
     void refreshPending();
@@ -296,7 +296,7 @@ function SkillCatalogManager({
       if (!active) return;
       const message = reason instanceof Error ? reason.message : t("skillManager.error.openGeneratedDraft");
       setLocalError(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
       setWorkspaceSkillId(undefined);
       setWorkspaceOpen(true);
     }).finally(() => {
@@ -397,7 +397,7 @@ function SkillCatalogManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillManager.error.inspectGit");
       setLocalError(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -421,7 +421,7 @@ function SkillCatalogManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillManager.error.prepareGitUpdates");
       setLocalError(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -447,7 +447,7 @@ function SkillCatalogManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillManager.error.saveSkill");
       setLocalError(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -464,7 +464,7 @@ function SkillCatalogManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillManager.error.importSkill");
       setLocalError(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
       if (importInput.current) importInput.current.value = "";
@@ -483,7 +483,7 @@ function SkillCatalogManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillManager.error.importSkillFolder");
       setLocalError(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
       if (importFolderInput.current) importFolderInput.current.value = "";
@@ -606,7 +606,7 @@ function SkillLibraryManager({
   onViewChange,
 }: {
   client: ApiClient;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onViewChange: (view: "libraries" | "memory" | "skills") => void;
 }) {
   const [libraries, setLibraries] = useState<SkillLibrary[]>([]);
@@ -641,7 +641,7 @@ function SkillLibraryManager({
       setLibraries(items);
       setSelectedId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id);
     }).catch((reason: Error) => {
-      if (active) onError(reason.message);
+      if (active) onError(reason);
     });
     return () => { active = false; };
   }, [client, onError]);
@@ -671,7 +671,7 @@ function SkillLibraryManager({
       setFromVersionId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id ?? "");
       setToVersionId((current) => current && items.some((item) => item.id === current) ? current : head ?? items.at(-1)?.id ?? "");
     }).catch((reason: Error) => {
-      if (active) onError(reason.message);
+      if (active) onError(reason);
     });
     return () => { active = false; };
   }, [client, libraries, onError, selectedId]);
@@ -710,7 +710,7 @@ function SkillLibraryManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillLibrary.error.create");
       setStatus(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -738,7 +738,7 @@ function SkillLibraryManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillLibrary.error.commit");
       setStatus(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -755,7 +755,7 @@ function SkillLibraryManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillLibrary.error.loadDiff");
       setStatus(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -778,7 +778,7 @@ function SkillLibraryManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillLibrary.error.rollback");
       setStatus(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -799,7 +799,7 @@ function SkillLibraryManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillLibrary.error.publishProposal");
       setStatus(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -822,7 +822,7 @@ function SkillLibraryManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillLibrary.error.publishProposals");
       setStatus(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -847,7 +847,7 @@ function SkillLibraryManager({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillLibrary.error.rejectProposal");
       setStatus(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }

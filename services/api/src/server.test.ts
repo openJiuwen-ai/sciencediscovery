@@ -149,6 +149,8 @@ function rootSseGolden(stream: string): string[] {
       !event.type.startsWith("subagent.")
       && event.type !== "run.queued"
       && event.type !== "run.status"
+      // Evidence-only records are not chat milestones; checked independently below.
+      && event.type !== "agent.record"
     )
     .map((event) => event.type);
 }
@@ -2399,17 +2401,24 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.equal(completedExecutions.body[0]?.exitCode, 0);
   assert.equal(completedExecutions.body[0]?.status, "succeeded");
 
-  // Both completed Shells wake the model independently. Drain their bounded
-  // notification turns before switching the shared fixture to a silent user
-  // request; otherwise the cancellation assertion observes unrelated work.
+  // Only the Shell whose foreground wait ran out wakes the model: the first
+  // Shell finished inside its wait, so its result was delivered in that turn
+  // and its notice was marked read. Drain the one bounded notification turn
+  // before switching the shared fixture to a silent user request; otherwise
+  // the cancellation assertion observes unrelated work.
   const notificationDeadline = Date.now() + 10000;
   let settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
-  while ((completionNotifications !== 2 || settled.body.sessions.length !== 0) && Date.now() < notificationDeadline) {
+  while ((completionNotifications !== 1 || settled.body.sessions.length !== 0) && Date.now() < notificationDeadline) {
     await new Promise((done) => setTimeout(done, 25));
     settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
   }
-  assert.equal(completionNotifications, 2);
+  assert.equal(completionNotifications, 1);
   assert.deepEqual(settled.body.sessions, []);
+  const successfulToolRuns = await jsonRequest<Array<{ automaticWake?: boolean }>>(
+    `${origin}/api/sessions/${successfulToolSession.body.id}/runs`, { headers: authorization },
+  );
+  assert.equal(successfulToolRuns.body.some((candidate) => candidate.automaticWake), false,
+    "a result read during the foreground wait must not wake its Session again");
 
   gatewayMode = "silent";
   await jsonRequest<SystemTimeoutSettings>(`${origin}/api/timeout-settings`, {
@@ -3980,6 +3989,13 @@ test("API runs one observable subagent through task and keeps nested task denied
     "subagent.usage",
     "subagent.updated",
   ]]);
+  const evidenceEvents = parseSseEvents(stream).filter(event => event.type === "agent.record");
+  assert.equal(evidenceEvents.filter(event => event.name === "context.captured").length, 3);
+  assert.equal(evidenceEvents.filter(event => event.name === "model.completed").length, 3);
+  assert.ok(evidenceEvents.every(event => {
+    const evidence = event.evidence as import("@sciencediscovery/schema").AgentEventEvidence;
+    return evidence.agentRunId && evidence.contextRef && Number.isFinite(Date.parse(evidence.recordedAt));
+  }));
   const streamedAssistantSteps = parseSseEvents(stream).flatMap((rawEvent) => {
     const event = rawEvent as { step?: SubagentStep; type: string };
     return event.type === "subagent.step" && event.step?.kind === "assistant" ? [event.step] : [];
@@ -6931,6 +6947,21 @@ test("delta coalescing publishes a window when its timer fires", async () => {
   assert.equal(published.length, 1, "an empty buffer flushes to nothing");
 });
 
+test("delta coalescing preserves producer interval and cannot cross evidence boundaries", async () => {
+  const published: RunStreamEvent[] = [];
+  const sink = createDeltaCoalescingSink(event => { published.push(event); }, 10_000);
+  const evidence = { agentId: "main:s", agentRunId: "a", requestExecutionId: "r", turn: 0, recordedAt: "2026-09-15T10:00:00.000Z" };
+  await sink.emit({ type: "assistant.delta", responseId: "response", delta: "a", evidence });
+  await sink.emit({ type: "assistant.delta", responseId: "response", delta: "b", evidence: { ...evidence, recordedAt: "2026-09-15T10:00:02.000Z" } });
+  await sink.emit({ type: "assistant.delta", responseId: "response", delta: "c", evidence: { ...evidence, agentRunId: "b" } });
+  await sink.flush();
+  assert.equal(published.length, 2);
+  assert.deepEqual(published[0], { type: "assistant.delta", responseId: "response", delta: "ab",
+    evidence: { ...evidence, endedAt: "2026-09-15T10:00:02.000Z" } });
+  assert.equal(published[1]!.evidence!.agentRunId, "b");
+  assert.equal("endedAt" in evidence, false, "coalescing must not mutate producer metadata");
+});
+
 test("delta coalescing never merges text across response identities", async () => {
   const published: RunStreamEvent[] = [];
   const sink = createDeltaCoalescingSink((event) => { published.push(event); }, 10_000, 1_000);
@@ -7015,6 +7046,13 @@ test("publishing routes growable payloads into child streams and keeps the main 
   });
   const subagentStream = await store.listRunStreamEvents(session.id, run.id, `subagent-${subagent.id}`);
   assert.equal(subagentStream.length, 1, "subagent process events live in their own stream");
+
+  const evidence = { agentId: `subagent:${subagent.id}`, agentRunId: "child-run", requestExecutionId: "child-request", turn: 0,
+    recordedAt: "2026-09-15T10:00:00.000Z" };
+  await publishRunEvent(store, session.id, run.id, { type: "agent.record", name: "context.captured", evidence });
+  const childRecords = await store.listRunStreamEvents(session.id, run.id, `subagent-${subagent.id}`);
+  assert.equal(childRecords.length, 2);
+  assert.deepEqual(childRecords[1]!.event.evidence, evidence);
 
   await publishRunEvent(store, session.id, run.id, { subagent, type: "subagent.updated" });
   const main = await store.listSessionRunEvents(session.id, run.id);

@@ -40,6 +40,8 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | memory-graph 端点（API 客户端） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API→memory-graph token |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | memory-graph 日志级别 |
+| `SCIENCE_AGENT_MEMORY_GRAPH_BACKEND` | `local` | memory-graph 启动时的存储后端（`local` 或 `neo4j`）；API 会按“系统配置 → 记忆”里的设置覆盖它 |
+| `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` | `~/.science-agent/memory-graph` | 本地后端存放 `nodes.jsonl` 和 `edges.jsonl` 的目录 |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `0` | 初始单次沙箱执行墙钟上限（`0` = 无限） |
 | `SCIENCE_AGENT_MAX_WORKSPACE_BYTES` | `10737418240`（10 GiB） | Runner 工作区总量上限（`0` = 无限）；亦播种系统设置 |
 | `SCIENCE_AGENT_MAX_OUTPUT_BYTES` | `1073741824`（1 GiB） | 单次执行 stdout+stderr 保留上限（超限截断；`0` = 不截断） |
@@ -73,7 +75,7 @@ set -a && source .env && set +a
 
 Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管理员明确开启。没有 Ascend NPU、未安装 CANN/MindSpore，或不希望 Agent 调用宿主 NPU 时，请保持 `SCIENCE_AGENT_NPU_BROKER=0`；此时工具表不会包含 `run_npu_job`。本地模式启用后仍使用正常启动入口。启用 Broker 前，应先创建并验证至少一个可导入所需 CANN/MindSpore 栈的 ScienceDiscovery 包含 Python 的托管科学环境。内置 NPU workload（包括 `npu.smoke_test`）用 `environment_list` 返回的 `environment_id` 选择环境；省略时由 API 解析 Session 所选环境。API 选择该环境最新版 Revision，供 Broker 内部执行与审计；Agent 不能选择历史版本，`environment_revision_id` 会被拒绝。`SCIENCE_AGENT_NPU_WORKLOAD_CONFIG` 留空时使用仓内默认白名单，当前包含 `npu.smoke_test` 与 `antibody.protenix.v1`；如需新增模型，提供自定义 JSON 白名单并固定 entrypoint，而不是让 Agent 传任意命令。`SCIENCE_AGENT_NPU_PYTHON` 仅保留给显式使用 `${python}` 的自定义白名单；仓内默认白名单使用 `${managedPython}`，不会读取它。修改白名单 JSON 等价于修改可执行代码入口，应作为部署变更审查；模型权重、数据库、HMMER、CANN、MindScience checkout 等站点资产不进入仓库，通常通过上面的环境变量或 workload 配置引用。
 
-浏览器仅将 API token 保存在 local storage。模型凭证只存在于后端存储。
+浏览器仅将本地服务访问令牌保存在 local storage。模型凭证只存在于后端存储。
 
 ### 配额层级
 
@@ -92,29 +94,46 @@ Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管
 
 ## Docker 环境变量
 
-Compose 读取仓库根目录 `.env`，并把以下键插值到 `docker-compose.yml`：
+Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把下面的键插值到 `docker-compose.yml`。它们分两层：编排层只影响 Compose 如何启动容器；容器层由服务的 `environment` 块逐个转发进容器，留空等于使用内置默认值。操作步骤与分层说明见[Docker 部署](../how-to/deployment.md#docker-部署)。
+
+### 编排层
 
 | 变量 | 默认值 | 作用 |
 |---|---|---|
-| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | 容器 uid/gid；必须能写宿主的 `./data` |
+| `COMPOSE_PROJECT_NAME` | 当前目录名 | 容器名与默认网络名的前缀；同机多实例靠它隔离，与 `docker compose -p` 等价 |
+| `SCIENCE_AGENT_IMAGE` | `sciencediscovery:local` | 构建并运行的镜像 tag |
+| `SCIENCE_AGENT_DATA_HOST_DIR` | `./data` | bind mount 到容器 `/app/data` 的宿主目录，须先创建 |
+| `SCIENCE_AGENT_UID` / `SCIENCE_AGENT_GID` | `1000` | 容器 uid/gid；必须能写宿主数据目录 |
 | `SCIENCE_AGENT_PUBLISH_HOST` | `127.0.0.1` | UI/API 在宿主上发布到的网卡 |
 | `SCIENCE_AGENT_PUBLISH_PORT` | `4310` | 映射到容器 `4310` 的宿主端口 |
-| `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `<数据目录>/secrets/auth-token` 中保存的值 |
+
+### 容器层
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `SCIENCE_AGENT_AUTH_TOKEN` | 首次启动生成 | 浏览器/API bearer token；不设置时使用 `/app/data/secrets/auth-token`（宿主 `./data/secrets/auth-token`）中保存的值 |
+| `SCIENCE_AGENT_LOG_LEVEL` | `INFO` | 运行日志级别阈值（`DEBUG` / `INFO` / `WARNING` / `ERROR`） |
+| `SCIENCE_AGENT_LOG_DIR` | `/app/data/logs` | 日志目录；保持默认即随数据目录持久化 |
+| `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | 单个类别日志滚动前的最大字节数 |
+| `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | 每个类别保留的滚动历史文件数 |
+| `SCIENCE_AGENT_CONTEXT_MODE` | `dynamic` | 上下文装配模式；`legacy` 与 `shadow` 仅用于调试和回归对比 |
+| `SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS`、`…_SECTION_MAX_CHARS`、`…_DATA_BUDGET_CHARS`、`…_ATTACHMENT_MAX_CHARS`、`…_CONTRIBUTED_MESSAGE_BUDGET_CHARS`、`…_MAX_CONTRIBUTED_MESSAGES`、`…_WINDOW_MESSAGES`、`…_WINDOW_ROUNDS`、`…_WINDOW_TOKENS` | 见 `.env.docker.example` | 上下文装配的预算与窗口，含义见[上下文装配](../../architecture/context-assembly.md) |
+| `SCIENCE_AGENT_CONTEXT_TRACE` / `SCIENCE_AGENT_CONTEXT_TRACE_DIR` | `0` / `/app/data/context-traces` | 上下文装配追踪开关与输出目录 |
 | `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API→runner token（仅容器回环） |
-| `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核 |
+| `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核；首次启动自动创建 starter Python |
 | `SCIENCE_AGENT_EXEC_TIMEOUT_MS` | `7200000` | 单次沙箱执行的墙钟上限 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `1800000` | 持久内核空闲超时（最小 1000 ms） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单 |
-| `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验副本 |
-| `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，供无法访问上游发布地址的部署使用；SHA-256 仍按固定版本校验 |
+| `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员 micromamba 路径；留空使用镜像内已校验、并播种到数据目录的副本 |
 | `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存路径；离线 provision 前需填充内容 |
 | `SCIENCE_AGENT_BWRAP_PATH` | `/usr/bin/bwrap` | 镜像内 bubblewrap 可执行文件 |
+| `SCIENCE_AGENT_SSH_CONFIG_PATH` | — | 远程 runner 的 SSH 配置文件（容器内路径）；放在宿主 `./data/ssh` 下即已在 `/app/data/ssh` 可见 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED` | `true` | 用量看板展示币种换算开关；关闭后费用只显示各模型原始币种 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL` | `https://api.frankfurter.dev/v2/rate/USD/CNY` | 用量看板 USD/CNY 汇率源，默认使用无需 API key 的 Frankfurter；自定义 URL 时汇率来源按 URL host 标注 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | 用量看板汇率缓存 TTL，默认 6 小时 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | 用量看板汇率请求超时 |
 
-API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。操作步骤与沙箱放权边界见[Docker 部署](../how-to/deployment.md#docker-部署)。
+镜像内固定的值不经 `.env` 修改：`SCIENCE_AGENT_DATA_DIR=/app/data`、`SCIENCE_AGENT_HOST=0.0.0.0`、`SCIENCE_AGENT_PORT=4310`、`SCIENCE_AGENT_RUNNER_HOST=127.0.0.1`、`SCIENCE_AGENT_RUNNER_PORT=4311`、`SCIENCE_AGENT_RUNNER_URL`，以及镜像内 Python 环境、模型目录快照与 micromamba 种子的路径。API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。本地模式的 `SCIENCE_AGENT_MICROMAMBA_BASE_URL` 在 Docker 中不需要：镜像已内置并播种固定版本的 micromamba，运行时不再下载。其余本地模式变量（如 `HTTP_PROXY`）未被转发，需要时通过 `docker-compose.override.yml` 追加到服务的 `environment` 块。
 
 ## 存储布局
 
@@ -137,7 +156,7 @@ API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，�
 | `.sciencediscovery-data/skills/` | 本地托管技能包与 revision |
 | `.sciencediscovery-data/envs/paper/`、`.sciencediscovery-data/envs/gateway/` | uv 管理的 PDF worker 与 agent gateway Python 环境（可由运行脚本重建；非业务状态） |
 | `.sciencediscovery-data/logs/{api,run,gateway,runner,memory-graph}.log` | 分级、按类别和大小滚动的运行日志；memory-graph 文件仅在功能启用时使用 |
-| 浏览器 local storage | 仅 API bearer token——模型凭证从不离开后端 |
+| 浏览器 local storage | 仅本地服务访问令牌——模型凭证从不离开后端 |
 
 数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于仓库启动器，已有默认 `data` 目录会一次性移动到 `.sciencediscovery-data`。对于单文件 launcher，已有默认 `./science-discovery-data` 或更早的 `./science-agent-data` 会按由新到旧的顺序一次性导入 `./.sciencediscovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../how-to/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `.sciencediscovery-data/envs/` 下的环境。
 

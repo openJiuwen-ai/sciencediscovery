@@ -314,7 +314,7 @@ test("remote Node version does not gate SEA deployment after a successful probe"
 });
 
 test("generated-key registration resumes trust by host id without resubmitting the consumed path", async () => {
-  const errors: string[] = [];
+  const errors: (string | Error)[] = [];
   const registered: RegisterRemoteHostRequest[] = [];
   const trusted: string[] = [];
   const key = { algorithm: "ssh-ed25519", fingerprint: "SHA256:test" };
@@ -348,7 +348,7 @@ test("generated-key registration resumes trust by host id without resubmitting t
 });
 
 test("connect runner presents a changed host key and resumes from the settings trust action", async () => {
-  const errors: string[] = [];
+  const errors: (string | Error)[] = [];
   let connects = 0;
   let trusts = 0;
   const host = buildHost();
@@ -560,7 +560,7 @@ test("ticking a card saves the selection against the Runner it belongs to", asyn
 
 test("a draft can be discarded and a rejected save keeps what was picked", async () => {
   const calls: Array<{ devices: number[]; runnerId: string }> = [];
-  const errors: string[] = [];
+  const errors: (string | Error)[] = [];
   let renderer: ReactTestRenderer | undefined;
   const failing = {
     setRunnerNpuDevices: async (runnerId: string, devices: number[]) => {
@@ -570,13 +570,14 @@ test("a draft can be discarded and a rejected save keeps what was picked", async
   } as unknown as ApiClient;
   await act(async () => {
     renderer = create(createElement(NpuDeviceSelector, {
-      client: failing, inventory: NPU_INVENTORY, onError: (message: string) => errors.push(message),
+      client: failing, inventory: NPU_INVENTORY, onError: (reason: string | Error) => errors.push(reason),
       onSelected: () => {}, runnerId: "host-1", selected: [],
     } as never));
   });
   await act(async () => { renderer!.root.findAllByType("input")[1]!.props.onChange({ target: { checked: true } }); });
   await clickButton(renderer!, "Save selection");
-  assert.deepEqual(errors, ["NPU 4 cannot be opened inside the sandbox"]);
+  assert.ok(errors[0] instanceof Error);
+  assert.deepEqual(errors.map((reason) => reason instanceof Error ? reason.message : reason), ["NPU 4 cannot be opened inside the sandbox"]);
   // The Runner refusing one card must not throw away what was picked.
   assert.equal(renderer!.root.findAllByType("input")[1]!.props.checked, true);
   await clickButton(renderer!, "Discard");

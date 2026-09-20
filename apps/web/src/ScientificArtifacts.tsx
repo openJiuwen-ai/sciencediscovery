@@ -451,7 +451,7 @@ export function ArtifactModal({
     * Absent in standalone mode → code header renders as plain text. */
   onNavigateCode?: (runId: string) => void;
   onChipClick?: (reference: ComposerReference) => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onPendingAnnotation: (annotation: ArtifactAnnotation) => void;
   refreshKey?: string;
   sessionId: string;
@@ -502,7 +502,7 @@ export function ArtifactModal({
   // in a ref and keep it out of the fetch effects' dependencies.
   const onErrorRef = useRef(onError);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
-  const reportError = useCallback((message: string) => onErrorRef.current(message), []);
+  const reportError = useCallback((message: string | Error) => onErrorRef.current(message), []);
   const artifact = artifacts.find((item) => item.id === artifactId);
   const version = versions.find((item) => item.id === versionId);
   const sourceSessions = sessions ?? loadedSessions;
@@ -590,7 +590,7 @@ export function ArtifactModal({
         if (current && items.some((item) => item.id === current)) return current;
         return match?.id ?? items[0]?.id;
       });
-    }).catch((error: Error) => { if (active) reportError(error.message); });
+    }).catch((error: Error) => { if (active) reportError(error); });
     return () => { active = false; };
   }, [client, embedded, logicalName, onMissing, refreshKey, sessionId]);
 
@@ -620,7 +620,7 @@ export function ArtifactModal({
         : undefined;
       setVersionId((current) =>
         items.some((item) => item.id === current) ? current : (pinned?.id ?? items.at(-1)?.id));
-    }).catch((error: Error) => { if (active) reportError(error.message); });
+    }).catch((error: Error) => { if (active) reportError(error); });
     return () => { active = false; };
   }, [artifactId, client, refreshKey, sessionId, initialVersion]);
 
@@ -636,7 +636,7 @@ export function ArtifactModal({
       const text = await (await client.readArtifactVersion(sessionId, latest.id)).text();
       const format = detectStructureFormat({ content: text, mediaType: latest.mediaType, name: other?.logicalName });
       if (active && format) setCompare({ content: text, format, name: other?.logicalName });
-    }).catch((error: Error) => { if (active) reportError(error.message); });
+    }).catch((error: Error) => { if (active) reportError(error); });
     return () => { active = false; };
   }, [artifacts, client, compareId, sessionId]);
 
@@ -692,9 +692,9 @@ export function ArtifactModal({
           setProvenance((current) =>
             current ? { ...current, dependencies: graphResult.dependencies } : current,
           );
-        }).catch((error: Error) => { if (active) reportError(error.message); });
+        }).catch((error: Error) => { if (active) reportError(error); });
       }
-    }).catch((error: Error) => { if (active) reportError(error.message); });
+    }).catch((error: Error) => { if (active) reportError(error); });
     return () => { active = false; if (url) URL.revokeObjectURL(url); };
   }, [artifact?.kind, artifact?.logicalName, client, graphSessionId, sessionId, versionId]);
 
@@ -703,7 +703,7 @@ export function ArtifactModal({
     if (artifact.kind !== "dataset" && artifact.kind !== "json" && artifact.kind !== "notebook") { setPreview(undefined); return; }
     let active = true;
     void client.getArtifactVersionPreview(sessionId, versionId).then((payload) => { if (active) setPreview(payload); })
-      .catch((error: Error) => { if (active) { setPreview(undefined); reportError(error.message); } });
+      .catch((error: Error) => { if (active) { setPreview(undefined); reportError(error); } });
     return () => { active = false; };
   }, [artifact, client, sessionId, versionId]);
 
@@ -729,7 +729,7 @@ export function ArtifactModal({
       setPoint(undefined);
       setNote("");
     } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not save annotation");
+      onError(error instanceof Error ? error : "Could not save annotation");
     }
   }
 
@@ -740,7 +740,7 @@ export function ArtifactModal({
       const blob = await client.readArtifactVersion(sessionId, version.id);
       downloadBlob(blob, artifactDownloadFileName(artifact.name));
     } catch (error) {
-      reportError(error instanceof Error ? error.message : t("artifact.downloadFailed"));
+      reportError(error instanceof Error ? error : t("artifact.downloadFailed"));
     } finally {
       setDownloadBusy(false);
     }
@@ -781,7 +781,7 @@ export function ArtifactModal({
       }
       setChainExplorer({ nodeId: node.id, version: currentVersion, subgraph });
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("evidence.loadMemoryFailed"));
+      onError(error instanceof Error ? error : t("evidence.loadMemoryFailed"));
     }
   }
 
@@ -946,7 +946,7 @@ export function ScientificArtifacts({
   sessionId,
 }: {
   client: ApiClient;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onEvolve?: (seed: { cas: string; label: string }) => void;
   /** Open the evolve panel for a run a graph node points at. */
   onOpenEvolveRun?: (runId: string) => void;

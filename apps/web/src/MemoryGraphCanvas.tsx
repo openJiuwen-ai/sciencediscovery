@@ -672,7 +672,10 @@ function applyNodeLabelVisibility(
   // (tiny graph), the threshold is the same *relative* zoom-in.
   const visible = scale >= baselineScale * LABEL_SHOW_ZOOM_RATIO ? 1 : 0;
   nodeSel.select("text.memory-canvas-node-label").attr("opacity", visible);
-  nodeSel.select("text.memory-canvas-scope-badge").attr("opacity", visible);
+  // The ▸N badge is not a caption: it is the only cue that a node has folded
+  // children, so it stays visible at the fit zoom where captions are hidden.
+  nodeSel.select("text.memory-canvas-scope-badge").attr("opacity", 1);
+  nodeSel.select("rect.memory-canvas-scope-badge-bg").attr("stroke-opacity", 1);
 }
 
 /**
@@ -1832,17 +1835,23 @@ export function MemoryGraphCanvas({
             // 文案在下面的 update 块按节点类型 + 折叠态重绑。
             g.append("title")
               .attr("class", "memory-canvas-scope-title");
-            // The ▸N badge is aggregate-only now (a scope's folded state is
-            // shown by the stack discs, not a numeric badge).
-            g.filter((node: SimNode) => node.isAggregate === true).append("text")
+            // Every node carries a badge slot: "▸ N" is the number of folded
+            // child nodes a double-click would reveal (aggregate stacks, scopes
+            // and ordinary nodes alike); it stays empty when there is nothing
+            // left to expand.
+            // The badge is a filled pill (background rect + white text) at the
+            // node's top-right, so it reads as a button-like cue instead of
+            // small coloured text. Geometry is set in the update block below,
+            // where the label length is known.
+            g.append("rect")
+              .attr("class", "memory-canvas-scope-badge-bg")
+              .attr("pointer-events", "none");
+            g.append("text")
               .attr("class", "memory-canvas-scope-badge")
-              .attr("text-anchor", "start")
-              .attr("x", nodeSize * 0.7)
-              .attr("y", -nodeSize * 0.7)
+              .attr("text-anchor", "middle")
               .attr("font-family", '"Open Sans", sans-serif')
-              .attr("font-size", captionFontSizeFor(nodeSize) * 1.6)
               .attr("font-weight", 700)
-              .attr("fill", "#d97706")
+              .attr("fill", "#ffffff")
               .attr("pointer-events", "none");
             // Bind the mount-once drag behaviour (created in the mount
             // effect, survives rebuilds) to the new node group.
@@ -1918,10 +1927,40 @@ export function MemoryGraphCanvas({
           .attr("y", (_line: string, i: number) => yPos0 + i * captionFontSize)
           .text((line: string) => line);
       });
+    // "+N": N nodes are folded behind this one (double-click reveals them);
+    // "−N" once they are open. A small white chip with a coloured rim sits on
+    // the node's top-right edge, so it reads as a count, not as a control.
+    const badgeLabel = (node: SimNode): string => {
+      if (node.isAggregate) return `${node.aggregateExpanded ? "−" : "+"}${node.aggregateCount ?? 0}`;
+      if (node.isScope) return node.childCount ? `${node.folded ? "+" : "−"}${node.childCount}` : "";
+      const folded = foldedProducesCountsRef.current?.get(node.id) ?? 0;
+      return folded > 0 ? `+${folded}` : "";
+    };
+    const badgeColour = (node: SimNode): string => node.isAggregate ? "#d97706" : node.isScope ? "#2563eb" : "#334155";
+    const badgeFont = Math.max(10, nodeSize * 0.5);
+    const badgeCentre = (node: SimNode) => ({ x: nodeSize * 0.75, y: -nodeSize * 0.75, label: badgeLabel(node) });
     nodeSel.select("text.memory-canvas-scope-badge")
-      .text((node: SimNode) => node.isAggregate
-        ? `${node.aggregateExpanded ? "▾" : "▸"} ${node.aggregateCount ?? 0}`
-        : "");
+      .attr("font-size", badgeFont)
+      .attr("fill", (node: SimNode) => badgeColour(node))
+      .attr("x", (node: SimNode) => badgeCentre(node).x)
+      .attr("y", (node: SimNode) => badgeCentre(node).y + badgeFont * 0.36)
+      .text((node: SimNode) => badgeLabel(node));
+    nodeSel.select("rect.memory-canvas-scope-badge-bg")
+      .attr("fill", "#ffffff")
+      .attr("stroke", (node: SimNode) => badgeColour(node))
+      .attr("stroke-width", 1.4)
+      .each(function (node: SimNode) {
+        const { x, y, label } = badgeCentre(node);
+        const h = badgeFont * 1.45;
+        const w = Math.max(h, label.length * badgeFont * 0.6 + badgeFont * 0.7);
+        select(this)
+          .attr("x", x - w / 2)
+          .attr("y", y - h / 2)
+          .attr("width", w)
+          .attr("height", h)
+          .attr("rx", h / 2)
+          .attr("opacity", label ? 1 : 0);
+      });
     // The aggregate's amber ring solidifies when expanded. A scope no longer
     // has a ring (its folded state is shown by the stack discs).
     nodeSel.select("circle.memory-canvas-scope-ring")

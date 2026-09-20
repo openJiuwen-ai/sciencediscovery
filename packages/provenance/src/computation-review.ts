@@ -106,6 +106,8 @@ export type TraceArtifactProvenance = (
 
 export interface QuickComputationReviewResult {
   findings: ArtifactReviewFinding[];
+  /** A graph outage limits this check; it is never evidence of an Artifact defect. */
+  inconclusive?: boolean;
   provenanceRef: string;
 }
 
@@ -224,13 +226,8 @@ export async function quickComputationReview(
   if (signal?.aborted) throw new DOMException("Review cancelled", "AbortError");
   if (!trace) {
     return {
-      findings: [finding(
-        version,
-        reference.provenanceRef,
-        "COMPUTATION_PROVENANCE_QUERY_FAILED",
-        "The Artifact provenance graph is unavailable.",
-        "warning",
-      )],
+      findings: [],
+      inconclusive: true,
       provenanceRef: reference.provenanceRef,
     };
   }
@@ -241,26 +238,16 @@ export async function quickComputationReview(
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     return {
-      findings: [finding(
-        version,
-        reference.provenanceRef,
-        "COMPUTATION_PROVENANCE_QUERY_FAILED",
-        `The Artifact provenance query failed: ${error instanceof Error ? error.message : String(error)}`,
-        "warning",
-      )],
+      findings: [],
+      inconclusive: true,
       provenanceRef: reference.provenanceRef,
     };
   }
   if (signal?.aborted) throw new DOMException("Review cancelled", "AbortError");
   if (unavailable(result.reason)) {
     return {
-      findings: [finding(
-        version,
-        reference.provenanceRef,
-        "COMPUTATION_PROVENANCE_QUERY_FAILED",
-        `The Artifact provenance could not be checked${result.reason ? `: ${result.reason}` : "."}`,
-        "warning",
-      )],
+      findings: [],
+      inconclusive: true,
       provenanceRef: reference.provenanceRef,
     };
   }
@@ -406,9 +393,10 @@ export function quickNumericEvidenceCoverageReview(
   const explicitMeasurement = /\b\d+(?:\.\d+)?\s*(?:%|‰|mg\/?L|ng\/?mL|years?|months?|days?|patients?|cases?)/iu;
   const contextualDecimal = /\b\d+\.\d+\b/iu;
   const quantitativeContext = /\b(?:mean|median|average|rate|frequency|prevalence|incidence|ratio|hazard|odds|fold)\b|(?:均值|中位数|平均|频率|比例|发生率|患病率|风险比|比值|倍)/iu;
-  const literatureMarker = /(?:\[(?!(?:ev|evidence)\d+\])\d+(?:\s*[,，]\s*\d+)*\]|【\d+(?:\s*[,，]\s*\d+)*】|\[\^[^\]]+\]|\b[A-Z][A-Za-z'’-]+\s+et al\.,?\s*(?:\(|,)?\s*(?:19|20)\d{2}\b)/u;
+  const literatureMarker = /(?:\[(?!(?:ev|evidence)\d+\])\d+(?:\s*[,，]\s*\d+)*\]|【\d+(?:\s*[,，]\s*\d+)*】|\[\^[^\]]+\]|\b[A-Z][A-Za-z'’-]+\s+et al\.,?\s*(?:\(|,)?\s*(?:19|20)\d{2}\b|[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z .'-]{0,40}等\s*[（(]\s*(?:19|20)\d{2}|\bPMID\s*[:：]\s*\d{4,9}\b)/u;
   const evidenceMarker = /\[(?:ev|evidence)\d+\]/iu;
   const bibliographyEntry = /^\s*(?:\[\d+\]|\d+[.)、])\s+/u;
+  const unavailableMeasurement = /(?:not\s+(?:extractable|available|reported)|(?:cannot|unable\s+to)\s+(?:extract|obtain)|unavailable|无法(?:提取|获取)|未(?:提取|获取|报告)|不可(?:提取|获得))/iu;
   const artifactAliases = new Set(
     (version.references ?? [])
       .filter((reference) => reference.kind === "artifact")
@@ -419,6 +407,7 @@ export function quickNumericEvidenceCoverageReview(
     if (bibliographyEntry.test(line)) continue;
     for (const rawSentence of line.split(/(?<=[.!?。！？])\s+/gu)) {
       const sentence = rawSentence.trim();
+      if (unavailableMeasurement.test(sentence)) continue;
       const citation = sentence.match(literatureMarker)?.[0];
       const isNumericClaim = explicitMeasurement.test(sentence)
         || (contextualDecimal.test(sentence) && quantitativeContext.test(sentence));

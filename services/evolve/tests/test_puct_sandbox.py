@@ -24,7 +24,11 @@ claims to refuse.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +54,19 @@ def test_the_sandbox_blocks_the_writes_and_network_it_claims_to_block(tmp_path):
     scratch.mkdir()
     outside = tmp_path / "outside.txt"
     probe = scratch / "probe.py"
+    # `/tmp` by name, rather than another path under `tmp_path`, because the
+    # profile once mounted a tmpfs there. That overlay answered *both* probes
+    # wrongly and in opposite directions: the write succeeded into a throwaway
+    # mount (so the profile allowed a write outside the scratch bind), and the
+    # host file underneath disappeared (so a dataset staged in the system
+    # temporary directory could not be read). `tmp_path` catches this only
+    # while pytest keeps its base temporary directory under `/tmp`; naming the
+    # directory keeps the check honest if that ever moves.
+    shared = Path(tempfile.gettempdir()) / f"puct-sandbox-probe-{os.getpid()}"
+    shared.mkdir()
+    shared_read = shared / "staged.txt"
+    shared_read.write_text("staged-by-the-host", encoding="utf-8")
+    shared_write = shared / "escaped.txt"
     probe.write_text(
         "import json, socket\n"
         "result = {}\n"
@@ -58,6 +75,15 @@ def test_the_sandbox_blocks_the_writes_and_network_it_claims_to_block(tmp_path):
         "    result['outside_write'] = 'allowed'\n"
         "except Exception as exc:\n"
         "    result['outside_write'] = type(exc).__name__\n"
+        "try:\n"
+        f"    open({str(shared_write)!r}, 'w').write('x')\n"
+        "    result['shared_tmp_write'] = 'allowed'\n"
+        "except Exception as exc:\n"
+        "    result['shared_tmp_write'] = type(exc).__name__\n"
+        "try:\n"
+        f"    result['shared_tmp_read'] = open({str(shared_read)!r}).read()\n"
+        "except Exception as exc:\n"
+        "    result['shared_tmp_read'] = type(exc).__name__\n"
         "try:\n"
         f"    open({str(scratch / 'inside.txt')!r}, 'w').write('x')\n"
         "    result['inside_write'] = 'allowed'\n"
@@ -72,17 +98,25 @@ def test_the_sandbox_blocks_the_writes_and_network_it_claims_to_block(tmp_path):
         encoding="utf-8",
     )
 
-    command, env = sandbox_command(
-        scratch, [str(probe)], capability=detect_local_capability(), timeout=30.0,
-    )
-    completed = subprocess.run(command, capture_output=True, text=True,
-                               timeout=90, env=env, cwd=str(scratch))
-    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    try:
+        command, env = sandbox_command(
+            scratch, [str(probe)], capability=detect_local_capability(), timeout=30.0,
+        )
+        completed = subprocess.run(command, capture_output=True, text=True,
+                                   timeout=90, env=env, cwd=str(scratch))
+        payload = json.loads(completed.stdout.strip().splitlines()[-1])
 
-    assert payload["outside_write"] != "allowed"
-    assert payload["inside_write"] == "allowed", "a candidate must be able to use its scratch"
-    assert payload["network"] != "allowed"
-    assert not outside.exists(), "and the write really did not land"
+        assert payload["outside_write"] != "allowed"
+        assert payload["shared_tmp_write"] != "allowed", "no writable mount outside the scratch bind"
+        assert payload["shared_tmp_read"] == "staged-by-the-host", (
+            "a candidate must still read what the host staged for it"
+        )
+        assert payload["inside_write"] == "allowed", "a candidate must be able to use its scratch"
+        assert payload["network"] != "allowed"
+        assert not outside.exists(), "and the write really did not land"
+        assert not shared_write.exists(), "and neither did the one aimed at the system temp dir"
+    finally:
+        shutil.rmtree(shared, ignore_errors=True)
 
 
 @needs_sandbox

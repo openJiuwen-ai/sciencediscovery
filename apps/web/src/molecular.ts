@@ -59,6 +59,19 @@ export function isStructureJson(content: string): boolean {
   }
 }
 
+/**
+ * Which Mol* trajectory parser a `.cif` file needs. Crystallographic (CIF core)
+ * files carry fractional coordinates in `_atom_site_fract_x` / `_cell_length_*`
+ * and no Cartesian ones; mmCIF carries `_atom_site.Cartn_x`. Feeding a core CIF
+ * to the mmCIF parser yields zero models ("No models found"), so the two must
+ * not share one format. Mirrors Mol*'s own CIF variant guess.
+ */
+export function cifTrajectoryFormat(content: string): "mmcif" | "cifCore" {
+  const hasCartesian = /_atom_site\.Cartn_x/i.test(content);
+  const hasFractional = /_atom_site[._]fract_x/i.test(content);
+  return hasFractional && !hasCartesian ? "cifCore" : "mmcif";
+}
+
 function sniffFormat(content: string): StructureFormat | undefined {
   const trimmed = content.trimStart();
   if (!trimmed) return undefined;

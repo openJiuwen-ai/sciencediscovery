@@ -62,9 +62,12 @@ Run from the repository root. Report each check as pass/fail with the value seen
 ```bash
 uname -s -m                              # expect: Linux x86_64 or aarch64
 ss -ltn | grep -E ':(4310|4311)' || echo "ports free"
-sysctl kernel.unprivileged_userns_clone             2>/dev/null   # 1, where the knob exists
-sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null   # 0, required on Ubuntu 24.04+
 ```
+
+Sandbox availability is decided by **running the product's probe**, never by
+reading a sysctl. Use the probe below for host-process mode, and the
+in-container probe under *Docker mode* for Compose. A sysctl value is a
+diagnostic to reach for after a probe fails — see Step 3.
 
 **Host-process mode** (mirrors `README.md` → Quick start → Requirements)
 
@@ -77,13 +80,13 @@ bwrap --version   # 0.6+; 0.8+ recommended (adds --disable-userns where the envi
 curl --version | head -1
 ```
 
-Sandbox preflight — the same probe `scripts/start-stack.sh` runs, harmless and
-read-only:
+Sandbox preflight — the same probe `scripts/start-stack.sh` and
+`packages/sandbox-capability` run, harmless and read-only:
 
 ```bash
 bwrap --unshare-all --unshare-user --die-with-parent \
   --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
-  --symlink usr/lib64 /lib64 /usr/bin/true && echo "sandbox ok"
+  --symlink usr/lib64 /lib64 --proc /proc /usr/bin/true && echo "sandbox ok"
 ```
 
 **Docker mode**
@@ -94,6 +97,21 @@ docker compose version                          # v2.x
 docker info >/dev/null && echo "daemon reachable"
 id -u; id -g                                    # → SCIENCE_AGENT_UID / _GID
 ```
+
+The container's sandbox can only be probed once the image exists, and the entry
+point already probes it at startup: a failure is printed to
+`docker compose logs`. To confirm it positively after `up -d`:
+
+```bash
+docker compose exec sciencediscovery sh -c '
+  bwrap --unshare-all --unshare-user --die-with-parent \
+    --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib \
+    --symlink usr/lib64 /lib64 --proc /proc /usr/bin/true' && echo "sandbox ok"
+```
+
+Keep the outer `sh -c`. With `bwrap` as the exec session's first process the
+loopback setup fails for reasons unrelated to sandbox capability, which reads
+as a false negative.
 
 ## Step 3 — Report gaps, do not close them yourself
 
@@ -107,9 +125,20 @@ fixes are **for the user to run**, quoted as such:
   the pinned pnpm, and the official uv installer script (installs to
   `~/.local/bin`). Missing bubblewrap has no user-level path — it is a distro
   package the user must install.
-- `kernel.apparmor_restrict_unprivileged_userns` is `1` → the documented fix is
-  `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`. Quote it,
-  explain it needs root and is not persistent, and stop.
+- Sandbox probe **passed** → the environment is fine. Do not read
+  `kernel.apparmor_restrict_unprivileged_userns`, do not report it, and never
+  ask for `sudo sysctl -w ...=0`. That restriction is configured per AppArmor
+  profile, so the value is routinely `1` on Ubuntu 24.04+ hosts where the probe
+  passes; quoting a root command there is wrong advice.
+- Sandbox probe **failed** → report it and work through the causes in order:
+  the container's `security_opt` (Docker mode needs `seccomp`, `apparmor` and
+  `systempaths` all unconfined); then the host AppArmor configuration, where
+  `/etc/apparmor.d/` can grant `userns create` per program; and only then
+  `sysctl kernel.unprivileged_userns_clone` and
+  `sysctl kernel.apparmor_restrict_unprivileged_userns`. If the last one is the
+  confirmed cause, quote `sudo sysctl -w
+  kernel.apparmor_restrict_unprivileged_userns=0`, say it needs root and does
+  not persist, and stop for the user's decision.
 - Port already in use → offer `SCIENCE_AGENT_PORT` (host mode) or
   `SCIENCE_AGENT_PUBLISH_PORT` (Docker) instead of killing the other process.
   When moving the runner port, also update the explicit
@@ -121,7 +150,7 @@ fixes are **for the user to run**, quoted as such:
   `start-stack.sh`'s install commands and never touch user or global
   npm/uv config.
 
-If user namespaces stay restricted, the API and UI still start and `/health`
+If the sandbox probe keeps failing, the API and UI still start and `/health`
 still reports the runner, but every `run_python` / `run_shell` fails. Say this
 plainly and let the user choose whether to continue.
 
@@ -151,7 +180,7 @@ cp .env.example .env                               # first time only; never over
 ```bash
 cp .env.docker.example .env      # or merge its keys into an existing .env
 # set SCIENCE_AGENT_UID / SCIENCE_AGENT_GID to `id -u` / `id -g` when they are not 1000
-mkdir -p data
+mkdir -p data                    # before `up`: Docker creates a missing bind-mount source as root
 docker compose build             # first build is long and needs network
 docker compose up -d
 curl -fsS http://127.0.0.1:4310/health
@@ -161,7 +190,29 @@ curl -fsS http://127.0.0.1:4310/health
   survives `docker compose down` and rebuilds.
 - A uid/gid mismatch is the most common first-run failure: the entry point exits
   with an explicit "not writable" message. Fix it via `SCIENCE_AGENT_UID` /
-  `SCIENCE_AGENT_GID` and recreate the container.
+  `SCIENCE_AGENT_GID` and recreate the container. The same message appears when
+  the data directory did not exist at `up` time: Docker then created it as
+  root, so remove it and `mkdir -p` it as the user first.
+- The sign-in URL in `docker compose logs` always names the container port
+  4310. When `SCIENCE_AGENT_PUBLISH_PORT` differs, tell the user to substitute
+  the published port before opening it.
+- The first start seeds micromamba into `./data/scientific-envs/bin/` and then
+  creates the starter Python environment in the background (conda-forge, about
+  2 GB into `./data`). The UI works meanwhile; `runner.scientificEnvs.startersReady`
+  in `/health` turns `true` when it is done. `SCIENTIFIC_ENVS=0` skips it.
+- Several instances on one host: give each its own Compose project name, port
+  and data directory. The service sets no `container_name`, so the project name
+  alone separates container and network names.
+
+  ```bash
+  mkdir -p data-b
+  COMPOSE_PROJECT_NAME=sciencediscovery-b SCIENCE_AGENT_PUBLISH_PORT=4320 \
+    SCIENCE_AGENT_DATA_HOST_DIR=./data-b docker compose up -d
+  ```
+
+  Every later `ps` / `logs` / `down` needs the same project name, or it acts on
+  the other instance. Add `SCIENCE_AGENT_IMAGE` when the instances are built
+  from different checkouts.
 - The service already sets `seccomp=unconfined`, `apparmor=unconfined` and
   `systempaths=unconfined` for bubblewrap. Do not add capabilities or
   `privileged: true`. Dropping `systempaths=unconfined` still works, but the
@@ -178,7 +229,8 @@ curl -fsS http://127.0.0.1:4310/health
   channel.
 - Host-process mode binds all interfaces by default, so `http://<machine-ip>:4310`
   also works. Docker publishes on `127.0.0.1` unless `SCIENCE_AGENT_PUBLISH_HOST`
-  is changed. Auth is one bearer token with no TLS: recommend loopback plus SSH
+  is changed, and the `Open to sign in` URL in its log always says port 4310 —
+  report the published port instead when it differs. Auth is one bearer token with no TLS: recommend loopback plus SSH
   forwarding over exposing the port, and tell the user to change the token first
   if they do expose it.
 - There is no built-in model. A usable session needs a profile plus credential
@@ -274,10 +326,15 @@ as a session id, so it silently prints nothing and the group looks empty.
 | Symptom | Cause / next step |
 |---|---|
 | `data ... is not writable by uid ...` | Docker uid/gid mismatch → set `SCIENCE_AGENT_UID` / `_GID`, recreate |
-| `WARNING: bubblewrap cannot create a sandbox` in logs | Host restricts user namespaces → quote the `sysctl` fix, let the user run it |
+| `WARNING: bubblewrap cannot create a sandbox` in logs | The probe failed → work Step 3's order: `security_opt`, then host AppArmor profiles, then the sysctl. Never open with the `sysctl` fix |
 | `.sciencediscovery-data/envs/gateway is missing` | Started with `--no-build` before a build → run once without it (that venv holds the interpreter for the bundled Python MCP servers) |
 | API up but every run fails | Usually the sandbox warning above, or no model profile configured |
-| Port already bound | Change `SCIENCE_AGENT_PORT` / `SCIENCE_AGENT_PUBLISH_PORT` |
+| Port already bound (`Bind for 127.0.0.1:4310 failed: port is already allocated` in Docker mode) | Change `SCIENCE_AGENT_PORT` / `SCIENCE_AGENT_PUBLISH_PORT`; substitute the new port in the sign-in URL |
+| Sign-in URL from `docker compose logs` does not open | It names container port 4310; replace it with `SCIENCE_AGENT_PUBLISH_PORT` |
+| Second Docker instance exits with the "not writable" message | Its data directory was created by Docker as root → `mkdir -p` it as the user before `up` |
+| Model on the host is unreachable from the container | `127.0.0.1` inside the container is the container. Add `extra_hosts: ["host.docker.internal:host-gateway"]` to the service in a `docker-compose.override.yml` and use `host.docker.internal:<port>`, or the host's LAN IP |
+| Model calls need a proxy (Docker mode) | System configuration → Network proxies with a `custom_url` record, or inject `HTTPS_PROXY` through `docker-compose.override.yml` and pick the `environment` proxy type. Compose forwards only the keys of `.env.docker.example` |
+| Web says "Local service access token rejected" | The pasted value is not this instance's token (a model API key, or another data directory's token) → use `./data/secrets/auth-token` |
 | Ctrl-C did not stop a host stack, ports still bound | It was backgrounded (`nohup`/tmux/supervisor), so SIGINT never reached it → stop its process group, see *Stopping a backgrounded host stack* |
 | Killed the script but the API/runner survived | `start-stack.sh` only runs its cleanup trap after its foreground API exits → signal the process group, not the script PID |
 | `does not support --disable-userns` warning at runner startup | Expected on bwrap < 0.8 (e.g. Ubuntu 22.04's 0.6): nested-userns hardening is skipped, everything else isolates normally. Upgrade bubblewrap for the stronger profile |

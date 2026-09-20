@@ -48,7 +48,7 @@ export function ArtifactLifecycleProvider({
 }: {
   children: ReactNode;
   onDelete: (artifact: ScientificArtifact) => Promise<void>;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   resetKey: string;
 }): ReactNode {
   const { t } = useLocale();
@@ -84,7 +84,7 @@ export function ArtifactLifecycleProvider({
     try {
       await onDelete(artifact);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("app.artifactActionFailed"));
+      onError(reason instanceof Error ? reason : t("app.artifactActionFailed"));
     } finally {
       setBusyDeleteIds((current) => {
         const next = new Set(current);

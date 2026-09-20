@@ -94,26 +94,25 @@ export function resolveBootstrapToken(
   }
 }
 
-/**
- * Startup lines describing the bearer token the Web UI needs. A token this
- * installation generated is printed in full, because nothing else tells the
- * user what it is. A token the operator supplied through
- * `SCIENCE_AGENT_AUTH_TOKEN` is only named, never echoed: they already have it,
- * and console output can outlive the process in shared terminals and CI logs.
- */
+/** Startup credentials; the URL fragment is consumed only by the browser. */
 export function accessTokenBanner(config: {
   authToken: string;
   authTokenSource?: BootstrapTokenSource;
   dataDir: string;
+  host: string;
+  port: number;
 }): string[] {
-  if (config.authTokenSource === "environment") {
-    return ["Local API token comes from SCIENCE_AGENT_AUTH_TOKEN; its value is not printed."];
-  }
-  const origin = config.authTokenSource === "stored"
-    ? "restored from local storage"
-    : "generated on first start";
+  const host = config.host === "0.0.0.0" || config.host === "::" ? "127.0.0.1" : config.host;
+  const uiHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const url = new URL(`http://${uiHost}:${config.port}`);
+  url.hash = new URLSearchParams({ token: config.authToken }).toString();
+  const origin = config.authTokenSource === "environment" ? "SCIENCE_AGENT_AUTH_TOKEN"
+    : config.authTokenSource === "stored" ? "restored from local storage" : "generated on first start";
   return [
-    `Local API token (${origin}): ${config.authToken}`,
-    `  Stored in ${bootstrapTokenPath(config.dataDir, AUTH_TOKEN_FILE)}; paste it into the Web UI when asked.`,
+    `Open to sign in: ${url.href}`,
+    `Local service access token (${origin}): ${config.authToken}`,
+    ...(config.authTokenSource === "environment" ? [] : [`  Stored in ${bootstrapTokenPath(config.dataDir, AUTH_TOKEN_FILE)}.`]),
+    "  Open the sign-in URL to save the token in this browser, or paste it into Connection and click Save.",
+    "  This is not an external model API Key. Keep the sign-in URL private.",
   ];
 }

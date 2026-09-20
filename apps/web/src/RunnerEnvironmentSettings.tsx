@@ -9,7 +9,7 @@ import { EnvironmentManager } from "./EnvironmentManager.js";
 import { useLocale } from "./i18n/index.js";
 
 export function RunnerEnvironmentSettings({ client, onError, runnerId, runner, machine }: {
-  client: ApiClient; onError: (message: string) => void; runnerId: string; runner?: RemoteHostTarget; machine: ReactNode;
+  client: ApiClient; onError: (reason: string | Error) => void; runnerId: string; runner?: RemoteHostTarget; machine: ReactNode;
 }) {
   const { t } = useLocale();
   const [tab, setTab] = useState<"machine" | "workspaces" | "environments">("machine");

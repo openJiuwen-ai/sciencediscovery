@@ -306,6 +306,12 @@ export class RefStore {
       .map((row) => JSON.parse(row.target as string) as AgentStateRef);
   }
 
+  /** Exact namespace, not SQL LIKE. Authorization belongs to the caller. */
+  list(prefix: string): Array<{ name: string; target: AgentStateRef }> {
+    return this.db.prepare("SELECT name,target FROM live_refs WHERE substr(name,1,?)=? ORDER BY name").all(prefix.length, prefix)
+      .map(row => ({ name: String(row.name), target: JSON.parse(String(row.target)) as AgentStateRef }));
+  }
+
   /** Closure is checked immediately before entering the synchronous transaction. No deletion API exists. */
   async commit(store: VersionStore, name: string, expected: AgentStateRef | null, target: AgentStateRef,
     fault?: (point: "before-transaction" | "after-live-ref") => void): Promise<void> {
@@ -327,6 +333,8 @@ export class RefStore {
 }
 
 export interface TrajectoryStep {
+  startedAt?: string;
+  finishedAt?: string;
   agentId: string;
   trajectoryId: string;
   turn: number;

@@ -17,6 +17,10 @@ packages:
   - apps/*
   - services/*
   - packages/*
+overrides:
+  # @modelcontextprotocol/sdk accepts ^8.17.1 and would otherwise keep the
+  # ReDoS-affected 8.17.1 in the tree next to our own pinned 8.18.0.
+  ajv: 8.18.0
 allowBuilds:
   '@scarf/scarf': true
   # ssh2 works without its optional native helpers, and building them would put

@@ -1,6 +1,6 @@
 # 科学记忆（任务链与引用链）
 
-科学记忆是 ScienceDiscovery 的一个**实验性、默认关闭**的可选功能，把一个会话的执行过程与论证过程存成一张 Neo4j 图。它的价值是让"这个结论是怎么来的"可被回溯与点击：从研究目标，到每一步任务、跑的代码、产出的文件，再到最终报告里的每一条带引用的断言（Claim）及其支撑证据。
+科学记忆是 ScienceDiscovery 的一个**实验性、默认关闭**的可选功能，把一个会话的执行过程与论证过程存成一张图，默认以本地文本文件保存，也可选择存到 Neo4j。它的价值是让"这个结论是怎么来的"可被回溯与点击：从研究目标，到每一步任务、跑的代码、产出的文件，再到最终报告里的每一条带引用的断言（Claim）及其支撑证据。
 
 图谱里两条核心链路：
 
@@ -16,13 +16,13 @@
 - **前端 `apps/web`**：只读。渲染图谱（缩略卡 + 全屏浏览器）、把报告里的 `[alias]` 渲染成可点 chip、点击后分发到证据/产物/图节点详情。不直接连图谱，所有读请求经 Node API。
 - **共享包 `packages`**：`schema` 定义跨包类型（节点/边、Declare 输入、ComposerReference、报告版本 references）；`agent-runtime` 定义 LLM 可调的工具（`query_graph` / `declare_*`）并在功能开启时把 declare 流程注入系统提示。两者让前端、Node、工具三者不漂移。
 - **控制面 `services/api`（Node）**：唯一与图谱直连的客户端。做两件事——① 执行事件发生时 fire-and-forget 镜像写图、接收 LLM 工具回调做 declare；② 对浏览器反向代理 `/api/memory/*` 读请求。报告版本落盘时把 chip references drain 到版本上。
-- **图侧车 `services/memory-graph`（Python）**：FastAPI 服务，回环 `:17674`，Bearer 鉴权。把 Node 发来的写入落成 Neo4j 节点/边（`persistence.py`），响应读查询（`query.py`）。Neo4j 不可达时静默降级，不抛错。
+- **图侧车 `services/memory-graph`（Python）**：FastAPI 服务，回环 `:17674`，Bearer 鉴权。把 Node 发来的写入落成图节点/边（`persistence.py`），响应读查询（`query.py`）。读写都经过同一个存储接缝（`backend.py`），有两种实现：默认的本地 JSONL 存储（`local_graph.py`，由 `_cypher.py` 里的小型 Cypher 解释器驱动）和 Neo4j。所选的 Neo4j 不可达时静默降级，不抛错。
 
 四层交互流向（写与读两条独立路径，都经 Node API）：
 
 ```
-【写】执行事件 / LLM 工具回调 ──触发──> Node API ──fire-and-forget 写──> Python 侧车 ──Cypher──> Neo4j
-【读】浏览器 ────────────────────────> Node API ──反向代理──────────> Python 侧车 ──Cypher──> Neo4j
+【写】执行事件 / LLM 工具回调 ──触发──> Node API ──fire-and-forget 写──> Python 侧车 ──Cypher──> 本地文件 / Neo4j
+【读】浏览器 ────────────────────────> Node API ──反向代理──────────> Python 侧车 ──Cypher──> 本地文件 / Neo4j
 
 旁路：agent-runtime 定义 LLM 工具、schema 定义跨包类型（约束工具/类型，不直接参与数据流）
 ```
@@ -175,6 +175,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper（Paper 不存在 → 422 `source_paper_not_found`） |
 | `POST /persist/claim` | CREATE Claim + supports（Evidence/Artifact→Claim）+ 可选 produces + 可选 stated_in；返回 `chip_map`。无支撑目标 → 422 `no_cites_target`（在降级分支前触发，图挂了也报） |
 | `POST /persist/stated_in` | MERGE stated_in（Claim→报告 Artifact）；Artifact 可能尚未镜像，轮询等待最多 10×0.3s |
+| `POST /internal/backend` | 选择存储后端（`local` 或 `neo4j`） |
 | `POST /internal/neo4j-password` | 推送 Neo4j 密码 + ensure_schema |
 
 **读 / 查询**
@@ -235,7 +236,7 @@ reviewer 据返回的 `broken` 派生 `decision`：`broken:false` → `ACCEPT_AN
 
 ## 4. 新增存储
 
-科学记忆自身的数据在 Neo4j，但为支持 chip 渲染与跨刷新存活，Node 侧的既有存储模型扩展了字段：
+科学记忆自身的数据在图存储里（默认本地 JSONL 文件，或 Neo4j），但为支持 chip 渲染与跨刷新存活，Node 侧的既有存储模型扩展了字段：
 
 ### 4.1 Node 侧文件存储扩展
 
@@ -257,6 +258,6 @@ sidecar 与 Node 客户端的连接、鉴权、日志变量：
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | sidecar Bearer token；Node 与 sidecar 双向校验 |
 | `SCIENCE_AGENT_MEMORY_GRAPH_LOG_LEVEL` | `INFO` | sidecar 与 Node 两侧的日志级别（同源传递） |
 
-> ScienceMemory 的启停、Neo4j 连接地址、用户与密码都在 **System Settings → ScienceMemory** 里管理（单一 toggle，无需改 `.env`、无需重启 stack）。
+> ScienceMemory 的启停、存储后端（本地文件或 Neo4j），以及选 Neo4j 时的连接地址、用户与密码都在 **System Settings → ScienceMemory** 里管理（单一 toggle，无需改 `.env`、无需重启 stack）。
 
 启动：`scripts/start-stack.sh` 无条件用 `.sciencediscovery-data/envs/memory-graph/bin/python -m sciencediscovery_memory_graph.server` 拉起 sidecar（环境随栈启动无条件 provision），并 `wait_healthy` 等 `http://127.0.0.1:17674/health`。toggle 关时 sidecar 空跑，sink 写入与读路径 short-circuit 返回 `memory_graph_disabled`。

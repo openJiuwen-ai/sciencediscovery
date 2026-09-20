@@ -7,6 +7,7 @@
 ## Tutorial（教程）
 
 - [快速开始](tutorial/01-quick-start.md) — 安装、启动、配置模型并完成第一次 Agent 任务。
+- [演进出一个更优解](tutorial/02-evolve-a-solution.md) — 完整跑一次程序演进搜索，并判断改进是不是真的。
 
 ## How-to（操作指南）
 
@@ -15,6 +16,7 @@
 - [部署](how-to/deployment.md) — 本地模式、Docker 和源码构建单文件二进制的操作步骤。
 - [配置网络代理](how-to/configure-network-proxy.md) — 在设置页添加代理并为 LLM、Web 和 MCP 选择策略。
 - [文献调研案例指南](how-to/literature-research-case-guide.md) — 以一项跨数据库文献调研任务为例，演示从启动服务、配置系统到下发任务、审批与查看结果的全流程。
+- [运行一次演进搜索](how-to/run-an-evolution-search.md) — 提出 `/evolve` 搜索、定分片规模、看过程，并读留出结果。
 - [安装 Neo4j 与配置科学记忆](how-to/science-memory-setup.md) — 安装外部 Neo4j、在系统设置里开启科学记忆，并在前端图谱里查看链路。
 
 ## Reference（参考）

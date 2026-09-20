@@ -186,7 +186,13 @@
 
 .memory-explorer-body { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); min-height: 0; flex: 1 1 auto; }
 .memory-explorer-canvas { position: relative; min-width: 0; min-height: 220px; flex: 1 1 auto; background: var(--surface-subtle); }
-.memory-explorer-hint { position: absolute; left: 12px; bottom: 10px; margin: 0; border-radius: 6px; background: color-mix(in srgb, var(--surface) 82%, transparent); padding: 3px 8px; color: var(--muted); font-size: 10px; }
+.memory-explorer-hint { position: absolute; left: 12px; bottom: 10px; margin: 0; border-radius: 8px; background: color-mix(in srgb, var(--surface) 88%, transparent); padding: 6px 12px; color: var(--text-secondary); font-size: 13px; }
+/* One-click expand / collapse for the whole graph, pinned to the canvas so it
+   is visible without hunting for the double-click gesture. */
+.memory-explorer-actions { position: absolute; right: 12px; top: 10px; z-index: 2; display: flex; gap: 8px; }
+.memory-explorer-actions button { border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text-secondary); padding: 7px 14px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.memory-explorer-actions button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-softer); color: var(--accent-ink); }
+.memory-explorer-actions button:disabled { opacity: .5; cursor: default; }
 
 /* Left column hosts either the shared artifacts panel or the node detail. */
 .memory-explorer-product { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--border); }

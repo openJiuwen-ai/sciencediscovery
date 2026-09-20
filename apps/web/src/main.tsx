@@ -16,6 +16,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App.js";
+import { loadLocalAccessToken } from "./local-access-token.js";
+import "@sciencediscovery/trajectory/style.css";
 import { LocaleProvider } from "./i18n/index.js";
 import "katex/dist/katex.min.css";
 import "./styles.css";
@@ -23,8 +25,10 @@ import "./styles.css";
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root element");
 
+const initialToken = loadLocalAccessToken(localStorage, window.location, window.history);
+
 createRoot(root).render(
   <StrictMode>
-    <LocaleProvider><App /></LocaleProvider>
+    <LocaleProvider><App initialToken={initialToken} /></LocaleProvider>
   </StrictMode>,
 );

@@ -18,6 +18,7 @@ import { handlePluginRequest } from "../plugins/http.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { CasStore, VersionStore, withWorkspaceMutation } from "@sciencediscovery/cas";
+import { sessionTrajectory } from "../trajectory.js";
 import { dirname, resolve } from "node:path";
 import { listSshKeyFiles } from "../ssh-key-files.js";
 
@@ -232,6 +233,8 @@ import {
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
 import { createReviewAgentOptions } from "../reviewer-specialist/review-agent-executor.js";
+import { ReviewerPaperEvidenceGateway } from "../reviewer-specialist/paper-evidence-gateway.js";
+import { ReviewerComputationEvidenceGateway } from "../reviewer-specialist/computation-evidence-gateway.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
 import { MAX_PAPER_PDF_BYTES } from "../papers.js";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
@@ -482,6 +485,37 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           skills: reviewerSkills,
           workspace: reviewerWorkspace,
         });
+        // Paper Reader may already have produced a permitted, immutable
+        // full-text/table extraction. Attach it as an additional Reviewer-only
+        // source; this does not download, parse, or write anything.
+        const publicProbe = semanticReview.probeCitation;
+        const paperEvidence = new ReviewerPaperEvidenceGateway(store);
+        const computationEvidence = new ReviewerComputationEvidenceGateway(store, provenanceRecorder.cas);
+        semanticReview = {
+          ...semanticReview,
+          probeComputation: (claim, probeSignal) => {
+            if (probeSignal?.aborted) throw new DOMException("Review cancelled", "AbortError");
+            return computationEvidence.resolve(task.sessionId, claim);
+          },
+          probeCitation: async (request, probeSignal) => {
+            const materials = request.citation
+              ? await paperEvidence.resolveCitation(request.sessionId, request.citation)
+              : [];
+            // A matching acquisition already proves the source identity through
+            // its recorded identifier. Prefer it to a new external lookup:
+            // Deep must remain useful when a Connector is unavailable.
+            if (materials.length) return {
+              materials,
+              sourceId: request.citation?.key,
+              sourceType: "paper_metadata" as const,
+              status: "available" as const,
+            };
+            const publicSource = publicProbe
+              ? await publicProbe(request, probeSignal)
+              : { status: "unavailable" as const, message: "No governed literature source is configured." };
+            return publicSource;
+          },
+        };
       }
       try {
         const result = await runReviewerCheckpoint({
@@ -1088,7 +1122,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         let health = details.enabled
           ? await memoryGraphClient.health().catch(() => "degraded")
           : "disabled";
-        if (details.enabled && details.hasNeo4jPassword && health !== "healthy") {
+        if (details.enabled && details.backend === "neo4j") {
+          // A sidecar that restarted after the API is back on its `local`
+          // default and reports healthy: put it on the chosen backend again.
+          const info = await memoryGraphClient.healthInfo();
+          if (info.backend !== undefined && info.backend !== details.backend) {
+            mgLog.info("GET /api/memory/settings: sidecar runs %s, re-pushing backend %s", info.backend, details.backend);
+            await memoryGraphClient.pushBackend(details.backend).catch(() => undefined);
+            health = await memoryGraphClient.health().catch(() => "degraded");
+          }
+        }
+        if (details.enabled && details.backend === "neo4j" && details.hasNeo4jPassword && health !== "healthy") {
           const password = store.getMemoryGraphNeo4jPassword();
           if (password) {
             mgLog.info("GET /api/memory/settings: auto-repushing stored password (health=%s)", health);
@@ -1110,6 +1154,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // HTTP/user connection changed — either rebuilds the driver. The store
         // is the source of truth; send the stored http/user so the sidecar's
         // env-only http/user is overridden. Best-effort, non-fatal.
+        if (body.backend !== undefined) {
+          await memoryGraphClient.pushBackend(details.backend).catch((error: unknown) => {
+            mgLog.warn("PUT /api/memory/settings: backend push failed (non-fatal): %s",
+              error instanceof Error ? error.message : String(error));
+          });
+        }
         const passwordChanged = body.neo4jPassword !== undefined;
         const connectionChanged = body.neo4jHttp !== undefined || body.neo4jUser !== undefined;
         if (passwordChanged || connectionChanged) {
@@ -2345,6 +2395,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if ((await runnerClient.health().catch(() => undefined))?.scientificEnvs?.available) {
           await runnerClient.teardownKernels(sessionMatch[1]!, "Session was deleted; persistent memory was lost");
         }
+        // Cancel delayed and active Reviewer work while its durable task
+        // records still exist. Otherwise a quiet-window timer can wake after
+        // deletion and attempt to read a Session that no longer exists.
+        await reviewerAuditCoordinator.cancelSession(sessionMatch[1]!);
         const researchProjectId = store.getSession(sessionMatch[1]!)!.projectId;
         await store.deleteSession(sessionMatch[1]!, body.confirmationId ?? "");
         void ideaResearch.cleanup(researchProjectId, sessionMatch[1]!).catch(error => {
@@ -2751,6 +2805,34 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      const trajectoryMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/trajectory(?:\/(detail|export))?$/);
+      if (trajectoryMatch && request.method === "GET") {
+        const sessionId = decodeURIComponent(trajectoryMatch[1]!);
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        const controller = new AbortController();
+        response.once("close", () => controller.abort());
+        const view = await sessionTrajectory(store, sessionId, controller.signal);
+        response.setHeader("Cache-Control", "no-store");
+        if (trajectoryMatch[2] === "detail") {
+          const detail = await view.detail(url.searchParams.get("id") ?? "");
+          return detail ? sendJson(response, 200, detail) : sendError(response, 404, "Trajectory entry not found");
+        }
+        if (trajectoryMatch[2] === "export") {
+          response.writeHead(200, { "Content-Type": "application/x-ndjson", "Content-Disposition": "attachment; filename=trajectory.ndjson" });
+          try {
+            for await (const line of view.exportRecords()) {
+              if (!response.write(line)) await new Promise<void>((resolve, reject) => {
+                const close = () => { response.off("drain", drain); reject(new Error("Export disconnected")); };
+                const drain = () => { response.off("close", close); resolve(); };
+                response.once("drain", drain); response.once("close", close);
+              });
+            }
+            response.end();
+          } catch { response.destroy(); }
+          return;
+        }
+        return sendJson(response, 200, view.index);
+      }
       const sessionRunsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs$/);
       if (sessionRunsMatch && request.method === "GET") {
         if (!store.getSession(sessionRunsMatch[1]!)) return sendError(response, 404, "Session not found");
@@ -3803,7 +3885,7 @@ export async function startApiServer(config = loadServerConfig()): Promise<Serve
   const port = typeof address === "object" && address ? address.port : config.port;
   apiLog.info("service_started", { host: config.host, port });
   console.log(`ScienceDiscovery listening on http://${config.host}:${port}`);
-  for (const line of accessTokenBanner(config)) console.log(line);
+  for (const line of accessTokenBanner({ ...config, port })) console.log(line);
   if (config.host !== "127.0.0.1" && config.host !== "localhost" && config.host !== "::1") {
     console.warn("Warning: M0 authentication and Python execution are not safe for untrusted networks.");
   }

@@ -271,7 +271,12 @@ export function createReviewAgentOptions(input: CreateReviewAgentOptionsInput): 
             sourceId,
             sourceType: "mcp",
           });
-          return { ...snapshot, status: "available" as const };
+          return {
+            ...snapshot,
+            sourceId: candidate.key,
+            sourceType: "paper_metadata" as const,
+            status: "available" as const,
+          };
         } catch (error) {
           if (signal?.aborted) throw new DOMException("Review cancelled", "AbortError");
           reviewerLog.event(logContext, "deep.citation.search.failed", {
@@ -293,7 +298,12 @@ export function createReviewAgentOptions(input: CreateReviewAgentOptionsInput): 
               contentLength: content.length,
               sourceType: "web_search",
             });
-            return { content, status: "available" as const };
+            return {
+              content,
+              sourceId: candidate.key,
+              sourceType: "paper_metadata" as const,
+              status: "available" as const,
+            };
           }
           reviewerLog.event(logContext, "deep.citation.search.empty", {
             reason: "no_exact_identifier_match",

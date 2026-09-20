@@ -48,7 +48,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-另开终端执行 `curl -fsS http://127.0.0.1:4310/health`。随后打开 <http://127.0.0.1:4310>，使用服务端启动时打印的访问 token 登录，并在 **系统配置 → Global defaults** 配置任务模型。第一次任务见[快速开始教程](docs/zh/tutorial/01-quick-start.md)；二进制打包、本地源码模式与 Docker 见[部署指南](docs/zh/how-to/deployment.md)。
+另开终端执行 `curl -fsS http://127.0.0.1:4310/health`。随后打开启动日志中的 `Open to sign in` 链接，浏览器会自动保存本地服务访问令牌；它与外部模型 API Key 不同，请勿分享该链接。然后在 **系统配置 → Global defaults** 配置任务模型。第一次任务见[快速开始教程](docs/zh/tutorial/01-quick-start.md)；二进制打包、本地源码模式与 Docker 见[部署指南](docs/zh/how-to/deployment.md)。
 
 ## 许可证
 

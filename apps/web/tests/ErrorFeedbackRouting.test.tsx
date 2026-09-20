@@ -15,6 +15,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { ApiRequestError, isAuthFailure } from "../src/api/auth.js";
+
 import {
   createSettingsErrorRouter,
   type SettingsOperationName,
@@ -38,7 +40,9 @@ function createHarness(): DialogHarness {
   };
 }
 
-function replaceErrors(target: string[], message?: string): void {
+function replaceErrors(target: string[], reason?: string | Error): void {
+  if (isAuthFailure(reason)) return;
+  const message = reason instanceof Error ? reason.message : reason;
   target.splice(0, target.length, ...(message ? [message] : []));
 }
 
@@ -99,5 +103,16 @@ for (const operationName of scopedOperations) {
     assert.deepEqual(harness.globalToasts, []);
     assert.equal(harness.dialogOpen, true);
     assert.equal(harness.draft, originalDraft);
+  });
+}
+
+for (const operationName of [...systemOperations, ...scopedOperations, "saveSandboxNetworkSettings"] as const) {
+  test(`${operationName} preserves a rejected token for authentication routing`, async () => {
+    const errors: (string | Error | undefined)[] = [];
+    const router = createSettingsErrorRouter({ scoped: (reason) => { errors.push(reason); }, system: (reason) => { errors.push(reason); } });
+    const failure = new ApiRequestError("Unauthorized", 401);
+    await router.run(operationName, async () => { throw failure; }, "fallback").catch(() => undefined);
+    assert.deepEqual(errors, [undefined, failure]);
+    assert.equal(isAuthFailure(errors[1]), true);
   });
 }

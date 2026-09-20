@@ -1,22 +1,52 @@
 import type { IdeaResearchState } from "@sciencediscovery/schema";
 
-const fixedPhases: Record<string, string> = {
-  ideate: "构思方向与改进",
-  design: "设计候选",
-  aggregate: "聚合评估",
-  propagate: "汇总研究发现",
-  complete: "已完成",
+import type { MessageKey } from "./i18n/index.js";
+
+/** The catalogue lookup a caller already holds from `useLocale()`. Passing it in
+ *  rather than reading the module-level active locale keeps these labels correct
+ *  on the very first render after the language switch. */
+type Translate = (key: MessageKey, variables?: Record<string, string | number>) => string;
+
+/** Roles the engine reports itself. Anything else is a template-defined
+ *  assessor and carries its own label, which is why the lookup falls through. */
+const ROLE_KEYS: Record<string, MessageKey> = {
+  ideate: "ideaResearch.role.ideate",
+  design: "ideaResearch.role.design",
+  aggregate: "ideaResearch.role.aggregate",
+  propagate: "ideaResearch.role.propagate",
+  complete: "ideaResearch.role.complete",
 };
 
-export const IDEA_RESEARCH_STATUSES: Record<string, string> = {
-  running: "运行中",
-  pausing: "正在暂停",
-  paused: "已暂停",
-  interrupted: "已中断",
-  completed: "已完成",
-  ended: "已结束",
+const STATUS_KEYS: Record<string, MessageKey> = {
+  running: "ideaResearch.status.running",
+  pausing: "ideaResearch.status.pausing",
+  paused: "ideaResearch.status.paused",
+  interrupted: "ideaResearch.status.interrupted",
+  completed: "ideaResearch.status.completed",
+  ended: "ideaResearch.status.ended",
 };
 
-export function ideaResearchPhaseLabel(research: IdeaResearchState, role: string): string {
-  return fixedPhases[role] ?? research.template?.assessors.find((assessor) => assessor.id === role)?.label ?? role;
+const ACTIVITY_STATUS_KEYS: Record<string, MessageKey> = {
+  running: "ideaResearch.activity.running",
+  completed: "ideaResearch.activity.completed",
+  stopped: "ideaResearch.activity.stopped",
+  failed: "ideaResearch.activity.failed",
+};
+
+/** An unknown value renders as itself: the engine may report a status this
+ *  build does not know, and showing the raw token beats showing nothing. */
+export function ideaResearchStatusLabel(t: Translate, status: string): string {
+  const key = STATUS_KEYS[status];
+  return key ? t(key) : status;
+}
+
+export function ideaResearchActivityStatusLabel(t: Translate, status: string): string {
+  const key = ACTIVITY_STATUS_KEYS[status];
+  return key ? t(key) : status;
+}
+
+export function ideaResearchPhaseLabel(t: Translate, research: IdeaResearchState, role: string): string {
+  const key = ROLE_KEYS[role];
+  if (key) return t(key);
+  return research.template?.assessors.find((assessor) => assessor.id === role)?.label ?? role;
 }

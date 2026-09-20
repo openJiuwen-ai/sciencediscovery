@@ -14,12 +14,14 @@
 
 import { useLocale, type MessageKey } from "./i18n/index.js";
 import type {
+  MemoryGraphBackend,
   MemoryGraphSettingsDetails,
   UpdateMemoryGraphSettingsRequest,
 } from "@sciencediscovery/schema";
 
 export interface MemoryGraphSettingsDraft {
   enabled: boolean;
+  backend: MemoryGraphBackend;
   neo4jHttp: string;
   neo4jUser: string;
   password: string;
@@ -29,6 +31,7 @@ export interface MemoryGraphSettingsDraft {
 export function createMemoryGraphSettingsDraft(settings: MemoryGraphSettingsDetails): MemoryGraphSettingsDraft {
   return {
     enabled: settings.enabled,
+    backend: settings.backend,
     neo4jHttp: settings.neo4jHttp,
     neo4jUser: settings.neo4jUser,
     password: "",
@@ -39,6 +42,7 @@ export function createMemoryGraphSettingsDraft(settings: MemoryGraphSettingsDeta
 export function memoryGraphSettingsRequest(draft: MemoryGraphSettingsDraft): UpdateMemoryGraphSettingsRequest {
   return {
     enabled: draft.enabled,
+    backend: draft.backend,
     neo4jHttp: draft.neo4jHttp,
     neo4jUser: draft.neo4jUser,
     ...(draft.removePassword ? { neo4jPassword: null } : draft.password.trim() ? { neo4jPassword: draft.password.trim() } : {}),
@@ -59,7 +63,9 @@ export function MemoryGraphSettingsEditor({
   // No status badge here — the live health already shows
   // on the workspace thumbnail. The settings panel only surfaces connection
   // fields + the degraded install hint below.
-  const degraded = settings.memoryGraphStatus === "degraded" || settings.memoryGraphStatus === "needs-password";
+  const useNeo4j = draft.backend === "neo4j";
+  const degraded = useNeo4j
+    && (settings.memoryGraphStatus === "degraded" || settings.memoryGraphStatus === "needs-password");
 
   // The dependency hint carries a clickable link in the middle ({link}); the
   // translate() helper returns plain text, so split on the placeholder and
@@ -73,9 +79,6 @@ export function MemoryGraphSettingsEditor({
       <span className="eyebrow">{t("settings.memoryGraph.eyebrow" as MessageKey)}</span>
       <h3>{t("settings.memoryGraph.title" as MessageKey)}</h3>
       <p>{t("settings.memoryGraph.help" as MessageKey)}</p>
-    </div>
-    <div className="config-note memory-graph-depends-note">
-      {dependsParts[0]}<a href="https://neo4j.com/docs/operations-manual/current/install/" rel="noreferrer" target="_blank">{linkLabel}</a>{dependsParts[1] ?? ""}
     </div>
     {/* The toggle mirrors the Reviewer Specialist switch
         and sits inside a bordered card (built-in-specialists) so the label and
@@ -95,6 +98,25 @@ export function MemoryGraphSettingsEditor({
         ><i /></button>
       </div>
     </div>
+    <div className="memory-graph-backend">
+      <label>
+        <span>{t("settings.memoryGraph.backend" as MessageKey)}</span>
+        <select
+          value={draft.backend}
+          onChange={(event) => onChange({ ...draft, backend: event.target.value as MemoryGraphBackend })}
+        >
+          <option value="local">{t("settings.memoryGraph.backendLocal" as MessageKey)}</option>
+          <option value="neo4j">{t("settings.memoryGraph.backendNeo4j" as MessageKey)}</option>
+        </select>
+      </label>
+    </div>
+    {useNeo4j ? null : <div className="config-note memory-graph-local-note">
+      {t("settings.memoryGraph.localHint" as MessageKey)}
+    </div>}
+    {useNeo4j ? <>
+    <div className="config-note memory-graph-depends-note">
+      {dependsParts[0]}<a href="https://neo4j.com/docs/operations-manual/current/install/" rel="noreferrer" target="_blank">{linkLabel}</a>{dependsParts[1] ?? ""}
+    </div>
     <div className="memory-graph-connection">
       <label><span>{t("settings.memoryGraph.httpUri" as MessageKey)}</span><input value={draft.neo4jHttp} onChange={(event) => onChange({ ...draft, neo4jHttp: event.target.value })} placeholder="http://127.0.0.1:7474" /></label>
       <label><span>{t("settings.memoryGraph.user" as MessageKey)}</span><input value={draft.neo4jUser} onChange={(event) => onChange({ ...draft, neo4jUser: event.target.value })} placeholder="neo4j" /></label>
@@ -112,6 +134,7 @@ export function MemoryGraphSettingsEditor({
         {draft.removePassword ? t("settings.memoryGraph.passwordRemovePending" as MessageKey) : t("settings.memoryGraph.passwordRemove" as MessageKey)}
       </button> : null}
     </div>
+    </> : null}
     {degraded ? <div className="config-note">
       {t("settings.memoryGraph.degradedHint" as MessageKey)}
     </div> : null}

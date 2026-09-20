@@ -259,10 +259,12 @@ export async function serve(context: ServeContext, log: (message: string) => voi
   try {
     await supervisor.start(services);
 
-    const uiHost = settings.host === "0.0.0.0" ? "127.0.0.1" : settings.host;
+    const host = settings.host === "0.0.0.0" || settings.host === "::" ? "127.0.0.1" : settings.host;
+    const uiHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+    const uiUrl = `http://${uiHost}:${settings.port}`;
     log("");
-    log(`  ScienceDiscovery is ready at http://${uiHost}:${settings.port}`);
-    for (const line of accessTokenBanner(settings.dataDir, credentials)) log(line);
+    log(`  ScienceDiscovery is ready at ${uiUrl}`);
+    for (const line of accessTokenBanner(settings.dataDir, credentials, uiUrl)) log(line);
     log(`  Data directory: ${settings.dataDir}`);
     log("  Memory graph is disabled: it needs a Neo4j server, which is not bundled.");
     log("  Press Ctrl-C to stop.");

@@ -336,7 +336,7 @@ export function resolveQuotaSettings(value: unknown, fallback: SystemQuotaSettin
   });
 }
 
-const MEMORY_GRAPH_SETTING_FIELDS = ["enabled", "neo4jHttp", "neo4jUser"] as const satisfies readonly (keyof MemoryGraphSettings)[];
+const MEMORY_GRAPH_SETTING_FIELDS = ["enabled", "backend", "neo4jHttp", "neo4jUser"] as const satisfies readonly (keyof MemoryGraphSettings)[];
 
 /** Normalize persisted/partial memory-graph settings, filling gaps from the
  *  product defaults. Unknown keys are dropped silently (not rejected) so an
@@ -353,13 +353,17 @@ export function normalizeMemoryGraphSettings(value: unknown): MemoryGraphSetting
   // here — we only read the known fields below, so anything else is ignored
   // and the current field falls back to its default. See the doc above.
   const enabled = typeof value.enabled === "boolean" ? value.enabled : DEFAULT_MEMORY_GRAPH_SETTINGS.enabled;
+  if (value.backend !== undefined && value.backend !== "local" && value.backend !== "neo4j") {
+    throw new Error("Memory-graph backend must be \"local\" or \"neo4j\"");
+  }
+  const backend = value.backend === "neo4j" ? "neo4j" : DEFAULT_MEMORY_GRAPH_SETTINGS.backend;
   const rawHttp = typeof value.neo4jHttp === "string" ? value.neo4jHttp.trim() : "";
   const neo4jHttp = rawHttp || DEFAULT_MEMORY_GRAPH_SETTINGS.neo4jHttp;
   if (neo4jHttp.length > 8_192) throw new Error("neo4jHttp is too long");
   const rawUser = typeof value.neo4jUser === "string" ? value.neo4jUser.trim() : "";
   const neo4jUser = rawUser || DEFAULT_MEMORY_GRAPH_SETTINGS.neo4jUser;
   if (neo4jUser.length > 512) throw new Error("neo4jUser is too long");
-  return { enabled, neo4jHttp, neo4jUser };
+  return { enabled, backend, neo4jHttp, neo4jUser };
 }
 
 const WEB_FETCH_PROVIDERS = new Set<WebFetchProvider>(["jina", "tavily", "exa"]);

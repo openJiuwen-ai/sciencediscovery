@@ -2,11 +2,29 @@
 
 ScienceMemory is an optional ScienceDiscovery feature that stores a session's research goal, each task, the code run, the files produced, and each cited assertion in the final report with its supporting evidence as a Neo4j graph, making "where did this conclusion come from" traceable and clickable. It is disabled by default and has no effect on the web or conversation path.
 
-> This guide covers how to install Neo4j, how to configure it in system settings, and how to use it in the frontend. For the feature's architecture, node/edge types, and API, see [ScienceMemory](../explanation/science-memory.md); for environment variables and ports, see the [configuration reference](../reference/configuration.md).
+> This guide covers the built-in local store, how to install Neo4j and configure it in system settings, and how to use ScienceMemory in the frontend. For the feature's architecture, node/edge types, and API, see [ScienceMemory](../explanation/science-memory.md); for environment variables and ports, see the [configuration reference](../reference/configuration.md).
 
-## 1. Prerequisite: install Neo4j
+## 0. Zero setup: the local file store
 
-None of the three ScienceDiscovery deployment modes (single-file binary, Docker, or source local mode) bundle Neo4j. ScienceMemory needs an external Neo4j server. Until it is configured the feature stays off and nothing else is affected.
+ScienceMemory needs no external service. By default (System configuration → Memory → Storage backend = Local files) the graph is kept by the memory-graph sidecar itself and persisted as plain text under `~/.science-agent/memory-graph/` (override with `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR`):
+
+- `nodes.jsonl`: one JSON line per node (`id`, `labels`, `props`); a deleted node is a `{"id": ..., "deleted": true}` line.
+- `edges.jsonl`: one JSON line per relationship (`id`, `type`, `src`, `dst`, `props`).
+
+Replay is last-write-wins per `id`, so the files are append-only, survive a crash mid-write (a torn last line is skipped), and are compacted when they are loaded. You can `grep` or `jq` them, diff them, or attach them to a bug report. One store holds all sessions; every node carries its `session_id`. `/health` reports `{"status": "healthy", "backend": "local"}`.
+
+The backend is a setting: choose Neo4j server in Storage backend to reveal the Neo4j HTTP address, user, and password fields (section 2). Saving the credentials alone never switches stores, and a selected but unreachable Neo4j stays `degraded` instead of silently falling back, so the two histories never diverge. `SCIENCE_AGENT_MEMORY_GRAPH_BACKEND` (`local` or `neo4j`) only sets the sidecar's value before the API's first push.
+
+The local store suits single-user and per-session graphs of a few thousand nodes. Choose Neo4j for larger or shared deployments, or for the Neo4j Browser. To move history from the local store into Neo4j (one-way, idempotent):
+
+```bash
+NEO4J_PASSWORD=yourpassword python -m sciencediscovery_memory_graph.export_to_neo4j \
+  --http http://127.0.0.1:7474 --user neo4j
+```
+
+The rest of this guide is only needed if you want Neo4j.
+
+## 1. Optional: install Neo4j
 
 You need:
 
@@ -72,7 +90,7 @@ Neo4j does not need to start in lockstep with ScienceDiscovery, but it must be o
 
 ## 2. Configure ScienceMemory in system settings
 
-Once Neo4j is running, all configuration happens in System configuration → Memory, with no `.env` edit and no stack restart.
+Once Neo4j is running (and Storage backend is set to Neo4j server), all configuration happens in System configuration → Memory, with no `.env` edit and no stack restart.
 
 ### 2.1 Open settings
 
@@ -87,6 +105,7 @@ The Memory section has:
 | Field | What to enter | Default placeholder |
 |---|---|---|
 | Enable ScienceMemory (toggle) | Turn on to actually enable | Off |
+| Storage backend | Local files (default) or Neo4j server; the fields below appear only for Neo4j | Local files |
 | Neo4j HTTP | Neo4j's HTTP address | `http://127.0.0.1:7474` |
 | Neo4j user | Neo4j username | `neo4j` |
 | Neo4j password | The password you set in 1.1/1.2 | — |
@@ -109,7 +128,7 @@ Back in the session workspace, expand Memory > ScienceMemory in the right rail. 
 | Status | Meaning | Action |
 |---|---|---|
 | `healthy` | Neo4j reachable, password configured | Working; reads/writes the graph |
-| `needs-password` | Sidecar up but no password pushed yet | Go back to settings, enter the password, save |
+| `needs-password` | The backend is Neo4j and the sidecar has not received a password yet | Enter the password and save, or switch Storage backend back to Local files |
 | `degraded` | Password set but Neo4j unreachable | Check Neo4j is running, port 7474 is open, address/password are correct |
 | `disabled` | Toggle is off | Turn the toggle on |
 
@@ -134,7 +153,8 @@ On first open the graph shows only the research spine by default: research goal 
 
 - Double-click a Task node (subagent scope) to unfold the tool-call chain it contains.
 - Double-click any other node (tool call, code, paper, evidence, claim, or artifact) to unfold one layer of its direct produces, one layer at a time. Double-click again to collapse, which cascades to orphan descendants.
-- Hovering a node shows a "Double-click to expand / Double-click to collapse" tooltip.
+- Hovering a node shows a "Double-click to expand / Double-click to collapse" tooltip. The `+N` chip on a node's top-right means N nodes are folded behind it; it becomes `−N` once they are open.
+- "Expand all" at the canvas's top-right opens every folded node at once, and "Collapse all" returns to the research spine. The visible / total counts in the header follow.
 
 ### 3.4 Chain buttons (per node type)
 

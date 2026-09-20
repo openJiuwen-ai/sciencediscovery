@@ -668,11 +668,17 @@ class NativeAgent implements NativeAgentHandle {
             return contextAssembler.assemble(input);
           },
         },
-        modelClient,
+        modelClient: {
+          isInputTooLargeError: error => modelClient.isInputTooLargeError(error),
+          invoke: async (input, signal, observer) => {
+            const result = await modelClient.invoke(input, signal, observer);
+            await this.versionRecorder?.modelCompleted(result);
+            return result;
+          },
+        },
         toolDispatcher: this.toolRegistry,
         eventSink: (event) => {
-          this.versionRecorder?.event(event);
-          this.emitRuntimeEvent(event);
+          this.emitRuntimeEvent(event, this.versionRecorder?.event(event));
           if (event.type === "model_usage") reportedModelUsage = true;
         },
         // Stall guard (V2-C6): a model call with no progress for the idle
@@ -702,6 +708,7 @@ class NativeAgent implements NativeAgentHandle {
       if (usage) this.emit({ type: "usage", usage });
       return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")) };
     } finally {
+      await this.versionRecorder?.flushEvents().catch((error: unknown) => console.error("Trajectory event flush failed", error instanceof Error ? error.message : "unknown error"));
       this.versionRecorder?.close();
       if (turnTimeoutId) clearTimeout(turnTimeoutId);
       if (idleTimeoutId) clearTimeout(idleTimeoutId);
@@ -788,16 +795,17 @@ class NativeAgent implements NativeAgentHandle {
     for (const listener of this.listeners) listener(event);
   }
 
-  private emitRuntimeEvent(event: RunEvent<ModelUsage>): void {
+  private emitRuntimeEvent(event: RunEvent<ModelUsage>, evidence?: import("@sciencediscovery/schema").AgentEventEvidence): void {
+    const emit = (value: AgentEvent) => this.emit({ ...value, ...(evidence ? { evidence } : {}) });
     switch (event.type) {
       case "turn_start":
-        this.emit({ type: "turn_start" });
+        emit({ type: "turn_start" });
         break;
       case "response_start":
-        this.emit({ responseId: event.responseId, turn: event.turn, type: "response_start" });
+        emit({ responseId: event.responseId, turn: event.turn, type: "response_start" });
         break;
       case "model_delta":
-        this.emit({
+        emit({
           type: "message_update",
           assistantMessageEvent: event.kind === "text"
             ? { type: "text_delta", delta: event.delta, responseId: event.responseId }
@@ -805,10 +813,10 @@ class NativeAgent implements NativeAgentHandle {
         });
         break;
       case "response_settled":
-        this.emit({ responseId: event.responseId, turn: event.turn, type: "response_settled" });
+        emit({ responseId: event.responseId, turn: event.turn, type: "response_settled" });
         break;
       case "tool_execution_start":
-        this.emit({
+        emit({
           type: "tool_execution_start",
           toolCallId: event.call.id,
           toolName: event.call.name,
@@ -816,7 +824,7 @@ class NativeAgent implements NativeAgentHandle {
         });
         break;
       case "tool_execution_end":
-        this.emit({
+        emit({
           type: "tool_execution_end",
           toolCallId: event.call.id,
           toolName: event.call.name,
@@ -828,10 +836,10 @@ class NativeAgent implements NativeAgentHandle {
         });
         break;
       case "model_usage":
-        this.emit({ type: "model_usage", usage: event.usage, usageReported: true });
+        emit({ type: "model_usage", usage: event.usage, usageReported: true });
         break;
       case "completed":
-        if (event.truncated) this.emit({ type: "turn_truncated" });
+        if (event.truncated) emit({ type: "turn_truncated" });
         break;
       case "finish_gate":
         this.emit({ action: event.action, turn: event.turn, type: "finish_gate" });

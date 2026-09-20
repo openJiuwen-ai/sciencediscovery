@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { IdeaTreeGraph } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { useLocale } from "./i18n/index.js";
 import { StructureIcon } from "./icons.js";
 import { IdeaTreeExplorer } from "./IdeaTreeExplorer.js";
 
@@ -40,10 +41,11 @@ function LegacyIdeaTreeView({
   client: ApiClient;
   onOpenArtifact?: (id: string) => void;
   onOpenSubagent?: (id: string) => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   refreshKey: string;
   sessionId: string;
 }) {
+  const { t } = useLocale();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [graph, setGraph] = useState<IdeaTreeGraph | null>(null);
   const [hasIdeaTreeRun, setHasIdeaTreeRun] = useState<boolean>();
@@ -74,7 +76,7 @@ function LegacyIdeaTreeView({
     } catch (error) {
       if (sequence === requestSequence.current) setLoadError(error instanceof Error ? error.message : "Could not load Idea Tree");
       if (sequence === requestSequence.current && reportFailure) {
-        onError(error instanceof Error ? error.message : "Could not load Idea Tree");
+        onError(error instanceof Error ? error : "Could not load Idea Tree");
       }
     } finally {
       if (showLoading && loadingSequence.current === sequence) setLoading(false);
@@ -104,7 +106,7 @@ function LegacyIdeaTreeView({
     return () => clearInterval(timer);
   }, [hasIdeaTreeRun, load]);
 
-  if (loadError) return <div role="alert">{loadError} <button type="button" onClick={() => void load(selectedTreeId.current)}>Retry Idea Tree</button></div>;
+  if (loadError) return <div role="alert">{loadError} <button className="secondary-button compact-button" type="button" onClick={() => void load(selectedTreeId.current)}>Retry Idea Tree</button></div>;
   if (!graph) return null;
   const completed = graph.nodes.filter((node) => node.status === "done").length;
   const running = graph.nodes.filter((node) => node.status === "running").length;
@@ -120,7 +122,7 @@ function LegacyIdeaTreeView({
         {graph.nodes.length} nodes · {graph.edges.length} branches · {completed} done
         {running ? <i>{running} running</i> : null}
       </span>
-      <span className="idea-tree-view-action">查看旧树（只读） →</span>
+      <span className="idea-tree-view-action">{t("ideaTree.viewArchived")}</span>
     </button>
     {open ? <IdeaTreeExplorer
       graph={graph}

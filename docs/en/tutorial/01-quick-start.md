@@ -9,7 +9,7 @@ This tutorial starts with a ready-to-run ScienceDiscovery executable, then confi
 - Linux on `x86_64` or `aarch64`.
 - `bwrap` (Bubblewrap) for sandboxed command execution.
 - A ScienceDiscovery executable matching the host architecture.
-- At least one model-provider API key.
+- At least one external model API Key.
 
 Bubblewrap must be provided by the host:
 
@@ -27,7 +27,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-`serve` starts the gateway, runner, and API/Web UI and binds them to the local machine by default. Once startup completes, `serve` prints the access token for this installation; open <http://127.0.0.1:4310> and sign in with it. The Web UI opens its Connection settings automatically whenever the token it holds is rejected. Ctrl-C stops all child services.
+`serve` starts the gateway, runner, and API/Web UI and binds them to the local machine by default. Once startup completes, `serve` prints the `Open to sign in` URL and the local service access token; open that sign-in URL in a browser to authenticate and save the local service access token automatically. (If opening <http://127.0.0.1:4310> directly, the Web UI presents a clear Connection onboarding guide where you can paste the token from the startup output and save.) Keep the sign-in URL private. The Web UI opens its Connection settings automatically whenever the token it holds is rejected. Ctrl-C stops all child services.
 
 In a second terminal, verify the API:
 
@@ -41,7 +41,7 @@ Binary packaging, source mode, and Docker are separate deployment paths; their p
 
 ## 3. Configure a task model
 
-Under **System configuration → Global defaults**, configure the provider base URL, model ID, and API token for the task model. See [Configuration reference](../reference/configuration.md) for supported environment variables and files.
+Under **System configuration → Global defaults**, configure the provider base URL, model ID, and external model API Key for the task model. This is separate from the local service access token. See [Configuration reference](../reference/configuration.md) for supported environment variables and files.
 
 ## 4. Run a first scientific task
 

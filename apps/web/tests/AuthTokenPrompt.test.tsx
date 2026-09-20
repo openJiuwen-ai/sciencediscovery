@@ -15,7 +15,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createElement } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+
+import { useMemorySubgraph } from "../src/MemoryGraphView.js";
 import { ApiClient } from "../src/api.js";
+import { ApiRequestError, isAuthFailure } from "../src/api/auth.js";
 import { createAuthTokenPromptGate } from "../src/auth-token-prompt.js";
 import { addToastToQueue, type Toast } from "../src/Toasts.js";
 
@@ -108,8 +113,7 @@ test("a token that starts working never reopens the dialog", async () => {
 });
 
 /** The App wiring in miniature: every failed request reports through `setError`,
- *  which pushes a persistent error toast, and a 401 additionally arms the token
- *  dialog. Startup issues several independent calls, so one rejected token fails
+ *  which reserves 401 for the token dialog and toasts other errors. Startup issues several independent calls, so one rejected token fails
  *  all of them at once. */
 function recoveryHarness() {
   const gate = createAuthTokenPromptGate();
@@ -132,7 +136,7 @@ function recoveryHarness() {
       if (gate.shouldPrompt(token)) state.dialogOpens += 1;
     });
     await Promise.all(Array.from({ length: 5 }, async () => {
-      await client.listProjects().catch((reason: Error) => setError(reason.message));
+      await client.listProjects().catch((reason: Error) => { if (!isAuthFailure(reason)) setError(reason.message); });
     }));
   };
   return { attempt, state };
@@ -146,14 +150,13 @@ test("correcting a token after wrong attempts never needs the notifications clea
     await attempt("wrong-token-a", false); // user saves a wrong token
     await attempt("wrong-token-b", false); // and another one
 
-    // One notification for one condition, however many requests failed: the
-    // column cannot reach the dialog footer the user has to click.
-    assert.equal(state.toasts.length, 1);
+    // The Connection prompt is the only feedback for local authentication.
+    assert.equal(state.toasts.length, 0);
     assert.equal(state.dialogOpens, 3);
 
     await attempt("correct-token", true);
 
-    assert.equal(state.toasts.length, 1);
+    assert.equal(state.toasts.length, 0);
     assert.equal(state.dialogOpens, 3);
   } finally {
     globalThis.fetch = previousFetch;
@@ -176,9 +179,67 @@ test("an unrelated failure during recovery keeps its own notification", async ()
       });
     });
 
-    assert.deepEqual(state.toasts.map((toast) => toast.detail), ["Unauthorized", "Gateway is unavailable"]);
+    assert.deepEqual(state.toasts.map((toast) => toast.detail), ["Gateway is unavailable"]);
     assert.equal(state.dialogOpens, 1);
   } finally {
     globalThis.fetch = previousFetch;
+  }
+});
+
+for (const failure of ["401", "500", "network"] as const) {
+  test(`an existing session's next memory poll routes ${failure} without losing its status`, async (context) => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    context.mock.timers.enable({ apis: ["setInterval"] });
+    const previousFetch = globalThis.fetch;
+    let failed = false;
+    let graphRequests = 0;
+    const state = { connection: false, toasts: [] as string[], forwarded: [] as (Error | string)[] };
+    const gate = createAuthTokenPromptGate();
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("subgraph")) graphRequests += 1;
+      if (!failed) return Response.json({ nodes: [], edges: [], memoryGraph: "ok" });
+      if (failure === "network") throw new TypeError("Failed to fetch");
+      return Response.json({ error: failure === "401" ? "Unauthorized" : "Memory unavailable" }, { status: Number(failure) });
+    };
+    const client = new ApiClient("session-token", () => {
+      if (gate.shouldPrompt("session-token")) state.connection = true;
+    });
+    function Session() {
+      useMemorySubgraph(client, "existing-session", "unchanged", (reason) => {
+        state.forwarded.push(reason);
+        if (!isAuthFailure(reason)) state.toasts.push(reason instanceof Error ? reason.message : reason);
+      }, false);
+      return null;
+    }
+    let view: ReactTestRenderer | undefined;
+    try {
+      await act(async () => { view = create(createElement(Session)); });
+      assert.equal(graphRequests, 1);
+      assert.equal(state.connection, false);
+      failed = true;
+      // Exercise two actual timer ticks, not a cold mount with a bad token.
+      for (let i = 0; i < 2; i += 1) {
+        await act(async () => { context.mock.timers.tick(8_000); });
+      }
+      assert.equal(graphRequests, 3);
+      if (failure === "401") {
+        assert.deepEqual(state.toasts, [], "401 must leave Connection as the only authentication prompt");
+        assert.equal(state.connection, true);
+        assert.ok(state.forwarded.every(isAuthFailure), "the global reporter must receive the HTTP status");
+      } else {
+        assert.equal(state.connection, false);
+        assert.deepEqual(state.toasts, Array(2).fill(failure === "500" ? "Memory unavailable" : "Failed to fetch"));
+      }
+    } finally {
+      if (view) await act(async () => view!.unmount());
+      globalThis.fetch = previousFetch;
+      context.mock.timers.reset();
+    }
+  });
+}
+
+test("authentication routing never infers status from Unauthorized text", () => {
+  for (const reason of ["Unauthorized", new Error("Unauthorized"), new ApiRequestError("Unauthorized", 500)]) {
+    assert.equal(isAuthFailure(reason), false);
   }
 });

@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { IdeaTreeGraph, IdeaTreeNode } from "@sciencediscovery/schema";
 
+import { LocaleProvider } from "../src/i18n/index.js";
 import { chooseIdeaTreeOrientation, IDEA_TREE_STATUS_COLORS, layoutIdeaTree } from "../src/IdeaTreeCanvas.js";
 import { IdeaTreeExplorer } from "../src/IdeaTreeExplorer.js";
 import { sameIdeaTreeGraphSnapshot } from "../src/IdeaTreeView.js";
@@ -132,12 +133,18 @@ test("autonomous research presents stage results without legacy execution fields
   const researchGraph: IdeaTreeGraph = {...graph, nodes: graph.nodes.map(n => n.id === "ROOT" ? {
     ...n, kind: "direction", stages: {aggregate: {text: "Prefer recoverable materials; verify leaching."}},
   } : n)};
-  const html = renderToStaticMarkup(createElement(IdeaTreeExplorer, {
+  const explorer = createElement(IdeaTreeExplorer, {
     autonomous: true, graph: researchGraph, onClose() {}, onSelectTree() {}, treeIds: [graph.treeId],
-  }));
-  assert.match(html, /综合评估/);
-  assert.match(html, /Prefer recoverable materials/);
-  assert.doesNotMatch(html, /Result handle|Active execution|revision 4/);
+  });
+  // The assessor heading follows the reader's locale rather than being fixed
+  // Chinese, which is what an English-locale user used to see here.
+  const english = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" as const }, explorer));
+  assert.match(english, /Overall assessment/);
+  assert.doesNotMatch(english, /[\u4e00-\u9fff]/);
+  const chinese = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" as const }, explorer));
+  assert.match(chinese, /综合评估/);
+  assert.match(english, /Prefer recoverable materials/);
+  assert.doesNotMatch(english, /Result handle|Active execution|revision 4/);
 });
 
 

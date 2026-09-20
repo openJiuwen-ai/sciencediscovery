@@ -4,11 +4,11 @@ The root [README](../../../README.md) covers basic use. This page documents mode
 
 ## Models
 
-Each model configuration has a display name, base URL such as `https://api.openai.com/v1`, model ID, optional **Vision capable** flag, and API token.
+Each model configuration has a display name, base URL such as `https://api.openai.com/v1`, model ID, optional **Vision capable** flag, and external model API Key.
 
 - The **task model** runs chat and agent work.
 - The **evidence-review model** is an optional separate semantic reviewer.
-- Provider tokens are encrypted at rest with AES-256-GCM and the owner-readable `model-secrets.key`. The API never returns the raw token.
+- Provider API keys are encrypted at rest with AES-256-GCM and the owner-readable `model-secrets.key`. The API never returns the raw key.
 - Protect and back up the data directory and key together. This is not an OS keychain.
 
 ## Runtime settings and inheritance

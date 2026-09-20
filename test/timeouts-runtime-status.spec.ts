@@ -105,7 +105,11 @@ test("用户可配置无限超时、查看运行状态并在会话中追溯超�
     const sessionId = (await sessionResponse.json()).id as string;
 
     await page.goto("/");
-    await page.waitForLoadState("networkidle");
+    // Not `waitForLoadState("networkidle")`: when the workbench restores a
+    // Session it starts five per-Session pollers, the browser is never idle
+    // for 500 ms, and the wait runs out the whole test budget. Wait for the
+    // shell the next step clicks in instead.
+    await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
 
     await page.getByRole("button", { name: "System configuration" }).click();
     const configuration = page.getByRole("dialog", { name: "System configuration" });

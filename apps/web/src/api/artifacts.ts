@@ -53,6 +53,7 @@ import type {
 import type { ArtifactDashboard, ArtifactPreviewPayload } from "../artifact-dashboard.js";
 import { translateActive } from "../i18n/index.js";
 
+import { ApiRequestError } from "./auth.js";
 import { RunsApiClient } from "./runs.js";
 
 export interface ManualReviewerSpecialistResult { task: ReviewerAuditTask; }
@@ -133,7 +134,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error(translateActive("error.loadArtifactVersion"));
+      throw new ApiRequestError(translateActive("error.loadArtifactVersion"), response.status);
     }
     return await response.blob();
   }
@@ -156,7 +157,11 @@ export class ArtifactsApiClient extends RunsApiClient {
     const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research/${encodeURIComponent(researchId)}/events`, {
       headers: {accept: "text/event-stream", authorization: `Bearer ${this.token}`}, signal,
     });
-    if (!response.ok || !response.body) throw new Error(`Idea Tree stream failed: HTTP ${response.status}`);
+    if (!response.ok) {
+      this.reportAuthStatus(response.status);
+      throw new ApiRequestError(`Idea Tree stream failed: HTTP ${response.status}`, response.status);
+    }
+    if (!response.body) throw new Error(`Idea Tree stream failed: HTTP ${response.status}`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -439,7 +444,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error(translateActive("error.loadArtifactVersion"));
+      throw new ApiRequestError(translateActive("error.loadArtifactVersion"), response.status);
     }
     return await response.blob();
   }
@@ -464,7 +469,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const reason = response.status === 404 ? "WebPage content not available" : "Could not load WebPage content";
-      throw new Error(reason);
+      throw new ApiRequestError(reason, response.status);
     }
     return await response.text();
   }
@@ -549,7 +554,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      throw new Error(translateActive("error.loadFile", { path }));
+      throw new ApiRequestError(translateActive("error.loadFile", { path }), response.status);
     }
     return await response.blob();
   }
