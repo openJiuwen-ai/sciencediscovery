@@ -45,6 +45,7 @@ import {
   type ModelProvider,
   type ProviderModelEntry,
   type ProviderModelList,
+  type ProviderModelPreview,
   type RemoteModelFacts,
   type UpdateModelProviderRequest,
 } from "@sciencediscovery/schema";
@@ -154,6 +155,8 @@ import {
 } from "@sciencediscovery/idea-tree";
 
 import { SessionStoreHttpError } from "../store.js";
+import { validateLiveProvider } from "../store/providers.js";
+import { normalizeApiToken } from "../store/secrets.js";
 import { remoteWorkspaceKey, syncRemoteWorkspace } from "../remote-runner.js";
 import { normalizeRemoteHostEndpoint } from "../store/remote-hosts.js";
 import {
@@ -554,7 +557,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const savedFacts = (profileId: string | undefined): ModelFactOverrides | undefined =>
     profileId ? store.getModel(profileId)?.facts : undefined;
   const providerModelEntry = (
-    provider: ModelProvider,
+    provider: Pick<ModelProvider, "baseUrl" | "presetId">,
     model: DiscoveredModel,
     fetchedAt: string,
     profileId: string | undefined,
@@ -1900,6 +1903,33 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (request.method === "POST" && url.pathname === "/api/providers") {
         const body = await readJson<CreateModelProviderRequest>(request);
         sendJson(response, 201, await store.createProvider(body));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/providers/preview-models") {
+        // The connect card lists the models of a configuration the user has
+        // not saved yet, so the listing is fetched straight from the body's
+        // endpoint with the body's key; nothing is persisted or cached.
+        const body = await readJson<CreateModelProviderRequest>(request);
+        const candidate = validateLiveProvider(body);
+        const apiToken = normalizeApiToken(body.apiToken);
+        try {
+          const fetchedAt = new Date().toISOString();
+          const models = await listProviderModels({
+            ...(apiToken ? { apiToken } : {}),
+            baseUrl: candidate.baseUrl,
+            discovery: candidate.modelDiscovery,
+            proxy: resolveProxyForUrl(store.resolveProxy(body.proxyPolicy), candidate.baseUrl),
+          });
+          const preview: ProviderModelPreview = {
+            fetchedAt,
+            models: models.map((model) => providerModelEntry(candidate, model, fetchedAt, undefined)),
+            source: "remote",
+          };
+          sendJson(response, 200, preview);
+        } catch (error) {
+          if (error instanceof ModelDiscoveryError) throw new ApiStatusError(502, error.message);
+          throw error;
+        }
         return;
       }
       const providerMatch = url.pathname.match(/^\/api\/providers\/([^/]+)$/);

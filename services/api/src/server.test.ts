@@ -56,6 +56,7 @@ import type {
   PermissionRequest,
   ProxySettingsDetails,
   ProviderModelList,
+  ProviderModelPreview,
   RunStreamEvent,
   PromptManifest,
   Project,
@@ -6117,7 +6118,36 @@ test("provider REST discovers models, reports upstream failure, and keeps manual
   assert.deepEqual(listing.body.models[0]?.remote, { contextWindow: 131_072, vision: true });
   assert.deepEqual(receivedAuth, ["Bearer provider-secret-must-stay-write-only"]);
 
+  // The connect card previews the listing of a configuration that is not
+  // saved yet: the body's endpoint and key are used and nothing is written.
+  const previewBody = JSON.stringify({
+    apiToken: "preview-secret",
+    baseUrl: `${upstreamOrigin}/v1`,
+    modelDiscovery: "openai-models",
+    name: "Draft gateway",
+  });
+  const preview = await jsonRequest<ProviderModelPreview>(`${origin}/api/providers/preview-models`, {
+    body: previewBody,
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(preview.response.status, 200);
+  assert.equal(preview.body.source, "remote");
+  assert.equal(preview.body.models[0]?.id, "fixture-vision");
+  assert.deepEqual(preview.body.models[0]?.remote, { contextWindow: 131_072, vision: true });
+  assert.equal("profileId" in (preview.body.models[0] ?? {}), false, "a preview cannot know any profile");
+  assert.equal(receivedAuth.at(-1), "Bearer preview-secret", "the draft key is sent with the preview request");
+  const afterPreview = await jsonRequest<{ providers: ModelProvider[] }>(`${origin}/api/providers`, { headers: authorization });
+  assert.equal(afterPreview.body.providers.length, 1, "a preview never saves a provider");
+
   failDiscovery = true;
+  const failedPreview = await jsonRequest<{ error: string }>(`${origin}/api/providers/preview-models`, {
+    body: previewBody,
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(failedPreview.response.status, 502);
+  assert.match(failedPreview.body.error, /403.*model-list permission denied/);
   const failedRefresh = await jsonRequest<{ error: string }>(
     `${origin}/api/providers/${provider.body.id}/models?refresh=1`,
     { headers: authorization },
