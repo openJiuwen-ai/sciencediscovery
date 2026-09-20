@@ -1,6 +1,6 @@
 # 运行一次演进搜索
 
-在会话里驱动 `/evolve`：提出搜索、定规模、看过程、读结果。搜索是什么、什么时候根本不适用，见[程序演进](../explanation/evolve.md)；要一次能完整跑完的第一次运行，见[教程](../tutorial/02-evolve-a-solution.md)。
+在会话里驱动 `/evolve-design`：提出搜索、定规模、看过程、读结果。搜索是什么、什么时候根本不适用，见[程序演进](../explanation/evolve.md)；要一次能完整跑完的第一次运行，见[教程](../tutorial/02-evolve-a-solution.md)。
 
 ## 开始之前
 

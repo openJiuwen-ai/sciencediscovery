@@ -273,6 +273,15 @@ export interface ProviderModelList {
   source: "remote";
 }
 
+/** The listing of a provider configuration that is not saved yet. The connect
+ *  card previews it so the user can choose models before anything is written;
+ *  no entry carries a profile because no profile can exist yet. */
+export interface ProviderModelPreview {
+  fetchedAt: string;
+  models: ProviderModelEntry[];
+  source: "remote";
+}
+
 /** Thinking capability recorded for a catalog model. */
 export interface ModelCatalogThinking {
   /** Provider default used when a saved effort is absent or no longer legal. */
@@ -382,4 +391,6 @@ export interface ModelProviderPreset {
   name: string;
   /** Local endpoints (Ollama) work without a token. */
   tokenOptional?: boolean;
+  /** Direct link to the vendor console where users generate an API key. */
+  keyUrl?: string;
 }

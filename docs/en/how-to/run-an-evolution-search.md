@@ -1,6 +1,6 @@
 # Run an evolution search
 
-How to drive `/evolve` from a session: proposing a search, sizing it, watching it, and reading
+How to drive `/evolve-design` from a session: proposing a search, sizing it, watching it, and reading
 what comes back. For what a search is and when it works at all, see
 [Program evolution](../explanation/evolve.md); for a first run you can complete end to end, see
 the [tutorial](../tutorial/02-evolve-a-solution.md).

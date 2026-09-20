@@ -729,7 +729,7 @@ export function ArtifactModal({
       setPoint(undefined);
       setNote("");
     } catch (error) {
-      onError(error instanceof Error ? error : "Could not save annotation");
+      onError(error instanceof Error ? error : t("error.saveAnnotation"));
     }
   }
 
@@ -836,7 +836,7 @@ export function ArtifactModal({
             ? datasetPreview
           : artifact?.kind === "dataset" && jsonSource
             ? <JsonSourcePreview parsed={jsonSource.parsed} source={jsonSource.source} truncated={jsonSource.truncated} />
-          : artifact?.kind === "dataset" && !(structureFormat && source) ? <pre className="artifact-source-preview">{source.slice(0, 100_000) || "Binary artifact: use the version content endpoint to inspect it."}</pre> : null}
+          : artifact?.kind === "dataset" && !(structureFormat && source) ? <pre className="artifact-source-preview">{source.slice(0, 100_000) || t("artifact.binaryNote")}</pre> : null}
         {/* JSON: a record array still gets the table (with a raw-JSON switch);
             every other document is shown as formatted JSON or raw text, never
             an empty grid. */}
@@ -845,11 +845,11 @@ export function ArtifactModal({
             ? datasetPreview
             : jsonSource
               ? <JsonSourcePreview parsed={jsonSource.parsed} source={jsonSource.source} truncated={jsonSource.truncated} />
-              : <pre className="artifact-source-preview">{source.slice(0, 100_000) || "Loading JSON content…"}</pre>
+              : <pre className="artifact-source-preview">{source.slice(0, 100_000) || t("artifact.loadingJson")}</pre>
           : null}
         {artifact?.kind === "notebook" && preview?.kind === "notebook" && preview.mode === "notebook-cells"
           ? <NotebookCells cells={preview.cells} />
-          : artifact?.kind === "notebook" && !(structureFormat && source) ? <pre className="artifact-source-preview">{source.slice(0, 100_000) || "Binary artifact: use the version content endpoint to inspect it."}</pre> : null}
+          : artifact?.kind === "notebook" && !(structureFormat && source) ? <pre className="artifact-source-preview">{source.slice(0, 100_000) || t("artifact.binaryNote")}</pre> : null}
         {/* "other" is where every source file lands — the kind enum has no
             "code" — and it had no case at all, so a .py artifact opened to a
             blank body. A NUL byte in the head is the binary tell; those get

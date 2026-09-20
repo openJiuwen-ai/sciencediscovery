@@ -869,7 +869,7 @@ function SessionGroup({
           {group.runs.map((run) => (
             <div className="usage-tree-node run" key={`${group.sessionId}:${run.runId ?? run.bucket.key}`}>
               <div className="usage-run-header">
-                <strong>{run.runId ? `Run ${run.runId.slice(0, 8)}` : "Standalone invocations"}</strong>
+                <strong>{run.runId ? t("usage.runLabel", { id: run.runId.slice(0, 8) }) : t("usage.standaloneInvocations")}</strong>
                 <small>{usageBreakdownLabel(run.bucket)}</small>
               </div>
               <InvocationTable invocations={run.invocations} />

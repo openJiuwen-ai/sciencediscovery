@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * The `/evolve` shell: command parsing, the event fold, and the workspace card.
+ * The `/evolve-design` shell: command parsing, the event fold, and the workspace card.
  *
  * The fold is where the interesting cases live, because the same reducer serves
  * three sources (live SSE, the run's log, the graph) and they must render

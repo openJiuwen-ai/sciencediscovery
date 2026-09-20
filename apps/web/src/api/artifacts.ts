@@ -468,7 +468,9 @@ export class ArtifactsApiClient extends RunsApiClient {
     );
     if (!response.ok) {
       this.reportAuthStatus(response.status);
-      const reason = response.status === 404 ? "WebPage content not available" : "Could not load WebPage content";
+      const reason = response.status === 404
+        ? translateActive("error.webPageContentUnavailable")
+        : translateActive("error.webPageContentLoadFailed");
       throw new ApiRequestError(reason, response.status);
     }
     return await response.text();

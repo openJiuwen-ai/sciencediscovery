@@ -256,7 +256,7 @@ test("renders skill library cards with pinned head version metadata", async () =
 
   const text = JSON.stringify(renderer!.toJSON()).replace(/","/g, "");
   assert.match(text, /Evaluation Skills/);
-  assert.match(text, /Head version/);
+  assert.match(text, /Latest version/);
   assert.match(text, /2 skills/);
   assert.match(text, /abcdef123456/);
   assert.match(text, /Pending proposals/);

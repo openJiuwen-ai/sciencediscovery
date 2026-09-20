@@ -37,7 +37,7 @@ import { mergePermissionRequestSnapshot } from "../permission-state.js";
 import { ReviewerPanel } from "../ReviewerPanel.js";
 import { SkillReviewRecords } from "../SkillReviewRecords.js";
 import { ToolIoSections } from "./ToolIoSections.js";
-import { useLocale } from "../i18n/index.js";
+import { translateActive, useLocale } from "../i18n/index.js";
 import { formatRunFailure } from "../run-failure.js";
 import type { ApiClient } from "../api.js";
 
@@ -726,7 +726,7 @@ export function reduceRunTimeline(
       || event.status === "failed"
       || event.status === "cancelled"
       || event.status === "interrupted")) {
-    const summary = event.reason ?? event.run.error ?? `Run ${event.status}`;
+    const summary = event.reason ?? event.run.error ?? translateActive("timeline.runStatusFallback", { status: event.status });
     return finishIdeaTreePhases(finishThinking(entries, { all: true })).map((entry) => {
       if (entry.type === "assistant" && entry.streaming) return { ...entry, streaming: false };
       if (entry.type === "tool" && entry.trace.status === "running" && event.status !== "completed") {
@@ -898,7 +898,7 @@ export function RunTimeline({
           return (
             <aside className="boundary-note process-notice" key={entry.id}>
               <span><WarningIcon size={15} /></span>
-              <p>{entry.droppedEvents} run event(s) were removed by the retention policy; approval records are kept.</p>
+              <p>{t("timeline.historyTruncated", { count: entry.droppedEvents })}</p>
             </aside>
           );
         }
@@ -1007,7 +1007,7 @@ export function RunTimeline({
                   references={entry.references ?? references}
                   workspaceSessionId={workspaceSessionId}
                 />
-                {entry.truncated ? <p className="muted">Earlier replay text was truncated by the retention policy.</p> : null}
+                {entry.truncated ? <p className="muted">{t("timeline.replayTextTruncated")}</p> : null}
                 {isRunning && (entry.responseId !== undefined
                   ? entry.streaming
                   : entries[findLegacyContinuation(entries)]?.id === entry.id) ? <span className="cursor" /> : null}
@@ -1037,7 +1037,7 @@ export function RunTimeline({
                 {entry.content
                   ? <MarkdownRenderer content={entry.content} />
                   : <p>{entry.status === "running" ? t("timeline.waitingReasoning") : t("timeline.noReasoning")}</p>}
-                {entry.truncated ? <p className="muted">This replay step was truncated by the retention policy.</p> : null}
+                {entry.truncated ? <p className="muted">{t("timeline.replayStepTruncated")}</p> : null}
               </div>
             </details>
           );

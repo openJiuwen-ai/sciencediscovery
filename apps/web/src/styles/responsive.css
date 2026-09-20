@@ -83,6 +83,15 @@
   .send-button { width: 100%; }
   .trust-metrics { grid-template-columns: repeat(2, 1fr); }
   .workflow-controls > label { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .wizard-inputs-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .wizard-custom-grid { grid-template-columns: minmax(0, 1fr); }
+  .wizard-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .model-connect-wizard .wizard-model-row { grid-template-columns: 16px minmax(0, 1fr); }
+  .model-connect-wizard .wizard-model-row > .provider-model-row-facts { grid-column: 2; }
+  .wizard-manual-item { grid-template-columns: minmax(0, 1fr) auto; }
+  .wizard-manual-item em { grid-column: 1; }
+  .wizard-footer-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .wizard-actions { width: 100%; justify-content: flex-end; }
   .config-backdrop { padding: 12px; }
   .config-panel { max-height: calc(100vh - 24px); padding: 24px 20px; }
   .system-config-dialog { width: 100%; height: calc(100vh - 24px); padding: 0; }
@@ -93,8 +102,6 @@
   .provider-model-row { grid-template-columns: minmax(0, 1fr) auto; }
   .provider-model-row-facts { grid-column: 1 / -1; }
   .provider-row-test { margin-left: 0; }
-  .provider-add-panel { align-items: stretch; flex-direction: column; }
-  .provider-add-panel select { max-width: none; }
   .provider-section-heading { align-items: stretch; flex-direction: column; }
   .provider-editor-actions { justify-content: stretch; }
   .provider-editor-actions button { flex: 1 1 120px; }

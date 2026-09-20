@@ -11,7 +11,7 @@ These pages explain why the system is designed this way and how components coope
 - [Science connectors](science-connectors.md) — governance chain, audit, and citation for scientific MCP sources.
 - [MCP tool and protocol design](mcp-tool-protocol.md) — Source Manifest, tool protocol, Agent Loop, permissions, audit, and control-plane interface.
 - [Network proxy](network-proxy.md) — proxy policy resolution, outbound access, and security boundary.
-- [Program evolution](evolve.md) — `/evolve`: what a search is, the four scoring modes, the two engines, the shard split and the discrimination probe.
+- [Program evolution](evolve.md) — `/evolve-design`: what a search is, the four scoring modes, the two engines, the shard split and the discrimination probe.
 - [Review and provenance](review-provenance.md) — integrity checks, semantic review, claims/evidence, and Prompt Manifest.
 - [ScienceMemory](science-memory.md) — task chain, citation chain, module boundary, and storage.
 - [Skill progressive disclosure](skill-progressive-disclosure.md) — catalog search and frozen-snapshot reads.

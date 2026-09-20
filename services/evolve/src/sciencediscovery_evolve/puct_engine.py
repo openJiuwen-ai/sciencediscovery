@@ -234,6 +234,7 @@ class PuctEngine:
                     entrypoint_path=_entrypoint_of(spec),
                     candidate_timeout=spec.candidate_timeout_seconds,
                     baseline=baseline,
+                    should_stop=should_stop,
                 )
             except TestGateError as error:
                 raise _Refusal(str(error)) from error
@@ -252,6 +253,7 @@ class PuctEngine:
                     baseline_code=spec.baseline_code,
                     candidate_timeout=spec.candidate_timeout_seconds,
                     baseline=baseline,
+                    should_stop=should_stop,
                 )
             except ScriptError as error:
                 raise _Refusal(str(error)) from error
@@ -282,6 +284,7 @@ class PuctEngine:
                 baseline_code=spec.baseline_code,
                 candidate_timeout=spec.candidate_timeout_seconds,
                 baseline=baseline,
+                should_stop=should_stop,
             )
 
         tree = PuctTree(c_puct=float(spec.options.get("c_puct", 1.0)),

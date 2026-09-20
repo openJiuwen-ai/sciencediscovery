@@ -42,7 +42,7 @@ way to the dashboard.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .logging_config import get_logger
 from .measurement import Dataset, Measurement, measure_shards, shard_indices, TEST
@@ -69,6 +69,7 @@ def scorecard_domain(
     baseline_code: str = "",
     candidate_timeout: float = 60.0,
     baseline: Optional[MutableMapping[str, float]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Domain:
     """Build the domain for one search.
 
@@ -84,6 +85,7 @@ def scorecard_domain(
     def evaluate(code: str, shards: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
         result: Measurement = measure_shards(
             code, dataset, shards, capability=capability, timeout=candidate_timeout,
+            should_stop=should_stop,
         )
         if not result.ok:
             return False, {SCORE_KEY: float("-inf")}, result.error

@@ -167,6 +167,7 @@ class OpenEvolveEngine:
                     entrypoint_path=_entrypoint_of(spec),
                     candidate_timeout=spec.candidate_timeout_seconds,
                     baseline=baseline,
+                    should_stop=should_stop,
                 )
             except TestGateError as error:
                 raise _Refusal(str(error)) from error
@@ -181,6 +182,7 @@ class OpenEvolveEngine:
                     baseline_code=spec.baseline_code,
                     candidate_timeout=spec.candidate_timeout_seconds,
                     baseline=baseline,
+                    should_stop=should_stop,
                 )
             except ScriptError as error:
                 raise _Refusal(str(error)) from error
@@ -209,6 +211,7 @@ class OpenEvolveEngine:
                 baseline_code=spec.baseline_code,
                 candidate_timeout=spec.candidate_timeout_seconds,
                 baseline=baseline,
+                should_stop=should_stop,
             )
 
         # --- Algorithm state: OpenEvolveArchive instead of PuctTree ---

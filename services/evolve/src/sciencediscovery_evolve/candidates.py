@@ -37,10 +37,11 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from .logging_config import get_logger
 from .vendor.puct.program import validate_source
+from .sandbox_run import RunStopped, run_killable
 from .vendor.puct.sandbox import (
     SandboxCapability,
     SandboxUnavailable,
@@ -91,6 +92,7 @@ def run_candidate(
     timeout: float,
     max_length: int = 20_000,
     nproc_limit: int = 64,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Execute one candidate and return its runner payload.
 
@@ -98,6 +100,9 @@ def run_candidate(
     appended here — the caller decides *what* measures the candidate, this
     decides *how* it is confined.
     """
+    if should_stop is not None and should_stop():
+        # Before the scratch directory and the sandbox are even prepared.
+        return {"ok": False, "error": "the search was stopped", "seconds": 0.0}
     valid, reason = validate_source(code, max_length=max_length)
     if not valid:
         # The gate is not the boundary (the sandbox is), but it turns the
@@ -119,10 +124,12 @@ def run_candidate(
 
         started = time.monotonic()
         try:
-            completed = subprocess.run(
-                command, capture_output=True, text=True,
-                timeout=timeout + _GRACE_SECONDS, env=env, cwd=str(scratch),
+            completed = run_killable(
+                command, cwd=scratch, env=env,
+                timeout=timeout + _GRACE_SECONDS, should_stop=should_stop,
             )
+        except RunStopped:
+            return {"ok": False, "error": "the search was stopped", "seconds": time.monotonic() - started}
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": f"timeout after {timeout + _GRACE_SECONDS:.0f}s",
                     "seconds": time.monotonic() - started}

@@ -8,6 +8,7 @@ import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent }
 
 import type { IdeaTreeGraph, IdeaTreeNode } from "@sciencediscovery/schema";
 
+import { ideaTreeStatusLabel } from "./IdeaResearchLabels.js";
 import { useLocale } from "./i18n/index.js";
 
 const NODE_WIDTH = 244;
@@ -297,11 +298,11 @@ export function IdeaTreeCanvas({
               x={NODE_WIDTH - 91}
               y="10"
             />
-            <text className="idea-tree-node-status" fill={IDEA_TREE_STATUS_COLORS[node.status]} textAnchor="middle" x={NODE_WIDTH - 52} y="24">{node.kind === "direction" ? t("ideaTree.direction") : node.status.replace("_", " ")}</text>
+            <text className="idea-tree-node-status" fill={IDEA_TREE_STATUS_COLORS[node.status]} textAnchor="middle" x={NODE_WIDTH - 52} y="24">{node.kind === "direction" ? t("ideaTree.direction") : ideaTreeStatusLabel(t, node.status)}</text>
             <foreignObject height="40" width={NODE_WIDTH - 40} x="20" y="38">
               <div className="idea-tree-node-title" title={node.hypothesis}>{node.hypothesis}</div>
             </foreignObject>
-            <text className="idea-tree-node-meta" x="20" y="94">Depth {node.depth}{node.score === null ? "" : ` · Score ${node.score}`}</text>
+            <text className="idea-tree-node-meta" x="20" y="94">{node.score === null ? t("ideaTree.canvas.depth", { depth: node.depth }) : t("ideaTree.canvas.depthScore", { depth: node.depth, score: node.score })}</text>
           </g>;
         })}
       </g>

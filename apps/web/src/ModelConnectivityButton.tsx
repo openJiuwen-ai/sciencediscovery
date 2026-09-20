@@ -35,7 +35,7 @@ export interface ModelConnectivityButtonProps {
   testModel: (modelId: string) => Promise<ModelConnectivityTestResult>;
 }
 
-function failureCopy(category: ModelConnectivityTestCategory, t: Translate): { label: string; title: string } {
+export function failureCopy(category: ModelConnectivityTestCategory, t: Translate): { label: string; title: string } {
   switch (category) {
     case "missing_token":
       return { label: t("settings.modelTest.missingToken"), title: t("settings.modelTest.missingTokenDetail") };

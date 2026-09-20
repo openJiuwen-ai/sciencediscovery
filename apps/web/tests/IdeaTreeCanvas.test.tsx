@@ -157,3 +157,33 @@ test("autonomous research reuses the existing explorer with run controls", () =>
   assert.match(html, /role="dialog"/);
   assert.match(html, /Close Idea Tree/);
 });
+
+test("the legacy explorer follows the reader's language, not hardcoded English", () => {
+  const legacyGraph: IdeaTreeGraph = {...graph, nodes: graph.nodes.map(n => n.id === "1.1" ? {
+    ...n, status: "needs_retry" as const, pruneReason: "duplicate direction", result: "scored 0.12",
+  } : n)};
+  const explorer = createElement(IdeaTreeExplorer, {
+    graph: legacyGraph, onClose() {}, onSelectTree() {}, treeIds: [graph.treeId, "older-tree"],
+  });
+  // English reader: field labels, section headings and status words stay English.
+  const english = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" as const }, explorer));
+  assert.match(english, /Auto layout · click to inspect/);
+  assert.match(english, /4 nodes/);
+  assert.match(english, /revision 4/);
+  assert.match(english, /Result handle/);
+  assert.match(english, /Needs retry/);
+  // Search status renders as localized words, not the raw active/pruned enum.
+  assert.match(english, />Active</);
+  // A zh-CN reader gets Chinese chrome: no English paragraphs or raw enum
+  // tokens remain in the detail labels, the status words or the canvas hint.
+  const chinese = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" as const }, explorer));
+  assert.match(chinese, /自动布局/);
+  assert.match(chinese, /4 个节点/);
+  assert.match(chinese, /第 4 版/);
+  assert.match(chinese, /结果句柄/);
+  assert.match(chinese, /需重试/);
+  assert.match(chinese, /参与搜索/);
+  assert.doesNotMatch(chinese, /Auto layout/);
+  assert.doesNotMatch(chinese, /Result handle|Active execution/);
+  assert.doesNotMatch(chinese, /needs_retry|>Pending<|>active</);
+});

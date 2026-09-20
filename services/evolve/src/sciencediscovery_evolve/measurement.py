@@ -290,6 +290,7 @@ def measure_shards(
     timeout: float,
     runner_argv: Optional[Sequence[str]] = None,
     what: str = "",
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Measurement:
     """Run the candidate over exactly these shards and reduce to per-criterion means.
 
@@ -316,6 +317,7 @@ def measure_shards(
             [*argv, "--train", str(train), "--test", str(test), "--rows", str(rows)],
             capability=capability,
             timeout=timeout,
+            should_stop=should_stop,
         )
         if not payload.get("ok"):
             return Measurement(

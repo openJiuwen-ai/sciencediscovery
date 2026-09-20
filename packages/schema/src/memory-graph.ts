@@ -24,7 +24,7 @@ export type MemoryGraphNodeLabel =
   | "Claim"
   | "Code"
   | "Artifact"
-  /** One `/evolve` search: run-level identity and aggregates. A resumed run is a
+  /** One `/evolve-design` search: run-level identity and aggregates. A resumed run is a
    * second ToolCall pointing at the same SearchRun. */
   | "SearchRun"
   /** One candidate, including a failed one. Excluded from the session subgraph —

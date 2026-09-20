@@ -131,46 +131,51 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     );
 
     await journey.step(
-      "在模型注册表添加自定义服务商并手动登记模型",
-      "注册表以服务商为中心：添加是“下拉+自定义服务商按钮”而不再是预置卡墙，编辑器只在显式选择后才出现；填写本地端点与令牌、选 DeepSeek 变种后保存（模型列表策略跟随基础接口，不再由用户选择）；行展开后点「添加模型」才出现手动表单，登记模型；保存后行内显示已添加计数，重开设置后仍在。",
+      "在模型注册表确认服务商与模型已就位且重开仍在",
+      "注册表以连接模型为唯一新建入口：没有独立的添加 Provider 表单，编辑器只在显式编辑后出现；本步经 API 预置服务商与模型（界面创建路径由连接模型旅程覆盖），随后核对行内计数、模型行与重开持久化。",
       async () => {
+        providerName = `J1 自定义服务商 ${Date.now()}`;
+        // 界面新建入口已并入连接模型向导（向导旅程覆盖）；本旅程聚焦分析主路径，
+        // 服务商与模型经 API 预置。向导的连通性探针由后端发起且需要非流式响应，
+        // 与 scriptedModel 的 SSE 形态不兼容，因此不在本旅程走向导提交。
+        const created = await apiJsonSafe("/api/providers", {
+          data: {
+            apiProtocol: "openai-chat-completions",
+            apiToken: stub.apiToken,
+            apiVariant: "deepseek",
+            baseUrl: stub.baseUrl,
+            modelDiscovery: "openai-models",
+            name: providerName,
+            proxyPolicy: "inherit",
+            tokenOptional: false,
+          },
+          method: "POST",
+        }) as { id: string; name: string } | undefined;
+        expect(created).toBeDefined();
+        providerId = created!.id;
+        model = await apiJsonSafe(`/api/providers/${encodeURIComponent(providerId)}/models`, {
+          data: { model: stub.model },
+          method: "POST",
+        }) as JourneyModel | undefined;
+        expect(model).toBeDefined();
+
         await page.getByRole("button", { name: /^系统设置/ }).click();
         const settings = page.getByRole("dialog", { name: "系统设置" });
         await settings.getByRole("navigation", { name: "设置分组" })
           .getByRole("button", { name: /^模型注册表/ })
           .click();
         await expect(settings.getByRole("heading", { name: "模型注册表" })).toBeVisible();
-        // The editor only appears after an explicit choice, never on open.
+        // The editor only appears when explicitly editing an existing row,
+        // and there is no standalone add-provider form anymore.
         await expect(settings.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
-        providerName = `J1 自定义服务商 ${Date.now()}`;
-        await settings.getByRole("button", { name: "自定义服务商" }).click();
-        const editor = settings.getByRole("region", { name: "服务商编辑器" });
-        await expect(editor).toBeVisible();
-        await editor.getByLabel("服务商名称").fill(providerName);
-        await editor.getByLabel("外部模型 API Key").fill(stub.apiToken);
-        // 自定义服务商的高级连接默认展开；配置端点与变种。模型列表策略不再由
-        // 用户选择——它跟随基础接口，且总是去问服务商自己的接口。
-        await editor.getByLabel("基础 URL").fill(stub.baseUrl);
-        await editor.getByLabel("接口变种").selectOption("deepseek");
-        const providerSave = page.waitForResponse((response) =>
-          response.request().method() === "POST" && new URL(response.url()).pathname === "/api/providers");
-        await editor.getByRole("button", { name: "保存" }).click();
-        const savedProvider = await (await providerSave).json() as { id: string; name: string };
-        providerId = savedProvider.id;
-        expect(savedProvider.name).toBe(providerName);
-        // 保存后自动展开该服务商并预载。手动表单收在「添加模型」后面，先点开
-        // 再填；添加不再写思考默认值，新档案落在省略思考参数的模型默认上。
+        await expect(settings.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
+
+        // 服务商行显示已添加计数；行内模型行在展开后可见。
         const row = settings.locator(".provider-row").filter({ hasText: providerName });
-        await expect(row.locator(".provider-row-detail")).toBeVisible();
-        await row.locator(".provider-add-model-toggle").click();
-        await expect(settings.getByLabel("思考默认值（可选）")).toHaveCount(0);
-        await settings.getByLabel("手动模型 ID").fill(stub.model);
-        const modelResponsePromise = page.waitForResponse((response) =>
-          response.request().method() === "POST" && new URL(response.url()).pathname
-            === `/api/providers/${providerId}/models`);
-        await settings.locator(".provider-manual-form").getByRole("button", { name: "添加模型" }).click();
-        model = await (await modelResponsePromise).json() as JourneyModel;
         await expect(row).toContainText("已添加 1");
+        if (!await row.locator(".provider-row-detail").count()) {
+          await row.locator(".provider-row-summary").click();
+        }
         await expect(row.locator(".provider-model-row").filter({ hasText: stub.model })).toBeVisible();
 
         // 关闭后重开：服务商与已添加模型仍在。
@@ -183,7 +188,6 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
           .click();
         await expect(reopened.locator(".provider-row").filter({ hasText: providerName }))
           .toContainText("已添加 1");
-        // 手动登记（manual 策略无目录建议）的模型在重开设置后仍占有行内表一行，不被发现为空吞掉。
         const reopenedRow = reopened.locator(".provider-row").filter({ hasText: providerName });
         if (!await reopenedRow.locator(".provider-row-detail").count()) {
           await reopenedRow.locator(".provider-row-summary").click();
@@ -333,7 +337,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await editor.getByRole("button", { name: "删除" }).click();
         expect((await deleteResponse).status()).toBe(200);
         await expect(settings.locator(".provider-row")).toHaveCount(0);
-        await expect(settings.getByText("还没有服务商——点击下方“添加 Provider”选择预置或自定义服务商。")).toBeVisible();
+        await expect(settings.getByText("还没有服务商——先在上方「连接模型」里选择服务商并填入 API Key。")).toBeVisible();
         // The unreferenced model profile is deleted together with the provider.
         model = undefined;
         const registryCount = await apiJsonSafe("/api/models");

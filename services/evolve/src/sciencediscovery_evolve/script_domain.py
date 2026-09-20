@@ -63,13 +63,14 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .logging_config import get_logger
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
 from .vendor.puct.domain import Domain
 from .vendor.puct.program import Program
+from .sandbox_run import RunStopped, run_killable
 from .vendor.puct.sandbox import SandboxCapability, sandbox_command
 from .shard_roles import cases_for, total_slots
 from .vendor.puct.tree import finite as _finite
@@ -117,6 +118,7 @@ def script_domain(
     baseline_code: str = "",
     candidate_timeout: float = 120.0,
     baseline: Optional[MutableMapping[str, float]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Domain:
     """Build a domain that scores a candidate by running the drafted evaluator."""
     reference: MutableMapping[str, float] = {} if baseline is None else baseline
@@ -138,8 +140,13 @@ def script_domain(
         try:
             payload = _run_evaluator(
                 code, script, cases_for(shards, _total, _seed),
-                capability=capability, timeout=candidate_timeout,
+                capability=capability, timeout=candidate_timeout, should_stop=should_stop,
             )
+        except RunStopped:
+            # Not a broken evaluator and not a bad candidate: the user pressed
+            # stop. An invalid result lets the search wind down and say
+            # "stopped", where raising would report a fault that is not there.
+            return False, {SCORE_KEY: float("-inf")}, "the search was stopped"
         except ScriptError:
             # A broken evaluator is not a bad candidate. Raised so the run
             # stops and says which of the two is wrong, rather than reporting
@@ -253,6 +260,7 @@ def _run_evaluator(
     *,
     capability: SandboxCapability,
     timeout: float,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Materialise both programs in a throwaway directory and read the result.
 
@@ -283,9 +291,8 @@ def _run_evaluator(
             extra_env=extra,
         )
         try:
-            completed = subprocess.run(
-                argv, capture_output=True, text=True, cwd=str(scratch),
-                env=env, timeout=timeout + 30,
+            completed = run_killable(
+                argv, cwd=scratch, env=env, timeout=timeout + 30, should_stop=should_stop,
             )
         except subprocess.TimeoutExpired as error:
             raise ScriptError(f"the evaluator ran for over {timeout + 30:.0f}s without finishing") from error
