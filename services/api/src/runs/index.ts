@@ -26,6 +26,7 @@ import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
 
 import type { KnowledgeEngineToolPort } from "../knowledge-engine/tools.js";
 import { createKeResidentSummaryFactory } from "../knowledge-engine/contributor.js";
+import { createKnowledgeEngineGraphMirror } from "../knowledge-engine/graph-mirror.js";
 import { RefStore, VersionStore, type TrajectoryStep } from "@sciencediscovery/cas";
 import { agentHeadName } from "../native-agent/versioning.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
@@ -1416,6 +1417,16 @@ async function executeAgentRun(
     },
     ...(knowledgeEngineTools ? { knowledgeEngine: knowledgeEngineTools } : {}),
     ...(kbToolScope ? { knowledgeEngineScope: kbToolScope } : {}),
+    // Knowledge-engine → memory-graph mirror: the observer reports every
+    // successful KE tool invoke; the registry gate + product mapping live in
+    // graph-mirror.ts. The sink's live enabled toggle gates emission per call,
+    // so wiring is unconditional whenever KE tools exist. KE tools register
+    // for the main agent only (subagent bindings never receive the
+    // knowledgeEngine port), so sessionId/turnId attribution is exact today;
+    // if subagents ever gain KE access, thread parentSubagentId here.
+    ...(knowledgeEngineTools
+      ? { knowledgeEngineObserver: createKnowledgeEngineGraphMirror({ sink: memoryGraphSink, sessionId, turnId: runId }) }
+      : {}),
     // Project-ledger root for research_state promote/hydrate (V2-C2) — the
     // cross-trajectory world model lives outside any session workspace.
     researchProjectRoot: resolve(store.dataDir, "research-ledgers", session.projectId),

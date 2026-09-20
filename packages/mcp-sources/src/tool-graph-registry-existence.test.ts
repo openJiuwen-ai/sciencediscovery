@@ -22,6 +22,9 @@ import { TOOL_GRAPH_REGISTRY } from "@sciencediscovery/schema";
 
 // Workspace 工具没有 MCP manifest，直接对照 workspace 包源码里的工具定义。
 const WORKSPACE_TOOLS = ["run_shell", "run_npu_job", "web_search", "web_fetch"] as const;
+// KE 工具走 keTool("<name>", ...) 工厂注册（不是 name: "<name>" 属性），
+// grep 模式不同，单列一组。
+const KE_TOOLS = ["kb_search", "kb_expand", "doc_grep"] as const;
 
 test("every registry key resolves to a real workspace tool or MCP manifest tool", async () => {
   const mcpKeys = new Set<string>();
@@ -41,6 +44,14 @@ test("every registry key resolves to a real workspace tool or MCP manifest tool"
       workspaceSource,
       new RegExp(`name: "${tool}"`),
       `missing workspace tool: ${tool}`,
+    );
+    workspaceKeys.add(tool);
+  }
+  for (const tool of KE_TOOLS) {
+    assert.match(
+      workspaceSource,
+      new RegExp(`keTool\\(\\s*"${tool}"`),
+      `missing knowledge-engine tool: ${tool}`,
     );
     workspaceKeys.add(tool);
   }
