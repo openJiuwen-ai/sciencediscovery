@@ -328,6 +328,26 @@ export class MemoryGraphClient {
     this.token = options.token;
   }
 
+  /** Choose the store behind the graph. Sent at startup and on every change of
+   *  System configuration → Memory → Backend; the sidecar defaults to `local`. */
+  async pushBackend(backend: "local" | "neo4j"): Promise<void> {
+    mgLog.info("pushing backend selection to memory-graph: %s", backend);
+    await this.post("/internal/backend", { backend });
+  }
+
+  /** `/health` with the backend the sidecar is actually running, so the API can
+   *  notice a sidecar that restarted and fell back to its `local` default. */
+  async healthInfo(): Promise<{ status: string; backend?: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/health`);
+      if (!response.ok) return { status: "degraded" };
+      const body = (await response.json()) as { status?: string; backend?: string };
+      return { status: body.status ?? "degraded", backend: body.backend };
+    } catch {
+      return { status: "degraded" };
+    }
+  }
+
   async health(): Promise<string> {
     try {
       const response = await fetch(`${this.baseUrl}/health`);

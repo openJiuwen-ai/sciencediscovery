@@ -407,7 +407,7 @@ export function EvidenceModal({ client, evidenceId, onClose, onOpenEvolveRun, on
             initialNodeId={chainExplorer.nodeId}
             autoChain
             onClose={() => setChainExplorer(null)}
-            onError={(message: string) => { setError(message); setChainExplorer(null); }}
+            onError={(reason) => { setError(reason instanceof Error ? reason.message : reason); setChainExplorer(null); }}
             sessionId={sessionId}
             subgraph={chainExplorer.subgraph}
           />

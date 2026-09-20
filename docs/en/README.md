@@ -7,6 +7,7 @@ This is the complete English documentation set.
 ## Tutorials
 
 - [Quick start](tutorial/01-quick-start.md) — install, start the stack, configure a model, and complete a first agent task.
+- [Evolve a solution](tutorial/02-evolve-a-solution.md) — run a program-evolution search end to end and judge whether the improvement is real.
 
 ## How-to guides
 
@@ -15,6 +16,7 @@ This is the complete English documentation set.
 - [Deployment](how-to/deployment.md) — local mode, Docker, and building a single-file binary from source.
 - [Configure the network proxy](how-to/configure-network-proxy.md) — add a proxy on the settings page and choose a policy for LLM, web, and MCP traffic.
 - [Literature research case guide](how-to/literature-research-case-guide.md) — run an end-to-end cross-database literature survey, from service startup to approvals and results.
+- [Run an evolution search](how-to/run-an-evolution-search.md) — propose a `/evolve` search, size its shards, watch it run, and read the held-out result.
 - [Install Neo4j and configure ScienceMemory](how-to/science-memory-setup.md) — install an external Neo4j, enable ScienceMemory in system settings, and explore chains in the frontend graph.
 
 ## Reference

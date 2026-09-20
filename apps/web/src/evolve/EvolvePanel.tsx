@@ -49,7 +49,7 @@ import { emptyRunView, reduceEvolveRecord, runProgress, type EvolveRunView } fro
 export interface EvolvePanelProps {
   client: ApiClient;
   onClose: () => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   /** Bumped by the parent when a run's record changes, so the card and the
    *  panel cannot disagree about a status. */
   onRunChanged: () => void;
@@ -85,7 +85,7 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
       .then(() => { if (settled) onRunChanged(); })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        onError(error instanceof Error ? error.message : String(error));
+        onError(error instanceof Error ? error : String(error));
       });
     return () => controller.abort();
   }, [client, onError, onRunChanged, run.id]);
@@ -119,7 +119,7 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
               setStopping(true);
               void client.stopEvolveRun(run.id)
                 .then(() => onRunChanged())
-                .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)));
+                .catch((error: unknown) => onError(error instanceof Error ? error : String(error)));
             }}
             type="button"
           >{t(stopping ? "evolve.panel.stopping" : "evolve.panel.stop")}</button> : null}

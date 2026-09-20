@@ -104,7 +104,9 @@ async function createSession(
 
 async function openWorkspace(page: Page) {
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  // The visible assertion below is the wait. `networkidle` cannot be reached
+  // once the workbench restores a Session and starts its pollers, and it stood
+  // here only as a redundant prefix to it — see timeouts-runtime-status.spec.ts.
   await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
 }
 

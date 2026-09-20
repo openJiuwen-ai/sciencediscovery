@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export type SettingsErrorReporter = (message?: string) => void;
+export type SettingsErrorReporter = (reason?: string | Error) => void;
 
 const SETTINGS_OPERATION_ROUTES = {
   loadScopedSettings: { propagate: false, scope: "scoped" },
@@ -46,7 +46,8 @@ export function createSettingsErrorRouter(reporters: SettingsErrorReporters): {
       try {
         return await operation();
       } catch (reason) {
-        reportError(reason instanceof Error ? reason.message : fallbackMessage);
+        // Authentication routing needs the HTTP status, not just its message.
+        reportError(reason instanceof Error ? reason : fallbackMessage);
         if (route.propagate) throw reason;
         return undefined;
       }

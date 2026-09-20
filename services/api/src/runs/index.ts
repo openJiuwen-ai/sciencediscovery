@@ -298,6 +298,7 @@ export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningSt
     ...clonedDetailsEntry(event.result.details),
     id: event.toolCallId,
     ...(runningStep ? { input: runningStep.input ?? runningStep.content } : {}),
+    ...(runningStep?.args ? { args: structuredClone(runningStep.args) } : {}),
     kind: "tool",
     status: event.isError ? "failed" : "completed",
     toolCallId: event.toolCallId,
@@ -306,6 +307,7 @@ export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningSt
 }
 import { generateRefinedSessionTitle } from "../session-naming.js";
 import { notificationPrompt, runtimeNotice } from "../notification-dispatch.js";
+import { reopenSubagentForContinuation, settleSubagentContinuation } from "../subagent-continuation.js";
 import type { NotificationBatch } from "../agent-notifications.js";
 
 import { type ServerConfig } from "../bootstrap/config.js";
@@ -583,6 +585,9 @@ async function executeAgentRun(
   const continuation = notificationDelivery && notificationDelivery.agentId !== "main"
     ? store.listSubagents(sessionId).find((child) => `subagent:${child.id}` === notificationDelivery.agentId) : undefined;
   if (notificationDelivery?.agentId !== "main" && notificationDelivery && !continuation) throw new Error("Notification owner not found");
+  // How the wake turn itself ended, before the child's recorded history is
+  // folded back in; the run's own status is judged on this, not on history.
+  let continuationTurnStatus: Subagent["status"] | undefined;
   if (activeSessions.has(sessionId)) {
     throw new ApiStatusError(409, "A run is already active for this session");
   }
@@ -1650,7 +1655,7 @@ async function executeAgentRun(
       const releaseSubagentSlot = reserveSubagentSlot(subagentInput.description);
       let childId: string | undefined;
       try {
-        let subagent = continuation ? await store.updateSubagent({ ...continuation, status: "running", finishedAt: undefined, error: undefined }) : await store.createSubagent(sessionId, runId, subagentInput, {
+        let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
           model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
           ...(specialist ? { specialistConfigHash: specialistConfigHash(specialist) } : {}),
@@ -1711,6 +1716,7 @@ async function executeAgentRun(
         // live subscribers on a timer and written to the run stream exactly
         // once, when the message ends.
         let liveMessageStep: SubagentStep | undefined;
+        let liveMessageEvidence: import("@sciencediscovery/schema").AgentEventEvidence | undefined;
         let messageEmitTimer: ReturnType<typeof setTimeout> | undefined;
         const recordStep = (step: SubagentStep) => {
           const existing = steps.findIndex((candidate) => candidate.id === step.id);
@@ -1727,7 +1733,7 @@ async function executeAgentRun(
           clearMessageEmitTimer();
           if (!liveMessageStep) return;
           void emit(
-            { step: liveMessageStep, subagentId: subagent.id, type: "subagent.step" },
+            { step: liveMessageStep, subagentId: subagent.id, type: "subagent.step", ...(liveMessageEvidence ? { evidence: liveMessageEvidence } : {}) },
             { transient: true },
           );
         };
@@ -1738,18 +1744,26 @@ async function executeAgentRun(
           if (!liveMessageStep) return;
           const step = liveMessageStep;
           liveMessageStep = undefined;
-          void emit({ step, subagentId: subagent.id, type: "subagent.step" });
+          void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(liveMessageEvidence ? { evidence: liveMessageEvidence } : {}) });
+          liveMessageEvidence = undefined;
         };
-        const publishStep = (step: SubagentStep) => {
+        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence) => {
           recordStep(step);
           finalizeMessageStep();
-          void emit({ step, subagentId: subagent.id, type: "subagent.step" });
+          void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) });
           scheduleProgressFlush();
         };
         const publishMessageDelta = (
           kind: Extract<SubagentStep["kind"], "assistant" | "thinking">,
           delta: string,
+          evidence?: import("@sciencediscovery/schema").AgentEventEvidence,
         ) => {
+          // A message snapshot never crosses a response, context or channel boundary.
+          if (liveMessageStep && (liveMessageStep.kind !== kind || liveMessageEvidence?.responseId !== evidence?.responseId
+            || liveMessageEvidence?.contextRef?.digest !== evidence?.contextRef?.digest)) {
+            finalizeMessageStep();
+            activeMessageStep = undefined;
+          }
           const activeStep = activeMessageStep?.kind === kind
             ? steps.find((step) => step.id === activeMessageStep?.id)
             : undefined;
@@ -1765,6 +1779,8 @@ async function executeAgentRun(
           activeMessageStep = { id: step.id, kind };
           recordStep(step);
           liveMessageStep = step;
+          liveMessageEvidence = evidence ? { ...evidence, recordedAt: liveMessageEvidence?.recordedAt ?? evidence.recordedAt,
+            endedAt: evidence.recordedAt } : undefined;
           if (!messageEmitTimer) {
             messageEmitTimer = setTimeout(broadcastMessageStep, SUBAGENT_STREAM_EMIT_MS);
           }
@@ -2046,13 +2062,14 @@ async function executeAgentRun(
             }
           if (event.type === "message_update") {
             const isText = event.assistantMessageEvent.type === "text_delta";
-            publishMessageDelta(isText ? "assistant" : "thinking", event.assistantMessageEvent.delta);
+            publishMessageDelta(isText ? "assistant" : "thinking", event.assistantMessageEvent.delta, event.evidence);
           }
           if (event.type === "tool_execution_start") {
             activeMessageStep = undefined;
             const input = formatSubagentToolInput(event.args);
             publishStep({
               content: input,
+              args: structuredClone(event.args),
               createdAt: new Date().toISOString(),
               id: event.toolCallId,
               input,
@@ -2060,12 +2077,12 @@ async function executeAgentRun(
               status: "running",
               toolCallId: event.toolCallId,
               toolName: event.toolName,
-            });
+            }, event.evidence);
           }
           if (event.type === "tool_execution_end") {
             activeMessageStep = undefined;
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
-            publishStep(buildSubagentToolStep(event, runningStep));
+            publishStep(buildSubagentToolStep(event, runningStep), event.evidence);
           }
           if (event.type === "usage") {
             subagent.usage = event.usage;
@@ -2083,6 +2100,7 @@ async function executeAgentRun(
             pluginSettings: settingsSnapshot.plugins,
             abortSignal: childExecution.abortSignal,
             observer: observeSubagentEvent,
+            recordEvent: async (event) => { finalizeMessageStep(); activeMessageStep = undefined; await emit(event); },
             planStore: createRunPlanStore(`subagent:${subagent.id}`, () => subagent.turnCount),
             readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
             runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
@@ -2174,6 +2192,11 @@ async function executeAgentRun(
             steps,
           };
         }
+        if (continuation) {
+          // The wake run reports on its own turn; the record keeps the task's history.
+          continuationTurnStatus = subagent.status;
+          subagent = settleSubagentContinuation(continuation, subagent);
+        }
         subagent = await store.updateSubagent(subagent);
         await emit({ subagent, type: "subagent.updated" });
         // Mirror the subagent's terminal state into its scope SubTask node.
@@ -2233,6 +2256,7 @@ async function executeAgentRun(
     workspaceRoot: store.workspacePath(sessionId),
   });
   const observeMainEvent: NonNullable<import("../agent-run/create-agent-run.js").AgentRunBindings["observer"]> = (event) => {
+    const publish = (value: RunStreamEvent) => emit({ ...value, ...(event.evidence ? { evidence: event.evidence } : {}) });
     const active = activeSessions.get(sessionId);
     if (active) active.lastActivityAt = new Date().toISOString();
     if (event.type === "model_usage") {
@@ -2241,16 +2265,16 @@ async function executeAgentRun(
     }
     if (event.type === "turn_start") {
       turnNumber += 1;
-      void emit({ phase: "thinking", turn: turnNumber, type: "agent.phase" });
+      void publish({ phase: "thinking", turn: turnNumber, type: "agent.phase" });
     }
     if (event.type === "response_start") {
-      void emit({ responseId: event.responseId, turn: turnNumber, type: "assistant.response.started" });
+      void publish({ responseId: event.responseId, turn: turnNumber, type: "assistant.response.started" });
     }
     if (event.type === "response_settled") {
-      void emit({ responseId: event.responseId, turn: turnNumber, type: "assistant.response.settled" });
+      void publish({ responseId: event.responseId, turn: turnNumber, type: "assistant.response.settled" });
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
-      void emit({
+      void publish({
         delta: event.assistantMessageEvent.delta,
         responseId: event.assistantMessageEvent.responseId,
         turn: turnNumber,
@@ -2266,7 +2290,7 @@ async function executeAgentRun(
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       assistantText += event.assistantMessageEvent.delta;
-      void emit({
+      void publish({
         delta: event.assistantMessageEvent.delta,
         responseId: event.assistantMessageEvent.responseId,
         type: "assistant.delta",
@@ -2280,17 +2304,17 @@ async function executeAgentRun(
         status: "running",
       };
       traces.set(trace.id, trace);
-      void emit({ trace, type: "tool.started" });
+      void publish({ trace, type: "tool.started" });
     }
     if (event.type === "tool_execution_end") {
       const text = aggregateToolText(event.result);
       if (event.isError) rememberTimeout(timeoutFailure(text));
       if (text !== undefined) {
-        void emit({ chunk: text, toolCallId: event.toolCallId, type: "tool.output" });
+        void publish({ chunk: text, toolCallId: event.toolCallId, type: "tool.output" });
       }
       const trace = buildCompletedToolTrace(event, text);
       traces.set(trace.id, trace);
-      void emit({ trace, type: "tool.completed" });
+      void publish({ trace, type: "tool.completed" });
       workspaceRefreshQueue = workspaceRefreshQueue
         .then(() => emitWorkspaceChanges({
           emit,
@@ -2310,6 +2334,7 @@ async function executeAgentRun(
       pluginSettings: settingsSnapshot.plugins,
       abortSignal: requestExecution.abortSignal,
       observer: observeMainEvent,
+      recordEvent: async (event) => { await emit(event); },
       planStore: createRunPlanStore("main"),
       readVersioningAuthorities: versioningAuthorities(store, sessionId, runId),
       // Knowledge-engine awareness: the resident-summary contributor injects
@@ -2394,7 +2419,8 @@ async function executeAgentRun(
       const message = await store.appendMessage(sessionId, "assistant", `Subagent ${child.input.description}: ${child.steps.findLast((step) => step.kind === "assistant")?.content ?? child.error ?? child.status}`, selectedModel);
       await store.updateSessionRun(sessionId, runId, { assistantMessageId: message.id });
       await emit({ files: await listWorkspaceFiles(store, sessionId), message, type: "run.completed" });
-      return child.status === "completed" ? "completed" : child.status === "cancelled" ? "cancelled" : "failed";
+      const outcome = continuationTurnStatus ?? child.status;
+      return outcome === "completed" ? "completed" : outcome === "cancelled" ? "cancelled" : "failed";
     }
     lastAgentUsage = unreportedModelUsage();
     taskInvocationAttempted = true;
@@ -2714,6 +2740,7 @@ export function createDeltaCoalescingSink(
     delta: string;
     responseId?: string;
     turn?: number;
+    evidence?: import("@sciencediscovery/schema").AgentEventEvidence;
     type: "assistant.delta" | "assistant.thinking.delta";
   } | undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -2724,7 +2751,7 @@ export function createDeltaCoalescingSink(
       timer = undefined;
     }
     if (!pending) return Promise.resolve();
-    const merged: RunStreamEvent = pending.type === "assistant.thinking.delta"
+    const merged: RunStreamEvent = { ...(pending.type === "assistant.thinking.delta"
       ? {
           delta: pending.delta,
           ...(pending.responseId !== undefined ? { responseId: pending.responseId } : {}),
@@ -2735,7 +2762,7 @@ export function createDeltaCoalescingSink(
           delta: pending.delta,
           ...(pending.responseId !== undefined ? { responseId: pending.responseId } : {}),
           type: "assistant.delta",
-        };
+        }), ...(pending.evidence ? { evidence: pending.evidence } : {}) };
     pending = undefined;
     return Promise.resolve(publish(merged));
   };
@@ -2744,13 +2771,17 @@ export function createDeltaCoalescingSink(
     if (event.type === "assistant.delta" || event.type === "assistant.thinking.delta") {
       const turn = event.type === "assistant.thinking.delta" ? event.turn : undefined;
       const responseId = event.responseId;
-      if (pending && (pending.type !== event.type || pending.turn !== turn || pending.responseId !== responseId)) void flush();
+      if (pending && (pending.type !== event.type || pending.turn !== turn || pending.responseId !== responseId
+        || pending.evidence?.agentRunId !== event.evidence?.agentRunId
+        || pending.evidence?.contextRef?.digest !== event.evidence?.contextRef?.digest)) void flush();
       if (!pending) {
-        pending = { delta: "", ...(responseId === undefined ? {} : { responseId }), ...(turn === undefined ? {} : { turn }), type: event.type };
+        pending = { delta: "", ...(responseId === undefined ? {} : { responseId }), ...(turn === undefined ? {} : { turn }), type: event.type,
+          ...(event.evidence ? { evidence: { ...event.evidence } } : {}) };
         timer = setTimeout(() => void flush(), windowMs);
         timer.unref?.();
       }
       pending.delta += event.delta;
+      if (pending.evidence && event.evidence) pending.evidence.endedAt = event.evidence.endedAt ?? event.evidence.recordedAt;
       if (pending.delta.length >= maxChars) return flush();
       return Promise.resolve();
     }
@@ -2790,6 +2821,9 @@ export async function publishRunEvent(
     record = { createdAt: new Date().toISOString(), event, runId, sequence: 0, sessionId };
   } else if (event.type === "tool.output") {
     const persisted = await store.appendRunStreamEvent(sessionId, runId, toolOutputStreamId(event.toolCallId), event);
+    record = { ...persisted, sequence: 0 };
+  } else if (event.type === "agent.record" && event.evidence?.agentId.startsWith("subagent:")) {
+    const persisted = await store.appendRunStreamEvent(sessionId, runId, subagentStreamId(event.evidence.agentId.slice("subagent:".length)), event);
     record = { ...persisted, sequence: 0 };
   } else if (event.type === "subagent.step") {
     const persisted = await store.appendRunStreamEvent(sessionId, runId, subagentStreamId(event.subagentId), event);
@@ -3323,7 +3357,7 @@ export function scheduleSessionRuns(
             evolve,
             knowledgeEngineTools,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
-            delivery ? runtimeNotice(delivery) : undefined,
+            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery)) : undefined,
           );
         } catch (reason) {
           error = runFailureMessage(reason);

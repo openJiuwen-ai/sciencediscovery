@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import type { BridgeEnvelope, BridgeScope, PluginManifest, PluginStatus } from "@sciencediscovery/plugin-sdk";
 import type { RuntimeSettingsDetails } from "@sciencediscovery/schema";
-import { AuthApiClient } from "./auth.js";
+import { ApiRequestError, AuthApiClient } from "./auth.js";
 
 export interface PluginComposition {
   revision: string; settings: RuntimeSettingsDetails; plugins: PluginManifest[];
@@ -21,7 +21,8 @@ export class PluginApiClient extends AuthApiClient {
   async subscribePlugins(scope: BridgeScope, changed: () => void, signal: AbortSignal): Promise<void> {
     const response = await fetch(pathFor(scope, "/events"), { headers: { authorization: `Bearer ${this.token}` }, signal });
     this.reportAuthStatus(response.status);
-    if (!response.ok || !response.body) throw new Error("Plugin subscription unavailable");
+    if (!response.ok) throw new ApiRequestError("Plugin subscription unavailable", response.status);
+    if (!response.body) throw new Error("Plugin subscription unavailable");
     const reader = response.body.getReader(), decoder = new TextDecoder();
     let pending = "";
     try {

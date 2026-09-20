@@ -40,7 +40,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .external_urls import format_external_url
 from .logging_config import get_logger
-from .neo4j_driver import handle
+from .backend import handle
 
 log = get_logger("persistence")
 def _normalize_link(url: str) -> str:

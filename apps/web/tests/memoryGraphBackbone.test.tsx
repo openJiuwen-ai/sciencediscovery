@@ -17,7 +17,7 @@ import test from "node:test";
 
 import type { MemoryGraphEdge, MemoryGraphNode, MemoryGraphNodeLabel, MemorySubgraph } from "@sciencediscovery/schema";
 
-import { buildProducesMemberCounts, collapseProducesOwner, countFoldedProducesMembers, expandProducesOwner, mainChainNodeIds, producesMembersOf, projectToCanvas } from "../src/memoryGraphBackbone.js";
+import { buildProducesMemberCounts, collapseProducesOwner, countFoldedProducesMembers, expandAllProduces, expandProducesOwner, mainChainNodeIds, producesMembersOf, projectToCanvas } from "../src/memoryGraphBackbone.js";
 
 // Helpers to build a subgraph without the verbose schema fields.
 function node(id: string, label: MemoryGraphNodeLabel): MemoryGraphNode {
@@ -575,3 +575,38 @@ test("projectToCanvas + collapseProducesOwner: shallow collapse breaks the owner
 });
 
 
+
+// --- expand all ------------------------------------------------------------
+
+test("expandAllProduces reveals every layer and leaves nothing folded", () => {
+  const sg = subgraph(
+    [node("g", "ResearchGoal"), node("t1", "ToolCall"), node("c1", "Code"), node("a1", "Artifact"),
+      node("cl", "Claim"), node("p1", "Paper")],
+    [edge("g", "t1", "next"), edge("t1", "c1", "produces"), edge("c1", "a1", "produces"),
+      edge("a1", "cl", "supports"), edge("t1", "p1", "produces")],
+  );
+  const visible = new Set(["g", "t1"]); // the research spine only
+  const before = countFoldedProducesMembers(sg, "t1", visible);
+  assert.equal(before, 2);
+
+  const out = expandAllProduces(sg, visible, new Map(), new Set());
+  assert.deepEqual([...out.appearedIds].sort(), ["a1", "c1", "cl", "p1"]);
+  // Every owner now records who it pulled in, so the badge/tooltips agree.
+  assert.deepEqual([...out.expandedNodeMap.get("t1")!].sort(), ["c1", "p1"]);
+  assert.deepEqual([...(out.expandedNodeMap.get("c1") ?? [])], ["a1"]);
+  const all = new Set([...visible, ...out.appearedIds]);
+  for (const id of all) assert.equal(countFoldedProducesMembers(sg, id, all), 0);
+});
+
+test("expandAllProduces is idempotent and honours the owner filter", () => {
+  const sg = subgraph(
+    [node("t1", "ToolCall"), node("c1", "Code"), node("s", "Task")],
+    [edge("t1", "c1", "produces"), edge("s", "c1", "produces")],
+  );
+  const once = expandAllProduces(sg, new Set(["t1"]), new Map(), new Set());
+  const twice = expandAllProduces(sg, new Set(["t1", ...once.appearedIds]), once.expandedNodeMap, once.appearedIds);
+  assert.deepEqual([...twice.appearedIds].sort(), [...once.appearedIds].sort());
+  // A filtered-out owner never pulls anything in.
+  const none = expandAllProduces(sg, new Set(["t1"]), new Map(), new Set(), () => false);
+  assert.equal(none.appearedIds.size, 0);
+});

@@ -21,6 +21,11 @@ export interface ExecutionLogPage {
   nextCursor: number;
   truncated: boolean;
   retentionTruncated: boolean;
+  /** The control plane's record of how the execution ended, attached when the
+   * page is read through an Agent tool after the execution reached a terminal
+   * state. A Runner's own page never carries it. */
+  state?: ManagedExecution["state"];
+  finishedAt?: string;
 }
 
 /** Control-plane ownership; Runner refs remain namespaced, not local CAS refs. */

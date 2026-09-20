@@ -8,7 +8,7 @@ This page records the key HTTP interfaces used by the current Web UI, based on `
 - Docker default published address: `http://127.0.0.1:4310`.
 - `GET /health` and `GET /api/health` do not require authentication.
 - The MCP OAuth browser callback `GET /api/mcp/oauth/callback` does not use the local bearer token; it validates a pending, one-time OAuth state and exchanges the authorization code with PKCE.
-- Other `/api/*` requests require `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`. There is no default token: when the variable is unset the server generates one on its first start, prints it, and stores it in `<data-dir>/secrets/auth-token`.
+- Other `/api/*` requests require `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`. There is no default token: when the variable is unset the server generates a local service access token on its first start, prints the `Open to sign in` URL and token, and stores it in `<data-dir>/secrets/auth-token`.
 - JSON clients send `Content-Type: application/json`; generic JSON bodies are limited to 1,500,000 bytes. Workspace multipart uploads have separate quotas.
 - JSON errors contain at least `{"error":"..."}` and may also contain `code` or `details`.
 
@@ -95,9 +95,22 @@ A minimal Run requires only `content`:
 
 `SendMessageRequest` may also contain `annotationIds`, `references`, and `webForceRefresh`. `SessionRun.status` can be `queued`, `running`, `blocked`, `completed`, `failed`, `cancelled`, or `interrupted`.
 
+## Evolution searches
+
+Read-only views of `/evolve` runs, plus stopping one. Searches are started by the agent through
+the `create_evolve_run` tool, not by this API. See
+[Program evolution](../explanation/evolve.md).
+
+| Method and path | Request/query | Success |
+|---|---|---|
+| `GET /api/evolve/runs` | none | `200`, evolution run array |
+| `GET /api/evolve/runs/:runId/events?after=0` | `after` is a non-negative cursor | `200`, event array or SSE; resume with the last cursor seen |
+| `GET /api/evolve/runs/:runId/candidates/:codeHash` | none | `200`, candidate source and its scores |
+| `POST /api/evolve/runs/:runId/stop` | none | `200`, stop result |
+
 ## Custom MCP servers and Inspector
 
-See [Configure custom MCP servers](../how-to/configure-custom-mcp.md) for the UI workflow. Routes are implemented in `services/api/src/http/custom-mcp.ts`; request/response types are in `packages/schema/src/custom-mcp.ts`. All routes in this table require the local API bearer token.
+See [Configure custom MCP servers](../how-to/configure-custom-mcp.md) for the UI workflow. Routes are implemented in `services/api/src/http/custom-mcp.ts`; request/response types are in `packages/schema/src/custom-mcp.ts`. All routes in this table require the local service access token (Bearer token).
 
 | Method and path | Request | Response |
 |---|---|---|

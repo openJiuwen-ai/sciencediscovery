@@ -45,7 +45,7 @@ First startup prepares uv environments under `.sciencediscovery-data/envs/gatewa
 
 ### 2.1 `apps/web` — workbench
 
-Project/Session navigation and lifecycle, chat/tool traces, workspace files, connector controls, settings, models, environments, skills, specialists, permissions, connection tokens, layered Project/Session overrides, approval cards, and review results.
+Project/Session navigation and lifecycle, chat/tool traces, workspace files, connector controls, settings, models, environments, skills, specialists, permissions, local service connection, layered Project/Session overrides, approval cards, and review results.
 
 ### 2.2 `services/api` — control plane
 

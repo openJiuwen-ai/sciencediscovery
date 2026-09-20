@@ -228,14 +228,20 @@ export const DEFAULT_SYSTEM_QUOTA_SETTINGS: SystemQuotaSettings = {
  * connection defaults; the password is a write-only store secret (see
  * `MemoryGraphSettingsDetails.hasNeo4jPassword`), never returned in cleartext.
  */
+export type MemoryGraphBackend = "local" | "neo4j";
+
 export interface MemoryGraphSettings {
   enabled: boolean;
+  /** `local` keeps the graph as JSONL files (default, nothing to install);
+   *  `neo4j` uses the external server configured by the fields below. */
+  backend: MemoryGraphBackend;
   neo4jHttp: string;
   neo4jUser: string;
 }
 
 export const DEFAULT_MEMORY_GRAPH_SETTINGS: MemoryGraphSettings = {
   enabled: false,
+  backend: "local",
   neo4jHttp: "http://127.0.0.1:7474",
   neo4jUser: "neo4j",
 };
@@ -249,6 +255,7 @@ export const DEFAULT_MEMORY_GRAPH_SETTINGS: MemoryGraphSettings = {
  */
 export interface MemoryGraphSettingsDetails {
   enabled: boolean;
+  backend: MemoryGraphBackend;
   neo4jHttp: string;
   neo4jUser: string;
   hasNeo4jPassword: boolean;
@@ -263,6 +270,7 @@ export interface MemoryGraphSettingsDetails {
  */
 export interface UpdateMemoryGraphSettingsRequest {
   enabled?: boolean;
+  backend?: MemoryGraphBackend;
   neo4jHttp?: string;
   neo4jUser?: string;
   neo4jPassword?: string | null;

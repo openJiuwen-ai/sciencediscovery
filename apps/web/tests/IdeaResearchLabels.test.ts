@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ideaResearchPhaseLabel } from "../src/IdeaResearchLabels.js";
+import { en, zhCN, type MessageKey } from "../src/i18n/messages.js";
 
 const research = {
   template: {
@@ -11,7 +12,18 @@ const research = {
   },
 } as never;
 
+// The catalogue lookup a caller already holds from `useLocale()`.
+const translateWith = (catalogue: Partial<Record<MessageKey, string>>) => (key: MessageKey): string => catalogue[key] ?? en[key];
+
 test("uses the frozen template label for an assessor phase", () => {
-  assert.equal(ideaResearchPhaseLabel(research, "scientificValidity"), "科学合理性");
-  assert.equal(ideaResearchPhaseLabel(research, "aggregate"), "聚合评估");
+  const t = translateWith(zhCN);
+  assert.equal(ideaResearchPhaseLabel(t, research, "scientificValidity"), "科学合理性");
+  assert.equal(ideaResearchPhaseLabel(t, research, "aggregate"), "聚合评估");
+});
+
+test("engine roles follow the reader's language while template labels stay frozen", () => {
+  assert.equal(ideaResearchPhaseLabel(translateWith(en), research, "aggregate"), "Aggregating assessments");
+  assert.equal(ideaResearchPhaseLabel(translateWith(en), research, "scientificValidity"), "科学合理性");
+  // An unknown role renders as itself rather than as nothing.
+  assert.equal(ideaResearchPhaseLabel(translateWith(en), research, "brand-new-role"), "brand-new-role");
 });

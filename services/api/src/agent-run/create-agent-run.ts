@@ -37,6 +37,7 @@ export interface AgentRunBindings {
   createAgent?: (options: NativeAgentOptions) => NativeAgentHandle;
   contextContributorFactories?: readonly ContextContributorFactory<AgentHistoryMessage>[];
   observer?: (event: AgentEvent) => void;
+  recordEvent?: (event: import("@sciencediscovery/schema").RunStreamEvent) => Promise<void>;
   /** Approval-gated plan lifecycle (V3-C2, propose_plan/revise_plan). */
   planRepository?: PlanRepository;
   /** Model-declared plan snapshots (update_plan). Both may be present. */
@@ -66,6 +67,7 @@ export function createAgentRun(
       agentId: `${profile.kind}:${profile.gatewayThreadId}`,
       trajectoryId: input.agentRunId,
       requestExecutionId: input.requestExecutionId,
+      ...(bindings.recordEvent ? { recordEvent: bindings.recordEvent } : {}),
       readAuthorities: async () => ({
         plan: await bindings.planRepository?.latest() ?? bindings.planStore?.latest() ?? null,
         resources: profile.resources,

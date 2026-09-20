@@ -1,5 +1,8 @@
 # 演进侧车：架构、引擎与独立部署
 
+> 本文是面向维护者的引擎内部与部署说明。想了解 `/evolve` 是什么、什么时候用、怎么跑，
+> 请看[程序演进](evolve.md)与[运行一次演进搜索](../how-to/run-an-evolution-search.md)。
+
 `services/evolve` 是一个 Python FastAPI 进程，跑演进搜索。它支持两种搜索引擎：
 
 - **PUCT**（`puct_engine.py`）：flat-PUCT 树搜索，通过访问次数和排名引导探索。适合在一个起点上持续精炼。

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ApiRequestError } from "../src/api/auth.js";
+
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -93,4 +95,9 @@ test("Provider operation errors identify the failed refresh and localize runtime
     ),
     "请先更换全局默认模型",
   );
+});
+
+test("provider failure formatting preserves local authentication errors", () => {
+  const failure = new ApiRequestError("Unauthorized", 401);
+  assert.equal(providerOperationError(failure, "Save failed", "Referenced provider"), failure);
 });

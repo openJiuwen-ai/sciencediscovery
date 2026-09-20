@@ -25,7 +25,7 @@
 | 显示名 | `task-gpt5`（用户自定义） |
 | Base URL | `https://api.openai.com/v1` |
 | 模型 ID | `gpt-5` |
-| API token | 模型的 key。加密存在后端，UI隐藏明文 |
+| API Key | 外部模型的 API Key。加密存在后端，UI 隐藏明文 |
 
 ![模型注册表](../../images/model.png)
 

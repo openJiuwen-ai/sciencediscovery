@@ -7,10 +7,21 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { IdeaTreeGraph, IdeaTreeNode } from "@sciencediscovery/schema";
 
+import { useLocale, type MessageKey } from "./i18n/index.js";
 import { CloseIcon } from "./icons.js";
 import { IDEA_TREE_STATUS_COLORS, IdeaTreeCanvas } from "./IdeaTreeCanvas.js";
 
 const STATUSES: IdeaTreeNode["status"][] = ["pending", "running", "done", "needs_retry", "failed"];
+
+/** Assessor roles the bundled templates define. A template may add its own, so
+ *  an unknown role falls through to its raw id rather than rendering blank. */
+const ASSESSOR_KEYS: Record<string, MessageKey | undefined> = {
+  design: "ideaTree.assessor.design",
+  activity: "ideaTree.assessor.activity",
+  stability: "ideaTree.assessor.stability",
+  sustainability: "ideaTree.assessor.sustainability",
+  aggregate: "ideaTree.assessor.aggregate",
+};
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
@@ -19,14 +30,15 @@ function formatValue(value: unknown): string {
 }
 
 function IdeaTreeNodeDetail({ node, autonomous, onOpenArtifact, onOpenSubagent }: { node?: IdeaTreeNode; autonomous?: boolean; onOpenArtifact?: (id: string) => void; onOpenSubagent?: (id: string) => void }) {
+  const { t } = useLocale();
   if (!node) return <div className="idea-tree-detail-empty">
     <strong>Select a tree node</strong>
     <p>Click a node to inspect its hypothesis, result, score, execution state, and artifacts.</p>
   </div>;
   const fields: Array<[string, unknown]> = autonomous ? [
-    ["类型", node.kind === "direction" ? "研究方向" : "候选方案"],
-    ["深度", node.depth], ["评分", node.score], ["父节点", node.parentId],
-    ["子节点", node.childrenIds],
+    [t("ideaTree.node.kind"), node.kind === "direction" ? t("ideaTree.kind.direction") : t("ideaTree.kind.candidate")],
+    [t("ideaTree.node.depth"), node.depth], [t("ideaTree.node.score"), node.score], [t("ideaTree.node.parent"), node.parentId],
+    [t("ideaTree.node.children"), node.childrenIds],
   ] : [
     ["Status", node.status],
     ["Search", node.searchStatus],
@@ -45,7 +57,7 @@ function IdeaTreeNodeDetail({ node, autonomous, onOpenArtifact, onOpenSubagent }
   return <article className="idea-tree-detail">
     <header>
       <span className="idea-tree-detail-id">{node.id}</span>
-      <span className="idea-tree-status" style={{ borderColor: IDEA_TREE_STATUS_COLORS[node.status], color: IDEA_TREE_STATUS_COLORS[node.status] }}>{node.kind === "direction" ? "研究方向" : node.status}</span>
+      <span className="idea-tree-status" style={{ borderColor: IDEA_TREE_STATUS_COLORS[node.status], color: IDEA_TREE_STATUS_COLORS[node.status] }}>{node.kind === "direction" ? t("ideaTree.kind.direction") : node.status}</span>
     </header>
     <section>
       <h3>Hypothesis</h3>
@@ -54,7 +66,7 @@ function IdeaTreeNodeDetail({ node, autonomous, onOpenArtifact, onOpenSubagent }
     {node.insight ? <section><h3>Insight</h3><p>{node.insight}</p></section> : null}
     {!autonomous && node.result ? <section><h3>Result</h3><p>{node.result}</p></section> : null}
     {autonomous && Object.entries(node.stages ?? {}).map(([role, result]) => <section key={role}>
-      <h3>{{design: "材料设计", activity: "活性评估", stability: "稳定性评估", sustainability: "可持续性评估", aggregate: "综合评估"}[role] ?? role}{result.score === undefined ? "" : ` · ${result.score}`}</h3>
+      <h3>{ASSESSOR_KEYS[role] ? t(ASSESSOR_KEYS[role]!) : role}{result.score === undefined ? "" : ` · ${result.score}`}</h3>
       <p>{result.text}</p>
     </section>)}
     {node.pruneReason ? <section><h3>Prune reason</h3><p>{node.pruneReason}</p></section> : null}

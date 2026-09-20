@@ -29,8 +29,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: sciencediscovery:local
-    container_name: sciencediscovery
+    # Overridable so two instances built from different checkouts do not
+    # overwrite each other's tag.
+    image: "${SCIENCE_AGENT_IMAGE:-sciencediscovery:local}"
+    # Deliberately no container_name. Compose then derives the container and
+    # network names from the project name, so changing the project name alone
+    # (`docker compose -p <name>` or COMPOSE_PROJECT_NAME) is enough to run a
+    # second instance on the same host; a fixed name collides instead.
     # Must match the owner of the bind-mounted ./data on the host (id -u / id -g),
     # otherwise the container cannot write its state.
     user: "${SCIENCE_AGENT_UID:-1000}:${SCIENCE_AGENT_GID:-1000}"
@@ -51,6 +56,22 @@ services:
       SCIENCE_AGENT_LOG_DIR: "${SCIENCE_AGENT_LOG_DIR:-}"
       SCIENCE_AGENT_LOG_MAX_BYTES: "${SCIENCE_AGENT_LOG_MAX_BYTES:-10485760}"
       SCIENCE_AGENT_LOG_BACKUP_COUNT: "${SCIENCE_AGENT_LOG_BACKUP_COUNT:-5}"
+      # Context assembly. The container does not read .env from inside the
+      # image, so every key .env.docker.example offers has to be forwarded here
+      # or it silently has no effect. An empty value means "use the built-in
+      # default", which is how the application already reads these.
+      SCIENCE_AGENT_CONTEXT_MODE: "${SCIENCE_AGENT_CONTEXT_MODE:-}"
+      SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS: "${SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS:-}"
+      SCIENCE_AGENT_CONTEXT_SECTION_MAX_CHARS: "${SCIENCE_AGENT_CONTEXT_SECTION_MAX_CHARS:-}"
+      SCIENCE_AGENT_CONTEXT_DATA_BUDGET_CHARS: "${SCIENCE_AGENT_CONTEXT_DATA_BUDGET_CHARS:-}"
+      SCIENCE_AGENT_CONTEXT_ATTACHMENT_MAX_CHARS: "${SCIENCE_AGENT_CONTEXT_ATTACHMENT_MAX_CHARS:-}"
+      SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS: "${SCIENCE_AGENT_CONTEXT_CONTRIBUTED_MESSAGE_BUDGET_CHARS:-}"
+      SCIENCE_AGENT_CONTEXT_MAX_CONTRIBUTED_MESSAGES: "${SCIENCE_AGENT_CONTEXT_MAX_CONTRIBUTED_MESSAGES:-}"
+      SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES: "${SCIENCE_AGENT_CONTEXT_WINDOW_MESSAGES:-}"
+      SCIENCE_AGENT_CONTEXT_WINDOW_ROUNDS: "${SCIENCE_AGENT_CONTEXT_WINDOW_ROUNDS:-}"
+      SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS: "${SCIENCE_AGENT_CONTEXT_WINDOW_TOKENS:-}"
+      SCIENCE_AGENT_CONTEXT_TRACE: "${SCIENCE_AGENT_CONTEXT_TRACE:-}"
+      SCIENCE_AGENT_CONTEXT_TRACE_DIR: "${SCIENCE_AGENT_CONTEXT_TRACE_DIR:-}"
       SCIENCE_AGENT_RUNNER_TOKEN: "${SCIENCE_AGENT_RUNNER_TOKEN:-sciencediscovery-runner-local}"
       SCIENTIFIC_ENVS: "${SCIENTIFIC_ENVS:-1}"
       SCIENCE_AGENT_EXEC_TIMEOUT_MS: "${SCIENCE_AGENT_EXEC_TIMEOUT_MS:-7200000}"
@@ -60,10 +81,18 @@ services:
       SCIENCE_AGENT_PACKAGE_CACHE_DIR: "${SCIENCE_AGENT_PACKAGE_CACHE_DIR:-}"
       SCIENCE_AGENT_BWRAP_PATH: "${SCIENCE_AGENT_BWRAP_PATH:-/usr/bin/bwrap}"
       SCIENCE_AGENT_SSH_CONFIG_PATH: "${SCIENCE_AGENT_SSH_CONFIG_PATH:-}"
+      # Usage-dashboard currency conversion. The default source is a public
+      # rate API; a host that cannot reach it disables the conversion here or
+      # names a mirror. Empty keeps the application's built-in default.
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATES_ENABLED:-}"
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATE_URL:-}"
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS:-}"
+      SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS: "${SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS:-}"
     volumes:
-      # Bind mount only — no named volume. Change the host side (left of the
-      # colon) to keep container state away from a host-side data/ you already use.
-      - ./data:/app/data
+      # Bind mount only — no named volume. Point SCIENCE_AGENT_DATA_HOST_DIR at
+      # another host path to keep container state away from a host-side data/
+      # you already use, or to give a second instance its own state.
+      - "${SCIENCE_AGENT_DATA_HOST_DIR:-./data}:/app/data"
     security_opt:
       # The runner still sandboxes agent code with bubblewrap; bubblewrap needs
       # mount/pivot_root inside its own user namespace. Docker's default seccomp

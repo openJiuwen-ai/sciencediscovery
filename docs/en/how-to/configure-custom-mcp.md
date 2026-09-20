@@ -6,7 +6,7 @@ This guide covers custom MCP management in system settings. Existing built-in so
 
 ## Before you start
 
-- Start the product and connect your browser using the local API token printed by the backend.
+- Start the product and connect your browser using the `Open to sign in` URL (or the local service access token) printed by the backend.
 - Obtain the MCP provider's startup command or remote MCP URL and authentication requirements. An MCP URL is not an ordinary web page or an OpenAI-compatible LLM base URL.
 - STDIO runs on the API backend machine, not the browser machine, and does not automatically enter the Session sandbox. Configure only trusted commands and install the required runtime there. With Docker, executable paths and dependencies must be available inside the container.
 
@@ -68,7 +68,7 @@ OAuth applies to HTTP/SSE, not STDIO. Remote OAuth endpoints require HTTPS; loop
 5. Save, then choose **Sign in** in server details and complete consent in the new window. If the popup is blocked, use **Open login page**.
 6. Return to the product, check the authorization state, and test discovery and tool execution. You can sign in again or cancel a pending attempt.
 
-Tokens are stored and refreshed by the backend. Do not paste them into the local API token field or manually copy them to request headers. Invalid refresh tokens, insufficient scope or configuration changes may require another sign-in. **Clear local authorization** removes this product's saved credentials, not consent at the provider; revoke provider-side access in the provider's own settings.
+Tokens are stored and refreshed by the backend. Do not paste them into the local service access token field or manually copy them to request headers. Invalid refresh tokens, insufficient scope or configuration changes may require another sign-in. **Clear local authorization** removes this product's saved credentials, not consent at the provider; revoke provider-side access in the provider's own settings.
 
 Registration policies, scopes, callback allowlists and account permissions differ between providers. OAuth support does not imply universal zero-configuration compatibility.
 
@@ -92,7 +92,7 @@ The Agent decides whether a task needs a tool, so selection does not force a cal
 
 | Symptom | Check |
 |---|---|
-| System settings show Unauthorized | The local API token, not the MCP provider token; use the current backend's token |
+| Connection guide opens or shows Unauthorized | The local service access token, not the MCP provider token or external model API Key; open the backend's `Open to sign in` URL or paste the current backend's access token |
 | STDIO cannot start | Executable, arguments, working directory and dependencies on the backend machine/container |
 | HTTP/SSE authentication failure | MCP URL, header names/values, OAuth state and provider permissions |
 | Save blocked after renaming a key | Re-enter the value, or restore the original key if the value was not edited |

@@ -47,6 +47,7 @@
 .artifact-modal-backdrop { z-index: var(--z-overlay-low); padding: 28px; grid-template-columns: minmax(0, 100%); }
 .artifact-modal-panel { display: flex; flex-direction: column; width: min(1080px, 100%); max-height: calc(100vh - 56px); }
 .artifact-modal-header { padding: 22px 26px; border-bottom: 1px solid var(--border); }
+.artifact-modal-panel > .artifact-mode-tabs { padding-inline: 26px; }
 .artifact-modal-header h2 { margin: 3px 0 0; color: var(--text-strong); font-size: 20px; }
 .artifact-version-source { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
 /* Wraps rather than overflows: with the version picker, two icon squares and

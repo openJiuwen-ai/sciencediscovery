@@ -29,6 +29,7 @@ import type {
 import { effectiveRunnerIds, selectableNpuDevices } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "./api.js";
+import { isAuthFailure } from "./api/auth.js";
 import { hostKeyFromError, type GeneratedRemoteHostKey, type RemoteHostKeyInfo } from "./api/settings.js";
 import { CopyButton } from "./CopyButton.js";
 import { useLocale } from "./i18n/index.js";
@@ -165,7 +166,7 @@ export function ConnectLogPanel({ entries, live }: {
 export function NpuDeviceSelector({ client, inventory, onError, onSelected, runnerId, selected }: {
   client: ApiClient;
   inventory: NpuInventory | null | undefined;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onSelected: (devices: number[]) => void;
   runnerId: string;
   selected: readonly number[];
@@ -207,7 +208,7 @@ export function NpuDeviceSelector({ client, inventory, onError, onSelected, runn
     } catch (error) {
       // The draft survives a rejected save: the Runner refusing one card must
       // not throw away the rest of what the operator picked.
-      onError(error instanceof Error ? error.message : String(error));
+      onError(error instanceof Error ? error : String(error));
     } finally {
       setSaving(false);
     }
@@ -325,13 +326,13 @@ function runnerUsable(host: RemoteHostTarget): boolean {
 }
 
 /** Fresh host catalog for the scoped settings sections, fetched on mount. */
-function useRemoteHosts(client: ApiClient, onError: (message: string) => void): RemoteHostTarget[] | undefined {
+function useRemoteHosts(client: ApiClient, onError: (reason: string | Error) => void): RemoteHostTarget[] | undefined {
   const [hosts, setHosts] = useState<RemoteHostTarget[]>();
   useEffect(() => {
     let cancelled = false;
     void client.listRunners()
       .then((list) => { if (!cancelled) setHosts(list); })
-      .catch((error: Error) => { if (!cancelled) onError(error.message); });
+      .catch((error: Error) => { if (!cancelled) onError(error); });
     return () => { cancelled = true; };
     // onError is a stable App callback; the catalog reloads per client, not per render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -370,7 +371,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
   onCancelAdd?: () => void;
   client: ApiClient;
   onCredentialEditStateChange?: (editing: boolean) => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
 }) {
   const { t } = useLocale();
   const [hosts, setHosts] = useState<RemoteHostTarget[]>([]);
@@ -417,7 +418,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
     onHostsChange?.(items);
   }
 
-  useEffect(() => { void refresh().catch((error: Error) => onError(error.message)); }, [client]);
+  useEffect(() => { void refresh().catch((error: Error) => onError(error)); }, [client]);
   // Read once for all Runners rather than per machine record, and separately
   // from the catalog so a machine list still renders if this call fails.
   useEffect(() => {
@@ -426,7 +427,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       const loaded = await client.listRunnerNpuDevices();
       if (!cancelled) setNpu(loaded);
     };
-    void load().catch((error: unknown) => { onError(error instanceof Error ? error.message : String(error)); });
+    void load().catch((error: unknown) => { onError(error instanceof Error ? error : String(error)); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
@@ -488,7 +489,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       });
       return;
     }
-    onError(error instanceof Error ? error.message : fallback);
+    onError(error instanceof Error ? error : fallback);
   }
 
   /** A probe can also fail softly with host.error; an untrusted key there opens the same trust card. */
@@ -558,7 +559,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       setConfigHosts(await client.listSshConfigHosts());
     } catch (error) {
       setConfigListOpen(false);
-      onError(error instanceof Error ? error.message : t("remote.errorReadSshConfig"));
+      onError(error instanceof Error ? error : t("remote.errorReadSshConfig"));
     } finally {
       setBusyId(undefined);
     }
@@ -587,7 +588,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         keyNote,
       }));
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("remote.errorImportSshConfig", { alias: selected.alias }));
+      onError(error instanceof Error ? error : t("remote.errorImportSshConfig", { alias: selected.alias }));
     } finally {
       setBusyId(undefined);
     }
@@ -602,7 +603,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       setKeyPath(generated.privateKeyPath);
       setShowCredentials(true);
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("remote.errorGenerateKeyPair"));
+      onError(error instanceof Error ? error : t("remote.errorGenerateKeyPair"));
     } finally {
       setBusyId(undefined);
     }
@@ -615,7 +616,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       setCredGeneratedKey(generated);
       setCredKeyPath(generated.privateKeyPath);
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("remote.errorGenerateKeyPair"));
+      onError(error instanceof Error ? error : t("remote.errorGenerateKeyPair"));
     } finally {
       setBusyId(undefined);
     }
@@ -647,7 +648,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       onAdded?.(host.id);
       if (host.error) onError(host.error);
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("remote.errorRegisterRunner"));
+      onError(error instanceof Error ? error : t("remote.errorRegisterRunner"));
     } finally {
       setBusyId(undefined);
     }
@@ -749,10 +750,10 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       setHosts((current) => current.map((candidate) => candidate.id === updated.id
         ? { ...updated, ...(candidate.runnerStatus ? { runnerStatus: candidate.runnerStatus } : {}) }
         : candidate));
-      await refresh().catch((error: Error) => onError(t("remote.errorRefreshAfterCredentials", { message: error.message })));
+      await refresh().catch((error: Error) => onError(isAuthFailure(error) ? error : t("remote.errorRefreshAfterCredentials", { message: error.message })));
       if (updated.error) reportHostError(updated);
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("remote.errorUpdateCredentials"));
+      onError(error instanceof Error ? error : t("remote.errorUpdateCredentials"));
     } finally {
       setBusyId(undefined);
     }
@@ -765,7 +766,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
       await client.deleteRemoteHost(host.id);
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("remote.errorDelete"));
+      onError(error instanceof Error ? error : t("remote.errorDelete"));
     } finally {
       setBusyId(undefined);
     }
@@ -860,7 +861,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
         </div>
         <div className="remote-host-actions">
           <button className="secondary-button" disabled={Boolean(busyId) || (!connected && !runnerUsable(host))} onClick={() => void toggleRunnerConnection(host, false)} type="button">{connected ? t("runnerCatalog.checkConnection") : t("remote.connectRunner")}</button>
-          <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void refresh().catch((error: Error) => onError(error.message))} type="button">{t("runnerCatalog.refreshResources")}</button>
+          <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => void refresh().catch((error: Error) => onError(error))} type="button">{t("runnerCatalog.refreshResources")}</button>
           {host.connectionKind === "ssh" ? <button aria-expanded={editingCredentials === host.id} className="secondary-button" disabled={Boolean(busyId)} onClick={() => toggleCredentialsEditor(host)} type="button">{t("remote.credentials")}</button> : null}
           {untrustedKey ? <button className="secondary-button" disabled={Boolean(busyId)} onClick={() => setHostKeyPrompt({ changed: false, hostKey: untrustedKey, origin: host.id, target: host.alias, resume: async () => { setHostKeyPrompt(undefined); await probe(host, untrustedKey); } })} type="button">{t("remote.trustHostKey")}</button> : null}
           {host.id !== "local" ? <button className="danger-button" disabled={Boolean(busyId)} onClick={() => void removeHost(host)} type="button">{t("common.delete")}</button> : null}
@@ -995,7 +996,7 @@ export function RemoteHostManager({ client, onCredentialEditStateChange, onError
 /** Project-scoped allowlist, rendered inside the Project settings dialog. */
 export function ProjectRemoteSettings({ client, onError, onProjectChange, project }: {
   client: ApiClient;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onProjectChange: (project: Project) => void;
   project: Project;
 }) {
@@ -1012,7 +1013,7 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
         : [...effectiveRunnerIds(project), host.id];
       onProjectChange(await client.updateProject(project.id, { runnerIds: ids }));
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("remote.errorUpdateProjectAllowlist"));
+      onError(error instanceof Error ? error : t("remote.errorUpdateProjectAllowlist"));
     } finally {
       setBusyId(undefined);
     }
@@ -1038,7 +1039,7 @@ export function ProjectRemoteSettings({ client, onError, onProjectChange, projec
 export function SessionRemoteSettings({ client, disabled = false, onError, onSessionChange, project, session }: {
   client: ApiClient;
   disabled?: boolean;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onSessionChange: (session: Session) => void;
   project: Project;
   session: Session;
@@ -1057,7 +1058,7 @@ export function SessionRemoteSettings({ client, disabled = false, onError, onSes
     try {
       onSessionChange(await client.updateSession(session.id, body));
     } catch (error) {
-      onError(error instanceof Error ? error.message : fallback);
+      onError(error instanceof Error ? error : fallback);
     } finally {
       setBusyId(undefined);
     }

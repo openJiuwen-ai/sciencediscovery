@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type {
+  AgentShellExecution,
   Environment,
   KernelMode,
   ResolvedProxy,
@@ -217,6 +218,19 @@ export function createWorkspaceExecutionBindings(
         parentSubagentId: options.parentSubagentId,
       };
   };
+  const executionOwner = { sessionId: options.sessionId, agentId: options.agentId };
+  const pending = (record: Pick<AgentShellExecution, "state">) => record.state === "queued" || record.state === "running";
+  /**
+   * A terminal record returned through an Agent tool is delivered: the owner's
+   * model has read how the execution ended, so the completion notice retained
+   * for it is marked read and cannot start another turn for the same result.
+   * A record still queued or running leaves the notice in place; that wake is
+   * the one the inbox exists for.
+   */
+  const delivered = <T extends Pick<AgentShellExecution, "id" | "state">>(record: T): T => {
+    if (!pending(record)) options.store.notifications.markRead(executionOwner, "execution", record.id);
+    return record;
+  };
   const readSessionNpuJob = async (jobId: string) => {
     const job = await options.runnerClient.getNpuJob(jobId, options.sessionId);
     if (job.sessionId !== options.sessionId) throw new Error("NPU job not found in this Session");
@@ -389,29 +403,34 @@ export function createWorkspaceExecutionBindings(
     shellExecutions: {
       start: async (code, environment, signal, toolCallId, runnerId) => {
         const prepared = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
-        const owner = { sessionId: options.sessionId, agentId: options.agentId };
-        return options.store.shellExecutions.start(owner, {
+        return delivered(await options.store.shellExecutions.start(executionOwner, {
           runnerId: prepared.runnerId!, turnId: options.executionId,
           workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id,
         }, () => resolveExecutionTarget(runnerId).runnerClient,
-        (id, dispatch, completionStatus) => options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }));
+        (id, dispatch, completionStatus) => options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus })));
       },
       wait: async (id, waitMs, signal) => {
-        const owner = { sessionId: options.sessionId, agentId: options.agentId };
-        const record = await options.store.shellExecutions.get(id, owner);
+        const record = await options.store.shellExecutions.get(id, executionOwner);
         if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
-        return options.store.shellExecutions.wait(id, owner, waitMs, signal);
+        return delivered(await options.store.shellExecutions.wait(id, executionOwner, waitMs, signal));
       },
-      list: () => options.store.shellExecutions.list({ sessionId: options.sessionId, agentId: options.agentId }).filter((record) => {
+      list: () => options.store.shellExecutions.list(executionOwner).filter((record) => {
         try { if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId); return true; } catch { return false; }
-      }),
+      }).map(delivered),
       get: async (id) => {
-        const record = await options.store.shellExecutions.get(id, { sessionId: options.sessionId, agentId: options.agentId });
+        const record = await options.store.shellExecutions.get(id, executionOwner);
         if (record.runnerId !== "local") options.store.assertSessionAllowsRemoteRunner(options.sessionId, record.runnerId);
-        return record;
+        return delivered(record);
       },
-      logs: (id, cursor) => options.store.shellExecutions.logs(id, { sessionId: options.sessionId, agentId: options.agentId }, (runnerId) => resolveExecutionTarget(runnerId).runnerClient, cursor),
-      cancel: (id) => options.store.shellExecutions.cancel(id, { sessionId: options.sessionId, agentId: options.agentId }, (runnerId) => resolveExecutionTarget(runnerId).runnerClient),
+      logs: async (id, cursor) => {
+        const page = await options.store.shellExecutions.logs(id, executionOwner, (runnerId) => resolveExecutionTarget(runnerId).runnerClient, cursor);
+        // The Runner's page says nothing about the outcome, so a finished
+        // execution reports it here: the model that read these logs now knows
+        // how the command ended, and nothing is left for a wake to tell it.
+        const record = delivered(options.store.shellExecutions.find(id, executionOwner));
+        return pending(record) ? page : { ...page, state: record.state, ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}) };
+      },
+      cancel: async (id) => delivered(await options.store.shellExecutions.cancel(id, executionOwner, (runnerId) => resolveExecutionTarget(runnerId).runnerClient)),
     },
     ...(options.scientificEnvironments || options.remoteTargets?.length ? {
       environmentManagement: {

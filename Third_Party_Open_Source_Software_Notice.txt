@@ -435,7 +435,7 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-Software: ajv 8.17.1
+Software: ajv 8.18.0
 Copyright notice:
 Copyright (c) 2015-2021 Evgeny Poberezkin
 License: MIT
@@ -1338,9 +1338,9 @@ Copyright (c) 2018 Sebastián Ramírez
 License: MIT
 Please see above
 
-Software: fflate 0.8.2
+Software: fflate 0.8.3
 Copyright notice:
-Copyright (c) 2023 Arjun Barrett
+Copyright (c) 2026 Arjun Barrett
 License: MIT
 Please see above
 
@@ -3734,7 +3734,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Software: undici 8.7.0
+Software: undici 8.9.0
 Copyright notice:
 Copyright (c) Matteo Collina and Undici contributors
 License: MIT

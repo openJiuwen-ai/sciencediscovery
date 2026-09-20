@@ -72,7 +72,7 @@ export function requireApiToken(env: NodeJS.ProcessEnv = process.env): string {
   throw new Error(
     `${API_TOKEN_VARIABLE} is not set, so these tests have no way to authenticate.`
     + " The stack prints the token it generated on its first start"
-    + ' ("Local API token (generated on first start): ..."), and stores it in'
+    + ' ("Local service access token (generated on first start): ..."), and stores it in'
     + " <data dir>/secrets/auth-token. Export that value as"
     + ` ${API_TOKEN_VARIABLE} before running the suite.`
     + " There is no default token to fall back on.",

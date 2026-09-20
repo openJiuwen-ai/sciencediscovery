@@ -79,19 +79,17 @@ describe("launcher bootstrap credentials", () => {
     assert.notEqual(credentials.authToken.token, "science-agent-local");
   });
 
-  test("the ready banner prints a managed token and withholds an operator one", () => {
-    const dataDir = join(workspace, "banner");
-    const managed = resolveServeCredentials(dataDir, {});
-
-    const shown = accessTokenBanner(dataDir, managed).join("\n");
-    const hidden = accessTokenBanner(
-      dataDir,
-      resolveServeCredentials(dataDir, { SCIENCE_AGENT_AUTH_TOKEN: "operator-token" }),
-    ).join("\n");
-
-    assert.equal(shown.includes(managed.authToken.token), true);
-    assert.equal(shown.includes(bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)), true);
-    assert.equal(hidden.includes("operator-token"), false);
-    assert.match(hidden, /SCIENCE_AGENT_AUTH_TOKEN/);
-  });
+  for (const source of ["generated", "stored", "environment"] as const) {
+    test(`the ready banner opens a sign-in URL for a ${source} token`, () => {
+      const dataDir = join(workspace, "banner");
+      const token = "local+token/with?reserved=&字符";
+      const shown = accessTokenBanner(dataDir, { authToken: { source, token } }, "http://127.0.0.1:54321");
+      const url = new URL(shown[0]!.trim().replace("Open to sign in: ", ""));
+      assert.equal(url.origin, "http://127.0.0.1:54321");
+      assert.equal(url.search, "");
+      assert.equal(new URLSearchParams(url.hash.slice(1)).get("token"), token);
+      assert.match(shown.join("\n"), /Local service access token/);
+      assert.equal(shown.join("\n").includes(bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)), source !== "environment");
+    });
+  }
 });

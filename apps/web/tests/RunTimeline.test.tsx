@@ -19,6 +19,7 @@ import type { ArtifactReviewRun, RunStreamEvent, Subagent } from "@sciencediscov
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { LocaleProvider } from "../src/i18n/index.js";
 import { reduceRunTimeline, RunTimeline, skillDraftNameFromTrace, type RunTimelineEntry } from "../src/RunTimeline.js";
 
 function apply(events: RunStreamEvent[]): RunTimelineEntry[] {
@@ -213,8 +214,9 @@ test("keeps an autonomous Idea Tree research card in the conversation timeline",
     { content: "The research continues in the background.", type: "assistant.snapshot" },
   ]);
   assert.deepEqual(entries.map(entry => entry.type), ["idea-research", "assistant"]);
-  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle: () => undefined }));
-  assert.match(html, /Idea Tree 研究已启动/);
+  const timeline = createElement(RunTimeline, { entries, isRunning: false, onToggle: () => undefined });
+  assert.match(renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" as const }, timeline)), /Idea Tree research started/);
+  assert.match(renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" as const }, timeline)), /Idea Tree 研究已启动/);
 });
 
 test("renders completed activity as collapsible disclosures", () => {

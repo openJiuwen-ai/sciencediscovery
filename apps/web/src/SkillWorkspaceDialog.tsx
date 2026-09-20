@@ -120,7 +120,7 @@ export function SkillWorkspaceDialog({
   onCatalogChange: (skills: SkillDescriptor[]) => void;
   onClose: () => void;
   onDraftsChange: (drafts: SkillReviewDraftSummary[]) => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onOpenSession?: (sessionId: string) => void;
   sessionId?: string;
   skills: SkillDescriptor[];
@@ -446,7 +446,7 @@ export function SkillWorkspaceDialog({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : t("skillExplorer.errorConfirmProposal");
       setLoadError(message);
-      onError(message);
+      onError(reason instanceof Error ? reason : message);
     } finally {
       setBusy(false);
     }
@@ -488,7 +488,7 @@ export function SkillWorkspaceDialog({
       setMergeOpen(false);
       setRefreshKey((current) => current + 1);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorCombineDrafts"));
+      onError(reason instanceof Error ? reason : t("skillExplorer.errorCombineDrafts"));
     } finally {
       setBusy(false);
     }
@@ -506,7 +506,7 @@ export function SkillWorkspaceDialog({
       onCatalogChange(await client.listSkills());
       setRefreshKey((current) => current + 1);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorSaveFile"));
+      onError(reason instanceof Error ? reason : t("skillExplorer.errorSaveFile"));
     } finally {
       setBusy(false);
     }
@@ -527,7 +527,7 @@ export function SkillWorkspaceDialog({
       if (!candidate) throw new Error(t("skillExplorer.errorSkillPathGone"));
       setGitUpdate({ candidate, inspection });
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorCheckGitUpdate"));
+      onError(reason instanceof Error ? reason : t("skillExplorer.errorCheckGitUpdate"));
     } finally {
       setBusy(false);
     }
@@ -547,7 +547,7 @@ export function SkillWorkspaceDialog({
       setGitUpdate(undefined);
       setRefreshKey((current) => current + 1);
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorPrepareGitUpdate"));
+      onError(reason instanceof Error ? reason : t("skillExplorer.errorPrepareGitUpdate"));
     } finally {
       setBusy(false);
     }
@@ -567,7 +567,7 @@ export function SkillWorkspaceDialog({
       setDeleteConfirmation("");
       setDeleteTarget({ id: selectedSkill.id, impact, kind: "skill" });
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("skillExplorer.errorInspectReferences"));
+      onError(reason instanceof Error ? reason : t("skillExplorer.errorInspectReferences"));
     } finally {
       setBusy(false);
     }
@@ -595,7 +595,7 @@ export function SkillWorkspaceDialog({
         setRefreshKey((current) => current + 1);
       }
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : deleteTarget.kind === "draft" ? t("skillExplorer.errorDiscardDraft") : t("skillExplorer.errorDeleteSkill"));
+      onError(reason instanceof Error ? reason : deleteTarget.kind === "draft" ? t("skillExplorer.errorDiscardDraft") : t("skillExplorer.errorDeleteSkill"));
     } finally {
       setBusy(false);
     }

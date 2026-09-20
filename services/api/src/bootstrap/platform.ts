@@ -56,6 +56,7 @@ import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-sourc
 import { EmbeddingClient } from "../knowledge-engine/embedding.js";
 import { createGraphRootsService } from "../knowledge-engine/graph-roots.js";
 import { KeJobRunner } from "../knowledge-engine/job-runner.js";
+import { KeLivingReviewRunner } from "../knowledge-engine/living-review-runner.js";
 import { KeOrchestrator } from "../knowledge-engine/orchestrator.js";
 import { extractPdfText } from "../knowledge-engine/pdf-text.js";
 import { describeImageWithVision, type VisionEndpoint } from "../knowledge-engine/pdf-vision.js";
@@ -455,6 +456,7 @@ export function createPlatformServices(
     },
     unpaywall: { email: process.env.SCIENCE_AGENT_KE_UNPAYWALL_EMAIL?.trim() || null },
     coreApiKey: process.env.SCIENCE_AGENT_CORE_API_KEY?.trim() || undefined,
+    s2ApiKey: process.env.SCIENCE_AGENT_S2_API_KEY?.trim() || undefined,
   });
   const keEmbeddingBaseUrl = process.env.SCIENCE_AGENT_KE_EMBEDDING_BASE_URL?.trim();
   const keEmbeddingApiKey = process.env.SCIENCE_AGENT_KE_EMBEDDING_API_KEY?.trim();
@@ -525,7 +527,7 @@ export function createPlatformServices(
         docId,
         // V1-Z3: warnings (scanned-without-vision, enhancement hints) must
         // fire even when no vision endpoint is configured.
-        onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+        onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
         ...(keVisionEndpoint
           ? {
               describeImage: (pngBytes: Uint8Array) => describeImageWithVision(keVisionEndpoint, pngBytes),
@@ -536,12 +538,20 @@ export function createPlatformServices(
     },
     // Fixture mode never touches DNS (see transport selection above).
     ...(keFixtureDir ? { assertUrl: async () => {} } : {}),
-    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
   });
   const keJobRunner = new KeJobRunner(knowledgeEngineStore, {
-    onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { message, detail }),
+    onError: (message, detail) => apiLog.warn("knowledge_engine_jobs", { text: message, detail }),
   });
   keOrchestrator.registerJobs(keJobRunner);
+  // Living review (DA cron living_review port): converged KBs are re-checked
+  // on an interval and auto-reopened with a top-up grow when they drift.
+  // Opt-in (env/ke_settings, default off) — it spends external API quota.
+  const keLivingReviewRunner = new KeLivingReviewRunner({
+    store: knowledgeEngineStore,
+    orchestrator: keOrchestrator,
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
+  });
   // Consumption tools (concept_explore / deep_dive / unified search /
   // validate / gaps) — a plain port object; the agent runtime registers the
   // LLM tools when this is present. The embedding client enables kb_search's
@@ -569,14 +579,14 @@ export function createPlatformServices(
   const knowledgeEngineTools = createKnowledgeEngineTools(knowledgeEngineStore, {
     ...(keEmbedding ? { embedding: keEmbedding } : {}),
     noveltyExternal: keNoveltyExternal,
-    onWarn: (message) => apiLog.warn("knowledge_engine", { message }),
+    onWarn: (message) => apiLog.warn("knowledge_engine", { text: message }),
   });
   // Community roots for the progressive graph drill-down (fingerprint-cached,
   // stale-while-revalidate, LLM-named when a pipeline model is configured).
   const keGraphRoots = createGraphRootsService({
     store: knowledgeEngineStore,
     resolveEndpoint: keResolveEndpoint,
-    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { message, detail }),
+    onWarn: (message, detail) => apiLog.warn("knowledge_engine", { text: message, detail }),
   });
 
   return {
@@ -586,6 +596,7 @@ export function createPlatformServices(
     evolutionStore,
     keGraphRoots,
     keJobRunner,
+    keLivingReviewRunner,
     keOrchestrator,
     knowledgeEngineStore,
     knowledgeEngineTools,
@@ -682,9 +693,22 @@ export async function initializePlatformServices(
 
   // Recover crash-orphaned KE jobs and resume queue processing.
   services.keJobRunner.start();
+  services.keLivingReviewRunner.start();
 
+  const startupSettings = store.getMemoryGraphSettings();
+  // The sidecar starts on `local`, so only a Neo4j choice needs pushing.
+  if (startupSettings.backend === "neo4j") {
+    await memoryGraphClient
+      .pushBackend(startupSettings.backend)
+      .catch((error) => {
+        mgLog.warn(
+          "startup: backend push failed (non-fatal): %s",
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+  }
   const storedNeo4jPassword = store.getMemoryGraphNeo4jPassword();
-  if (storedNeo4jPassword) {
+  if (startupSettings.backend === "neo4j" && storedNeo4jPassword) {
     mgLog.info("startup: pushing stored Neo4j credential to memory-graph");
     const connection = store.getMemoryGraphSettings();
     await memoryGraphClient
@@ -697,7 +721,7 @@ export async function initializePlatformServices(
         );
       });
   } else {
-    mgLog.info("startup: no stored Neo4j password, skipping push (set it in System Settings → Memory graph)");
+    mgLog.info("startup: memory graph backend is %s, no Neo4j credential to push", startupSettings.backend);
   }
 
   for (const project of store.listProjects()) {

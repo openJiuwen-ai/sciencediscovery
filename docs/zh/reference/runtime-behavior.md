@@ -4,11 +4,11 @@
 
 ## 模型
 
-每个配置包含显示名、base URL（如 `https://api.openai.com/v1`）、模型 ID、可选 **Vision capable** 标志，以及 API token。
+每个配置包含显示名、base URL（如 `https://api.openai.com/v1`）、模型 ID、可选 **Vision capable** 标志，以及外部模型 API Key。
 
 - **任务模型** — 用于聊天与 agent 运行
 - **证据评审模型** — 可选的独立语义评审模型
-- 提供方 token 静态加密存储（数据目录中的 `model-secrets.key`，AES-256-GCM，仅属主可读）。API **从不**返回原始 token（只返回是否已存储）。
+- 提供方 API Key 静态加密存储（数据目录中的 `model-secrets.key`，AES-256-GCM，仅属主可读）。API **从不**返回原始密钥（只返回是否已存储）。
 - 数据目录须与密钥文件一并保护与备份。这不是 OS 钥匙串。
 
 ## 运行时设置与继承

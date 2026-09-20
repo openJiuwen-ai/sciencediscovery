@@ -1,0 +1,17 @@
+{
+  "name": "@sciencediscovery/trajectory",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": { "types": "./src/index.ts", "default": "./dist/index.js" },
+    "./server": { "types": "./src/server.ts", "default": "./dist/server.js" },
+    "./journal": { "types": "./src/journal.ts", "default": "./dist/journal.js" },
+    "./web": { "types": "./src/web.tsx", "default": "./dist/web.js" },
+    "./style.css": "./src/style.css"
+  },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "node --test dist/*.test.js" },
+  "dependencies": { "@sciencediscovery/cas": "workspace:*" },
+  "peerDependencies": { "react": "^19.0.0" },
+  "devDependencies": { "@types/node": "26.1.1", "@types/react": "19.2.17", "react": "19.2.7" }
+}

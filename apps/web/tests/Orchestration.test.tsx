@@ -222,7 +222,7 @@ test("a running subagent card shows the current streamed step", () => {
 });
 
 test("a running subagent without a step reports that it is starting", () => {
-  const running = buildSubagent({ id: "subagent-running", status: "running", steps: [] });
+  const running = buildSubagent({ id: "subagent-running", status: "running", steps: [], turnCount: 0 });
   const html = renderToStaticMarkup(createElement(SubagentCards, {
     onOpenSubagent: () => undefined,
     subagents: [running],
@@ -230,6 +230,19 @@ test("a running subagent without a step reports that it is starting", () => {
 
   assert.match(html, /1 running · 1 total/);
   assert.match(html, /Starting…/);
+});
+
+test("a running subagent whose snapshot carries turns but no step reports its turn, not a start", () => {
+  // The main stream's snapshot omits steps; a child on its second turn has
+  // clearly started, and the card must say so.
+  const running = buildSubagent({ id: "subagent-running", status: "running", steps: [], turnCount: 2 });
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent: () => undefined,
+    subagents: [running],
+  }));
+
+  assert.match(html, /Current: Turn 2 · Started/);
+  assert.doesNotMatch(html, /Starting…/);
 });
 
 test("clicking a subagent card selects that SubAgent for navigation", async () => {

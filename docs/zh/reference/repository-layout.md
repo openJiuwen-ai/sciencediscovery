@@ -55,7 +55,7 @@ sciencediscovery/
 
 - 项目 / 会话导航，归档与删除
 - 聊天与工具轨迹、工作区文件、Domain loop（连接器开关）
-- **System configuration**（侧栏唯一全局设置入口）：全局默认、模型注册表、科学环境、技能、specialists、权限和连接 token
+- **System configuration**（侧栏唯一全局设置入口）：全局默认、模型注册表、科学环境、技能、specialists、权限和本地服务连接
 - 分层运行时设置：Project / Session 菜单中的 Settings（可 Inherit 全局）；与系统配置不是同一对话框
 - 权限卡片、审批策略、语义评审结果展示
 

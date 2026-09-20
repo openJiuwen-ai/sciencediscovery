@@ -153,9 +153,9 @@ export function SubagentConversation({
       <div className="subagent-session-bar-title">
         <button aria-label={t("subagent.backToMain")} className="icon-button subagent-back-button" onClick={onBack} title={t("subagent.backToMain")} type="button"><ChevronRightIcon size={17} /></button>
         <div className="session-bar-title">
-          <span className="session-bar-project" title={projectName}>{projectName}</span>
+          <button className="session-bar-project" onClick={onBack} title={projectName} type="button">{projectName}</button>
           <span aria-hidden="true" className="session-bar-sep">›</span>
-          <span className="subagent-parent-session" title={sessionTitle}>{sessionTitle}</span>
+          <button className="subagent-parent-session" onClick={onBack} title={sessionTitle} type="button">{sessionTitle}</button>
           <span aria-hidden="true" className="session-bar-sep">›</span>
           <h1 className="session-bar-session" title={subagent.input.description}><span>{subagent.input.description}</span></h1>
         </div>

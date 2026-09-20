@@ -215,8 +215,11 @@ export function OrchestrationPanel({
 function subagentSummary(subagent: Subagent, t: Translate): string {
   if (subagent.status === "running") {
     const step = subagent.steps.findLast((candidate) => candidate.status === "running") ?? subagent.steps.at(-1);
-    return step
-      ? t("subagent.current", { label: subagentStepLabel(step, t), preview: subagentStepPreview(step, t) })
+    if (step) return t("subagent.current", { label: subagentStepLabel(step, t), preview: subagentStepPreview(step, t) });
+    // A snapshot that carries no step still says how far the work has come:
+    // a child on its second turn is running, not starting.
+    return subagent.turnCount > 0
+      ? t("subagent.current", { label: t("subagent.step.turn", { turn: subagent.turnCount }), preview: t("subagent.step.started") })
       : t("subagent.starting");
   }
   const parts = [subagent.input.subagentType ?? "general-purpose", t("subagent.turns", { count: subagent.turnCount, max: subagent.maxTurns })];
@@ -296,7 +299,7 @@ export function SpecialistManager({
   client: ApiClient;
   connectors: ConnectorManifest[];
   onChanged: (specialists: Specialist[]) => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   skills: SkillDescriptor[];
 }) {
   const { t } = useLocale();
@@ -320,7 +323,7 @@ export function SpecialistManager({
     onChanged(items);
   }
 
-  useEffect(() => { void refresh().catch((error: Error) => onError(error.message)); }, [client]);
+  useEffect(() => { void refresh().catch((error: Error) => onError(error)); }, [client]);
 
   function applySpecialist(updated: Specialist): void {
     setSpecialists((current) => {
@@ -336,7 +339,7 @@ export function SpecialistManager({
       const updated = await client.updateSpecialist(id, { enabled: next });
       applySpecialist(updated);
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("specialist.updateBuiltinFailed"));
+      onError(error instanceof Error ? error : t("specialist.updateBuiltinFailed"));
     } finally {
       setBuiltinBusy(false);
     }
@@ -348,7 +351,7 @@ export function SpecialistManager({
       await Promise.all(builtinSpecialists.map((specialist) => client.updateSpecialist(specialist.id, { enabled: next })));
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("specialist.updateAllBuiltinFailed"));
+      onError(error instanceof Error ? error : t("specialist.updateAllBuiltinFailed"));
     } finally {
       setBuiltinBusy(false);
     }
@@ -358,7 +361,7 @@ export function SpecialistManager({
       .then((settings) => {
         setReviewerEnabled(settings.enabled);
       })
-      .catch((error: Error) => onError(error.message))
+      .catch((error: Error) => onError(error))
       .finally(() => setReviewerBusy(false));
   }, [client]);
 
@@ -370,7 +373,7 @@ export function SpecialistManager({
       });
       setReviewerEnabled(settings.enabled);
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("specialist.updateReviewerFailed"));
+      onError(error instanceof Error ? error : t("specialist.updateReviewerFailed"));
     } finally {
       setReviewerBusy(false);
     }
@@ -406,7 +409,7 @@ export function SpecialistManager({
       closeEditor();
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("specialist.saveFailed"));
+      onError(error instanceof Error ? error : t("specialist.saveFailed"));
     } finally {
       setBusy(false);
     }
@@ -420,7 +423,7 @@ export function SpecialistManager({
       closeEditor();
       await refresh();
     } catch (error) {
-      onError(error instanceof Error ? error.message : t("specialist.deleteFailed"));
+      onError(error instanceof Error ? error : t("specialist.deleteFailed"));
     } finally {
       setBusy(false);
     }

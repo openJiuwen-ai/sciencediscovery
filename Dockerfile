@@ -49,6 +49,19 @@ RUN node scripts/fetch-managed-micromamba.mjs \
       --arch "$TARGETARCH" \
       --output /opt/sciencediscovery/provisioner/micromamba
 
+# Every workspace manifest, and nothing else. The dependency layer below used to
+# name each package.json by hand, which silently drifted from
+# pnpm-workspace.yaml: a renamed package left `docker compose build` failing on
+# a path that no longer existed. Extracting the manifests from the build context
+# keeps that list correct without anyone remembering to update it, and the
+# extract stays byte-identical while only application source changes, so the
+# pnpm install layer below keeps its cache. Architecture-independent, so this
+# stage also runs on the build host.
+FROM --platform=$BUILDPLATFORM ${NODE_RUNTIME_IMAGE} AS manifests
+WORKDIR /source
+COPY . .
+RUN find . -name node_modules -prune -o -name package.json -exec install -D {} /manifests/{} \;
+
 # The model catalog is deliberately not committed. One snapshot is downloaded
 # here and baked into the image so a first container start with no network
 # still knows model context windows, prices and thinking capabilities; the user
@@ -83,17 +96,12 @@ RUN npm install --global "pnpm@${PNPM_VERSION}"
 WORKDIR /app
 
 # Dependency layer first: only workspace manifests, so editing application
-# source does not invalidate the pnpm install cache. New workspace packages
-# must be added here as well (services/gateway and services/paper are Python
-# and carry no package.json).
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY config/package.json config/
-COPY apps/web/package.json apps/web/
-COPY packages/agent-runtime/package.json packages/agent-runtime/
-COPY packages/mcp-sources/package.json packages/mcp-sources/
-COPY packages/schema/package.json packages/schema/
-COPY services/api/package.json services/api/
-COPY services/runner/package.json services/runner/
+# source does not invalidate the pnpm install cache. The manifests stage above
+# derives the list from the build context, so adding a workspace package needs
+# no change here (services/gateway and services/paper are Python and carry no
+# package.json).
+COPY --from=manifests /manifests/ ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # Install managed Python and third-party Python dependencies before application

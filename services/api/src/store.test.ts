@@ -1871,11 +1871,21 @@ test("SessionStore seeds, validates, and persists memory-graph settings + passwo
   await store.load();
   assert.deepEqual(store.getMemoryGraphSettings(), {
     enabled: false,
+    backend: "local",
     neo4jHttp: "http://127.0.0.1:7474",
     neo4jUser: "neo4j",
     hasNeo4jPassword: false,
   });
   assert.equal(store.getMemoryGraphNeo4jPassword(), undefined);
+
+  // The backend defaults to the local store and only moves when asked to.
+  assert.equal((await store.updateMemoryGraphSettings({ backend: "neo4j" })).backend, "neo4j");
+  assert.equal((await store.updateMemoryGraphSettings({ neo4jUser: "neo4j" })).backend, "neo4j");
+  assert.equal((await store.updateMemoryGraphSettings({ backend: "local" })).backend, "local");
+  await assert.rejects(
+    store.updateMemoryGraphSettings({ backend: "sqlite" } as never),
+    /backend must be/,
+  );
 
   // 2B: saving the password alone does NOT flip enabled.
   const initialPassword = `pw-${randomUUID()}`;
@@ -1892,6 +1902,7 @@ test("SessionStore seeds, validates, and persists memory-graph settings + passwo
   });
   assert.deepEqual(updated, {
     enabled: true,
+    backend: "local",
     neo4jHttp: "http://neo4j.local:7474",
     neo4jUser: "graph",
     hasNeo4jPassword: true,
@@ -1921,6 +1932,7 @@ test("SessionStore seeds, validates, and persists memory-graph settings + passwo
   await reopened.load();
   assert.deepEqual(reopened.getMemoryGraphSettings(), {
     enabled: true,
+    backend: "local",
     neo4jHttp: "http://neo4j.local:7474",
     neo4jUser: "graph",
     hasNeo4jPassword: false,
@@ -1953,6 +1965,9 @@ test("SessionStore seeds the memory-graph password from env on first load only",
   await seeded.load();
   assert.equal(seeded.getMemoryGraphSettings().hasNeo4jPassword, true);
   assert.equal(seeded.getMemoryGraphNeo4jPassword(), "env-seed-password");
+  // Someone who already had a Neo4j password was using Neo4j: the upgrade keeps
+  // them on it instead of dropping them onto the empty local store.
+  assert.equal(seeded.getMemoryGraphSettings().backend, "neo4j");
 
   // Second load, env seed removed (simulating the user migrating to the UI):
   // the store retains the previously-seeded password — env is one-time only.
@@ -1960,6 +1975,21 @@ test("SessionStore seeds the memory-graph password from env on first load only",
   await reopened.load();
   assert.equal(reopened.getMemoryGraphSettings().hasNeo4jPassword, true);
   assert.equal(reopened.getMemoryGraphNeo4jPassword(), "env-seed-password");
+  assert.equal(reopened.getMemoryGraphSettings().backend, "neo4j");
+});
+
+test("SessionStore keeps an explicit local backend even when a Neo4j password is saved", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-memory-graph-local-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  await store.updateMemoryGraphSettings({ backend: "local", neo4jPassword: "kept-for-later" });
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getMemoryGraphSettings().backend, "local");
+  assert.equal(reopened.getMemoryGraphSettings().hasNeo4jPassword, true);
 });
 
 test("SessionStore preserves managed skill selections when the catalog is restored before settings migration", async (context) => {

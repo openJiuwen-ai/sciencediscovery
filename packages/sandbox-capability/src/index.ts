@@ -284,9 +284,14 @@ export function seatbeltUnusableMessage(
 export const SANDBOX_UNUSABLE_HINT = [
   "bubblewrap is installed but cannot create a sandbox on this host.",
   "The Web UI and control API still start; run_python and run_shell will fail.",
-  "Check that unprivileged user namespaces are permitted:",
-  "  sysctl kernel.unprivileged_userns_clone             # 1 where the knob exists",
-  "  sysctl kernel.apparmor_restrict_unprivileged_userns # 0 on Ubuntu 24.04+",
+  "Check, in this order:",
+  "  1. A container security profile is not blocking it. Docker Compose needs",
+  "     seccomp, apparmor and systempaths all unconfined.",
+  "  2. The host AppArmor configuration. Ubuntu 24.04+ restricts unprivileged",
+  "     user namespaces per profile, so a host can allow them without a sysctl.",
+  "  3. Only then the kernel switches, which need root and do not persist:",
+  "       sysctl kernel.unprivileged_userns_clone             # 1 where the knob exists",
+  "       sysctl kernel.apparmor_restrict_unprivileged_userns # read with step 2, not alone",
 ].join("\n");
 
 /**

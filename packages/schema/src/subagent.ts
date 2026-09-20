@@ -77,6 +77,8 @@ export interface SubagentStep {
   id: string;
   /** Raw tool input retained when a completed tool step replaces its running snapshot. */
   input?: string;
+  /** Exact structured arguments; input remains the compact chat summary. */
+  args?: Record<string, unknown>;
   kind: "assistant" | "system" | "thinking" | "tool";
   status?: "completed" | "failed" | "running";
   toolCallId?: string;

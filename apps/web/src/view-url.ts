@@ -29,12 +29,16 @@
  * - `/projects/<projectId>`                          Project
  * - `/projects/<projectId>/settings`                 Project-scoped settings
  * - `/projects/<projectId>/sessions/<sessionId>`     Session
+ * - `/projects/<projectId>/sessions/<sessionId>/trajectory`  Session inline trajectory view
  * - `/projects/<projectId>/sessions/<sessionId>/settings`  Session-scoped settings
  *
  * When several layers apply at once the settings layer wins the path, then
- * Usage, then Session, then Project.
+ * Usage, then Session, then Project. The inline trajectory view owns a path
+ * segment because it *is* the Session's main-area view; query parameters stay
+ * reserved for state that coexists with other views. The legacy
+ * `?trajectory=open` query form is still parsed and normalized to the path.
  *
- * Query keys (only these three):
+ * Query keys:
  * - `filter`    `archived` | `all`: Session list filter (default `active` omitted)
  * - `panel`     `open` | `collapsed`: right-hand workspace panel
  * - `artifact`  workspace-relative path of the open artifact; `/` stays unescaped
@@ -62,6 +66,7 @@ export interface ViewState {
   /** Right-hand panel; `undefined` means "fall back to the local preference". */
   workspaceOpen?: boolean;
   artifact?: string;
+  trajectory?: true;
 }
 
 const GROUP_SEGMENT = /^[a-z][a-z0-9-]*$/;
@@ -94,6 +99,8 @@ export function parseViewState(pathname: string, search: string): ViewState {
       if (parts.length === 5 && parts[4] === "settings") {
         view.settingsKind = "session";
         view.settingsTargetId = parts[3];
+      } else if (parts.length === 5 && parts[4] === "trajectory") {
+        view.trajectory = true;
       } else if (parts.length > 4) {
         // Unknown trailing segments below a Session: keep the Session itself.
       }
@@ -112,6 +119,8 @@ export function parseViewState(pathname: string, search: string): ViewState {
   else if (panel === "collapsed") view.workspaceOpen = false;
   const artifact = params.get("artifact");
   if (artifact) view.artifact = artifact;
+  // Legacy query form; the URL effect normalizes it to the /trajectory path.
+  if (view.sessionId && params.get("trajectory") === "open") view.trajectory = true;
   return view;
 }
 
@@ -133,7 +142,7 @@ export function serializeViewState(view: ViewState): { pathname: string; search:
   } else if (view.view === "usage") {
     pathname = "/usage";
   } else if (view.projectId && view.sessionId) {
-    pathname = `/projects/${encodeURIComponent(view.projectId)}/sessions/${encodeURIComponent(view.sessionId)}`;
+    pathname = `/projects/${encodeURIComponent(view.projectId)}/sessions/${encodeURIComponent(view.sessionId)}${view.trajectory ? "/trajectory" : ""}`;
   } else if (view.projectId) {
     pathname = `/projects/${encodeURIComponent(view.projectId)}`;
   }
@@ -157,5 +166,6 @@ export function isPrimaryViewChange(previous: ViewState, next: ViewState): boole
     || previous.view !== next.view
     || previous.settingsKind !== next.settingsKind
     || previous.settingsTargetId !== next.settingsTargetId
-    || previous.artifact !== next.artifact;
+    || previous.artifact !== next.artifact
+    || previous.trajectory !== next.trajectory;
 }

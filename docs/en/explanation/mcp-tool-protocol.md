@@ -223,7 +223,7 @@ The initial 12 Sources are PubMed, arXiv, Europe PMC, bioRxiv, medRxiv, UniProt,
 
 Custom server management: `/api/mcp/servers` lists/creates servers; `/:id` updates/deletes; `/import` imports a batch. `/:id/test` probes connections and `/:id/inspect` executes tools. `/:id/oauth/start|cancel|clear` and `/api/mcp/oauth/callback` manage authorization. See the [REST API](../reference/rest-api.md) for methods and request/response shapes, and section 5 for the integration design.
 
-Custom server management endpoints require the local API access token except for OAuth callback. Tests can return HTTP 200 with a failed check, and Inspector can return HTTP 200 with `ok: false`; HTTP status alone does not indicate tool success.
+Custom server management endpoints require the local service access token except for OAuth callback. Tests can return HTTP 200 with a failed check, and Inspector can return HTTP 200 with `ok: false`; HTTP status alone does not indicate tool success.
 
 Source Catalog exposes list/reload/detail/status/tools. Session invocation routes list/detail calls. Artifact candidate/plan/job routes list, create, approve, cancel, and retry; extraction-job routes list/detail. Permission routes list/decide requests, list/delete Grants, list Session authorizations, and PATCH Session approval mode.
 

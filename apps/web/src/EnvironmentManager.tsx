@@ -132,7 +132,7 @@ export function environmentSetupActionLabel(setup: ScientificEnvironmentSetup, b
   return translateActive("environment.actionInstall");
 }
 
-export function EnvironmentManager({ client, onError, compact = false }: { client: ApiClient; onError: (message: string) => void; compact?: boolean }) {
+export function EnvironmentManager({ client, onError, compact = false }: { client: ApiClient; onError: (reason: string | Error) => void; compact?: boolean }) {
   const { t } = useLocale();
   const [setup, setSetup] = useState<ScientificEnvironmentSetup>();
   const [environments, setEnvironments] = useState<Environment[]>([]);
@@ -178,7 +178,7 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
   useEffect(() => {
     if (setup?.state !== "installing") return;
     const timer = window.setInterval(() => {
-      void refresh().catch((reason: Error) => onError(reason.message));
+      void refresh().catch((reason: Error) => onError(reason));
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [client, setup?.state]);
@@ -190,7 +190,7 @@ export function EnvironmentManager({ client, onError, compact = false }: { clien
       await operation();
       await refresh();
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("environment.operationFailed"));
+      onError(reason instanceof Error ? reason : t("environment.operationFailed"));
     } finally {
       setBusy(false);
     }

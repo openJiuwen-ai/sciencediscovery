@@ -35,6 +35,8 @@ from fastapi.testclient import TestClient
 
 def _live_neo4j_config() -> tuple[str, str] | None:
     """Return (http_uri, password) when an integration Neo4j is configured."""
+    if os.environ.get("SCIENCE_AGENT_MEMORY_GRAPH_TEST_BACKEND") == "local":
+        return "local", ""
     http_uri = os.environ.get("SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J")
     password = os.environ.get("SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J_PASSWORD")
     if http_uri and password:
@@ -57,7 +59,7 @@ def _wipe_session(session_id: str) -> None:
     like ``len(cites) == 1`` break on the residue. Called at the top of each
     live test on its own (unique) session id.
     """
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
     if not handle().is_reachable():
         return
     with handle().session() as s:
@@ -74,6 +76,8 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     if cfg is None:
         pytest.skip("needs a live Neo4j")
     http_uri, password = cfg
+    if http_uri == "local":
+        monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_BACKEND", "local")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_ENABLED", "1")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN", "test-token")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP", http_uri)
@@ -1277,7 +1281,10 @@ def test_legacy_artifact_id_constraint_dropped(live_client: TestClient) -> None:
     headers = {"authorization": "Bearer test-token"}
     _wipe_session("sess-leg")
     from sciencediscovery_memory_graph.constraints import ensure_schema
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
+
+    if handle().kind == "local":
+        pytest.skip("Neo4j server-side constraints do not exist on the local backend")
 
     # This test exercises a schema-level invariant (legacy single-field
     # constraint is dropped at boot), which requires the Artifact label to be
@@ -1621,7 +1628,7 @@ def _cypher(query: str, **params: Any) -> list[dict[str, Any]]:
     Iterating the driver's _HttpRecord yields its keys (not key/value pairs),
     so dict(record) fails; dict(record.items()) is the correct conversion.
     """
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
     with handle().session() as s:
         result = s.run(query, **params)
         return [dict(r.items()) for r in result]
@@ -3119,7 +3126,7 @@ def test_cleanup_session_soft_marks_artifacts_and_deletes_private(live_client: T
     """delete_session_graph physically deletes a session's private nodes but
     soft-marks (does NOT delete) its Artifact version nodes, and severs the
     edges whose private endpoint was deleted (produces, stated_in)."""
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-cleanup-soft"
@@ -3208,7 +3215,7 @@ def test_cleanup_session_leaves_cross_session_input_edge_buildable(live_client: 
     as an input still builds the ``Artifact(v1)-[:input]->Code(D)`` edge —
     because the version node was retained (matchable), not hard-deleted. This
     is the regression a hard-delete design would break."""
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid_a = "sess-cleanup-a"
@@ -3265,7 +3272,7 @@ def test_cleanup_project_physically_deletes_all_nodes(live_client: TestClient) -
     """delete_project_graph physically removes every node of a project's
     sessions (including Artifact versions — no soft-mark: the project is gone,
     there is no future cross-project reference)."""
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid1 = "sess-cleanup-p1"
@@ -3320,7 +3327,7 @@ def test_get_subgraph_hides_soft_marked_artifact_versions(live_client: TestClien
     ``get_subgraph`` node and edge Cypher, which filter
     ``NOT coalesce(n.deleted_session, false)``. The version nodes being
     retained (soft-mark, not hard-delete) is asserted separately below."""
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-subgraph-soft"
@@ -3366,7 +3373,7 @@ def test_cleanup_project_falls_back_to_project_id_when_sessions_already_deleted(
     soft-marked Artifact leftovers by ``project_id`` so no orphans remain.
     This is the regression the single-pass (session_ids-only) design would
     leave behind."""
-    from sciencediscovery_memory_graph.neo4j_driver import handle
+    from sciencediscovery_memory_graph.backend import handle
 
     headers = {"authorization": "Bearer test-token"}
     sid = "sess-proj-fallback"

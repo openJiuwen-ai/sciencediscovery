@@ -49,6 +49,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
+import { isAuthFailure } from "./api/auth.js";
 import { ImageIcon, SparkleIcon } from "./icons.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
@@ -140,7 +141,8 @@ export function providerOperationError(
   reason: unknown,
   fallback: string,
   referencedProviderMessage: string,
-): string {
+): string | Error {
+  if (reason instanceof Error && isAuthFailure(reason)) return reason;
   const detail = reason instanceof Error ? reason.message : "";
   if (detail.includes("Provider models are referenced by runtime settings")) {
     return referencedProviderMessage;
@@ -415,7 +417,7 @@ export function ModelCatalogStatus({ catalog, client, onCatalogChange, onError, 
   catalog?: ModelCatalogDetails;
   client: SettingsApiClient;
   onCatalogChange?: (details: ModelCatalogDetails) => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onNotice: (message: string, detail?: string) => void;
 }) {
   const { t } = useLocale();
@@ -435,7 +437,8 @@ export function ModelCatalogStatus({ catalog, client, onCatalogChange, onError, 
       // The server keeps serving the snapshot it already had, so say that
       // rather than leaving the user to guess whether the data is now gone.
       const detail = reason instanceof Error ? reason.message : "";
-      onError(detail ? `${t("providers.catalog.refreshFailed")}: ${detail}` : t("providers.catalog.refreshFailed"));
+      onError(reason instanceof Error && isAuthFailure(reason) ? reason
+        : detail ? `${t("providers.catalog.refreshFailed")}: ${detail}` : t("providers.catalog.refreshFailed"));
     } finally {
       setRefreshing(false);
     }
@@ -728,7 +731,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   models: ModelProfile[];
   onCatalogChange?: (details: ModelCatalogDetails) => void;
   onDraftStateChange?: (dirty: boolean) => void;
-  onError: (message: string) => void;
+  onError: (reason: string | Error) => void;
   onModelsChange: (models: ModelProfile[]) => void;
   onNotice: (message: string, detail?: string) => void;
   onProvidersChange: (providers: ModelProvider[]) => void;
@@ -817,7 +820,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     setDraft(undefined);
   }
 
-  function operationError(reason: unknown, fallback: string): string {
+  function operationError(reason: unknown, fallback: string): string | Error {
     return providerOperationError(reason, fallback, t("providers.delete.referenced"));
   }
 
@@ -989,7 +992,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
       onNotice(t("providers.notice.modelAdded"), saved.name);
       return true;
     } catch (reason) {
-      onError(reason instanceof Error ? reason.message : t("providers.models.addFailed"));
+      onError(reason instanceof Error ? reason : t("providers.models.addFailed"));
       return false;
     } finally {
       setBusy(false);
@@ -1029,7 +1032,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : "";
       const fallback = t("error.deleteModel");
-      onError(detail ? `${fallback}: ${detail}` : fallback);
+      onError(reason instanceof Error && isAuthFailure(reason) ? reason : detail ? `${fallback}: ${detail}` : fallback);
       return false;
     } finally {
       setBusy(false);

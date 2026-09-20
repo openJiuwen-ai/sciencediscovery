@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { shouldFocusEntryNode } from "../src/MemoryGraphExplorer.js";
+import { countVisibleAndTotal, shouldFocusEntryNode } from "../src/MemoryGraphExplorer.js";
 
 test("an entry node is focused without any modal-entry marker", () => {
   // The chip-jump shape: initialNodeId set, autoChain unset. Before the fix
@@ -48,4 +48,48 @@ test("an entry completed for one node still allows the next chip click", () => {
   // focused instead of the canvas staying pinned to the first one.
   assert.equal(shouldFocusEntryNode("P38398", true), false);
   assert.equal(shouldFocusEntryNode("Q92731", false), true);
+});
+
+// --- header visible / total counts ---------------------------------------
+
+test("countVisibleAndTotal counts the drawn graph against the whole session", () => {
+  const all = {
+    nodes: [
+      { id: "g", label: "ResearchGoal" },
+      { id: "t1", label: "ToolCall" },
+      { id: "c1", label: "Code" },
+      { id: "a1", label: "Artifact" },
+    ],
+    edges: [
+      { source: "g", target: "t1", type: "next" },
+      { source: "t1", target: "c1", type: "produces" },
+      { source: "c1", target: "a1", type: "produces" },
+    ],
+  } as const;
+  const spine = {
+    nodes: all.nodes.slice(0, 2),
+    edges: all.edges.slice(0, 1),
+  };
+  assert.deepEqual(countVisibleAndTotal(spine as never, all as never), {
+    visibleNodes: 2, totalNodes: 4, visibleEdges: 1, totalEdges: 3,
+  });
+  // Fully expanded reads N / N.
+  assert.deepEqual(countVisibleAndTotal(all as never, all as never), {
+    visibleNodes: 4, totalNodes: 4, visibleEdges: 3, totalEdges: 3,
+  });
+});
+
+test("countVisibleAndTotal ignores aggregate stacks and surrogate edges", () => {
+  const all = {
+    nodes: [
+      { id: "t1", label: "ToolCall" },
+      { id: "_group:t1:Paper", label: "Paper", extra: { aggregated: true, count: 5 } },
+    ],
+    edges: [
+      { source: "t1", target: "_group:t1:Paper", type: "produces", extra: { surrogate: true } },
+    ],
+  };
+  assert.deepEqual(countVisibleAndTotal(all as never, all as never), {
+    visibleNodes: 1, totalNodes: 1, visibleEdges: 0, totalEdges: 0,
+  });
 });

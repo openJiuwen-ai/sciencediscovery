@@ -49,6 +49,8 @@ from ._neo4j_http import _HttpSession
 class Neo4jHandle:
     """Holds the current HTTP client + the password it was built with."""
 
+    kind = "neo4j"
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._client: httpx.Client | None = None

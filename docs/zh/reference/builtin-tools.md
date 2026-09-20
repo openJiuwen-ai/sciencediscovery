@@ -87,6 +87,8 @@
 | 工具 | 出现条件 | 参数要点 |
 |---|---|---|
 | `run_npu_job` | Runner 启用 `SCIENCE_AGENT_NPU_BROKER=1` 且加载到 NPU workload 白名单 | `operation=list_workloads\|submit\|status\|logs\|result\|cancel`；`workload_id` 来自白名单，`config_path` 为 Workspace 相对路径；`environment_id` 选择环境最新版，省略时使用 Session 所选环境；内置 workload 为 `npu.smoke_test` 与 `antibody.protenix.v1` |
+| `create_evolve_run` | 部署注册了演进能力 | 提交搜索方案 —— 起点、打分模式、分片划分、预算与算法（`puct` 或 `openevolve`）。服务端负责校验、跑判别力探针并掌握预算；Agent 只负责提交。启动前会弹出审批卡片，搜索随后运行数分钟到数小时，并有自己的实时面板 |
+| `get_evolve_run` | 部署注册了演进能力 | 读取某次搜索的状态与结果。不是等待机制 —— 面板会自行流式显示进度，轮询它只会花掉搜索需要的预算 |
 | `read_skill` | 本次运行至少选择一个技能 | `skillId`（枚举限定为本次运行选中的技能）；按需读取冻结 revision 的完整 `SKILL.md` instructions，并列出可选 supporting resources |
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
 | `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，用户确认后把审核内容发布为 Skill Library 的新不可变版本 |

@@ -31,6 +31,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import { translateActive } from "../i18n/index.js";
+import { ApiRequestError } from "./auth.js";
 import { SessionsApiClient } from "./sessions.js";
 
 export interface AgentActivity {
@@ -114,7 +115,7 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || translateActive("error.usageExportFailed", { status: response.status }));
+      throw new ApiRequestError(error.error || translateActive("error.usageExportFailed", { status: response.status }), response.status);
     }
     return await response.blob();
   }
@@ -172,7 +173,7 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || translateActive("error.eventStreamFailed", { status: response.status }));
+      throw new ApiRequestError(error.error || translateActive("error.eventStreamFailed", { status: response.status }), response.status);
     }
     if (!response.body) throw new Error(translateActive("error.eventStreamNoBody"));
     const reader = response.body.getReader();
@@ -232,7 +233,7 @@ export class RunsApiClient extends SessionsApiClient {
     if (!response.ok) {
       this.reportAuthStatus(response.status);
       const error = (await response.json().catch(() => ({ error: response.statusText }))) as { error?: string };
-      throw new Error(error.error || translateActive("error.runFailedStatus", { status: response.status }));
+      throw new ApiRequestError(error.error || translateActive("error.runFailedStatus", { status: response.status }), response.status);
     }
     if (!response.body) throw new Error(translateActive("error.streamNoBody"));
 

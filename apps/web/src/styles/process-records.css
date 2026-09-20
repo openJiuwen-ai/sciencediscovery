@@ -103,8 +103,12 @@ details[open] > summary > .record-chevron { transform: rotate(90deg); }
 .run-timeline > .timeline-subagents { margin-top: 0; margin-bottom: 4px; gap: 4px; }
 .run-timeline > .process-notice { margin-bottom: 6px; }
 .workspace-folder { border: 0; background: transparent; min-width: 0; margin-top: 12px; }
-/* Keep the activity poller mounted so newly arriving tasks can reveal the section. */
-.workspace-folder[data-folder="tasks"]:not(:has(.workspace-fold, .agent-activity > button, [role="alert"])) { display: none; }
+/* Keep the activity poller mounted so newly arriving tasks can reveal the section.
+   Every shape the Tasks folder can hold has to be listed here, or a section
+   that does have content is hidden as empty: the Idea Tree cards are the one
+   child that is neither a fold nor an activity button, and leaving them out
+   made a running research unreachable while its panel rendered normally. */
+.workspace-folder[data-folder="tasks"]:not(:has(.workspace-fold, .agent-activity > button, .idea-research-panel, .idea-tree-view, [role="alert"])) { display: none; }
 .workspace-folder > summary {
   display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: 6px; background: #fafbfc;

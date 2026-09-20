@@ -11,7 +11,7 @@
 - Linux x86_64 或 aarch64；
 - bubblewrap；
 - 与宿主架构匹配的 ScienceDiscovery 可执行文件；
-- 至少一个模型提供方凭据。
+- 至少一个外部模型 API Key。
 
 bubblewrap 需由宿主提供：
 
@@ -29,7 +29,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-`serve` 会依次启动 gateway、runner 与 API/Web，并默认只监听本机。启动完成后，`serve` 会打印本次安装的访问 token；打开 <http://127.0.0.1:4310> 并用它登录。Web UI 在持有的 token 被拒绝时会自动打开连接设置。Ctrl-C 会停止全部子服务。
+`serve` 会依次启动 gateway、runner 与 API/Web，并默认只监听本机。启动完成后，`serve` 会打印 `Open to sign in` 链接与本地服务访问令牌；在浏览器中打开该链接即可自动认证并保存本地服务访问令牌。（若直接打开 <http://127.0.0.1:4310>，界面会呈现清晰的连接引导，可复制启动日志中的「本地服务访问令牌」粘贴保存。）请勿分享该登录链接。Web UI 在持有的 token 被拒绝时会自动打开连接设置。Ctrl-C 会停止全部子服务。
 
 另开终端检查 API 健康状态：
 
@@ -43,7 +43,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 ## 3. 配置任务模型
 
-在 **系统配置 → Global defaults** 中配置任务模型。每个配置包含显示名、base URL、模型 ID、可选的 **Vision capable** 标志与 API token。提供方 token 以 AES-256-GCM 加密存储，API 不返回原始 token。完整行为见[运行时行为参考](../reference/runtime-behavior.md#模型)。
+在 **系统配置 → Global defaults** 中配置任务模型。每个配置包含显示名、base URL、模型 ID、可选的 **Vision capable** 标志与外部模型 API Key。此处配置外部模型服务商凭据，与本地服务访问令牌相互独立。提供方 API Key 以 AES-256-GCM 加密存储，API 不返回原始密钥。完整行为见[运行时行为参考](../reference/runtime-behavior.md#模型)。
 
 ## 4. 完成第一次 Agent 任务
 

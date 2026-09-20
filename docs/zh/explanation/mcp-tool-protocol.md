@@ -358,7 +358,7 @@ Job 表示执行状态，已完成下载的文件保持不可变。PDF 抽取是
 
 `/api/mcp/servers` 提供列表/创建，`/:id` 提供更新/删除，`/import` 提供批量导入；`/:id/test`、`/:id/inspect` 分别用于连接探测和工具执行；`/:id/oauth/start|cancel|clear` 与 `/api/mcp/oauth/callback` 维护授权生命周期。方法、请求体和响应结构以 [REST API](../reference/rest-api.md) 为准，接入设计见第 5 节。
 
-除 OAuth callback 外，自定义服务器管理接口要求本地 API 访问令牌。测试接口可以 HTTP 200 返回包含错误的检查结果，Inspector 也可以 HTTP 200 返回 `ok: false`；前端不能仅凭 HTTP 状态判定工具成功。
+除 OAuth callback 外，自定义服务器管理接口要求本地服务访问令牌。测试接口可以 HTTP 200 返回包含错误的检查结果，Inspector 也可以 HTTP 200 返回 `ok: false`；前端不能仅凭 HTTP 状态判定工具成功。
 
 Source Catalog：
 
