@@ -101,7 +101,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 演进搜索
 
-`/evolve` 运行的只读视图，以及停止一次运行。搜索由 Agent 通过 `create_evolve_run` 工具发起，不经由本 API。参见[程序演进](../explanation/evolve.md)。
+`/evolve-design` 运行的只读视图，以及停止一次运行。搜索由 Agent 通过 `create_evolve_run` 工具发起，不经由本 API。参见[程序演进](../explanation/evolve.md)。
 
 | 方法与路径 | 请求/查询 | 成功 |
 |---|---|---|

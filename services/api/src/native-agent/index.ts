@@ -134,7 +134,7 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
   disabledPlugins?: readonly string[];
   pluginSettings?: import("@sciencediscovery/plugin-sdk").PluginSettingsMap;
   /** Run-scoped Plan snapshot projection; when present, registers update_plan and context injection. */
-  /** The `/evolve` capability for this turn, or absent when the deployment has
+  /** The `/evolve-design` capability for this turn, or absent when the deployment has
    *  none. One object instead of two forwarded callbacks and a deps bundle
    *  threaded through three run-loop entry points. */
   evolve?: EvolveToolRuntime;

@@ -43,14 +43,14 @@ import {
 // arrow markers and filter-chip swatches.
 const EDGE_TYPES: MemoryGraphEdgeType[] = [
   "next", "produces", "extracts", "supports", "stated_in", "supersedes", "input", "contains",
-  // /evolve search graph.
+  // /evolve-design search graph.
   "searches", "root", "expands", "inspires", "elected", "occupies",
   // upload → goal.
   "feeds",
 ];
 const NODE_LABELS: MemoryGraphNodeLabel[] = [
   "ResearchGoal", "Task", "ToolCall", "Paper", "Evidence", "Claim", "Code", "Artifact",
-  // /evolve search graph.
+  // /evolve-design search graph.
   "SearchRun", "SearchNode", "SearchCell",
   // uploaded file.
   "SourceFile",

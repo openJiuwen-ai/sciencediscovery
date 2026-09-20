@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * The search graph a `/evolve` run writes: one `SubTask` in the memory graph
+ * The search graph a `/evolve-design` run writes: one `SubTask` in the memory graph
  * binds one `SearchRun`, under which the candidates live.
  *
  * The same three types cover both algorithms. the PUCT tree and OpenEvolve's island

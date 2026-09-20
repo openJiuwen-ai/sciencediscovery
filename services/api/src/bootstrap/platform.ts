@@ -349,7 +349,7 @@ export function createPlatformServices(
     );
 
   /**
-   * The `/evolve` capability, registered once.
+   * The `/evolve-design` capability, registered once.
    *
    * The run loop calls this per turn and spreads whatever comes back into the
    * agent's options; it never sees `EvolutionStore`, the orchestrator, or the

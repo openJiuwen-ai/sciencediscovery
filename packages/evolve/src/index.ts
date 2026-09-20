@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * `/evolve` as a capability package: the two LLM tools and nothing else.
+ * `/evolve-design` as a capability package: the two LLM tools and nothing else.
  *
  * Registered the way `plan` is — the composition root builds the runtime
  * and hands it over once; a deployment that does not build one simply gets no

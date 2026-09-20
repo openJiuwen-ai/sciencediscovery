@@ -19,7 +19,7 @@ import { ApiRequestError } from "./auth.js";
 import { SkillsApiClient } from "./skills.js";
 
 /**
- * `/evolve` run control and its two event sources.
+ * `/evolve-design` run control and its two event sources.
  *
  * `listEvents` and `subscribeEvents` return the same records — one from the log,
  * one live — because the dashboard must render identically whether it is

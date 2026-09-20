@@ -492,7 +492,7 @@ export function splitArtifactVersionSuffix(raw: string): { id: string; version: 
 }
 
 /**
- * Builds the `/evolve` capability for one turn, or nothing when the deployment
+ * Builds the `/evolve-design` capability for one turn, or nothing when the deployment
  * has none.
  *
  * A factory rather than a dependency bundle: `emit`, `beginExternalWait` and

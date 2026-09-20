@@ -14,7 +14,7 @@
 
 """Scoring by a model against a rubric — the mode that needs no dataset.
 
-This is what makes `/evolve` work on things that are not programs over tables:
+This is what makes `/evolve-design` work on things that are not programs over tables:
 a prompt, an abstract, a protocol, a plan. There is nothing to execute and
 nothing to measure, so a judge model reads the candidate against a frozen rubric
 and gives it a number.

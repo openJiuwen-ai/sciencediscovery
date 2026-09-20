@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * File-backed store for `/evolve` runs.
+ * File-backed store for `/evolve-design` runs.
  *
  * ```
  * data/evolution/

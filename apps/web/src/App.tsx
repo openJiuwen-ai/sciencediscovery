@@ -1078,12 +1078,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [usageAnalytics, setUsageAnalytics] = useState<ModelUsageAnalyticsSummary>();
   const [usageFilters, setUsageFilters] = useState<UsageAnalyticsUiFilters>({});
   const [workspaceView, setWorkspaceView] = useState<"session" | "usage">(() => initialView.view === "usage" ? "usage" : "session");
-  // `/evolve` runs for the active session, plus which one the panel shows. The
+  // `/evolve-design` runs for the active session, plus which one the panel shows. The
   // card is the only persistent handle a search has (the command never creates
   // a chat run), so the list is kept even when the panel is closed.
   const [evolveRuns, setEvolveRuns] = useState<EvolveRun[]>([]);
   const [openEvolveRunId, setOpenEvolveRunId] = useState<string>();
-  /** The sentence a `/evolve` command carried, while its wizard is open. */
+  /** The sentence a `/evolve-design` command carried, while its wizard is open. */
   const [evolveRefreshKey, setEvolveRefreshKey] = useState(0);
   // The right-rail MemoryGraphView card opens the full-screen explorer directly
   // (previously the explorer was only reachable from a product's "View chain"

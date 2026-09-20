@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /**
- * `/evolve` — the goal a search optimises and the events it emits.
+ * `/evolve-design` — the goal a search optimises and the events it emits.
  *
  * Two layers, with deliberately different certainty requirements (see
  * docs/evolve-scorecard.md §1): the **goal** is the user's sentence plus what is

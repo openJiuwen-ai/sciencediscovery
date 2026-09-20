@@ -15,7 +15,7 @@
 /**
  * The workspace card: the only persistent handle a search has.
  *
- * `/evolve` is intercepted in the composer and never creates a chat run, so a
+ * `/evolve-design` is intercepted in the composer and never creates a chat run, so a
  * search leaves no trace in the session timeline. Close the panel and a search
  * that has been running for half an hour would be unreachable — this card is
  * what makes it findable again, which is why it stays after the panel closes and

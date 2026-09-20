@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-/* `/evolve`: the workspace card and the full-screen run panel.
+/* `/evolve-design`: the workspace card and the full-screen run panel.
  * Colours come from tokens.css — the one place this feature hard-codes any is
  * the Cytoscape palette in TS, because a canvas cannot resolve CSS variables. */
 
