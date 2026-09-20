@@ -224,7 +224,7 @@ export interface RuntimeSkillSnapshot {
    */
   preFinishAudit?: boolean;
   readPackageFiles: () => SkillPackageFileBytes[];
-  metadata: Record<string, string>;
+  metadata: Record<string, unknown>;
   readResource: (path: string) => SkillResourceContent;
   resources: SkillResource[];
   revision: number;
@@ -501,12 +501,12 @@ function optionalString(value: unknown, key: string, maxLength?: number): string
   return result;
 }
 
-function normalizeMetadata(value: unknown): Record<string, string> | undefined {
+function normalizeMetadata(value: unknown): Record<string, unknown> | undefined {
   if (value === undefined) return undefined;
   const record = asRecord(value, "metadata");
-  const metadata: Record<string, string> = {};
+  const metadata: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(record)) {
-    if (typeof item !== "string") throw validationError(`metadata.${key} must be a string`);
+    if (item === undefined || item === null) continue;
     metadata[key] = item;
   }
   return metadata;
@@ -518,9 +518,6 @@ export interface ParsedSkillMarkdown {
 }
 
 export function parseSkillMarkdown(bytes: Buffer): ParsedSkillMarkdown {
-  if (bytes.length > SKILL_LIMITS.skillMarkdownBytes) {
-    throw payloadTooLarge(`SKILL.md exceeds ${SKILL_LIMITS.skillMarkdownBytes} bytes`);
-  }
   let source: string;
   try {
     source = utf8Decoder.decode(bytes);
@@ -535,7 +532,6 @@ export function parseSkillMarkdown(bytes: Buffer): ParsedSkillMarkdown {
   }
   const frontmatter = asRecord(document.toJS({ maxAliasCount: 20 }), "SKILL.md frontmatter");
   const instructions = source.slice(match[0].length).trim();
-  if (!instructions) throw validationError("SKILL.md must include Markdown instructions after frontmatter");
   return { frontmatter, instructions };
 }
 
@@ -619,11 +615,7 @@ export function validateSkillPackage(
   if (options.directoryName !== undefined && name !== options.directoryName) {
     throw validationError(`SKILL.md name ${name} must match package directory ${options.directoryName}`);
   }
-  const description = optionalString(parsed.frontmatter.description, "description", 1024);
-  if (!description) throw validationError("description is required");
-  optionalString(parsed.frontmatter.license, "license");
-  optionalString(parsed.frontmatter.compatibility, "compatibility", 500);
-  optionalString(parsed.frontmatter["allowed-tools"], "allowed-tools");
+  const description = typeof parsed.frontmatter.description === "string" ? parsed.frontmatter.description : "";
   const metadata = normalizeMetadata(parsed.frontmatter.metadata);
   const diagnostics: SkillValidationDiagnostic[] = [];
   if (parsed.frontmatter["allowed-tools"] !== undefined) {
@@ -652,7 +644,8 @@ export function validateSkillPackage(
     }))
     .toSorted((left, right) => left.path.localeCompare(right.path));
   const revision = options.revision ?? 1;
-  const declaredVersion = metadata?.version?.trim() || undefined;
+  const rawVersion = metadata?.version;
+  const declaredVersion = typeof rawVersion === "string" ? rawVersion.trim() || undefined : undefined;
   const version = options.version ?? declaredVersion ?? `revision:${revision}`;
   const kinds: SkillDetail["resourceSummary"]["kinds"] = {
     asset: 0,

@@ -73,6 +73,7 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
     "wikidata",
     "datacite",
     "llm-wiki",
+    "web",
   ]);
 }
 

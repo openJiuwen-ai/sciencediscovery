@@ -89,6 +89,14 @@ test("a sandbox without network access keeps the current launch shape", () => {
   assert.equal(seccompVariantFor(NO_SANDBOX_NETWORK_ACCESS), "baseline");
 });
 
+test("an NPU sandbox permits the socket family without attaching an egress bridge", () => {
+  assert.equal(seccompVariantFor(NO_SANDBOX_NETWORK_ACCESS, true), "npu");
+  assert.deepEqual(
+    deniedSyscalls(baselineSeccompFilter("arm64", "npu")),
+    deniedSyscalls(baselineSeccompFilter("arm64", "network")),
+  );
+});
+
 test("a domain-allowlist sandbox keeps its own network namespace and exits through the gateway socket", async () => {
   const directory = await scratchDirectory();
   const gateway = new EgressGateway(ALLOWLIST, join(directory, "egress.sock"));
@@ -130,12 +138,15 @@ test("the network seccomp profile allows socket calls and keeps every other deni
   for (const syscall of armSocketSyscalls) assert.equal(armNetwork.includes(syscall), false);
 });
 
-test("the two seccomp variants are written to separate files", async () => {
+test("the seccomp variants are written to separate files", async () => {
   const directory = await scratchDirectory();
   const baseline = await ensureSeccompFilter(directory, "baseline", "x64");
   const network = await ensureSeccompFilter(directory, "network", "x64");
+  const npu = await ensureSeccompFilter(directory, "npu", "x64");
   assert.notEqual(baseline, network);
+  assert.notEqual(network, npu);
   assert.match(network, /seccomp-network-x86_64\.bpf$/);
+  assert.match(npu, /seccomp-npu-x86_64\.bpf$/);
 });
 
 test("scientific environment install stays independent of the sandbox network policy", async () => {

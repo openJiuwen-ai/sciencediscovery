@@ -9,6 +9,9 @@ export function filterEnabledMcpSources(
   sourceIds: readonly string[],
   plugins?: Readonly<Record<string, { enabled?: boolean }>>,
 ): string[] {
-  if (plugins?.mcp?.enabled === false) return [];
+  // "web" (web_search / web_fetch) is a built-in tool, not an MCP source, so
+  // the MCP master switch must not clear it. A connector.web plugin override
+  // still disables it through the per-source filter below.
+  if (plugins?.mcp?.enabled === false) return sourceIds.filter((id) => id === "web");
   return sourceIds.filter(sourceId => plugins?.[`connector.${sourceId}`]?.enabled !== false);
 }
