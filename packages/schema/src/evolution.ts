@@ -397,10 +397,21 @@ export interface EvolveRunSummary {
   candidates: number;
   /** The winning candidate's own one-line description of what it changed. */
   bestChange?: string;
+  /** Content hash of the winning candidate. Absent when nothing beat the starting
+   *  point, or the run has not finished. */
+  bestCodeHash?: string;
+  /** The winning candidate's full text, so a reader needs no second call and no
+   *  path. Cut at `BEST_SOURCE_LIMIT` characters; see `bestSourceTruncated`. */
+  bestSource?: string;
+  /** How long the winner really is, set only when `bestSource` was cut short. */
+  bestSourceTruncated?: { chars: number };
   id: string;
   /** Said plainly when it happened: a run can finish `succeeded` having learned
    *  nothing, and that is worth reporting rather than dressing up. */
   note?: string;
+  /** Name of the artifact a finished run published: version 1 is the starting
+   *  point and version 2 the winner. The whole text lives there whatever its size. */
+  resultArtifact?: string;
   status: EvolveRunStatus;
   /** Set only when the search made fewer expansions than it planned, which a
    *  `succeeded` status and a real improvement otherwise hide completely. */

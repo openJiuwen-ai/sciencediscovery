@@ -72,7 +72,12 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
     description:
       "Read an evolution search's outcome: status, how many candidates ran, the best score "
       + "against the starting point, and the score on the test split that never took part in "
-      + "the search. Call this when the user asks how a search went, or before summarising one "
+      + "the search. Once a search has finished and beaten its starting point, the result also "
+      + "carries the winning candidate's full text in a <best_candidate> block, and `resultArtifact`, "
+      + "the artifact whose version 2 is that winner (version 1 is the starting point). To apply it, "
+      + "write that text to the file it replaces; never rebuild it from `bestChange`, which is one "
+      + "line and yields a program nobody scored. If the block says it was cut, read the rest from "
+      + "`resultArtifact`. Call this when the user asks how a search went, or before summarising one "
       + "— a search runs for minutes after the turn that started it, so its result is never in "
       + "your context. Never describe an outcome you have not read. Do NOT call this to wait "
       + "for a search you just started: end that turn instead. The run's card streams live "
@@ -80,7 +85,18 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       + "spending the budget the search itself needs.",
     execute: async (_toolCallId, params) => {
       const summary = await runtime.getEvolveRun(params.runId);
-      return { content: [{ type: "text", text: JSON.stringify(summary) }], details: summary };
+      // The text goes out as its own block. Inside the JSON it would arrive as one
+      // line of escaped newlines and quotes, which is what a person cannot read and
+      // a model has to unescape before it can write the file back.
+      const { bestSource, ...figures } = summary;
+      const text = [JSON.stringify(figures)];
+      if (bestSource !== undefined) {
+        const cut = summary.bestSourceTruncated
+          ? ` (first ${bestSource.length} of ${summary.bestSourceTruncated.chars} characters; the rest is in ${summary.resultArtifact ?? "the result artifact"})`
+          : "";
+        text.push(`<best_candidate${cut ? ` truncated="true"` : ""}>${cut}\n${bestSource}\n</best_candidate>`);
+      }
+      return { content: [{ type: "text", text: text.join("\n") }], details: summary };
     },
     label: "Read evolution run",
     name: "get_evolve_run",

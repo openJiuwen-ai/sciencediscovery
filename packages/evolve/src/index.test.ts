@@ -67,6 +67,41 @@ test("the tools reach the runtime they were built with", async () => {
   assert.deepEqual(calls, ["get:run-1"]);
 });
 
+test("a finished search hands the agent the winning text as its own block, not as escaped JSON", async () => {
+  const winner = "第一段。\n第二段带\"引号\"。";
+  const finished = {
+    baselineScore: 0.03, bestChange: "补入可核实事实", bestCodeHash: "a".repeat(64), bestScore: 0.0938,
+    bestSource: winner, bestTestScore: 0.09, candidates: 13, id: "run-1",
+    resultArtifact: "evolve/run-1/evolved.md", status: "succeeded" as const, tokens: 28_147,
+  };
+  const get = createEvolveTools(runtime({ getEvolveRun: async () => finished }))
+    .find((tool) => tool.name === "get_evolve_run")!;
+  const result = await get.execute("call", {} as never, new AbortController().signal);
+  const text = (result.content[0] as { text: string }).text;
+  const [figures, ...block] = text.split("\n");
+  assert.equal(JSON.parse(figures!).resultArtifact, "evolve/run-1/evolved.md");
+  assert.ok(!("bestSource" in JSON.parse(figures!)), "the text is not duplicated inside the JSON");
+  assert.equal(block.join("\n"), `<best_candidate>\n${winner}\n</best_candidate>`);
+  assert.deepEqual(result.details, finished);
+});
+
+test("a cut winner says how much was cut and where the rest is", async () => {
+  const get = createEvolveTools(runtime({ getEvolveRun: async () => ({
+    baselineScore: 0.1, bestScore: 0.5, bestSource: "x".repeat(10), bestSourceTruncated: { chars: 50_000 },
+    bestTestScore: null, candidates: 3, id: "run-2", resultArtifact: "evolve/run-2/candidate.py",
+    status: "succeeded" as const, tokens: 1,
+  }) })).find((tool) => tool.name === "get_evolve_run")!;
+  const text = ((await get.execute("call", {} as never, new AbortController().signal)).content[0] as { text: string }).text;
+  assert.match(text, /<best_candidate truncated="true"> \(first 10 of 50000 characters; the rest is in evolve\/run-2\/candidate\.py\)/);
+});
+
+test("a search with no winner returns just the figures", async () => {
+  const get = createEvolveTools(runtime()).find((tool) => tool.name === "get_evolve_run")!;
+  const text = ((await get.execute("call", {} as never, new AbortController().signal)).content[0] as { text: string }).text;
+  assert.ok(!text.includes("<best_candidate"));
+  assert.equal(JSON.parse(text).status, "running");
+});
+
 test("Idea Tree status reader returns the actual background research to the agent", async () => {
   const summary = {id: "research-1", status: "running", activities: [{role: "activity", status: "running"}]};
   const calls: Array<string | undefined> = [];

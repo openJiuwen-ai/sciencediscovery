@@ -484,6 +484,11 @@ export function summariseRun(
   let bestChange: string | undefined;
   let note: string | undefined;
   let stoppedEarly: string | undefined;
+  // The winner is the node the engine names in `search_finished`, the same one
+  // the orchestrator publishes; `null` there means nothing beat the seed. A
+  // search still running has no winner yet.
+  const hashByNode = new Map<number, string>();
+  let bestNodeIndex: number | null | undefined;
 
   for (const { event } of events) {
     const kind = event.type;
@@ -496,7 +501,11 @@ export function summariseRun(
         bestChange = typeof event.changeSummary === "string" ? event.changeSummary : undefined;
       }
     }
+    if (kind === "expanded" && typeof event.nodeIndex === "number" && typeof event.codeHash === "string") {
+      hashByNode.set(event.nodeIndex, event.codeHash);
+    }
     if (kind === "search_finished") {
+      bestNodeIndex = typeof event.bestNodeIndex === "number" ? event.bestNodeIndex : null;
       if (typeof event.bestTestScore === "number") bestTestScore = event.bestTestScore;
       // A run that made 8 of its 20 expansions reports `succeeded` and a real
       // improvement, and nothing in the summary says it stopped a third of the
@@ -521,9 +530,15 @@ export function summariseRun(
     }
   }
 
+  // Node 0 is the seed: it winning means nothing beat the starting point.
+  const bestCodeHash = typeof bestNodeIndex === "number" && bestNodeIndex !== 0
+    ? hashByNode.get(bestNodeIndex)
+    : undefined;
+
   return {
     baselineScore,
     bestChange,
+    bestCodeHash,
     bestScore,
     bestTestScore,
     candidates: run.candidates ?? 0,

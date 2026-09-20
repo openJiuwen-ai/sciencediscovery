@@ -343,3 +343,23 @@ test("a rollout at the floor is accepted", async () => {
 
   assert.equal(result.run?.id, "run-1");
 });
+
+test("the summary names the winner the engine picked, and only once it has finished", () => {
+  const events = (finish: Record<string, unknown> | null) => [
+    { event: { baselineScore: 0.03, nodeIndex: 0, type: "seeded" } },
+    { event: { codeHash: "sha256:" + "1".repeat(64), nodeIndex: 1, score: 0.09, type: "expanded", valid: true } },
+    { event: { codeHash: "sha256:" + "2".repeat(64), nodeIndex: 2, score: 0.0938, type: "expanded", valid: true } },
+    { event: { codeHash: "sha256:" + "3".repeat(64), nodeIndex: 3, score: 0.09, type: "expanded", valid: true } },
+    ...(finish ? [{ event: { type: "search_finished", ...finish } }] : []),
+  ];
+  const run = { candidates: 4, id: "r", status: "succeeded" as const, tokens: 1 };
+
+  assert.equal(summariseRun(run, events({ bestNodeIndex: 2 })).bestCodeHash, "sha256:" + "2".repeat(64));
+  // The engine's pick wins over the best score seen, since they need not agree.
+  assert.equal(summariseRun(run, events({ bestNodeIndex: 1 })).bestCodeHash, "sha256:" + "1".repeat(64));
+  // Node 0 is the seed, and `null` is no best at all: nothing beat the start.
+  assert.equal(summariseRun(run, events({ bestNodeIndex: 0 })).bestCodeHash, undefined);
+  assert.equal(summariseRun(run, events({ bestNodeIndex: null })).bestCodeHash, undefined);
+  // A search still moving has no winner to hand over.
+  assert.equal(summariseRun({ ...run, status: "running" }, events(null)).bestCodeHash, undefined);
+});

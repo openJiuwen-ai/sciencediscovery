@@ -44,7 +44,7 @@ import { SearchCellGrid } from "./SearchCellGrid.js";
 import { SearchGraphCanvas } from "./SearchGraphCanvas.js";
 import { SearchGraphTable } from "./SearchGraphTable.js";
 import { layoutSearchGraph } from "./search-graph-layout.js";
-import { emptyRunView, reduceEvolveRecord, runProgress, type EvolveRunView } from "./model.js";
+import { emptyRunView, evolveShortTitle, reduceEvolveRecord, runProgress, type EvolveRunView } from "./model.js";
 
 export interface EvolvePanelProps {
   client: ApiClient;
@@ -100,9 +100,13 @@ export function EvolvePanel({ client, onClose, onError, onRunChanged, run }: Evo
   return <div className="evolve-panel-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section aria-label={t("evolve.panel.title")} aria-modal="true" className={`evolve-panel ${fullscreen ? "evolve-panel-fullscreen" : ""}`} role="dialog">
       <header className="evolve-panel-header">
-        <div>
+        <div className="evolve-panel-heading">
           <span className="eyebrow">{t("evolve.panel.eyebrow")}</span>
-          <h2>{run.goal.statement}</h2>
+          <h2 title={run.goal.statement}>{evolveShortTitle(run.goal.statement)}</h2>
+          {evolveShortTitle(run.goal.statement) !== run.goal.statement.trim() ? <details className="evolve-panel-task">
+            <summary>{t("evolve.panel.fullTask")}</summary>
+            <p>{run.goal.statement}</p>
+          </details> : null}
         </div>
         <div className="evolve-panel-controls">
           <span className={`evolve-status evolve-status-${view.status}`}>{t(`evolve.status.${view.status}`)}</span>

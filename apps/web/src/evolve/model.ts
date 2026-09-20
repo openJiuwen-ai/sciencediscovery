@@ -286,3 +286,33 @@ export function runProgress(view: EvolveRunView, budgetExpansions: number): numb
   if (budgetExpansions <= 0) return 0;
   return Math.min(1, view.expansions / budgetExpansions);
 }
+
+/** Longest title, in columns: a CJK character is two columns wide. */
+const TITLE_COLUMNS = 64;
+
+const columnsOf = (char: string): number => (/[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/.test(char) ? 2 : 1);
+
+/**
+ * A one-line title for a run whose goal is the user's whole brief.
+ *
+ * The goal statement is kept verbatim because the search reads it; a brief with
+ * audience, constraints and a scoring rubric is a paragraph, and headers and
+ * list rows cannot show a paragraph. This keeps the first sentence, drops a
+ * leading "任务：" style label, and cuts at a fixed width. The full statement is
+ * still shown wherever there is room for it.
+ */
+export function evolveShortTitle(statement: string): string {
+  const flat = statement.replace(/\s+/g, " ").trim();
+  const unlabelled = flat.replace(/^(?:任务|目标|Task|Goal|Objective)\s*[:：]\s*/i, "");
+  const firstSentence = unlabelled.split(/[。！？!?；;]|\.(?=\s|$)/, 1)[0]?.trim() ?? "";
+  // A label with nothing after it ("任务：。") has no title worth keeping.
+  const title = /[\p{L}\p{N}]/u.test(firstSentence) ? firstSentence : /[\p{L}\p{N}]/u.test(unlabelled) ? unlabelled : flat;
+  let width = 0;
+  let out = "";
+  for (const char of title) {
+    width += columnsOf(char);
+    if (width > TITLE_COLUMNS) return `${out.trimEnd()}…`;
+    out += char;
+  }
+  return out;
+}

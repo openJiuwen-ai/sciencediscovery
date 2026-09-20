@@ -145,9 +145,33 @@
   padding: 16px 20px;
 }
 
+.evolve-panel-heading {
+  min-width: 0;
+}
+
 .evolve-panel-header h2 {
   font-size: 16px;
   margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolve-panel-task {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.evolve-panel-task summary {
+  cursor: pointer;
+}
+
+.evolve-panel-task p {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
 }
 
 .evolve-panel-controls {

@@ -86,6 +86,10 @@ async function initializeComponent<T>(component: string, operation: () => Promis
   }
 }
 
+/** How much of the winning candidate `get_evolve_run` inlines. A long program is
+ *  read in full from its artifact; this bounds what one tool result can cost. */
+export const BEST_SOURCE_LIMIT = 30_000;
+
 /**
  * What a run's result artifact is called: `evolve/<run>/<entrypoint>`.
  *
@@ -415,7 +419,19 @@ export function createPlatformServices(
             known ? `The searches in this session: ${known}` : "This session has no searches yet."}`
           : "this session has no searches yet.");
       }
-      return summariseRun(run, await evolutionStore.readEvents(run.id));
+      const summary = summariseRun(run, await evolutionStore.readEvents(run.id));
+      if (!summary.bestCodeHash) return summary;
+      // Hand the winner over with the numbers. Without it the reader had scores
+      // and a one-line change summary, and set out to rebuild the program from
+      // the summary — which yields one that was never scored. The same text is
+      // already published as an artifact, so name that too: it is where the
+      // whole text lives when it is too long to inline.
+      const source = await evolveCandidates.read(run.id, summary.bestCodeHash);
+      const resultArtifact = evolveArtifactName(run);
+      if (source === undefined) return { ...summary, resultArtifact };
+      return source.length > BEST_SOURCE_LIMIT
+        ? { ...summary, bestSource: source.slice(0, BEST_SOURCE_LIMIT), bestSourceTruncated: { chars: source.length }, resultArtifact }
+        : { ...summary, bestSource: source, resultArtifact };
     },
   });
 
