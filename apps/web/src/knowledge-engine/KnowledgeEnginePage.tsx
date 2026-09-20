@@ -36,6 +36,10 @@ import { KeRootsView } from "./KeRootsView.js";
 export interface KnowledgeEnginePageProps {
   client: ApiClient;
   onClose: () => void;
+  /** Deep-link target (/kbs/<kbId>[/documents/<docId>], or a memory-graph
+   *  jump). Applied whenever it changes: selects the KB and, with a docId,
+   *  opens the reader at that document. */
+  target?: { kbId: string; docId?: string } | null;
 }
 
 const OVERLAY_STYLE: CSSProperties = {
@@ -149,7 +153,7 @@ const JOB_STATUS_COLOR: Record<string, string> = {
  * Agent subject-engine page; mounted as a full-page overlay (same pattern as
  * MemoryGraphExplorer).
  */
-export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProps) {
+export function KnowledgeEnginePage({ client, onClose, target }: KnowledgeEnginePageProps) {
   const { t } = useLocale();
   const [kbs, setKbs] = useState<KeKb[]>([]);
   const [activeKbId, setActiveKbId] = useState<string | undefined>(undefined);
@@ -185,6 +189,15 @@ export function KnowledgeEnginePage({ client, onClose }: KnowledgeEnginePageProp
   // W7 three-level reader overlay: opened from a document row (no quote) or
   // an evidence card (with its verbatim quote for click-through highlight).
   const [readerDoc, setReaderDoc] = useState<{ docId: string; highlightQuote: string | null } | null>(null);
+
+  // Deep-link target (URL /kbs/... or a memory-graph jump): select the KB and
+  // open the reader at the document. Re-applies on every target change so a
+  // second jump while the page is open still lands.
+  useEffect(() => {
+    if (!target) return;
+    setActiveKbId(target.kbId);
+    if (target.docId) setReaderDoc({ docId: target.docId, highlightQuote: null });
+  }, [target]);
 
   // Stale-response guards: a refresh that resolves after the user switched
   // KBs (or after unmount) must not land.

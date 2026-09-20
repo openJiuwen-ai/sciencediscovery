@@ -1106,7 +1106,15 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // re-fetches what the card already polled.
   const [memoryExplorerOpen, setMemoryExplorerOpen] = useState(false);
 
-  const [knowledgeEngineOpen, setKnowledgeEngineOpen] = useState(false);
+  const [knowledgeEngineOpen, setKnowledgeEngineOpen] = useState(() => Boolean(initialView.kbId));
+  // URL-driven deep link (/kbs/<kbId>[/documents/<docId>]) and graph-node
+  // jumps both land here; cleared when the overlay closes so the URL falls
+  // back to the underlying view.
+  const [knowledgeEngineTarget, setKnowledgeEngineTarget] = useState<{ kbId: string; docId?: string } | null>(
+    () => initialView.kbId
+      ? { kbId: initialView.kbId, ...(initialView.kbDocId ? { docId: initialView.kbDocId } : {}) }
+      : null,
+  );
   // V4-C1: conversation KB scope — the KB list for the composer picker and the
   // active session's runtime settings details (kbScopeKbIds/kbScopeWebSearch
   // live in the settings overrides, not on the Session record).
@@ -1697,6 +1705,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const view: ViewState = {
       artifact: artifactModalName,
       trajectory: trajectorySession && trajectorySession.id === activeSessionId ? true : undefined,
+      kbDocId: knowledgeEngineTarget?.docId,
+      kbId: knowledgeEngineTarget?.kbId,
       projectId: activeProjectId,
       sessionFilter: sessionListState,
       sessionId: activeSessionId,
@@ -1725,7 +1735,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const url = `${next}${window.location.hash}`;
     if (replace) window.history.replaceState(null, "", url);
     else window.history.pushState(null, "", url);
-  }, [activeProjectId, activeSessionId, artifactModalName, trajectorySession, projectsLoaded, sessionListState, sessionsLoaded, settingsTarget, showConfig, systemSettingsGroup, urlEpoch, workspaceCollapsed, workspaceView]);
+  }, [activeProjectId, activeSessionId, artifactModalName, knowledgeEngineTarget, trajectorySession, projectsLoaded, sessionListState, sessionsLoaded, settingsTarget, showConfig, systemSettingsGroup, urlEpoch, workspaceCollapsed, workspaceView]);
 
   // Leaving a Session closes its inline trajectory view: switching back must
   // not silently reopen it and rewrite the path. The activeSessionId guard
@@ -1750,6 +1760,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       setArtifactModalSessionId(undefined);
       if (view.settingsKind === "system") openSystemSettings();
       else cancelSystemSettings();
+      // /kbs/... deep links open the knowledge-engine overlay at the target;
+      // navigating away from a kb path closes it (same rule as settings
+      // dialogs: back/forward dismisses overlays the path does not name).
+      if (view.kbId) {
+        setKnowledgeEngineTarget({ kbId: view.kbId, ...(view.kbDocId ? { docId: view.kbDocId } : {}) });
+        setKnowledgeEngineOpen(true);
+      } else {
+        setKnowledgeEngineTarget(null);
+        setKnowledgeEngineOpen(false);
+      }
       setWorkspaceView(view.view === "usage" ? "usage" : "session");
       const projectId = view.projectId && projects.some((project) => project.id === view.projectId)
         ? view.projectId
@@ -5077,9 +5097,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       /> : null}
 
       {knowledgeEngineOpen ? (
-        <ErrorBoundary label="KnowledgeEngine" onError={(message) => { reportError(message); setKnowledgeEngineOpen(false); }}>
+        <ErrorBoundary label="KnowledgeEngine" onError={(message) => { reportError(message); setKnowledgeEngineOpen(false); setKnowledgeEngineTarget(null); }}>
           <Suspense fallback={null}>
-            <KnowledgeEnginePage client={client} onClose={() => setKnowledgeEngineOpen(false)} />
+            <KnowledgeEnginePage
+              client={client}
+              onClose={() => { setKnowledgeEngineOpen(false); setKnowledgeEngineTarget(null); }}
+              target={knowledgeEngineTarget}
+            />
           </Suspense>
         </ErrorBoundary>
       ) : null}
@@ -5098,6 +5122,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               {...(pendingMemoryNode ? { initialNodeId: pendingMemoryNode.id } : {})}
               onClose={() => setMemoryExplorerOpen(false)}
               onError={reportError}
+              // A mirrored knowledge-base record (kb_search/kb_expand/doc_grep
+              // product) deep-links into the KE overlay at its document.
+              onOpenKnowledgeBase={(kbId, docId) => {
+                setKnowledgeEngineTarget({ kbId, docId });
+                setKnowledgeEngineOpen(true);
+              }}
               sessionId={session.id}
               subgraph={memorySubgraph}
             />
