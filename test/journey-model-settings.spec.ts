@@ -16,6 +16,7 @@ import { expect } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
+import { requireFirstRunState } from "./helpers/journeys.ts";
 
 test.use({ locale: "zh-CN" });
 
@@ -41,14 +42,14 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN（隔离实例）与新建 Provider 的本地演示令牌（无外部访问）。
  * CostSideEffects: none；创建的 Provider 与模型记录在 finally 中删除。
  */
-test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" }, async ({ journey, page }) => {
+test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" }, async ({ journey, page }, testInfo) => {
   test.setTimeout(180_000);
   journey.scenario({
     goal: "一位用户要为模型服务商配置策略：先确认注册表入口与空态、添加控件紧凑清楚，"
       + "再验证服务商编辑器分组、行内模型表可扫读、思考档位、失败恢复，并确认桌面和窄屏下都整齐可用。",
     preconditions: [
       "隔离栈已启动，浏览器已持有本实例的访问 token",
-      "实例内没有可用模型与服务商；新建的 Provider 与模型由本旅程创建并在结束时清理",
+      "实例内没有可用模型与服务商：本旅程只在运行自己拥有该栈时清掉上一次运行的残留（见 E2E_ALLOW_STACK_RESET），否则记为前置未满足；自己新建的 Provider 与模型在结束时清理",
       "浏览器与界面语言均为 zh-CN",
       "mocked：仅配置并回读，不发起任何模型调用",
     ],
@@ -102,6 +103,11 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       "注册表入口高亮；右侧出现标题与说明；还没有服务商时给出指向连接模型的空态引导，连接卡片默认展开作为唯一新建入口。"
       + "不再有独立的「添加 Provider」按钮、预置下拉或自定义表单；编辑器默认隐藏；旧的高级独立模型入口不再存在。",
       async () => {
+        // The empty-state copy this step reads only renders while no Provider
+        // exists, so a record a crashed earlier run left behind would fail the
+        // step for a reason that has nothing to do with the registry's layout.
+        // The gate only clears a stack this run owns; otherwise it blocks.
+        await requireFirstRunState(page, testInfo);
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();

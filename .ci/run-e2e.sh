@@ -44,7 +44,11 @@ fi
 results_suffix="e2e"
 if [[ "$group" != "mocked" ]]; then results_suffix="e2e-$group"; fi
 results_root="${CI_RESULTS_DIR:-/ci-results}/$results_suffix"
-runtime_root="${CI_RUNTIME_DIR:-/ci-cache/sciencediscovery-e2e}"
+# A test run keeps its own data directory, separate from the one an instance a
+# person runs for themselves uses (`.sciencediscovery-data`). The container path
+# is what CI passes; the repository-local fallback is what a laptop gets, and it
+# is gitignored.
+runtime_root="${CI_RUNTIME_DIR:-$repository_root/.e2e-data}"
 stack_log="$results_root/stack.log"
 test_log="$results_root/run.log"
 summary="$results_root/summary.txt"
@@ -156,9 +160,16 @@ node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('h
 IFS= read -r auth_token < "$auth_token_path"
 
 export SCIENCE_AGENT_AUTH_TOKEN="$auth_token"
-export SCIENCE_AGENT_DATA_DIR="$runtime_root/data"
-export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4310}"
-export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4311}"
+export SCIENCE_DISCOVERY_DATA_DIR="$runtime_root/data"
+# The product's own defaults — 4310/4311, evolve 4313, memory-graph 17674 — belong
+# to the instance a person leaves running. A test stack that reuses them competes
+# with that instance for the port and puts its own address in front of whoever the
+# suite then talks to, so the layer keeps a block of its own. An explicit override
+# still wins, which is how two runs share one machine.
+export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4410}"
+export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4411}"
+export SCIENCE_AGENT_EVOLVE_PORT="${SCIENCE_AGENT_EVOLVE_PORT:-4413}"
+export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774}"
 export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
@@ -173,6 +184,12 @@ export E2E_API_TOKEN="$auth_token"
 export E2E_BASE_URL="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
 export E2E_API_URL="$E2E_BASE_URL"
 export E2E_JOURNEY_REPORTS="$results_root/journey-reports"
+# This layer started the stack above, on a data directory it owns, and will kill
+# it again on the way out, so a journey may empty it to reach a first-run state.
+# Nothing else grants that: a suite merely pointed at an address — someone's own
+# instance, a colleague's machine — clears nothing and reports the journey as
+# blocked instead.
+export E2E_ALLOW_STACK_RESET=1
 
 stack_arguments=(--mode local)
 # A prepared workspace already carries the installed dependencies and the
@@ -180,6 +197,18 @@ stack_arguments=(--mode local)
 # modules directory that came from another store, which it refuses to do
 # without a TTY, and the stack dies before it can listen.
 if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
+# A taken port is not refused anywhere below: the stack loses that bind, the
+# journeys reach whoever already owns the address, and the run reports a wall of
+# 401s that reads like a broken token. Say it here instead, while the port is
+# still the answer.
+for busy_port in "$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT"; do
+  if ss -ltn "sport = :$busy_port" 2>/dev/null | grep -q LISTEN; then
+    printf 'BLOCKED: port %s is already in use; another stack owns it. Set SCIENCE_AGENT_PORT / SCIENCE_AGENT_RUNNER_PORT / SCIENCE_AGENT_EVOLVE_PORT / SCIENCE_AGENT_MEMORY_GRAPH_PORT to a free block.\n' \
+      "$busy_port" | tee -a "$test_log" >&2
+    exit 2
+  fi
+done
+
 setsid ./scripts/start-stack.sh "${stack_arguments[@]}" > "$stack_log" 2>&1 &
 stack_pid=$!
 

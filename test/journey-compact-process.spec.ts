@@ -291,7 +291,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
  *   2. Start Skill summarization from the UI and check live then completed presentation.
  *   3. Ask skill-creator to create a real draft and open/close its review UI without processing.
  *   4. Discard that exact draft through the public API and verify the browser and reload show a processed record.
- * Environment: Fresh isolated local API/Runner with only the built-in Skill library initially.
+ * Environment: Fresh isolated local API/Runner with only the built-in Skill library initially; a stack that already
+ * holds a writable library is reported as BLOCKED, since libraries cannot be deleted through the API.
  * Type: mocked
  * LLM: journey-owned local scripted model; no external requests.
  * WebSearch: none
@@ -301,12 +302,16 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
  * Credentials: E2E_API_TOKEN for the local stack only.
  * CostSideEffects: no external cost; Project/model/draft cleanup; the isolated test library remains in test data.
  */
-test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, async ({ page, journey }) => {
+test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, async ({ page, journey }, testInfo) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "zh-CN"));
   journey.scenario({ goal: "确认源对话完成和打开审核窗口都不会提前压缩尚未处理的 Skill 入口。",
-    preconditions: ["隔离本地 API", "测试自己创建项目、模型和草稿"] });
+    preconditions: [
+      "隔离本地 API",
+      "实例内只有内置 Skill 库：可写库无法经 API 删除，已存在可写库时本旅程记为前置未满足",
+      "测试自己创建项目、模型和草稿",
+    ] });
   const skillName = `card-lifecycle-check-${Date.now()}`;
   const stub = await scriptedModel([
     [{ text: "普通分析已完成。" }],
@@ -328,8 +333,17 @@ test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, 
   try {
     await journey.step("未配置可写库时完成普通源任务", "没有可写 Skill 库时不显示总结入口，也不出现不可点击的创建提案按钮。",
       async () => {
+        // This step's subject is what a user sees *before* any writable library
+        // exists, and a Skill library cannot be deleted through the API, so a
+        // library an earlier run created makes the state unreachable rather
+        // than wrong. Report that as an unmet precondition with the one action
+        // that fixes it instead of failing on an assertion that reads like a
+        // product defect.
         const libraries = await api("/api/skill-libraries") as Array<{ id: string }>;
-        expect(libraries.every((library) => library.id === "built-in-skills"), "Run this journey with fresh isolated Skill library data").toBe(true);
+        const writable = libraries.filter((library) => library.id !== "built-in-skills").map((library) => library.id);
+        testInfo.skip(writable.length > 0, `BLOCKED: this stack already holds writable Skill librar${writable.length > 1 ? "ies" : "y"} `
+          + `${writable.join(", ")}, so the "no writable library" state cannot be reproduced. Skill libraries have no delete API; `
+          + "reset the E2E layer's data directory (keep data/envs) and rerun.");
         fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { ...stub, name: "Skill lifecycle local stub" },
           projectName: `Skill 生命周期 ${Date.now()}`, sessionTitle: "Skill 入口验证" });
         await openProjectSession(page, fixture);

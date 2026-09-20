@@ -57,8 +57,11 @@ not such a reason; unavailable prerequisites are BLOCKED, not an exemption.
 
 ### Browser journeys (Playwright)
 
-Requires an isolated running stack on `:4310` (or `E2E_BASE_URL`) and its
-generated access token exported as `E2E_API_TOKEN`. Specs live in `test/`; the
+Requires an isolated running stack on `:4410` (or `E2E_BASE_URL`) and its
+generated access token exported as `E2E_API_TOKEN`. That port, and the data
+directory below `.e2e-data/`, are deliberately not the ones an instance you run
+for yourself uses (`:4310`, `.sciencediscovery-data`): a test run gets its own,
+so it can never drive — or be asked to empty — your own instance. Specs live in `test/`; the
 local environment is **`.e2e/`** (fully gitignored: deps, reports,
 screenshots). Committed bootstrap files under `test/` recreate it:
 

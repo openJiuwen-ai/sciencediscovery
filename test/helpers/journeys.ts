@@ -15,7 +15,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { expect, request, type Locator, type Page } from "@playwright/test";
+import { expect, request, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 
@@ -676,6 +676,121 @@ export function sessionExecutionRuns(page: Page, sessionId: string): Promise<Arr
 /** Query the setup state without triggering installation or other environment changes. */
 export function environmentSetup(page: Page): Promise<{ message: string; state: string }> {
   return apiJson(page, "/api/environment-setup");
+}
+
+/** Records a first-run journey cannot tolerate, counted before anything is deleted. */
+export interface FirstRunLeftovers {
+  models: number;
+  projects: number;
+  providers: number;
+}
+
+/**
+ * Set to `1` only by `.ci/run-e2e.sh`, for the throwaway stack it starts itself
+ * on a run-scoped data directory. Nothing else grants it.
+ */
+export const STACK_RESET_VARIABLE = "E2E_ALLOW_STACK_RESET";
+
+/** The port the guideline reserves for the human's own long-running instance. */
+const TRIAL_INSTANCE_PORT = "4310";
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * Whether this run is allowed to delete records it did not create, and why not
+ * when it is not.
+ *
+ * Deleting every Project and Provider is the right thing to do to a stack the
+ * run owns and the wrong thing to do to anything else, and the suite cannot
+ * tell the two apart by looking at them — a colleague's instance answers the
+ * same API. So permission is granted, never inferred: the E2E layer sets
+ * `E2E_ALLOW_STACK_RESET=1` for the stack it just started, and a suite that was
+ * merely pointed at an address clears nothing. The loopback and trial-port
+ * checks then catch an opt-in that was exported into the wrong shell.
+ */
+export function stackResetRefusal(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const base = apiBaseUrl(env);
+  const target = new URL(base);
+  if (env[STACK_RESET_VARIABLE] !== "1") {
+    return `${STACK_RESET_VARIABLE} is not set, so this run may not delete records on ${base}`;
+  }
+  if (!LOOPBACK_HOSTS.has(target.hostname)) {
+    return `${base} is not a loopback address, so this run may not delete records on it`;
+  }
+  if (target.port === TRIAL_INSTANCE_PORT) {
+    return `${base} is the local trial instance, whose data belongs to its user`;
+  }
+  return undefined;
+}
+
+async function firstRunLeftovers(page: Pick<Page, "request">): Promise<FirstRunLeftovers> {
+  const [projects, providers, models] = await Promise.all([
+    apiJson<Array<{ id: string }>>(page, "/api/projects"),
+    // The registry answers with the catalogue of presets alongside what is
+    // actually configured; only the configured ones exist to delete.
+    apiJson<{ providers: Array<{ id: string }> }>(page, "/api/providers").then((body) => body.providers),
+    apiJson<Array<{ id: string }>>(page, "/api/models"),
+  ]);
+  return { models: models.length, projects: projects.length, providers: providers.length };
+}
+
+/**
+ * Bring this stack to the first-run state a journey reads, or stop the journey
+ * saying why it could not.
+ *
+ * A journey that asserts "create a project" / "no providers yet" cannot reach
+ * that state on a stack that still holds records, and one predecessor that died
+ * mid-run leaves enough behind to fail every later run for an unrelated reason.
+ * Each journey already cleans up its own records in `finally`; this is the other
+ * half — what a crashed predecessor could not clean up.
+ *
+ * It deletes nothing unless this run owns the stack (see `stackResetRefusal`).
+ * On someone's own instance the journey is reported as BLOCKED instead, which
+ * is the honest outcome: the state cannot be reached, and their data is not the
+ * suite's to remove.
+ */
+export async function requireFirstRunState(
+  page: Pick<Page, "request">,
+  testInfo: TestInfo,
+): Promise<FirstRunLeftovers> {
+  const found = await firstRunLeftovers(page);
+  const total = found.projects + found.providers + found.models;
+  if (!total) return found;
+
+  const refusal = stackResetRefusal();
+  testInfo.skip(Boolean(refusal), `BLOCKED: this journey reads the first-run empty state, but the stack holds `
+    + `${found.projects} project(s), ${found.providers} provider(s) and ${found.models} model profile(s) from an `
+    + `earlier run. ${refusal}. Run the E2E layer (\`pnpm ci:e2e\`), which starts a throwaway stack and grants the `
+    + `reset, or point E2E_BASE_URL at a stack you can afford to empty — the suite will not clear one it was only `
+    + "pointed at.");
+
+  // Sessions reference models, so Projects go first; a runtime default pointing
+  // at a model would otherwise block that model's Provider from being deleted.
+  const projects = await apiJson<Array<{ id: string }>>(page, "/api/projects");
+  for (const project of projects) {
+    await apiJson(page, `/api/projects/${encodeURIComponent(project.id)}`, {
+      data: { confirmationId: project.id },
+      method: "DELETE",
+    });
+  }
+  const settings = await apiJson<{ overrides?: Record<string, unknown> }>(page, "/api/settings").catch(() => undefined);
+  const overrides = { ...(settings?.overrides ?? {}) };
+  const referenced = ["modelId", "reviewModelId"].filter((key) => overrides[key] !== undefined);
+  if (referenced.length) {
+    for (const key of referenced) delete overrides[key];
+    await apiJson(page, "/api/settings", { data: overrides, method: "PUT" });
+  }
+  const { providers } = await apiJson<{ providers: Array<{ id: string }> }>(page, "/api/providers");
+  for (const provider of providers) {
+    await apiJson(page, `/api/providers/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
+  }
+  // A Provider takes its own models with it; anything still listed was added
+  // without one.
+  const models = await apiJson<Array<{ id: string }>>(page, "/api/models");
+  for (const model of models) {
+    await apiJson(page, `/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
+  }
+  return found;
 }
 
 /** Best-effort cleanup for data created in an isolated E2E run. */

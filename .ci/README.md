@@ -225,8 +225,10 @@ Optional cache volumes speed up repeated dependency and browser installs:
 --mount type=volume,source=sciencediscovery-ci-cache,target=/ci-cache
 ```
 
-That volume is not only a cache: `CI_RUNTIME_DIR` defaults below it, so it also
-holds the E2E stack's `data/envs`. Those service environments are *editable*
+That volume is not only a cache: CI points `CI_RUNTIME_DIR` below it, so it also
+holds the E2E stack's `data/envs`. (Without that variable — a laptop run — the
+E2E layer falls back to the repository-local, gitignored `.e2e-data/` instead of
+the data directory a personal instance uses.) Those service environments are *editable*
 installs whose `.pth` files record the absolute source path, so a volume
 populated from one checkout location is unusable from another. After changing
 the mount path, drop `/ci-cache/sciencediscovery-e2e` and

@@ -36,7 +36,10 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   const stub = await ideaResearchModel();
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
   const card = page.getByRole("region", { name: "Idea Tree 研究控制" });
-  const panel = page.getByRole("dialog", {name: "Idea Tree explorer"});
+  // The explorer's accessible name follows the reader's language, so match
+  // both spellings rather than pinning one locale's wording.
+  const explorerName = /Idea Tree (explorer|浏览器)/;
+  const panel = page.getByRole("dialog", {name: explorerName});
   const read = async () => {
     const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`, {headers: authorizationHeader()});
     expect(response.ok()).toBe(true);
@@ -76,7 +79,7 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await expect(panel.locator(".idea-tree-settings")).toHaveCount(0);
       await expect(page.getByLabel("研究目标与约束")).toHaveCount(0);
       await expect(page.getByLabel("给定材料", {exact: true})).toHaveCount(0);
-      await expect(page.getByRole("dialog", {name: "Idea Tree explorer"})).toHaveCount(0);
+      await expect(page.getByRole("dialog", {name: explorerName})).toHaveCount(0);
       await expect.poll(() => stub.requests.some(r => r.system.includes("DESIGN-OVERRIDE"))).toBe(true);
       await expect(page.getByText(/已启动 Idea Tree 研究/)).toBeVisible();
       await card.getByRole("button", {name: /查看研究进度/}).click();

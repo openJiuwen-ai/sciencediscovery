@@ -39,7 +39,17 @@ export const BASE_URL_VARIABLE = "E2E_BASE_URL";
 /** Older per-spec spelling, still accepted so existing commands keep working. */
 export const LEGACY_BASE_URL_VARIABLE = "E2E_API_URL";
 
-const DEFAULT_BASE_URL = "http://127.0.0.1:4310";
+/**
+ * The address `.ci/run-e2e.sh` gives the stack it starts for a test run.
+ *
+ * Deliberately not the product's own default (4310): that port belongs to the
+ * instance a person leaves running for themselves, and a suite that falls back
+ * to it would drive their data — creating Projects there, and, for a journey
+ * that needs an empty instance, asking to delete what it finds. Pointing the
+ * fallback at the test stack means an unconfigured run finds nothing listening
+ * and says so, instead of quietly working on someone's own instance.
+ */
+const DEFAULT_BASE_URL = "http://127.0.0.1:4410";
 
 /**
  * The one address the whole suite talks to.

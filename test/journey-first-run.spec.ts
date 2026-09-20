@@ -21,6 +21,7 @@ import {
   expandToolStep,
   handlePermissionsUntilTerminal,
   openProjectSession,
+  requireFirstRunState,
   scriptedModel,
   sendUserMessage,
   waitForRunTerminal,
@@ -51,14 +52,14 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN for the isolated local API only; the stub token has no external access.
  * CostSideEffects: no external cost; temporary model and Project records are deleted in finally.
  */
-test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, async ({ journey, page, playwright }) => {
+test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, async ({ journey, page, playwright }, testInfo) => {
   test.setTimeout(180_000);
   journey.scenario({
     goal: "一位第一次打开 ScienceDiscovery 的中文用户，要把工作台配起来，"
       + "并确认产品真的在本机执行命令、保留工作区文件而不继承 Shell 状态，刷新之后工作也还在。",
     preconditions: [
       "隔离栈已启动，浏览器已持有本实例的访问 token",
-      "实例内没有可用模型、没有项目；模型与项目都由本旅程自己创建并在结束时清理",
+      "实例内没有可用模型、没有项目：本旅程只在运行自己拥有该栈时清掉上一次运行的残留（见 E2E_ALLOW_STACK_RESET），否则记为前置未满足；自己创建的记录在结束时清理",
       "浏览器语言与界面语言均为 zh-CN",
       "模型由旅程自带的本地 stub 驱动，不访问任何外部服务",
     ],
@@ -122,6 +123,11 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
       "打开工作台首页",
       "首页标题与侧栏品牌是 ScienceDiscovery，并给出「创建项目」「配置模型」这两个上手入口。",
       async () => {
+        // A crashed earlier run can leave a Project or Provider behind, and the
+        // first-run entry points this step reads only exist while the instance
+        // is empty. The gate clears that residue when this run owns the stack,
+        // and blocks the journey rather than touching a stack it does not.
+        await requireFirstRunState(page, testInfo);
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
