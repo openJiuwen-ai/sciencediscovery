@@ -120,6 +120,11 @@ def completion_for(
         on_failure: Optional[Callable[[str], None]] = None,
     ) -> str:
         report = sink or on_usage
+        # Already stopped: do not send the request at all. Every expansion the
+        # search still has queued would otherwise fire a real, paid model call
+        # and abandon it half a second later, once per remaining expansion.
+        if should_stop is not None and should_stop():
+            return ""
         # Owned by the caller's thread rather than reported from `_call`: the
         # call runs on a daemon thread so it can be abandoned when the run
         # stops, and a thread-local set over there is invisible here.

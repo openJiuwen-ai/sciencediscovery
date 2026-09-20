@@ -49,13 +49,14 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 from .logging_config import get_logger
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
 from .vendor.puct.domain import Domain
 from .vendor.puct.program import Program
+from .sandbox_run import RunStopped, run_killable
 from .vendor.puct.sandbox import SandboxCapability, sandbox_command
 from .vendor.puct.tree import finite as _finite
 
@@ -82,6 +83,7 @@ def test_gate_domain(
     entrypoint_path: str = "",
     candidate_timeout: float = 300.0,
     baseline: Optional[MutableMapping[str, float]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Domain:
     """Build a domain that scores a candidate by running the project's tests.
 
@@ -110,10 +112,13 @@ def test_gate_domain(
     target = entrypoint_path or _sole_python(workspace)
 
     def evaluate(code: str, groups: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
-        outcomes = _run_suite(
-            code, workspace, target, frozen, setup_cmd, test_cmd,
-            capability=capability, timeout=candidate_timeout,
-        )
+        try:
+            outcomes = _run_suite(
+                code, workspace, target, frozen, setup_cmd, test_cmd,
+                capability=capability, timeout=candidate_timeout, should_stop=should_stop,
+            )
+        except RunStopped:
+            return False, {SCORE_KEY: float("-inf")}, "the search was stopped"
         if outcomes is None:
             return False, {SCORE_KEY: float("-inf")}, "the test suite produced no readable result"
 
@@ -195,6 +200,7 @@ def _run_suite(
     *,
     capability: SandboxCapability,
     timeout: float,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Optional[Dict[str, bool]]:
     """Materialise, re-freeze, run, and read the results back."""
     with tempfile.TemporaryDirectory(prefix="evolve-suite-") as scratch_dir:
@@ -215,10 +221,10 @@ def _run_suite(
         env_extra = {JUNIT_ENV: str(junit)}
 
         if setup_cmd:
-            ok, why = _run(setup_cmd, scratch, capability, timeout, env_extra)
+            ok, why = _run(setup_cmd, scratch, capability, timeout, env_extra, should_stop)
             if not ok:
                 raise TestGateError(f"the setup command failed before any test ran: {why}")
-        _ran, why = _run(test_cmd, scratch, capability, timeout, env_extra)
+        _ran, why = _run(test_cmd, scratch, capability, timeout, env_extra, should_stop)
 
         if not junit.exists():
             # No report at all means the runner never got as far as writing one,
@@ -270,6 +276,7 @@ def _run(
     capability: SandboxCapability,
     timeout: float,
     env_extra: Mapping[str, str],
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[bool, str]:
     """`(succeeded, why not)`.
 
@@ -291,9 +298,8 @@ def _run(
     # given inside the same confinement.
     argv = [part for part in argv if part not in ("-I",)]
     try:
-        completed = subprocess.run(
-            argv, capture_output=True, text=True, cwd=str(cwd),
-            env=env, timeout=timeout + 30,
+        completed = run_killable(
+            argv, cwd=cwd, env=env, timeout=timeout + 30, should_stop=should_stop,
         )
     except subprocess.TimeoutExpired:
         return False, f"the command ran for over {timeout + 30:.0f}s without finishing"

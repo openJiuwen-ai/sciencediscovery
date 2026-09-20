@@ -251,6 +251,29 @@ def test_a_stop_takes_effect_during_a_model_call_not_after_it() -> None:
         urllib.request.urlopen = original  # type: ignore[assignment]
 
 
+def test_a_stopped_run_sends_no_further_model_requests() -> None:
+    """Every expansion still queued when the user presses stop would otherwise
+    fire a real, paid request and abandon it half a second later."""
+    import urllib.request
+
+    from sciencediscovery_evolve.completion import completion_for
+
+    requests: list[object] = []
+
+    def counting_urlopen(*args, **_kwargs):
+        requests.append(args)
+        raise AssertionError("no request should be sent once the run is stopped")
+
+    original = urllib.request.urlopen
+    urllib.request.urlopen = counting_urlopen  # type: ignore[assignment]
+    try:
+        complete = completion_for("http://127.0.0.1:1/chat/completions", "t", should_stop=lambda: True)
+        assert [complete("improve this program") for _ in range(5)] == [""] * 5
+    finally:
+        urllib.request.urlopen = original  # type: ignore[assignment]
+    assert requests == []
+
+
 def test_a_quiet_stream_is_kept_alive_rather_than_left_to_time_out() -> None:
     """One expansion is minutes of silence, and the client's HTTP stack cannot
     tell that apart from a dead sidecar.
