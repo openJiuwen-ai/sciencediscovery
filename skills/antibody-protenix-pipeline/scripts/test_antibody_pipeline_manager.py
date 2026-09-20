@@ -32,6 +32,32 @@ SPEC.loader.exec_module(manager)
 
 
 class SandboxConfigTests(unittest.TestCase):
+    def test_hotspot_list_is_normalized(self) -> None:
+        self.assertEqual(
+            manager.normalize_hotspots(["A45", "A46", "A49"]),
+            "[A45,A46,A49]",
+        )
+
+    def test_hotspots_must_exist_in_target_pdb(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target.pdb"
+            target.write_text(
+                "ATOM      1  CA  ALA A  45      0.000   0.000   0.000  1.00  0.00           C\n"
+                "ATOM      2  CA  GLY A  46      1.000   0.000   0.000  1.00  0.00           C\n",
+                encoding="utf-8",
+            )
+            valid = {"target_pdb": target, "hotspots": "[A45,A46]"}
+            invalid = {"target_pdb": target, "hotspots": "[B45,A49]"}
+
+            self.assertEqual(manager.hotspot_target_errors(valid), [])
+            self.assertEqual(
+                manager.hotspot_target_errors(invalid),
+                [
+                    f"hotspots do not exist in target_pdb {target}: "
+                    "B45,A49 (available chains: A)"
+                ],
+            )
+
     def test_checkpoint_download_is_atomic_and_verified(self) -> None:
         payload = b"verified-checkpoint"
         digest = manager.hashlib.sha256(payload).hexdigest()
@@ -67,9 +93,13 @@ class SandboxConfigTests(unittest.TestCase):
 
     def test_mindscience_source_and_checkpoints_are_pinned(self) -> None:
         self.assertRegex(manager.MINDSCIENCE_REF, r"^[0-9a-f]{40}$")
+        self.assertRegex(manager.SHARKER_REF, r"^[0-9a-f]{40}$")
+        self.assertEqual(manager.SHARKER_REPO_URL, "https://gitee.com/sunhaoneng/gnn.git")
         self.assertEqual(manager.RF_DIFFUSION_CKPT["size"], 480_719_938)
+        self.assertEqual(manager.PROTEINMPNN_CKPT["size"], 6_654_507)
         self.assertEqual(manager.PROTENIX_CKPT["size"], 1_472_707_161)
         self.assertRegex(str(manager.RF_DIFFUSION_CKPT["sha256"]), r"^[0-9a-f]{64}$")
+        self.assertRegex(str(manager.PROTEINMPNN_CKPT["sha256"]), r"^[0-9a-f]{64}$")
         self.assertRegex(str(manager.PROTENIX_CKPT["sha256"]), r"^[0-9a-f]{64}$")
 
     def test_existing_mindscience_checkout_moves_to_pinned_detached_ref(self) -> None:
@@ -121,6 +151,145 @@ class SandboxConfigTests(unittest.TestCase):
             )
             self.assertEqual(head, pinned)
             self.assertNotEqual(symbolic.returncode, 0)
+
+    def test_rfdiffusion_io_patch_is_applied_once_and_then_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "mindscience"
+            checkout.mkdir()
+            subprocess.run(["git", "init", str(checkout)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(checkout), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(checkout), "config", "user.name", "Skill Test"], check=True)
+            source = checkout / "writer.py"
+            source.write_text("value = tensor\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(checkout), "add", "writer.py"], check=True)
+            subprocess.run(["git", "-C", str(checkout), "commit", "-m", "base"], check=True, capture_output=True)
+            source.write_text("value = int(tensor)\n", encoding="utf-8")
+            patch = root / "compat.patch"
+            patch.write_text(
+                subprocess.run(
+                    ["git", "-C", str(checkout), "diff", "--", "writer.py"],
+                    check=True,
+                    text=True,
+                    capture_output=True,
+                ).stdout,
+                encoding="utf-8",
+            )
+            patch.write_bytes(patch.read_bytes().replace(b"\n", b"\r\n"))
+            subprocess.run(["git", "-C", str(checkout), "checkout", "--", "writer.py"], check=True)
+
+            manager.apply_rfdiffusion_io_patch(checkout, patch)
+            self.assertEqual(source.read_text(encoding="utf-8"), "value = int(tensor)\n")
+            self.assertEqual(manager.rfdiffusion_io_patch_errors(checkout, patch), [])
+
+            with mock.patch.object(manager.subprocess, "run", wraps=subprocess.run) as run:
+                manager.apply_rfdiffusion_io_patch(checkout, patch)
+            apply_calls = [
+                call for call in run.call_args_list
+                if "apply" in call.args[0] and "--check" not in call.args[0]
+            ]
+            self.assertEqual(apply_calls, [])
+
+    def test_rfdiffusion_io_patch_rejects_unexpected_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "mindscience"
+            checkout.mkdir()
+            subprocess.run(["git", "init", str(checkout)], check=True, capture_output=True)
+            source = checkout / "writer.py"
+            source.write_text("unexpected\n", encoding="utf-8")
+            patch = root / "compat.patch"
+            patch.write_text(
+                "diff --git a/writer.py b/writer.py\n"
+                "--- a/writer.py\n+++ b/writer.py\n"
+                "@@ -1 +1 @@\n-old\n+new\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "does not match"):
+                manager.apply_rfdiffusion_io_patch(checkout, patch)
+
+    def test_sharker_install_is_pinned_and_replaces_unverified_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            package = source / "sharker"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("VERSION = 'pinned'\n", encoding="utf-8")
+            destination = root / "rf_diffusion" / "env" / "sharker"
+            destination.mkdir(parents=True)
+            (destination / "__init__.py").write_text("VERSION = 'old'\n", encoding="utf-8")
+
+            manager.install_sharker(source, destination)
+
+            self.assertEqual(
+                (destination / "__init__.py").read_text(encoding="utf-8"),
+                "VERSION = 'pinned'\n",
+            )
+            marker = manager.read_json(destination / ".sciencediscovery-source.json")
+            self.assertEqual(marker["revision"], manager.SHARKER_REF)
+            self.assertFalse(destination.with_name("sharker.part").exists())
+
+            with mock.patch.object(manager.shutil, "copytree") as copytree:
+                manager.install_sharker(source, destination)
+            copytree.assert_not_called()
+
+    def test_validate_paths_reports_missing_sharker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rf_dir = root / "rf_diffusion"
+            rf_dir.mkdir()
+            cfg = {
+                "app_dir": root,
+                "rf_diffusion_dir": rf_dir,
+                "proteinmpnn_dir": root,
+                "protenix_dir": root,
+                "target_pdb": root / "target.pdb",
+                "framework_pdb": root / "framework.pdb",
+                "ckpt": root / "rf.ckpt",
+                "proteinmpnn_ckpt": root / "proteinmpnn.ckpt",
+                "protenix_ckpt": root / "protenix.ckpt",
+                "python": Path(os.sys.executable),
+                "pipeline_env": "",
+                "hmmer_home": "",
+                "cann_set_env": "",
+                "protenix_use_msa": False,
+            }
+            for key in ("target_pdb", "framework_pdb", "ckpt", "proteinmpnn_ckpt", "protenix_ckpt"):
+                Path(cfg[key]).touch()
+            with mock.patch.object(manager, "managed_python_errors", return_value=[]):
+                errors, _ = manager.validate_paths(cfg)
+            self.assertTrue(any("sharker package" in item for item in errors), errors)
+
+            package = rf_dir / "env" / "sharker"
+            package.mkdir(parents=True)
+            (package / "__init__.py").touch()
+            with mock.patch.object(manager, "managed_python_errors", return_value=[]):
+                errors, _ = manager.validate_paths(cfg)
+            self.assertFalse(any("sharker package" in item for item in errors), errors)
+
+            Path(cfg["proteinmpnn_ckpt"]).unlink()
+            with mock.patch.object(manager, "managed_python_errors", return_value=[]):
+                errors, _ = manager.validate_paths(cfg)
+            self.assertTrue(any("proteinmpnn_ckpt" in item for item in errors), errors)
+
+    def test_sharker_import_uses_rfdiffusion_env_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_dir = root / "mindscience" / "MindSPONGE" / "applications"
+            rf_dir = app_dir / "rf_diffusion"
+            package = rf_dir / "env" / "sharker"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("VALUE = 'ok'\n", encoding="utf-8")
+            cfg = {
+                "app_dir": app_dir,
+                "rf_diffusion_dir": rf_dir,
+                "python": os.fspath(Path(os.sys.executable).resolve()),
+            }
+            self.assertEqual(manager.sharker_import_errors(cfg), [])
+
+            (package / "__init__.py").write_text("raise RuntimeError('broken sharker')\n", encoding="utf-8")
+            errors = manager.sharker_import_errors(cfg)
+            self.assertTrue(any("broken sharker" in item for item in errors), errors)
 
     def test_selected_environment_python_precedes_legacy_aliases(self) -> None:
         with mock.patch.dict(os.environ, {

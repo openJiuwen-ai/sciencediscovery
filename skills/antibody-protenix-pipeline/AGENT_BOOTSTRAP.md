@@ -8,10 +8,13 @@
 3. Select and probe a managed scientific environment on the same Runner.
 4. Create the workspace-relative config, then launch the frozen Skill
    entrypoint once with `--prepare-only` and `background=true`. The first run
-   clones the pinned official MindScience source and downloads the two official
-   checkpoints; an existing checkout is verified/re-pinned and verified files
-   are reused in the same Session. The sandbox
-   network allowlist must contain `gitcode.com`, `tools.mindspore.cn`, and
+   clones the pinned official MindScience and RFdiffusion `sharker` sources and
+   applies the bundled RFdiffusion MindSpore Tensor-to-PDB compatibility patch
+   before downloading the three official RFdiffusion, ProteinMPNN, and
+   Protenix checkpoints; existing checkouts are
+   verified/re-pinned and verified files are reused in the same Session. The
+   sandbox network allowlist must contain `gitcode.com`, `gitee.com`,
+   `tools.mindspore.cn`, and
    `af3-dev.tos-cn-beijing.volces.com`. Keep the returned Execution ID and
    monitor it; never duplicate a queued, running, or unknown preparation.
 5. Validate in the foreground, then launch the frozen Skill entrypoint once with
