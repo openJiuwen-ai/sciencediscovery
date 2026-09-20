@@ -40,6 +40,12 @@ from typing import Any
 
 MINDSCIENCE_REPO_URL = "https://gitcode.com/mindspore/mindscience.git"
 MINDSCIENCE_REF = "971c015b0111d229608ff05b9e77704dbb0793b4"
+SHARKER_REPO_URL = "https://gitee.com/sunhaoneng/gnn.git"
+SHARKER_REF = "face6e69112866d69b102839d7aeff3a6822bc8e"
+RF_DIFFUSION_IO_PATCH = Path(__file__).with_name("rfdiffusion_mindspore_io.patch")
+RF_DIFFUSION_IO_TARGET = Path(
+    "MindSPONGE/applications/rf_diffusion/rfdiffusion/inference/ab_util.py"
+)
 RF_DIFFUSION_CKPT = {
     "url": "https://tools.mindspore.cn/dataset/workspace/mindspore_ckpt/ckpt/RFdiffusion/RFdiffusion_Ab.ckpt",
     "size": 480_719_938,
@@ -49,6 +55,11 @@ PROTENIX_CKPT = {
     "url": "https://tools.mindspore.cn/dataset/workspace/mindspore_ckpt/ckpt/Protenix/ms_model_v0.5.0.ckpt",
     "size": 1_472_707_161,
     "sha256": "b0944db8b3ecf48db7c73c4538194bda86b9ce8b036812e0a1c950bebc26fde0",
+}
+PROTEINMPNN_CKPT = {
+    "url": "https://tools.mindspore.cn/dataset/workspace/mindspore_ckpt/ckpt/ProteinMPNN/vanilla_model_weights/v_48_020.ckpt",
+    "size": 6_654_507,
+    "sha256": "abb333dde811e2b5a4909a3e6a0ef67c762809e14dd3e1ebd8dca0feea7bcd3a",
 }
 
 
@@ -62,6 +73,7 @@ WORKSPACE_PATH_KEYS = {
     "protenix_dir",
     "ckpt",
     "protenix_ckpt",
+    "proteinmpnn_ckpt",
     "hmmer_home",
     "target_pdb",
     "framework_pdb",
@@ -73,6 +85,7 @@ SANDBOX_FORBIDDEN_CONFIG_KEYS = {
     "pipeline_env",
     "cann_set_env",
     "scripts_dir",
+    "proteinmpnn_ckpt",
 }
 
 
@@ -116,13 +129,58 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 def normalize_hotspots(value: Any) -> str:
     """Return RFdiffusion-style [A13,A14] hotspots from common user formats."""
-    text = str(value or "").strip()
+    if isinstance(value, (list, tuple)):
+        text = ",".join(str(item).strip() for item in value if str(item).strip())
+    else:
+        text = str(value or "").strip()
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1]
     parts = [part.strip() for part in re.split(r"[,;\s]+", text) if part.strip()]
     if not parts:
         return ""
     return "[" + ",".join(parts) + "]"
+
+
+def target_pdb_residues(path: Path) -> tuple[set[tuple[str, int]], set[str]]:
+    """Return chain-labelled CA residues from a target PDB."""
+    residues: set[tuple[str, int]] = set()
+    chains: set[str] = set()
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if not line.startswith("ATOM") or line[12:16].strip() != "CA":
+                continue
+            chain = line[21].strip() or "_"
+            try:
+                residue = int(line[22:26])
+            except ValueError:
+                continue
+            chains.add(chain)
+            residues.add((chain, residue))
+    return residues, chains
+
+
+def hotspot_target_errors(cfg: dict[str, Any]) -> list[str]:
+    """Reject hotspot labels that are absent from the uploaded target PDB."""
+    target = Path(str(cfg.get("target_pdb", "")))
+    match = re.fullmatch(
+        r"\[([A-Za-z][0-9]+(?:,[A-Za-z][0-9]+)*)\]",
+        str(cfg.get("hotspots", "")),
+    )
+    if not target.is_file() or not match:
+        return []
+    residues, chains = target_pdb_residues(target)
+    requested = [
+        (item[0], int(item[1:]))
+        for item in match.group(1).split(",")
+    ]
+    missing = [f"{chain}{residue}" for chain, residue in requested if (chain, residue) not in residues]
+    if not missing:
+        return []
+    available = ",".join(sorted(chains)) or "none"
+    return [
+        "hotspots do not exist in target_pdb "
+        f"{target}: {','.join(missing)} (available chains: {available})"
+    ]
 
 
 def default_scripts_dir() -> str:
@@ -269,8 +327,13 @@ def resolve_config(cfg: dict[str, Any], *, workspace_root: Path | None = None) -
     protenix_ckpt = cfg.get("protenix_ckpt") or (
         join_path(protenix_dir, "release_data", "checkpoint", "ms_model_v0.5.0.ckpt") if protenix_dir else ""
     )
+    proteinmpnn_ckpt = (
+        join_path(proteinmpnn_dir, "weights", "vanilla_model_weights", "v_48_020.ckpt")
+        if proteinmpnn_dir else ""
+    )
     rf_ckpt = resolve_workspace_value(rf_ckpt, root)
     protenix_ckpt = resolve_workspace_value(protenix_ckpt, root)
+    proteinmpnn_ckpt = resolve_workspace_value(proteinmpnn_ckpt, root)
     hmmer_home = resolve_workspace_value(cfg.get("hmmer_home", ""), root)
     cann_set_env = cfg.get("cann_set_env", "")
 
@@ -294,6 +357,7 @@ def resolve_config(cfg: dict[str, Any], *, workspace_root: Path | None = None) -
         "pipeline_env": posix_path(pipeline_env) if pipeline_env else "",
         "ckpt": rf_ckpt,
         "protenix_ckpt": protenix_ckpt,
+        "proteinmpnn_ckpt": proteinmpnn_ckpt,
         "hmmer_home": hmmer_home,
         "cann_set_env": posix_path(cann_set_env) if cann_set_env else "",
         "target_pdb": target_pdb,
@@ -337,7 +401,7 @@ def validate_paths(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     required_dirs = ["app_dir", "rf_diffusion_dir", "proteinmpnn_dir", "protenix_dir"]
-    required_files = ["target_pdb", "framework_pdb", "ckpt", "protenix_ckpt"]
+    required_files = ["target_pdb", "framework_pdb", "ckpt", "proteinmpnn_ckpt", "protenix_ckpt"]
     for key in required_dirs:
         value = cfg.get(key, "")
         if not value:
@@ -350,6 +414,14 @@ def validate_paths(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
             errors.append(f"{key} is unresolved")
         elif not Path(value).is_file():
             errors.append(f"{key} does not exist or is not a file: {value}")
+    errors.extend(hotspot_target_errors(cfg))
+    rf_diffusion_dir = Path(cfg.get("rf_diffusion_dir", ""))
+    sharker_init = rf_diffusion_dir / "env" / "sharker" / "__init__.py"
+    if rf_diffusion_dir.is_dir() and not sharker_init.is_file():
+        errors.append(f"RFdiffusion sharker package does not exist: {sharker_init.parent}")
+    mindscience_root = Path(cfg.get("mindscience_root", ""))
+    if (mindscience_root / RF_DIFFUSION_IO_TARGET).is_file():
+        errors.extend(rfdiffusion_io_patch_errors(mindscience_root))
     python_bin = cfg.get("python", "")
     if not python_bin or not Path(python_bin).exists():
         errors.append(f"python does not exist: {python_bin}")
@@ -363,6 +435,38 @@ def validate_paths(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
     if cfg.get("pipeline_env") and not Path(cfg["pipeline_env"]).exists():
         warnings.append(f"pipeline_env configured but not found: {cfg['pipeline_env']}")
     return errors, warnings
+
+
+def sharker_import_errors(cfg: dict[str, Any]) -> list[str]:
+    """Verify that the selected Python resolves sharker through RFdiffusion env."""
+    python_bin = str(cfg.get("python", "")).strip()
+    rf_diffusion_dir = Path(cfg.get("rf_diffusion_dir", ""))
+    sharker_init = rf_diffusion_dir / "env" / "sharker" / "__init__.py"
+    if not executable_file(python_bin) or not sharker_init.is_file():
+        return []
+    app_dir = Path(cfg.get("app_dir", ""))
+    python_path = [str(app_dir.parent.parent), str(rf_diffusion_dir / "env")]
+    inherited = os.environ.get("PYTHONPATH", "")
+    if inherited:
+        python_path.append(inherited)
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(python_path)
+    try:
+        probe = subprocess.run(
+            [python_bin, "-c", "import sharker; print(sharker.__file__)"],
+            cwd=rf_diffusion_dir,
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return [f"RFdiffusion sharker import probe could not run: {error}"]
+    if probe.returncode == 0:
+        return []
+    detail = (probe.stderr or probe.stdout).strip().splitlines()
+    tail = detail[-1] if detail else f"exit code {probe.returncode}"
+    return [f"RFdiffusion sharker import failed with selected Python: {tail}"]
 
 
 def print_clone_hint(cfg: dict[str, Any]) -> None:
@@ -485,6 +589,178 @@ def ensure_mindscience_checkout(destination: Path) -> None:
         )
 
 
+def git_patch_check(repository: Path, patch: Path, *, reverse: bool = False) -> subprocess.CompletedProcess[str]:
+    patch_text = patch.read_text(encoding="utf-8").replace("\r\n", "\n")
+    command = ["git", "-C", str(repository), "apply"]
+    if reverse:
+        command.append("--reverse")
+    command.extend(["--check", "-"])
+    return subprocess.run(command, input=patch_text, text=True, capture_output=True)
+
+
+def rfdiffusion_io_patch_errors(
+    mindscience_root: Path,
+    patch: Path = RF_DIFFUSION_IO_PATCH,
+) -> list[str]:
+    """Return a preflight error unless the pinned RFdiffusion I/O patch is present."""
+    if not patch.is_file():
+        return [f"bundled RFdiffusion MindSpore I/O patch does not exist: {patch}"]
+    if git_patch_check(mindscience_root, patch, reverse=True).returncode == 0:
+        return []
+    return [
+        "RFdiffusion MindSpore PDB writer compatibility patch is not applied; "
+        "run the Skill preparation step before validation or model launch"
+    ]
+
+
+def apply_rfdiffusion_io_patch(
+    mindscience_root: Path,
+    patch: Path = RF_DIFFUSION_IO_PATCH,
+) -> None:
+    """Apply the verified 131 RFdiffusion Tensor-to-PDB compatibility patch."""
+    if not patch.is_file():
+        raise RuntimeError(f"bundled RFdiffusion MindSpore I/O patch does not exist: {patch}")
+    if git_patch_check(mindscience_root, patch, reverse=True).returncode == 0:
+        print(f"Verified existing RFdiffusion MindSpore I/O patch: {RF_DIFFUSION_IO_TARGET}")
+        return
+
+    applicable = git_patch_check(mindscience_root, patch)
+    if applicable.returncode != 0:
+        detail = (applicable.stderr or applicable.stdout).strip()
+        raise RuntimeError(
+            "RFdiffusion MindSpore I/O patch does not match the pinned MindScience source"
+            + (f": {detail}" if detail else "")
+        )
+    patch_text = patch.read_text(encoding="utf-8").replace("\r\n", "\n")
+    subprocess.run(
+        ["git", "-C", str(mindscience_root), "apply", "-"],
+        input=patch_text,
+        text=True,
+        check=True,
+    )
+    if git_patch_check(mindscience_root, patch, reverse=True).returncode != 0:
+        raise RuntimeError("RFdiffusion MindSpore I/O patch verification failed after apply")
+    print(f"Applied RFdiffusion MindSpore I/O patch: {RF_DIFFUSION_IO_TARGET}")
+
+
+def clone_sharker_source(destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Cloning RFdiffusion sharker source {SHARKER_REF} into workspace: {destination}")
+    subprocess.run(
+        ["git", "clone", "--no-checkout", SHARKER_REPO_URL, str(destination)],
+        check=True,
+    )
+    ensure_sharker_checkout(destination)
+
+
+def ensure_sharker_checkout(destination: Path) -> None:
+    """Verify the RFdiffusion helper checkout and leave it at the pinned ref."""
+    if not destination.is_dir():
+        raise RuntimeError(f"sharker source path exists but is not a directory: {destination}")
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(destination), "rev-parse", "--is-inside-work-tree"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        current = subprocess.run(
+            ["git", "-C", str(destination), "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            f"existing sharker source path is not a valid Git checkout: {destination}"
+        ) from error
+
+    if inside != "true":
+        raise RuntimeError(f"existing sharker source path is not a Git worktree: {destination}")
+    detached = subprocess.run(
+        ["git", "-C", str(destination), "symbolic-ref", "-q", "HEAD"],
+        text=True,
+        capture_output=True,
+    ).returncode != 0
+    if current == SHARKER_REF and detached:
+        print(f"Verified existing sharker source checkout: {destination} @ {current}")
+        return
+
+    has_pin = subprocess.run(
+        ["git", "-C", str(destination), "cat-file", "-e", f"{SHARKER_REF}^{{commit}}"],
+        text=True,
+        capture_output=True,
+    ).returncode == 0
+    if not has_pin:
+        print(f"Fetching pinned sharker source revision {SHARKER_REF}")
+        subprocess.run(
+            [
+                "git", "-C", str(destination), "fetch", "--depth", "1",
+                SHARKER_REPO_URL, SHARKER_REF,
+            ],
+            check=True,
+        )
+    print(f"Checking out pinned sharker source revision: {current} -> {SHARKER_REF}")
+    subprocess.run(
+        ["git", "-C", str(destination), "checkout", "--detach", SHARKER_REF],
+        check=True,
+    )
+    verified = subprocess.run(
+        ["git", "-C", str(destination), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    if verified != SHARKER_REF:
+        raise RuntimeError(
+            f"sharker source checkout verification failed: expected {SHARKER_REF}, got {verified}"
+        )
+
+
+def install_sharker(source_checkout: Path, destination: Path) -> None:
+    """Install the pinned source package into RFdiffusion's expected env path."""
+    source = source_checkout / "sharker"
+    if not (source / "__init__.py").is_file():
+        raise RuntimeError(f"sharker package is missing from pinned source checkout: {source}")
+
+    marker_name = ".sciencediscovery-source.json"
+    marker = destination / marker_name
+    expected_marker = {"repository": SHARKER_REPO_URL, "revision": SHARKER_REF}
+    if (destination / "__init__.py").is_file() and marker.is_file():
+        try:
+            if read_json(marker) == expected_marker:
+                print(f"Verified existing RFdiffusion sharker package: {destination}")
+                return
+        except (OSError, json.JSONDecodeError, SystemExit):
+            pass
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".part")
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    try:
+        shutil.copytree(source, temporary)
+        write_json(temporary / marker_name, expected_marker)
+        if destination.exists():
+            shutil.rmtree(destination)
+        temporary.replace(destination)
+    except BaseException:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+    print(f"Installed pinned RFdiffusion sharker package: {destination}")
+
+
+def prepare_sharker(cfg: dict[str, Any]) -> None:
+    source_checkout = Path(cfg["models_dir"]) / "gnn-sharker"
+    if source_checkout.exists():
+        ensure_sharker_checkout(source_checkout)
+    else:
+        clone_sharker_source(source_checkout)
+    destination = Path(cfg["rf_diffusion_dir"]) / "env" / "sharker"
+    install_sharker(source_checkout, destination)
+
+
 def prepare_cmd(args: argparse.Namespace) -> int:
     cfg_path = args.config
     raw = read_json(cfg_path)
@@ -506,8 +782,21 @@ def prepare_cmd(args: argparse.Namespace) -> int:
     elif app_missing:
         print_clone_hint(cfg)
 
+    if Path(cfg["rf_diffusion_dir"]).is_dir() and args.clone_missing:
+        apply_rfdiffusion_io_patch(Path(cfg["mindscience_root"]))
+        prepare_sharker(cfg)
+        errors = sandbox_config_errors(raw, cfg) + validate_format(cfg) + validate_paths(cfg)[0]
+    elif Path(cfg["rf_diffusion_dir"]).is_dir() and not (
+        Path(cfg["rf_diffusion_dir"]) / "env" / "sharker" / "__init__.py"
+    ).is_file():
+        print(
+            "RFdiffusion requires sharker; rerun preparation with --clone-missing "
+            f"to fetch pinned source from {SHARKER_REPO_URL}"
+        )
+
     missing_checkpoints = {
         "ckpt": RF_DIFFUSION_CKPT,
+        "proteinmpnn_ckpt": PROTEINMPNN_CKPT,
         "protenix_ckpt": PROTENIX_CKPT,
     }
     if args.download_missing:
@@ -640,9 +929,11 @@ def validate_cmd(args: argparse.Namespace) -> int:
     format_errors = validate_format(cfg)
     path_errors, warnings = validate_paths(cfg)
     errors = sandbox_config_errors(raw, cfg) + format_errors + path_errors
+    if not path_errors:
+        errors.extend(sharker_import_errors(cfg))
     print("Antibody pipeline validation")
     print(f"  valid: {not errors}")
-    for key in ["workspace", "scripts_dir", "mindscience_root", "app_dir", "rf_diffusion_dir", "proteinmpnn_dir", "protenix_dir", "python", "pipeline_env", "ckpt", "protenix_ckpt", "target_pdb", "framework_pdb", "run_dir", "protenix_use_msa", "protenix_n_sample", "protenix_seeds"]:
+    for key in ["workspace", "scripts_dir", "mindscience_root", "app_dir", "rf_diffusion_dir", "proteinmpnn_dir", "protenix_dir", "python", "pipeline_env", "ckpt", "proteinmpnn_ckpt", "protenix_ckpt", "target_pdb", "framework_pdb", "run_dir", "protenix_use_msa", "protenix_n_sample", "protenix_seeds"]:
         print(f"  {key}: {cfg.get(key, '')}")
     if warnings:
         print("Warnings:")
@@ -662,6 +953,8 @@ def run_cmd(args: argparse.Namespace) -> int:
     cfg = resolve_config(raw)
     path_errors, warnings = validate_paths(cfg)
     errors = sandbox_config_errors(raw, cfg) + validate_format(cfg) + path_errors
+    if not path_errors:
+        errors.extend(sharker_import_errors(cfg))
     for item in warnings:
         print(f"WARNING: {item}", file=sys.stderr)
     if errors:

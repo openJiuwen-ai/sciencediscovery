@@ -39,7 +39,9 @@ monitoring, and output transfer.
   web, or choose residues from geometry without an explicit user request.
 - On first use in a Session, prepare model code and checkpoints inside the
   selected Runner workspace with the bundled `--prepare-only` entrypoint. It
-  uses pinned official sources, verifies checkpoint size and SHA-256, and
+  uses pinned official sources, applies the bundled RFdiffusion MindSpore
+  Tensor-to-PDB compatibility patch, downloads the official RFdiffusion,
+  ProteinMPNN, and Protenix checkpoints, verifies their size and SHA-256, and
   reuses verified files on later runs in the same Session. Do not invent mirror
   URLs, scan unrelated host paths, or copy assets from another Session.
 
@@ -60,7 +62,7 @@ For a remote Runner:
 
 Before preparation, check the three required user inputs. If one is missing,
 ask once and stop this run. The first preparation needs outbound access to the
-official `gitcode.com`, `tools.mindspore.cn`, and
+official `gitcode.com`, `gitee.com`, `tools.mindspore.cn`, and
 `af3-dev.tos-cn-beijing.volces.com` domains. The last domain is used by
 Protenix for its CCD cache. If the Session sandbox network policy does not
 allow these domains, report the required allowlist change before launching the
@@ -75,6 +77,12 @@ them from zero.
 Call `environment_list(runner_id="<runner-id>")`. Probe a candidate environment
 on the same Runner with a short foreground `run_shell` call and keep its
 environment ID. The environment must provide the packages in `requirements.txt`.
+Always pass that explicit `environment_id` to the probe; never validate against
+the Runner's starter/default Python. Probe ready task environments whose names
+identify this antibody pipeline first (for example, a name containing
+`antibody`), then probe the remaining ready task environments if needed. After
+one candidate fails, continue to the next candidate instead of inspecting model
+source or the uploaded PDBs for a Python dependency problem.
 Validate that complete, single-source dependency manifest with the selected
 environment's Python:
 
@@ -137,7 +145,9 @@ Create `antibody_pipeline/config.json` from
 ```
 
 Keep the user's original target-PDB chain labels and residue numbers in
-`hotspots`. Keep `diffuser_t >= 15`. Reusing a run name with `force=true`
+`hotspots`. Validation rejects hotspot labels that do not exist as CA residues
+in the uploaded target PDB and reports its available chains before any model is
+launched. Keep `diffuser_t >= 15`. Reusing a run name with `force=true`
 deletes that run's existing stage outputs, so require explicit overwrite intent.
 
 Run first-use preparation as a managed background Shell Execution on the same
@@ -155,10 +165,13 @@ run_shell(
 
 Retain the returned Execution ID and wait with `execution_status` while reading
 incremental `execution_logs`. Never resubmit preparation because one wait
-expired. Preparation checks out the pinned MindScience revision and downloads
-the official RFdiffusion and Protenix checkpoints to their default locations.
-An existing MindScience Git checkout is verified and moved to the same detached
-pin when necessary; a non-Git directory is rejected instead of silently reused.
+expired. Preparation checks out the pinned MindScience revision, installs the
+pinned RFdiffusion `sharker` source package, and downloads the official
+RFdiffusion and Protenix checkpoints to their default locations. Existing
+MindScience and `sharker` Git checkouts are verified and moved to their detached
+pins when necessary; the package is copied to RFdiffusion's expected
+`env/sharker` path. A non-Git source directory is rejected instead of silently
+reused.
 Each download uses a `.part` file and becomes visible only after its expected
 size and SHA-256 match. Existing verified checkpoints are reused. A fresh
 Session has a fresh Workspace and therefore downloads once again; sharing model
