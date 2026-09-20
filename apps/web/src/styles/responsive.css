@@ -86,6 +86,10 @@
   .wizard-inputs-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .wizard-custom-grid { grid-template-columns: minmax(0, 1fr); }
   .wizard-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .model-connect-wizard .wizard-model-row { grid-template-columns: 16px minmax(0, 1fr); }
+  .model-connect-wizard .wizard-model-row > .provider-model-row-facts { grid-column: 2; }
+  .wizard-manual-item { grid-template-columns: minmax(0, 1fr) auto; }
+  .wizard-manual-item em { grid-column: 1; }
   .wizard-footer-row { flex-direction: column; align-items: flex-start; gap: 8px; }
   .wizard-actions { width: 100%; justify-content: flex-end; }
   .config-backdrop { padding: 12px; }

@@ -15,14 +15,17 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
+  CreateModelProviderRequest,
+  CreateProviderModelRequest,
   ModelApiProtocol,
   ModelApiVariant,
   ModelConnectivityTestResult,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
-  ModelProviderPresetId,
+  ProviderModelEntry,
   ProviderModelList,
+  ProviderModelPreview,
   ProxyPolicy,
   ProxySettingsDetails,
   RuntimeSettingsOverrides,
@@ -36,6 +39,13 @@ import {
 import type { SettingsApiClient } from "./api/settings.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
+import {
+  EMPTY_MANUAL_MODEL,
+  ManualModelFields,
+  manualModelRequest,
+  ModelRowFacts,
+  type ManualModelForm,
+} from "./ProviderModelFields.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
 import { useLocale } from "./i18n/index.js";
 
@@ -49,6 +59,14 @@ export interface ModelConnectWizardProps {
   onSuccess?: (model: ModelProfile, provider: ModelProvider) => void;
   presets: readonly ModelProviderPreset[];
   proxySettings?: ProxySettingsDetails;
+}
+
+const CUSTOM_PROTOCOL: ModelApiProtocol = "openai-chat-completions";
+
+/** What the row of one previewed model is called: the catalog label when the
+ *  model is known, else the vendor's display name, else the bare id. */
+function previewEntryName(entry: ProviderModelEntry): string {
+  return entry.catalog?.label ?? entry.displayName ?? entry.id;
 }
 
 export function ModelConnectWizard({
@@ -79,11 +97,26 @@ export function ModelConnectWizard({
   useEffect(() => {
     if (advancedOpen) footerRef.current?.scrollIntoView({ block: "nearest" });
   }, [advancedOpen]);
+
+  // Provider-side fine tuning (advanced). Protocol and variant start from the
+  // preset and stay editable, exactly like the provider editor used to allow.
+  const initialPreset = presets.find((preset) => preset.id === selectedPresetId);
   const [baseUrlOverride, setBaseUrlOverride] = useState("");
   const [presetNameOverride, setPresetNameOverride] = useState("");
-  const [customProtocol, setCustomProtocol] = useState<ModelApiProtocol>("openai-chat-completions");
-  const [customVariant, setCustomVariant] = useState<ModelApiVariant>("openai");
-  const [advancedProxyPolicy, setAdvancedProxyPolicy] = useState<ProxyPolicy>("inherit");
+  const [apiProtocol, setApiProtocol] = useState<ModelApiProtocol>(initialPreset?.apiProtocol ?? CUSTOM_PROTOCOL);
+  const [apiVariant, setApiVariant] = useState<ModelApiVariant>(initialPreset?.apiVariant ?? DEFAULT_MODEL_API_VARIANT[CUSTOM_PROTOCOL]);
+  const [proxyPolicy, setProxyPolicy] = useState<ProxyPolicy>("inherit");
+
+  // The model plan (advanced): a previewed listing with the rows the user
+  // keeps ticked, plus models described by hand. Nothing here is written until
+  // Save & connect runs; that keeps the whole card one atomic attempt.
+  const [preview, setPreview] = useState<ProviderModelPreview>();
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string>();
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [manualEntries, setManualEntries] = useState<CreateProviderModelRequest[]>([]);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualForm, setManualForm] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
 
   const [testing, setTesting] = useState(false);
   const [validationError, setValidationError] = useState<string>();
@@ -93,11 +126,31 @@ export function ModelConnectWizard({
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
   const providerDisplayName = isCustom ? (customName.trim() || t("wizard.customNamePlaceholder")) : (selectedPreset?.name ?? selectedPresetId);
-  // A model identifier the user typed by hand (custom provider only). When it
-  // is empty the wizard enables the first entry of the provider's own model
-  // listing instead of any curated recommendation.
+  // A model identifier the user typed by hand (custom provider only). It is
+  // registered on its own; the listing is never consulted for it.
   const explicitModelId = isCustom ? customModelId.trim() : "";
   const tokenOptional = selectedPreset?.tokenOptional === true;
+  const busy = testing || previewLoading;
+
+  const previewSelectedCount = preview ? preview.models.filter((entry) => selectedIds.has(entry.id)).length : 0;
+  // How many models Save & connect will register right now; undefined means
+  // "every model the provider lists", fetched at that moment.
+  const plannedCount = explicitModelId || preview || manualEntries.length
+    ? new Set([
+        ...(explicitModelId ? [explicitModelId] : []),
+        ...(preview ? preview.models.filter((entry) => selectedIds.has(entry.id)).map((entry) => entry.id) : []),
+        ...manualEntries.map((entry) => entry.model),
+      ]).size
+    : undefined;
+
+  function resetPlan() {
+    setPreview(undefined);
+    setPreviewError(undefined);
+    setSelectedIds(new Set());
+    setManualEntries([]);
+    setManualForm({ ...EMPTY_MANUAL_MODEL });
+    setManualOpen(false);
+  }
 
   function handleProviderChange(value: string) {
     setValidationError(undefined);
@@ -105,26 +158,142 @@ export function ModelConnectWizard({
     setSuccessInfo(undefined);
     setBaseUrlOverride("");
     setPresetNameOverride("");
+    resetPlan();
     if (value === "custom") {
       setIsCustom(true);
+      setApiProtocol(CUSTOM_PROTOCOL);
+      setApiVariant(DEFAULT_MODEL_API_VARIANT[CUSTOM_PROTOCOL]);
     } else {
       setIsCustom(false);
       setSelectedPresetId(value);
+      const preset = presets.find((p) => p.id === value);
+      setApiProtocol(preset?.apiProtocol ?? CUSTOM_PROTOCOL);
+      setApiVariant(preset?.apiVariant ?? DEFAULT_MODEL_API_VARIANT[CUSTOM_PROTOCOL]);
     }
   }
 
-  function handleCustomProtocolChange(value: string) {
-    const apiProtocol = value as ModelApiProtocol;
-    setCustomProtocol(apiProtocol);
-    setCustomVariant(DEFAULT_MODEL_API_VARIANT[apiProtocol]);
+  function handleProtocolChange(value: string) {
+    const nextProtocol = value as ModelApiProtocol;
+    setApiProtocol(nextProtocol);
+    setApiVariant(DEFAULT_MODEL_API_VARIANT[nextProtocol]);
   }
 
-  // The models to register on this provider: the user's own identifier when
-  // given, otherwise every entry of the provider's own model listing.
-  // Throws a readable, already-translated error when the listing cannot
-  // supply any; the caller's rollback path treats it like any other failure.
-  async function resolveModelIds(providerId: string): Promise<string[]> {
-    if (explicitModelId) return [explicitModelId];
+  /** The first problem with the inputs, or undefined when a request can go. */
+  function inputProblem(): string | undefined {
+    if (isCustom && !customBaseUrl.trim()) return t("wizard.error.missingBaseUrl");
+    if (!apiKey.trim() && !tokenOptional) return t("wizard.error.missingKey");
+    return undefined;
+  }
+
+  // The provider this card would create: the preset's endpoint facts with
+  // any advanced override on top, or the custom fields. Always a fresh
+  // provider — the same vendor may be added several times with its own
+  // name and key; existing rows are never touched.
+  function providerInput(): CreateModelProviderRequest {
+    const apiToken = apiKey.trim() || undefined;
+    if (selectedPreset) {
+      return {
+        apiProtocol,
+        apiToken,
+        apiVariant,
+        baseUrl: baseUrlOverride.trim() || selectedPreset.baseUrl,
+        modelDiscovery: apiProtocol === selectedPreset.apiProtocol ? selectedPreset.modelDiscovery : DEFAULT_MODEL_DISCOVERY[apiProtocol],
+        name: presetNameOverride.trim() || selectedPreset.name,
+        presetId: selectedPreset.id,
+        proxyPolicy,
+        tokenOptional: selectedPreset.tokenOptional === true,
+      };
+    }
+    return {
+      apiProtocol,
+      apiToken,
+      apiVariant,
+      baseUrl: customBaseUrl.trim(),
+      modelDiscovery: DEFAULT_MODEL_DISCOVERY[apiProtocol],
+      name: customName.trim() || "Custom",
+      proxyPolicy,
+      tokenOptional: false,
+    };
+  }
+
+  // Fetch (or refresh) the listing of the not-yet-saved provider so the user
+  // can tick models by hand. Every row starts ticked — the same "all of them"
+  // the simple path registers — and a refresh keeps the user's choices for
+  // ids that are still listed.
+  async function fetchPreview(): Promise<void> {
+    const problem = inputProblem();
+    if (problem) {
+      setValidationError(problem);
+      return;
+    }
+    setValidationError(undefined);
+    setPreviewError(undefined);
+    setPreviewLoading(true);
+    try {
+      const next = await client.previewProviderModels(providerInput());
+      const known = new Set(preview?.models.map((entry) => entry.id) ?? []);
+      setPreview(next);
+      setSelectedIds(new Set(next.models
+        .map((entry) => entry.id)
+        .filter((id) => !known.has(id) || selectedIds.has(id))));
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      setPreviewError(t("wizard.error.listingFailed", { detail }));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function toggleSelected(id: string, checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleAll(checked: boolean) {
+    setSelectedIds(checked ? new Set(preview?.models.map((entry) => entry.id) ?? []) : new Set());
+  }
+
+  function addManualEntry() {
+    const modelId = manualForm.modelId.trim();
+    if (!modelId) return;
+    const request = manualModelRequest(modelId, manualForm);
+    setManualEntries((current) => [...current.filter((entry) => entry.model !== modelId), request]);
+    setManualForm({ ...EMPTY_MANUAL_MODEL });
+    setManualOpen(false);
+  }
+
+  function removeManualEntry(modelId: string) {
+    setManualEntries((current) => current.filter((entry) => entry.model !== modelId));
+  }
+
+  // The models to register on the new provider, first one first. Anything the
+  // user chose by hand — a typed identifier, ticked listing rows, manual
+  // entries — is registered exactly; with no choice at all, every model the
+  // provider lists is fetched now and registered. Throws a readable,
+  // already-translated error when nothing can be registered; the caller's
+  // rollback path treats it like any other failure.
+  async function resolveModelPlan(providerId: string): Promise<CreateProviderModelRequest[]> {
+    const chosen: CreateProviderModelRequest[] = [];
+    const seen = new Set<string>();
+    const choose = (request: CreateProviderModelRequest) => {
+      if (seen.has(request.model)) return;
+      seen.add(request.model);
+      chosen.push(request);
+    };
+    if (explicitModelId) choose({ label: explicitModelId, model: explicitModelId });
+    for (const entry of preview?.models ?? []) {
+      if (selectedIds.has(entry.id)) choose({ model: entry.id });
+    }
+    for (const entry of manualEntries) choose(entry);
+    if (chosen.length) return chosen;
+    // A fetched list with every row unticked is an explicit "none", not a
+    // request for all of them.
+    if (preview) throw new Error(t("wizard.error.noSelection"));
+
     let listing: ProviderModelList;
     try {
       listing = await client.listProviderModels(providerId);
@@ -138,7 +307,7 @@ export function ModelConnectWizard({
     if (!ids.length) {
       throw new Error(t("wizard.error.noModels"));
     }
-    return ids;
+    return ids.map((id) => ({ model: id }));
   }
 
   async function handleTestAndEnable(): Promise<void> {
@@ -146,15 +315,13 @@ export function ModelConnectWizard({
     setTestResult(undefined);
     setSuccessInfo(undefined);
 
-    if (isCustom) {
-      if (!customBaseUrl.trim()) {
-        setValidationError(t("wizard.error.missingBaseUrl"));
-        return;
-      }
+    const problem = inputProblem();
+    if (problem) {
+      setValidationError(problem);
+      return;
     }
-
-    if (!apiKey.trim() && !tokenOptional) {
-      setValidationError(t("wizard.error.missingKey"));
+    if (preview && !plannedCount) {
+      setValidationError(t("wizard.error.noSelection"));
       return;
     }
 
@@ -183,38 +350,12 @@ export function ModelConnectWizard({
       // Always create a fresh provider: the same vendor may be added several
       // times with its own name and key. Existing rows stay untouched —
       // failure rolls back only what this attempt created.
-      const createInput = selectedPreset
-        ? {
-            apiProtocol: selectedPreset.apiProtocol,
-            apiToken: apiKey.trim() || undefined,
-            apiVariant: selectedPreset.apiVariant,
-            baseUrl: baseUrlOverride.trim() || selectedPreset.baseUrl,
-            modelDiscovery: selectedPreset.modelDiscovery,
-            name: presetNameOverride.trim() || selectedPreset.name,
-            presetId: selectedPreset.id,
-            proxyPolicy: advancedProxyPolicy,
-            tokenOptional: selectedPreset.tokenOptional === true,
-          }
-        : {
-            apiProtocol: customProtocol,
-            apiToken: apiKey.trim() || undefined,
-            apiVariant: customVariant,
-            baseUrl: customBaseUrl.trim(),
-            modelDiscovery: DEFAULT_MODEL_DISCOVERY[customProtocol],
-            name: customName.trim() || "Custom",
-            proxyPolicy: advancedProxyPolicy,
-            tokenOptional: false,
-          };
-
-      const provider = await client.createProvider(createInput);
+      const provider = await client.createProvider(providerInput());
       createdProviderId = provider.id;
 
       // Register the first model and prove the wire before registering more.
-      const modelIds = await resolveModelIds(provider.id);
-      const firstProfile = await client.addProviderModel(provider.id, {
-        ...(explicitModelId ? { label: explicitModelId } : {}),
-        model: modelIds[0]!,
-      });
+      const requests = await resolveModelPlan(provider.id);
+      const firstProfile = await client.addProviderModel(provider.id, requests[0]!);
       createdModelIds.push(firstProfile.id);
 
       const testOutcome = await client.testModel(firstProfile.id);
@@ -239,9 +380,9 @@ export function ModelConnectWizard({
         return;
       }
 
-      // Wire proven: register the rest of the listing.
-      for (const modelId of modelIds.slice(1)) {
-        const profile = await client.addProviderModel(provider.id, { model: modelId });
+      // Wire proven: register the rest of the plan.
+      for (const request of requests.slice(1)) {
+        const profile = await client.addProviderModel(provider.id, request);
         createdModelIds.push(profile.id);
       }
 
@@ -276,6 +417,9 @@ export function ModelConnectWizard({
         latencyMs: testOutcome.latencyMs,
         modelName: firstProfile.name,
       });
+      // The plan belonged to the provider that now exists; the next connect
+      // starts from a clean slate.
+      resetPlan();
 
       onNotice?.(t("wizard.successTitle"), successDesc);
       onSuccess?.(firstProfile, provider);
@@ -316,6 +460,11 @@ export function ModelConnectWizard({
     );
   }
 
+  const planSummary = plannedCount === undefined
+    ? t("wizard.plan.all")
+    : t("wizard.plan.count", { count: plannedCount });
+  const allSelected = preview !== undefined && preview.models.length > 0 && previewSelectedCount === preview.models.length;
+
   return (
     <section aria-label={t("wizard.title")} className="model-connect-wizard">
       <div className="wizard-header">
@@ -331,7 +480,7 @@ export function ModelConnectWizard({
           <div className="wizard-field wizard-field-provider">
             <label htmlFor="wizard-provider-select">{t("wizard.providerLabel")}</label>
             <select
-              disabled={testing}
+              disabled={busy}
               id="wizard-provider-select"
               onChange={(e) => handleProviderChange(e.target.value)}
               value={isCustom ? "custom" : selectedPresetId}
@@ -350,7 +499,7 @@ export function ModelConnectWizard({
             <label htmlFor="wizard-api-key">{t("wizard.apiKeyLabel")}</label>
             <input
               autoComplete="off"
-              disabled={testing}
+              disabled={busy}
               id="wizard-api-key"
               onChange={(e) => {
                 setApiKey(e.target.value);
@@ -383,7 +532,7 @@ export function ModelConnectWizard({
             <div className="wizard-field">
               <label htmlFor="wizard-custom-name">{t("wizard.customNameLabel")}</label>
               <input
-                disabled={testing}
+                disabled={busy}
                 id="wizard-custom-name"
                 onChange={(e) => setCustomName(e.target.value)}
                 placeholder={t("wizard.customNamePlaceholder")}
@@ -394,7 +543,7 @@ export function ModelConnectWizard({
             <div className="wizard-field">
               <label htmlFor="wizard-custom-url">{t("wizard.customBaseUrlLabel")}</label>
               <input
-                disabled={testing}
+                disabled={busy}
                 id="wizard-custom-url"
                 onChange={(e) => setCustomBaseUrl(e.target.value)}
                 placeholder={t("wizard.customBaseUrlPlaceholder")}
@@ -405,7 +554,7 @@ export function ModelConnectWizard({
             <div className="wizard-field">
               <label htmlFor="wizard-custom-model">{t("wizard.customModelLabel")}</label>
               <input
-                disabled={testing}
+                disabled={busy}
                 id="wizard-custom-model"
                 onChange={(e) => setCustomModelId(e.target.value)}
                 placeholder={t("wizard.customModelPlaceholder")}
@@ -418,75 +567,188 @@ export function ModelConnectWizard({
 
         {advancedOpen ? (
           <div className="wizard-advanced">
-            <div className="wizard-advanced-grid">
-              {selectedPreset ? (
-                <>
-                  <div className="wizard-field">
-                    <label htmlFor="wizard-preset-name">{t("wizard.customNameLabel")}</label>
-                    <input
-                      disabled={testing}
-                      id="wizard-preset-name"
-                      onChange={(e) => setPresetNameOverride(e.target.value)}
-                      placeholder={selectedPreset.name}
-                      type="text"
-                      value={presetNameOverride}
-                    />
-                  </div>
-                  <div className="wizard-field">
-                    <label htmlFor="wizard-base-url-override">{t("wizard.customBaseUrlLabel")}</label>
-                    <input
-                      disabled={testing}
-                      id="wizard-base-url-override"
-                      onChange={(e) => setBaseUrlOverride(e.target.value)}
-                      placeholder={selectedPreset.baseUrl}
-                      type="url"
-                      value={baseUrlOverride}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="wizard-field">
-                    <label htmlFor="wizard-api-protocol">{t("settings.apiProtocol")}</label>
-                    <select
-                      disabled={testing}
-                      id="wizard-api-protocol"
-                      onChange={(e) => handleCustomProtocolChange(e.target.value)}
-                      value={customProtocol}
-                    >
-                      <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
-                      <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
-                      <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
-                    </select>
-                  </div>
-                  <div className="wizard-field">
-                    <label htmlFor="wizard-api-variant">{t("settings.apiVariant")}</label>
-                    <select
-                      disabled={testing}
-                      id="wizard-api-variant"
-                      onChange={(e) => setCustomVariant(e.target.value as ModelApiVariant)}
-                      value={customVariant}
-                    >
-                      {MODEL_API_VARIANTS[customProtocol].map((variant) => (
-                        <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              )}
-              {proxySettings ? (
+            {/* Provider side: everything the provider editor asks for when it
+                creates a provider, so a gateway, a regional endpoint, or an
+                unusual protocol never needs a second form. */}
+            <section aria-label={t("wizard.section.provider")} className="wizard-advanced-section">
+              <div className="wizard-section-heading">
+                <h5 className="wizard-section-title">{t("wizard.section.provider")}</h5>
+              </div>
+              <div className="wizard-advanced-grid">
+                {selectedPreset ? (
+                  <>
+                    <div className="wizard-field">
+                      <label htmlFor="wizard-preset-name">{t("wizard.customNameLabel")}</label>
+                      <input
+                        disabled={busy}
+                        id="wizard-preset-name"
+                        onChange={(e) => setPresetNameOverride(e.target.value)}
+                        placeholder={selectedPreset.name}
+                        type="text"
+                        value={presetNameOverride}
+                      />
+                    </div>
+                    <div className="wizard-field">
+                      <label htmlFor="wizard-base-url-override">{t("wizard.customBaseUrlLabel")}</label>
+                      <input
+                        disabled={busy}
+                        id="wizard-base-url-override"
+                        onChange={(e) => setBaseUrlOverride(e.target.value)}
+                        placeholder={selectedPreset.baseUrl}
+                        type="url"
+                        value={baseUrlOverride}
+                      />
+                    </div>
+                  </>
+                ) : null}
                 <div className="wizard-field">
-                  <label htmlFor="wizard-proxy-policy">{t("settings.llmProxy")}</label>
-                  <ProxyPolicySelect
-                    disabled={testing}
-                    id="wizard-proxy-policy"
-                    onChange={setAdvancedProxyPolicy}
-                    settings={proxySettings}
-                    value={advancedProxyPolicy}
-                  />
+                  <label htmlFor="wizard-api-protocol">{t("settings.apiProtocol")}</label>
+                  <select
+                    disabled={busy}
+                    id="wizard-api-protocol"
+                    onChange={(e) => handleProtocolChange(e.target.value)}
+                    value={apiProtocol}
+                  >
+                    <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
+                    <option value="openai-responses">{t("settings.apiProtocol.responses")}</option>
+                    <option value="anthropic-messages">{t("settings.apiProtocol.anthropic")}</option>
+                  </select>
+                </div>
+                <div className="wizard-field">
+                  <label htmlFor="wizard-api-variant">{t("settings.apiVariant")}</label>
+                  <select
+                    disabled={busy}
+                    id="wizard-api-variant"
+                    onChange={(e) => setApiVariant(e.target.value as ModelApiVariant)}
+                    value={apiVariant}
+                  >
+                    {MODEL_API_VARIANTS[apiProtocol].map((variant) => (
+                      <option key={variant} value={variant}>{t(`settings.apiVariant.${variant}`)}</option>
+                    ))}
+                  </select>
+                </div>
+                {proxySettings ? (
+                  <div className="wizard-field">
+                    <label htmlFor="wizard-proxy-policy">{t("settings.llmProxy")}</label>
+                    <ProxyPolicySelect
+                      disabled={busy}
+                      id="wizard-proxy-policy"
+                      onChange={setProxyPolicy}
+                      settings={proxySettings}
+                      value={proxyPolicy}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            {/* Model side: fetch the provider's list and tick what to keep, or
+                describe a model by hand. Nothing is registered until Save &
+                connect proves the wire. */}
+            <section aria-label={t("wizard.section.models")} className="wizard-advanced-section wizard-models">
+              <div className="wizard-section-heading">
+                <h5 className="wizard-section-title">{t("wizard.section.models")}</h5>
+                <span className="wizard-plan-summary">{planSummary}</span>
+                <button
+                  className="secondary-button compact-button wizard-fetch-models"
+                  disabled={busy}
+                  onClick={() => void fetchPreview()}
+                  type="button"
+                >
+                  {previewLoading ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
+                </button>
+              </div>
+
+              {previewError ? (
+                <div className="wizard-alert wizard-alert-error" role="alert">
+                  <AlertCircleIcon size={16} />
+                  <div className="wizard-alert-content">
+                    <span>{previewError}</span>
+                    <small className="wizard-alert-detail">{t("providers.discovery.fallback")}</small>
+                  </div>
                 </div>
               ) : null}
-            </div>
+
+              {preview ? (
+                preview.models.length ? (
+                  <div aria-label={t("wizard.models.table")} className="wizard-model-table" role="table">
+                    <label className="wizard-model-row wizard-model-row-all" role="row">
+                      <input
+                        aria-label={t("wizard.models.selectAll")}
+                        checked={allSelected}
+                        disabled={busy}
+                        onChange={(e) => toggleAll(e.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>
+                        <strong>{t("wizard.models.selectAll")}</strong>
+                        <small>{t("wizard.models.selected", { selected: previewSelectedCount, total: preview.models.length })}</small>
+                      </span>
+                    </label>
+                    {preview.models.map((entry) => (
+                      <label className="wizard-model-row" key={entry.id} role="row">
+                        <input
+                          aria-label={entry.id}
+                          checked={selectedIds.has(entry.id)}
+                          disabled={busy}
+                          onChange={(e) => toggleSelected(entry.id, e.target.checked)}
+                          type="checkbox"
+                        />
+                        <span className="provider-model-cell-name">
+                          <strong>{previewEntryName(entry)}</strong>
+                          <code>{entry.id}</code>
+                        </span>
+                        <ModelRowFacts model={entry} />
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted wizard-models-empty">{t("providers.models.empty")}</p>
+                )
+              ) : null}
+
+              {manualEntries.length ? (
+                <ul aria-label={t("wizard.models.manualList")} className="wizard-manual-list">
+                  {manualEntries.map((entry) => (
+                    <li className="wizard-manual-item" key={entry.model}>
+                      <span className="provider-model-cell-name">
+                        <strong>{entry.label ?? entry.model}</strong>
+                        <code>{entry.model}</code>
+                      </span>
+                      <em>{t("wizard.models.manualTag")}</em>
+                      <button
+                        className="danger-button compact-button wizard-manual-remove"
+                        disabled={busy}
+                        onClick={() => removeManualEntry(entry.model)}
+                        type="button"
+                      >
+                        {t("wizard.models.remove")}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <button
+                aria-expanded={manualOpen}
+                className="provider-add-model-toggle"
+                disabled={busy}
+                onClick={() => setManualOpen((open) => !open)}
+                type="button"
+              >
+                {t("providers.models.add")}
+              </button>
+              {manualOpen ? (
+                <ManualModelFields
+                  busy={busy}
+                  form={manualForm}
+                  onChange={setManualForm}
+                  onSubmit={addManualEntry}
+                  presetId={selectedPreset?.id}
+                  submitLabel={t("wizard.models.enqueue")}
+                />
+              ) : null}
+            </section>
           </div>
         ) : null}
 
@@ -524,7 +786,7 @@ export function ModelConnectWizard({
             <button
               aria-busy={testing}
               className="primary-button wizard-submit-button"
-              disabled={testing}
+              disabled={busy}
               onClick={() => void handleTestAndEnable()}
               type="button"
             >

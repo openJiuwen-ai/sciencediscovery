@@ -29,7 +29,6 @@ import type {
   ModelCatalogDetails,
   ModelCatalogEntry,
   ModelDiscoveryStrategy,
-  ModelThinkingEffort,
   ModelProfile,
   ModelProvider,
   ModelProviderPreset,
@@ -38,7 +37,6 @@ import type {
   ProviderModelList,
   ProxyPolicy,
   ProxySettingsDetails,
-  UserModelPricing,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_MODEL_API_VARIANT,
@@ -50,11 +48,20 @@ import {
 
 import type { SettingsApiClient } from "./api/settings.js";
 import { isAuthFailure } from "./api/auth.js";
-import { ImageIcon, SparkleIcon } from "./icons.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ModelConnectWizard } from "./ModelConnectWizard.js";
+import {
+  EMPTY_MANUAL_MODEL,
+  ManualModelFields,
+  manualModelRequest,
+  mergedFact,
+  ModelRowFacts,
+  type ManualModelForm,
+} from "./ProviderModelFields.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
 import { useLocale } from "./i18n/index.js";
+
+export { compactTokenCount, parseEffortList, prefillManualFromCatalog, type ManualModelForm } from "./ProviderModelFields.js";
 
 interface ProviderDraft {
   apiProtocol: ModelApiProtocol;
@@ -84,10 +91,6 @@ function providerDraft(provider: ModelProvider): ProviderDraft {
     removeToken: false,
     tokenOptional: provider.tokenOptional,
   };
-}
-
-function mergedFact<T>(remote: T | undefined, catalog: T | undefined): T | undefined {
-  return remote !== undefined ? remote : catalog;
 }
 
 function tokenCount(value: number | undefined, unknown: string): string {
@@ -263,45 +266,6 @@ export function providerModelPopupStyle(
     : { left, position: "fixed", top: anchor.bottom + 4, width: popupWidth };
 }
 
-/** Large token counts as integers: 1,000,000 → "1M", 200,000 → "200k". */
-export function compactTokenCount(value: number | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  if (value >= 1_000_000) return `${Math.round(value / 1_000_000)}M`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
-  return String(value);
-}
-
-/** Compact facts as hover-labelled badges: context/output as 1M/200k, vision
- *  and thinking as icons, thinking levels as one group, price as
- *  input/output/cached with the per-million unit last. */
-function ModelRowFacts({ model }: { model: ProviderModelEntry }) {
-  const { t } = useLocale();
-  const unknown = t("providers.metadata.unknown");
-  const resolved = resolveModelFacts(model);
-  const contextWindow = resolved.contextWindow;
-  const maxOutputTokens = resolved.maxOutputTokens;
-  const vision = mergedFact(model.remote?.vision, model.catalog?.vision);
-  const thinking = resolved.thinkingSupported ?? model.catalog?.thinking?.supported;
-  // Effort levels are provider vocabulary: show the raw strings (the user's
-  // declared list wins over the catalog), never translated labels.
-  const efforts = model.user?.thinkingEfforts ?? model.catalog?.thinking?.efforts;
-  const pricing = resolved.pricing;
-  return <span className="provider-model-row-facts">
-    <span className="fact">{compactTokenCount(contextWindow) ?? "?"} / {compactTokenCount(maxOutputTokens) ?? "?"}</span>
-    <span className={vision ? "fact icon on" : "fact icon"}><ImageIcon size={12} />{vision === undefined ? "?" : vision ? "✓" : "—"}</span>
-    <span className={thinking ? "fact icon on" : "fact icon"}>
-      <SparkleIcon size={12} />{thinking === undefined ? "?" : thinking
-        ? (efforts?.length ? efforts.join(" ") : "✓")
-        : "—"}
-    </span>
-    <span className="fact">
-      {pricing
-        ? `${pricing.input} / ${pricing.output}${pricing.cachedInput !== undefined ? ` / ${pricing.cachedInput}` : ""} ${pricing.currency}/1M`
-        : "?"}
-    </span>
-  </span>;
-}
-
 /** Rich hover card for one provider model row: everything the compact badges
  *  abbreviate, with full numbers and the fact's origin. Replaces native
  *  `title` tooltips. */
@@ -441,78 +405,6 @@ interface ListingState {
   loading: boolean;
 }
 
-export interface ManualModelForm {
-  contextWindow: string;
-  efforts: string;
-  label: string;
-  maxOutputTokens: string;
-  modelId: string;
-  priceCached: string;
-  priceCurrency: string;
-  priceInput: string;
-  priceOutput: string;
-  vision: boolean;
-}
-
-const EMPTY_MANUAL_MODEL: ManualModelForm = {
-  contextWindow: "",
-  efforts: "",
-  label: "",
-  maxOutputTokens: "",
-  modelId: "",
-  priceCached: "",
-  priceCurrency: "",
-  priceInput: "",
-  priceOutput: "",
-  vision: false,
-};
-
-const KNOWN_EFFORTS: readonly ModelThinkingEffort[] = ["low", "medium", "high", "xhigh", "max"];
-
-/** Parse a comma-separated raw effort list ("low, high, max"), keeping only
- *  efforts the product knows. */
-export function parseEffortList(value: string): ModelThinkingEffort[] {
-  return value.split(",")
-    .map((part) => part.trim())
-    .filter((part): part is ModelThinkingEffort => KNOWN_EFFORTS.includes(part as ModelThinkingEffort));
-}
-
-function parseOptionalInt(value: string): number | undefined {
-  const parsed = Number.parseInt(value.trim(), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function parseOptionalNumber(value: string): number | undefined {
-  const parsed = Number.parseFloat(value.trim());
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-/** Exact-match a typed model ID against models.dev (alias-aware) and prefill
- *  every field the user has not filled yet. No match means no guessing: the
- *  form is returned unchanged apart from the ID itself. */
-export function prefillManualFromCatalog(
-  current: ManualModelForm,
-  modelId: string,
-  presetId: string | undefined,
-): ManualModelForm {
-  const catalog = lookupModelCatalog(modelId.trim(), presetId);
-  const next = { ...current, modelId };
-  if (!catalog) return next;
-  return {
-    ...next,
-    label: current.label || catalog.label,
-    vision: current.vision || catalog.vision === true,
-    contextWindow: current.contextWindow || (catalog.contextWindow !== undefined ? String(catalog.contextWindow) : ""),
-    maxOutputTokens: current.maxOutputTokens || (catalog.maxOutputTokens !== undefined ? String(catalog.maxOutputTokens) : ""),
-    efforts: current.efforts || (catalog.thinking?.efforts?.length ? catalog.thinking.efforts.join(",") : ""),
-    priceCurrency: current.priceCurrency || catalog.pricing?.currency || "",
-    priceInput: current.priceInput || (catalog.pricing ? String(catalog.pricing.input) : ""),
-    priceOutput: current.priceOutput || (catalog.pricing ? String(catalog.pricing.output) : ""),
-    priceCached: current.priceCached || (catalog.pricing?.cachedInput !== undefined ? String(catalog.pricing.cachedInput) : ""),
-  };
-}
-
-
 export function ProviderRow({
   addedProfiles,
   busy,
@@ -557,10 +449,6 @@ export function ProviderRow({
       setManual({ ...EMPTY_MANUAL_MODEL });
       setManualOpen(false);
     }
-  }
-
-  function changeManualId(value: string): void {
-    setManual((current) => prefillManualFromCatalog(current, value, provider.presetId));
   }
 
   return <div className={expanded ? "provider-row expanded" : "provider-row"}>
@@ -616,22 +504,14 @@ export function ProviderRow({
       <button aria-expanded={manualOpen} className="provider-add-model-toggle" onClick={() => setManualOpen((current) => !current)} type="button">
         {t("providers.models.add")}
       </button>
-      {manualOpen ? <div className="provider-manual-form">
-        <label><span>{t("providers.models.manualId")}</span><input value={manual.modelId} onChange={(event) => changeManualId(event.target.value)} placeholder={t("providers.models.manualPlaceholder")} /></label>
-        <label><span>{t("providers.manual.label")}</span><input value={manual.label} onChange={(event) => setManual((current) => ({ ...current, label: event.target.value }))} placeholder={t("providers.manual.labelPlaceholder")} /></label>
-        <label><span>{t("providers.manual.context")}</span><input inputMode="numeric" value={manual.contextWindow} onChange={(event) => setManual((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="1000000" /></label>
-        <label><span>{t("providers.manual.output")}</span><input inputMode="numeric" value={manual.maxOutputTokens} onChange={(event) => setManual((current) => ({ ...current, maxOutputTokens: event.target.value }))} placeholder="131072" /></label>
-        <label><span>{t("providers.manual.efforts")}</span><input value={manual.efforts} onChange={(event) => setManual((current) => ({ ...current, efforts: event.target.value }))} placeholder={t("providers.manual.effortsPlaceholder")} /></label>
-        <label className="provider-manual-vision"><input checked={manual.vision} onChange={(event) => setManual((current) => ({ ...current, vision: event.target.checked }))} type="checkbox" /><span>{t("settings.visionCapable")}</span></label>
-        <div className="provider-manual-price">
-          <span className="provider-manual-price-title">{t("providers.manual.price")}</span>
-          <label><span>{t("providers.manual.priceCurrency")}</span><input value={manual.priceCurrency} onChange={(event) => setManual((current) => ({ ...current, priceCurrency: event.target.value }))} placeholder="USD" /></label>
-          <label><span>{t("providers.manual.priceInput")}</span><input inputMode="decimal" value={manual.priceInput} onChange={(event) => setManual((current) => ({ ...current, priceInput: event.target.value }))} placeholder="1.5" /></label>
-          <label><span>{t("providers.manual.priceOutput")}</span><input inputMode="decimal" value={manual.priceOutput} onChange={(event) => setManual((current) => ({ ...current, priceOutput: event.target.value }))} placeholder="3" /></label>
-          <label><span>{t("providers.manual.priceCached")}</span><input inputMode="decimal" value={manual.priceCached} onChange={(event) => setManual((current) => ({ ...current, priceCached: event.target.value }))} placeholder="0.2" /></label>
-        </div>
-        <button className="secondary-button provider-manual-submit" disabled={busy || !manual.modelId.trim()} onClick={() => void submitManual()} type="button">{t("providers.models.add")}</button>
-      </div> : null}
+      {manualOpen ? <ManualModelFields
+        busy={busy}
+        form={manual}
+        onChange={setManual}
+        onSubmit={() => void submitManual()}
+        presetId={provider.presetId}
+        submitLabel={t("providers.models.add")}
+      /> : null}
     </div> : null}
   </div>;
 }
@@ -907,38 +787,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     if (!modelId.trim() || busy) return false;
     setBusy(true);
     try {
-      const label = manual.label.trim() || entry?.displayName || entry?.catalog?.label;
-      const vision = manual.vision || mergedFact(entry?.remote?.vision, entry?.catalog?.vision);
-      const efforts = parseEffortList(manual.efforts);
-      const contextWindow = parseOptionalInt(manual.contextWindow);
-      const maxOutputTokens = parseOptionalInt(manual.maxOutputTokens);
-      const priceInput = parseOptionalNumber(manual.priceInput);
-      const priceOutput = parseOptionalNumber(manual.priceOutput);
-      const priceCached = parseOptionalNumber(manual.priceCached);
-      const pricing = priceInput !== undefined && priceOutput !== undefined
-        ? {
-            currency: (manual.priceCurrency.trim() || "USD") as UserModelPricing["currency"],
-            input: priceInput,
-            output: priceOutput,
-            ...(priceCached !== undefined ? { cachedInput: priceCached } : {}),
-          }
-        : undefined;
-      // Facts carry the user-stated effort list; without one the model simply
-      // omits thinking parameters (the "model default" behaviour).
-      const facts = contextWindow !== undefined || maxOutputTokens !== undefined || pricing || efforts.length
-        ? {
-            ...(contextWindow !== undefined ? { contextWindow } : {}),
-            ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-            ...(pricing ? { pricing } : {}),
-            ...(efforts.length ? { thinkingEfforts: efforts } : {}),
-          }
-        : undefined;
-      const saved = await client.addProviderModel(providerId, {
-        ...(label ? { label } : {}),
-        model: modelId.trim(),
-        ...(vision !== undefined ? { vision } : {}),
-        ...(facts ? { facts } : {}),
-      });
+      const saved = await client.addProviderModel(providerId, manualModelRequest(modelId, manual, entry));
       const nextModels = [...models.filter((model) => model.id !== saved.id), saved]
         .toSorted((left, right) => left.name.localeCompare(right.name));
       onModelsChange(nextModels);
