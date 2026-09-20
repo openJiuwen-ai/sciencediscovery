@@ -11,7 +11,7 @@ Runner 是无 root 的代码执行器：Agent 的常规执行统一使用 `run_s
 | `execution-manager.ts` | 受管理 Shell 的生命周期、状态/日志/取消与已提交 Workspace 回执 |
 | `kernel-manager.ts`、`shell-session-manager.ts`、`session-env-profile.ts` | 旧内部基础组件；HTTP 执行不再启动持久 worker，也不注入历史 profile |
 | `environment-store.ts` | 科学环境 provisioning：micromamba、目录 catalog、命名环境原地更新与 revision 记录 |
-| `seccomp.ts` | x86_64/aarch64 seccomp BPF（拒绝同一类高风险 syscall，`EPERM`），baseline 与 network 两套 profile 按宿主架构写入 `.sciencediscovery-data/runner-runtime/seccomp-*.bpf` |
+| `seccomp.ts` | x86_64/aarch64 seccomp BPF（拒绝同一类高风险 syscall，`EPERM`），baseline、network 与无 egress 的 NPU 兼容 profile 按宿主架构写入 `.sciencediscovery-data/runner-runtime/seccomp-*.bpf` |
 | `egress-gateway.ts` | 沙箱网络访问的宿主侧出口：按 policy revision 复用的 UDS HTTP 服务，域名允许列表与地址分类 |
 | `egress-bridge.ts` | 沙箱内 TCP→UDS 桥接脚本、宿主解释器探测与 bwrap 绑定参数 |
 | `request-auth.ts` | HMAC-SHA256（token + 时间戳 + body SHA256），30 秒新鲜度窗口 |
@@ -117,7 +117,7 @@ launch 具体做的事：
 - 选中的芯片按设备号升序从 0 重新编号，因此不论宿主怎么编号，rank 0..n-1 就是 `/dev/davinci0..n-1`。
 - 重述 `--clearenv` 会清掉的 CANN 环境，其中 `LD_LIBRARY_PATH` 必须包含 `/usr/local/Ascend/driver/lib64/common`（`libascend_hal.so` 依赖的 `libc_sec.so` 只在这里）；宿主有 `/etc/ascend_install.info` 时以只读绑入。
 - 只有携带芯片的 launch 才把 `/usr/local/bin` 前置到 `PATH`，让 `npu-smi` 能作为命令直接执行；不带芯片的沙箱 PATH 一个字节不变。
-- 其余一律不变：`--unshare-all --unshare-user --cap-drop ALL`、seccomp 过滤器与网络策略与任何其他执行相同。
+- 保留 `--unshare-all --unshare-user --cap-drop ALL` 与生效网络策略。沙箱为 Runner 当前 UID/GID 挂入各一条记录的 `passwd/group`，因为基础 MindSpore 张量运算虽能容忍 `getpwuid` 失败，CANN GE/TBE 初始化却会把它当成致命错误。NPU 执行使用独立 seccomp 变体，放行 CANN/TE Python 模块导入时使用的 socket-family 调用；它不挂 egress bridge，仍在独立 network namespace 内，所以 `networkPolicy=none` 仍无外部网络路由。普通非 NPU 执行继续使用 baseline profile；NPU 执行也继续拒绝 ptrace、mount、setns、bpf、keyring、io_uring 等基线拒绝项。
 
 **哪些芯片可选由逐芯片的真实探针决定，不看宿主清单**：用一个与真实执行同形态的一次性沙箱只绑那一颗芯片，在里面跑 `npu-smi info`。宿主会把沙箱根本打不开的卡报成健康，所以只有探针通过的芯片才能勾选；而且每次执行前会对它点名的芯片重探一遍——期间被别的租户占走的芯片会让执行以卡号明确失败，而不是在框架深处报一个不指名的错。支持范围是昇腾 910 系列，其他芯片会列出但拒绝，理由里写明芯片名。
 

@@ -13,7 +13,7 @@ Runner is a rootless executor. Ordinary Agent execution uses `run_shell`, includ
 | `environment-store.ts` | micromamba catalog, in-place named environments and revision records |
 | `npu-broker.ts` | Optional Host NPU Broker that starts allowlisted host NPU workloads under Runner control |
 | `workloads/` | Broker default workload allowlist, Ascend smoke probe, and controlled adapters |
-| `seccomp.ts` | x86_64/aarch64 BPF generated under runner runtime; baseline and network profiles |
+| `seccomp.ts` | x86_64/aarch64 BPF generated under runner runtime; baseline, network, and no-egress NPU compatibility profiles |
 | `egress-gateway.ts` | Host-side exit for sandbox network access: a UDS HTTP service reused per policy revision, allowed domains and address classification |
 | `egress-bridge.ts` | In-sandbox TCP→UDS bridge script, host interpreter probe, and bwrap bind arguments |
 | `request-auth.ts` | HMAC-SHA256 token/timestamp/body hash with 30-second freshness |
@@ -85,7 +85,7 @@ What the launch does:
 - Renumbers the selection from 0 in ascending device order, so rank 0..n-1 is `/dev/davinci0..n-1` whatever the host numbering is.
 - Restates the CANN environment that `--clearenv` would otherwise wipe, including `/usr/local/Ascend/driver/lib64/common` on `LD_LIBRARY_PATH` (it holds the `libc_sec.so` that `libascend_hal.so` links), and binds `/etc/ascend_install.info` read-only when present.
 - Prefixes `/usr/local/bin` to `PATH` only for a launch that carries chips, so `npu-smi` resolves as a command there and a non-NPU sandbox keeps the PATH it always had.
-- Changes nothing else: `--unshare-all --unshare-user --cap-drop ALL`, the seccomp filter and the network policy are the same as any other execution.
+- Keeps `--unshare-all --unshare-user --cap-drop ALL` and the effective network policy. The sandbox receives single-record `passwd` and `group` files for the Runner UID/GID because CANN GE/TBE treats a failed `getpwuid` lookup as fatal even though basic MindSpore tensor operations tolerate it. NPU launches use a dedicated seccomp variant that permits the socket-family calls used while CANN/TE imports its Python modules. They receive no egress bridge and retain a private network namespace, so `networkPolicy=none` still has no external route. Ordinary non-NPU launches keep the baseline profile, and ptrace, mount, setns, bpf, keyring, io_uring, and the other baseline denials remain in force for NPU launches too.
 
 What may be selected is decided per chip by a real probe, not by the host listing: a throwaway sandbox shaped like a real launch binds that one chip and runs `npu-smi info` in it. The host reports cards as healthy that a sandbox cannot open, so only a chip whose probe succeeded can be ticked, and every execution re-probes the chips it names before launching — a chip claimed by another tenant in the meantime fails the execution by name instead of failing deep inside a framework. Scope is the Ascend 910 series; other chips are listed and refused with the chip name in the reason.
 

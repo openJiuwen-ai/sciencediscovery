@@ -161,6 +161,9 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .kb-scope-picker .connector-picker-popover select { width: 100%; margin: 4px 0 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); padding: 4px 6px; color: var(--text-heading); font-size: 11px; }
 .kb-scope-web { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; color: var(--text-heading); font-size: 11px; line-height: 1.4; cursor: pointer; }
 .kb-scope-web input { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; accent-color: var(--accent); }
+.connector-picker-group { margin-top: 6px; }
+.connector-picker-group:first-of-type { margin-top: 0; }
+.connector-picker-group-label { display: block; margin-bottom: 2px; color: var(--text-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
 .model-picker { position: relative; display: flex; flex: 1 1 280px; min-width: 0; max-width: 360px; }
 .model-picker-trigger { display: flex; align-items: center; width: 100%; min-width: 0; min-height: 36px; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--surface-subtle); color: var(--text-heading); padding: 6px 10px; cursor: pointer; text-align: left; }
 .model-picker-trigger:hover, .model-picker-trigger[aria-expanded="true"] { border-color: var(--accent-border); background: var(--accent-soft); }

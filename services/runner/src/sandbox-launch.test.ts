@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, realpath as realpathFs, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath as realpathFs, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -24,6 +24,7 @@ import {
   buildSandboxLaunch,
   hostInterpreterMaskArguments,
   resolveHostRuntimeSupport,
+  sandboxIdentityBindArguments,
   sandboxLaunchProfile,
   type HostRuntimeSupport,
 } from "./executor.js";
@@ -162,6 +163,25 @@ describe("host CA trust inside the sandbox", () => {
     const built = launch({ disableUserns: true, hostRuntimeSupport: support, procMode: "new" });
     assert.ok(!built.args.includes("--share-net"));
     assertBaselineIsolation(built.args);
+  });
+});
+
+describe("sandbox process identity", () => {
+  test("stages only the current uid and gid for CANN GE/TBE lookups", async (t) => {
+    if (typeof process.getuid !== "function" || typeof process.getgid !== "function") {
+      t.skip("POSIX identity files are only used by the Linux bubblewrap runner");
+      return;
+    }
+    const dataDir = await mkdtemp(join(tmpdir(), "sandbox-identity-"));
+    t.after(async () => await rm(dataDir, { force: true, recursive: true }));
+    const args = await sandboxIdentityBindArguments(dataDir);
+    assert.deepEqual([args[0], args[2], args[3], args[5]], ["--ro-bind", "/etc/passwd", "--ro-bind", "/etc/group"]);
+    const passwd = await readFile(args[1]!, "utf8");
+    const group = await readFile(args[4]!, "utf8");
+    assert.match(passwd, new RegExp(`:x:${process.getuid()}:${process.getgid()}:`));
+    assert.match(group, new RegExp(`:x:${process.getgid()}:`));
+    assert.equal(passwd.trim().split("\n").length, 1);
+    assert.equal(group.trim().split("\n").length, 1);
   });
 });
 

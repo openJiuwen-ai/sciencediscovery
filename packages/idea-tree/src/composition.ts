@@ -27,7 +27,7 @@ export const IDEA_TREE_TEAM_SKILL_ID = "idea-tree-team";
 export interface IdeaTreeSkillSnapshot {
   hash: string;
   id: string;
-  metadata: Record<string, string>;
+  metadata: Record<string, unknown>;
   revision: number;
   version: string;
 }

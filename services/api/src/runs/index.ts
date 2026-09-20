@@ -1374,7 +1374,7 @@ async function executeAgentRun(
       store,
       turnId: runId,
     }),
-    ...createWebWorkspaceTools({
+    ...(settingsSnapshot.enabledConnectorIds.includes("web") ? createWebWorkspaceTools({
       broker: webBroker,
       context: {
         forceRefresh: body.webForceRefresh === true,
@@ -1383,7 +1383,7 @@ async function executeAgentRun(
         turnId: runId,
       },
       permission: requestExecution.permission,
-    }),
+    }) : {}),
     approvalMode: session.approvalMode,
     localRunnerAllowed: store.effectiveRunnerIds(sessionId).includes("local"),
     remoteRunners: workspaceRunners(store.workspacePath(sessionId), runId, requestExecution.permission),
@@ -1916,7 +1916,7 @@ async function executeAgentRun(
               workspacePathPrefix: handoff.privateWorkspacePath,
               parentSubagentId: subagent.id,
             }),
-            ...createWebWorkspaceTools({
+            ...(settingsSnapshot.enabledConnectorIds.includes("web") ? createWebWorkspaceTools({
               broker: webBroker,
               context: {
                 forceRefresh: body.webForceRefresh === true,
@@ -1925,7 +1925,7 @@ async function executeAgentRun(
                 turnId: childExecution.identity.executionId,
               },
               permission: childExecution.permission,
-            }),
+            }) : {}),
             // report-writer citation chain (topology B): when a specialist
             // declares the report-writer role skill, inject the same four
             // graph callbacks + memoryGraphEnabled the leader gets above,

@@ -38,7 +38,7 @@ export interface SkillEditorDraft {
   description: string;
   instructions: string;
   license: string;
-  metadata: Record<string, string>;
+  metadata: Record<string, unknown>;
   name: string;
   resources?: SkillEditorResourceDraft[];
   version: string;

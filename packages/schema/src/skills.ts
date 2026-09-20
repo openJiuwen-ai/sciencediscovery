@@ -77,7 +77,7 @@ export interface SkillDescriptor {
   diagnostics: SkillValidationDiagnostic[];
   hash: string;
   id: string;
-  /** Server-computed availability; never trusted from Skill frontmatter. */
+/** Server-computed availability; never trusted from Skill frontmatter. */
   ideaTreeExecutor?: {
     authorityKey: string;
     authorityVersion: string;
@@ -85,8 +85,8 @@ export interface SkillDescriptor {
     developmentOnly: boolean;
     reason?: string;
   };
-  /** Normalized string metadata from SKILL.md frontmatter. */
-  metadata?: Record<string, string>;
+  /** Normalized metadata from SKILL.md frontmatter; values may be nested objects, arrays, or strings (relaxed in https://gitcode.com/openJiuwen/sciencediscovery/pull/127 to admit SAS skill openclaw declarations). */
+  metadata?: Record<string, unknown>;
   name: string;
   readOnly: boolean;
   resourceSummary: SkillResourceSummary;
@@ -131,7 +131,7 @@ export interface CreateSkillRequest {
   description: string;
   instructions: string;
   license?: string;
-  metadata?: Record<string, string>;
+  metadata?: Record<string, unknown>;
   name: string;
   sourceSessionId?: string;
 }

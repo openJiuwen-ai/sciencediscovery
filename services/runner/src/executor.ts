@@ -13,7 +13,8 @@
 // limitations under the License.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { access, mkdir, mkdtemp, open, readdir, realpath, rm, stat } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -378,8 +379,32 @@ async function hostPathExists(path: string): Promise<boolean> {
   }
 }
 
-export async function resolveHostRuntimeSupport(): Promise<HostRuntimeSupport> {
+function safeIdentityName(value: string): string {
+  return /^[A-Za-z0-9._-]+$/.test(value) ? value : "sciencediscovery";
+}
+
+/**
+ * Basic MindSpore operators tolerate a missing passwd entry, but CANN GE/TBE
+ * initialization treats getpwuid failure as fatal. Stage only the Runner's
+ * current identity rather than exposing the host account database.
+ */
+export async function sandboxIdentityBindArguments(dataDir: string): Promise<string[]> {
+  if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return [];
+  const uid = process.getuid();
+  const gid = process.getgid();
+  const username = safeIdentityName(userInfo().username);
+  const identityRoot = resolve(dataDir, "runtime", "sandbox-identity");
+  const passwd = resolve(identityRoot, "passwd");
+  const group = resolve(identityRoot, "group");
+  await mkdir(identityRoot, { recursive: true, mode: 0o700 });
+  await writeFile(passwd, `${username}:x:${uid}:${gid}:ScienceDiscovery sandbox user:/tmp:/bin/sh\n`, { mode: 0o644 });
+  await writeFile(group, `${username}:x:${gid}:\n`, { mode: 0o644 });
+  return ["--ro-bind", passwd, "/etc/passwd", "--ro-bind", group, "/etc/group"];
+}
+
+export async function resolveHostRuntimeSupport(dataDir?: string): Promise<HostRuntimeSupport> {
   const bindArgs: string[] = [];
+  if (dataDir) bindArgs.push(...await sandboxIdentityBindArguments(dataDir));
   if (await hostPathExists("/etc/alternatives")) {
     bindArgs.push("--ro-bind", "/etc/alternatives", "/etc/alternatives");
   }
@@ -663,8 +688,9 @@ export async function prepareSandboxEgress(
   };
 }
 
-export function seccompVariantFor(access: SandboxNetworkAccess): SeccompVariant {
-  return access.mode === "none" ? "baseline" : "network";
+export function seccompVariantFor(access: SandboxNetworkAccess, npu = false): SeccompVariant {
+  if (access.mode !== "none") return "network";
+  return npu ? "npu" : "baseline";
 }
 
 /**
@@ -1004,7 +1030,7 @@ export async function executePython(
     ?? request.environmentRevisionId
     ?? request.permissionEpoch.environmentRevisionId;
   const hostInterpreterMasks = runtime ? await hostInterpreterMaskArguments() : [];
-  const hostRuntimeSupport = await resolveHostRuntimeSupport();
+  const hostRuntimeSupport = await resolveHostRuntimeSupport(config.dataDir);
   const localPythonPackages = !runtime && language === "python"
     ? await localPythonPackagePath(config)
     : undefined;
@@ -1065,7 +1091,7 @@ export async function executePython(
     language === "python" ? "Python execution" : "R execution",
     maxWorkspaceBytes,
     maxOutputBytes,
-    seccompVariantFor(networkAccess),
+    seccompVariantFor(networkAccess, Boolean(npu)),
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
 
@@ -1125,7 +1151,7 @@ export async function executeShell(
   const skillRoots = await resolveSandboxSkillRoots(config.dataDir, workspaceRoot, request.skillPackagesRoot);
   const before = await workspaceSnapshot(workspaceRoot);
   const startedAt = new Date().toISOString();
-  const hostRuntimeSupport = await resolveHostRuntimeSupport();
+  const hostRuntimeSupport = await resolveHostRuntimeSupport(config.dataDir);
   const localPythonPackages = await localPythonPackagePath(config);
   const workspaceBinds = workspaceBindArguments(workspaceRoot, readOnlyWorkspaceRoot);
   const sandbox = executorSandboxKind(config);
@@ -1186,7 +1212,7 @@ export async function executeShell(
     "Shell execution",
     maxWorkspaceBytes,
     maxOutputBytes,
-    seccompVariantFor(networkAccess),
+    seccompVariantFor(networkAccess, Boolean(npu)),
     onOutput,
   );
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);

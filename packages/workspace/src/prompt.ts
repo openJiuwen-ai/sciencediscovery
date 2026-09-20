@@ -158,7 +158,7 @@ export function buildSkillSystemSection(
   const score = (skill: RuntimeSkill): number => {
     if (state.loadedSkillIds?.has(skill.id)) return 1_000;
     const id = skill.id.toLowerCase();
-    const description = skill.description.toLowerCase();
+    const description = typeof skill.description === "string" ? skill.description.toLowerCase() : "";
     if (query.includes(id)) return 500;
     const terms = query.split(/[^\p{L}\p{N}_-]+/u).filter((term) => term.length >= 3);
     return terms.reduce((total, term) => total + (id.includes(term) ? 10 : description.includes(term) ? 2 : 0), 0);
