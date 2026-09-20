@@ -480,3 +480,58 @@ test("wizard 高级配置在卡片内展开精细字段：向导与服务商列�
   assert.ok(buttonTexts.some((text) => text.includes("收起")), "wizard toggle survives");
   assert.ok(!buttonTexts.some((text) => text.includes("添加 Provider")), "no add-provider entry");
 });
+
+test("注册表内的全局默认任务模型选择器与全局默认值页写同一设置项", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let setTo: string | undefined | null = null;
+  const client = {
+    listProviderModels: async (providerId: string) => ({
+      fetchedAt: "2026-09-20T00:00:00.000Z",
+      models: [],
+      providerId,
+      source: "remote" as const,
+    }),
+  } as unknown as SettingsApiClient;
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ProviderModelSettings, {
+          client,
+          defaultModelId: "m1",
+          models: [profile("m1", "p1"), { ...profile("m2", "p1"), model: "deepseek-v4-pro", name: "工作 DeepSeek · DeepSeek V4 Pro" }],
+          onDefaultModelSet: async (modelId) => {
+            setTo = modelId;
+          },
+          onError: () => undefined,
+          onModelsChange: () => undefined,
+          onNotice: () => undefined,
+          onProvidersChange: () => undefined,
+          presets: PRESETS,
+          providers: [provider("p1", "DeepSeek")],
+        }),
+      ),
+    );
+  });
+
+  // The selector mirrors the current global default and offers every profile.
+  const select = renderer!.root.findByProps({ id: "registry-default-model" });
+  assert.equal(select.props.value, "m1");
+  const optionValues = select.findAllByType("option").map((option) => option.props.value);
+  assert.deepEqual(optionValues, ["", "m1", "m2"]);
+
+  // Changing it writes the same globalSettings.modelId the global page edits.
+  await act(async () => {
+    select.props.onChange({ target: { value: "m2" } });
+  });
+  assert.equal(setTo, "m2");
+
+  // Choosing 未配置 clears the same key (undefined), not a session-level pick.
+  await act(async () => {
+    select.props.onChange({ target: { value: "" } });
+  });
+  assert.equal(setTo, undefined);
+});

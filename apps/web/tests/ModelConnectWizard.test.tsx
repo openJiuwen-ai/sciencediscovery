@@ -1354,3 +1354,45 @@ test("advanced preset fields: protocol and variant overrides drive creation just
   assert.equal(renderer.root.findByProps({ id: "wizard-api-protocol" }).props.value, "anthropic-messages");
   assert.equal(renderer.root.findByProps({ id: "wizard-api-variant" }).props.value, "anthropic-adaptive");
 });
+
+test("fetch model list lives in the card's main area, reachable without opening advanced", async () => {
+  let previewCalled = false;
+  const client = createMockClient({
+    previewProviderModels: async () => {
+      previewCalled = true;
+      return {
+        fetchedAt: "2026-09-20T00:00:00.000Z",
+        models: [{ id: "listed-model-first" }, { id: "listed-model-second" }],
+        source: "remote" as const,
+      };
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS }),
+      ),
+    );
+  });
+
+  // Advanced is closed, yet the fetch button is right there in the main area.
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
+  const fetchRow = renderer!.root.findByProps({ className: "wizard-fetch-side" });
+  assert.ok(fetchRow);
+  const fetchButton = renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-main-area" } });
+  });
+  await act(async () => {
+    await fetchButton.props.onClick();
+  });
+  assert.equal(previewCalled, true);
+  // The fetched table renders in the main area with every row ticked.
+  assert.ok(renderer!.root.findByProps({ className: "wizard-model-table" }));
+  assert.equal(renderer!.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, true);
+  assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
+});

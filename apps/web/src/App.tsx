@@ -5002,11 +5002,18 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 <ProviderModelSettings
                   catalog={modelCatalog}
                   client={client}
+                  defaultModelId={globalSettings?.effective.modelId}
                   initialWizardOpen={modelWizardRequested}
                   models={models}
                   onCatalogChange={applyModelCatalog}
                   onDefaultModelSet={async (modelId) => {
-                    const updated = await client.replaceGlobalSettings({ modelId });
+                    // One setting, written from the wizard and from the
+                    // registry's default-model row alike; keep every other
+                    // global override instead of replacing the whole object.
+                    const overrides = { ...(globalSettings?.overrides ?? {}) };
+                    if (modelId) overrides.modelId = modelId;
+                    else delete overrides.modelId;
+                    const updated = await client.replaceGlobalSettings(overrides);
                     setGlobalSettings(updated);
                     if (activeProjectId) {
                       setProjectSettings(await client.getProjectSettings(activeProjectId));

@@ -623,7 +623,7 @@
 .wizard-key-link:hover { color: var(--accent-hover); }
 .wizard-key-generic { color: var(--muted); font-size: 10.5px; }
 .wizard-billing-notice { color: var(--text-faint); font-size: 10px; }
-.wizard-footer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; }
+.wizard-footer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; }
 .wizard-actions { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
 /* Buttons never wrap their caption: they grow with the label text instead of
    folding it into two lines, so `height` stays a floor, not a ceiling. */
@@ -641,6 +641,11 @@
 .model-catalog-status strong { color: var(--text-heading); font-size: 12px; white-space: nowrap; }
 .model-catalog-status small { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .model-catalog-status button { flex: 0 0 auto; }
+/* The registry mirrors the global default task model (same globalSettings.modelId
+   as 全局默认值 → 任务模型) inline in the 已配置服务商 heading row. */
+.registry-default-inline { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; justify-content: flex-end; }
+.provider-settings .registry-default-inline label { color: var(--muted); font-size: 11px; white-space: nowrap; margin-bottom: 0; }
+.registry-default-inline select { flex: 1 1 auto; min-width: 0; min-height: 27px; height: 27px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text-heading); padding: 3px 8px; font-size: 11px; }
 .wizard-advanced { display: grid; gap: 9px; border-top: 1px dashed var(--border); padding-top: 7px; }
 .wizard-advanced-section { display: grid; gap: 6px; min-width: 0; }
 .wizard-section-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
@@ -648,6 +653,10 @@
 .wizard-plan-summary { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: 10.5px; line-height: 1.3; }
 .wizard-section-heading .compact-button { flex: none; min-height: 27px; padding: 3px 9px; font-size: 11px; white-space: nowrap; }
 .wizard-advanced-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+/* The model plan sits on the action row itself: the fetch button is directly
+   clickable next to Save & connect, with the plan summary beside it. */
+.wizard-fetch-side { display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin: 0; }
+.wizard-fetch-side .wizard-fetch-models { flex: none; min-height: 27px; padding: 3px 9px; font-size: 11px; white-space: nowrap; }
 /* Listed models to tick: one row per model, the same name/id cell and fact
    badges as the registry table, with the checkbox as the whole row's hit area. */
 .wizard-model-table { display: grid; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--surface); }

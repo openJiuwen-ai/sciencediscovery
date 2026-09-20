@@ -91,12 +91,6 @@ export function ModelConnectWizard({
   // 「高级配置」在卡片内展开精细字段，永不收起向导本身。
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const footerRef = useRef<HTMLDivElement>(null);
-  // Expanding grows the card; keep the expanded fields and the action row
-  // inside the dialog's scroll viewport instead of letting them slip under
-  // the settings footer.
-  useEffect(() => {
-    if (advancedOpen) footerRef.current?.scrollIntoView({ block: "nearest" });
-  }, [advancedOpen]);
 
   // Provider-side fine tuning (advanced). Protocol and variant start from the
   // preset and stay editable, exactly like the provider editor used to allow.
@@ -117,6 +111,13 @@ export function ModelConnectWizard({
   const [manualEntries, setManualEntries] = useState<CreateProviderModelRequest[]>([]);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualForm, setManualForm] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
+
+  // Expanding grows the card; keep the expanded fields and the action row
+  // inside the dialog's scroll viewport instead of letting them slip under
+  // the settings footer. A fetched listing grows it the same way.
+  useEffect(() => {
+    if (advancedOpen || preview) footerRef.current?.scrollIntoView({ block: "nearest" });
+  }, [advancedOpen, preview]);
 
   const [testing, setTesting] = useState(false);
   const [validationError, setValidationError] = useState<string>();
@@ -565,6 +566,54 @@ export function ModelConnectWizard({
           </div>
         ) : null}
 
+        {previewError ? (
+          <div className="wizard-alert wizard-alert-error" role="alert">
+            <AlertCircleIcon size={16} />
+            <div className="wizard-alert-content">
+              <span>{previewError}</span>
+              <small className="wizard-alert-detail">{t("providers.discovery.fallback")}</small>
+            </div>
+          </div>
+        ) : null}
+
+        {preview ? (
+          preview.models.length ? (
+            <div aria-label={t("wizard.models.table")} className="wizard-model-table" role="table">
+              <label className="wizard-model-row wizard-model-row-all" role="row">
+                <input
+                  aria-label={t("wizard.models.selectAll")}
+                  checked={allSelected}
+                  disabled={busy}
+                  onChange={(e) => toggleAll(e.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <strong>{t("wizard.models.selectAll")}</strong>
+                  <small>{t("wizard.models.selected", { selected: previewSelectedCount, total: preview.models.length })}</small>
+                </span>
+              </label>
+              {preview.models.map((entry) => (
+                <label className="wizard-model-row" key={entry.id} role="row">
+                  <input
+                    aria-label={entry.id}
+                    checked={selectedIds.has(entry.id)}
+                    disabled={busy}
+                    onChange={(e) => toggleSelected(entry.id, e.target.checked)}
+                    type="checkbox"
+                  />
+                  <span className="provider-model-cell-name">
+                    <strong>{previewEntryName(entry)}</strong>
+                    <code>{entry.id}</code>
+                  </span>
+                  <ModelRowFacts model={entry} />
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="muted wizard-models-empty">{t("providers.models.empty")}</p>
+          )
+        ) : null}
+
         {advancedOpen ? (
           <div className="wizard-advanced">
             {/* Provider side: everything the provider editor asks for when it
@@ -642,70 +691,12 @@ export function ModelConnectWizard({
               </div>
             </section>
 
-            {/* Model side: fetch the provider's list and tick what to keep, or
-                describe a model by hand. Nothing is registered until Save &
-                connect proves the wire. */}
-            <section aria-label={t("wizard.section.models")} className="wizard-advanced-section wizard-models">
+            {/* Manual model entry stays in 高级配置; the fetched listing lives
+                in the card's main area. */}
+            <section aria-label={t("wizard.section.manualModels")} className="wizard-advanced-section wizard-models">
               <div className="wizard-section-heading">
-                <h5 className="wizard-section-title">{t("wizard.section.models")}</h5>
-                <span className="wizard-plan-summary">{planSummary}</span>
-                <button
-                  className="secondary-button compact-button wizard-fetch-models"
-                  disabled={busy}
-                  onClick={() => void fetchPreview()}
-                  type="button"
-                >
-                  {previewLoading ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
-                </button>
+                <h5 className="wizard-section-title">{t("wizard.section.manualModels")}</h5>
               </div>
-
-              {previewError ? (
-                <div className="wizard-alert wizard-alert-error" role="alert">
-                  <AlertCircleIcon size={16} />
-                  <div className="wizard-alert-content">
-                    <span>{previewError}</span>
-                    <small className="wizard-alert-detail">{t("providers.discovery.fallback")}</small>
-                  </div>
-                </div>
-              ) : null}
-
-              {preview ? (
-                preview.models.length ? (
-                  <div aria-label={t("wizard.models.table")} className="wizard-model-table" role="table">
-                    <label className="wizard-model-row wizard-model-row-all" role="row">
-                      <input
-                        aria-label={t("wizard.models.selectAll")}
-                        checked={allSelected}
-                        disabled={busy}
-                        onChange={(e) => toggleAll(e.target.checked)}
-                        type="checkbox"
-                      />
-                      <span>
-                        <strong>{t("wizard.models.selectAll")}</strong>
-                        <small>{t("wizard.models.selected", { selected: previewSelectedCount, total: preview.models.length })}</small>
-                      </span>
-                    </label>
-                    {preview.models.map((entry) => (
-                      <label className="wizard-model-row" key={entry.id} role="row">
-                        <input
-                          aria-label={entry.id}
-                          checked={selectedIds.has(entry.id)}
-                          disabled={busy}
-                          onChange={(e) => toggleSelected(entry.id, e.target.checked)}
-                          type="checkbox"
-                        />
-                        <span className="provider-model-cell-name">
-                          <strong>{previewEntryName(entry)}</strong>
-                          <code>{entry.id}</code>
-                        </span>
-                        <ModelRowFacts model={entry} />
-                      </label>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="muted wizard-models-empty">{t("providers.models.empty")}</p>
-                )
-              ) : null}
 
               {manualEntries.length ? (
                 <ul aria-label={t("wizard.models.manualList")} className="wizard-manual-list">
@@ -779,6 +770,19 @@ export function ModelConnectWizard({
         ) : null}
 
         <div className="wizard-footer-row" ref={footerRef}>
+          {/* Fetch the provider's model list right here next to Save & connect —
+              no trip through 高级配置 needed; the ticked plan appears above. */}
+          <div className="wizard-fetch-side">
+            <button
+              className="secondary-button compact-button wizard-fetch-models"
+              disabled={busy}
+              onClick={() => void fetchPreview()}
+              type="button"
+            >
+              {previewLoading ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
+            </button>
+            <span className="wizard-plan-summary">{planSummary}</span>
+          </div>
           {/* The surrounding settings dialog closes when a press lands on its
               backdrop; a press on the wizard's own buttons must never take
               part in that gesture, even after future handler refactors. */}

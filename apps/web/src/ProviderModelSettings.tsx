@@ -50,6 +50,7 @@ import type { SettingsApiClient } from "./api/settings.js";
 import { isAuthFailure } from "./api/auth.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ModelConnectWizard } from "./ModelConnectWizard.js";
+import { modelOptionLabel } from "./modelLabels.js";
 import {
   EMPTY_MANUAL_MODEL,
   ManualModelFields,
@@ -582,12 +583,13 @@ function ProviderEditorPanel({
 export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   catalog?: ModelCatalogDetails;
   client: SettingsApiClient;
+  defaultModelId?: string | undefined;
   models: ModelProfile[];
   onCatalogChange?: (details: ModelCatalogDetails) => void;
   onDraftStateChange?: (dirty: boolean) => void;
   initialWizardOpen?: boolean;
   onError: (reason: string | Error) => void;
-  onDefaultModelSet?: (modelId: string) => Promise<void>;
+  onDefaultModelSet?: (modelId: string | undefined) => Promise<void>;
   onModelsChange: (models: ModelProfile[]) => void;
   onNotice: (message: string, detail?: string) => void;
   onProvidersChange: (providers: ModelProvider[]) => void;
@@ -597,6 +599,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
 }>(function ProviderModelSettings({
   catalog,
   client,
+  defaultModelId,
   initialWizardOpen,
   models,
   onCatalogChange,
@@ -871,6 +874,20 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     <section className="provider-registry" aria-label={t("providers.configured.title")}>
       <div className="provider-section-heading">
         <div><h4>{t("providers.configured.title")}</h4></div>
+        {/* The global default task model, mirrored from 全局默认值 → 任务模型:
+            both write the same globalSettings.modelId via the same handler. */}
+        <div className="registry-default-inline">
+          <label htmlFor="registry-default-model">{t("providers.globalDefaultModel")}</label>
+          <select
+            disabled={!onDefaultModelSet}
+            id="registry-default-model"
+            onChange={(event) => { void onDefaultModelSet?.(event.target.value || undefined); }}
+            value={defaultModelId ?? ""}
+          >
+            <option value="">{t("common.notConfigured")}</option>
+            {models.map((model) => <option key={model.id} value={model.id}>{modelOptionLabel(model, models, t)}</option>)}
+          </select>
+        </div>
         <button
           aria-expanded={wizardOpen}
           className="secondary-button compact-button"
