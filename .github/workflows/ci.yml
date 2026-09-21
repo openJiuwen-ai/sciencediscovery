@@ -19,6 +19,13 @@
 # actually receives and then exercise them. Every layer is hermetic: no model
 # credentials, no live endpoints, no NPU. The opt-in live layers
 # (ci:st:real, ci:e2e:real, ci:st:npu, ci:e2e:legacy) stay out of this file.
+#
+# This file is also the one definition of that gate for the scheduled and
+# tagged pipelines: nightly.yml and release.yml call it instead of restating
+# its jobs. When their coverage diverges from the merge gate, give this
+# workflow an input describing what to run and branch on it here — copying
+# jobs into those files is exactly the second test definition the CI contract
+# forbids.
 
 name: CI
 
@@ -31,9 +38,25 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-version:
+        description: >-
+          Version stamped into the release binaries and their file names. Left
+          empty the packaging script falls back to `git describe`, which on a
+          hosted runner's shallow checkout has no tags to describe and yields
+          0.0.0 — fine for a gate that only proves the build runs, useless for
+          an artifact somebody downloads. Callers that publish or keep the
+          output pass a real version.
+        type: string
+        default: ""
 
+# Keyed on the calling workflow as well as the ref: a nightly run and a push
+# run land on refs/heads/main at the same time, and without the workflow name
+# they would share a group and cancel each other. In a called workflow
+# `github.workflow` is the caller's name, so each pipeline gets its own lane.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -265,8 +288,19 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
           zstd --version
 
+      # The version reaches the VERSION file, the payload manifest and the
+      # artifact's own name, so a caller that publishes what comes out has to
+      # supply it; a merge-gate run leaves it empty and takes the script's
+      # `git describe` default.
       - name: Build both architectures
-        run: bash scripts/package-binary-release.sh --arch ${{ matrix.arch }} --output dist/binary-release
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          arguments=(--arch "${{ matrix.arch }}" --output dist/binary-release)
+          if [[ -n "${RELEASE_VERSION}" ]]; then
+            arguments+=(--version "${RELEASE_VERSION}")
+          fi
+          bash scripts/package-binary-release.sh "${arguments[@]}"
 
       - name: Report the artifacts
         if: always()
