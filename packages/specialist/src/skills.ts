@@ -1466,6 +1466,20 @@ export class SkillCatalog {
           }
           throw new SkillCatalogError("SKILL_CONFLICT", `Only Git review drafts can be bulk published: ${draftId}`);
         }
+        if (draft.baseRevision !== undefined) {
+          // Bulk publish cannot safely rotate revisions: the managed rollback
+          // path deletes the index entry but does not restore the previous
+          // revision bytes, so a partial library failure would silently drop
+          // an already-installed Skill from the catalog. The single-draft
+          // update path in `confirmReviewDraft` is well tested and remains the
+          // way to apply updates. Always skip in bulk — never an error,
+          // regardless of onConflict.
+          skipped.push({
+            draftId,
+            reason: "Bulk publish does not support updates to installed Skills; publish this draft individually",
+          });
+          continue;
+        }
         try {
           const files = new Map<string, Buffer>();
           for (const file of draft.files) {

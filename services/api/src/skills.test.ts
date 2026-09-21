@@ -482,6 +482,90 @@ test("bulk publish rolls back the managed entries if the library commit fails mi
   }
 });
 
+test("bulk publish skips update drafts instead of aborting the batch", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const commit = "1111111111111111111111111111111111111111";
+    const updateCommit = "2222222222222222222222222222222222222222";
+
+    // Step 1: seed an initial Git draft and bulk-publish it so it lands in the
+    // managed catalog at revision 1. After this the bulk endpoint will treat
+    // any further draft with the same name as an update.
+    const seed = await catalog.createReviewDraft({
+      description: "Initial bulk publish target.",
+      instructions: "# Workflow\n\nRun bulk-update-seed.",
+      name: "bulk-update-seed",
+    }, {
+      git: { commit, repositoryUrl: "https://example.com/update.git", subdirectory: "skills/bulk-update-seed" },
+      source: "git",
+    });
+    await catalog.publishReviewDraftsAtomically([seed.draftId], {
+      onConflict: "fail", prepare: () => Promise.resolve("seeded"),
+    });
+    assert.equal(catalog.list().find((entry) => entry.id === "bulk-update-seed")?.currentRevision, 1);
+
+    // Step 2: a Git draft that targets the same Skill id picks up baseRevision
+    // automatically when upsertReviewDraft sees an existing managed entry.
+    const update = await catalog.createReviewDraft({
+      description: "Updated bulk publish target.",
+      instructions: "# Workflow\n\nRun bulk-update-seed at revision 2.",
+      name: "bulk-update-seed",
+    }, {
+      git: { commit: updateCommit, repositoryUrl: "https://example.com/update.git", subdirectory: "skills/bulk-update-seed" },
+      source: "git",
+    });
+    assert.equal(update.baseRevision, 1);
+
+    // Step 3: a fresh draft mixed into the batch so we can verify it still
+    // commits even though update is skipped.
+    const fresh = await catalog.createReviewDraft({
+      description: "An unrelated new Skill mixed into the same batch.",
+      instructions: "# Workflow\n\nRun bulk-update-fresh.",
+      name: "bulk-update-fresh",
+    }, {
+      git: { commit, repositoryUrl: "https://example.com/update.git", subdirectory: "skills/bulk-update-fresh" },
+      source: "git",
+    });
+
+    // Step 4: bulk publish a mixed batch. The update must end up in `skipped`
+    // with a clear reason, the fresh Skill must commit, and the previously
+    // installed bulk-update-seed must remain at revision 1.
+    const preparedIds: string[] = [];
+    const { result, skipped } = await catalog.publishReviewDraftsAtomically(
+      [fresh.draftId, update.draftId],
+      {
+        onConflict: "fail",
+        prepare: async (prepared) => {
+          preparedIds.push(...prepared.map((item) => item.detail.id));
+          return "partial";
+        },
+      },
+    );
+    assert.equal(result, "partial");
+    assert.deepEqual(preparedIds, ["bulk-update-fresh"]);
+    assert.equal(skipped.length, 1);
+    assert.equal(skipped[0]!.draftId, update.draftId);
+    assert.match(skipped[0]!.reason, /updates to installed/i);
+
+    // The update draft stays on disk so the user can publish it individually
+    // through the existing single-draft review flow.
+    assert.deepEqual(catalog.listReviewDrafts().map((draft) => draft.name).sort(), ["bulk-update-seed"]);
+
+    // The previously installed Skill is untouched: bulk publish cannot
+    // silently bump or wipe a managed entry.
+    const seedAfter = catalog.list().find((entry) => entry.id === "bulk-update-seed");
+    assert.ok(seedAfter);
+    assert.equal(seedAfter.currentRevision, 1);
+    const freshAfter = catalog.list().find((entry) => entry.id === "bulk-update-fresh");
+    assert.ok(freshAfter);
+    assert.equal(freshAfter.currentRevision, 1);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("updates one pending Agent Skill draft and compares it with the previous proposal", async () => {
   const dataDir = await temporaryDataDir();
   try {

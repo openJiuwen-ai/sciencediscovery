@@ -289,17 +289,31 @@ const quickImportInspection = {
 
 test("quick import publishes scanned Git candidates as one bulk request", async () => {
   const calls: Array<{ draftIds: string[]; onConflict?: string; presetId?: string }> = [];
-  const createdDrafts = [
-    { draftId: "draft-alpha", name: "quick-alpha" },
-    { draftId: "draft-beta", name: "quick-beta" },
-  ];
+  // The candidate set includes an `update` entry; quick import only ships
+  // "new" candidates, so the mock for createGitFilterDrafts must mirror what
+  // the real endpoint does — return only drafts for the requested subdirs.
+  const draftByName: Record<string, { draftId: string; name: string }> = {
+    "quick-alpha": { draftId: "draft-alpha", name: "quick-alpha" },
+    "quick-beta": { draftId: "draft-beta", name: "quick-beta" },
+  };
   const client = {
     listSkillReviewDrafts: async () => [],
     listSkills: async () => [skill],
     inspectGitSkillRepository: async () => quickImportInspection,
-    createGitSkillReviewDrafts: async () => ({ commit: quickImportInspection.commit, drafts: createdDrafts }),
+    createGitSkillReviewDrafts: async (request: { subdirectories: string[] }) => ({
+      commit: quickImportInspection.commit,
+      drafts: request.subdirectories.map((subdirectory) => {
+        const name = subdirectory.replace(/^.*\//, "");
+        const draft = draftByName[name];
+        if (!draft) throw new Error(`unexpected subdirectory in test fixture: ${subdirectory}`);
+        return draft;
+      }),
+    }),
     bulkPublishGitSkillReviewDrafts: async (body: { draftIds: string[]; onConflict?: string; presetId?: string }) => {
       calls.push(body);
+      const drafts = body.draftIds
+        .map((draftId) => Object.values(draftByName).find((draft) => draft.draftId === draftId))
+        .filter((draft): draft is { draftId: string; name: string } => Boolean(draft));
       return {
         conflicts: [],
         diagnostics: [],
@@ -310,7 +324,7 @@ test("quick import publishes scanned Git candidates as one bulk request", async 
           createdAt: "2026-01-02T03:04:05.000Z",
           id: "version-1",
           libraryId: "project-skills",
-          skills: createdDrafts.map((draft) => ({ description: "d", hash: "h", id: draft.name, version: "1.0.0" })),
+          skills: drafts.map((draft) => ({ description: "d", hash: "h", id: draft.name, version: "1.0.0" })),
         },
       };
     },
@@ -350,21 +364,23 @@ test("quick import publishes scanned Git candidates as one bulk request", async 
     node.props.className.includes("skill-git-quick-dialog")
   ));
   assert.ok(dialog);
-  // Only publishable candidates are preselected; the invalid collider is not.
+  // Quick import only handles fresh Skill packages. Only the "new" candidate
+  // is preselected; the invalid collider and the "update" candidate are
+  // shown but disabled, so the user can still see why they were excluded.
   const candidateCheckboxes = dialog!.findByProps({ className: "skill-git-candidates skill-git-quick-candidates" })
     .findAllByType("input").filter((input) => input.props.type === "checkbox");
   const checked = candidateCheckboxes.filter((input) => input.props.checked === true);
-  assert.equal(checked.length, 2);
+  assert.equal(checked.length, 1);
   const conflictToggle = dialog!.findByProps({ className: "skill-git-quick-conflict-toggle" }).findByType("input");
   assert.equal(conflictToggle.props.checked, true);
 
-  const confirm = dialog!.findAllByType("button").find((button) => button.children.join("").includes("Import 2 Skills"));
+  const confirm = dialog!.findAllByType("button").find((button) => button.children.join("").includes("Import 1 Skill"));
   assert.ok(confirm);
   await act(async () => confirm!.props.onClick());
   await act(async () => undefined);
 
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0]!.draftIds, ["draft-alpha", "draft-beta"]);
+  assert.deepEqual(calls[0]!.draftIds, ["draft-alpha"]);
   assert.equal(calls[0]!.onConflict, "fail");
   assert.equal(calls[0]!.presetId, quickImportInspection.repositoryUrl);
   assert.equal(renderer!.root.findAllByProps({ role: "status" }).length, 1);

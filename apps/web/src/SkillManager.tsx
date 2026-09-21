@@ -343,7 +343,10 @@ function SkillCatalogManager({
     }
   }
 
-  const quickImportCandidates = useMemo(() => (gitInspection?.candidates ?? []).filter((candidate) => candidate.status === "new" || candidate.status === "update"), [gitInspection]);
+  // Bulk publish only handles fresh Skill packages. Updates to installed
+  // Skills have to go through the single-draft `confirmReviewDraft` flow,
+  // because the bulk rollback path does not restore the previous revision.
+  const quickImportCandidates = useMemo(() => (gitInspection?.candidates ?? []).filter((candidate) => candidate.status === "new"), [gitInspection]);
 
   function openQuickImportConfirm(): void {
     if (!gitInspection || !quickImportCandidates.length) return;
@@ -627,7 +630,6 @@ function SkillCatalogManager({
       {gitInspection && quickImportEnabled ? <div className="skill-git-quick-summary">
         <button className="primary-button skill-git-quick-button" disabled={busy || !quickImportCandidates.length} onClick={openQuickImportConfirm} type="button">{t(quickImportCandidates.length === 1 ? "skillManager.quickImportButtonOne" : "skillManager.quickImportButtonMany", { count: quickImportCandidates.length, hash: gitInspection.commit.slice(0, 12), repo: gitInspection.repositoryUrl.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "") })}</button>
         {!quickImportCandidates.length ? <p className="skill-git-quick-note">{t("skillManager.quickImportUnchangedHint")}</p> : null}
-        {quickImportCandidates.some((candidate) => candidate.status === "update") ? <p className="skill-git-quick-note">{t("skillManager.quickImportUpdateNote", { count: quickImportCandidates.filter((candidate) => candidate.status === "update").length })}</p> : null}
       </div> : null}
       {gitInspection && !quickImportEnabled ? <fieldset className="skill-git-candidates"><legend>{t("skillManager.gitSelectLegend")}</legend>{gitInspection.candidates.map((candidate) => {
         const selectable = candidate.status === "new" || candidate.status === "update";
@@ -644,7 +646,7 @@ function SkillCatalogManager({
       <section aria-label={t("skillManager.quickImportDialogTitle")} aria-modal="true" className="skill-merge-dialog skill-git-quick-dialog" role="dialog">
         <header><h3>{t("skillManager.quickImportDialogTitle")}</h3><span className="skill-git-commit" title={gitInspection.commit}>{t("skillManager.gitCommitBadge", { hash: gitInspection.commit.slice(0, 12) })}</span></header>
         <fieldset className="skill-git-candidates skill-git-quick-candidates"><legend>{t("skillManager.gitSelectLegend")}</legend>{gitInspection.candidates.map((candidate) => {
-          const selectable = candidate.status === "new" || candidate.status === "update";
+          const selectable = candidate.status === "new";
           const selected = quickImportSelected.includes(candidate.subdirectory);
           const conflicts = candidate.status === "invalid" && candidate.diagnostics.length;
           return <label className={`skill-git-candidate ${candidate.status}`} key={candidate.subdirectory}>
