@@ -170,7 +170,15 @@ export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4410}"
 export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4411}"
 export SCIENCE_AGENT_EVOLVE_PORT="${SCIENCE_AGENT_EVOLVE_PORT:-4413}"
 export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774}"
+# Moving a service is only half of it: the API dials each sidecar by URL, and
+# every one of those has its own hardcoded default (see
+# services/api/src/bootstrap/config.ts). Setting only the port starts the
+# service on the new one and leaves the API knocking on the old one, which
+# fails as a connection refused the API reports to the browser as a bare
+# "fetch failed". Derive every URL from the port that was just chosen.
 export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
+export SCIENCE_AGENT_EVOLVE_URL="http://127.0.0.1:${SCIENCE_AGENT_EVOLVE_PORT}"
+export SCIENCE_AGENT_MEMORY_GRAPH_URL="http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
 export SCIENTIFIC_ENVS="${E2E_SCIENTIFIC_ENVS:-0}"

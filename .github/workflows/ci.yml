@@ -320,6 +320,23 @@ jobs:
       - name: Build the product image
         run: docker compose build
 
+      # The container carries its own bubblewrap, but the kernel policy it
+      # sandboxes under is the host's. Ubuntu 24.04 — what ubuntu-latest is —
+      # ships kernel.apparmor_restrict_unprivileged_userns=1, and a restricted
+      # unprivileged user namespace is created without the capabilities its
+      # owner normally holds, so bubblewrap gets as far as its own network
+      # namespace and then cannot bring up loopback:
+      #
+      #   bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+      #
+      # `security_opt: apparmor=unconfined` does not cover this: it governs the
+      # container's profile, not the host-wide restriction. The UT, ST, E2E and
+      # binary jobs all clear the same switch before touching the sandbox; this
+      # job needs it for the same reason, one layer down.
+      - name: Allow the sandbox's user namespaces on the host
+        run: |
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       # The documented first-run sequence: copy the example .env, name the
       # invoking user's ids in it (a hosted runner is not uid 1000, and the
       # container writes the bind mount as the ids .env names), create the bind
@@ -367,6 +384,19 @@ jobs:
           jq -e '.status == "ok"' "$health_json" >/dev/null || fail "API status is not ok"
           jq -e '.runner.status == "ok"' "$health_json" >/dev/null || fail "runner status is not ok"
           jq -e '.runner.sandbox == "bubblewrap"' "$health_json" >/dev/null || fail "runner does not report the bubblewrap sandbox"
+
+          # That field alone cannot fail a Linux deployment: it reports the
+          # configured provider (`executorSandboxKind` returns
+          # `sandboxProvider ?? "bubblewrap"`), not the probe's verdict. A
+          # container whose sandbox is unusable still answers
+          # `"sandbox": "bubblewrap"` with `"status": "ok"`, which is how this
+          # job once reported a healthy runner and a broken sandbox in the same
+          # breath. The runner does know — it probes at startup and says so on
+          # stderr — so read that.
+          if docker compose logs sciencediscovery 2>&1 | grep -q "could not build a sandbox"; then
+            docker compose logs sciencediscovery 2>&1 | grep -A 12 "could not build a sandbox" >&2 || true
+            fail "the runner probed its sandbox at startup and could not build one (see the container log above)"
+          fi
 
           # Compose's own health check, which is what `docker compose ps` shows
           # an operator. start_period is 60s, so allow for it.
