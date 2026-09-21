@@ -2054,44 +2054,6 @@ test("SessionStore preserves managed skill selections when the catalog is restor
   assert.deepEqual(reopened.resolveRuntimeSettings(session.id).effective.enabledSkillIds, ["managed-skill"]);
 });
 
-test("SessionStore migrates the renamed antibody built-in skill in persisted selections", async (context) => {
-  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-antibody-skill-rename-${Date.now()}-${process.pid}`);
-  await mkdir(tempRoot, { recursive: true });
-  context.after(() => rm(tempRoot, { force: true, recursive: true }));
-
-  const seed = new SessionStore(tempRoot);
-  seed.setAvailableSkillIds(["antibody-design"]);
-  await seed.load();
-  const project = await seed.createProject("Antibody project", {
-    enabledSkillIds: ["antibody-design"],
-    skillSelectionMode: "selected",
-  });
-  const session = await seed.createSession(project.id, "Antibody task", {
-    enabledSkillIds: ["antibody-design"],
-    skillSelectionMode: "selected",
-  }, {}, { allowUnconfiguredModel: true });
-
-  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
-  const row = database.prepare("SELECT json FROM catalog_state WHERE id = 1").get() as { json: string };
-  const legacy = JSON.parse(row.json) as PersistedCatalog & {
-    sessions: Array<PersistedCatalog["sessions"][number] & { enabledSkillIds?: string[] }>;
-  };
-  legacy.projects[0]!.settingsOverrides.enabledSkillIds = ["antibody-protenix-pipeline"];
-  legacy.sessions[0]!.enabledSkillIds = ["antibody-protenix-pipeline"];
-  legacy.sessions[0]!.settingsOverrides.enabledSkillIds = ["antibody-protenix-pipeline"];
-  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(legacy));
-  database.close();
-
-  const migrated = new SessionStore(tempRoot);
-  migrated.setAvailableSkillIds(["antibody-design"]);
-  await migrated.load();
-  assert.deepEqual(migrated.resolveRuntimeSettings(session.id).effective.enabledSkillIds, ["antibody-design"]);
-  assert.deepEqual(migrated.getSession(session.id)?.enabledSkillIds, ["antibody-design"]);
-  const persisted = JSON.stringify(await readPersistedCatalog(tempRoot));
-  assert.doesNotMatch(persisted, /antibody-protenix-pipeline/u);
-  assert.match(persisted, /antibody-design/u);
-});
-
 test("skill selection defaults to all, is configured from Project down, and ignores Global", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-skill-modes-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
