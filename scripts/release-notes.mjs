@@ -65,6 +65,33 @@ export const newContributorCount = (body) => {
   return untilNextHeading.split("\n").filter((line) => /^\* /.test(line)).length;
 };
 
+// Orders the people in a release by how much of it they wrote. A commit whose
+// author GitHub cannot resolve to an account still had an author, so it is
+// credited under the name the commit carries rather than dropped: 22 of the
+// 455 commits in 0.2.0...main are in that state, and losing them would make
+// this list disagree with the count printed above it.
+export const rankContributors = (rows) => {
+  const byDisplay = new Map();
+  for (const { login, name } of rows) {
+    const display = login ? `@${login}` : name;
+    if (!display) continue;
+    byDisplay.set(display, (byDisplay.get(display) ?? 0) + 1);
+  }
+  return [...byDisplay]
+    .map(([display, commits]) => ({ commits, display }))
+    .sort((a, b) => b.commits - a.commits || a.display.localeCompare(b.display));
+};
+
+// GitHub draws its own avatar row under a release, but only across a range it
+// can form, and forming one needs a previous release — this repository has had
+// exactly one release, so that row has never had anything to show. Naming the
+// contributors in the body does not depend on it, and unlike the pull request
+// list it is unaffected by this mirror rewriting main.
+export const formatContributors = (contributors) =>
+  contributors.length === 0
+    ? ""
+    : `## Contributors\n\n${contributors.map((contributor) => contributor.display).join(", ")}`;
+
 // Used only when there is no earlier tag to compare against: the authors
 // generate-notes credited are then the best available answer, and saying so is
 // better than reporting nothing.
@@ -107,7 +134,10 @@ export const formatSummary = ({ commits, contributors, issues, newContributors, 
   return parts.join(" · ");
 };
 
-export const composeBody = ({ generated, summary }) =>
+// Contributors goes last, after What's Changed and New Contributors, so the
+// reader meets the release before the roll call — the order GitHub's own
+// generated notes and the projects that extend them both use.
+export const composeBody = ({ contributors = "", generated, summary }) =>
   [
     summary,
     "",
@@ -116,6 +146,7 @@ export const composeBody = ({ generated, summary }) =>
     "     binaries attached. Edit this release to add them, then delete this note. -->",
     "",
     generated.trim(),
+    ...(contributors ? ["", contributors] : []),
     "",
   ].join("\n");
 
@@ -131,17 +162,23 @@ const compareStatistics = (repository, base, head) => {
   // The comparison caps each page at 100 commits, and a release spanning
   // several hundred is normal here — 0.1.1...0.2.0 was 349 — so the author
   // list has to be paged or the contributor count silently truncates.
-  const authors = gh([
+  // Both fields, not a coalesce: which of the two is present decides whether
+  // the person is named as an @handle or as the name on the commit, and that
+  // is lost once jq has picked one.
+  const rows = gh([
     "api",
     "--paginate",
     `repos/${repository}/compare/${base}...${head}?per_page=100`,
     "--jq",
-    ".commits[] | .author.login // .commit.author.name",
+    '.commits[] | [.author.login // "", .commit.author.name] | @tsv',
   ])
     .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  return { commits: total.commits, contributors: new Set(authors).size };
+    .filter(Boolean)
+    .map((line) => {
+      const [login, name] = line.split("\t");
+      return { login, name };
+    });
+  return { commits: total.commits, contributorList: rankContributors(rows) };
 };
 
 // closingIssuesReferences is the link GitHub itself draws between a merged
@@ -208,13 +245,21 @@ const main = () => {
     newContributors: newContributorCount(generated),
     pullRequests: pullRequests.length,
   };
+  let contributorList;
   if (previous) {
-    Object.assign(statistics, compareStatistics(repository, previous, target ?? tag));
+    const compared = compareStatistics(repository, previous, target ?? tag);
+    statistics.commits = compared.commits;
+    contributorList = compared.contributorList;
   } else {
-    statistics.contributors = contributorHandlesFrom(generated).length;
+    contributorList = contributorHandlesFrom(generated).map((handle) => ({ commits: 1, display: `@${handle}` }));
   }
+  statistics.contributors = contributorList.length;
 
-  const body = composeBody({ generated, summary: formatSummary(statistics) });
+  const body = composeBody({
+    contributors: formatContributors(contributorList),
+    generated,
+    summary: formatSummary(statistics),
+  });
   const output = options.get("output");
   if (output) writeFileSync(output, body);
   else process.stdout.write(body);

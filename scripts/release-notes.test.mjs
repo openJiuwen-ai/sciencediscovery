@@ -17,10 +17,12 @@ import { test } from "node:test";
 import {
   composeBody,
   contributorHandlesFrom,
+  formatContributors,
   formatSummary,
   newContributorCount,
   previousTagFrom,
   pullRequestNumbers,
+  rankContributors,
 } from "./release-notes.mjs";
 
 // A trimmed copy of what generate-notes returned for this repository, kept
@@ -104,12 +106,57 @@ test("the summary states what is true and omits what is not", () => {
   assert.equal(formatSummary({ contributors: 2, issues: 0, newContributors: 2, pullRequests: 0 }), "**2 contributors** (2 new)");
 });
 
+test("contributors are ranked by how much of the release they wrote", () => {
+  const ranked = rankContributors([
+    { login: "zhaozhaozz", name: "wang_cheng_zhao" },
+    { login: "", name: "Hugaqq" },
+    { login: "zhaozhaozz", name: "wang_cheng_zhao" },
+    { login: "Birfy", name: "Birfy" },
+    { login: "", name: "Hugaqq" },
+    { login: "zhaozhaozz", name: "wang_cheng_zhao" },
+  ]);
+  assert.deepEqual(ranked, [
+    { commits: 3, display: "@zhaozhaozz" },
+    { commits: 2, display: "Hugaqq" },
+    { commits: 1, display: "@Birfy" },
+  ]);
+  // The same person reached through an account and through a bare commit name
+  // is two entries, because nothing here can prove they are one; what must not
+  // happen is a commit vanishing because GitHub could not resolve its author.
+  assert.deepEqual(rankContributors([{ login: "", name: "" }]), []);
+});
+
+test("the contributors section names everyone the count claims", () => {
+  const ranked = rankContributors([
+    { login: "a", name: "A" },
+    { login: "", name: "B" },
+  ]);
+  assert.equal(formatContributors(ranked), "## Contributors\n\n@a, B");
+  assert.equal(ranked.length, 2);
+  // A first release with no comparable range has no list, and an empty
+  // heading is worse than no heading.
+  assert.equal(formatContributors([]), "");
+});
+
 test("the body leads with the summary and preserves the generated sections", () => {
-  const body = composeBody({ generated, summary: "**1 commit**" });
+  const body = composeBody({
+    contributors: "## Contributors\n\n@a",
+    generated,
+    summary: "**1 commit**",
+  });
   assert.match(body, /^\*\*1 commit\*\*\n/);
   assert.ok(body.includes("## What's Changed"));
   assert.ok(body.includes("## New Contributors"));
-  assert.ok(body.trimEnd().endsWith("compare/0.2.0...0.3.0"));
+  // Contributors sits after the compare link, so the roll call follows the
+  // release rather than introducing it.
+  assert.ok(body.indexOf("compare/0.2.0...0.3.0") < body.indexOf("## Contributors"));
+  assert.ok(body.trimEnd().endsWith("@a"));
   // The prompt for a human summary must not render in the published note.
   assert.ok(body.includes("<!-- Highlights:"));
+});
+
+test("without a contributors section the body still ends at the compare link", () => {
+  const body = composeBody({ generated, summary: "**1 commit**" });
+  assert.ok(!body.includes("## Contributors"));
+  assert.ok(body.trimEnd().endsWith("compare/0.2.0...0.3.0"));
 });
