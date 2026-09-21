@@ -18,6 +18,7 @@ import { expect } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
+import { requireFirstRunState } from "./helpers/journeys.ts";
 
 test.use({ locale: "zh-CN" });
 
@@ -53,12 +54,15 @@ test.use({ locale: "zh-CN" });
  * Credentials: E2E_API_TOKEN
  * CostSideEffects: none
  */
-test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, async ({ journey, page }) => {
+test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, async ({ journey, page }, testInfo) => {
   test.setTimeout(180_000);
   journey.scenario({
     goal: "用户通过模型连接向导配置模型：验证直达链接、计费提示、坏 Key 友好报错与回滚、有效 Key 一键登记全部模型并在系统首个模型时设为全局默认、已有 Provider 凭据防覆盖保护，以及高级配置里获取列表手选模型、手填模型与卡内展开不串关闭路径。",
     preconditions: [
       "隔离栈已启动，浏览器已持有访问令牌",
+      "实例内没有任何模型：这条旅程断言「系统首个模型设为全局默认」，"
+        + "而产品只在 listModels() 为空时走那条路径。本旅程只在运行自己拥有该栈时清掉上一次运行的残留"
+        + "（见 E2E_ALLOW_STACK_RESET），否则记为前置未满足",
       "界面语言为 zh-CN",
       "使用本地 HTTP stub 模拟模型端点响应，不发生真实外网大模型调用",
     ],
@@ -184,6 +188,12 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
       "打开模型注册表：空态下连接模型是唯一新建入口，无独立添加面板",
       "系统设置中点击模型注册表；没有已配置服务商时连接模型卡片默认展开，作为唯一新建入口；注册表不再有独立的「添加 Provider」按钮、预置下拉或自定义表单，编辑器默认隐藏。",
       async () => {
+        // 这条旅程从"空态"读起：连接卡片默认展开是首启路径，而后面那步断言
+        // 「已设为全局默认任务模型」——产品只在 listModels() 为空时才这么做
+        // （ModelConnectWizard 的 hadModels）。共享栈上前面的旅程已经登记过模型，
+        // 于是产品正确地回「全局默认任务模型保持不变」，用例却当成失败。
+        // 这道闸只清理本次运行自己拥有的栈，否则把用例记为 BLOCKED。
+        await requireFirstRunState(page, testInfo);
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
         const dialog = await openModelRegistry();
@@ -622,7 +632,12 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         const footerBox = await dialog.locator(".system-config-footer").boundingBox();
         expect(submitBox).not.toBeNull();
         expect(footerBox).not.toBeNull();
-        expect(submitBox!.y + submitBox!.height).toBeLessThan(footerBox!.y);
+        // 量的是"按钮没有压在底栏上"。亚像素取整在不同渲染环境之间本来就会差一点：
+        // 同一份布局本机量到按钮底边正好落在底栏上沿，CI 的渲染器量到 580.234px
+        // 对 580px。用严格的浮点先后去表达这个性质，测的就成了渲染器而不是布局，
+        // 所以给一个 CSS 像素的容差——真正的回归（按钮确实盖住底栏）是几十像素级的。
+        const overlap = (submitBox!.y + submitBox!.height) - footerBox!.y;
+        expect(overlap, `提交按钮压住底栏 ${overlap.toFixed(2)}px`).toBeLessThan(1);
 
         // 系统设置保持打开，注册表与已配置列表都在，底栏按钮完好
         await expect(dialog).toBeVisible();
