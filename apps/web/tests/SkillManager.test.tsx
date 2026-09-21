@@ -275,3 +275,98 @@ test("renders skill library cards with pinned head version metadata", async () =
   assert.equal(renderer!.root.findAllByProps({ className: "skill-library-create" }).length, 0);
   await act(async () => renderer!.unmount());
 });
+
+const quickImportInspection = {
+  candidates: [
+    { diagnostics: [], name: "quick-alpha", status: "new", subdirectory: "skills/quick-alpha" },
+    { diagnostics: ["Name collides with a built-in Skill"], name: "life-science-evidence-brief", status: "invalid", subdirectory: "skills/builtin-collider" },
+    { diagnostics: [], name: "quick-beta", status: "update", subdirectory: "skills/quick-beta" },
+  ],
+  commit: "abcdef1234567890abcdef1234567890abcdef12",
+  ref: "main",
+  repositoryUrl: "https://github.com/example/quick-skills.git",
+};
+
+test("quick import publishes scanned Git candidates as one bulk request", async () => {
+  const calls: Array<{ draftIds: string[]; onConflict?: string; presetId?: string }> = [];
+  const createdDrafts = [
+    { draftId: "draft-alpha", name: "quick-alpha" },
+    { draftId: "draft-beta", name: "quick-beta" },
+  ];
+  const client = {
+    listSkillReviewDrafts: async () => [],
+    listSkills: async () => [skill],
+    inspectGitSkillRepository: async () => quickImportInspection,
+    createGitSkillReviewDrafts: async () => ({ commit: quickImportInspection.commit, drafts: createdDrafts }),
+    bulkPublishGitSkillReviewDrafts: async (body: { draftIds: string[]; onConflict?: string; presetId?: string }) => {
+      calls.push(body);
+      return {
+        conflicts: [],
+        diagnostics: [],
+        skipped: [],
+        version: {
+          author: { kind: "system" as const, name: "Quick Git import" },
+          contentHash: "hash",
+          createdAt: "2026-01-02T03:04:05.000Z",
+          id: "version-1",
+          libraryId: "project-skills",
+          skills: createdDrafts.map((draft) => ({ description: "d", hash: "h", id: draft.name, version: "1.0.0" })),
+        },
+      };
+    },
+  } as Partial<ApiClient> as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SkillManager, {
+      client,
+      onCatalogChange: () => undefined,
+      onError: () => undefined,
+      skills: [skill],
+    }));
+  });
+
+  const gitButton = renderer!.root.findAllByType("button").find((button) => (
+    button.findAllByType("strong").some((strong) => strong.children.join("") === "Git repository")
+  ));
+  assert.ok(gitButton);
+  await act(async () => gitButton.props.onClick({ currentTarget: { closest: () => undefined } }));
+
+  const urlInput = renderer!.root.findByProps({ placeholder: "https://github.com/org/repo/tree/main/skills" });
+  await act(async () => urlInput.props.onChange({ target: { value: quickImportInspection.repositoryUrl } }));
+  const form = renderer!.root.findByType("form");
+  await act(async () => form.props.onSubmit({ preventDefault: () => undefined }));
+
+  // Quick import is opt-in; the classic candidate list renders until then.
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-git-candidates" }).length, 1);
+  const quickToggle = renderer!.root.findByProps({ className: "skill-git-quick-toggle" }).findByType("input");
+  await act(async () => quickToggle.props.onChange({ target: { checked: true } }));
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-git-candidates" }).length, 0);
+
+  const quickButton = renderer!.root.findAllByProps({ className: "primary-button skill-git-quick-button" })[0];
+  assert.ok(quickButton);
+  await act(async () => quickButton.props.onClick());
+
+  const dialog = renderer!.root.findAllByProps({ role: "dialog" }).find((node) => (
+    node.props.className.includes("skill-git-quick-dialog")
+  ));
+  assert.ok(dialog);
+  // Only publishable candidates are preselected; the invalid collider is not.
+  const candidateCheckboxes = dialog!.findByProps({ className: "skill-git-candidates skill-git-quick-candidates" })
+    .findAllByType("input").filter((input) => input.props.type === "checkbox");
+  const checked = candidateCheckboxes.filter((input) => input.props.checked === true);
+  assert.equal(checked.length, 2);
+  const conflictToggle = dialog!.findByProps({ className: "skill-git-quick-conflict-toggle" }).findByType("input");
+  assert.equal(conflictToggle.props.checked, true);
+
+  const confirm = dialog!.findAllByType("button").find((button) => button.children.join("").includes("Import 2 Skills"));
+  assert.ok(confirm);
+  await act(async () => confirm!.props.onClick());
+  await act(async () => undefined);
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]!.draftIds, ["draft-alpha", "draft-beta"]);
+  assert.equal(calls[0]!.onConflict, "fail");
+  assert.equal(calls[0]!.presetId, quickImportInspection.repositoryUrl);
+  assert.equal(renderer!.root.findAllByProps({ role: "status" }).length, 1);
+  await act(async () => renderer!.unmount());
+});

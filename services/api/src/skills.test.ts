@@ -336,6 +336,152 @@ test("keeps a reviewed Agent draft when its external Library publication fails",
   }
 });
 
+test("bulk publish prepares Git drafts as one batch, skips on filter, and sweeps drafts on success", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const commit = "fedcba0987654321fedcba0987654321fedcba09";
+    const drafts = await Promise.all(["bulk-alpha", "bulk-beta"].map((name) => catalog.createReviewDraft({
+      description: `Bulk import candidate ${name}.`,
+      instructions: `# Workflow\n\nRun ${name}.`,
+      name,
+    }, {
+      git: { commit, ref: "main", repositoryUrl: "https://example.com/bulk.git", subdirectory: `skills/${name}` },
+      source: "git",
+    })));
+    const agentDraft = await catalog.createReviewDraft({
+      description: "A non-Git draft that must never join a bulk batch.",
+      instructions: "# Workflow\n\nAgent authored.",
+      name: "bulk-agent-draft",
+    }, { sessionId: "session-agent", source: "agent" });
+
+    await assert.rejects(catalog.publishReviewDraftsAtomically(
+      [...drafts.map((draft) => draft.draftId), agentDraft.draftId, drafts[0]!.draftId],
+      { onConflict: "fail", prepare: () => Promise.resolve([]) },
+    ), /Only Git review drafts can be bulk published/);
+    assert.equal(catalog.listReviewDrafts().length, 3);
+
+    const seen: Array<{ id: string; metadata?: Record<string, unknown> }> = [];
+    const { result, skipped } = await catalog.publishReviewDraftsAtomically(
+      [...drafts.map((draft) => draft.draftId), "missing-draft-id"],
+      {
+        onConflict: "filter",
+        prepare: async (prepared) => {
+          for (const item of prepared) {
+            seen.push({ id: item.detail.id, metadata: item.provenance.metadata });
+          }
+          return "committed";
+        },
+        provenanceMetadata: { autoImportedAt: "2026-01-02T03:04:05.000Z", autoImportPresetId: "https://example.com/bulk.git" },
+      },
+    );
+    assert.equal(result, "committed");
+    assert.deepEqual(skipped, [{ draftId: "missing-draft-id", reason: "Skill review draft not found (already published or deleted)" }]);
+    assert.deepEqual(seen.map((item) => item.id).sort(), ["bulk-alpha", "bulk-beta"]);
+    for (const item of seen) {
+      assert.equal(item.metadata?.autoImportedAt, "2026-01-02T03:04:05.000Z");
+      assert.equal(item.metadata?.autoImportPresetId, "https://example.com/bulk.git");
+    }
+    assert.deepEqual(catalog.listReviewDrafts().map((candidate) => candidate.name).sort(), ["bulk-agent-draft"]);
+    // Bulk-published Git Skills must also land in the local managed catalog so
+    // SkillCatalog.list() and SkillWorkspaceDialog can find them. The agent
+    // draft is still a draft and the repo's bundled built-ins are unrelated.
+    const published = catalog.list().map((skill) => skill.id).filter((id) => id.startsWith("bulk-")).sort();
+    assert.deepEqual(published, ["bulk-alpha", "bulk-beta"]);
+
+    await assert.rejects(catalog.publishReviewDraftsAtomically([], { onConflict: "fail", prepare: () => Promise.resolve([]) }), /between 1 and 200/);
+    await assert.rejects(
+      catalog.publishReviewDraftsAtomically(Array.from({ length: 201 }, (_, index) => `draft-${index}`), { onConflict: "filter", prepare: () => Promise.resolve([]) }),
+      /between 1 and 200/,
+    );
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("bulk publish keeps every Git draft when the external commit fails", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const commit = "abcdef1234567890abcdef1234567890abcdef12";
+    const drafts = await Promise.all(["rollback-alpha", "rollback-beta"].map((name) => catalog.createReviewDraft({
+      description: `Rollback candidate ${name}.`,
+      instructions: `# Workflow\n\nRun ${name}.`,
+      name,
+    }, {
+      git: { commit, repositoryUrl: "https://example.com/rollback.git", subdirectory: `skills/${name}` },
+      source: "git",
+    })));
+    await assert.rejects(catalog.publishReviewDraftsAtomically(
+      drafts.map((draft) => draft.draftId),
+      {
+        onConflict: "fail",
+        prepare: () => Promise.reject(new Error("Library commit failed")),
+      },
+    ), /Library commit failed/);
+    assert.deepEqual(catalog.listReviewDrafts().map((candidate) => candidate.name).sort(), ["rollback-alpha", "rollback-beta"]);
+    // Managed sync must also be rolled back — neither the list nor the index
+    // should retain references to skills that never made it to a library commit.
+    // The repo's bundled built-ins are unrelated and stay loaded.
+    const rollbackEntries = catalog.list().map((skill) => skill.id).filter((id) => id.startsWith("rollback-"));
+    assert.deepEqual(rollbackEntries, []);
+    const reloaded = new SkillCatalog(dataDir, repositoryRoot);
+    await reloaded.load();
+    const reloadedEntries = reloaded.list().map((skill) => skill.id).filter((id) => id.startsWith("rollback-"));
+    assert.deepEqual(reloadedEntries, []);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("bulk publish rolls back the managed entries if the library commit fails mid-batch", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    const commit = "1234567890abcdef1234567890abcdef12345678";
+    const drafts = await Promise.all(["managed-rollback-1", "managed-rollback-2", "managed-rollback-3"].map((name) => catalog.createReviewDraft({
+      description: `Bulk rollback candidate ${name}.`,
+      instructions: `# Workflow\n\nRun ${name}.`,
+      name,
+    }, {
+      git: { commit, repositoryUrl: "https://example.com/managed-rollback.git", subdirectory: `skills/${name}` },
+      source: "git",
+    })));
+
+    await assert.rejects(catalog.publishReviewDraftsAtomically(
+      drafts.map((draft) => draft.draftId),
+      {
+        onConflict: "fail",
+        prepare: (prepared) => {
+          // Mirror what happens during a real commit: the catalog already
+          // touched managed entries. Now the library commit must fail so we
+          // can verify the catalog unwinds them.
+          assert.equal(prepared.length, 3);
+          return Promise.reject(new Error("Library publishVersion exploded"));
+        },
+      },
+    ), /Library publishVersion exploded/);
+
+    // Drafts stayed on disk for retry, managed entries were rolled back, and a
+    // fresh catalog instance loads the same empty state from disk. The repo's
+    // bundled built-ins are unrelated and stay loaded.
+    assert.deepEqual(catalog.listReviewDrafts().map((candidate) => candidate.name).sort(), [
+      "managed-rollback-1", "managed-rollback-2", "managed-rollback-3",
+    ]);
+    const midRollback = catalog.list().map((skill) => skill.id).filter((id) => id.startsWith("managed-rollback-"));
+    assert.deepEqual(midRollback, []);
+    const reloaded = new SkillCatalog(dataDir, repositoryRoot);
+    await reloaded.load();
+    const reloadedEntries = reloaded.list().map((skill) => skill.id).filter((id) => id.startsWith("managed-rollback-"));
+    assert.deepEqual(reloadedEntries, []);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("updates one pending Agent Skill draft and compares it with the previous proposal", async () => {
   const dataDir = await temporaryDataDir();
   try {

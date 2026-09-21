@@ -184,6 +184,11 @@ export interface PreparedSkillReviewDraft {
   provenance: SkillVersionProvenance;
 }
 
+/** One prepared Git review draft inside a {@link SkillCatalog.publishReviewDraftsAtomically} batch. */
+export interface PreparedGitSkillReviewDraft extends PreparedSkillReviewDraft {
+  draftId: string;
+}
+
 export class SkillCatalogError extends Error {
   code: "SKILL_CONFLICT" | "SKILL_NOT_FOUND" | "SKILL_READ_ONLY" | "SKILL_VALIDATION";
 
@@ -1420,6 +1425,152 @@ export class SkillCatalog {
       this.reviewDrafts.delete(draft.draftId);
       return result;
     });
+  }
+
+  /**
+   * Bulk sibling of {@link publishReviewDraft} for Git review drafts: prepare every
+   * draft, let one external publisher commit them as a single unit, then remove the
+   * drafts only if that publisher succeeded. Drafts whose package no longer validates
+   * are reported through `skipped` (filter mode) instead of aborting the batch.
+   */
+  async publishReviewDraftsAtomically<T>(
+    draftIds: string[],
+    options: {
+      onConflict: "fail" | "filter";
+      prepare: (prepared: PreparedGitSkillReviewDraft[]) => Promise<T>;
+      provenanceMetadata?: Record<string, unknown>;
+    },
+  ): Promise<{ result: T; skipped: Array<{ draftId: string; reason: string }> }> {
+    const uniqueIds = [...new Set(draftIds.map((id) => id.trim()).filter(Boolean))];
+    if (!uniqueIds.length || uniqueIds.length > 200) {
+      throw validationError("Select between 1 and 200 Skill review drafts to publish");
+    }
+    return await this.mutate(async () => {
+      this.assertLoaded();
+      const skipped: Array<{ draftId: string; reason: string }> = [];
+      const prepared: PreparedGitSkillReviewDraft[] = [];
+      const seenNames = new Set<string>();
+      for (const draftId of uniqueIds) {
+        const draft = this.reviewDrafts.get(draftId);
+        if (!draft) {
+          if (options.onConflict === "filter") {
+            skipped.push({ draftId, reason: "Skill review draft not found (already published or deleted)" });
+            continue;
+          }
+          throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill review draft not found: ${draftId}`);
+        }
+        if (draft.provenance?.source !== "git") {
+          if (options.onConflict === "filter") {
+            skipped.push({ draftId, reason: "Draft was not created from a Git import" });
+            continue;
+          }
+          throw new SkillCatalogError("SKILL_CONFLICT", `Only Git review drafts can be bulk published: ${draftId}`);
+        }
+        try {
+          const files = new Map<string, Buffer>();
+          for (const file of draft.files) {
+            if (files.has(file.path)) throw validationError(`Duplicate skill package path: ${file.path}`);
+            files.set(file.path, this.storedReviewFileBytes(file));
+          }
+          const loaded = validateSkillPackage(files, {
+            ...(draft.baseRevision !== undefined ? { directoryName: draft.name } : {}),
+            revision: draft.baseRevision === undefined ? 1 : draft.baseRevision + 1,
+          });
+          if (seenNames.has(loaded.detail.id)) {
+            throw validationError(`Duplicate Skill name in batch: ${loaded.detail.id}`);
+          }
+          seenNames.add(loaded.detail.id);
+          prepared.push({
+            detail: structuredClone(loaded.detail),
+            files: new Map([...loaded.files].map(([path, bytes]) => [path, Buffer.from(bytes)])),
+            draftId,
+            provenance: {
+              ...structuredClone(draft.provenance),
+              ...(options.provenanceMetadata
+                ? { metadata: { ...structuredClone(options.provenanceMetadata), ...(draft.provenance?.metadata ?? {}) } }
+                : {}),
+            },
+          });
+        } catch (error) {
+          if (options.onConflict !== "filter" || error instanceof SkillCatalogError) throw error;
+          skipped.push({ draftId, reason: error instanceof Error ? error.message : "Skill package failed validation" });
+        }
+      }
+      if (!prepared.length) {
+        throw validationError("No publishable Git Skill drafts remained after filtering");
+      }
+      // Mirror the published Skills into the local managed catalog first so the
+      // Skills tab search and SkillWorkspaceDialog can find them. The library
+      // commit is the canonical audit record; managed is the browse index.
+      // Syncing managed first lets us roll it back cleanly if the library
+      // commit fails partway through.
+      const mirrored = await this.mirrorPreparedToManaged(prepared);
+      let result: T;
+      try {
+        result = await options.prepare(prepared);
+      } catch (error) {
+        await this.rollbackManagedEntries(mirrored);
+        throw error;
+      }
+      for (const item of prepared) {
+        await rm(this.reviewDraftPath(item.draftId), { force: true });
+        this.reviewDrafts.delete(item.draftId);
+      }
+      return { result, skipped };
+    });
+  }
+
+  private async mirrorPreparedToManaged(prepared: PreparedGitSkillReviewDraft[]): Promise<Array<{ id: string; revision: number }>> {
+    const synced: Array<{ id: string; revision: number }> = [];
+    const createdAt = new Date().toISOString();
+    try {
+      for (const item of prepared) {
+        const id = item.detail.id;
+        if (this.builtIns.has(id) || this.managed.has(id)) {
+          throw new SkillCatalogError("SKILL_CONFLICT", `Skill already exists: ${id}`);
+        }
+        const revision = item.detail.currentRevision;
+        const mutableFiles = new Map<string, Buffer>();
+        for (const [path, bytes] of item.files) mutableFiles.set(path, bytes);
+        const committed = await this.commitManaged(
+          { detail: item.detail, files: mutableFiles },
+          revision,
+          createdAt,
+          item.provenance,
+        );
+        this.index.managed[id] = { currentRevision: revision };
+        this.managed.set(id, committed);
+        synced.push({ id, revision });
+      }
+      await this.saveIndex();
+    } catch (error) {
+      for (const entry of synced.reverse()) {
+        this.managed.delete(entry.id);
+        delete this.index.managed[entry.id];
+        await rm(this.revisionRoot(entry.id, entry.revision), { force: true, recursive: true });
+      }
+      try {
+        await this.saveIndex();
+      } catch {
+        // Best effort — index will be repaired on next successful save.
+      }
+      throw error;
+    }
+    return synced;
+  }
+
+  private async rollbackManagedEntries(entries: Array<{ id: string; revision: number }>): Promise<void> {
+    if (!entries.length) return;
+    for (const entry of entries.reverse()) {
+      this.managed.delete(entry.id);
+      delete this.index.managed[entry.id];
+      await rm(this.revisionRoot(entry.id, entry.revision), { force: true, recursive: true });
+    }
+    try {
+      await this.saveIndex();
+    } catch {
+      // Best effort — index will be repaired on next successful save.
+    }
   }
 
   private prepareReviewDraftConfirmation(draftId: string, input: ConfirmSkillReviewDraftRequest): {

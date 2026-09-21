@@ -30,6 +30,7 @@ export const LOCALE_STORAGE_KEY = `${CURRENT_PREFIX}-locale`;
 export const WORKSPACE_COLLAPSED_STORAGE_KEY = `${CURRENT_PREFIX}-workspace-collapsed`;
 export const WORKSPACE_WIDTH_STORAGE_KEY = `${CURRENT_PREFIX}-workspace-width`;
 export const SHOW_PHYSICAL_FILES_STORAGE_KEY = `${CURRENT_PREFIX}-show-physical-files`;
+export const SKILL_GIT_IMPORT_PRESETS_STORAGE_KEY = `${CURRENT_PREFIX}-skill-git-import-presets`;
 
 /** Former spelling of a current key, or undefined when the key is not renamed. */
 export function legacyStorageKey(key: string): string | undefined {
