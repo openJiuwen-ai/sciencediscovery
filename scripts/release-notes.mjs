@@ -20,6 +20,11 @@
 // compare link — so this keeps that output verbatim instead of reimplementing
 // it, and adds the one thing it does not carry: how much is in the release.
 //
+// That API reads .github/release.yml from the default branch, so the grouping
+// into Features, Bug Fixes and the rest arrives inside `generated` here with
+// nothing to do for it. Do not reimplement the grouping: one classifier, in
+// the file GitHub's own Releases page also honours.
+//
 // What the release means still has to be written by a person. That belongs at
 // the top, and the placeholder below says so; nothing here tries to infer
 // highlights from commit subjects. The numbers are the part a script can do

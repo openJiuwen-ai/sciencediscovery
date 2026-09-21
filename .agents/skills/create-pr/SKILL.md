@@ -125,6 +125,28 @@ local/private paths, or links that a repository reader cannot access.
 Mark a merge request that must not land — a CI experiment, a spike — in both
 the title and the body, and say what to delete before it could be merged.
 
+## Carry the release category across
+
+The release note is generated on GitHub and grouped by the `release:*` label on
+the **paired GitHub pull request** — a merge request body cannot classify
+anything. So state the intended category here:
+
+```markdown
+## 发布信息
+
+Release category: release:feature
+用户影响：<what a user notices; or the internal scope if none>
+兼容性与迁移：<none; or the incompatibility and the steps>
+```
+
+The whitelist, the rules for choosing exactly one, and what to do when the
+label cannot be applied are in
+[create-github-pr](../create-github-pr/SKILL.md); the sections and their order
+are in [.github/release.yml](../../../.github/release.yml). Until the sync
+adapter reads this field, a maintainer applies the label on the paired pull
+request. An unlabelled pull request is not lost — it lands in *Other Changes* —
+but that section is a backstop to read before publishing, not a default.
+
 ## After it opens
 
 Two bots respond within a minute or two:
