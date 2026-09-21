@@ -277,32 +277,6 @@ const SESSION_DATA_CATEGORIES = [
   "workspace files",
 ] as const;
 
-const LEGACY_BUILTIN_SKILL_IDS: Readonly<Record<string, string>> = {
-  "antibody-protenix-pipeline": "antibody-design",
-};
-
-/** Keep persisted Project and Session selections working when a built-in Skill is renamed. */
-function migrateLegacySkillIds(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  let changed = false;
-  const mapped = value.map((id) => {
-    if (typeof id !== "string") return id;
-    const replacement = LEGACY_BUILTIN_SKILL_IDS[id];
-    if (!replacement) return id;
-    changed = true;
-    return replacement;
-  });
-  const unique = [...new Set(mapped)];
-  if (unique.length !== mapped.length) changed = true;
-  return changed ? unique : value;
-}
-
-function migrateLegacySkillSettings(value: unknown): unknown {
-  if (!isRecord(value) || !hasOwn(value, "enabledSkillIds")) return value;
-  const enabledSkillIds = migrateLegacySkillIds(value.enabledSkillIds);
-  return enabledSkillIds === value.enabledSkillIds ? value : { ...value, enabledSkillIds };
-}
-
 interface StagedDeletion {
   entries: Array<{ source: string; staged: string }>;
   root: string;
@@ -772,7 +746,7 @@ export class SessionStore {
     const defaultGlobalSettings = emptyCatalog(this.initialTimeoutSettings, this.initialQuotaSettings).globalSettings;
     const normalizedGlobalSettings = saved.globalSettings === undefined
       ? undefined
-      : withoutSkillSelection(normalizeRuntimeSettings(migrateLegacySkillSettings(saved.globalSettings), modelIds, this.skillIds, false, this.connectorIds));
+      : withoutSkillSelection(normalizeRuntimeSettings(saved.globalSettings, modelIds, this.skillIds, false, this.connectorIds));
     const globalSettings = normalizedGlobalSettings === undefined
       ? defaultGlobalSettings
       : normalizedGlobalSettings;
@@ -817,7 +791,7 @@ export class SessionStore {
       remoteRunnerHostIds: Array.isArray(project.remoteRunnerHostIds)
         ? project.remoteRunnerHostIds.filter((id): id is string => typeof id === "string")
         : [],
-      settingsOverrides: normalizeRuntimeSettings(migrateLegacySkillSettings(project.settingsOverrides), modelIds, this.skillIds, false, this.connectorIds),
+      settingsOverrides: normalizeRuntimeSettings(project.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds),
     }));
     const migratedHierarchicalSettings = saved.globalSettings === undefined
       || JSON.stringify(globalSettings) !== JSON.stringify(saved.globalSettings)
@@ -952,10 +926,8 @@ export class SessionStore {
         ? session.enabledConnectorIds.filter((id): id is ConnectorId => this.connectorIds.has(id))
         : [];
       // Compatibility mirror only; syncSessionCompatibility recomputes it after load.
-      const savedEnabledSkillIds = migrateLegacySkillIds(session.enabledSkillIds);
-      if (savedEnabledSkillIds !== session.enabledSkillIds) migratedSessionSettings = true;
-      const enabledSkillIds = Array.isArray(savedEnabledSkillIds)
-        ? savedEnabledSkillIds.filter((id): id is string => typeof id === "string" && this.skillIds.has(id))
+      const enabledSkillIds = Array.isArray(session.enabledSkillIds)
+        ? session.enabledSkillIds.filter((id): id is string => this.skillIds.has(id))
         : [];
       const semanticReviewEnabled = session.semanticReviewEnabled ?? true;
       const reviewerAutomaticReviewEnabled = typeof session.reviewerAutomaticReviewEnabled === "boolean"
@@ -969,7 +941,7 @@ export class SessionStore {
         : [];
       const reviewMode = session.reviewMode === "manual" ? "manual" as const : "auto" as const;
       const settingsOverrides = isRecord(session.settingsOverrides)
-        ? normalizeRuntimeSettings(migrateLegacySkillSettings(session.settingsOverrides), modelIds, this.skillIds, false, this.connectorIds)
+        ? normalizeRuntimeSettings(session.settingsOverrides, modelIds, this.skillIds, false, this.connectorIds)
         : {
             enabledConnectorIds,
             ...(modelId ? { modelId } : {}),
