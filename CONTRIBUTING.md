@@ -311,14 +311,19 @@ supplied.
 
 ## Repositories
 
-GitCode and GitHub host **separate repositories**, and GitCode syncs to GitHub
+GitCode and GitHub host **separate repositories**, and GitHub syncs to GitCode
 periodically. They are not two remotes of one history: the same change lands
 under a different SHA on each host.
 
 | Host | Repository | Role |
 | --- | --- | --- |
-| gitcode.com | `openJiuwen/sciencediscovery` | where changes are proposed and reviewed |
-| github.com | `openJiuwen-ai/sciencediscovery` | synced mirror |
+| github.com | `openJiuwen-ai/sciencediscovery` | where changes are proposed and reviewed |
+| gitcode.com | `openJiuwen/sciencediscovery` | synced mirror |
+
+This direction is the reverse of what it was: changes used to be proposed on
+GitCode and mirrored to GitHub. Older merge requests, and documentation that
+has not caught up, describe that arrangement — read a pairing from the
+direction in this table, not from which number is lower.
 
 Two consequences. A commit id is only meaningful alongside the host it came
 from — `refactor: move domain capabilities into packages` is `c151f58` on
@@ -357,29 +362,38 @@ unprivileged user namespaces, cleared with
 container it is normally unfixable for a process using that same host kernel;
 a full-system VM can instead provide an independent guest kernel.
 
-Then branch from an up-to-date `main`, **push the branch to your own GitCode
-fork**, and open the merge request against `openJiuwen/sciencediscovery`. Never
-push task branches to the upstream repository (`origin`); never push to
-`main`. Rebase rather than merge when `main` moves, so the diff stays readable.
+Then branch from an up-to-date `main`, **push the branch to your own GitHub
+fork**, and open the pull request against `openJiuwen-ai/sciencediscovery`.
+Never push task branches to an upstream repository on either host; never push
+to `main`. Rebase rather than merge when `main` moves, so the diff stays
+readable — and rebase onto the host's own `main`, since a branch based on one
+host's history does not belong on the other.
 
-Each contributor forks the upstream repo under their own GitCode login and
-keeps that fork updated. Do not hard-code anyone's login. A common local
-remote name for that fork is `gitcode-fork`. Resolve the login from
-`gitcode auth status --json` (do not print the token). If the fork does not
-exist yet: `gitcode repo fork openJiuwen/sciencediscovery --json`, then
-`git remote add gitcode-fork git@gitcode.com:<gitcode-login>/sciencediscovery.git`.
+Each contributor forks the upstream repo under their own GitHub login and keeps
+that fork updated. Do not hard-code anyone's login; resolve it from
+`gh api user --jq .login`. Note that `origin` here is GitCode, so it is not the
+personal fork and not the host the pull request goes to.
 
 ```bash
-git fetch origin && git checkout -b <type>/<short-topic> origin/main
-git push -u gitcode-fork <branch>
-gitcode pr create -R openJiuwen/sciencediscovery \
-  --head <gitcode-login>:<branch> --base main \
+git fetch github && git checkout -b <type>/<short-topic> github/main
+git push -u github-fork <branch>
+gh pr create --repo openJiuwen-ai/sciencediscovery \
+  --head <github-login>:<branch> --base main \
   --title "<type>: <what changed>" --body-file <file>
 ```
+
+Apply exactly one `release:*` label so the release note can group the change;
+[.github/release.yml](.github/release.yml) lists the categories and
+[the create-github-pr skill](.agents/skills/create-github-pr/SKILL.md) covers
+choosing one and what to do without the access to apply it.
 
 State in the body what was verified, with the numbers each layer reported.
 "Tests pass" is not reviewable. If the change cannot pass a layer, say which and
 why — do not weaken an assertion to get a green run.
+
+A merge request opened on GitCode still works and CodeArts still runs on it;
+[the create-pr skill](.agents/skills/create-pr/SKILL.md) documents that path.
+It is no longer where changes are proposed by default.
 
 Check `git status` before committing: no `.tmp/`, no local editor or tooling
 config, no private notes.

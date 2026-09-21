@@ -14,10 +14,12 @@ restriction on unprivileged user namespaces before probing the sandbox. If the
 probe fails, diagnose the host policy; do not replace the sandbox or remove the
 tests.
 
-GitHub is `openJiuwen-ai/sciencediscovery`, a periodic mirror of the GitCode
-repository. The two repositories have different histories and SHAs. Always
-name the host when reporting a commit and compare trees rather than assuming
-matching commit IDs.
+GitHub is `openJiuwen-ai/sciencediscovery`, where changes are proposed; it
+syncs periodically to the GitCode repository. That direction is the reverse of
+what it was, so older runs, merge requests and stale documentation describe
+GitCode as the source. The two repositories have different histories and SHAs
+either way. Always name the host when reporting a commit and compare trees
+rather than assuming matching commit IDs.
 
 ## Read a result
 

@@ -4,18 +4,27 @@ description: >
   Open a merge request on GitCode: run the UT/ST/E2E layers locally first,
   write a body that says what was verified with numbers, target
   openJiuwen/sciencediscovery, then read the bot comments and the CodeArts
-  result the merge request receives. Use when asked to create a PR or MR,
-  submit a change for review, when a branch is ready to propose, or when
-  interpreting a merge request's CI result comment or ci-* labels.
+  result the merge request receives. Use when the task names GitCode or a
+  merge request, when working on gitcode.com, or when interpreting a merge
+  request's CI result comment or ci-* labels. Changes are proposed on GitHub
+  by default now — for an ordinary "create a PR" use create-github-pr.
 ---
 
 # Create a merge request (GitCode)
 
 Project-local skill for **ScienceDiscovery**.
 
+> **Changes are proposed on GitHub now**, and GitHub syncs to GitCode — the
+> reverse of the arrangement this skill was written for. Opening a merge
+> request here still works and CodeArts still runs on it, but unless the task
+> says GitCode, the skill you want is
+> [create-github-pr](../create-github-pr/SKILL.md).
+> [CONTRIBUTING.md](../../../CONTRIBUTING.md)'s *Repositories* table is the
+> authority on the direction.
+
 **Read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first** — *Opening a merge
-request* and *Repositories* carry the process and the reason changes are
-proposed on GitCode rather than GitHub. Command surface:
+request* and *Repositories* carry the process and which host changes are
+proposed on. Command surface:
 [.agents/skills/gitcode/SKILL.md](../gitcode/SKILL.md). Pipeline internals —
 which platform runs which layer, the workflow files, run logs, and failure
 attribution: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
@@ -24,8 +33,9 @@ attribution: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
 
 1. **The layers are a gate, not a suggestion.** CONTRIBUTING says run all
    three; do not open a merge request without them.
-2. **Target `openJiuwen/sciencediscovery` on gitcode.com.** GitHub is a synced
-   mirror with its own SHAs; a merge request opened there is in the wrong place.
+2. **Target `openJiuwen/sciencediscovery` on gitcode.com.** Once a task has said
+   GitCode, keep it there: the two hosts carry their own SHAs, and a change
+   split across both is reviewed in neither.
    **Push the task branch only to the operator's own GitCode fork** (commonly
    a local remote named `gitcode-fork` →
    `git@gitcode.com:<gitcode-login>/sciencediscovery.git`). Resolve

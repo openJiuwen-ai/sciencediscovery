@@ -1,8 +1,9 @@
 ---
 name: ci
 description: >
-  Read, diagnose, and change the CI pipelines: CodeArts on GitCode merge
-  requests and GitHub Actions on the mirror. Use when a pipeline or job fails,
+  Read, diagnose, and change the CI pipelines: GitHub Actions on pull requests,
+  the nightly and the release tag, and CodeArts on GitCode merge requests. Use
+  when a pipeline or job fails,
   when editing .codearts/workflow/ or .github/workflows/, when asking which
   platform runs which layer, when reproducing a pipeline failure locally, or
   when a job needs the bubblewrap sandbox. Running the layers before a merge
@@ -35,13 +36,16 @@ smokes in `ci:st` are not E2E merely because they call a model. Keep layer
 names, entry points and pipeline scheduling unchanged when reporting this
 broader coverage.
 
-Three pipelines exist and none runs everything.
+Three test pipelines exist and none runs everything. `nightly.yml` and
+`release.yml` are not a fourth and a fifth definition: both call `ci.yml`
+through `workflow_call`, so what they run is the row below, and the reason
+they exist is in their own file headers.
 
 | Pipeline | Trigger | UT | ST | Browser E2E subset | Binary/resource output |
 | --- | --- | --- | --- | --- | --- |
 | CodeArts — `.codearts/workflow/codearts-pipeline.yml` | merge request to `main` on gitcode.com (open, update, reopen); update and push the PR source branch to start a fresh run | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | `ci:st` | off; the journeys reach a browser under emulation but outrun timeouts sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
 | CodeArts resources — `.codearts/workflow/codearts-resources-pipeline.yml` on `ci/codearts-resources` | push to `ci/codearts-resources` | — | — | — | checksum-pinned toolchains and QEMU image uploaded to stable OBS keys |
-| GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on the mirror `openJiuwen-ai/sciencediscovery` | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
+| GitHub Actions — `.github/workflows/ci.yml` | push to `main`, pull request, or `workflow_dispatch` on `openJiuwen-ai/sciencediscovery`, where changes are proposed; also called by `nightly.yml` on a schedule and by `release.yml` on a version tag | full `ci:ut` | `ci:st` | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
 
 CodeArts's default pool cannot create user namespaces, so the UT guest tier
 cannot run directly there. The debug pipeline runs the unchanged `ci:ut:guest`

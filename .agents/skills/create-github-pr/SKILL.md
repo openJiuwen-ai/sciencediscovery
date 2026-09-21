@@ -5,22 +5,24 @@ description: >
   run the UT/ST/E2E layers locally, push the branch to the operator's own
   GitHub fork, write a body that says what was verified with numbers, apply
   exactly one release:* label so the release note can classify it, then read
-  the pull request and its Actions run back. Use when asked for a GitHub PR,
-  when a change is being proposed on the mirror rather than on GitCode, when
+  the pull request and its Actions run back. Use when asked to create a PR,
+  submit a change for review, when a branch is ready to propose, when
   labelling a pull request for the release note, or when reading a GitHub
-  Actions result on a pull request. For a merge request on gitcode.com use the
-  create-pr skill instead.
+  Actions result on a pull request. This is the default path for proposing a
+  change; for a merge request on gitcode.com, which still works but is no
+  longer the default, use the create-pr skill instead.
 ---
 
 # Open a pull request (GitHub)
 
 Project-local skill for **ScienceDiscovery**.
 
-Most change reaches GitHub by being merged on GitCode and synced — that path is
-[create-pr](../create-pr/SKILL.md), and it stays the default. This skill is for
-the case where the pull request is opened on GitHub directly, which is what
-happens when the work is about GitHub itself (the Actions workflows, the
-release pipeline, `.github/`) or when a maintainer asks for it there.
+**This is the default path.** Changes are proposed here and GitHub syncs to
+GitCode; [CONTRIBUTING.md](../../../CONTRIBUTING.md)'s *Repositories* table is
+the authority. That direction is the reverse of what it was, so older merge
+requests and any documentation that has not caught up describe GitCode as the
+place to propose — [create-pr](../create-pr/SKILL.md) still documents that
+path, which still works, but it is no longer the default.
 
 Pipeline internals — which platform runs which layer, the workflow files, run
 logs, failure attribution: [ci](../ci/SKILL.md). Journey design and reporting:
