@@ -3355,7 +3355,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   const initial = await jsonRequest<SkillDescriptor[]>(`${origin}/api/skills`, { headers: authorization });
   assert.equal(initial.response.status, 200);
   assert.deepEqual(initial.body.map((item) => item.id), [
-    "antibody-protenix-pipeline",
+    "antibody-design",
     "assessment-screening",
     "citation-reviewer",
     "code-engineer",

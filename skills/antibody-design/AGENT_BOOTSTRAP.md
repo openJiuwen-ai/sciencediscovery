@@ -18,7 +18,7 @@
    `af3-dev.tos-cn-beijing.volces.com`. Keep the returned Execution ID and
    monitor it; never duplicate a queued, running, or unknown preparation.
 5. Validate in the foreground, then launch the frozen Skill entrypoint once with
-   `run_shell(scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/scripts/run_sandbox_pipeline.sh", arguments=["--config", "antibody_pipeline/config.json"], runner_id=..., environment_id=..., background=true)`.
+   `run_shell(scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-design/scripts/run_sandbox_pipeline.sh", arguments=["--config", "antibody_pipeline/config.json"], runner_id=..., environment_id=..., background=true)`.
 6. Retain the returned Execution ID. Wait and monitor with
    `execution_status` / `execution_logs`; never use `nohup`, shell sleep loops,
    file polling, `run_npu_job`, or automatic replay.

@@ -1,5 +1,5 @@
 ---
-name: antibody-protenix-pipeline
+name: antibody-design
 description: Prepare, launch, monitor, and summarize the real RFdiffusion to ProteinMPNN to Protenix antibody pipeline on a local or remote ScienceDiscovery Runner with sandboxed Ascend NPUs.
 ---
 
@@ -87,8 +87,8 @@ Validate that complete, single-source dependency manifest with the selected
 environment's Python:
 
 ```sh
-python "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/scripts/validate_managed_environment.py" \
-  "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/requirements.txt"
+python "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-design/scripts/validate_managed_environment.py" \
+  "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-design/requirements.txt"
 ```
 
 The validator reads every dependency and exact pin directly from
@@ -155,7 +155,7 @@ Runner and managed environment:
 
 ```text
 run_shell(
-  scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/scripts/run_sandbox_pipeline.sh",
+  scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-design/scripts/run_sandbox_pipeline.sh",
   arguments=["--prepare-only", "--config", "antibody_pipeline/config.json"],
   runner_id="<runner-id>",
   environment_id="<environment-id>",
@@ -188,7 +188,7 @@ Run a foreground validation on the selected Runner and environment:
 
 ```text
 run_shell(
-  scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-protenix-pipeline/scripts/run_sandbox_pipeline.sh",
+  scriptPath="$SCIENCEDISCOVERY_SKILLS_DIR/antibody-design/scripts/run_sandbox_pipeline.sh",
   arguments=["--validate-only", "--config", "antibody_pipeline/config.json"],
   runner_id="<runner-id>",
   environment_id="<environment-id>",
