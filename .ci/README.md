@@ -330,10 +330,28 @@ e2e/
   playwright-report/
   test-results/                  # results.json, failure screenshots/traces
   journey-reports/               # report.md/html and step screenshots
+node-coverage/
+  lcov.info                      # Node V8 coverage, excluding test/temporary source files
+  summary.json                   # line, branch, and function totals
+  summary.md                     # human-readable coverage summary
 selection/
   run.log                         # selected case commands and combined output
   summary.json                    # selection, tags, result paths and outcomes
 ```
+
+The versioned design contract for this report is
+[`docs/designs/test-coverage.v2.md`](../docs/designs/test-coverage.v2.md).
+
+The dedicated GitHub `Node coverage` workflow runs `pnpm coverage:node` every
+Monday at 03:30 Asia/Shanghai on the default branch, on manual dispatch, and
+once when its coverage infrastructure changes on `main`. It publishes
+`node-coverage-<source-sha>` for 90 days. The report covers the built Node
+workspace and CI-script tests only; browser/TSX, Python, and Playwright suites
+use different runners and are outside its totals. The report is additional
+evidence, not a CI layer or a pull-request gate, and not a replacement for UT,
+ST, or E2E. The ScienceDiscovery GitHub status board auto-discovers the
+artifact and reads `lcov.info`; it does not need to be added to the board's
+UT/ST/E2E result-artifact list.
 
 `run-layer.mjs` stops at the first failing UT/ST command and records every
 attempted command, exit code, and duration. It gives each run a unique

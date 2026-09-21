@@ -1,0 +1,91 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The source-owned weekly coverage baseline. This does not restate the merge
+# gate in ci.yml: coverage has different instrumentation, output, cadence and
+# retention, and remains non-gating. The status board only consumes the
+# SHA-qualified artifact produced here.
+
+name: Node coverage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/coverage.yml"
+      - "scripts/coverage-summary.mjs"
+      - "scripts/coverage-summary.test.mjs"
+      - "scripts/run-node-coverage.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  schedule:
+    # 19:30 UTC on Sunday is 03:30 Monday in Asia/Shanghai. Nightly starts at
+    # 02:00, so the offset avoids launching both resource-heavy runs together.
+    - cron: "30 19 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sciencediscovery-node-coverage
+  cancel-in-progress: false
+
+jobs:
+  node-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out ScienceDiscovery
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Provision the sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Node coverage
+        run: pnpm coverage:node
+
+      - name: Upload Node coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-coverage-${{ github.sha }}
+          path: coverage
+          if-no-files-found: warn
+          retention-days: 90
