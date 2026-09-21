@@ -187,7 +187,7 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  * E2E-META
  * Purpose: Provider 与模型目录完整用户旅程——草稿安全、内置预设只填令牌、自定义 Provider、发现成功/失败/乱序、双语可溯源价格、模型级思考能力与 Session/wire 一致性，以及桌面/窄屏真实几何。
  * Steps:
- *   1. 打开模型注册表，确认主视图无预设墙、无常驻编辑器；“添加 Provider”下拉列出预置（智谱国内与国际 Z.AI 为两项），另有自定义入口。
+ *   1. 打开模型注册表，确认主视图无预设墙、无常驻编辑器；连接卡片的服务商下拉列出预置（智谱国内与国际 Z.AI 为两项），末项是自定义入口。
  *   2. 核对目录状态行：models.dev 来源、打包快照时间与刷新按钮；刷新成功改时间、刷新失败保留旧数据且草稿不丢（浏览器边界伪造目录下载响应）。
  *   3. MiniMax 仅填令牌；Escape 取消关闭保留草稿，底部保存并关闭提交；请求在浏览器边界改写为 loopback/manual。
  *   4. 选择智谱内置预设，仅填令牌连接；核对默认 endpoint/协议未要求用户填写，令牌不回传。
@@ -231,6 +231,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
   const stub = await providerStub();
   const customName = `J7 自定义服务商 ${Date.now()}`;
+  const minimaxName = `J7 MiniMax ${Date.now()}`;
+  const deepseekName = `J7 DeepSeek ${Date.now()}`;
+  const zhipuName = `J7 智谱 ${Date.now()}`;
   const providerIds: string[] = [];
   const modelIds: string[] = [];
   let fixture: JourneyFixture | undefined;
@@ -252,24 +255,60 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     return dialog;
   };
 
-  // Adding a provider: a dropdown lists the supported presets and a separate
-  // button adds a fully custom provider. The editor only opens on an explicit
-  // choice — never just because the registry was opened.
-  // The preset dropdown and custom entry live behind one "添加 Provider"
-  // button below the configured list; open it on demand.
-  const openAddPanel = async (dialog: ReturnType<typeof page.getByRole>) => {
-    if (!await dialog.locator(".provider-add-panel").count()) {
-      // The button's CSS ::before "+ " folds into its accessible name, so the
-      // match must stay unanchored.
-      await dialog.getByRole("button", { name: /添加 Provider|Add provider/ }).first().click();
+  // 新建服务商已经并入连接卡片：一个下拉装下全部预设与自定义入口，
+  // 「添加 Provider」按钮和独立的添加面板都不存在了。编辑器还在，但它只服务
+  // 已经存在的服务商——journey-model-settings 迁移时得出的也是这个结论。
+  // 这条旅程要的是「有服务商可看」，不是「从界面把它建出来」（那件事由
+  // journey-model-connect-wizard 覆盖），所以记录一律用 API 预置。
+  /**
+   * The connect card holds the provider select. It is expanded on an empty
+   * instance and collapsed once providers exist, so open it on demand rather
+   * than assuming either state — this journey runs on a shared stack.
+   */
+  const openConnectCard = async (dialog: ReturnType<typeof page.getByRole>) => {
+    const card = dialog.locator(".model-connect-wizard");
+    if (!await card.count()) {
+      await dialog.getByRole("button", { name: /连接模型|Connect model/ }).first().click();
     }
-    return dialog.locator(".provider-add-panel");
+    await expect(card).toBeVisible();
+    return card;
   };
-  const choosePreset = async (presetId: string) => {
-    await page.locator(".provider-add-panel").getByLabel(/^(添加 Provider|Add provider)$/).selectOption(presetId);
+  const providerSelect = (dialog: ReturnType<typeof page.getByRole>) =>
+    dialog.locator("#wizard-provider-select");
+  const seedProvider = async (overrides: {
+    apiToken: string;
+    apiVariant?: string;
+    baseUrl: string;
+    modelDiscovery?: string;
+    name: string;
+    // 目录用 presetId 认这个服务商是哪家（区域价就是按它挑的），所以预置预设型
+    // 服务商时必须带上，等同于界面走预设创建时送出的那一份。
+    presetId?: string;
+  }) => {
+    const response = await page.request.fetch(`${apiBaseUrl()}/api/providers`, {
+      data: {
+        apiProtocol: "openai-chat-completions",
+        apiVariant: overrides.apiVariant ?? "openai",
+        modelDiscovery: overrides.modelDiscovery ?? "openai-models",
+        proxyPolicy: "inherit",
+        tokenOptional: false,
+        ...overrides,
+      },
+      headers: authorizationHeader(),
+      method: "POST",
+    });
+    expect(response.ok(), `seed provider ${overrides.name}`).toBe(true);
+    const provider = await response.json() as ModelProvider;
+    providerIds.push(provider.id);
+    return provider;
   };
-  const addCustomProvider = async (dialog: ReturnType<typeof page.getByRole>) => {
-    await (await openAddPanel(dialog)).getByRole("button", { name: /^(自定义服务商|Custom provider)$/ }).click();
+  /** 展开某个已有服务商的行并打开它的编辑器。 */
+  const openProviderEditor = async (dialog: ReturnType<typeof page.getByRole>, name: string) => {
+    const row = dialog.locator(".provider-row").filter({ hasText: name }).first();
+    await expect(row).toBeVisible();
+    await row.locator(".provider-row-summary").click();
+    await row.getByRole("button", { name: "编辑", exact: true }).click();
+    return dialog.getByRole("region", { name: "服务商编辑器" });
   };
 
   // Conversation model selection goes through the connector-style popover:
@@ -400,8 +439,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
   try {
     await journey.step(
-      "模型注册表把常见预设收进“添加 Provider”",
-      "模型注册表主视图是目录状态与已配置服务商，而不是铺开的预设墙；设置窗口放大到约 80% 视口保持响应式。展开“添加 Provider”后可见 DeepSeek、智谱 GLM、Z.AI（智谱国际）、OpenAI、Anthropic、Gemini、DashScope 等常见预设；每张需密钥的卡片标明“只需令牌”，末尾是“自定义服务商”。",
+      "模型注册表把常见预设收进连接卡片的服务商下拉",
+      "模型注册表主视图是目录状态与已配置服务商，而不是铺开的预设墙；设置窗口放大到约 80% 视口保持响应式。预设收在连接卡片的服务商下拉里——可见 DeepSeek、智谱 GLM、Z.AI（智谱国际）、OpenAI、Anthropic、Gemini、DashScope 等，末项是“自定义服务商”；独立的“添加 Provider”按钮已不存在。",
       async () => {
         await page.goto("/");
         await expect(page).toHaveTitle("ScienceDiscovery");
@@ -418,22 +457,33 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(dialogGeometry.height).toBeLessThanOrEqual(0.83 * dialogGeometry.viewportHeight + 2);
         await expect(dialog.locator(".provider-preset-card")).toHaveCount(0);
         await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
-        // 空态下添加面板默认展开（首启路径）；openAddPanel 只在未展开时点击，
-        // 避免把已展开的面板 toggle 收起。
-        await openAddPanel(dialog);
-        const optionTexts = await dialog.locator(".provider-add-panel").getByLabel("添加 Provider").locator("option").allTextContents();
+        // 预设仍然收在一个入口后面，只是那个入口从「添加 Provider」面板变成了
+        // 连接卡片的服务商下拉，自定义入口成了它的末项。
+        await expect(dialog.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
+        await openConnectCard(dialog);
+        const optionTexts = await providerSelect(dialog).locator("option").allTextContents();
         for (const name of ["DeepSeek", "智谱 GLM", "Z.AI", "OpenAI", "Anthropic", "Google Gemini", "Alibaba Cloud Model Studio"]) {
           expect(optionTexts.some((text) => text.includes(name))).toBe(true);
         }
-        await expect(dialog.locator(".provider-add-panel").getByRole("button", { name: /^自定义服务商$/ })).toBeVisible();
+        expect(optionTexts.at(-1)).toContain("自定义服务商");
       },
     );
 
     await journey.step(
       "目录带快照时间可手动刷新，失败保留旧数据且草稿不丢",
-      "模型注册表顶部展示“模型元数据目录”状态行：标明快照随本次构建发布、最近更新于打包时间，并提供“刷新目录”按钮。手动刷新成功后状态行改为“最近更新于”新时间并提示“模型目录已更新”；随后模拟刷新失败时给出“无法刷新模型目录，仍在使用上一次的目录数据”，状态行时间与内容保留刷新后的快照，同时正在填写的自定义服务商草稿字段一个都不丢。",
+      "模型注册表顶部展示“模型元数据目录”状态行：标明快照随本次构建发布、最近更新于打包时间，并提供“刷新目录”按钮。手动刷新成功后状态行改为“最近更新于”新时间并提示“模型目录已更新”；随后模拟刷新失败时给出“刷新模型目录失败”，状态行时间与内容仍保留刷新后的快照，同时正在填写的自定义服务商草稿字段一个都不丢。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
+        // 草稿要填在一个已有服务商的编辑器里——编辑器不再是新建表单。先把它备好：
+        // 后面那次"刷新成功"只存在于浏览器边界，中途 reload 会把它冲掉。
+        const draftHost = await seedProvider({
+          apiToken: "j7-draft-host-token",
+          baseUrl: stub.baseUrl,
+          modelDiscovery: "manual",
+          name: `J7 草稿宿主 ${Date.now()}`,
+        });
+        await page.reload();
+        await openModelRegistry();
         const status = dialog.getByRole("region", { name: "模型元数据目录" });
         await expect(status).toContainText("数据来源：models.dev");
         await expect(status).toContainText("随本次构建发布，最近更新于");
@@ -473,8 +523,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           await expect(status).not.toContainText("随本次构建发布");
 
           // 刷新失败：上游 502，保留上一次快照且草稿不丢。
-          await addCustomProvider(dialog);
-          const editor = dialog.getByRole("region", { name: "服务商编辑器" });
+          const editor = await openProviderEditor(dialog, draftHost.name);
           const draftName = `J7 目录刷新草稿 ${Date.now()}`;
           await editor.getByLabel("服务商名称").fill(draftName);
           await editor.getByLabel("外部模型 API Key").fill("j7-catalog-draft-token");
@@ -485,7 +534,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
             status: 502,
           };
           await status.getByRole("button", { name: "刷新目录" }).click();
-          await expect(page.getByText("无法刷新模型目录，仍在使用上一次的目录数据")).toBeVisible();
+          await expect(page.getByText("刷新模型目录失败")).toBeVisible();
           await expect(status).toContainText("最近更新于 2026/8/26 02:00:00");
           await expect(editor.getByLabel("服务商名称")).toHaveValue(draftName);
           await expect(editor.getByLabel("外部模型 API Key")).toHaveValue("j7-catalog-draft-token");
@@ -502,131 +551,40 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       },
     );
 
-    await journey.step(
-      "MiniMax 只填令牌且底部动作不会丢失草稿",
-      "选择 MiniMax 预设后只填写令牌。按 Escape 时出现明确的未保存确认；取消关闭后令牌仍在。点击对话框底部“保存并关闭”会提交同一草稿并关闭设置。测试在浏览器边界核对预设原始 endpoint/发现策略，再把请求改写到本地 manual fixture，保证服务端绝不访问厂商网络。",
-      async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await openAddPanel(dialog);
-        await choosePreset("minimax");
-        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
-        await editor.getByLabel("外部模型 API Key").fill("j7-minimax-local-token");
+    // 这里原先是「MiniMax 只填令牌」与「内置智谱 Provider 只填令牌即可连接」两步。
+    // 创建服务商已经并入连接卡片，这两步驱动的编辑器新建路径不复存在；它们真正
+    // 守着的性质——选了预设，建出来的 provider 就带着该厂商 endpoint、变种与
+    // modelDiscovery——已迁进 journey-model-connect-wizard 的「预设落地」一步。
+    //
+    // 后面几步仍然需要这两个服务商存在：目录要有多个来源可比，令牌配对断言要有
+    // 多条列表请求可查。所以在这里按预设的形状用 API 预置，端点指向本地 stub 的
+    // 各自路径，令牌沿用原来的值。
+    await seedProvider({
+      apiToken: "j7-minimax-local-token",
+      apiVariant: "minimax",
+      baseUrl: `${stub.origin}/minimax/v1`,
+      name: minimaxName,
+      presetId: "minimax",
+    });
+    await seedProvider({
+      apiToken: "j7-zhipu-local-token",
+      apiVariant: "deepseek",
+      baseUrl: `${stub.origin}/zhipu/v1`,
+      name: zhipuName,
+      presetId: "zhipu",
+    });
+    await page.reload();
+    await openModelRegistry();
 
-        let confirmationType = "";
-        let confirmationMessage = "";
-        page.once("dialog", (confirmation) => {
-          confirmationType = confirmation.type();
-          confirmationMessage = confirmation.message();
-          void confirmation.dismiss();
-        });
-        await page.keyboard.press("Escape");
-        expect(confirmationType).toBe("confirm");
-        expect(confirmationMessage).toContain("放弃尚未保存的服务商修改");
-        await expect(dialog).toBeVisible();
-        await expect(editor.getByLabel("外部模型 API Key")).toHaveValue("j7-minimax-local-token");
-
-        let originalBody: Record<string, unknown> | undefined;
-        const providerRoute = async (route: Route) => {
-          const request = route.request();
-          const body = request.method() === "POST" ? request.postDataJSON() as Record<string, unknown> : undefined;
-          if (body?.presetId !== "minimax") {
-            await route.continue();
-            return;
-          }
-          originalBody = body;
-          const localResponse = await page.request.post(`${apiBaseUrl()}/api/providers`, {
-            data: { ...body, baseUrl: stub.baseUrl },
-            headers: authorizationHeader(),
-          });
-          await route.fulfill({
-            body: await localResponse.body(),
-            contentType: localResponse.headers()["content-type"],
-            status: localResponse.status(),
-          });
-        };
-        await page.route("**/api/providers", providerRoute);
-        try {
-          const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
-            && new URL(response.url()).pathname === "/api/providers");
-          await dialog.getByRole("button", { name: "保存并关闭" }).click();
-          const provider = await (await responsePromise).json() as ModelProvider;
-          providerIds.push(provider.id);
-          expect(originalBody).toMatchObject({
-            apiProtocol: "openai-chat-completions",
-            apiVariant: "minimax",
-            baseUrl: "https://api.minimaxi.com/v1",
-            modelDiscovery: "openai-models",
-            presetId: "minimax",
-          });
-          await expect(dialog).toBeHidden();
-        } finally {
-          await page.unroute("**/api/providers", providerRoute);
-        }
-        await openModelRegistry();
-      },
-    );
-
-    await journey.step(
-      "内置智谱 Provider 只填令牌即可连接",
-      "选择“智谱 GLM”后，名称与可靠默认连接参数已经预填且高级项保持收起；用户只填写令牌并保存。创建请求使用预设的 open.bigmodel.cn endpoint、DeepSeek 变种和 OpenAI 兼容 /models 策略，返回体只有 hasApiToken=true，不包含令牌。",
-      async () => {
-        const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await openAddPanel(dialog);
-        await choosePreset("zhipu");
-        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
-        await expect(editor.locator("details.provider-advanced")).toHaveJSProperty("open", false);
-        await editor.getByLabel("外部模型 API Key").fill("j7-zhipu-local-token");
-        // 预设的真实端点是 open.bigmodel.cn，而列表现在一定会被真的请求。像
-        // MiniMax 那样把创建改写到 loopback stub，既能断言界面送出的是预设的
-        // 真实连接参数，又不会让 E2E 打到厂商。
-        let zhipuBody: Record<string, unknown> | undefined;
-        const zhipuRoute = async (route: Route) => {
-          const request = route.request();
-          const body = request.method() === "POST" ? request.postDataJSON() as Record<string, unknown> : undefined;
-          if (body?.presetId !== "zhipu") {
-            await route.continue();
-            return;
-          }
-          zhipuBody = body;
-          const localResponse = await page.request.post(`${apiBaseUrl()}/api/providers`, {
-            data: { ...body, baseUrl: `${stub.origin}/zhipu/v1` },
-            headers: authorizationHeader(),
-          });
-          await route.fulfill({
-            body: await localResponse.body(),
-            contentType: localResponse.headers()["content-type"],
-            status: localResponse.status(),
-          });
-        };
-        await page.route("**/api/providers", zhipuRoute);
-        try {
-          const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
-            && new URL(response.url()).pathname === "/api/providers");
-          await editor.getByRole("button", { name: "保存", exact: true }).click();
-          const response = await responsePromise;
-          expect(response.status()).toBe(201);
-          const provider = await response.json() as ModelProvider & Record<string, unknown>;
-          providerIds.push(provider.id);
-          expect(provider.hasApiToken).toBe(true);
-          expect(provider).not.toHaveProperty("apiToken");
-        } finally {
-          await page.unroute("**/api/providers", zhipuRoute);
-        }
-        expect(zhipuBody).toMatchObject({
-          apiProtocol: "openai-chat-completions",
-          apiVariant: "deepseek",
-          baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-          modelDiscovery: "openai-models",
-          presetId: "zhipu",
-        });
-      },
-    );
 
     await journey.step(
       "清单来自服务商，目录只给命中的模型补事实",
       "模型清单是服务商 /models 的返回，因此行来源写「服务商返回」，并且目录里没有的 glm-zhipu-internal 也照样出现。GLM-5.2 命中目录，于是紧凑模型行补上 1,000,000 上下文、131,072 最大输出、无视觉、有思考（high/max）与该端点自己的目录价 1.4 / 4.4 / 0.26 USD/1M；悬停卡的「来源」格写 models.dev 数据库，因为那是**事实**的出处，不是清单的出处。界面不再出现每模型「官方来源」链接。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
+        // 预置的服务商行默认收起（从界面新建时它是展开的），先展开智谱这一行。
+        await dialog.locator(".provider-row").filter({ hasText: zhipuName }).first()
+          .locator(".provider-row-summary").click();
         // 清单出处：服务商自己返回的，而不是目录顶替。
         await expect(dialog.locator(".provider-row-source").filter({ hasText: /服务商返回/ })).toBeVisible();
         await expect(dialog.locator(".provider-row-source").filter({ hasText: /models\.dev 数据库/ })).toHaveCount(0);
@@ -667,45 +625,33 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
     let deepseekModelId = "";
     await journey.step(
-      "自定义 Provider 获取并规范化模型列表",
-      "新建自定义服务商，填写本地 endpoint、令牌、OpenAI Chat Completions、DeepSeek 变种和 /models 策略。点击标题栏关闭时确认未保存且取消后字段仍在；随后使用对话框底部“保存”提交。目录显示服务商真实返回的 deepseek-v4-flash 与 fixture-unknown，且模型列表请求携带 Bearer 令牌。",
+      "自定义 Provider 的清单来自服务商自己，令牌按服务商配对",
+      "一个指向本地 endpoint、DeepSeek 变种、/models 策略的自定义服务商：目录显示服务商真实返回的 deepseek-v4-flash 与 fixture-unknown，行来源写「服务商返回」，且每个服务商的模型列表请求都带着它自己的 Bearer 令牌，不会串用别人的。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await addCustomProvider(dialog);
-        const editor = dialog.getByRole("region", { name: "服务商编辑器" });
-        await editor.getByLabel("服务商名称").fill(customName);
-        await editor.getByLabel("外部模型 API Key").fill("j7-custom-local-token");
-        await editor.getByLabel("基础 URL").fill(stub.baseUrl);
-        await editor.getByLabel("基础接口").selectOption("openai-chat-completions");
-        await editor.getByLabel("接口变种").selectOption("deepseek");
-
-        let confirmationMessage = "";
-        page.once("dialog", (confirmation) => {
-          confirmationMessage = confirmation.message();
-          void confirmation.dismiss();
-        });
-        await dialog.getByRole("button", { name: "取消并关闭" }).first().click();
-        expect(confirmationMessage).toContain("放弃尚未保存的服务商修改");
-        await expect(editor.getByLabel("服务商名称")).toHaveValue(customName);
-        await expect(editor.getByLabel("基础 URL")).toHaveValue(stub.baseUrl);
-
-        const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
-          && new URL(response.url()).pathname === "/api/providers");
-        await dialog.locator(".system-config-footer").getByRole("button", { name: "保存", exact: true }).click();
-        const provider = await (await responsePromise).json() as ModelProvider & Record<string, unknown>;
-        providerIds.push(provider.id);
+        // 从界面新建服务商的路径已并入连接卡片，由 journey-model-connect-wizard
+        // 覆盖；这一步要验的是清单来源与令牌配对，所以记录用 API 预置。
+        const provider = await seedProvider({
+          apiToken: "j7-custom-local-token",
+          apiVariant: "deepseek",
+          baseUrl: stub.baseUrl,
+          name: customName,
+        }) as ModelProvider & Record<string, unknown>;
         expect(provider).not.toHaveProperty("apiToken");
+        await page.reload();
+        await openModelRegistry();
         await expect(dialog.getByRole("region", { name: "已配置服务商" })
           .getByRole("button", { name: new RegExp(customName) })
           .getByRole("img", { name: "可用" })).toBeVisible();
-        // 行来源行只属于刚创建的这个自定义 Provider，避免命中其他展开行。
+        // 行来源行只属于这个自定义 Provider，避免命中其他展开行。预置的行默认收起。
         const customRow = dialog.locator(".provider-row").filter({ hasText: customName });
+        await customRow.locator(".provider-row-summary").click();
         await expect(customRow.locator(".provider-row-source").filter({ hasText: /服务商返回/ })).toBeVisible();
         await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
         await expect(modelRowById(dialog, "fixture-unknown")).toBeVisible();
-        // 到这一步 MiniMax、智谱与这个自定义 Provider 都各自打过一次列表接口，
-        // 所以 stub 累计的是三条记录。要证明的是每次列表请求都带上了该服务商
-        // 自己的令牌，而不是这个数组只有一条。
+        // 到这一步 MiniMax、智谱与这个自定义 Provider 都各自打过一次列表接口
+        // （前两个由本旅程用 API 预置，端点分别指向 stub 的 /minimax 与 /zhipu）。
+        // 要证明的是每次列表请求都带上了该服务商自己的令牌，而不是这个数组只有一条。
         expect(stub.listAuth.every((auth) => auth?.startsWith("Bearer "))).toBe(true);
         expect(stub.listAuth).toContain("Bearer j7-custom-local-token");
         // 令牌与端点配对：智谱那次请求带的是智谱自己的令牌，不是别人的。
@@ -757,6 +703,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
           data: {
             apiToken: "j7-deepseek-catalog-local-token",
             baseUrl: stub.baseUrl,
+            name: deepseekName,
             presetId: "deepseek",
           },
           method: "POST",
@@ -765,7 +712,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await page.reload();
         const dialog = await openModelRegistry();
         const registry = dialog.getByRole("region", { name: "已配置服务商" });
-        await registry.getByRole("button", { name: /DeepSeek/ }).click();
+        await registry.getByRole("button", { name: new RegExp(deepseekName) }).click();
         const flash = modelRowById(dialog, "deepseek-v4-flash");
         const flashPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         // stub 的 /models 自报了 prompt/completion/cache_read，换算成每百万
@@ -778,9 +725,9 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
         // The pulled model list collapses with the provider row: closing the
         // row hides the inline table, expanding brings it back.
-        await registry.getByRole("button", { name: /DeepSeek/ }).click();
+        await registry.getByRole("button", { name: new RegExp(deepseekName) }).click();
         await expect(dialog.locator(".provider-model-table")).toHaveCount(0);
-        await registry.getByRole("button", { name: /DeepSeek/ }).click();
+        await registry.getByRole("button", { name: new RegExp(deepseekName) }).click();
         await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
 
         await registry.getByRole("button", { name: new RegExp(customName) }).click();
@@ -1205,13 +1152,13 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 1440 });
         await verifyComposerGeometry({ labels, runButton: "Run analysis", width: 600 });
         const englishDialog = await openModelRegistry();
-        // 已有服务商时添加面板默认收起，先展开再取预置与自定义入口。
-        await openAddPanel(englishDialog);
-        const enOptionTexts = await englishDialog.locator(".provider-add-panel").getByLabel("Add provider").locator("option").allTextContents();
+        // 预设与自定义入口同样收在连接卡片的服务商下拉里，英文界面下也一样。
+        await openConnectCard(englishDialog);
+        const enOptionTexts = await providerSelect(englishDialog).locator("option").allTextContents();
         expect(enOptionTexts.some((text) => text.includes("DeepSeek"))).toBe(true);
-        await expect(englishDialog.getByRole("button", { name: "Custom provider" })).toBeVisible();
+        expect(enOptionTexts.at(-1)).toContain("Custom provider");
         const registry = englishDialog.getByRole("region", { name: "Configured providers" });
-        await registry.getByRole("button", { name: /DeepSeek/ }).click();
+        await registry.getByRole("button", { name: new RegExp(deepseekName) }).click();
         const flash = modelRowById(englishDialog, "deepseek-v4-flash");
         const enPrice = flash.locator(".provider-model-row-facts .fact").nth(3);
         // 同上：展示的是服务商自报价，不是目录价。

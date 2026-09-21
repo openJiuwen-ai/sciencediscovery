@@ -14,7 +14,7 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { expect } from "@playwright/test";
+import { expect, type Route } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
@@ -394,6 +394,81 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         });
         const secondDefault = (await secondSettingsRes.json() as { effective: { modelId?: string } }).effective.modelId;
         expect(secondDefault).toBe(firstDefault);
+      },
+    );
+
+    await journey.step(
+      "预设落地：选定的厂商 endpoint、接口变种与模型列表策略原样进入创建请求",
+      "选择 MiniMax 与智谱 GLM 后只填令牌并提交：创建请求必须带着该预设自己的 endpoint"
+        + "（api.minimaxi.com / open.bigmodel.cn）、接口变种与 OpenAI 兼容 /models 发现策略，"
+        + "而不是被向导的默认值覆盖。请求在浏览器边界被改写到本地 stub，服务端绝不访问厂商网络。",
+      async () => {
+        const dialog = page.getByRole("dialog", { name: "系统设置" });
+        const wizardSection = dialog.locator(".model-connect-wizard");
+
+        // 预设填进创建请求的原始值。这些断言原先只存在于 J7 的两步创建流程里，
+        // 而创建已经并入连接卡片——路径换了，要守的性质没换：选了哪个厂商，
+        // 建出来的 provider 就得带着那个厂商的 endpoint、变种与发现策略。
+        const presets = [
+          {
+            apiVariant: "minimax",
+            baseUrl: "https://api.minimaxi.com/v1",
+            id: "minimax",
+            key: "wizard-minimax-local-token",
+          },
+          {
+            apiVariant: "deepseek",
+            baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+            id: "zhipu",
+            key: "wizard-zhipu-local-token",
+          },
+        ];
+
+        for (const preset of presets) {
+          let sentBody: Record<string, unknown> | undefined;
+          // 捕获浏览器真正发出的 body，再把 baseUrl 改写到本地 stub 转发给 API：
+          // 断言看到的是厂商原值，而服务端只会连 127.0.0.1。
+          const presetRoute = async (route: Route) => {
+            const request = route.request();
+            const body = request.method() === "POST"
+              ? request.postDataJSON() as Record<string, unknown>
+              : undefined;
+            if (body?.presetId !== preset.id) {
+              await route.continue();
+              return;
+            }
+            sentBody = body;
+            const forwarded = await page.request.post(`${apiBaseUrl()}/api/providers`, {
+              data: { ...body, baseUrl: stubBaseUrl },
+              headers: authorizationHeader(),
+            });
+            await route.fulfill({
+              body: await forwarded.body(),
+              contentType: forwarded.headers()["content-type"],
+              status: forwarded.status(),
+            });
+          };
+          await page.route("**/api/providers", presetRoute);
+          try {
+            await wizardSection.locator("#wizard-provider-select").selectOption(preset.id);
+            await wizardSection.locator("#wizard-api-key").fill(preset.key);
+            await wizardSection.locator(".wizard-submit-button").click();
+            await expect(wizardSection.locator(".wizard-alert-success")).toBeVisible();
+          } finally {
+            await page.unroute("**/api/providers", presetRoute);
+          }
+
+          expect(sentBody, `${preset.id} 的创建请求应当被捕获`).toBeDefined();
+          expect(sentBody).toMatchObject({
+            apiProtocol: "openai-chat-completions",
+            apiVariant: preset.apiVariant,
+            baseUrl: preset.baseUrl,
+            modelDiscovery: "openai-models",
+            presetId: preset.id,
+          });
+          // 令牌只进请求，不回显到响应里。
+          expect(sentBody).toMatchObject({ apiToken: preset.key });
+        }
       },
     );
 
