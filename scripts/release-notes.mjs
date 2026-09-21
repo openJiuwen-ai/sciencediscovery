@@ -52,12 +52,21 @@ const ghJson = (arguments_) => JSON.parse(gh(arguments_));
 // --- Pure helpers, so the parsing this depends on can be tested without a
 // --- network or a repository.
 
-// generate-notes writes one bullet per pull request, each ending in the pull
-// request's URL. Counting the links rather than the bullets keeps the figure
-// equal to what the reader can see listed right below it.
+// generate-notes writes one bullet per pull request under What's Changed, each
+// ending in the pull request's URL, and .github/release.yml groups those
+// bullets under `###` category headings inside that one `##` section.
+//
+// Only that section counts. A pull request carrying `release:skip` is dropped
+// from it but still credited under New Contributors, so counting links across
+// the whole body reports one more pull request than the note lists — the
+// figure has to equal what the reader can see immediately below it or it is
+// worse than absent.
 export const pullRequestNumbers = (body) => {
+  const afterHeading = body.split(/^##+ +What's Changed\s*$/m)[1];
+  if (afterHeading === undefined) return [];
+  const section = afterHeading.split(/^## /m)[0];
   const numbers = new Set();
-  for (const match of body.matchAll(/\/pull\/(\d+)\b/g)) numbers.add(Number(match[1]));
+  for (const match of section.matchAll(/\/pull\/(\d+)\b/g)) numbers.add(Number(match[1]));
   return [...numbers].sort((a, b) => a - b);
 };
 

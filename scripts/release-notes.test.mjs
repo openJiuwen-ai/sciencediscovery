@@ -38,14 +38,46 @@ const generated = `## What's Changed
 
 **Full Changelog**: https://github.com/o/r/compare/0.2.0...0.3.0`;
 
-test("pull request numbers come from the links, deduplicated and ordered", () => {
+test("pull request numbers come from What's Changed, deduplicated and ordered", () => {
   assert.deepEqual(pullRequestNumbers(generated), [6, 112, 113]);
-  // New Contributors cites a pull request already listed above it; counting
-  // links without deduplicating would report one more than is shown.
-  assert.deepEqual(pullRequestNumbers("/pull/9 /pull/9 /pull/2"), [2, 9]);
+  // The same pull request appearing twice inside the section is one entry.
+  assert.deepEqual(pullRequestNumbers("## What's Changed\n* a in /pull/9\n* b in /pull/9\n* c in /pull/2"), [2, 9]);
   // An issue link is not a pull request link.
-  assert.deepEqual(pullRequestNumbers("see https://github.com/o/r/issues/7"), []);
+  assert.deepEqual(pullRequestNumbers("## What's Changed\n* see /issues/7"), []);
   assert.deepEqual(pullRequestNumbers("**Full Changelog**: compare/a...b"), []);
+});
+
+test("a pull request excluded from the list is not counted as being in it", () => {
+  // What .github/release.yml's `exclude` produces: release:skip drops the
+  // bullet from What's Changed — here the whole section with it — while
+  // GitHub still credits the same pull request under New Contributors.
+  // Counting across the body would claim one pull request the note does not
+  // show, which is exactly the claim a reader can check and find false.
+  const excluded = `<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+
+## New Contributors
+* @zhaozhaozz made their first contribution in https://github.com/o/r/pull/3
+
+**Full Changelog**: https://github.com/o/r/compare/a...b`;
+  assert.deepEqual(pullRequestNumbers(excluded), []);
+  assert.equal(newContributorCount(excluded), 1);
+});
+
+test("category headings inside What's Changed do not end the section", () => {
+  // .github/release.yml renders its categories as `###` under the one `##`
+  // heading, so a section scan that stops at any heading would count only the
+  // first category.
+  const categorised = `## What's Changed
+### 💥 Breaking Changes / 不兼容变更
+* a by @x in https://github.com/o/r/pull/1
+
+### 🐛 Bug Fixes / 问题修复
+* b by @y in https://github.com/o/r/pull/2
+
+## New Contributors
+* @y made their first contribution in https://github.com/o/r/pull/2`;
+  assert.deepEqual(pullRequestNumbers(categorised), [1, 2]);
 });
 
 test("new contributors are counted only within their own section", () => {
