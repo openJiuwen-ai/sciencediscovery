@@ -234,14 +234,22 @@ lives in the guest tier's package and skips itself off macOS, so run
 
 ### What each pipeline covers
 
-Two test-layer pipelines run, and **neither runs everything**. GitCode
-merge-request CI is CodeArts-only; this repository intentionally has no
-`.gitcode/workflows/` Actions pipeline.
+**GitHub Actions is the gate.** It runs on the pull request, and it is what
+decides whether a change is ready. CodeArts still runs on a GitCode merge
+request and its output is still worth reading when you are looking at one, but
+it gates nothing — a green CodeArts run says nothing about whether a change can
+land, and a red one blocks nothing.
 
-| Pipeline | UT | ST | Browser E2E subset | Release binaries |
-| --- | --- | --- | --- | --- |
-| GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
-| CodeArts — `.codearts/workflow/` on a merge request to `main` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | off while its Playwright timeouts are sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
+| Pipeline | Gate | UT | ST | Browser E2E subset | Release binaries |
+| --- | --- | --- | --- | --- | --- |
+| GitHub Actions — `.github/workflows/ci.yml` | yes, on the pull request | full `ci:ut` | yes | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
+| CodeArts — `.codearts/workflow/` on a merge request to `main` | no | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | off while its Playwright timeouts are sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
+
+Neither runs the opt-in live layers — `ci:st:real`, `ci:e2e:real`,
+`ci:st:npu`, `ci:e2e:legacy` — which need credentials, live endpoints or an
+NPU, and stay out of both by design.
+
+This repository intentionally has no `.gitcode/workflows/` Actions pipeline.
 
 Every CodeArts job runs on a build task rather than a pipeline executor,
 because the two are billed against separate quotas and only the build one has
@@ -333,8 +341,10 @@ remote can look diverged when the trees are identical, so compare trees
 
 ## Opening a merge request
 
-**Run all three layers locally first.** No pipeline runs the full set, so review
-otherwise starts from a change nothing has exercised:
+**Run all three layers locally first.** GitHub Actions runs them again on the
+pull request, so this is not the only check any more — it is the one that costs
+a reviewer nothing. A change pushed unexercised spends eleven minutes of CI and
+somebody's attention discovering what the local run would have said:
 
 ```bash
 pnpm ci:ut     # not ci:ut:host — the sandbox tests run only here and on GitHub
@@ -392,7 +402,7 @@ State in the body what was verified, with the numbers each layer reported.
 why — do not weaken an assertion to get a green run.
 
 A merge request opened on GitCode still works and CodeArts still runs on it;
-[the create-pr skill](.agents/skills/create-pr/SKILL.md) documents that path.
+[the create-pr skill](.agents/skills/create-gitcode-pr/SKILL.md) documents that path.
 It is no longer where changes are proposed by default.
 
 Check `git status` before committing: no `.tmp/`, no local editor or tooling

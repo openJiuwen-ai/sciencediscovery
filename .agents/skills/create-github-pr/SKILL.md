@@ -10,7 +10,7 @@ description: >
   labelling a pull request for the release note, or when reading a GitHub
   Actions result on a pull request. This is the default path for proposing a
   change; for a merge request on gitcode.com, which still works but is no
-  longer the default, use the create-pr skill instead.
+  longer the default, use the create-gitcode-pr skill instead.
 ---
 
 # Open a pull request (GitHub)
@@ -21,7 +21,7 @@ Project-local skill for **ScienceDiscovery**.
 GitCode; [CONTRIBUTING.md](../../../CONTRIBUTING.md)'s *Repositories* table is
 the authority. That direction is the reverse of what it was, so older merge
 requests and any documentation that has not caught up describe GitCode as the
-place to propose — [create-pr](../create-pr/SKILL.md) still documents that
+place to propose — [create-gitcode-pr](../create-gitcode-pr/SKILL.md) still documents that
 path, which still works, but it is no longer the default.
 
 Pipeline internals — which platform runs which layer, the workflow files, run
@@ -57,18 +57,29 @@ CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:st
 CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:e2e
 ```
 
-Run them on the commit you will push, collect the per-layer numbers for the
-body, and attribute any failure against unmodified `main` in a separate
-detached worktree before touching anything. The create-pr skill's *Run the
-layers first* section covers this in full and applies here unchanged; nothing
-about the layers differs by which host receives the proposal.
+Run them on the commit you will push and collect the per-layer numbers for the
+body: the per-package `# pass` / `# skipped` lines in the UT `run.log`, the ST
+smoke line, and the E2E discovered / passed / failed / skipped split. Each
+layer leaves `run.log` and a summary under `CI_RESULTS_DIR/<layer>/`; with a
+relative `CI_RESULTS_DIR`, `ci:e2e` writes its journey reports under
+`.e2e/.tmp/…` instead, because Playwright runs from `.e2e/`.
+
+When a layer fails, attribute it before touching anything: run the same layer
+on unmodified `main` in a separate detached worktree
+(`git worktree add --detach .worktrees/<name> <sha>`). An identical failure is
+pre-existing — say so in the body with the step, the error and the baseline
+run, and leave the fix to its own pull request. A failure only on your commit
+is yours. Never weaken an assertion or skip a layer to get green; if a layer
+cannot run on this host, say which and why, and remember `ci:ut:host` is not a
+substitute for `ci:ut`.
 
 `pnpm ci:e2e` is the mocked **browser subset** only. Changed user-observable
 behaviour also needs the relevant API, CLI or local-stack journey.
 
 ## The two hosts are different repositories
 
-GitHub is a mirror of GitCode with its own history. Two consequences bite here:
+GitHub is where changes are proposed and GitCode mirrors it, but the two have
+separate histories either way. Two consequences bite here:
 
 - **Never compare SHAs across hosts.** The same change has a different commit
   id on each. Compare trees: `git rev-parse <a>^{tree}` on both.

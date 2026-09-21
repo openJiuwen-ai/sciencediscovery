@@ -1,26 +1,38 @@
 ---
-name: create-pr
+name: create-gitcode-pr
 description: >
-  Open a merge request on GitCode: run the UT/ST/E2E layers locally first,
-  write a body that says what was verified with numbers, target
-  openJiuwen/sciencediscovery, then read the bot comments and the CodeArts
-  result the merge request receives. Use when the task names GitCode or a
-  merge request, when working on gitcode.com, or when interpreting a merge
-  request's CI result comment or ci-* labels. Changes are proposed on GitHub
-  by default now — for an ordinary "create a PR" use create-github-pr.
+  Open a merge request on gitcode.com's openJiuwen/sciencediscovery, for the
+  cases that still need one: run the UT/ST/E2E layers locally first, write a
+  body that says what was verified with numbers, then read the bot comments the
+  merge request receives. Use only when the task names GitCode or a merge
+  request, or when interpreting an existing merge request's comments, CodeArts
+  run or ci-* labels. Proposing a change goes through GitHub — for "create a
+  PR", "submit this for review" or a branch that is ready, use
+  create-github-pr.
 ---
 
-# Create a merge request (GitCode)
+# Open a merge request (GitCode)
 
 Project-local skill for **ScienceDiscovery**.
 
-> **Changes are proposed on GitHub now**, and GitHub syncs to GitCode — the
-> reverse of the arrangement this skill was written for. Opening a merge
-> request here still works and CodeArts still runs on it, but unless the task
-> says GitCode, the skill you want is
-> [create-github-pr](../create-github-pr/SKILL.md).
+> **Pull requests are created on GitHub.** Changes are proposed on
+> `openJiuwen-ai/sciencediscovery` and GitHub syncs to GitCode, which is the
+> reverse of the arrangement this skill was written for. Use
+> [create-github-pr](../create-github-pr/SKILL.md) unless the task specifically
+> asks for GitCode — and it usually should not, because a change proposed here
+> is reviewed where nobody is looking and gated by nothing.
+>
+> **CodeArts is no longer a gate.** GitHub Actions is, on the pull request.
+> The CodeArts pipeline still runs on a merge request and its result is still
+> worth reading when you are looking at one, but it decides nothing, and a
+> green CodeArts run is not evidence that a change is ready.
+>
 > [CONTRIBUTING.md](../../../CONTRIBUTING.md)'s *Repositories* table is the
 > authority on the direction.
+
+What this skill is still for: a merge request that already exists and needs
+interpreting; work that has to land on GitCode directly; and the bot and
+CodeArts behaviour on gitcode.com, which nothing else documents.
 
 **Read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first** — *Opening a merge
 request* and *Repositories* carry the process and which host changes are
@@ -57,9 +69,10 @@ attribution: [.agents/skills/ci/SKILL.md](../ci/SKILL.md).
 
 ## Run the layers first
 
-No pipeline runs the full set — CodeArts runs `ci:ut:host` and `ci:st` on the
-merge request, GitHub runs the rest on the mirror (see the ci skill) — so the
-local run is the only complete check a reviewer gets.
+A merge request is gated by nothing now. CodeArts still runs on it and its
+result is still readable, but it decides nothing, and the pull request CI that
+does decide is on the other host. So here the local run is not the first
+check — it is the only one.
 
 ```bash
 bwrap --ro-bind / / --dev /dev true && echo sandbox ok      # ci:ut and ci:e2e need it
@@ -138,8 +151,14 @@ the title and the body, and say what to delete before it could be merged.
 ## Carry the release category across
 
 The release note is generated on GitHub and grouped by the `release:*` label on
-the **paired GitHub pull request** — a merge request body cannot classify
-anything. So state the intended category here:
+a **GitHub pull request** — a merge request body cannot classify anything, and
+now that GitHub is the source rather than the mirror, a change that only ever
+existed as a merge request has no pull request to carry the label. It will
+reach a release as commits with no entry in the note.
+
+That is a reason to open the change on GitHub instead. When it genuinely has
+to be a merge request, state the intended category here so a maintainer can
+place it by hand:
 
 ```markdown
 ## 发布信息
@@ -152,10 +171,10 @@ Release category: release:feature
 The whitelist, the rules for choosing exactly one, and what to do when the
 label cannot be applied are in
 [create-github-pr](../create-github-pr/SKILL.md); the sections and their order
-are in [.github/release.yml](../../../.github/release.yml). Until the sync
-adapter reads this field, a maintainer applies the label on the paired pull
-request. An unlabelled pull request is not lost — it lands in *Other Changes* —
-but that section is a backstop to read before publishing, not a default.
+are in [.github/release.yml](../../../.github/release.yml). An unlabelled pull
+request is not lost — it lands in *Other Changes* — but that section is a
+backstop to read before publishing, not a default, and a change with no pull
+request at all is not even there.
 
 ## After it opens
 
