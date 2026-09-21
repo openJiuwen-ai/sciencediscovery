@@ -50,7 +50,7 @@ const protenixPipelineScriptsDir = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../../..",
   "skills",
-  "antibody-protenix-pipeline",
+  "antibody-design",
   "scripts",
 );
 
