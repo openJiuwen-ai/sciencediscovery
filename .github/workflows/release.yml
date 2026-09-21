@@ -88,18 +88,21 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      # This job never checks the source out — it only uploads artifacts the
-      # gate already produced, and cloning a repository this size to call one
-      # API would be minutes spent on nothing. But `gh` names its target
-      # repository by reading the git remote of the working directory, so
-      # without a checkout every command fails with `fatal: not a git
-      # repository` before it reaches the network. GH_REPO states the target
-      # instead, which is what the checkout would have implied anyway.
+      # `gh` names its target repository by reading the git remote of the
+      # working directory. The checkout below is shallow and exists only to
+      # bring in the notes script — every figure that script reports comes from
+      # the API, not from local history — so stating the repository here is
+      # what keeps `gh` from depending on how that checkout was configured.
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
       VERSION: ${{ needs.version.outputs.version }}
       PRERELEASE: ${{ needs.version.outputs.prerelease }}
     steps:
+      # Shallow on purpose: only scripts/release-notes.mjs is needed, and it
+      # reads the release's history from the API rather than from this
+      # checkout, so there is nothing for a full clone to supply.
+      - uses: actions/checkout@v4
+
       # Deliberately not merged into one directory: each architecture's
       # artifact carries its own SHA256SUMS and VERSION, and merging would let
       # one silently overwrite the other's.
@@ -146,10 +149,16 @@ jobs:
           ( cd release && sha256sum --check SHA256SUMS )
           ls -lh release
 
+      # What's Changed, New Contributors and the compare link, with the counts
+      # this release is worth measuring by on top. Written to a file so the
+      # publishing step below stays about publishing.
+      - name: Compose the release notes
+        run: node scripts/release-notes.mjs --repo "${GH_REPO}" --tag "${TAG}" --output release-notes.md
+
       - name: Publish
-        # Idempotent on purpose: the gate ahead of this job runs for over an
-        # hour, so a re-run after a failed upload must not be blocked by the
-        # release the first attempt already created.
+        # Idempotent on purpose: the gate ahead of this job runs for the better
+        # part of an hour, so a re-run after a failed upload must not be
+        # blocked by the release the first attempt already created.
         run: |
           set -euo pipefail
           files=(release/ScienceDiscovery-*-linux-* release/SHA256SUMS)
@@ -160,10 +169,7 @@ jobs:
           else
             arguments=(
               --title "ScienceDiscovery v${VERSION} Release Note"
-              # Written from the commits and pull requests since the previous
-              # tag. An editor can replace the body afterwards; an empty
-              # release note cannot be reconstructed later.
-              --generate-notes
+              --notes-file release-notes.md
             )
             if [[ "${PRERELEASE}" == "true" ]]; then
               arguments+=(--prerelease)
