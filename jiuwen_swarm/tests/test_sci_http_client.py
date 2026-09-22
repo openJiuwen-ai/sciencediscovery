@@ -101,6 +101,17 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await self.client.call_tool("task", {})
 
+    async def test_forced_http_read_timeout_is_reported_without_hanging(self):
+        # Reproduce the original failure at a small timescale, even though
+        # production now disables this competing transport deadline.
+        original = httpx.AsyncClient.send
+        async def send(client, request, **kwargs):
+            request.extensions["timeout"]["read"] = .03
+            return await original(client, request, **kwargs)
+        with patch.object(httpx.AsyncClient, "send", send):
+            with self.assertRaisesRegex(RuntimeError, "transport failed"):
+                await asyncio.wait_for(self.client.call_tool("task", {"delay": .2}), 1)
+
     async def test_explicit_disconnect_wakes_pending_call(self):
         call = asyncio.create_task(self.client.call_tool("task", {"delay": .4}))
         await asyncio.sleep(.05)
