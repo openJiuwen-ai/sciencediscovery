@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -53,7 +54,7 @@ from .skills import SkillSync
 
 # SCIENCE_AGENT_ADAPTER_DEBUG=1 prints every tool event of every run to stderr.
 _DEBUG = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") == "1"
-_SAFE_NAME = re.compile(r"[^a-z0-9]")
+logger = logging.getLogger("uvicorn.error.run_binding")
 
 
 class ToolSpec(BaseModel):
@@ -79,6 +80,8 @@ class ModelSpec(BaseModel):
 
 class AgentRunRequest(BaseModel):
     sessionId: str
+    runId: str | None = None
+    agentId: str | None = None
     prompt: str
     mode: str = "agent.work.normal"
     cwd: str = "/tmp"
@@ -137,11 +140,6 @@ class AgentLanguage(BaseModel):
 
 class PermissionAnswer(BaseModel):
     decision: Literal["allow_once", "allow_matching", "deny"]
-
-
-def model_alias_base(model: str) -> str:
-    """A model id as a JiuwenSwarm entry name: letters, digits, `.`, `_` and `-` only, at most 48 characters."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", model).strip("-")[:48] or "model"
 
 
 def describe_approval(request: dict[str, Any], route: LlmRoute | None) -> None:
@@ -245,8 +243,9 @@ class AgentRunner:
         answer, _ = mapper.decide(request_id, decision)
         try:
             await run.answer(request_id, "permission_interrupt", answer)
-        except (gateway.GatewayError, websockets.WebSocketException):
-            pass
+        except (gateway.GatewayError, websockets.WebSocketException) as error:
+            if not mapper.finished and not mapper._cancel_requested:
+                raise gateway.GatewayError("approval delivery failed") from error
 
     async def _apply_approvals(self, tools: list[dict[str, Any]]) -> None:
         """JiuwenSwarm's permission engine decides every call (ScienceDiscovery's approval layer allows what it
@@ -263,13 +262,16 @@ class AgentRunner:
         name = SERVER_NAME
         token = None
         llm_token = None
-        model_alias = None
+        terminal_status = "completed"
         jw_session = request.sessionKey or request.sessionId
+        logger.info("run-binding start run=%s agent=%s session=%s swarm_session=%s tools=%d",
+                    request.runId, request.agentId, request.sessionId, jw_session, len(request.tools))
         mapper = RunEventMapper(session_id=request.sessionId, mcp_prefixes=(f"mcp_{name}_",))
         params: dict[str, Any] = {
             "session_id": jw_session, "content": request.prompt, "query": request.prompt,
             "mode": request.mode, "cwd": request.cwd, "project_dir": request.cwd, "trusted_dirs": [request.cwd],
-            "supports_user_interaction": True, "agent_ref": {"mode": request.mode, "id": "default"},
+            "supports_user_interaction": True, "sci_persistent_output": True,
+            "agent_ref": {"mode": request.mode, "id": "default"},
         }
         try:
             if request.tools:
@@ -283,8 +285,8 @@ class AgentRunner:
             if request.model:
                 if request.model.provider != "OpenAI":
                     raise ValueError(f"the {request.model.provider} protocol is not supported by this executor yet")
-                # JiuwenSwarm talks to a private alias that points at this run's proxy route, which
-                # forwards to the real endpoint with the real id, tool names and system prompt.
+                # A private connection routes this run's tools and prompt without
+                # changing the real model name or the global model configuration.
                 llm_token = self.routes.add(LlmRoute(
                     base_url=request.model.baseUrl.rstrip("/"), api_key=request.model.apiKey, model=request.model.model,
                     tool_prefix=f"mcp_{name}_", tool_names=frozenset(t.name for t in request.tools),
@@ -294,12 +296,14 @@ class AgentRunner:
                     native_tools=frozenset(request.nativeTools), all_native_tools=request.jiuwenSwarmTools == "all",
                     hidden_native_tools=frozenset(request.hiddenJiuwenSwarmTools), run_tag=token,
                 ))
-                # Named after the real model: JiuwenSwarm tells the model its own model's name (runtime state), and
-                # the alias is all it knows. The suffix keeps two runs of one model apart.
-                model_alias = f"{model_alias_base(request.model.model)}-{llm_token[:6]}"
-                await self.ensure_default_model()
-                params["model_name"] = await self.models.ensure(ModelProfile(
-                    model_alias, f"{self.settings.public_url}/llm/{llm_token}/v1", llm_token, "OpenAI",))
+                params["model_name"] = request.model.model
+                # Private, in-memory session binding. Never publish per-run credentials
+                # into Swarm's global model list or trigger a global model reload.
+                params["run_model"] = {
+                    "model_name": request.model.model,
+                    "api_base": f"{self.settings.public_url}/llm/{llm_token}/v1",
+                    "api_key": llm_token, "client_provider": "OpenAI",
+                }
             if request.tools:
                 if request.bridge is None:
                     raise ValueError("tools were given without a bridge to run them")
@@ -310,6 +314,10 @@ class AgentRunner:
                 try:
                     async for frame in run:
                         for event in mapper.feed(frame):
+                            if event["type"] == "run.failed":
+                                terminal_status = "failed"
+                            elif event["type"] == "run.cancelled":
+                                terminal_status = "cancelled"
                             if event["type"] == "permission.required":
                                 self.pending_approvals[event["request"]["id"]] = (run, mapper)
                                 route = self.routes.get(llm_token) if llm_token else None
@@ -327,22 +335,22 @@ class AgentRunner:
                         except Exception:
                             pass
                     raise
+            if not mapper.finished:
+                raise gateway.GatewayError("Swarm stream ended without a terminal event")
             yield json.dumps({"done": {
+                "status": "cancelled" if mapper._cancel_requested else terminal_status,
                 "finalText": mapper.final_text or "", "unmapped": mapper.unmapped,
                 "cancelled": mapper._cancel_requested,
             }}, ensure_ascii=False) + "\n"
         except (gateway.GatewayError, ValueError, httpx.HTTPError) as error:
             failure = {"type": "run.failed", "error": str(error), "errorCode": "transport-error"}
             yield json.dumps({"event": failure}, ensure_ascii=False) + "\n"
-            yield json.dumps({"done": {"finalText": "", "unmapped": mapper.unmapped, "cancelled": False}}) + "\n"
+            yield json.dumps({"done": {"status": "failed", "finalText": "", "unmapped": mapper.unmapped, "cancelled": False}}) + "\n"
         finally:
+            logger.info("run-binding release run=%s agent=%s swarm_session=%s terminal=%s",
+                        request.runId, request.agentId, jw_session, mapper.finished)
             if llm_token:
                 self.routes.remove(llm_token)
-            if model_alias:
-                try:
-                    await self.models.remove(model_alias)
-                except Exception:
-                    pass
             if token:
                 self.registry.remove(token)  # the shared server stays; calls for this run find nothing now
             for request_id in [key for key, (_, owner) in self.pending_approvals.items() if owner is mapper]:
@@ -437,6 +445,8 @@ def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
             await runner.answer_approval(request_id, body.decision)
         except KeyError:
             raise HTTPException(status_code=404, detail="no run is waiting on that question") from None
+        except gateway.GatewayError:
+            raise HTTPException(status_code=502, detail="approval delivery failed") from None
         return {"answered": request_id, "decision": body.decision}
 
     @router.get("/agent/skills")

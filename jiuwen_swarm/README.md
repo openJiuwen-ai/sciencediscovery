@@ -6,6 +6,12 @@ and transport bugs; research business logic remains in ScienceDiscovery.
 
 For `workswarm0.2.6`:
 
+- Platform runs pass a private `run_model` connection to the session adapter.
+  The real model name is unchanged. Run startup/cleanup no longer adds/removes
+  temporary global model entries or triggers global model hot reloads.
+- Unary startup errors retain `chat.error` through E2A stream conversion.
+  Missing terminal events/results are failures, not successful empty answers.
+
 - MCP calls honor their configured deadline without disconnecting a shared
   client when one call times out. Internally governed MCP cards do not receive
   a competing default 300-second wrapper timeout.
@@ -18,13 +24,12 @@ For `workswarm0.2.6`:
   unavailable explicit model instead of silently switching to the shared
   default route, which does not carry the run's tool contract.
 - TUI event envelopes preserve `stream_request_id`, separately from the
-  approval question ID. When an approval starts a replacement request, the
-  adapter ignores late terminal events from the superseded stream
-  before they can mark the logical run finished or release its model/MCP
-  bindings. Late tool results and usage remain observable. Gateways without
-  this metadata retain the older pause guard but
-  cannot reliably distinguish interleaved stream completions; use the pinned
-  patch when running this integration.
+  approval question ID. Platform runs opt into `sci_persistent_output`:
+  the SDK output subscription stays open across permission interruptions.
+  `runtime.output_owner` identifies the request actually consuming output;
+  approval submissions are control requests, not replacement result streams.
+  Their acknowledgements and completion markers cannot finish the logical run.
+  Native Swarm UI requests do not opt into this lifecycle change.
 - `chat.error`, `execution.error`, `runtime.error` and `error` are terminal
   failures: the adapter reports them without waiting for a later completion
   marker or the platform idle timeout. Transport heartbeats are not progress.
@@ -35,12 +40,45 @@ Calls with no tools can be model capability probes, not agent reasoning
 steps. This diagnostic does not log API keys, prompts or tool arguments.
 Inspect the model-bearing agent call, not a probe, when checking missing tools.
 
+## Platform task execution contract
+
+ScienceDiscovery still owns `task` scheduling, permissions, provenance and
+Artifact handoff. Swarm owns the reasoning loop and conversation history of
+each main/child session. This change does not switch delegation to native
+`subagent_spawn`.
+
+| Boundary | Contract |
+| --- | --- |
+| API → adapter | Task, system prompt, session key, run/agent identifiers, tool schemas, bridge and model connection |
+| Adapter → Swarm | Real model name and private in-memory `run_model`; MCP selection and task |
+| Swarm → adapter | Correlated tool, text, approval and terminal events; startup failures do not require an output lease |
+| Adapter → API | Events followed by one `done` with `completed` / `failed` / `cancelled`; missing or duplicate terminal results fail closed |
+| Child → parent | Existing platform task result and Artifact references; paths alone do not transfer files |
+
+The session keeps its model binding across approval control requests. A later
+run on an idle session may replace it; replacing an executing session's binding
+is rejected. Global config reloads must not overwrite this private connection.
+Route tokens are credentials, not model names or public correlation IDs; do not
+publish raw request bodies or private diagnostic traces. Only ephemeral proxy
+credentials cross this boundary, not the provider's API key.
+
+Adapter INFO logs named `run-binding start` / `run-binding release` correlate
+platform run/agent identifiers with the Swarm session and show whether a terminal
+event was received. They omit tokens, endpoint URLs, prompts and tool arguments.
+Older adapter results without `status` remain readable by the Node client, but
+an explicit terminal `done` is always required.
+
+Startup still bootstraps the existing shared default and prunes obsolete aliases
+from older adapter instances. Per-run model binding requires patch `0006` on the
+pinned Swarm version. Shared MCP discovery and tool-call run-tag adaptation are
+unchanged; this is not a complete redesign of the tool transport.
+
 Run focused patch checks with the patched Swarm environment:
 
 ```bash
 PYTHONPATH=.sciencediscovery-data/jiuwenswarm/src \
   .sciencediscovery-data/jiuwenswarm/src/.venv/bin/python \
-  jiuwen_swarm/tests/test_dynamic_bindings.py
+  -m unittest discover -s jiuwen_swarm/tests -v
 ```
 
 The platform `sci` HTTP MCP connection uses a dedicated lifetime owner task.
@@ -74,12 +112,88 @@ inherit the ScienceDiscovery specialist MCP bindings. Web provider selection
 continues to use the existing Swarm settings adapter; these patches do not
 add new providers or change the proxy-settings contract.
 
+With `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task`, the model sees the platform
+`task` tool, not Swarm's native spawn/wait/list/send-input/close/resume tools,
+even when the rest of Swarm's native toolset is enabled. Runs without delegation
+capability likewise hide these native tools. The run prompt explicitly overrides
+generic Swarm delegation instructions. This selection does not change the
+default native-delegation mode or implement native-child progress forwarding.
+
 Validation requires three observations: literature tools in the child's
 actual LLM request, a successful literature MCP invocation, and leader
 continuation after the child returns. A tool appearing in a registry or a
 run being marked completed alone does not establish successful research.
 
 ## Regression tests
+
+### Model tool-argument streaming
+
+The Node model gateway forwards tool-call identity and JSON argument fragments
+while they are generated, including OpenAI Chat Completions, OpenAI Responses,
+and Anthropic Messages. Parallel calls keep separate indices. The terminal
+response does not replay arguments already sent; providers that only return
+complete calls retain a final-result fallback. Cancellation aborts the upstream
+request. Invalid streamed arguments fail the request rather than executing a
+partially generated tool call.
+
+The Python route adapter also treats arguments as a stream: tool names are
+prefixed once, and the authoritative `_sd_run` field is appended before the
+final object brace. Only that trailing boundary is withheld, not the report
+body. Approval summaries are assembled from complete arguments. Parallel calls
+and separate HTTP responses have independent state; a model-supplied run tag
+cannot override the platform's tag.
+
+The pinned Swarm SDK merges anonymous argument fragments into the last call,
+ignoring their indices. The platform compatibility patch corrects this merge
+by tool index (identity fallback for legacy streams), preserving the SDK's
+content, reasoning and usage merge. This prevents parallel calls from sharing
+JSON tails. Remove the shim when upgrading to an SDK with indexed merging;
+the regression test in `tests/test_platform_interaction.py` covers interleaved
+fragments and metadata preservation. No installed SDK files are modified.
+
+Set `SCIENCE_AGENT_TRACE_MODEL_STREAM=1` on the Node API process to enable
+`[model-stream]` diagnostics (restart required). They record a request ID and
+model alias, upstream transport-chunk count, downstream delta count, tool
+argument character count, elapsed time, and upstream/downstream idle time.
+Progress logs are limited to once per five seconds; completion/error/cancellation
+always emits a summary. Prompt text, arguments, responses and API keys are not
+logged. This records actual progress and does not send synthetic heartbeats or
+raise Swarm's model-stream timeout. A genuinely silent upstream can still fail.
+
+### Approval and artifact handoff
+
+Approval delivery stays inside the platform's external-wait interval. Failed
+delivery terminates the active run explicitly instead of silently waiting for
+an idle timeout; an already-cancelled run remains a no-op. The task wall-clock
+deadline is unchanged. No failed action is automatically replayed.
+
+Declared child artifacts carry a platform-recorded `subagentId`. The `task`
+result includes their IDs, names and versions, including partial deliverables
+from a failed child. Parents use `read_artifact`, not `read_file` on a child's
+private path. No workspace is copied implicitly. Undeclared files and historical
+artifacts without this metadata are not inferred from model prose.
+
+Swarm has retired the legacy `HEARTBEAT.md` context file. The compatibility
+patch excludes it from automatic context-file loading without creating an
+empty file or suppressing other file errors. It does not disable Swarm's new
+heartbeat scheduler or change explicit file-tool calls.
+
+Adapter-to-Node HTTP failures log `legacy_proxy_failure` with a generated
+request ID, method, path, phase (`headers` or `body`), elapsed time, exception
+types and stack locations. A 502 response includes `requestId` for correlation.
+Streaming responses include `x-sciencediscovery-request-id` for the same purpose.
+Queries, headers, bodies and exception messages are excluded. A body-stream
+failure is logged and the stream closes; already-sent headers cannot become
+a 502. These diagnostics do not assert a cause for previous `ReadError`s and
+do not add automatic retries.
+
+Test the approval lease and context-file integration against the pinned SDK:
+
+```bash
+PYTHONPATH=.sciencediscovery-data/jiuwenswarm/src \
+  .sciencediscovery-data/jiuwenswarm/src/.venv/bin/python \
+  jiuwen_swarm/tests/test_platform_interaction.py
+```
 
 The patches are intentionally scoped to the pinned Swarm version. When upgrading
 Swarm, review and rebase or remove them; do not assume a different tag contains
@@ -108,7 +222,7 @@ with `--jiuwenswarm` and the delegation settings above first.
 
 ```bash
 node test/sync-e2e.mjs --write
-npm --prefix .e2e run test:mocked -- swarm-research-mocked.spec.ts
+E2E_RESEARCH=1 npm --prefix .e2e run test:mocked -- swarm-research-mocked.spec.ts
 ```
 
 This Mock E2E uses a local scripted model, real Swarm loops, the platform MCP
@@ -117,7 +231,9 @@ child command deliberately fails; the next call recovers, declares source
 notes, and the parent continues to declare the final report. Scientific source
 content is synthetic: this does not test public literature services or measure
 model recovery intelligence. The CI Swarm stack enables this test automatically;
-`CI_E2E_SPEC=swarm-research-mocked.spec.ts pnpm ci:e2e` selects only this spec.
+For an explicit local run, `E2E_RESEARCH=1 CI_E2E_SPEC=swarm-research-mocked.spec.ts pnpm ci:e2e`
+selects only this spec. Both research journeys are excluded from default test
+collection; do not set `E2E_RESEARCH=1` in PR gates.
 
 The live test requires `E2E_REAL=1` and either a preconfigured live model ID in
 `E2E_LLM_MODEL_ID`, or all three of `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL` and
@@ -125,7 +241,7 @@ The live test requires `E2E_REAL=1` and either a preconfigured live model ID in
 committed fixtures. It makes billable model calls and public-source requests.
 
 ```bash
-E2E_REAL=1 npm --prefix .e2e run test:real -- deepresearchbench-swarm.spec.ts
+E2E_RESEARCH=1 E2E_REAL=1 npm --prefix .e2e run test:real -- deepresearchbench-swarm.spec.ts
 ```
 
 The live case uses DeepResearchBench task 59 (bird migration navigation), with

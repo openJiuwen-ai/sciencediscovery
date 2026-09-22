@@ -24,6 +24,54 @@ from sciencediscovery_adapter.gateway import ChatRun, GatewayError, chat, rpc
 DONE = {"type": "event", "event": "chat.processing_status", "payload": {"is_processing": False, "is_complete": True}}
 
 
+@pytest.mark.parametrize("event", ["chat.error", "chat.final"])
+async def test_startup_failure_without_output_owner_terminates_immediately(event):
+    async def handler(connection):
+        await connection.send(json.dumps({"event": "connection.ack"}))
+        request = json.loads(await connection.recv())
+        await connection.send(json.dumps({"type": "event", "event": event,
+            "stream_request_id": request["id"], "payload": {"error": "model binding rejected"}}))
+        await connection.wait_closed()
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with ChatRun(f"ws://127.0.0.1:{port}", {"session_id": "s", "sci_persistent_output": True}, idle_timeout=1) as run:
+            frames = [frame async for frame in run]
+    assert len(frames) == 1
+    assert frames[0]["event"] == "chat.error"
+
+
+
+async def test_persistent_output_owner_survives_two_control_request_completions():
+    seen = []
+    async def handler(connection):
+        await connection.send(json.dumps({"event": "connection.ack"}))
+        initial = json.loads(await connection.recv())
+        owner = initial["id"]
+        await connection.send(json.dumps({"type": "event", "event": "runtime.output_owner", "stream_request_id": owner}))
+        for question in ("q1", "q2"):
+            await connection.send(json.dumps({"type": "event", "event": "chat.ask_user_question",
+                "stream_request_id": owner, "payload": {"request_id": question}}))
+        for _ in range(2):
+            answer = json.loads(await connection.recv())
+            assert answer["params"]["sci_persistent_output"] is True
+            await connection.send(json.dumps({"type": "event", "event": "runtime.accepted", "stream_request_id": answer["id"]}))
+            await connection.send(json.dumps({**DONE, "stream_request_id": answer["id"]}))
+            await connection.send(json.dumps({"type": "event", "event": "chat.final", "stream_request_id": answer["id"],
+                                             "payload": {"content": "not the task result"}}))
+        await connection.send(json.dumps({"type": "event", "event": "chat.final", "stream_request_id": owner,
+                                         "payload": {"content": "complete research"}}))
+        await connection.send(json.dumps({**DONE, "stream_request_id": owner}))
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with ChatRun(f"ws://127.0.0.1:{port}", {"session_id": "s1", "sci_persistent_output": True}, idle_timeout=3) as run:
+            async for frame in run:
+                seen.append(frame)
+                if frame.get("event") == "chat.ask_user_question":
+                    await run.answer(frame["payload"]["request_id"], "permission_interrupt", {})
+    assert [f["event"] for f in seen] == ["chat.ask_user_question", "chat.ask_user_question", "chat.final", "chat.processing_status"]
+    assert seen[-2]["payload"]["content"] == "complete research"
+
+
 async def test_late_completion_from_previous_approval_stream_cannot_end_resumed_run():
     from sciencediscovery_adapter.events import RunEventMapper
 

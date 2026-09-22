@@ -159,6 +159,10 @@ export const JIUWENSWARM_TODO_TOOLS = ["todo_create", "todo_modify", "todo_list"
 
 /** JiuwenSwarm's own sub-agent tools, offered in place of `task` unless subagents is `task`. */
 export const JIUWENSWARM_SUBAGENT_TOOLS = ["subagent_spawn", "subagent_wait"] as const;
+// Hide the whole native lifecycle, not just the two tools explicitly offered above.
+const JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS = [
+  ...JIUWENSWARM_SUBAGENT_TOOLS, "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume",
+] as const;
 
 /** Selected by SCIENCE_AGENT_EXECUTOR=jiuwenswarm; the native agent stays the default. */
 export function jiuwenSwarmConfigFromEnv(env: NodeJS.ProcessEnv = process.env): JiuwenSwarmAgentConfig | undefined {
@@ -184,7 +188,7 @@ interface ApprovalQuestion { id: string; resource?: string; summary?: string; to
 /** A line of the adapter's NDJSON stream. */
 type RunLine =
   | { event: { type: string; [key: string]: unknown } }
-  | { done: { finalText: string; unmapped?: string[]; cancelled?: boolean } };
+  | { done: { finalText: string; status?: "completed" | "failed" | "cancelled"; unmapped?: string[]; cancelled?: boolean } };
 
 export function createJiuwenSwarmAgentFactory(config: JiuwenSwarmAgentConfig) {
   return (options: NativeAgentOptions): NativeAgentHandle => new JiuwenSwarmAgent(config, options);
@@ -193,6 +197,7 @@ export function createJiuwenSwarmAgentFactory(config: JiuwenSwarmAgentConfig) {
 class JiuwenSwarmAgent implements NativeAgentHandle {
   private readonly listeners = new Set<Listener>();
   private readonly controller = new AbortController();
+  private approvalDeliveryError?: Error;
   private executed = false;
   /** The run's skills installed in JiuwenSwarm: JiuwenSwarm's name for each, and back. */
   private readonly skillNames = new Map<string, string>();
@@ -311,6 +316,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     } catch (error) {
       // Keep "timeout" in these errors: classifySubagentFailure matches /timeout/i for a sub-agent's timed_out status.
       if (deadlines.expired) throw deadlines.error();
+      if (this.approvalDeliveryError) throw this.approvalDeliveryError;
       if (this.controller.signal.aborted) throw new Error("Agent run cancelled");
       console.warn(`[jiuwenswarm-agent] run of ${this.options.sessionId} failed: ${error instanceof Error ? error.message : String(error)}`);
       if (error instanceof Error) {
@@ -380,17 +386,22 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     const decided = (ask
       ? ask({ resource, summary: question.summary ?? question.resource ?? "tool call",
         ...(question.toolCallId ? { toolCallId: question.toolCallId } : {}) }, this.controller.signal)
-      : Promise.resolve("deny" as const)).finally(release);
+      : Promise.resolve("deny" as const));
     void decided.catch(() => "deny" as const).then(async (decision) => {
       const response = await (this.config.fetch ?? fetch)(`${this.config.adapterUrl}/agent/approvals/${encodeURIComponent(question.id)}`, {
         method: "POST",
+        signal: AbortSignal.timeout(30_000),
         headers: { "content-type": "application/json", ...(this.config.adapterToken ? { authorization: `Bearer ${this.config.adapterToken}` } : {}) },
         body: JSON.stringify({ decision }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
     }).catch((error) => {
       console.warn(`[jiuwenswarm-agent] could not answer JiuwenSwarm's approval question ${question.id}: ${error instanceof Error ? error.message : String(error)}`);
-    });
+      if (!this.controller.signal.aborted) {
+        this.approvalDeliveryError = new Error("JiuwenSwarm approval delivery failed; the run cannot safely resume.");
+        this.controller.abort();
+      }
+    }).finally(release);
   }
 
   /** JiuwenSwarm's own web search and fetching, recorded in the memory graph as ours are. Fire and forget. */
@@ -445,7 +456,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       ...(jiuwenSwarmPlans ? [TODO_PLANNING_SECTION] : []),
       ...(jiuwenSwarmSubagents ? [SUBAGENT_DELEGATION_SECTION] : []),
     ];
-    const systemPrompt = [withHostRule, ...replacementSections].join("\n\n");
+    const delegationRule = jiuwenSwarmSubagents ? [] : [toolNames.has("task")
+      ? "Delegation for this run uses only the platform task tool. Swarm-native subagent tools are unavailable; ignore any generic instructions recommending them. Use task to delegate and collect results."
+      : "Delegation is unavailable for this run. Ignore any generic instructions recommending Swarm-native subagent tools; complete the assigned work with the available tools."];
+    const systemPrompt = [withHostRule, ...replacementSections, ...delegationRule].join("\n\n");
     const nativeToolNames = [...(jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []), ...(jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_TOOLS : [])];
     const response = await (this.config.fetch ?? fetch)(`${this.config.adapterUrl}/agent/runs`, {
       method: "POST",
@@ -455,6 +469,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       },
       body: JSON.stringify({
         sessionId: this.options.sessionId,
+        runId: this.options.versioning?.trajectoryId,
+        agentId: this.options.versioning?.agentId,
         sessionKey: jiuwenSwarmSessionKey(this.options),
         prompt: text,
         systemPrompt,
@@ -465,7 +481,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         model: { model: model.model, baseUrl: modelGateway.url, apiKey: modelGateway.token, provider: "OpenAI" },
         ...(nativeToolNames.length ? { nativeTools: nativeToolNames } : {}),
         jiuwenSwarmTools: allJiuwenSwarmTools ? "all" : "listed",
-        ...(allJiuwenSwarmTools ? { hiddenJiuwenSwarmTools: [...JIUWENSWARM_HOST_TOOLS] } : {}),
+        hiddenJiuwenSwarmTools: [
+          ...(allJiuwenSwarmTools ? JIUWENSWARM_HOST_TOOLS : []),
+          ...(!jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS : []),
+        ],
         // JiuwenSwarm gives a tool call 30 s unless told otherwise; the run's own timeout is the limit here.
         ...(this.options.runTimeoutMs ? { toolTimeoutSeconds: Math.ceil(this.options.runTimeoutMs / 1000) } : {}),
         tools: [...tools.values()].map((tool) => ({
@@ -489,14 +508,25 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       });
     let finalText = "";
     let failure: string | undefined;
+    let receivedTerminal = false;
     for await (const line of ndjson(response.body)) {
+      if (receivedTerminal) throw new Error("Swarm adapter sent data after its terminal result");
       this.deadlines?.progress();
       if ("event" in line && line.event.type === "permission.required") this.answerApproval(line.event.request as ApprovalQuestion);
-      if ("done" in line) finalText = line.done.finalText;
+      if ("done" in line) {
+        receivedTerminal = true;
+        finalText = line.done.finalText;
+        if (line.done.cancelled || line.done.status === "cancelled") failure ??= "Swarm run was cancelled";
+        if (line.done.status === "failed") failure ??= "Swarm run failed without an error event";
+        if (line.done.status !== undefined && !["completed", "failed", "cancelled"].includes(line.done.status)) {
+          failure ??= "Swarm adapter returned an invalid terminal status";
+        }
+      }
       else if (line.event.type === "run.failed") failure = String(line.event.error);
       else translator.handle(line.event);
     }
     if (failure !== undefined) throw new Error(failure);
+    if (!receivedTerminal) throw new Error("Swarm adapter stream ended without a terminal result");
     translator.finish();
     return finalText;
   }

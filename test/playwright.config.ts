@@ -45,6 +45,11 @@ export default defineConfig({
   // every scenario rediscover it as a 401. Skipped for `--list`.
   globalSetup: resolve(repoRoot, "test/global-setup.ts"),
   testDir: resolve(repoRoot, "test"),
+  // Research journeys are manual/benchmark opt-ins, not PR gate cases (including
+  // the mocked Swarm integration journey). Real LLMs additionally require E2E_REAL.
+  testIgnore: process.env.E2E_RESEARCH === "1" ? [] : [
+    "**/swarm-research-mocked.spec.ts", "**/deepresearchbench-swarm.spec.ts",
+  ],
   outputDir: resolve(envRoot, "test-results"),
   fullyParallel: false,
   forbidOnly: !!process.env.CI,

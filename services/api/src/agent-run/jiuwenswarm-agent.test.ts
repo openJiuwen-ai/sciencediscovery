@@ -54,6 +54,22 @@ async function fakeAdapter(
 
 const line = (value: unknown) => JSON.stringify(value) + "\n";
 
+for (const [name, reply, message] of [
+  ["EOF without done", "", /without a terminal result/],
+  ["cancelled terminal", line({ done: { finalText: "partial", cancelled: true } }), /cancelled/],
+  ["failed status without event", line({ done: { finalText: "", status: "failed" } }), /failed without an error event/],
+  ["invalid terminal status", line({ done: { finalText: "", status: "unknown" } }), /invalid terminal status/],
+  ["duplicate terminal", line({ done: { finalText: "ok" } }).repeat(2), /after its terminal result/],
+] as const) {
+  test(`Swarm run contract rejects ${name}`, async () => {
+    const adapter = await fakeAdapter((_request, response) => { response.writeHead(200); response.end(reply); });
+    try {
+      const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options());
+      await assert.rejects(agent.execute("go"), message);
+    } finally { await adapter.close(); }
+  });
+}
+
 function options(extra: Partial<NativeAgentOptions> = {}): NativeAgentOptions {
   const echo = {
     label: "Echo", name: "echo", description: "Echo a word.",
@@ -411,6 +427,41 @@ test("a handle runs once", async () => {
   } finally {
     await adapter.close();
   }
+});
+
+test("approval delivery failure terminates with a concrete error instead of an idle timeout", async () => {
+  const adapter = await fakeAdapter(({ body }, response) => {
+    if (body.decision) { response.writeHead(502); response.end("{}"); return; }
+    response.writeHead(200);
+    response.write(line({ event: { type: "permission.required", request: { id: "q1", resource: "run_shell" } } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({
+      requestApproval: async () => "allow", runIdleTimeoutMs: 5_000,
+    } as never));
+    await assert.rejects(agent.execute("go"), /approval delivery failed/);
+  } finally { await adapter.close(); }
+});
+
+test("approval HTTP delivery remains an external wait after the human has answered", async () => {
+  let main: ServerResponse | undefined;
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    if (body.decision) {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      response.writeHead(200); response.end("{}");
+      main!.end(line({ done: { finalText: "resumed" } }));
+      return;
+    }
+    main = response;
+    response.writeHead(200);
+    response.write(line({ event: { type: "permission.required", request: { id: "q1", resource: "run_shell" } } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({
+      requestApproval: async () => "allow", runIdleTimeoutMs: 80,
+    } as never));
+    assert.equal((await agent.execute("go")).finalMessages.at(-1)?.content, "resumed");
+  } finally { await adapter.close(); }
 });
 
 test("the executor is chosen by SCIENCE_AGENT_EXECUTOR and needs the adapter URL", () => {
@@ -942,6 +993,7 @@ test("by default the model delegates with JiuwenSwarm's subagent_spawn/subagent_
   try {
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(withRunSubagent()).execute("go");
     assert.deepEqual(sent.nativeTools, ["subagent_spawn", "subagent_wait"]);
+    assert.equal(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"), false);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
   } finally {
     await adapter.close();
@@ -955,6 +1007,11 @@ test("subagents can be switched back to our task, and then JiuwenSwarm's sub-age
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, subagents: "task" })(withRunSubagent()).execute("go");
     assert.ok(sent.tools.some((tool: { name: string }) => tool.name === "task"));
     assert.equal("nativeTools" in sent, false);
+    assert.equal(sent.jiuwenSwarmTools, "all");
+    for (const name of ["subagent_spawn", "subagent_wait", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]) {
+      assert.ok(sent.hiddenJiuwenSwarmTools.includes(name), `${name} must be hidden even with all native tools enabled`);
+    }
+    assert.match(sent.systemPrompt, /Delegation for this run uses only the platform task tool/);
   } finally {
     await adapter.close();
   }
@@ -979,6 +1036,8 @@ test("a run with no delegation capability offers no delegation tool of either ki
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options()).execute("go");
     assert.equal("nativeTools" in sent, false);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
+    assert.ok(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"));
+    assert.match(sent.systemPrompt, /Delegation is unavailable for this run/);
   } finally {
     await adapter.close();
   }
@@ -1121,7 +1180,8 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
     assert.equal(sent.jiuwenSwarmTools, "all");
     assert.equal(sent.systemPrompt.includes("Use only the registered workspace tools"), false);
     // Commands and file writes stay in ScienceDiscovery's sandbox: JiuwenSwarm's host tools are hidden, and the prompt says so.
-    assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf"]);
+    assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf",
+      "subagent_spawn", "subagent_wait", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
     assert.match(sent.systemPrompt, /run in the sandbox through run_shell/);
     const start = events.find((event) => event.type === "tool_execution_start") as any;
     const end = events.find((event) => event.type === "tool_execution_end") as any;

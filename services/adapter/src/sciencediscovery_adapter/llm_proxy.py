@@ -157,6 +157,8 @@ def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
         def keep(name: str) -> bool:
             if _is_ours(name, route):
                 return _unprefixed(name, route) not in route.shadowed
+            if name in route.hidden_native_tools:
+                return False
             return name in route.native_tools or (route.all_native_tools and name in native)
 
         out["tools"] = [
@@ -243,8 +245,7 @@ def _prefixed(name: str, route: LlmRoute) -> str:
 
 
 def _with_run_tag(arguments: Any, tag: str | None) -> Any:
-    """A call's JSON arguments with the run tag set (or, with `tag` None, removed). Anything else is left alone:
-    the model gateway sends each call whole, in one chunk, so its arguments are complete JSON."""
+    """Set/remove a run tag in complete JSON arguments (not streamed fragments)."""
     if not isinstance(arguments, str):
         return arguments
     try:
@@ -263,7 +264,7 @@ def _remember_call(function: dict[str, Any], route: LlmRoute) -> None:
     try:
         arguments = json.loads(function.get("arguments") or "{}")
     except (TypeError, ValueError):
-        return  # a streamed fragment: the model gateway sends whole calls, so this is not one of its calls
+        return  # Incomplete/malformed arguments must not become an approval summary.
     if isinstance(arguments, dict):
         arguments.pop(RUN_ARG, None)
         route.recent_calls.append((function["name"], arguments))
@@ -287,18 +288,81 @@ def rewrite_response(payload: dict[str, Any], route: LlmRoute) -> dict[str, Any]
 _HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "host"}
 
 
+class StreamingToolRewriter:
+    """Forward arguments immediately, retaining only the final non-space byte.
+
+    The authoritative run tag is appended before the closing object brace at
+    finish_reason, never as a second JSON object. State is per response/choice/
+    tool index, so parallel calls and concurrent model requests cannot mix.
+    Complete raw arguments are retained separately for approval summaries.
+    """
+    def __init__(self, route: LlmRoute):
+        self.route = route
+        self.calls: dict[tuple[int, int], dict[str, Any]] = {}
+
+    def rewrite(self, payload: dict[str, Any]) -> dict[str, Any]:
+        for choice in payload.get("choices") or []:
+            choice_index = choice.get("index", 0)
+            delta = choice.get("delta") or {}
+            for call in delta.get("tool_calls") or []:
+                index = call.get("index", 0)
+                state = self.calls.setdefault((choice_index, index), {"name": "", "raw": "", "tail": ""})
+                function = call.get("function") or {}
+                if isinstance(function.get("name"), str):
+                    function["name"] = _prefixed(function["name"], self.route)
+                    state["name"] = function["name"]
+                fragment = function.get("arguments")
+                if isinstance(fragment, str):
+                    state["raw"] += fragment
+                    if self.route.run_tag and state["name"].startswith(self.route.tool_prefix):
+                        pending = state["tail"] + fragment
+                        cut = max(0, len(pending.rstrip()) - 1)
+                        function["arguments"], state["tail"] = pending[:cut], pending[cut:]
+            if choice.get("finish_reason") is not None:
+                for (owner, index), state in list(self.calls.items()):
+                    if owner != choice_index:
+                        continue
+                    if self.route.run_tag and state["name"].startswith(self.route.tool_prefix):
+                        parsed = json.loads(state["raw"].strip() or "{}")
+                        if not isinstance(parsed, dict):
+                            raise ValueError("platform tool arguments must be a JSON object")
+                        tail = state["tail"]
+                        if state["raw"].strip() and not tail.startswith("}"):
+                            raise ValueError("platform tool arguments have no closing object brace")
+                        suffix = (("," if parsed else "") if state["raw"].strip() else "{")
+                        suffix += json.dumps(RUN_ARG) + ":" + json.dumps(self.route.run_tag) + "}" + tail[1:]
+                        calls = delta.setdefault("tool_calls", [])
+                        current = next((c for c in calls if c.get("index", 0) == index), None)
+                        if current is None:
+                            calls.append({"index": index, "function": {"arguments": suffix}})
+                        else:
+                            function = current.setdefault("function", {})
+                            function["arguments"] = function.get("arguments", "") + suffix
+                        choice["delta"] = delta
+                    _remember_call({"name": state["name"], "arguments": state["raw"]}, self.route)
+                    del self.calls[(owner, index)]
+        return payload
+
+
 async def _rewrite_stream(upstream: httpx.Response, route: LlmRoute) -> AsyncIterator[bytes]:
     buffer = ""
+    rewriter = StreamingToolRewriter(route)
     async for text in upstream.aiter_text():
         buffer += text
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             if line.startswith("data:") and line[5:].strip() not in ("", "[DONE]"):
                 try:
-                    payload = rewrite_response(json.loads(line[5:]), route)
-                    line = "data: " + json.dumps(payload, ensure_ascii=False)
-                except ValueError:
+                    payload = json.loads(line[5:])
+                except json.JSONDecodeError:
                     pass  # not JSON: pass it through untouched
+                else:
+                    try:
+                        payload = rewriter.rewrite(payload)
+                    except ValueError:
+                        yield b'data: {"error":{"message":"invalid streamed platform tool arguments"}}\n\n'
+                        return
+                    line = "data: " + json.dumps(payload, ensure_ascii=False)
             yield (line + "\n").encode()
     if buffer:
         yield buffer.encode()

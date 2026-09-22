@@ -55,6 +55,7 @@ type Streamer = typeof streamModelTurn;
 type HistoryMessage = Parameters<Streamer>[2][number];
 
 interface ChatRequest {
+  model?: string;
   messages?: Array<Record<string, unknown>>;
   stream?: boolean;
   tools?: Array<{ function?: { description?: string; name?: string; parameters?: unknown } }>;
@@ -172,6 +173,17 @@ export async function startModelGateway(
     signal.addEventListener("abort", abort, { once: true });
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
     const id = `chatcmpl-${randomUUID()}`;
+    const streamStarted = Date.now();
+    let upstreamChunks = 0, downstreamChunks = 0, toolArgumentChars = 0;
+    let lastUpstreamAt = streamStarted, lastDownstreamAt = streamStarted, lastLogAt = 0;
+    const trace = (phase: string, force = false) => {
+      const now = Date.now();
+      if (process.env.SCIENCE_AGENT_TRACE_MODEL_STREAM !== "1" || (!force && now - lastLogAt < 5_000)) return;
+      lastLogAt = now;
+      console.info(`[model-stream] ${JSON.stringify({ id, requestModel: body.model, phase,
+        elapsedMs: now - streamStarted, upstreamChunks, downstreamChunks, toolArgumentChars,
+        upstreamIdleMs: now - lastUpstreamAt, downstreamIdleMs: now - lastDownstreamAt })}`);
+    };
     const chunk = (delta: Record<string, unknown>, finish: string | null = null, extra: Record<string, unknown> = {}) =>
       `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: endpoint.model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
     try {
@@ -184,18 +196,45 @@ export async function startModelGateway(
           response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
           response.write(chunk({ role: "assistant" }));
         };
+        const streamedIds = new Set<string>();
+        const toolIndexes = new Set<number>();
+        const writeDelta = (delta: Record<string, unknown>) => {
+          controller.signal.throwIfAborted();
+          start();
+          response.write(chunk(delta));
+          downstreamChunks++;
+          lastDownstreamAt = Date.now();
+          trace("forward");
+        };
+        trace("start", true);
         await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
         const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
-          onTextDelta: (delta) => { start(); response.write(chunk({ content: delta })); },
-          onThinkingDelta: (delta) => { start(); response.write(chunk({ reasoning_content: delta })); },
+          onProgress: () => { upstreamChunks++; lastUpstreamAt = Date.now(); trace("receive"); },
+          onTextDelta: (delta) => writeDelta({ content: delta }),
+          onThinkingDelta: (delta) => writeDelta({ reasoning_content: delta }),
+          onToolCallDelta: (delta) => {
+            if (delta.id) streamedIds.add(delta.id);
+            toolIndexes.add(delta.index);
+            toolArgumentChars += delta.arguments.length;
+            writeDelta({ tool_calls: [{ index: delta.index, ...(delta.id ? { id: delta.id, type: "function" } : {}),
+              function: { ...(delta.name ? { name: delta.name } : {}), arguments: delta.arguments } }] });
+          },
         });
+        controller.signal.throwIfAborted();
+        if (turn.toolCalls.some((call) => call.argsParseError)) throw new Error("Model returned invalid tool arguments");
         start();
         remember(turn);
+        // Compatibility with streamers/providers that return only completed calls.
+        // Never append the full arguments again after incremental delivery.
+        let fallbackIndex = toolIndexes.size ? Math.max(...toolIndexes) + 1 : 0;
+        for (const call of toolCallsOf(turn)) {
+          if (!streamedIds.has(call.id)) writeDelta({ tool_calls: [{ ...call, index: fallbackIndex++ }] });
+        }
         await record(turn);
-        if (turn.toolCalls.length) response.write(chunk({ tool_calls: toolCallsOf(turn) }));
         const usage = usageOf(turn);
         response.write(chunk({}, finishReason(turn), usage ? { usage } : {}));
         response.end("data: [DONE]\n\n");
+        trace("complete", true);
         return;
       }
       await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
@@ -211,6 +250,7 @@ export async function startModelGateway(
         ...(usage ? { usage } : {}),
       }));
     } catch (error) {
+      trace(controller.signal.aborted ? "cancelled" : "error", true);
       const status = error instanceof ModelRequestError && error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 502;
       const message = error instanceof Error ? error.message : String(error);
       if (response.headersSent) {

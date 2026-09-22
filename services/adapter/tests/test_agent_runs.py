@@ -130,7 +130,22 @@ async def test_streams_run_events_then_a_done_line(harness):
     assert response.headers["content-type"].startswith("application/x-ndjson")
     events = [line["event"]["type"] for line in lines if "event" in line]
     assert events[0] == "agent.phase" and "assistant.delta" in events
-    assert lines[-1] == {"done": {"finalText": "hello from stub", "unmapped": [], "cancelled": False}}
+    assert lines[-1] == {"done": {"status": "completed", "finalText": "hello from stub", "unmapped": [], "cancelled": False}}
+
+
+async def test_truncated_gateway_stream_is_failure_not_success(harness):
+    app, runner, _ = harness
+    class Truncated(FakeRun):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.frames = []
+    runner.chat_run = Truncated
+    _, lines = await post(app, {"sessionId": "s", "prompt": "go"})
+    failed = [line["event"] for line in lines if line.get("event", {}).get("type") == "run.failed"]
+    assert len(failed) == 1
+    assert "without a terminal event" in failed[0]["error"]
+    assert lines[-1]["done"]["status"] == "failed"
+
 
 
 async def test_the_run_is_sent_to_the_gateway_with_the_session_and_prompt(harness):
@@ -233,7 +248,7 @@ async def test_closing_the_stream_cancels_the_gateway_run(harness):
     assert FakeRun.instances[0].cancelled is True
 
 
-async def test_the_run_talks_to_a_private_alias_that_routes_to_the_real_model(harness):
+async def test_the_run_binds_a_private_route_without_registering_a_model_alias(harness):
     app, runner, rpcs = harness
     listed = {"models": []}
 
@@ -253,7 +268,7 @@ async def test_the_run_talks_to_a_private_alias_that_routes_to_the_real_model(ha
         def __init__(self, url, params, **kwargs):
             super().__init__(url, params, **kwargs)
             seen["alias"] = params["model_name"]
-            seen["entry"] = next(m for m in listed["models"] if m["model_name"] == params["model_name"])
+            seen["entry"] = params["run_model"]
             seen["route"] = runner.routes.get(seen["entry"]["api_key"])
 
     runner.chat_run = Spy
@@ -261,13 +276,47 @@ async def test_the_run_talks_to_a_private_alias_that_routes_to_the_real_model(ha
                      "tools": [{"name": "run_shell"}], "bridge": {"url": "http://legacy.test/b"},
                      "model": {"model": "gpt-x", "baseUrl": "http://llm/v1/", "apiKey": "sk"}})
     entry, route = seen["entry"], seen["route"]
-    assert seen["alias"].startswith("gpt-x-") and len(seen["alias"]) == len("gpt-x-") + 6, "named after the real model"
+    assert seen["alias"] == "gpt-x", "routing identity must not change the model name"
     assert entry["api_base"] == f"http://adapter.test/llm/{entry['api_key']}/v1"
     assert (route.base_url, route.api_key, route.model, route.system_prompt) == ("http://llm/v1", "sk", "gpt-x", "Be a scientist.")
     assert route.tool_names == frozenset({"run_shell"}) and route.tool_prefix.startswith("mcp_sci")
-    # after the run: the alias is gone from the list and the route is closed
+    # Only startup bootstraps the default; no run-level global registration.
+    replacements = [p for _, m, p in rpcs if m == "models.replace_all"]
+    assert len(replacements) == 1
     assert [m["model_name"] for m in listed["models"]] == ["sciencediscovery-default"], "only the default-model entry is left"
     assert runner.routes.get(entry["api_key"]) is None
+
+
+async def test_concurrent_same_model_runs_have_isolated_routes_and_no_catalog_writes(harness):
+    from sciencediscovery_adapter.agent_runs import AgentRunRequest
+    _, runner, rpcs = harness
+    ready = asyncio.Event()
+    checked = asyncio.Event()
+    checks = []
+    bindings = []
+    class Concurrent(FakeRun):
+        async def __aenter__(self):
+            bindings.append(self.params["run_model"])
+            if len(bindings) == 2:
+                ready.set()
+            await asyncio.wait_for(ready.wait(), 2)
+            assert all(runner.routes.get(b["api_key"]) is not None for b in bindings)
+            checks.append(True)
+            if len(checks) == 2:
+                checked.set()
+            await asyncio.wait_for(checked.wait(), 2)
+            return self
+    runner.chat_run = Concurrent
+    async def execute(sid):
+        request = AgentRunRequest(sessionId=sid, prompt="go", model={
+            "model": "same-model", "baseUrl": "http://llm/v1", "apiKey": "fixture"})
+        return [json.loads(line) async for line in runner.stream(request)]
+    results = await asyncio.gather(execute("child-a"), execute("child-b"))
+    assert all("done" in result[-1] for result in results)
+    assert {b["model_name"] for b in bindings} == {"same-model"}
+    assert bindings[0]["api_key"] != bindings[1]["api_key"]
+    assert not any(method.startswith("models.") for _, method, _ in rpcs)
+    assert all(runner.routes.get(b["api_key"]) is None for b in bindings)
 
 
 async def test_a_protocol_other_than_openai_chat_is_refused_clearly(harness):
@@ -377,14 +426,6 @@ async def test_the_system_prompt_mode_reaches_the_route(harness):
     assert modes == [("ours", "append"), ("ours", "replace")]
 
 
-def test_a_model_id_becomes_a_safe_entry_name():
-    from sciencediscovery_adapter.agent_runs import model_alias_base
-    assert model_alias_base("DeepSeek-V4-Flash-0731") == "DeepSeek-V4-Flash-0731"
-    assert model_alias_base("openai/gpt 5:latest") == "openai-gpt-5-latest"
-    assert model_alias_base("///") == "model"
-    assert len(model_alias_base("x" * 100)) == 48
-
-
 async def post_config(app, values, headers=None):
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
@@ -461,3 +502,21 @@ async def test_the_language_is_set_on_the_tui_channel(harness):
         bad = await client.post("/agent/language", json={"language": "fr"})
     assert ok.status_code == 200 and bad.status_code == 422
     assert rpcs[-1] == ("ws://gw/tui", "config.set", {"preferred_language": "en"})
+
+
+@pytest.mark.parametrize("cancelled, expected", [(False, 502), (True, 200)])
+async def test_approval_delivery_failure_is_visible_unless_already_cancelled(harness, cancelled, expected):
+    from sciencediscovery_adapter.events import RunEventMapper
+    from sciencediscovery_adapter.gateway import GatewayError
+    app, runner, _ = harness
+    class Broken:
+        async def answer(self, *args):
+            raise GatewayError("closed")
+    mapper = RunEventMapper(session_id="s1")
+    mapper._cancel_requested = cancelled
+    mapper._permissions["q1"] = ["本次允许", "拒绝"]
+    mapper._pending_requests["q1"] = {"id": "q1", "state": "pending"}
+    runner.pending_approvals["q1"] = (Broken(), mapper)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
+        response = await client.post("/agent/approvals/q1", json={"decision": "allow_once"})
+    assert response.status_code == expected

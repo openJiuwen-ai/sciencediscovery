@@ -22,9 +22,32 @@ not.
 from __future__ import annotations
 
 import httpx
+import logging
+import time
+import traceback
+import uuid
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
+
+logger = logging.getLogger(__name__)
+
+
+def _log_failure(error: BaseException, *, request_id: str, request: Request, started: float, phase: str) -> None:
+    # Exception messages can contain credentials, full URLs or response bodies.
+    # Keep types and stack locations, never messages, locals or query strings.
+    chain = []
+    seen = set()
+    cause = error
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        chain.append({"type": type(cause).__name__, "stack": [
+            {"file": frame.filename, "line": frame.lineno, "function": frame.name}
+            for frame in traceback.extract_tb(cause.__traceback__)
+        ]})
+        cause = cause.__cause__ or cause.__context__
+    logger.error("legacy_proxy_failure request_id=%s method=%s path=%s phase=%s elapsed_ms=%d causes=%s",
+                 request_id, request.method, request.url.path, phase, (time.monotonic() - started) * 1000, chain)
 
 # RFC 9110 hop-by-hop fields are meaningful for one connection only.
 _HOP_BY_HOP = frozenset({
@@ -55,6 +78,8 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
     (MCP OAuth callbacks are checked against it), and the client's origin is the adapter's.
     """
     has_body = request.method not in ("GET", "HEAD")
+    request_id = uuid.uuid4().hex
+    started = time.monotonic()
     upstream_request = client.build_request(
         request.method,
         httpx.URL(path=request.url.path, query=request.url.query.encode()) if request.url.query
@@ -65,12 +90,23 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
     try:
         upstream = await client.send(upstream_request, stream=True)
     except httpx.HTTPError as error:
+        _log_failure(error, request_id=request_id, request=request, started=started, phase="headers")
         return JSONResponse(
-            {"error": "legacy_unavailable", "message": type(error).__name__},
+            {"error": "legacy_unavailable", "message": type(error).__name__, "requestId": request_id},
             status_code=502,
         )
+    async def stream():
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        except httpx.HTTPError as error:
+            _log_failure(error, request_id=request_id, request=request, started=started, phase="body")
+            raise
+        finally:
+            await upstream.aclose()
+
     response = StreamingResponse(
-        upstream.aiter_raw(),
+        stream(),
         status_code=upstream.status_code,
         background=BackgroundTask(upstream.aclose),
     )
@@ -80,4 +116,5 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
         (name.lower().encode("latin-1"), value.encode("latin-1"))
         for name, value in forwardable(upstream.headers)
     ]
+    response.headers["x-sciencediscovery-request-id"] = request_id
     return response

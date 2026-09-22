@@ -6,7 +6,7 @@
 import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSession,
-  scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
+  readRunActivity, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
 /**
  * E2E-META
@@ -30,13 +30,14 @@ test("Swarm child tool failure recovers and parent delivers report", { tag: "@mo
   test.setTimeout(240_000);
   journey.scenario({ goal: "Recover from a child tool error without losing the parent research run",
     preconditions: ["Swarm-backed isolated stack", "platform task delegation", "local sandbox"] });
-  const stub = await scriptedModel([
+  const stub = await scriptedModel([[
     { tool: "task", arguments: { description: "Collect fixture source notes", subagent_type: "general-purpose",
       prompt: "Prepare fixture-sources.md and return the declared source notes.", max_turns: 8, timeout_seconds: 120 } },
+    { tool: "read_artifact", arguments: { name: "fixture-sources.md", version: 1 } },
     { tool: "run_shell", arguments: { command: "printf '# Research report\n\nSynthesis based on fixture source notes.\n\n## Limitations\nSynthetic data only.\n' > fixture-report.md" } },
     { tool: "declare_artifact", arguments: { path: "fixture-report.md" } },
     { text: "Research complete. fixture-report.md synthesizes the child notes in fixture-sources.md; these are synthetic fixtures, not scientific evidence." },
-  ], [
+  ], [{ text: "Follow-up complete: prior fixture report remains available." }]], [
     { tool: "run_shell", arguments: { command: "echo FIXTURE-RECOVERABLE-FAILURE >&2; exit 1" } },
     { tool: "run_shell", arguments: { command: "printf '# Fixture source notes\n\nRecovery succeeded. Synthetic bird-navigation source.\n' > fixture-sources.md" } },
     { tool: "declare_artifact", arguments: { path: "fixture-sources.md" } },
@@ -58,10 +59,31 @@ test("Swarm child tool failure recovers and parent delivers report", { tag: "@mo
     await expect(page.locator(".message.assistant").last()).toContainText("Research complete");
     expect(stub.calls.filter((call) => call.route === "subagent" && call.tool === "run_shell")).toHaveLength(2);
     expect(stub.calls.some((call) => call.route === "main" && call.tool === "declare_artifact")).toBe(true);
+    expect(stub.calls.some((call) => call.route === "main" && call.tool === "read_artifact")).toBe(true);
+    await readRunActivity(page, { expandTools: true });
+    // Tool output is lazy-rendered inside its own disclosure, independently
+    // of the outer tool card. Open it before checking the visible content.
+    const resultSections = page.getByRole("region", { name: "Agent activity" })
+      .locator("details.timeline-disclosure.tool details");
+    for (let index = 0; index < await resultSections.count(); index += 1) {
+      const section = resultSections.nth(index);
+      if (await section.getAttribute("open") === null) await section.locator(":scope > summary").click();
+    }
+    const activity = await readRunActivity(page);
+    expect(activity.tools.some((tool) => /read_artifact/.test(tool.summary)
+      && /Recovery succeeded/.test(tool.details))).toBe(true);
+    expect(activity.tools.some((tool) => /task/.test(tool.summary)
+      && /artifact_id/.test(tool.details) && /fixture-sources.md/.test(tool.details))).toBe(true);
     for (const call of stub.calls.filter((call) => call.tool)) expect(call.offeredTools).toContain(call.tool);
     await card.locator(":scope > summary").click();
     await card.getByRole("button", { name: /^Open SubAgent: / }).click();
     await expect(page.locator("section.subagent-conversation")).toContainText("Recovered from the failed command");
+    // A new run uses a new route token on the same Swarm session. It must
+    // replace the expired connection without resetting conversation history.
+    await openProjectSession(page, fixture);
+    const followup = await sendUserMessage(page, fixture.session.id, "Acknowledge the prior fixture report without invoking tools.");
+    expect((await waitForRunTerminal(page, fixture.session.id, followup.id, 60_000)).status).toBe("completed");
+    await expect(page.locator(".message.assistant").last()).toContainText("Follow-up complete");
   } finally {
     try { if (fixture) await cleanupJourney(page, fixture); } finally { await stub.stop(); }
   }

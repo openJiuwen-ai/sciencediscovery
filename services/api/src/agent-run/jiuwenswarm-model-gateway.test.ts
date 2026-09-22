@@ -103,6 +103,74 @@ test("a truncated turn finishes with length, so the reader is told why the answe
   }
 });
 
+test("tool argument fragments reach Swarm before the model finishes, with parallel identity and no final replay", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const g = await gateway(async (_e, _p, _h, _t, _policy, _signal, callbacks) => {
+    callbacks!.onToolCallDelta!({ index: 0, id: "c1", name: "write", arguments: '{"text":' });
+    callbacks!.onToolCallDelta!({ index: 1, id: "c2", name: "search", arguments: '{"q":"birds"}' });
+    await gate;
+    callbacks!.onToolCallDelta!({ index: 0, arguments: '"report"}' });
+    return answer({ toolCalls: [{ id: "c1", name: "write", args: { text: "report" } }, { id: "c2", name: "search", args: { q: "birds" } }] });
+  });
+  try {
+    const response = await fetch(`${g.url}/chat/completions`, { method: "POST", signal: AbortSignal.timeout(2_000),
+      headers: { authorization: `Bearer ${g.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ stream: true, messages: [] }) });
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    let wire = new TextDecoder().decode(first.value);
+    assert.match(wire, /tool_calls/); // Model is still blocked on gate here.
+    finish();
+    for (;;) { const next = await reader.read(); if (next.done) break; wire += new TextDecoder().decode(next.value); }
+    const chunks = wire.split("\n\n").filter((s) => s.startsWith("data: {")).map((s) => JSON.parse(s.slice(6)));
+    const calls = chunks.flatMap((c) => c.choices[0].delta.tool_calls ?? []);
+    assert.equal(calls.filter((c) => c.index === 0).map((c) => c.function.arguments).join(""), '{"text":"report"}');
+    assert.equal(calls.filter((c) => c.index === 1).map((c) => c.function.arguments).join(""), '{"q":"birds"}');
+    assert.deepEqual(calls.filter((c) => c.id).map((c) => c.id), ["c1", "c2"]);
+    assert.equal(chunks.at(-1).choices[0].finish_reason, "tool_calls");
+  } finally { finish(); await g.close(); }
+});
+
+test("upstream transport progress does not manufacture downstream model content", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const g = await gateway(async (_e, _p, _h, _t, _policy, _signal, callbacks) => {
+    callbacks!.onTextDelta!("start");
+    callbacks!.onProgress!();
+    await gate;
+    return answer();
+  });
+  try {
+    const reader = (await post(g, { stream: true, messages: [] })).body!.getReader();
+    await reader.read();
+    const next = reader.read();
+    assert.equal(await Promise.race([next.then(() => "data"), new Promise((r) => setTimeout(() => r("silent"), 40))]), "silent");
+    finish();
+    await next;
+  } finally { finish(); await g.close(); }
+});
+
+test("cancelling during tool argument streaming aborts the upstream request", async () => {
+  let observedAbort!: () => void;
+  const aborted = new Promise<void>((resolve) => { observedAbort = resolve; });
+  const g = await gateway(async (_e, _p, _h, _t, _policy, signal, callbacks) => {
+    callbacks!.onToolCallDelta!({ index: 0, id: "c1", name: "write", arguments: '{"text":' });
+    await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+      observedAbort(); reject(new Error("upstream cancelled"));
+    }, { once: true }));
+    return answer();
+  });
+  try {
+    const reader = (await post(g, { stream: true, messages: [] })).body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    await Promise.race([aborted, new Promise((_r, reject) => {
+      const timer = setTimeout(() => reject(new Error("upstream was not cancelled")), 2_000); timer.unref();
+    })]);
+  } finally { await g.close(); }
+});
+
 test("the provider's HTTP status reaches JiuwenSwarm as that status, so a 429 is a 429", async () => {
   const { streamer } = fakeStreamer(new ModelRequestError("Model request failed (429): slow down", 429));
   const g = await gateway(streamer);
