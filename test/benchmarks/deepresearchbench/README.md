@@ -43,8 +43,9 @@ in `../../../jiuwen_swarm/README.md` (from the repository root, see
 E2E_RESEARCH=1 E2E_SWARM_TASK=1 npm --prefix .e2e run test:real -- deepresearchbench-swarm.spec.ts
 ```
 
-Both this case and `swarm-research-mocked.spec.ts` are excluded from default
-test collection unless `E2E_RESEARCH=1`. Do not enable this switch in PR gates;
+Only this real case is excluded from default test collection unless
+`E2E_RESEARCH=1`. The `swarm-research-mocked.spec.ts` journey remains in the
+default mocked PR gate. Do not enable the real research switch in PR gates;
 use an explicit local/manual benchmark run. Real evaluation additionally needs
 the real project and configured generator/Judge credentials.
 

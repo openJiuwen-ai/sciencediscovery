@@ -222,7 +222,7 @@ with `--jiuwenswarm` and the delegation settings above first.
 
 ```bash
 node test/sync-e2e.mjs --write
-E2E_RESEARCH=1 npm --prefix .e2e run test:mocked -- swarm-research-mocked.spec.ts
+npm --prefix .e2e run test:mocked -- swarm-research-mocked.spec.ts
 ```
 
 This Mock E2E uses a local scripted model, real Swarm loops, the platform MCP
@@ -231,9 +231,10 @@ child command deliberately fails; the next call recovers, declares source
 notes, and the parent continues to declare the final report. Scientific source
 content is synthetic: this does not test public literature services or measure
 model recovery intelligence. The CI Swarm stack enables this test automatically;
-For an explicit local run, `E2E_RESEARCH=1 CI_E2E_SPEC=swarm-research-mocked.spec.ts pnpm ci:e2e`
-selects only this spec. Both research journeys are excluded from default test
-collection; do not set `E2E_RESEARCH=1` in PR gates.
+for an explicit local run, `CI_E2E_SPEC=swarm-research-mocked.spec.ts pnpm ci:e2e`
+selects only this spec. The mocked journey remains in the default PR gate;
+only the real research journey requires `E2E_RESEARCH=1`. Do not set that
+real-research switch in PR gates.
 
 The live test requires `E2E_REAL=1` and either a preconfigured live model ID in
 `E2E_LLM_MODEL_ID`, or all three of `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL` and
