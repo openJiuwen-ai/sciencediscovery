@@ -43,6 +43,29 @@ PYTHONPATH=.sciencediscovery-data/jiuwenswarm/src \
   jiuwen_swarm/tests/test_dynamic_bindings.py
 ```
 
+The platform `sci` HTTP MCP connection uses a dedicated lifetime owner task.
+It opens and closes the MCP SDK contexts in that same task and wakes pending
+calls if the transport dies. This avoids a prewarm task owning contexts later
+closed by another task. Other external MCP clients are unchanged.
+
+The platform bridge has no independent HTTP read timeout: the configured
+per-tool deadline remains authoritative. The SDK's default 300-second read
+timeout otherwise disconnects long `task` calls before children return. A
+single tool timeout cancels only that request, not its siblings or the shared
+connection. A transport failure fails pending calls without replaying actions;
+inspect the child/tool state before retrying.
+
+Run the loopback transport regressions (no LLM or credentials required):
+
+```bash
+PYTHONPATH=.sciencediscovery-data/jiuwenswarm/src \
+  .sciencediscovery-data/jiuwenswarm/src/.venv/bin/python \
+  jiuwen_swarm/tests/test_sci_http_client.py
+```
+
+They cover the effective HTTP read deadline, concurrent result correlation,
+isolated tool timeouts, transport failure propagation and explicit disconnect.
+
 For the bounded literature integration check, use Swarm's native web tools
 (`SCIENCE_AGENT_JIUWENSWARM_TOOLS=jiuwenswarm`) and ScienceDiscovery's specialist
 delegation (`SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task`). This is distinct from
