@@ -111,6 +111,90 @@ jobs:
           path: .ci-results/ut
           if-no-files-found: warn
 
+  coverage:
+    name: Coverage
+    # Nightly reuses this workflow and needs the complete baseline. Release
+    # also reuses it, but coverage does not belong in a tagged release build.
+    if: github.workflow != 'Release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select coverage scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.workflow }}" == "Nightly" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            echo "groups=" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "artifact=node-coverage-summary-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/select-coverage-groups.mjs "$BASE_SHA" HEAD >> "$GITHUB_OUTPUT"
+            if [[ "$EVENT_NAME" == "pull_request" ]]; then
+              echo "artifact=node-coverage-summary-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            else
+              echo "artifact=node-coverage-summary-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.scope.outputs.skip != 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.skip != 'true'
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v6
+        if: steps.scope.outputs.skip != 'true'
+        with:
+          enable-cache: true
+
+      - name: Provision the bubblewrap sandbox
+        if: steps.scope.outputs.skip != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --ro-bind / / --dev /dev true
+
+      - name: Install dependencies
+        if: steps.scope.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate coverage
+        if: steps.scope.outputs.skip != 'true'
+        env:
+          COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_MODE: ${{ steps.scope.outputs.mode }}
+          COVERAGE_SOURCE_SHA: ${{ github.sha }}
+          SELECTED_GROUPS: ${{ steps.scope.outputs.groups }}
+        run: |
+          if [[ -n "$SELECTED_GROUPS" ]]; then
+            pnpm coverage:node -- --groups "$SELECTED_GROUPS"
+          else
+            pnpm coverage:node
+          fi
+
+      - name: Upload coverage summary
+        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.scope.outputs.artifact }}
+          path: |
+            coverage/summary.json
+            coverage/groups/**/summary.json
+          if-no-files-found: warn
+
   st:
     name: ST
     runs-on: ubuntu-latest

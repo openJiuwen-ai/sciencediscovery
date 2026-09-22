@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const root = process.cwd();
 const globalCoverageFiles = new Set([
-  ".github/workflows/coverage.yml",
+  ".github/workflows/ci.yml",
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",

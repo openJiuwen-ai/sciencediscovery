@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { isTestSource, markdownSummary, parseLcov, summarizeCoverage, writeCoverageSummary } from "./coverage-summary.mjs";
+import { isTestSource, parseLcov, summarizeCoverage, writeCoverageSummary } from "./coverage-summary.mjs";
 
 const lcov = `TN:
 SF:packages/example/dist/index.js
@@ -57,7 +57,6 @@ test("excludes test files and aggregates LCOV counters", () => {
   assert.deepEqual(summary.totals.lines, { covered: 6, percentage: 75, total: 8 });
   assert.deepEqual(summary.totals.branches, { covered: 3, percentage: 75, total: 4 });
   assert.deepEqual(summary.totals.functions, { covered: 1, percentage: 50, total: 2 });
-  assert.match(markdownSummary(summary), /Lines \| 6\/8 \| 75\.00%/);
 });
 
 test("accepts an LCOV file whose final record has no trailing newline", () => {
@@ -76,7 +75,6 @@ test("writes schema-versioned group metadata beside totals", async () => {
       input,
       jsonOutput,
       lcovOutput: join(directory, "lcov.info"),
-      markdownOutput: join(directory, "summary.md"),
       metadata: { group: "packages/example", mode: "incremental" },
     });
     const doc = JSON.parse(await readFile(jsonOutput, "utf8"));

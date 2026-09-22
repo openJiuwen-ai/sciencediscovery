@@ -330,29 +330,10 @@ e2e/
   playwright-report/
   test-results/                  # results.json, failure screenshots/traces
   journey-reports/               # report.md/html and step screenshots
-node-coverage/
-  lcov.info                      # Node V8 coverage, excluding test/temporary source files
-  summary.json                   # line, branch, and function totals
-  summary.md                     # human-readable coverage summary
 selection/
   run.log                         # selected case commands and combined output
   summary.json                    # selection, tags, result paths and outcomes
 ```
-
-The versioned design contract for this report is
-[`docs/designs/test-coverage.v3.md`](../docs/designs/test-coverage.v3.md).
-
-The dedicated GitHub `Node coverage` workflow runs affected Node-test groups
-on pull requests and pushes to `main`, then runs the complete Node scope daily
-at 03:30 Asia/Shanghai and on manual dispatch. Summary artifacts are retained
-for 90 days; larger LCOV detail artifacts are retained for 30 days. The report
-covers built Node workspace and CI-script tests only; browser/TSX, Python, and
-Playwright suites use different runners and are outside its totals. PR
-percentage changes are informational, while test failures still fail the
-check. The ScienceDiscovery GitHub status board uses the daily result as its
-authoritative baseline and labels any group-replaced main result as an
-incremental estimate. Coverage artifacts remain separate from UT/ST/E2E
-result artifacts.
 
 `run-layer.mjs` stops at the first failing UT/ST command and records every
 attempted command, exit code, and duration. It gives each run a unique

@@ -185,7 +185,6 @@ async function writeGroupReport(result) {
     input,
     jsonOutput: join(directory, "summary.json"),
     lcovOutput: join(directory, "lcov.info"),
-    markdownOutput: join(directory, "summary.md"),
     metadata: {
       base_sha: baseSha,
       generated_at: generatedAt,
@@ -228,7 +227,6 @@ try {
     input: rawLcov,
     jsonOutput: join(coverageDirectory, "summary.json"),
     lcovOutput: join(coverageDirectory, "lcov.info"),
-    markdownOutput: join(coverageDirectory, "summary.md"),
     metadata: {
       authoritative: coverageMode === "full",
       base_sha: baseSha,

@@ -62,34 +62,11 @@ export function summarizeCoverage(records) {
   return { files: measured.length, records: measured, totals };
 }
 
-export function markdownSummary(summary) {
-  const row = (name) => {
-    const metric = summary.totals[name];
-    const percentageText = metric.percentage === null ? "n/a" : `${metric.percentage.toFixed(2)}%`;
-    return `| ${name[0].toUpperCase()}${name.slice(1)} | ${metric.covered}/${metric.total} | ${percentageText} |`;
-  };
-  return [
-    "# Node test coverage",
-    "",
-    "Measured by Node's V8 test coverage across built workspace Node tests and repository CI-script tests. Browser/TSX, Python, and Playwright suites are outside this report.",
-    "",
-    `Source files measured: ${summary.files}`,
-    "",
-    "| Metric | Covered/total | Percentage |",
-    "| --- | ---: | ---: |",
-    row("lines"),
-    row("branches"),
-    row("functions"),
-    "",
-  ].join("\n");
-}
-
-export async function writeCoverageSummary({ input, lcovOutput, markdownOutput, jsonOutput, metadata = {} }) {
+export async function writeCoverageSummary({ input, lcovOutput, jsonOutput, metadata = {} }) {
   const records = parseLcov(await readFile(input, "utf8"));
   const summary = summarizeCoverage(records);
   await Promise.all([
     writeFile(lcovOutput, summary.records.map((record) => record.text).join("")),
-    writeFile(markdownOutput, markdownSummary(summary)),
     writeFile(jsonOutput, `${JSON.stringify({
       schema_version: 1,
       ...metadata,
@@ -102,19 +79,18 @@ export async function writeCoverageSummary({ input, lcovOutput, markdownOutput, 
 }
 
 async function main() {
-  const [input = "coverage/.node.lcov", lcovOutput = "coverage/lcov.info", jsonOutput = "coverage/summary.json", markdownOutput = "coverage/summary.md"] = process.argv.slice(2);
+  const [input = "coverage/.node.lcov", lcovOutput = "coverage/lcov.info", jsonOutput = "coverage/summary.json"] = process.argv.slice(2);
   const summary = await writeCoverageSummary({
     input: resolve(input),
     jsonOutput: resolve(jsonOutput),
     lcovOutput: resolve(lcovOutput),
-    markdownOutput: resolve(markdownOutput),
   });
   for (const metric of ["lines", "branches", "functions"]) {
     const value = summary.totals[metric];
     const percentageText = value.percentage === null ? "n/a" : `${value.percentage.toFixed(2)}%`;
     console.log(`${metric}: ${value.covered}/${value.total} (${percentageText})`);
   }
-  console.log(`Coverage report: ${resolve(markdownOutput)}`);
+  console.log(`Coverage summary: ${resolve(jsonOutput)}`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
