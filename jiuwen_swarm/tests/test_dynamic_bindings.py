@@ -6,6 +6,7 @@
 """Run with the pinned Swarm virtualenv, after applying the compatibility patches."""
 import asyncio
 import ast
+import json
 import logging
 import unittest
 from copy import deepcopy
@@ -57,6 +58,20 @@ class ModelRouteTests(unittest.TestCase):
     def test_missing_run_alias_fails_instead_of_routing_to_another_run(self):
         with self.assertRaisesRegex(ValueError, "refusing default-route fallback"):
             self.resolve([])
+
+
+class StreamIdentityTests(unittest.TestCase):
+    def test_tui_preserves_stream_id_separately_from_approval_id(self):
+        source = Path(call_timeout_patch.__file__).parents[3] / "gateway/channel_manager/tui/tui_channel.py"
+        tree = ast.parse(source.read_text())
+        method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_serialize_frame")
+        namespace = {"Any": object, "RoutingTarget": object, "json": json}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
+        message = SimpleNamespace(type="event", id="answer-stream-2", session_id="session",
+            event_type=SimpleNamespace(value="chat.ask_user_question"), payload={"request_id": "permission-3"})
+        result = json.loads(namespace["_serialize_frame"](None, message))
+        self.assertEqual(result["stream_request_id"], "answer-stream-2")
+        self.assertEqual(result["payload"]["request_id"], "permission-3")
 
 
 if __name__ == "__main__":

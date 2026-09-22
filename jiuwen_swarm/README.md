@@ -17,6 +17,17 @@ For `workswarm0.2.6`:
   currently published model configuration. ScienceDiscovery runs reject an
   unavailable explicit model instead of silently switching to the shared
   default route, which does not carry the run's tool contract.
+- TUI event envelopes preserve `stream_request_id`, separately from the
+  approval question ID. When an approval starts a replacement request, the
+  adapter ignores late terminal events from the superseded stream
+  before they can mark the logical run finished or release its model/MCP
+  bindings. Late tool results and usage remain observable. Gateways without
+  this metadata retain the older pause guard but
+  cannot reliably distinguish interleaved stream completions; use the pinned
+  patch when running this integration.
+- `chat.error`, `execution.error`, `runtime.error` and `error` are terminal
+  failures: the adapter reports them without waiting for a later completion
+  marker or the platform idle timeout. Transport heartbeats are not progress.
 
 Set `SCIENCE_AGENT_TRACE_TOOLS=1` on the adapter to log `[tool-contract]`
 records containing expected, incoming Swarm, and outgoing LLM tool names.
@@ -58,6 +69,7 @@ Focused unit/integration checks (from the repository root):
 ```bash
 uv run --project services/adapter --extra test pytest \
   services/adapter/tests/test_agent_runs.py \
+  services/adapter/tests/test_gateway.py services/adapter/tests/test_events.py \
   services/adapter/tests/test_llm_proxy.py \
   services/adapter/tests/test_mcp_server.py
 pnpm exec tsx --test packages/tools/src/registry.test.ts \

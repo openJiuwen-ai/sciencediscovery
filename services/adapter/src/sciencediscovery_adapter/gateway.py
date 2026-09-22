@@ -28,6 +28,12 @@ class GatewayError(RuntimeError):
     """The gateway could not be reached or broke the protocol."""
 
 
+_FAILURE_EVENTS = frozenset({"chat.error", "execution.error", "runtime.error", "error"})
+_RETIRED_EVENTS = frozenset({
+    "chat.processing_status", "chat.final",
+}) | _FAILURE_EVENTS
+
+
 def _ends_run(frame: dict[str, Any]) -> bool:
     """True for the last frame the gateway sends for a run.
 
@@ -49,7 +55,7 @@ def _ends_run(frame: dict[str, Any]) -> bool:
     event = frame.get("event")
     if event == "chat.processing_status":
         return bool(payload.get("is_complete")) and not payload.get("is_processing")
-    return event == "chat.interrupt_result"
+    return event == "chat.interrupt_result" or event in _FAILURE_EVENTS
 
 
 def _asked_question_id(frame: dict[str, Any]) -> str | None:
@@ -108,6 +114,11 @@ class ChatRun:
         # own premature completion already in flight over the same connection (see `_ends_run`). While
         # true, an `is_complete` `chat.processing_status` is that premature one, not the run ending.
         self._question_pending = False
+        # Approval answers start a new transport request for the same logical
+        # run. Old terminal frames can arrive AFTER new model/tool progress.
+        # Correlate them before yielding to the mapper or releasing resources.
+        self._active_request_id: str | None = None
+        self._retired_request_ids: set[str] = set()
 
     async def _connect(self) -> None:
         try:
@@ -152,8 +163,13 @@ class ChatRun:
             await self._connection.close()
 
     async def _send(self, prefix: str, method: str, params: dict[str, Any]) -> None:
+        request_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
+        if method == "chat.send":
+            if self._active_request_id:
+                self._retired_request_ids.add(self._active_request_id)
+            self._active_request_id = request_id
         await self._connection.send(json.dumps({
-            "type": "req", "id": f"{prefix}-{uuid.uuid4().hex[:12]}", "method": method,
+            "type": "req", "id": request_id, "method": method,
             "is_stream": True, "params": params,
         }, ensure_ascii=False))
 
@@ -193,14 +209,20 @@ class ChatRun:
                 if _resume_answer(frame):
                     continue
             self._misses = 0
+            if (frame.get("stream_request_id") in self._retired_request_ids
+                    and frame.get("event") in _RETIRED_EVENTS):
+                continue
             if _asked_question_id(frame):
                 self._question_pending = True
             elif _advances_run(frame):
                 self._question_pending = False
+            if (frame.get("event") == "chat.processing_status" and _ends_run(frame)
+                    and self._question_pending):
+                # Even for older gateways without correlation metadata, do not
+                # leak a pause's terminal marker to RunEventMapper.finished.
+                continue
             yield frame
             if _ends_run(frame):
-                if self._question_pending:
-                    continue
                 return
 
 

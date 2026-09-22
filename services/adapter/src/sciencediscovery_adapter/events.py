@@ -361,7 +361,13 @@ class RunEventMapper:
         return {"selected_options": [label], "custom_input": label}, {"type": "permission.resolved", "request": resolved}
 
     def _on_chat_error(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        return self._fail(str(payload.get("error") or "unknown error"))
+        return self._fail(str(payload.get("error") or payload.get("message") or "unknown error"))
+
+    # Harness execution failures are not always wrapped as chat.error. They
+    # are terminal failures, not unknown events to wait out until idle timeout.
+    _on_execution_error = _on_chat_error
+    _on_runtime_error = _on_chat_error
+    _on_error = _on_chat_error
 
     def _on_chat_interrupt_result(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         self.finished = True
