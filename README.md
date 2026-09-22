@@ -13,7 +13,7 @@ Literature review, hypothesis, code, experiments and tuning — in one environme
 
 [Download](#installation) · [Quick start](docs/en/getting-started/quick-start.md) · [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) · [中文](README_zh.md)
 
-<img src="docs/images/task.png" width="920" alt="The ScienceDiscovery workspace: project and session navigation, the composer, and the artifact, reviewer and provenance panels" />
+<img src="docs/images/task.gif" width="920" alt="The ScienceDiscovery workspace: project and session navigation, the composer, and the artifact, reviewer and provenance panels" />
 
 </div>
 
