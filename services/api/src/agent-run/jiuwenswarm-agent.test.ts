@@ -453,6 +453,44 @@ test("a tool is not run until the adapter has reported the model's call, so the 
   }
 });
 
+test("closing one bridge request cancels its running tool instead of leaving an orphan", async () => {
+  let toolStarted!: () => void;
+  const started = new Promise<void>((resolve) => { toolStarted = resolve; });
+  let toolAborted = false;
+  const slow = {
+    label: "Slow", name: "slow", description: "Wait until cancelled.", parameters: Type.Object({}),
+    execute: async (_id: string, _params: unknown, signal: AbortSignal) => {
+      toolStarted();
+      await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+        toolAborted = true;
+        reject(signal.reason);
+      }, { once: true }));
+      return { content: [{ type: "text" as const, text: "unreachable" }] };
+    },
+  };
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    response.write(line({ event: { type: "tool.started", trace: { id: "call-slow", name: "slow", args: {}, status: "running" } } }));
+    const controller = new AbortController();
+    const call = fetch(body.bridge.url, {
+      method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` }, body: JSON.stringify({ name: "slow", arguments: {} }),
+      signal: controller.signal,
+    }).catch(() => undefined);
+    await started;
+    controller.abort();
+    await call;
+    for (let i = 0; i < 50 && !toolAborted; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    response.end(line({ done: { finalText: "continued" } }));
+  });
+  try {
+    const result = await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ extraTools: [slow as never] })).execute("go");
+    assert.equal(toolAborted, true);
+    assert.equal(result.finalMessages.at(-1)?.content, "continued");
+  } finally {
+    await adapter.close();
+  }
+});
+
 test("two calls to the same tool with different arguments are matched to their own model call ids", async () => {
   const started: Array<{ id: string; word: string }> = [];
   const adapter = await fakeAdapter(async ({ body }, response) => {

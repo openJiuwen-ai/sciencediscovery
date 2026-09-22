@@ -142,6 +142,7 @@ def _original(function: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
 _DEBUG = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") in ("1", "2")
 # 2: every message of every model request, as far as the first 1500 characters (what JiuwenSwarm adds around the prompt).
 _DEBUG_FULL = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") == "2"
+_TRACE_TOOLS = os.environ.get("SCIENCE_AGENT_TRACE_TOOLS") == "1"
 
 
 def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
@@ -165,6 +166,13 @@ def rewrite_request(body: dict[str, Any], route: LlmRoute) -> dict[str, Any]:
         if not out["tools"]:
             del out["tools"]
             out.pop("tool_choice", None)
+    if _TRACE_TOOLS:
+        incoming = [t.get("function", {}).get("name", "") for t in body.get("tools") or []]
+        outgoing = [t.get("function", {}).get("name", "") for t in out.get("tools") or []]
+        expected = route.tool_names - route.shadowed
+        print("[tool-contract] " + json.dumps({"run": route.run_tag, "expected": sorted(expected),
+            "swarm": incoming, "llm": outgoing, "missing": sorted(expected - set(outgoing))}),
+            file=sys.stderr, flush=True)
     choice = body.get("tool_choice")
     if isinstance(choice, dict) and isinstance(choice.get("function"), dict):
         out["tool_choice"] = {**choice, "function": {**choice["function"], "name": _unprefixed(choice["function"]["name"], route)}}

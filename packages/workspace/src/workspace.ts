@@ -1887,18 +1887,18 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
       inputPaths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), { maxItems: 50 })),
       max_turns: Type.Optional(Type.Integer({
         default: DEFAULT_SUBAGENT_MAX_TURNS,
-        description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
+        description: "Optional model-turn budget for this subagent. Set a smaller value for focused work or increase it for unusually deep delegated work.",
         maximum: MAX_SUBAGENT_MAX_TURNS,
-        minimum: DEFAULT_SUBAGENT_MAX_TURNS,
+        minimum: 1,
       })),
       prompt: Type.String({ maxLength: 20_000, minLength: 1 }),
       specialistId: Type.Optional(specialistIdSchema),
       subagent_type: Type.Optional(Type.String({ maxLength: 80, minLength: 1 })),
       timeout_seconds: Type.Optional(Type.Integer({
         default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-        description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
+        description: "Optional hard wall-clock runtime budget in seconds for this subagent, including model and tool waits.",
         maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
-        minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+        minimum: 1,
       })),
       tools: Type.Optional(Type.Union([
         Type.Null(),

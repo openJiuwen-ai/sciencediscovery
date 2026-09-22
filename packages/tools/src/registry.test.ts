@@ -335,6 +335,17 @@ test("tool details sanitizer does not treat shared references as circular", () =
   assert.deepEqual(sanitized, { left: ["same"], right: ["same"] });
 });
 
+test("tool details sanitizer preserves CAS references atomically under detail pressure", () => {
+  for (const pool of ["data", "agent-state"]) {
+    const ref = { pool, digest: `sha256:${"a".repeat(64)}`, size: 123, mediaType: "application/json" };
+    assert.deepEqual((sanitizeToolDetails({ ref }) as { ref: unknown }).ref, ref);
+    const saturated = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`field${index}`, "x".repeat(4_000)]));
+    const result = sanitizeToolDetails({ ...saturated, ref }) as { ref: unknown };
+    assert.equal(result.ref, "[reference omitted: detail budget]");
+    assert.doesNotMatch(JSON.stringify(result), /"digest":"\[truncated\]"/);
+  }
+});
+
 test("every result crosses the output bound before it becomes a history message", async () => {
   const store = new ToolOutputStore();
   const observed: string[] = [];

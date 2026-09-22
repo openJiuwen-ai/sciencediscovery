@@ -127,7 +127,7 @@ export const JIUWENSWARM_WEB_TOOLS: Record<string, string> = { web_search: "free
 export const JIUWENSWARM_HOST_TOOLS = ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf"] as const;
 
 /** What the model is told instead: JiuwenSwarm's own prompt still names those tools. */
-export const HOST_TOOLS_SECTION = "Commands, scripts and file writes run in the sandbox through run_shell; read workspace files with read_file and list_files. JiuwenSwarm's bash, write_file, edit_file, glob, grep and read_pdf are not available here.";
+export const HOST_TOOLS_SECTION = "Commands, scripts and file writes run in the sandbox through run_shell; read workspace files with read_file and list_files. Use workspace-relative paths in run_shell (for example, report.md): the host working directory shown by JiuwenSwarm is not accessible at the same absolute path inside the sandbox. JiuwenSwarm's bash, write_file, edit_file, glob, grep and read_pdf are not available here.";
 
 /**
  * ScienceDiscovery's tools JiuwenSwarm's permission engine asks the user about: those that needed approval before
@@ -313,6 +313,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       if (deadlines.expired) throw deadlines.error();
       if (this.controller.signal.aborted) throw new Error("Agent run cancelled");
       console.warn(`[jiuwenswarm-agent] run of ${this.options.sessionId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error) {
+        const cause = error.cause as { name?: string; code?: string; message?: string } | undefined;
+        console.warn(`[jiuwenswarm-agent] transport diagnostic: ${JSON.stringify({ name: error.name, stack: error.stack, cause: cause && { name: cause.name, code: cause.code, message: cause.message } })}`);
+      }
       throw error;
     } finally {
       deadlines.stop();
@@ -868,11 +872,36 @@ async function startBridge(
     if (!claimed) console.warn(`[jiuwenswarm-bridge] no model call was reported for ${tool.name}; running it under a generated id`);
     const toolCallId = claimed?.id ?? randomUUID();
     const args = claimed?.args ?? body.arguments ?? {};
+    // A timed-out MCP client closes this HTTP response. Stop the corresponding
+    // tool (notably a child agent) instead of leaving it running after the
+    // parent has already received a transport failure.
+    const disconnected = new AbortController();
+    response.once("close", () => {
+      if (!response.writableEnded) disconnected.abort(new Error("MCP caller disconnected"));
+    });
+    const callSignal = AbortSignal.any([signal, disconnected.signal]);
     // registry.execute never throws for a failing tool: it answers with the standard error shape.
     // The scheduler holds the call back until the calls it may not overlap with have finished, so
     // the start is reported when the tool really starts, as the native loop does.
-    const dispatched = await scheduler.run({ id: toolCallId, name: tool.name, args }, signal, () =>
-      emit({ type: "tool_execution_start", toolCallId, toolName: tool.name, args }));
+    let dispatched: Dispatch;
+    try {
+      dispatched = await scheduler.run({ id: toolCallId, name: tool.name, args }, callSignal, () =>
+        emit({ type: "tool_execution_start", toolCallId, toolName: tool.name, args }));
+    } catch (error) {
+      // Tool handlers are normalized by the registry, but result persistence
+      // can still fail after the action has executed. Never let an async HTTP
+      // handler rejection terminate the API, or invite a blind replay.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[jiuwenswarm-bridge] dispatch of ${tool.name} failed: ${error instanceof Error ? error.stack : message}`);
+      const details = { ok: false, error: { code: "TOOL_DISPATCH_FAILED", message,
+        retryable: false, outcome: "unknown", instruction: "The action may have executed. Inspect its state before attempting it again." } };
+      const text = JSON.stringify(details);
+      emit({ type: "tool_execution_end", toolCallId, toolName: tool.name, isError: true,
+        result: { content: [{ type: "text", text }], details } });
+      transcript.toolResult(toolCallId, tool.name, text);
+      reply(200, { text, isError: true });
+      return;
+    }
     const isError = dispatched.isError === true;
     // Tool failures reach the model as text; without this line they are invisible to the operator.
     if (isError) console.warn(`[jiuwenswarm-bridge] tool ${tool.name} failed: ${dispatched.content.slice(0, 300)}`);

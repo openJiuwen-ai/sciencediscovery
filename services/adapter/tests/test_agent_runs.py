@@ -12,19 +12,58 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
 from pathlib import Path
 
 import httpx
 import pytest
 
-from sciencediscovery_adapter.agent_runs import AgentRunner
+from sciencediscovery_adapter.agent_runs import AgentRunner, stream_with_keepalive
 from sciencediscovery_adapter.app import create_app
 from sciencediscovery_adapter.config import Settings
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SETTINGS = Settings(host="127.0.0.1", port=4310, legacy_url="http://legacy.test",
                     gateway_url="ws://gw/tui", mgmt_url="ws://gw/ws", public_url="http://adapter.test")
+
+
+async def test_keepalive_does_not_cancel_pending_tool_or_fabricate_progress():
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def source():
+        try:
+            await release.wait()
+            yield '{"done":{"finalText":"ok"}}\n'
+        finally:
+            closed.set()
+
+    stream = stream_with_keepalive(source(), interval=0.01)
+    try:
+        assert await asyncio.wait_for(anext(stream), 1) == "\n"
+        assert not closed.is_set()
+        release.set()
+        assert json.loads(await asyncio.wait_for(anext(stream), 1))["done"]["finalText"] == "ok"
+    finally:
+        await stream.aclose()
+    assert closed.is_set()
+
+
+async def test_closing_keepalive_cancels_pending_source_and_finalizes_it():
+    closed = asyncio.Event()
+
+    async def source():
+        try:
+            await asyncio.Event().wait()
+            yield "unreachable"
+        finally:
+            closed.set()
+
+    stream = stream_with_keepalive(source(), interval=0.01)
+    assert await asyncio.wait_for(anext(stream), 1) == "\n"
+    await asyncio.wait_for(stream.aclose(), 1)
+    assert closed.is_set()
 
 
 def recorded(name):

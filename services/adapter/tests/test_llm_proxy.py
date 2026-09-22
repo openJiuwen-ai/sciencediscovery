@@ -34,6 +34,19 @@ def test_the_tool_list_is_cut_to_the_runs_toolset_with_original_names():
     assert names == ["run_shell", "declare_artifact"]
 
 
+def test_tool_contract_trace_reports_missing_tools_without_prompt_or_credentials(monkeypatch, capsys):
+    from sciencediscovery_adapter import llm_proxy
+    monkeypatch.setattr(llm_proxy, "_TRACE_TOOLS", True)
+    rewrite_request({"tools": [tool("mcp_sci_run_shell")],
+                     "messages": [{"role": "user", "content": "private research prompt"}]}, ROUTE)
+    logged = capsys.readouterr().err
+    record = json.loads(logged.split("[tool-contract] ", 1)[1].splitlines()[0])
+    assert record["missing"] == ["declare_artifact"]
+    assert record["llm"] == ["run_shell"]
+    assert "private research prompt" not in logged
+    assert ROUTE.api_key not in logged
+
+
 def test_no_science_tools_means_no_tools_field_at_all():
     out = rewrite_request({"tools": [tool("bash")], "tool_choice": "auto", "messages": []}, ROUTE)
     assert "tools" not in out and "tool_choice" not in out

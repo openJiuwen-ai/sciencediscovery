@@ -24,9 +24,11 @@ started for it (its script is consumed one turn per request):
     approval  STUB_LLM_SCRIPT=tests/fixtures/stub_script_approval.json (user allows)
     deny      the same script (user denies)
     cancel    STUB_LLM_SCRIPT=tests/fixtures/stub_script_slow.json
-    agent_run STUB_LLM_SCRIPT=tests/fixtures/stub_script_agent_run.json, same env as mcp, plus
+    agent_run / agent_run_slow  STUB_LLM_SCRIPT=tests/fixtures/stub_script_agent_run.json, same env as mcp, plus
               STUB_LLM_LOG and STUB_LLM_BASE_URL (http://127.0.0.1:<stub>/v1) to also check the
               model reaches the provider (the server name is generated per run, so the script names the tool as ~run_shell)
+    agent_run_recover  STUB_LLM_SCRIPT=tests/fixtures/stub_script_agent_run_recover.json; the first bridge
+              call exceeds a one-second MCP timeout, then a second run proves the shared client recovered
     mcp       STUB_LLM_SCRIPT=tests/fixtures/stub_script_mcp_live.json, plus
               JIUWENSWARM_MGMT_URL=ws://127.0.0.1:<web port>/ws and an instance with
               `progressive_tool_enabled: false` (MCP tools are then direct tools)
@@ -180,7 +182,7 @@ async def test_real_gateway_calls_a_tool_hosted_by_the_adapter():
     assert mapper.final_text == "live mcp done" and mapper.finished
 
 
-@pytest.mark.skipif(SCENARIO != "agent_run", reason="scenario is not agent_run")
+@pytest.mark.skipif(SCENARIO not in ("agent_run", "agent_run_slow"), reason="scenario is not agent_run")
 async def test_agent_runs_endpoint_drives_a_real_run_through_its_own_toolset():
     import socket
 
@@ -209,6 +211,10 @@ async def test_agent_runs_endpoint_drives_a_real_run_through_its_own_toolset():
     @bridge.post("/bridge")
     async def bridge_call(body: dict):
         bridge_calls.append(body)
+        if SCENARIO == "agent_run_slow":
+            # Regression: JiuwenSwarm used its 30 s fallback even though the
+            # adapter registered this server with a longer timeout.
+            await asyncio.sleep(31)
         return {"text": f"bridge ran: {body['arguments']['command']}", "isError": False}
 
     adapter_port, bridge_port = free_port(), free_port()
@@ -224,6 +230,7 @@ async def test_agent_runs_endpoint_drives_a_real_run_through_its_own_toolset():
             "tools": [{"name": "run_shell", "description": "Run a shell command.",
                        "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}],
             "bridge": {"url": f"http://127.0.0.1:{bridge_port}/bridge", "token": "t"},
+            "toolTimeoutSeconds": 60,
         }
         stub_log, stub_base = os.environ.get("STUB_LLM_LOG"), os.environ.get("STUB_LLM_BASE_URL")
         if stub_log and stub_base:  # also prove the requested model reaches the provider
@@ -249,3 +256,70 @@ async def test_agent_runs_endpoint_drives_a_real_run_through_its_own_toolset():
     if stub_log and stub_base:
         with open(stub_log) as log:
             assert {json.loads(row).get("model") for row in log if row.strip()} == {"live-model-x"}
+
+
+@pytest.mark.skipif(SCENARIO != "agent_run_recover", reason="scenario is not agent_run_recover")
+async def test_a_timed_out_mcp_call_does_not_poison_the_next_agent_run():
+    import socket
+
+    import httpx
+    import uvicorn
+    from fastapi import FastAPI
+
+    from sciencediscovery_adapter.app import create_app
+    from sciencediscovery_adapter.config import Settings
+
+    def free_port():
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            return probe.getsockname()[1]
+
+    calls = 0
+    bridge = FastAPI()
+
+    @bridge.post("/bridge")
+    async def bridge_call(body: dict):
+        nonlocal calls
+        calls += 1
+        command = body["arguments"]["command"]
+        if calls == 1:
+            await asyncio.sleep(2)
+        return {"text": f"bridge ran: {command}", "isError": False}
+
+    async def serve(app, port):
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+        task = asyncio.create_task(server.serve())
+        while not server.started:
+            await asyncio.sleep(0.05)
+        return server, task
+
+    adapter_port, bridge_port = free_port(), free_port()
+    settings = Settings(host="127.0.0.1", port=adapter_port, legacy_url="http://127.0.0.1:1", gateway_url=URL,
+                        mgmt_url=os.environ["JIUWENSWARM_MGMT_URL"], public_url=f"http://127.0.0.1:{adapter_port}")
+    adapter_server, adapter_task = await serve(create_app(settings), adapter_port)
+    bridge_server, bridge_task = await serve(bridge, bridge_port)
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            outputs = []
+            for index in range(2):
+                body = {
+                    "sessionId": f"recover-{index}-{uuid.uuid4().hex[:8]}", "prompt": "use the tool",
+                    "tools": [{"name": "run_shell", "description": "Run a shell command.",
+                               "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}],
+                    "bridge": {"url": f"http://127.0.0.1:{bridge_port}/bridge", "token": "t"},
+                    "toolTimeoutSeconds": 1,
+                    "model": {"model": "live-model-x", "baseUrl": os.environ["STUB_LLM_BASE_URL"], "apiKey": "live-key"},
+                }
+                lines = []
+                async with client.stream("POST", f"http://127.0.0.1:{adapter_port}/agent/runs", json=body) as response:
+                    async for line in response.aiter_lines():
+                        if line:
+                            lines.append(json.loads(line))
+                outputs.append(lines)
+        assert any(line.get("done", {}).get("finalText") == "second call completed" for line in outputs[1])
+        completed = [line["event"] for line in outputs[1] if line.get("event", {}).get("type") == "tool.completed"]
+        assert any(event["trace"]["status"] == "completed" and "SECOND" in event["trace"]["output"] for event in completed)
+    finally:
+        for server, task in ((adapter_server, adapter_task), (bridge_server, bridge_task)):
+            server.should_exit = True
+            await task

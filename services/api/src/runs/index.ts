@@ -1498,7 +1498,13 @@ async function executeAgentRun(
         childId = subagent.id;
         const childController = new AbortController();
         activeSubagentAbortControllers.set(childId, childController);
-        const childSignal = AbortSignal.any([signal ?? requestExecution.abortSignal, childController.signal]);
+        const parentSignal = signal ?? requestExecution.abortSignal;
+        // AgentRun deadlines pause while waiting on external systems. A task's
+        // timeout_seconds is instead a wall-clock budget, including MCP calls,
+        // approvals, and model/provider waits. Keep that hard deadline outside
+        // AgentRun so an unhealthy dependency cannot strand the parent task.
+        const wallClockTimeoutSignal = AbortSignal.timeout(subagentConfig.timeoutSeconds * 1_000);
+        const childSignal = AbortSignal.any([parentSignal, childController.signal, wallClockTimeoutSignal]);
         await ideaTreeRuntime?.recordSubagent(subagent.id);
         await emit({ subagent, type: "subagent.updated" });
         // Mirror the subagent's start into one scope SubTask node. objective /
@@ -1978,11 +1984,14 @@ async function executeAgentRun(
           };
         }
         } catch (error) {
-          rememberTimeout(timeoutFailure(error));
-          const failure = classifySubagentFailure(error, {
+          const failureError = wallClockTimeoutSignal.aborted
+            ? new Error(`Subagent wall-clock timeout after ${subagentConfig.timeoutSeconds} seconds`)
+            : error;
+          rememberTimeout(timeoutFailure(failureError));
+          const failure = classifySubagentFailure(failureError, {
             maxTurns: subagent.maxTurns,
             maxTurnsExceeded,
-            parentAborted: childSignal.aborted,
+            parentAborted: parentSignal.aborted || childController.signal.aborted,
           });
           subagent = {
             ...subagent,

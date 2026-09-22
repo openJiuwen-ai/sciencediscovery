@@ -25,6 +25,7 @@ purpose: no session ids, no server-sent stream.
 from __future__ import annotations
 
 import logging
+import time
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -138,6 +139,8 @@ async def handle_rpc(registry: ToolsetRegistry, message: dict[str, Any]) -> dict
             )
             return _result(request_id, {"content": [{"type": "text", "text": f"{name} is not one of this run's tools"}], "isError": True})
         arguments = restore_dropped_empties(tool.get("inputSchema") or {}, arguments)
+        started = time.monotonic()
+        logger.info("tool bridge start: tool=%s request=%s run=%s", name, request_id, tag)
         try:
             text, is_error = await toolset.call(str(name), arguments)
         except Exception as error:  # the callback is another process; surface, don't crash the run
@@ -145,6 +148,8 @@ async def handle_rpc(registry: ToolsetRegistry, message: dict[str, Any]) -> dict
             text, is_error = f"tool bridge failed: {type(error).__name__}: {error}", True
         if is_error:
             logger.warning("tools/call %r (run %r) returned isError: %s", name, tag, text[:500])
+        logger.info("tool bridge return: tool=%s request=%s run=%s error=%s elapsed=%.3fs",
+                    name, request_id, tag, is_error, time.monotonic() - started)
         return _result(request_id, {"content": [{"type": "text", "text": text}], "isError": is_error})
     return _error(request_id, -32601, f"method not found: {method}")
 

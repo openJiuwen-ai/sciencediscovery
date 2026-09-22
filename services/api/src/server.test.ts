@@ -1073,6 +1073,7 @@ async function startSubagentModel(
     structuredSubagentOutput?: string;
     structuredSubagentResult?: boolean;
     subagentPythonCode?: string;
+    taskTimeoutSeconds?: number;
     subagentUsesPython?: boolean;
     subagentType?: string;
     taskCount?: number;
@@ -1210,6 +1211,7 @@ async function startSubagentModel(
                       prompt: `Inspect workspace partition ${index + 1} and summarize what is available.`,
                       ...(specialistId ? { specialistId } : {}),
                       subagent_type: options.subagentType ?? "general-purpose",
+                      ...(options.taskTimeoutSeconds === undefined ? {} : { timeout_seconds: options.taskTimeoutSeconds }),
                     }),
                     name: "task",
                   },
@@ -4162,6 +4164,49 @@ test("API runs one observable subagent through task and keeps nested task denied
   });
   assert.doesNotMatch(taskResultContent, /Inspect workspace partition/);
   assert.doesNotMatch(taskResultContent, /"steps"|"prompt"/);
+});
+
+test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-wall-clock-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const fixture = await startSubagentModel(context, { pauseSubagent: true, taskTimeoutSeconds: 1 });
+  context.after(() => fixture.releaseSubagent());
+  const model = await createTestModel(origin, {
+    baseUrl: fixture.baseUrl,
+    model: "subagent-wall-clock-model",
+    name: "Subagent wall-clock model",
+  });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Subagent wall-clock project" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ approvalMode: "always_allow", modelId: model.id, title: "Subagent wall-clock session" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+
+  const startedAt = Date.now();
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "Delegate a bounded workspace inspection." }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(run.status, 200);
+  const stream = await run.text();
+  assert.ok(Date.now() - startedAt < 5_000, "the task should not remain blocked on the paused model");
+  assert.match(stream, /"type":"run.completed"/);
+  const subagents = await jsonRequest<Subagent[]>(
+    `${origin}/api/sessions/${session.body.id}/subagents`,
+    { headers: authorization },
+  );
+  assert.equal(subagents.body[0]?.status, "timed_out");
+  assert.equal(subagents.body[0]?.timeoutSeconds, 1);
+  assert.match(subagents.body[0]?.error ?? "", /wall-clock timeout after 1 seconds/);
+  fixture.releaseSubagent();
 });
 
 test("API does not auto-select a specialist by description for a subagent type", async (context) => {

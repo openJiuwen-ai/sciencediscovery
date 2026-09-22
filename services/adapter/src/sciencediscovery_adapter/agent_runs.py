@@ -33,7 +33,7 @@ import os
 import re
 import sys
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Any, Literal
 
 import httpx
@@ -259,7 +259,7 @@ class AgentRunner:
                 "tool": f"mcp_{SERVER_NAME}_{tool['name']}", "level": tool.get("approval") or "allow",
             })
 
-    async def stream(self, request: AgentRunRequest) -> AsyncIterator[str]:
+    async def stream(self, request: AgentRunRequest) -> AsyncGenerator[str, None]:
         name = SERVER_NAME
         token = None
         llm_token = None
@@ -349,6 +349,36 @@ class AgentRunner:
                 self.pending_approvals.pop(request_id, None)
 
 
+async def stream_with_keepalive(source: AsyncGenerator[str, None], interval: float = 15.0) -> AsyncIterator[str]:
+    """Keep the HTTP body alive while a run waits on tools or user approval.
+
+    Gateway WebSocket heartbeats are filtered before reaching this stream.
+    A blank NDJSON line keeps transport readers alive without reporting agent
+    progress or resetting the run's own idle deadline. Never cancel an active
+    read just because a heartbeat is due: that would cancel the agent itself.
+    """
+    pending = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(anext(source))
+            ready, _ = await asyncio.wait({pending}, timeout=interval)
+            if not ready:
+                yield "\n"
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield item
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await source.aclose()
+
+
 def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
     router = APIRouter()
 
@@ -356,7 +386,7 @@ def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
     async def create_run(body: AgentRunRequest, authorization: str | None = Header(default=None)) -> StreamingResponse:
         if settings.agent_token and authorization != f"Bearer {settings.agent_token}":
             raise HTTPException(status_code=401, detail="unauthorized")
-        return StreamingResponse(runner.stream(body), media_type="application/x-ndjson")
+        return StreamingResponse(stream_with_keepalive(runner.stream(body)), media_type="application/x-ndjson")
 
     @router.post("/agent/jiuwenswarm-config")
     async def jiuwenswarm_config(body: JiuwenSwarmConfig, authorization: str | None = Header(default=None)) -> dict[str, Any]:

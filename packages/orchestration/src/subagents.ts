@@ -74,7 +74,10 @@ export function resolveSubagentConfig(input: SubagentInput): ResolvedSubagentCon
   const requestedName = rawRequestedName || GENERAL_PURPOSE_SUBAGENT.name;
   const name = SUBAGENT_TYPE_ALIASES.get(requestedName) ?? requestedName;
   const preset = SUBAGENT_PRESETS.get(name) ?? GENERAL_PURPOSE_SUBAGENT;
-  const allowBelowDefault = rawRequestedName === GENERAL_PURPOSE_SUBAGENT.name || rawRequestedName === "general";
+  // Omitting subagentType selects general-purpose too. Treat that exactly like
+  // naming the preset explicitly so a caller's smaller, valid budget is not
+  // silently replaced by the much larger default.
+  const allowBelowDefault = !rawRequestedName || rawRequestedName === GENERAL_PURPOSE_SUBAGENT.name || rawRequestedName === "general";
   const maxTurns = boundedInteger(input.maxTurns, preset.maxTurns, MAX_SUBAGENT_MAX_TURNS, "maxTurns");
   const timeoutSeconds = boundedInteger(input.timeoutSeconds, preset.timeoutSeconds, MAX_SUBAGENT_TIMEOUT_SECONDS, "timeoutSeconds");
   return {

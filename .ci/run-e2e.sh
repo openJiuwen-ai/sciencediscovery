@@ -229,6 +229,8 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # Likewise they script ScienceDiscovery's read_file/list_files with its argument shapes; JiuwenSwarm's own
   # tools are covered by test/contract/jw-only/live.mjs native-tools.
   export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
+  export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task
+  export E2E_SWARM_TASK=1
   # A JiuwenSwarm instance of this layer's own, so a run never shares skills, config or sessions with the
   # instance a developer uses (the install itself, JIUWENSWARM_ROOT, is shared).
   export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-e2e}"
@@ -294,7 +296,10 @@ fi
 
 node test/check-e2e-meta.mjs 2>&1 | tee -a "$test_log" || exit $?
 test_started=1
-npm --prefix .e2e run "test:$group" 2>&1 | tee -a "$test_log"
+playwright_args=()
+if [[ -n "${CI_E2E_SPEC:-}" ]]; then playwright_args+=("$CI_E2E_SPEC"); fi
+if [[ -n "${CI_E2E_GREP:-}" ]]; then playwright_args+=(--grep "$CI_E2E_GREP"); fi
+npm --prefix .e2e run "test:$group" -- "${playwright_args[@]}" 2>&1 | tee -a "$test_log"
 journeys_status=${PIPESTATUS[0]}
 
 # What only the JiuwenSwarm backend does, checked against the same stack: the

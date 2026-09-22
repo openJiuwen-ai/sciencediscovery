@@ -1629,16 +1629,16 @@ test("subagent tools preserve structured governance inputs", async () => {
   });
   assert.deepEqual(taskProperties.max_turns, {
     default: DEFAULT_SUBAGENT_MAX_TURNS,
-    description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
+    description: "Optional model-turn budget for this subagent. Set a smaller value for focused work or increase it for unusually deep delegated work.",
     maximum: MAX_SUBAGENT_MAX_TURNS,
-    minimum: DEFAULT_SUBAGENT_MAX_TURNS,
+    minimum: 1,
     type: "integer",
   });
   assert.deepEqual(taskProperties.timeout_seconds, {
     default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-    description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
+    description: "Optional hard wall-clock runtime budget in seconds for this subagent, including model and tool waits.",
     maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
-    minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+    minimum: 1,
     type: "integer",
   });
   assert.match(JSON.stringify(taskProperties.specialistId), /specialist-evidence/);
