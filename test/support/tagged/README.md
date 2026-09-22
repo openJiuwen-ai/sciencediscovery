@@ -193,8 +193,44 @@ the pinned Chromium — so no separate setup step can disagree with it.
 [MIGRATION.md](MIGRATION.md) records which existing cases the plan covers and
 why each of the rest is outside it.
 
-To ask for something the shared plan excludes on purpose, query the tag
-vocabulary directly — one `--<group> <value>` per dimension:
+## CI policy
+
+Which tests a profile takes is stated once, in [profiles.mjs](profiles.mjs), as
+the dimensions themselves rather than as a selector string somebody has to
+parse:
+
+```js
+pr: [
+  { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64',
+    npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
+],
+```
+
+One row is one rule: several values in a group are OR inside the row, different
+groups are AND, and several rows are OR between them. The selector every
+command runs is derived from those rows, so a policy cannot drift from the
+string that implements it.
+
+`pnpm test:policy` prints them, each as the command that would ask the same
+question by hand:
+
+```
+pr:
+  pnpm test:list --category ut --category st --category e2e --os linux --arch amd64 \
+    --npu none --model none --model mock --judge none --status reviewed
+  selector: (category:ut or category:st or category:e2e) and os:linux and …
+  targets:  linux/amd64
+  run it:   pnpm test:run --profile pr
+```
+
+`--profile pr|daily` picks one; `pr` is the default, and `daily` is identical
+to it until there are live-model and `judge:llm` cases to put in the rows `pr`
+does not have.
+
+## Ad-hoc queries
+
+To ask for something a profile excludes on purpose, query the tag vocabulary
+directly — one `--<group> <value>` per dimension:
 
 ```bash
 pnpm test:run  --category e2e --os linux --npu none --model mock --judge none

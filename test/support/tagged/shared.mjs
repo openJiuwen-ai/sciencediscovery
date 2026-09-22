@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collect, execute } from './coordinator.mjs';
 import { createPlan, verifyResults, fileDigest, digest } from './plan.mjs';
 import { schema } from './tags.mjs';
-import { shared, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources } from './profiles.mjs';
+import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources } from './profiles.mjs';
 import { preflight } from './environment.mjs';
 import { checks } from './checks.mjs';
 
@@ -56,11 +56,26 @@ function selectorFrom(query) {
     .map(([group, values]) => values.length > 1 ? `(${values.map(v => `${group}:${v}`).join(' or ')})` : `${group}:${values[0]}`)
     .join(' and ');
 }
+/** Print each CI policy the way it would be asked for on the command line. */
+function showPolicies() {
+  for (const profile of Object.values(profiles)) {
+    console.log(`${profile.name}:`);
+    for (const rule of profile.rules) {
+      const flags=Object.entries(rule).flatMap(([g,v])=>[v].flat().map(x=>`--${g} ${x}`)).join(' ');
+      console.log(`  pnpm test:list ${flags}`);
+    }
+    console.log(`  selector: ${profile.selector}`);
+    console.log(`  targets:  ${profile.targets.map(t=>`${t.os}/${t.arch}`).join(' ')}`);
+    console.log(`  run it:   pnpm test:run --profile ${profile.name}`);
+  }
+  return 0;
+}
 export async function main(args=process.argv.slice(2)) {
-  const action=args.shift()??'run';let slice,output;const query={};
+  const action=args.shift()??'run';let slice,output,profileName='pr';const query={};
   while(args.length){
     const flag=args.shift();
     if(flag==='--slice')slice=args.shift();
+    else if(flag==='--profile')profileName=args.shift();
     else if(flag==='--output')output=args.shift();
     else if(flag?.startsWith('--')&&schema.groups[flag.slice(2)]){
       const group=flag.slice(2),value=args.shift();
@@ -70,12 +85,15 @@ export async function main(args=process.argv.slice(2)) {
     else throw new Error(`Unknown option ${flag}; tag dimensions are --${Object.keys(schema.groups).join(', --')}`);
   }
   const dimensions=Object.keys(query);
-  if(slice!==undefined&&dimensions.length)throw new Error('--slice names a part of the shared plan; a tag query builds its own. Use one or the other');
+  if(action==='policy')return showPolicies();
+  const profile=profiles[profileName];
+  if(!profile)throw new Error(`Unknown profile: ${profileName}; known are ${Object.keys(profiles).join(', ')}`);
+  if(dimensions.length&&(slice!==undefined||profileName!=='pr'))throw new Error('--profile and --slice name a part of a CI policy; a tag query builds its own selector. Use one or the other');
   slice??='shared';
-  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error(`Usage: test:run|test:list [--${Object.keys(schema.groups).join(' V] [--')} V] [--slice ut|st|e2e] [--output DIR]`);
+  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error(`Usage: test:run|test:list|policy [--profile ${Object.keys(profiles).join('|')}] [--slice ut|st|e2e] [--${Object.keys(schema.groups).join(' V] [--')} V] [--output DIR]`);
   // Under CI the layer entry point owns `<CI_RESULTS_DIR>/<layer>/run.log` and
   // its own summary; the frozen plan and its evidence go beside them, not over them.
-  const label=dimensions.length?'query':slice;
+  const label=dimensions.length?'query':profileName==='pr'?slice:`${profileName}-${slice}`;
   const outputDir=resolve(output??(process.env.CI_RESULTS_DIR?join(process.env.CI_RESULTS_DIR,label,'tagged'):join(root,'.test-runs',label)));
   mkdirSync(outputDir,{recursive:true});
   // Caches and run data are kept inside the workspace; TMPDIR deliberately is
@@ -136,16 +154,16 @@ export async function main(args=process.argv.slice(2)) {
   }
   const revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
   const {os:requestedOs,arch:requestedArch,...predicates}=query;
-  const selector=dimensions.length?selectorFrom(predicates):shared.selector+(slices[slice]?` and (${slices[slice]})`:'');
+  const selector=dimensions.length?selectorFrom(predicates):profile.selector+(slices[slice]?` and (${slices[slice]})`:'');
   // `os` and `arch` name the execution target rather than filter the tags: the
   // plan expands a multi-platform test into one instance per target, and the
   // selector is then evaluated on that concrete instance.
   const targets=dimensions.length
-    ?(requestedOs??[shared.targets[0].os]).flatMap(os=>(requestedArch??[shared.targets[0].arch]).map(arch=>({os,arch})))
-    :shared.targets;
+    ?(requestedOs??[profile.targets[0].os]).flatMap(os=>(requestedArch??[profile.targets[0].arch]).map(arch=>({os,arch})))
+    :profile.targets;
   const plan=createPlan(catalog,{revision,selector:selector||'',targets});
   json(join(outputDir,'catalog.json'),catalog);json(join(outputDir,'plan.json'),plan);
-  const asked=dimensions.length?`query ${dimensions.map(g=>`--${g} ${query[g].join(' --'+g+' ')}`).join(' ')}`:`slice ${slice}`;
+  const asked=dimensions.length?`query ${dimensions.map(g=>`--${g} ${query[g].join(' --'+g+' ')}`).join(' ')}`:`profile ${profileName}, slice ${slice}`;
   console.log(`Frozen ${plan.entries.length} identities for ${asked}`);
   console.log(`selector=${selector||'(everything collected)'}; targets=${plan.targets.map(t=>`${t.os}/${t.arch}`).join(' ')}`);
   console.log(`digest=${plan.digest}; plan=${join(outputDir,'plan.json')}`);

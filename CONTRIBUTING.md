@@ -20,6 +20,7 @@ Alternatively, provide a standalone `services/gateway/.venv`.
 pnpm test:shared  # the one plan CI runs: freeze it from source tags, then run all of it
 pnpm test:list    # freeze and print that plan without running a single test body
 pnpm test:run --category e2e --model mock   # any query over the tag dimensions
+pnpm test:policy  # what each CI profile selects, as the dimensions themselves
 pnpm check        # typecheck, paper tests, build, and package unit tests
 pnpm test         # build + recursive package unit tests
 pnpm smoke        # build + @sciencediscovery/api unit tests only
@@ -331,6 +332,24 @@ pnpm ci:e2e
 `pnpm test:shared` is those three in one process, on the same plan. Either way,
 report the numbers each slice's `summary.json` gives — `planned`, `executed`,
 `passed` — not "tests pass".
+
+Which tests a CI profile takes is stated once, as dimensions rather than as a
+selector string, in
+[test/support/tagged/profiles.mjs](test/support/tagged/profiles.mjs).
+`pnpm test:policy` prints them, each as the command that would ask the same
+question by hand:
+
+```
+pr:
+  pnpm test:list --category ut --category st --category e2e --os linux --arch amd64 \
+    --npu none --model none --model mock --judge none --status reviewed
+  selector: (category:ut or category:st or category:e2e) and os:linux and …
+  run it:   pnpm test:run --profile pr
+```
+
+`--profile pr|daily` picks one and `pr` is the default. `daily` is identical to
+`pr` today; it exists so the live-model and `judge:llm` rows have somewhere to
+land, and `nightly.yml` still calls the same gate until they do.
 
 `pnpm test:run` / `pnpm test:list` take one `--<group> <value>` per tag
 dimension (`--category`, `--os`, `--arch`, `--npu`, `--model`, `--judge`,

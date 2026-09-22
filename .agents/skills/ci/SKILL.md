@@ -53,8 +53,11 @@ run is the row below, and the reason they exist is in their own file headers.
 ## One plan, three layers
 
 `ci:ut`, `ci:st` and `ci:e2e` are not three suites. Each runs
-`test/support/tagged/shared.mjs` against the one selector in
-`test/support/tagged/profiles.mjs`, narrowed to that layer's `category`. The
+`test/support/tagged/shared.mjs` against the `pr` profile in
+`test/support/tagged/profiles.mjs`, narrowed to that layer's `category`. That
+profile is stated as tag dimensions rather than as a selector string, and
+`pnpm test:policy` prints it — read that before theorising about what a job
+covers. `daily` exists beside it and is identical for now. The
 three groups partition the plan, so the layers together run exactly
 `pnpm test:shared`, the command a developer runs locally.
 

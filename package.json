@@ -45,6 +45,7 @@
     "test:shared": "node test/support/tagged/shared.mjs run",
     "test:list": "node test/support/tagged/shared.mjs list",
     "test:run": "node test/support/tagged/shared.mjs run",
+    "test:policy": "node test/support/tagged/shared.mjs policy",
     "test:tagged:selftest": "node test/support/tagged/selftest.mjs",
     "test:tagged:list": "node test/support/tagged/cli.mjs list",
     "test:tagged:run": "node test/support/tagged/cli.mjs run"

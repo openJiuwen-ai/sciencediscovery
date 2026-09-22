@@ -10,7 +10,8 @@ migration quietly drop something"; the mechanics are in
 
 ## The one selector
 
-Defined once, in [profiles.mjs](profiles.mjs):
+Defined once, in [profiles.mjs](profiles.mjs), as the `pr` profile's tag
+dimensions; `pnpm test:policy` prints it and the selector derived from it:
 
 ```
 (category:ut or category:st or category:e2e)

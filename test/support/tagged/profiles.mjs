@@ -12,13 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The only shared policy. Every local and CI command below runs this one
-// selector against this one target; a slice narrows it with a category
-// predicate and never with a second hand-written list of cases.
-export const shared = Object.freeze({
-  selector: '(category:ut or category:st or category:e2e) and os:linux and arch:amd64 and npu:none and (model:none or model:mock) and judge:none and status:reviewed',
-  targets: [{ os: 'linux', arch: 'amd64' }],
-});
+/**
+ * CI policy, written as the question a reader actually asks: which dimensions
+ * does this profile take? One row is one rule; a group with several values is
+ * OR inside the row, different groups are AND, and several rows are OR between
+ * them. The selector string every command runs is derived from these rows, so
+ * this is the only place a policy is stated.
+ *
+ * `pr` is one rule today because the three categories differ in nothing but
+ * their name. The shape is a list because `daily` will grow rows that `pr` does
+ * not have — a live-model journey, a `judge:llm` case — as soon as there are
+ * cases to put in them.
+ */
+const policies = {
+  pr: [
+    { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
+  ],
+  daily: [
+    { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
+  ],
+};
+
+/** One rule: a group with several values is OR, different groups are AND. */
+export function ruleSelector(rule) {
+  return Object.entries(rule)
+    .map(([group, value]) => Array.isArray(value) && value.length > 1
+      ? `(${value.map(v => `${group}:${v}`).join(' or ')})`
+      : `${group}:${[value].flat()[0]}`)
+    .join(' and ');
+}
+
+/** Several rules: OR between them, each parenthesised so precedence cannot bite. */
+export function policySelector(rules) {
+  return rules.length === 1 ? ruleSelector(rules[0]) : rules.map(r => `(${ruleSelector(r)})`).join(' or ');
+}
+
+export const profiles = Object.freeze(Object.fromEntries(Object.entries(policies).map(([name, rules]) => [name, Object.freeze({
+  name,
+  rules: Object.freeze(rules.map(Object.freeze)),
+  selector: policySelector(rules),
+  // Every rule in a profile names the same execution target today; a profile
+  // that ever spans two would list both here.
+  targets: [...new Map(rules.map(r => [`${r.os}/${r.arch}`, { os: [r.os].flat()[0], arch: [r.arch].flat()[0] }])).values()],
+})])));
+
+/** What a command runs when no profile is named. */
+export const shared = profiles.pr;
 
 /**
  * The slices CI schedules as separate jobs. `category` is single-valued and
@@ -57,4 +96,3 @@ export const nodeExtraSources = Object.freeze(['test/api/agent_loop_smoke.ts']);
 export const pythonProjects = Object.freeze(['paper', 'gateway', 'memory-graph', 'evolve']);
 export const pythonSources = project => `services/${project}/tests/test_*.py`;
 
-export const profiles = Object.freeze({ shared, pr: shared });
