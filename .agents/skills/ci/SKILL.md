@@ -46,7 +46,7 @@ run is the row below, and the reason they exist is in their own file headers.
 
 | Pipeline | Gate | Trigger | Profile | Jobs |
 | --- | --- | --- | --- | --- |
-| `.github/workflows/ci.yml` | yes | push to `main`, pull request, or `workflow_dispatch` | `pr` | `ci:ut`, `ci:st`, mocked `ci:e2e`, x86_64 + aarch64 release binaries (smoke-gated), the Docker image |
+| `.github/workflows/ci.yml` | yes | push to `main`, pull request, or `workflow_dispatch` | `pr` | `ci:ut` (recording coverage), `ci:st`, mocked `ci:e2e`, Coverage (merges UT's data, runs nothing), x86_64 + aarch64 release binaries (smoke-gated), the Docker image |
 | `.github/workflows/nightly.yml` | — | 18:00 UTC daily, or manual | `daily` | calls `ci.yml` with a `nightly-<date>-<sha>` version |
 | `.github/workflows/release.yml` | — | push of a version tag | `release` | calls `ci.yml` with the tag's version, then publishes if it passes |
 

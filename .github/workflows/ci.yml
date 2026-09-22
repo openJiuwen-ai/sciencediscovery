@@ -123,12 +123,16 @@ jobs:
           bwrap --version
 
       # The `category:ut` slice, including the tests that drive the real
-      # bubblewrap sandbox provisioned above.
+      # bubblewrap sandbox provisioned above. `--coverage` records coverage in
+      # this same execution — per-file Node workers with V8 coverage, pytest
+      # with `coverage run` in front — and changes nothing about what is
+      # selected. The Coverage job below only merges what this step writes; a
+      # release build, which publishes no coverage, does not record it.
       - name: Run UT
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:ut -- --profile ${{ inputs.profile || 'pr' }}
+        run: pnpm ci:ut -- --profile ${{ inputs.profile || 'pr' }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
         if: always()
@@ -141,139 +145,88 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ut-results
-          path: .ci-results
+          path: |
+            .ci-results
+            !.ci-results/ut/tagged/coverage
+          if-no-files-found: warn
+
+      # Uploaded even when the run failed: the Coverage job summarises whatever
+      # a failed run managed to record and says that it failed, rather than
+      # running anything to fill the gap.
+      - name: Upload UT coverage data
+        if: always() && github.workflow != 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ut-coverage
+          path: .ci-results/ut/tagged/coverage
           if-no-files-found: warn
 
   coverage:
     name: Coverage
-    # Nightly reuses this workflow and needs the complete baseline. Release
-    # also reuses it, but coverage does not belong in a tagged release build.
-    if: github.workflow != 'Release'
+    # Reports on the UT job's own run; it executes no test. ST and the mocked
+    # browser E2E load no product module into a measured process, so there is
+    # nothing of theirs to wait for. Runs after a failed UT as well, to report
+    # what that run uploaded; a cancelled pipeline has nothing to report.
+    # Release calls skip it: a tagged build publishes no coverage.
+    needs: ut
+    if: ${{ !cancelled() && github.workflow != 'Release' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Select coverage scope
-        id: scope
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.workflow }}" == "Nightly" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo "node_mode=full" >> "$GITHUB_OUTPUT"
-            echo "node_groups=" >> "$GITHUB_OUTPUT"
-            echo "node_skip=false" >> "$GITHUB_OUTPUT"
-            echo "python_mode=full" >> "$GITHUB_OUTPUT"
-            echo "python_groups=" >> "$GITHUB_OUTPUT"
-            echo "python_skip=false" >> "$GITHUB_OUTPUT"
-            echo "node_artifact=node-coverage-summary-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            echo "python_artifact=python-coverage-summary-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          else
-            while IFS= read -r output; do echo "node_${output}" >> "$GITHUB_OUTPUT"; done \
-              < <(node scripts/select-coverage-groups.mjs "$BASE_SHA" HEAD)
-            while IFS= read -r output; do echo "python_${output}" >> "$GITHUB_OUTPUT"; done \
-              < <(node scripts/select-python-coverage-groups.mjs "$BASE_SHA" HEAD)
-            if [[ "$EVENT_NAME" == "pull_request" ]]; then
-              echo "node_artifact=node-coverage-summary-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-              echo "python_artifact=python-coverage-summary-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            else
-              echo "node_artifact=node-coverage-summary-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-              echo "python_artifact=python-coverage-summary-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-      - uses: pnpm/action-setup@v4
-        if: steps.scope.outputs.node_skip != 'true' || steps.scope.outputs.python_skip != 'true'
 
       - uses: actions/setup-node@v4
-        if: steps.scope.outputs.node_skip != 'true' || steps.scope.outputs.python_skip != 'true'
         with:
           node-version: 22.19.0
-          cache: pnpm
 
-      - uses: astral-sh/setup-uv@v6
-        if: steps.scope.outputs.node_skip != 'true' || steps.scope.outputs.python_skip != 'true'
+      # A UT run that stopped before recording anything uploaded nothing; the
+      # summary then says so instead of this step failing the job.
+      - name: Download the UT run's coverage data
+        continue-on-error: true
+        uses: actions/download-artifact@v4
         with:
-          enable-cache: true
+          name: ut-coverage
+          path: ${{ runner.temp }}/ut-coverage
 
-      - name: Provision the bubblewrap sandbox
-        if: steps.scope.outputs.node_skip != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
-          bwrap --ro-bind / / --dev /dev true
-
-      - name: Install dependencies
-        if: steps.scope.outputs.node_skip != 'true'
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate Node.js coverage
-        id: node_coverage
-        if: steps.scope.outputs.node_skip != 'true'
-        env:
-          COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          COVERAGE_MODE: ${{ steps.scope.outputs.node_mode }}
-          COVERAGE_SOURCE_SHA: ${{ github.sha }}
-          PROFILE: ${{ inputs.profile || 'pr' }}
-          SELECTED_GROUPS: ${{ steps.scope.outputs.node_groups }}
-        run: |
-          if [[ -n "$SELECTED_GROUPS" ]]; then
-            pnpm coverage:node -- --profile "$PROFILE" --groups "$SELECTED_GROUPS"
-          else
-            pnpm coverage:node -- --profile "$PROFILE"
-          fi
-
-      - name: Generate Python coverage
-        id: python_coverage
-        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.python_skip != 'true'
-        env:
-          COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          COVERAGE_MODE: ${{ steps.scope.outputs.python_mode }}
-          COVERAGE_SOURCE_SHA: ${{ github.sha }}
-          PROFILE: ${{ inputs.profile || 'pr' }}
-          SELECTED_GROUPS: ${{ steps.scope.outputs.python_groups }}
-        run: |
-          if [[ -n "$SELECTED_GROUPS" ]]; then
-            node scripts/run-python-coverage.mjs --profile "$PROFILE" --groups "$SELECTED_GROUPS"
-          else
-            node scripts/run-python-coverage.mjs --profile "$PROFILE"
-          fi
+      - name: Merge coverage
+        id: merge
+        run: node scripts/coverage-report.mjs --input "${{ runner.temp }}/ut-coverage" --producer "${{ needs.ut.result }}"
 
       - name: Summarize coverage
         if: always()
         env:
-          COVERAGE_SCOPE_OUTCOME: ${{ steps.scope.outcome }}
-          NODE_COVERAGE_MODE: ${{ steps.scope.outputs.node_mode }}
-          NODE_COVERAGE_OUTCOME: ${{ steps.node_coverage.outcome }}
-          NODE_COVERAGE_REASON: ${{ steps.scope.outputs.node_reason }}
-          NODE_COVERAGE_SKIP: ${{ steps.scope.outputs.node_skip }}
-          PYTHON_COVERAGE_MODE: ${{ steps.scope.outputs.python_mode }}
-          PYTHON_COVERAGE_OUTCOME: ${{ steps.python_coverage.outcome }}
-          PYTHON_COVERAGE_REASON: ${{ steps.scope.outputs.python_reason }}
-          PYTHON_COVERAGE_SKIP: ${{ steps.scope.outputs.python_skip }}
+          UT_RESULT: ${{ needs.ut.result }}
         run: node scripts/coverage-job-summary.mjs >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Name the summary artifacts
+        id: names
+        if: always()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORKFLOW: ${{ github.workflow }}
+        run: |
+          if [[ "$WORKFLOW" == "Nightly" ]]; then scope=nightly
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then scope="pr-${PR_NUMBER}"
+          else scope="$EVENT_NAME"; fi
+          echo "node=node-coverage-summary-${scope}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "python=python-coverage-summary-${scope}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Upload Node.js coverage summary
-        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.node_skip != 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.scope.outputs.node_artifact }}
+          name: ${{ steps.names.outputs.node }}
           path: |
             coverage/summary.json
             coverage/groups/**/summary.json
           if-no-files-found: warn
 
       - name: Upload Python coverage summary
-        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.python_skip != 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.scope.outputs.python_artifact }}
+          name: ${{ steps.names.outputs.python }}
           path: |
             coverage/python/summary.json
             coverage/python/groups/**/summary.json

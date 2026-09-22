@@ -43,55 +43,60 @@ layer stopped before it produced a plan at all.
 
 ## Coverage reporting
 
-The `Coverage` job in `.github/workflows/ci.yml` runs the same plan the test
-jobs run. A coverage group is a directory; what runs for it is the set of
-frozen-plan identities whose source lives under that directory, selected by the
-profile's selector and target matrix — `pr` unless the caller passes another
-one, exactly as `ci:ut` takes it. Incremental runs choose *which* directories to
-measure: pull requests and default-branch pushes take the affected Node.js
-workspaces (including transitive dependents) and the changed Python services.
-Nightly measures every group; Release calls skip the job.
+Coverage is recorded by the run that gates, not by a second one. The `UT` job
+runs `pnpm ci:ut -- --profile <profile> --coverage`: the same plan, the same
+per-file Node workers and the same pytest invocation, with V8 coverage added to
+each Node worker and `coverage run` put in front of pytest. `--coverage` changes
+how the selected cases are measured and nothing about which cases are selected.
+The job uploads what the run wrote, `<CI_RESULTS_DIR>/ut/tagged/coverage/`, as
+the `ut-coverage` artifact, including when the run failed.
+
+The `Coverage` job `needs` UT, downloads that artifact and runs
+`node scripts/coverage-report.mjs` (`pnpm coverage:report`), which only reads
+and merges files: it executes no test and starts no process. There is no second
+selection either — pull requests, pushes and the nightly run all report on the
+whole plan the gate ran, so there is no diff-based list of directories any
+more. Release calls skip both the recording and the job.
 
 What that buys is one answer to "why did this case not run": because the plan
 did not select it. A `status:external` case — `services/memory-graph` has 77 of
-them, all needing a live Neo4j — is absent from a coverage run for the same
-reason it is absent from `pnpm ci:ut`, and it still fails loudly if something
-does select it. `model:real`, `npu:required` and another platform's cases are
-out for the same reason. No probe of the machine can add or remove one.
+them, all needing a live Neo4j — is absent from coverage for the same reason it
+is absent from the gate, because it is the gate's run. `model:real`,
+`npu:required` and another platform's cases are out for the same reason. ST and
+the mocked browser E2E load no product module into a measured process, so they
+contribute no module coverage and the summary says so rather than reporting a
+number for them.
 
-Node.js coverage uses the built-in V8 collector, driving the harness's own
-worker one source file at a time — the isolation the slices give those files is
-part of how they run, not an optimisation — so its reports are over the
-TypeScript sources as written. Records for a file arrive from every run that
-touched it and are merged, so a line is counted once. Python coverage runs
-`coverage.py` in front of the same pytest adapter for all four service
-projects. Each group writes `tagged-summary.json` beside its report:
-planned, executed, passed, and the plan digest they came from. Run them locally
+What the run writes is self-describing. Each Node test file leaves one lcov
+whose records name that test file and a repository-relative source; each Python
+project leaves one `coverage.py` JSON report with repository-relative paths;
+`manifest.json` records the plan digest, the profile, the run's planned,
+executed and passed counts, and how many files it owed coverage for. The report
+credits a directory with what its own tests exercised — a record measuring
+`packages/cas` from a test under `services/api` is that test's dependency, not
+cas's coverage — merges records for one source file line by line, and leaves
+built output (`dist/`) and installed dependencies out. Reproduce CI locally
 with:
 
 ```bash
-pnpm coverage:node                              # every group
-pnpm coverage:node -- --groups packages/cas     # one directory
-node scripts/run-python-coverage.mjs --groups services/memory-graph
+CI_RESULTS_DIR=$PWD/.ci-results CI_RUNTIME_DIR=$PWD/.ci-runtime \
+  pnpm ci:ut -- --profile pr --coverage
+pnpm coverage:report -- --input .ci-results/ut/tagged/coverage
 ```
 
-CI uploads separate SHA-qualified Node.js and Python artifacts containing only
-aggregate and per-group `summary.json` files. Raw LCOV and `coverage.py` data
-remain local intermediates. Partial PR/main summaries identify their selected
-groups and are not complete repository baselines; coverage percentages are
-informational, while test failures still fail the job. Generated output
-(`dist/`) and installed dependencies are not attributed to a group, so a test
-that loads a built module does not report the same code twice. Playwright
-journeys are outside these percentages: they drive a running stack rather than
-load it.
+If the UT job passed, every file it ran must have left coverage, and the report
+step fails when one did not: that is a pipeline defect, not a partial result.
+If the UT job failed, the report summarises whatever it uploaded, labels it
+partial, and succeeds; nothing is re-run to fill the gap, and the UT job's own
+failure stays the signal. Coverage percentages are informational — there is no
+threshold.
 
-The same job writes a human-readable `Coverage summary` to the GitHub Actions
-run summary. It reports Node.js and Python separately, including whether each
-scan was full, incremental, or skipped, the measured file and group counts,
-and the available line and branch totals. The summary explicitly
-states that no minimum percentage is enforced. Missing output is shown as
-unavailable for diagnosis; it does not hide or replace the failing coverage
-step that produced it.
+CI uploads separate SHA-qualified Node.js and Python artifacts containing only
+aggregate and per-group `summary.json` files. The same job writes a
+human-readable `Coverage summary` to the run page: the UT run's plan and
+counts, then Node.js and Python separately with the measured file and group
+counts and the line and branch totals, each row labelled by where its numbers
+came from — the UT run, a partial upload from a failed UT run, or unavailable.
 
 ## Test tags and CI selection
 

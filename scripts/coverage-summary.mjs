@@ -154,7 +154,7 @@ export async function writeCoverageSummary({ input, lcovOutput, jsonOutput, meta
       schema_version: 1,
       ...metadata,
       files: summary.files,
-      scope: "Built Node.js workspace tests and repository CI-script tests; excludes browser/TSX, Python, and Playwright suites.",
+      scope: "Node.js sources as written, each credited with what its own directory's tests exercised in the UT run; excludes test files, built output and Playwright journeys.",
       totals: summary.totals,
     }, null, 2)}\n`),
   ]);

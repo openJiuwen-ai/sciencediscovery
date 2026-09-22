@@ -39,11 +39,17 @@ points into a generated report. The E2E job summary must include executed,
 skipped/blocked, failed, and flaky counts; a green conclusion alone is not
 enough.
 
-The Coverage job summary must show the Node.js and Python results directly in
-the run page, label each result as full, incremental, skipped, or unavailable,
-and identify the selected groups when the scan is partial. Coverage is
-informational: do not add a percentage threshold. A coverage test failure must
-still fail the job even when a partial summary can be rendered.
+The Coverage job runs no test. It `needs` UT, downloads the `ut-coverage`
+artifact that `pnpm ci:ut -- --coverage` wrote during the gate's own run, and
+merges it with `node scripts/coverage-report.mjs` (`pnpm coverage:report`). Never make it execute a test command or
+select a subset of directories to re-measure: a second execution reports on a
+run that did not gate the change. Its summary must show the Node.js and Python
+results directly in the run page, the UT run's planned/executed/passed counts,
+and label each row as the UT run, a partial upload from a failed UT run, or
+unavailable. Coverage is informational: do not add a percentage threshold. When
+UT passed, missing coverage for a file it ran fails the report step; when UT
+failed, the job summarises what was uploaded and the UT job's failure is the
+signal.
 
 ## Validate workflow changes
 

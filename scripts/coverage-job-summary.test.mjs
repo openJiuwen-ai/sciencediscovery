@@ -22,87 +22,51 @@ function metric(covered, total, percentage) {
   return { covered, percentage, total };
 }
 
-test("renders full and incremental coverage without a threshold", () => {
-  const output = renderCoverageJobSummary({
-    node: {
-      document: {
-        authoritative: true,
-        files: 12,
-        mode: "full",
-        scope: "Built Node.js sources.",
-        selected_groups: ["packages/agent-core", "scripts"],
-        totals: {
-          branches: metric(30, 40, 75),
-          functions: metric(18, 20, 90),
-          lines: metric(80, 100, 80),
-        },
-      },
-      outcome: "success",
-      skip: false,
-    },
-    python: {
-      document: {
-        authoritative: false,
-        files: 4,
-        mode: "incremental",
-        scope: "Maintained Python services.",
-        selected_groups: ["services/gateway"],
-        totals: {
-          branches: metric(6, 10, 60),
-          lines: metric(45, 50, 90),
-        },
-      },
-      outcome: "success",
-      skip: false,
-    },
-  });
+const run = { profile: "pr", slice: "ut", plan_digest: "0123456789abcdef", planned: 10, executed: 10, passed: 10, failed: 0, skipped: 0 };
+const nodeDocument = {
+  files: 12,
+  run,
+  scope: "Node.js sources.",
+  selected_groups: ["packages/agent-core", "scripts"],
+  totals: { branches: metric(30, 40, 75), functions: metric(18, 20, 90), lines: metric(80, 100, 80) },
+};
+const pythonDocument = {
+  files: 4,
+  run,
+  selected_groups: ["services/gateway"],
+  totals: { branches: metric(6, 10, 60), lines: metric(45, 50, 90) },
+};
 
+test("reports the UT run's own coverage and says nothing was executed here", () => {
+  const output = renderCoverageJobSummary({ node: { document: nodeDocument }, python: { document: pythonDocument }, producer: "success" });
   assert.match(output, /Coverage is informational\. \*\*No minimum percentage is enforced\.\*\*/);
-  assert.match(output, /\| Node\.js \| Full \| 12 \| 2 \| 80\.00% \(80\/100\) \| 75\.00% \(30\/40\) \|/);
-  assert.match(output, /\| Python \| Incremental \| 4 \| 1 \| 90\.00% \(45\/50\) \| 60\.00% \(6\/10\) \|/);
+  assert.match(output, /executes no tests/);
+  assert.match(output, /UT run: profile `pr`, slice `ut` — planned 10, executed 10, passed 10, failed 0, skipped 0 \(plan `0123456789ab`\)\./);
+  assert.match(output, /\| Node\.js \| UT run \| 12 \| 2 \| 80\.00% \(80\/100\) \| 75\.00% \(30\/40\) \|/);
+  assert.match(output, /\| Python \| UT run \| 4 \| 1 \| 90\.00% \(45\/50\) \| 60\.00% \(6\/10\) \|/);
   assert.doesNotMatch(output, /Functions/);
+  assert.doesNotMatch(output, /did not pass/);
   assert.match(output, /`packages\/agent-core`, `scripts`/);
-  assert.match(output, /`services\/gateway`/);
+  assert.match(output, /ST and the mocked browser E2E .* contribute no module coverage/);
 });
 
-test("shows skipped and unavailable scans without inventing percentages", () => {
-  const output = renderCoverageJobSummary({
-    node: {
-      reason: "no covered Node group changed",
-      skip: true,
-    },
-    python: {
-      error: "coverage generation failed before a readable summary was produced",
-      outcome: "failure",
-      skip: false,
-    },
-  });
-
-  assert.match(output, /\| Node\.js \| Skipped \| — \| — \| n\/a \| n\/a \|/);
+test("a failed UT job's upload is labelled partial, not topped up", () => {
+  const output = renderCoverageJobSummary({ node: { document: nodeDocument }, python: { document: undefined }, producer: "failure" });
+  assert.match(output, /The UT job did not pass \(`failure`\)\.\*\* The figures below cover only what it uploaded; nothing was re-run/);
+  assert.match(output, /\| Node\.js \| UT run \(partial\) \| 12 \|/);
   assert.match(output, /\| Python \| Unavailable \| — \| — \| n\/a \| n\/a \|/);
-  assert.match(output, /Skipped — no covered Node group changed/);
-  assert.match(output, /Unavailable — coverage generation failed/);
+  assert.match(output, /Python:\*\* Unavailable — the UT job ended `failure` before it uploaded coverage/);
 });
 
-test("labels a partial report from a failing scan", () => {
-  const output = renderCoverageJobSummary({
-    node: {
-      document: {
-        files: 1,
-        mode: "incremental",
-        selected_groups: ["scripts"],
-        totals: {
-          branches: metric(1, 2, 50),
-          functions: metric(1, 1, 100),
-          lines: metric(3, 4, 75),
-        },
-      },
-      outcome: "failure",
-      skip: false,
-    },
-    python: { reason: "no covered Python service changed", skip: true },
-  });
+test("no upload at all invents no numbers", () => {
+  const output = renderCoverageJobSummary({ node: { document: undefined }, python: { document: undefined }, producer: "cancelled" });
+  assert.match(output, /\| Node\.js \| Unavailable \| — \| — \| n\/a \| n\/a \|/);
+  assert.match(output, /\| Python \| Unavailable \| — \| — \| n\/a \| n\/a \|/);
+  assert.doesNotMatch(output, /UT run: profile/);
+  assert.doesNotMatch(output, /%/);
+});
 
-  assert.match(output, /\| Node\.js \| Incremental \(failed\) \|/);
-  assert.match(output, /\| Python \| Skipped \|/);
+test("a passing UT job with nothing to show is named as the defect it is", () => {
+  const output = renderCoverageJobSummary({ node: { document: undefined }, python: { document: pythonDocument }, producer: "success" });
+  assert.match(output, /Node\.js:\*\* Unavailable — the UT job passed but no coverage for this runtime reached this job/);
 });

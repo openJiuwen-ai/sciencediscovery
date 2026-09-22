@@ -127,7 +127,24 @@ export function nodeResults({ reportPath, entries, label }) {
   return { results, errors };
 }
 
-export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pythonCommand = [python], nodeImports = [], env = process.env, timeoutMs = 300_000 }) {
+/**
+ * Node writes lcov paths relative to the worker's directory and names no test.
+ * Rewrite both, so every record says by itself which test file produced it and
+ * which repository file it measures — the data then means the same thing
+ * wherever it is read, including after it has been handed to another job.
+ */
+export function relocateLcov(text, { root, cwd, source }) {
+  return text.split('\n').flatMap(line => {
+    if (line.startsWith('TN:')) return [];
+    if (!line.startsWith('SF:')) return [line];
+    const absolute = resolve(cwd, line.slice(3));
+    const inRepository = relative(root, absolute);
+    const file = inRepository.startsWith('..') || isAbsolute(inRepository) ? absolute : inRepository.replaceAll('\\', '/');
+    return [`TN:${source}`, `SF:${file}`];
+  }).join('\n');
+}
+
+export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pythonCommand = [python], nodeImports = [], coverageDir, env = process.env, timeoutMs = 300_000 }) {
   validatePlan(plan);
   for (const entry of plan.entries) inside(root, entry.source);
   mkdirSync(outputDir, { recursive: true });
@@ -155,11 +172,18 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
         writeJSON(request, { root, files, plan: part, timeoutMs });
         const nativeReport = join(outputDir, `${name}-events.jsonl`);
         rmSync(nativeReport, { force: true });
-        const completed = invoke(process.execPath, [...nodeImports.flatMap(p => ['--import', p]), '--test',
+        // A Node worker holds exactly one source (the grouping key above), so
+        // the coverage it records is that one test file's, named after it.
+        const lcov = coverageDir && join(coverageDir, `${files[0].replaceAll('/', '__')}.lcov`);
+        if (lcov) { mkdirSync(coverageDir, { recursive: true }); rmSync(lcov, { force: true }); }
+        const completed = invoke(process.execPath, [...nodeImports.flatMap(p => ['--import', p]),
+          ...(lcov ? ['--experimental-test-coverage'] : []), '--test',
           '--test-reporter', join(here, 'node-reporter.mjs'), '--test-reporter-destination', nativeReport,
+          ...(lcov ? ['--test-reporter', 'lcov', '--test-reporter-destination', lcov] : []),
           join(here, 'node-worker.mjs')],
         { root: cwd, env: { ...env, SCIENCE_TAG_RUN_REQUEST: request }, outputDir, name, timeoutMs });
         if (completed.status !== 0) errors.push(`NODE_WORKER_FAILED: ${name}`);
+        if (lcov && existsSync(lcov)) writeFileSync(lcov, relocateLcov(readFileSync(lcov, 'utf8'), { root, cwd, source: files[0] }));
         const reported = nodeResults({ reportPath: nativeReport, entries, label: name });
         results.push(...reported.results); errors.push(...reported.errors);
       } else {

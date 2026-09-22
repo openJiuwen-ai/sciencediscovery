@@ -190,7 +190,7 @@ the three groups together are exactly that plan:
 ```bash
 pnpm test:shared   # all of it, in one process
 
-pnpm ci:ut    # category:ut, as the host tier then the guest tier
+pnpm ci:ut    # category:ut
 pnpm ci:st    # category:st
 pnpm ci:e2e   # category:e2e: starts its own isolated stack, runs the browser journeys
 ```
@@ -233,6 +233,13 @@ files in `.test-runs/<slice>/`. `CI_RESULTS_DIR=.test-runs node
 fails a CI job when a layer ran less than it planned. Read
 `summary.json` rather than an exit code: a layer's own script can return zero
 and still have executed fewer cases than it froze.
+
+Coverage comes from the same run, never from a second one. `--coverage` makes a
+layer record it while it executes the plan — `pnpm ci:ut -- --coverage` writes
+it to `<CI_RESULTS_DIR>/ut/tagged/coverage/` — and `pnpm coverage:report --
+--input <that directory>` merges it into `coverage/` without running anything.
+CI's Coverage job does exactly that with the UT job's upload; see
+[.ci/README.md](.ci/README.md#coverage-reporting).
 
 Live and hardware layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`,
 `ci:e2e:legacy`) fail closed behind their `CI_ALLOW_*` variables and are never

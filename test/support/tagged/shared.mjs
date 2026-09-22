@@ -14,7 +14,7 @@
 // limitations under the License.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, globSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, globSync, readdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collect, execute } from './coordinator.mjs';
@@ -36,6 +36,31 @@ function run(command,args,env,log,cwd=root) {
 }
 function python(project){return join(root,'services',project,'.venv/bin/python');}
 function projectEnv(env,project){return {...env,PYTHONPATH:[join(root,'services',project,'tests'),join(root,'services',project,'src')].join(':')};}
+/**
+ * Coverage is recorded by the run that gates, never by a second one: `--coverage`
+ * instruments exactly this execution and changes nothing about what is selected.
+ * Node workers keep their one-file-per-process isolation and add V8 coverage;
+ * pytest keeps its interpreter, its adapter and its arguments and gains
+ * `coverage run` in front. What a Python project is measured over is its source
+ * tree — `paper` keeps its modules at the project root.
+ */
+const coverageRequirement='coverage>=7.6,<8';
+const measured=project=>join(root,'services',project,project==='paper'?'':'src');
+const coverageRun=(project,data)=>[python(project),'-m','coverage','run','--branch','--parallel-mode',`--data-file=${join(data,'.coverage')}`,
+  `--source=${measured(project)}`,'--omit=*/tests/*,*/test_*.py,*/.venv/*'];
+/**
+ * Turn one project's data files into a report with repository-relative paths.
+ * `-P` keeps the repository root off `sys.path`: a `coverage/` output directory
+ * there would otherwise be imported in place of the package.
+ */
+async function pythonCoverage(project,data,env,logs){
+  const dataFile=join(data,'.coverage'),report=join(data,'..',`${project}.json`);
+  const combined=await run(python(project),['-P','-m','coverage','combine',`--data-file=${dataFile}`,data],env,join(logs,'coverage-combine.log'));
+  const written=combined===0&&await run(python(project),['-P','-m','coverage','json',`--data-file=${dataFile}`,'-o',report],env,join(logs,'coverage-json.log'))===0;
+  rmSync(data,{recursive:true,force:true});
+  if(!written){console.log(`Coverage: ${project} produced no report; see ${logs}/coverage-*.log`);return null;}
+  return project;
+}
 /**
  * Two ways to name a set of tests, and they are deliberately different.
  *
@@ -70,7 +95,7 @@ function showPolicies() {
   return 0;
 }
 export async function main(args=process.argv.slice(2)) {
-  const action=args.shift()??'run';let slice,output,profileName='pr';const query={};
+  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false;const query={};
   while(args.length){
     const flag=args.shift();
     // pnpm versions differ on whether the conventional separator is stripped,
@@ -79,6 +104,7 @@ export async function main(args=process.argv.slice(2)) {
     if(flag==='--slice')slice=args.shift();
     else if(flag==='--profile')profileName=args.shift();
     else if(flag==='--output')output=args.shift();
+    else if(flag==='--coverage')coverage=true;
     else if(flag?.startsWith('--')&&schema.groups[flag.slice(2)]){
       const group=flag.slice(2),value=args.shift();
       if(!schema.groups[group].values.includes(value))throw new Error(`Unknown ${group}: ${value}; expected ${schema.groups[group].values.join('|')}`);
@@ -92,7 +118,7 @@ export async function main(args=process.argv.slice(2)) {
   if(!profile)throw new Error(`Unknown profile: ${profileName}; known are ${Object.keys(profiles).join(', ')}`);
   if(dimensions.length&&(slice!==undefined||profileName!=='pr'))throw new Error('--profile and --slice name a part of a CI policy; a tag query builds its own selector. Use one or the other');
   slice??='shared';
-  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error(`Usage: test:run|test:list|policy [--profile ${Object.keys(profiles).join('|')}] [--slice ut|st|e2e] [--${Object.keys(schema.groups).join(' V] [--')} V] [--output DIR]`);
+  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error(`Usage: test:run|test:list|policy [--profile ${Object.keys(profiles).join('|')}] [--slice ut|st|e2e] [--${Object.keys(schema.groups).join(' V] [--')} V] [--output DIR] [--coverage]`);
   // Under CI the layer entry point owns `<CI_RESULTS_DIR>/<layer>/run.log` and
   // its own summary; the frozen plan and its evidence go beside them, not over them.
   const label=dimensions.length?'query':profileName==='pr'?slice:`${profileName}-${slice}`;
@@ -125,6 +151,9 @@ export async function main(args=process.argv.slice(2)) {
   if(action!=='list' && !prepared) {
     const steps=[['pnpm',['install','--frozen-lockfile']],['pnpm',['build']]];
     if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:project==='memory-graph'?['--extra','test']:[])]]);
+    // Into the project's own environment, after the locked sync, so the tests
+    // run on exactly the interpreter and packages they run on without it.
+    if(needUT&&coverage)for(const project of pythonProjects)steps.push(['uv',['pip','install','--python',python(project),coverageRequirement]]);
     if(needPW)steps.push(['node',['test/sync-e2e.mjs','--write']],['npm',['ci','--prefix','.e2e']],['.e2e/node_modules/.bin/playwright',['install','chromium']]);
     for(let i=0;i<steps.length;i++){const [cmd,argv]=steps[i];console.log(`Prepare: ${cmd} ${argv.join(' ')}`);if(await run(cmd,argv,env,join(outputDir,`prepare-${i}.log`)))throw new Error(`PREPARATION_FAILED: inspect ${join(outputDir,`prepare-${i}.log`)}`);}
   }
@@ -176,6 +205,10 @@ export async function main(args=process.argv.slice(2)) {
   if(plan.entries.some(e=>e.tags.includes('category:ut')) && process.getuid?.()===0)checked.problems.push({code:'NON_ROOT_REQUIRED'});
   checked.ok=!checked.problems.length;json(join(outputDir,'preflight.json'),checked);
   const results=[], errors=checked.problems.map(p=>JSON.stringify(p));
+  const coverageDir=join(outputDir,'coverage');
+  if(coverage){rmSync(coverageDir,{recursive:true,force:true});mkdirSync(coverageDir,{recursive:true});}
+  // What this run owes the artifact: one lcov per Node test file it executed, one report per Python project.
+  const covered=[],owed={node:0,python:[]};
   if(checked.ok){
     const groups=new Map();
     for(const e of plan.entries.filter(e=>['node','python'].includes(e.runner))){
@@ -188,9 +221,14 @@ export async function main(args=process.argv.slice(2)) {
       const parts=group.split('/');const cwd=['packages','services','apps'].includes(parts[0])?join(root,...parts.slice(0,2)):root;
       const directory=join(outputDir,`group-${++index}`);
       console.log(`Run ${index}/${groups.size}: ${group} (${entries.length})`);
+      const data=project&&coverage?join(coverageDir,'python',project):undefined;
+      if(data){mkdirSync(data,{recursive:true});owed.python.push(project);}else if(coverage)owed.node++;
       const summary=await execute({root,cwd,plan:subplan(plan,entries),outputDir:directory,
-        python:project?python(project):undefined,nodeImports:['tsx'],env:project?projectEnv(env,project):env,timeoutMs:600_000});
+        python:project?python(project):undefined,pythonCommand:data?coverageRun(project,data):undefined,
+        coverageDir:!project&&coverage?join(coverageDir,'node'):undefined,
+        nodeImports:['tsx'],env:project?projectEnv(env,project):env,timeoutMs:600_000});
       results.push(...summary.results);errors.push(...summary.problems);
+      if(data)covered.push(await pythonCoverage(project,data,env,directory));
     }
     for(const entry of plan.entries.filter(e=>e.runner==='command')){
       const [command,...argv]=entry.command;const code=await run(command,argv,env,join(outputDir,entry.id.replaceAll(':','-')+'.log'));
@@ -213,6 +251,16 @@ export async function main(args=process.argv.slice(2)) {
     }
   }
   const summary=verifyResults(plan,results,errors);json(join(outputDir,'summary.json'),summary);
+  if(coverage){
+    // The artifact describes itself: which plan it measured, and how that run
+    // went. A report built from it later does not have to trust anything else.
+    const lcov=existsSync(join(coverageDir,'node'))?readdirSync(join(coverageDir,'node')).filter(f=>f.endsWith('.lcov')).length:0;
+    json(join(coverageDir,'manifest.json'),{schema_version:1,revision:plan.revision,profile:dimensions.length?null:profileName,slice,
+      selector:plan.selector,targets:plan.targets,plan_digest:plan.digest,status:summary.status,planned:summary.planned,
+      executed:summary.executed,passed:summary.passed,failed:summary.failed,skipped:summary.skipped,
+      node:{lcov,expected:owed.node},python:{projects:covered.filter(Boolean),expected:owed.python}});
+    console.log(`Coverage: ${lcov} Node test file(s), Python ${covered.filter(Boolean).join(', ')||'none'} -> ${coverageDir}`);
+  }
   console.log(JSON.stringify({status:summary.status,planned:summary.planned,executed:summary.executed,passed:summary.passed,failed:summary.failed,skipped:summary.skipped,outputDir}));
   return summary.exitCode;
 }

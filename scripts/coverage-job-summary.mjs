@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+// Render the Coverage job's run-page summary from the summaries
+// `coverage-report.mjs` merged. Every number here was recorded by the UT job
+// while it ran the plan; this job ran nothing, and the page says so.
+
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,46 +33,47 @@ function percentage(metric) {
   return `${Number(metric.percentage).toFixed(2)}% (${metric.covered}/${metric.total})`;
 }
 
-function titleCase(value) {
-  const text = String(value || "").trim();
-  return text ? `${text[0].toUpperCase()}${text.slice(1)}` : "Unknown";
-}
-
-function scannedGroups(document) {
+function measuredGroups(document) {
   if (Array.isArray(document?.selected_groups)) return document.selected_groups;
   if (!Array.isArray(document?.groups)) return [];
   return document.groups.map((group) => typeof group === "string" ? group : group?.name).filter(Boolean);
 }
 
-function scanStatus(state) {
-  if (state.skip) return "Skipped";
+/** Where a row's numbers came from, in the terms a reader of the run page needs. */
+function source(state, producer) {
   if (!state.document) return "Unavailable";
-  const mode = titleCase(state.document.mode || state.mode || (state.document.authoritative ? "full" : "incremental"));
-  return state.outcome === "failure" ? `${mode} (failed)` : mode;
+  return producer === "success" ? "UT run" : "UT run (partial)";
 }
 
-function detailLine(label, state) {
-  if (state.skip) return `- **${label}:** Skipped — ${markdownText(state.reason || "no covered group changed")}`;
-  if (!state.document) return `- **${label}:** Unavailable — ${markdownText(state.error || "summary.json was not produced")}`;
-  const groups = scannedGroups(state.document);
-  const groupText = groups.length > 0 ? groups.map((group) => `\`${markdownText(group)}\``).join(", ") : "none recorded";
-  return `- **${label}:** ${groupText}`;
+function detailLine(label, state, producer) {
+  if (state.document) {
+    const groups = measuredGroups(state.document);
+    return `- **${label}:** ${groups.length > 0 ? groups.map((group) => `\`${markdownText(group)}\``).join(", ") : "none recorded"}`;
+  }
+  const reason = state.error
+    || (producer === "success"
+      ? "the UT job passed but no coverage for this runtime reached this job"
+      : `the UT job ended \`${markdownText(producer || "unknown")}\` before it uploaded coverage for this runtime; nothing was re-run to fill the gap`);
+  return `- **${label}:** Unavailable — ${reason}`;
 }
 
-function scopeLine(label, state) {
-  if (!state.document?.scope) return undefined;
-  return `- **${label}:** ${markdownText(state.document.scope)}`;
+function runLine(document) {
+  const run = document?.run;
+  if (!run) return undefined;
+  const counts = ["planned", "executed", "passed", "failed", "skipped"].map((key) => `${key} ${run[key] ?? "?"}`).join(", ");
+  const plan = run.plan_digest ? ` (plan \`${String(run.plan_digest).slice(0, 12)}\`)` : "";
+  return `UT run: profile \`${markdownText(run.profile ?? "query")}\`, slice \`${markdownText(run.slice ?? "?")}\` — ${counts}${plan}.`;
 }
 
-export function renderCoverageJobSummary({ node, python }) {
+export function renderCoverageJobSummary({ node, python, producer = "success" }) {
   const rows = [
     ["Node.js", node],
     ["Python", python],
   ].map(([label, state]) => [
     label,
-    scanStatus(state),
+    source(state, producer),
     state.document?.files ?? "—",
-    state.document ? scannedGroups(state.document).length : "—",
+    state.document ? measuredGroups(state.document).length : "—",
     percentage(state.document?.totals?.lines),
     percentage(state.document?.totals?.branches),
   ]);
@@ -77,69 +83,44 @@ export function renderCoverageJobSummary({ node, python }) {
     "",
     "Coverage is informational. **No minimum percentage is enforced.**",
     "",
-    "| Runtime | Scan | Files measured | Groups measured | Lines | Branches |",
+    "Recorded by the UT job while it ran the plan. This job merges what that run uploaded and executes no tests.",
+  ];
+  const run = runLine(node.document) ?? runLine(python.document);
+  if (run) lines.push("", run);
+  if (producer !== "success") {
+    lines.push("", `> **The UT job did not pass (\`${markdownText(producer || "unknown")}\`).** The figures below cover only what it uploaded; nothing was re-run to fill the gap. The UT job's own result is the signal.`);
+  }
+  lines.push(
+    "",
+    "| Runtime | Source | Files measured | Groups measured | Lines | Branches |",
     "| --- | --- | ---: | ---: | ---: | ---: |",
     ...rows.map((row) => `| ${row.map(markdownText).join(" | ")} |`),
     "",
-    "### Scanned groups",
+    "### Measured groups",
     "",
-    detailLine("Node.js", node),
-    detailLine("Python", python),
-  ];
-
-  const scopes = [scopeLine("Node.js scope", node), scopeLine("Python scope", python)].filter(Boolean);
-  if (scopes.length > 0) lines.push("", "### Scope notes", "", ...scopes);
+    detailLine("Node.js", node, producer),
+    detailLine("Python", python, producer),
+    "",
+    "ST and the mocked browser E2E load no product module into a measured process, so they contribute no module coverage.",
+  );
   return `${lines.join("\n")}\n`;
 }
 
-async function loadState({ path, skip, reason, mode, outcome, scopeOutcome }) {
-  if (skip) return { document: undefined, mode, outcome, reason, skip: true };
+async function loadState(path) {
   try {
-    return {
-      document: JSON.parse(await readFile(path, "utf8")),
-      mode,
-      outcome,
-      reason,
-      skip: false,
-    };
+    return { document: JSON.parse(await readFile(path, "utf8")) };
   } catch (error) {
-    let message = scopeOutcome !== "success"
-      ? "coverage scope selection did not complete"
-      : outcome === "failure"
-        ? "coverage generation failed before a readable summary was produced"
-        : outcome === "skipped"
-          ? "coverage generation did not run"
-          : "summary.json was not produced";
-    if (error instanceof SyntaxError) message = "summary.json was not valid JSON";
-    return { document: undefined, error: message, mode, outcome, reason, skip: false };
+    if (error?.code === "ENOENT") return { document: undefined };
+    return { document: undefined, error: error instanceof SyntaxError ? "summary.json was not valid JSON" : String(error.message ?? error) };
   }
 }
 
-function selected(value) {
-  return String(value || "").toLowerCase() === "true";
-}
-
 async function main() {
-  const scopeOutcome = process.env.COVERAGE_SCOPE_OUTCOME || "unknown";
   const [node, python] = await Promise.all([
-    loadState({
-      mode: process.env.NODE_COVERAGE_MODE,
-      outcome: process.env.NODE_COVERAGE_OUTCOME,
-      path: resolve("coverage/summary.json"),
-      reason: process.env.NODE_COVERAGE_REASON,
-      scopeOutcome,
-      skip: selected(process.env.NODE_COVERAGE_SKIP),
-    }),
-    loadState({
-      mode: process.env.PYTHON_COVERAGE_MODE,
-      outcome: process.env.PYTHON_COVERAGE_OUTCOME,
-      path: resolve("coverage/python/summary.json"),
-      reason: process.env.PYTHON_COVERAGE_REASON,
-      scopeOutcome,
-      skip: selected(process.env.PYTHON_COVERAGE_SKIP),
-    }),
+    loadState(resolve("coverage/summary.json")),
+    loadState(resolve("coverage/python/summary.json")),
   ]);
-  process.stdout.write(renderCoverageJobSummary({ node, python }));
+  process.stdout.write(renderCoverageJobSummary({ node, python, producer: process.env.UT_RESULT || "unknown" }));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

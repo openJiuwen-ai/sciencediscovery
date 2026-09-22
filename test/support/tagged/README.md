@@ -236,13 +236,14 @@ argument and not an environment variable on purpose — the same commit and the
 same command have to mean the same plan, so reproducing a tagged run's failure
 is a matter of copying the command out of the log.
 
-Coverage answers to the same policy. [coverage.mjs](coverage.mjs) cuts a frozen
-plan into the directories its identities live under, and `pnpm coverage:node`
-and `scripts/run-python-coverage.mjs` run those identities through the same
-workers the slices use, taking `--profile` the same way. So the coverage job
-chooses *which directories* to measure and never which cases: a case the merge
-gate leaves out is missing from a coverage run for one reason, the selector,
-and reading it off the machine is not an option the code has.
+Coverage is a property of a run, not a run of its own. `--coverage` on the run
+that gates — `pnpm ci:ut -- --coverage` in CI — adds V8 coverage to each Node
+worker and puts `coverage run` in front of pytest, and writes the data beside
+the plan under `<output>/coverage/`. It changes how the selected cases are
+measured and never which cases are selected, so a case the policy leaves out is
+missing from coverage for one reason, the selector. `pnpm coverage:report` then
+merges those files and executes nothing; `.ci/README.md` describes the data and
+how the Coverage job uses it.
 
 ## Ad-hoc queries
 
