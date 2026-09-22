@@ -4,6 +4,9 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { ideaResearchModel } from "./helpers/idea-research-model.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-idea-tree-fixture.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 // This journey reads the research surface in Chinese throughout — the settings
 // selects, the control card, the progress list and every status word below.
 // Those strings used to be hardcoded in the components and matched in any
@@ -162,4 +165,6 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
     if (fixture) await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

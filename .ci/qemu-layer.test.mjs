@@ -19,12 +19,14 @@
  * under emulation, which is the cost the split removed.
  */
 
+import { createTest } from "../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+
 
 const ciDirectory = dirname(fileURLToPath(import.meta.url));
 const script = join(ciDirectory, "run-qemu-layer.sh");
@@ -76,7 +78,7 @@ test("an unknown layer is refused", () => {
   assert.match(output, /'st' is not a layer this guest runs/);
 });
 
-test("the UT guest tier refuses a workspace its host did not build", { skip: !hostRunsGuests }, async (t) => {
+test("the UT guest tier refuses a workspace its host did not build", { tags: ["os:linux", "arch:amd64"] }, async (t) => {
   const root = await skeleton(t, ["node_modules"]);
   const { output, status } = runScript(join(root, ".ci", "run-qemu-layer.sh"), "ut-guest", {
     CI_RESULTS_DIR: join(root, "results"),
@@ -85,7 +87,7 @@ test("the UT guest tier refuses a workspace its host did not build", { skip: !ho
   assert.match(output, /services\/runner\/dist is missing; install and build on this host before running the ut-guest guest/);
 });
 
-test("the E2E guest refuses a workspace whose host did not prepare .e2e", { skip: !hostRunsGuests }, async (t) => {
+test("the E2E guest refuses a workspace whose host did not prepare .e2e", { tags: ["os:linux", "arch:amd64"] }, async (t) => {
   const root = await skeleton(t, ["node_modules", "apps/web/dist"]);
   const { output, status } = runScript(join(root, ".ci", "run-qemu-layer.sh"), "e2e", {
     CI_RESULTS_DIR: join(root, "results"),

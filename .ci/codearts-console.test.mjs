@@ -19,10 +19,12 @@
 // does not mention is a piece of configuration nobody outside the console
 // knows about.
 
+import { createTest } from "../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
 import { access, readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import test from "node:test";
+
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const workflowDirectory = join(repositoryRoot, ".codearts", "workflow");

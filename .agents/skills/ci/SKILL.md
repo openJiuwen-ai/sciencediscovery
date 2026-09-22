@@ -104,13 +104,35 @@ the console without changing it has already cost a wasted CI round. This reposit
 intentionally has no `.gitcode/workflows/` pipeline; do not reintroduce
 GitCode Actions unless the user changes that policy.
 
+## One plan, several layers
+
+`ci:ut`, `ci:st` and `ci:e2e` are not three suites. Each runs
+`test/support/tagged/shared.mjs` against the one selector in
+`test/support/tagged/profiles.mjs`, narrowed to the group that layer schedules
+(`category:ut` — as `tier:host` then `tier:guest` — `category:st`,
+`category:e2e`). Those groups partition the plan, so the layers together run
+exactly `pnpm test:shared`, the command a developer runs locally.
+
+What this means when reading a failure: selection comes from the tags in each
+test's source and from nothing else. A job's credentials, devices, installed
+services and `CI_*` variables cannot add a case or remove one — a missing
+capability fails the plan's preflight instead, before any test body runs. A
+skipped case is a failed run. So "the layer passed but ran fewer tests" is not
+a possible outcome any more; `node .ci/tagged-summary.mjs` fails the job unless
+`planned == executed == passed`, including when no plan was produced at all.
+Live-model, NPU, legacy and macOS work is tagged out of the shared selector and
+keeps its own opt-in entry points; `test/support/tagged/MIGRATION.md` is the
+ledger of what is in and what is out.
+
 ## Shared rules
 
 1. Never weaken a sandbox assertion to make a pipeline green. Tests that
    assert isolation or the sandbox's `/workspace` view must run on a host where
    bubblewrap can create namespaces.
 2. Call the `pnpm ci:*` entry points, never their underlying commands. Do not
-   create a second platform-specific test definition.
+   create a second platform-specific test definition, and do not add a list of
+   cases beside the tags: `pnpm ci:catalog:check` fails a layer that runs
+   anything other than a slice of the shared plan.
 3. CodeArts bills pipelines and build tasks against separate quotas, and the
    pipeline's is the one that runs out. No workflow step may run shell, clone,
    or upload on a pipeline executor: every step is
@@ -126,18 +148,20 @@ GitCode Actions unless the user changes that policy.
    `pnpm ci:selftest` fails the build when a workflow step reaches for the
    pipeline quota again, or when the result gate stops keying on that
    verification.
-4. UT has exactly two tiers and no third bucket. Every UT case belongs to
-   `ut:host` (runs on an ordinary CI host, no sandbox) or to `ut:guest` (needs
+4. UT has exactly two tiers and no third bucket. Every UT test carries
+   `tier:host` (runs on an ordinary CI host, no sandbox) or `tier:guest` (needs
    a Linux guest kernel that grants user namespaces, so bubblewrap works), and
-   their union is all of UT. A new UT test joins the tier of the package it
-   lives in: a host-tier test may not depend on a guest capability, and a
-   guest-tier assertion may not be weakened so the test can move to the host
-   tier. Do not add a `ci:ut:*` entry point beside them; extend a tier
-   instead. `pnpm ci:catalog:check` fails closed on a UT case with no tier or
-   two, on a workspace package with tests that lands in both tiers or in
-   neither, on `ci:ut` no longer equalling the two tiers, and on a guest tier
-   that installs or builds. `pnpm ci:selftest` is that guard's regression
-   suite.
+   their union is all of UT — a UT test with no tier fails the run with
+   `MISSING_TIER` rather than being scheduled by neither job. A new UT test
+   joins the tier of the package it lives in: a host-tier test may not depend
+   on a guest capability, and a guest-tier assertion may not be weakened so the
+   test can move to the host tier. Do not add a `ci:ut:*` entry point beside
+   them; extend a tier instead. `pnpm ci:catalog:check` reads those tags back
+   out of the sources and fails closed on a workspace package with tests that
+   lands in both tiers or in neither or disagrees with the catalog's guest-tier
+   list, on `ci:ut` no longer equalling the two tiers, on a guest tier that
+   installs or builds, and on a layer that runs something other than its slice.
+   `pnpm ci:selftest` is that guard's regression suite.
 5. Read the failing job log before theorising. If the platform log is not
    accessible with the available credentials, ask for the log instead of
    inferring the failure from a status badge.
@@ -187,7 +211,8 @@ GitCode Actions unless the user changes that policy.
 | The guest reports `BLOCKED: ... expects a workspace its host already installed and built` | The host steps did not install and build before the guest started. Fix the host, never the guest: adding an install or build there is exactly what the split removed. |
 | A guest log shows `Scope: all N workspace projects`, or `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` | pnpm's `verify-deps-before-run` ran and decided to reinstall. Its check keys `node_modules/.pnpm-workspace-state-v1.json` by the absolute project directories of the machine that installed, so a moved workspace always looks changed. Keep `pnpm_config_verify_deps_before_run=` — the `pnpm_` prefix and the empty value both matter — in the guest environment; do not let the guest install instead. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`; regenerate it with `pnpm install --lockfile-only`. |
-| Playwright is green with fewer tests than expected | A skip is not a pass. Check counts and not-passed titles; a BLOCKED precondition is reported as skipped. |
+| Playwright is green with fewer tests than expected | A skip is not a pass, and the plan already says so. Read `<CI_RESULTS_DIR>/e2e/tagged/summary.json`: it names every planned journey that did not report one. |
+| `MISSING_TIER`, `EMPTY_SELECTION`, `EMPTY_MODULE` or `COLLECTION_DRIFT` | A collection problem, not a product failure. The plan is frozen from source, so a test that declares no tier, a selector that matches nothing, a module that registers no test, and a source that changed between freezing and running are all failures of the run. |
 | `fatal: couldn't find remote ref refs/heads/<source>` on a fork PR | The job fetched a fork-only branch from the upstream repository. Fetch GitCode's upstream merge-request ref instead; see the CodeArts reference. |
 | The PR result table says `COMPLETED` | A CodeArts lifecycle state leaked into user-facing output. Normalize each task to `PASSED` or `FAILED` in the parent workflow. |
 | One code-check JSON says `FIALED`, is missing, or contains an unknown status | It is not a success alias. Fail that child closed to `FAILED`; do not reuse the parent or another child's status. |

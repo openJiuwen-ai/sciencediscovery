@@ -52,7 +52,10 @@ async function run(command, args) {
   emit(`\n$ ${display}\n`, process.stdout);
   const child = spawn(command, args, {
     cwd: repositoryRoot,
-    env: { ...process.env, CI: "1", SCIENCE_AGENT_DATA_DIR: runtimeRoot },
+    // Resolve CI_RESULTS_DIR for the step too, so the frozen plan a slice
+    // writes lands beside this layer's own log instead of under the default
+    // the step would have picked for itself.
+    env: { ...process.env, CI: "1", CI_RESULTS_DIR: resultsRoot, SCIENCE_AGENT_DATA_DIR: runtimeRoot },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (chunk) => {

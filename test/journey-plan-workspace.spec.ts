@@ -24,6 +24,9 @@ import {
   waitForRunTerminal,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-plan-workspace.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: The Workspace shows independent current Plans for the main Agent and multiple Subagents, and clearing one Plan removes only that card.
@@ -201,4 +204,6 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
     await cleanupJourney(page, fixture).catch(() => undefined);
     await stub.stop();
   }
+});
+
 });

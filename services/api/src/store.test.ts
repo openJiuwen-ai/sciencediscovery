@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { test } from "node:test";
+
 import { DatabaseSync } from "node:sqlite";
 import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation } from "@sciencediscovery/cas";
 

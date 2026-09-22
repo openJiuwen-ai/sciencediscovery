@@ -758,11 +758,11 @@ export async function requireFirstRunState(
   if (!total) return found;
 
   const refusal = stackResetRefusal();
-  testInfo.skip(Boolean(refusal), `BLOCKED: this journey reads the first-run empty state, but the stack holds `
+  expect(refusal, `BLOCKED: this journey reads the first-run empty state, but the stack holds `
     + `${found.projects} project(s), ${found.providers} provider(s) and ${found.models} model profile(s) from an `
     + `earlier run. ${refusal}. Run the E2E layer (\`pnpm ci:e2e\`), which starts a throwaway stack and grants the `
     + `reset, or point E2E_BASE_URL at a stack you can afford to empty — the suite will not clear one it was only `
-    + "pointed at.");
+    + "pointed at.").toBeUndefined();
 
   // Sessions reference models, so Projects go first; a runtime default pointing
   // at a model would otherwise block that model's Provider from being deleted.

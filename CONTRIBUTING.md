@@ -17,6 +17,8 @@ Alternatively, provide a standalone `services/gateway/.venv`.
 ## Development commands
 
 ```bash
+pnpm test:shared  # the one plan CI runs: freeze it from source tags, then run all of it
+pnpm test:list    # freeze and print that plan without running a single test body
 pnpm check        # typecheck, paper tests, build, and package unit tests
 pnpm test         # build + recursive package unit tests
 pnpm smoke        # build + @sciencediscovery/api unit tests only
@@ -170,14 +172,31 @@ Integration/E2E tests under `test/` are **not** part of `pnpm check`.
 
 ## CI layers
 
-CI groups the commands above into three layer entry points. Reproducing a
-pipeline failure locally means running the same one:
+There is one plan and three layer entry points that slice it. `pnpm test:shared`
+runs the whole plan; each layer runs the group CI schedules as its own job, and
+the three groups together are exactly that plan:
 
 ```bash
-pnpm ci:ut    # both UT tiers: static checks, package tests, Python suites
-pnpm ci:st    # build, then the hermetic agent-loop smoke
-pnpm ci:e2e   # starts its own isolated stack and runs @mocked browser journeys
+pnpm test:shared   # all of it, in one process
+
+pnpm ci:ut    # category:ut, as the host tier then the guest tier
+pnpm ci:st    # category:st
+pnpm ci:e2e   # category:e2e: starts its own isolated stack, runs the browser journeys
 ```
+
+Which cases a command runs is decided by the tags each test declares in its own
+source, read through the single selector in
+[test/support/tagged/profiles.mjs](test/support/tagged/profiles.mjs). Nothing
+about the machine takes part in that decision: no credential, device, installed
+service or `CI_*` variable can add a case or remove one. A run then has to
+execute every planned case — `selected == 0`, a missing prerequisite, a skip,
+or `executed != planned` all fail it, so a layer cannot go green by running
+less.
+
+Live-model, NPU, legacy-quarantine and macOS work is deliberately not in that
+plan. It is tagged, collected and deselected, and keeps its own opt-in entry
+points. [test/support/tagged/MIGRATION.md](test/support/tagged/MIGRATION.md) is
+the ledger: what the shared plan covers, what is outside it, and why.
 
 The CI `e2e` layer is the mocked browser subset, not the definition of all
 user-perspective E2E. Record separately executed API/CLI/stack journeys in the
@@ -193,6 +212,17 @@ point them somewhere writable:
 CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:st
 ```
 
+Beside that, each slice writes its frozen plan and its accounting to
+`<CI_RESULTS_DIR>/<layer>/tagged/` — `plan.json` (every selected identity, its
+source hash, tags and target), `preflight.json` (what the host was asked for
+and what it had) and `summary.json` (`planned`, `executed`, `passed`, `failed`,
+`skipped`, and each problem by identity). `pnpm test:shared` leaves the same
+files in `.test-runs/<slice>/`. `CI_RESULTS_DIR=.test-runs node
+.ci/tagged-summary.mjs` reads either layout back into one table, and is what
+fails a CI job when a layer ran less than it planned. Read
+`summary.json` rather than an exit code: a layer's own script can return zero
+and still have executed fewer cases than it froze.
+
 Live and hardware layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`,
 `ci:e2e:legacy`) fail closed behind their `CI_ALLOW_*` variables and are never
 part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
@@ -204,13 +234,16 @@ image, the per-layer Docker commands, and the tag catalog used to select cases
 UT is split into exactly two tiers, and every UT case belongs to one of them:
 
 ```bash
-pnpm ci:ut:host    # no sandbox: static checks, the Python suites, and every
-                   # workspace package except the sandbox ones
-pnpm ci:ut:guest   # the sandbox packages, which execute a real bubblewrap
+pnpm ci:ut:host    # tier:host — no sandbox: static checks, the Python suites,
+                   # and every workspace package except the sandbox ones
+pnpm ci:ut:guest   # tier:guest — the sandbox packages, which execute a real bubblewrap
 ```
 
 `pnpm ci:ut` is the aggregate for a host that can run both, and is derived as
-the host tier followed by the guest tier — it is not a third definition.
+the host tier followed by the guest tier — it is not a third definition. The
+tier is the `tier:host` / `tier:guest` tag on each test, so the two tiers
+partition `category:ut` the way `category` partitions the whole plan; a UT test
+that declares no tier fails the run rather than being scheduled by neither job.
 
 When you add a unit test, it inherits the tier of the package or suite it lives
 in. Two rules keep the split honest:
@@ -222,15 +255,18 @@ in. Two rules keep the split honest:
   tests.
 
 `.ci/test-catalog.mjs` lists the guest-tier packages; everything else is the
-host tier by construction. `pnpm ci:catalog:check` fails when a package with
-tests ends up in both tiers or in neither, when the aggregate stops equalling
-the two tiers, when the guest tier grows an install or build step, or when a
-`ci:ut:*` entry point appears outside the two tiers. `pnpm ci:selftest` runs
-that guard's own regression tests, and the host tier runs it.
+host tier by construction. `pnpm ci:catalog:check` reads the `tier:` tags back
+out of the test sources and fails when a package with tests ends up in both
+tiers or in neither, when its tags disagree with that list, when the aggregate
+stops equalling the two tiers, when the guest tier grows an install or build
+step, when a layer runs something that is not a slice of the shared plan, or
+when a `ci:ut:*` entry point appears outside the two tiers. `pnpm ci:selftest`
+runs that guard's own regression tests, and the host tier runs it.
 
-On macOS there is no guest tier: `services/runner/src/macos-seatbelt.test.ts`
-lives in the guest tier's package and skips itself off macOS, so run
-`pnpm --filter @sciencediscovery/runner test` natively to exercise Seatbelt.
+`services/runner/src/macos-seatbelt.test.ts` carries `os:macos`, so a Linux
+plan does not contain it at all — it no longer skips itself at run time. To
+exercise Seatbelt, run `pnpm --filter @sciencediscovery/runner test` natively on
+macOS.
 
 ### What each pipeline covers
 
@@ -351,6 +387,10 @@ pnpm ci:ut     # not ci:ut:host — the sandbox tests run only here and on GitHu
 pnpm ci:st
 pnpm ci:e2e
 ```
+
+`pnpm test:shared` is those three in one process, on the same plan. Either way,
+report the numbers each slice's `summary.json` gives — `planned`, `executed`,
+`passed` — not "tests pass".
 
 In addition to those existing CI gates, report a user-perspective E2E
 conclusion for affected product paths, including API/CLI/stack journeys when

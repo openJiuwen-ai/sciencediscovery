@@ -18,6 +18,9 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { requireFirstRunState } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-model-settings.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -541,4 +544,6 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       await page.setViewportSize({ width: 1280, height: 720 }).catch(() => undefined);
     }
   }
+});
+
 });

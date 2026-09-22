@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+
 
 import {
   assertCiContract,
@@ -114,39 +116,69 @@ test("the two tiers cover every workspace package that has tests, and none twice
 test("a guest package that is not a workspace project is rejected", async () => {
   const copy = mutableCatalog();
   copy.utGuestPackages = [{ directory: "services/ghost", name: "@sciencediscovery/ghost" }];
-  copy.utWorkloads = copy.utWorkloads.map((workload) => {
-    if (workload.id === "sandbox-packages") return { ...workload, command: ["pnpm", "--filter", "@sciencediscovery/ghost", "test"] };
-    if (workload.id === "workspace-packages") return { ...workload, command: ["pnpm", "--recursive", "--filter", "!@sciencediscovery/ghost", "test"] };
-    return workload;
-  });
   const problems = await utContractProblems(copy);
   assert.match(problems.join("\n"), /UT guest package @sciencediscovery\/ghost is not a workspace project/);
-  assert.match(problems.join("\n"), /the guest tier selects @sciencediscovery\/ghost, which is not a workspace project/);
+  // With the runner no longer named as a guest package, its own `tier:guest`
+  // declarations are what now disagrees with the catalog.
+  assert.match(problems.join("\n"), /@sciencediscovery\/runner declares tier:guest, but the catalog puts it in the host tier/);
 });
 
-test("a hand-edited package filter that orphans a package is rejected", async () => {
-  const copy = mutableCatalog();
-  copy.utWorkloads = copy.utWorkloads.map((workload) => (workload.id === "workspace-packages"
-    ? { ...workload, command: ["pnpm", "--recursive", "--filter", "!@sciencediscovery/runner", "--filter", "!@sciencediscovery/api", "test"] }
-    : workload));
-  const problems = await utContractProblems(copy);
+/**
+ * A package's tier is the `tier:` tag its test sources declare, so these two
+ * are checked by writing sources into a fixture workspace rather than by
+ * editing a command list that no longer decides anything.
+ */
+async function tierFixture(t, { runnerTiers, apiTiers }) {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "ci-tier-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await writeFile(join(root, "pnpm-workspace.yaml"), "packages:\n  - services/*\n");
+  await writeFile(join(root, "package.json"), JSON.stringify({
+    scripts: {
+      "ci:e2e": "node test/support/tagged/shared.mjs run --slice e2e",
+      "ci:st": "node .ci/run-layer.mjs st",
+      "ci:ut": "node .ci/run-layer.mjs ut",
+      "ci:ut:guest": "node .ci/run-layer.mjs ut-guest",
+      "ci:ut:host": "node .ci/run-layer.mjs ut-host",
+    },
+  }));
+  for (const [directory, name, tiers] of [["runner", "@sciencediscovery/runner", runnerTiers], ["api", "@sciencediscovery/api", apiTiers]]) {
+    await mkdir(join(root, "services", directory), { recursive: true });
+    await writeFile(join(root, "services", directory, "package.json"), JSON.stringify({ name, scripts: { test: "node --test" } }));
+    await writeFile(join(root, "services", directory, "thing.test.mjs"),
+      tiers.map((tier) => `// tags: ["category:ut", "tier:${tier}"]\n`).join(""));
+  }
+  return root;
+}
+
+test("a package whose tests declare no tier is rejected", async (t) => {
+  const root = await tierFixture(t, { runnerTiers: ["guest"], apiTiers: [] });
+  const problems = await utContractProblems(catalog, root);
   assert.match(problems.join("\n"), /@sciencediscovery\/api has tests but belongs to neither UT tier/);
-  assert.match(problems.join("\n"), /UT workload workspace-packages runs /);
 });
 
-test("a package claimed by both tiers is rejected", async () => {
+test("a package claimed by both tiers is rejected", async (t) => {
+  const root = await tierFixture(t, { runnerTiers: ["guest", "host"], apiTiers: ["host"] });
+  const problems = await utContractProblems(catalog, root);
+  assert.match(problems.join("\n"), /@sciencediscovery\/runner has tests and is claimed by both UT tiers/);
+});
+
+test("a tier that runs something other than its slice of the shared plan is rejected", async () => {
   const copy = mutableCatalog();
-  copy.utWorkloads = copy.utWorkloads.map((workload) => (workload.id === "workspace-packages"
+  copy.utWorkloads = copy.utWorkloads.map((workload) => (workload.tier === "host"
     ? { ...workload, command: ["pnpm", "--recursive", "test"] }
     : workload));
+  copy.layers["ut-host"] = [["pnpm", ["--recursive", "test"]]];
+  copy.layers.ut = [...copy.layers["ut-host"], ...copy.layers["ut-guest"]];
   const problems = await utContractProblems(copy);
-  assert.match(problems.join("\n"), /@sciencediscovery\/runner has tests and is claimed by both UT tiers/);
+  assert.match(problems.join("\n"), /UT tier host must run exactly node test\/support\/tagged\/shared\.mjs run --slice ut-host/);
+  assert.match(problems.join("\n"), /layer ut-host runs pnpm --recursive test, which is not a slice of the shared plan/);
 });
 
 test("the ut aggregate is exactly the host tier followed by the guest tier", async () => {
   assert.deepEqual(catalog.layers.ut, [...catalog.layers["ut-host"], ...catalog.layers["ut-guest"]]);
   const copy = mutableCatalog();
-  copy.layers.ut = copy.layers.ut.filter(([, args]) => args[0] !== "evolve:test");
+  copy.layers.ut = copy.layers.ut.filter(([, args]) => args.at(-1) !== "ut-guest");
   const problems = await utContractProblems(copy);
   assert.match(problems.join("\n"), /layer ut is not exactly ut-host followed by ut-guest/);
 });

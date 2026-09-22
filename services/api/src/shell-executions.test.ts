@@ -1,11 +1,14 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 import { RefStore, VersionStore } from "@sciencediscovery/cas";
 import type { RunnerClient } from "@sciencediscovery/executor";
 import type { ManagedExecution, ShellExecutionRequest, ShellExecutionResult } from "@sciencediscovery/schema";

@@ -18,6 +18,9 @@ import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("issue-67-34-inline-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:real", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * Verification for inline run activity cards on the modularized layout:
  * plan / subagent cards must render at the run that
@@ -268,4 +271,6 @@ test("markdown previews anchor to the run that wrote them instead of pinning to 
   const orderAfterReload = await flowOrder(page);
   expect(orderAfterReload).toEqual(order);
   await page.screenshot({ path: `${SCREENSHOTS}/08-artifacts-after-reload.png`, fullPage: true });
+});
+
 });

@@ -18,11 +18,13 @@
 // parsing half is exercised here against fixtures, and the pipeline is checked
 // against the script it invokes.
 
+import { createTest } from "../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import test from "node:test";
+
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const helper = join(repositoryRoot, ".ci", "gitcode-merge-request.py");

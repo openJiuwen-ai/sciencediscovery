@@ -14,6 +14,9 @@
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("issue-143-proxy-settings.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@executor:independent", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+
 const screenshotDirectory = process.env.E2E_SCREENSHOT_DIR ?? "screenshots";
 
 async function openProxySettings(page: Page) {
@@ -188,4 +191,6 @@ test("custom URL remains complete after refresh and is prefilled for editing", a
   page.once("dialog", (dialog) => void dialog.accept());
   await card.getByRole("button", { name: "Delete" }).click();
   await expect(card).toBeHidden();
+});
+
 });

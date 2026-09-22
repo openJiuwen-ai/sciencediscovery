@@ -21,6 +21,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', executor='independent', judge='none', status='reviewed', tier='host')
 from fastapi.testclient import TestClient
 
 from sciencediscovery_memory_graph import backend

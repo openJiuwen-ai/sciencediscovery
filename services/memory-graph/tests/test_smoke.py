@@ -30,6 +30,8 @@ import os
 from typing import Any
 
 import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', executor='independent', judge='none', status='reviewed', tier='host')
 from fastapi.testclient import TestClient
 
 
@@ -44,10 +46,7 @@ def _live_neo4j_config() -> tuple[str, str] | None:
     return None
 
 
-needs_neo4j = pytest.mark.skipif(
-    _live_neo4j_config() is None,
-    reason="needs a live Neo4j (set SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J + ..._PASSWORD)",
-)
+needs_neo4j = pytest.mark.science_tags(status="external")
 
 
 def _wipe_session(session_id: str) -> None:
@@ -74,7 +73,7 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """
     cfg = _live_neo4j_config()
     if cfg is None:
-        pytest.skip("needs a live Neo4j")
+        pytest.fail("needs a live Neo4j")
     http_uri, password = cfg
     if http_uri == "local":
         monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_BACKEND", "local")
@@ -90,7 +89,7 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     importlib.reload(server)
     server.handle().set_password(password)
     if not server.handle().is_reachable():
-        pytest.skip("configured Neo4j not reachable")
+        pytest.fail("configured Neo4j not reachable")
     # Mirror the real boot path: /internal/neo4j-password runs ensure_schema
     # after set_password, so the composite (artifact_id, version) constraint is
     # in place and any legacy artifact_id-only constraint is dropped before
@@ -1284,7 +1283,7 @@ def test_legacy_artifact_id_constraint_dropped(live_client: TestClient) -> None:
     from sciencediscovery_memory_graph.backend import handle
 
     if handle().kind == "local":
-        pytest.skip("Neo4j server-side constraints do not exist on the local backend")
+        pytest.fail("Neo4j server-side constraints do not exist on the local backend")
 
     # This test exercises a schema-level invariant (legacy single-field
     # constraint is dropped at boot), which requires the Artifact label to be

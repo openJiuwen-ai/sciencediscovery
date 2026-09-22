@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
-import { test } from "node:test";
+
 
 import {
   SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID,
@@ -39,7 +41,7 @@ test("system environment revisions follow the selected native sandbox", () => {
   assert.equal(systemShellEnvironmentRevisionId("seatbelt"), SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID);
 });
 
-test("macOS package specs use executable paths that exist on macOS", { skip: process.platform !== "darwin" }, () => {
+test("macOS package specs use executable paths that exist on macOS", { tags: ["os:macos"] }, () => {
   assert.equal(JSON.parse(DEFAULT_ENVIRONMENT_PACKAGE_SPEC).executable, process.env.SCIENCE_AGENT_PYTHON_PATH || "/usr/bin/python3");
   assert.equal(JSON.parse(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC).executable, process.env.SCIENCE_AGENT_SHELL_PATH || "/bin/bash");
 });

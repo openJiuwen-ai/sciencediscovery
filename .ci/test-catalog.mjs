@@ -95,8 +95,13 @@ export const tagDimensions = {
 
 /**
  * The packages whose tests belong to the guest tier. Everything else in the
- * workspace is the host tier: the two commands below are generated from this
- * one list, so no package can land in both tiers or in neither.
+ * workspace is the host tier.
+ *
+ * The tier no longer selects a `pnpm --filter` command. It travels with each
+ * test as the `tier:guest` / `tier:host` tag its own source declares, and the
+ * shared selector in `test/support/tagged/profiles.mjs` is what reads those
+ * tags. This list is what `pnpm ci:catalog:check` measures the declared tags
+ * against, so a package still cannot land in both tiers or in neither.
  */
 export const utGuestPackages = [
   {
@@ -106,49 +111,50 @@ export const utGuestPackages = [
   },
 ];
 
-const guestPackageFilters = utGuestPackages.flatMap(({ name }) => ["--filter", name]);
-const hostPackageFilters = utGuestPackages.flatMap(({ name }) => ["--filter", `!${name}`]);
+/**
+ * Run one slice of the one shared plan. Everything a layer executes is selected
+ * from source tags by `test/support/tagged/profiles.mjs`; the catalog holds no
+ * second list of cases for CI to run instead.
+ */
+const sharedSlice = (slice) => ["node", "test/support/tagged/shared.mjs", "run", "--slice", slice];
 
-/** Every UT workload, each carrying exactly one tier. */
+/** The UT tiers, as the two slices that partition `category:ut` between them. */
 export const utWorkloads = [
-  { command: ["pnpm", "architecture:check"], id: "architecture", tier: "host" },
-  { command: ["pnpm", "typecheck"], id: "typecheck", tier: "host" },
-  { command: ["pnpm", "ci:selftest"], id: "ci-contract", tier: "host" },
-  { command: ["pnpm", "binary:test"], id: "binary-scripts", tier: "host" },
-  { command: ["pnpm", "--recursive", ...hostPackageFilters, "test"], id: "workspace-packages", tier: "host" },
-  { command: ["pnpm", "paper:test"], id: "paper", tier: "host" },
-  { command: ["pnpm", "gateway:test"], id: "gateway", tier: "host" },
-  { command: ["pnpm", "memory-graph:test"], id: "memory-graph", tier: "host" },
-  { command: ["pnpm", "evolve:test"], id: "evolve", tier: "host" },
-  { command: ["pnpm", ...guestPackageFilters, "test"], id: "sandbox-packages", tier: "guest" },
+  { command: sharedSlice("ut-host"), id: "tagged-ut-host", tier: "host" },
+  { command: sharedSlice("ut-guest"), id: "tagged-ut-guest", tier: "guest" },
 ];
 
+const step = (command) => [command[0], command.slice(1)];
 const installStep = ["pnpm", ["install", "--frozen-lockfile"]];
-// Both project virtualenvs are prerequisites, not test steps: the API package
-// spawns services/paper/.venv/bin/python and the gateway interpreter, so the
-// package tests fail with ENOENT unless these exist before they run.
-const gatewaySyncStep = ["uv", ["sync", "--project", "services/gateway"]];
-const paperSyncStep = ["uv", ["sync", "--project", "services/paper"]];
 const buildStep = ["pnpm", ["build"]];
-const workloadSteps = (tier) =>
-  utWorkloads.filter((workload) => workload.tier === tier).map(({ command }) => [command[0], command.slice(1)]);
+const workloadSteps = (tier) => utWorkloads.filter((workload) => workload.tier === tier).map(({ command }) => step(command));
 
 /**
  * The ordered commands each layer entry point runs. `ut` is exactly
  * `ut-host` followed by `ut-guest`, so the aggregate cannot drift from the sum
  * of the tiers. `ut-guest` deliberately has no install or build step: its host
  * hands it an installed, built workspace and it spends emulated CPU on tests
- * only.
+ * only — the slice command detects that and skips its own preparation.
+ *
+ * The hermetic layers carry no install or build step either: the shared runner
+ * prepares exactly what its own slice needs (the workspace build, the four
+ * service virtualenvs, the pinned Chromium) before it freezes a plan, so a
+ * second preparation here would only be a chance for the two to disagree. The
+ * opt-in live layers below still drive their own scripts and keep theirs.
+ *
+ * `e2e` is deliberately not here. `pnpm ci:e2e` calls the slice directly,
+ * because `.ci/run-e2e.sh` already owns `<results>/e2e/run.log` and a layer
+ * wrapper would be a second writer of that same file.
  */
 export const layers = {
-  st: [installStep, buildStep, ["bash", ["test/api/run_m1_smoke.sh"]]],
+  st: [step(sharedSlice("st"))],
   "st-npu": [
     [process.env.SCIENCE_AGENT_NPU_PYTHON?.trim() || "python3", ["services/runner/workloads/npu-smoke-test.py"]],
   ],
   "st-real": [installStep, buildStep, ["bash", ["test/api/run_real_smoke.sh"]]],
-  ut: [installStep, gatewaySyncStep, paperSyncStep, buildStep, ...workloadSteps("host"), ...workloadSteps("guest")],
+  ut: [...workloadSteps("host"), ...workloadSteps("guest")],
   "ut-guest": [...workloadSteps("guest")],
-  "ut-host": [installStep, gatewaySyncStep, paperSyncStep, buildStep, ...workloadSteps("host")],
+  "ut-host": [...workloadSteps("host")],
 };
 
 export const testCases = [

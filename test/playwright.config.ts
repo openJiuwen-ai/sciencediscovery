@@ -46,11 +46,13 @@ export default defineConfig({
   globalSetup: resolve(repoRoot, "test/global-setup.ts"),
   testDir: resolve(repoRoot, "test"),
   outputDir: resolve(envRoot, "test-results"),
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
   reporter: [
+    ...(process.env.SCIENCE_TAG_PW_REPORT ? [[resolve(repoRoot, "test/support/tagged/playwright-reporter.mjs")] as [string]] : []),
     ["list"],
     ["html", { open: "never", outputFolder: resolve(envRoot, "playwright-report") }],
     ["json", { outputFile: resolve(envRoot, "test-results/results.json") }],
@@ -77,32 +79,19 @@ export default defineConfig({
     {
       name: "mocked",
       grep: /@mocked/,
+      // A run driving a frozen plan executes that plan and nothing else. The
+      // shared selector takes only `status:reviewed`, so a quarantined journey
+      // is deselected here rather than running and reporting a skip — which
+      // Playwright exits 0 on and the plan would have to count as a journey
+      // that did not execute. Collection (SCIENCE_TAG_PW_CATALOG) keeps seeing
+      // it, so the migration ledger still knows it exists.
+      ...(process.env.SCIENCE_TAG_PW_REPORT
+        ? { grepInvert: /@status:(external|legacy|unreviewed)\b/ }
+        : {}),
       use: { ...devices["Desktop Chrome"], serviceWorkers: "block" },
     },
-    // Specs tagged @real call live LLMs / external services and may cost
-    // money. The project only exists when E2E_REAL=1, so the default command
-    // cannot reach them; without the variable, --project=real fails with
-    // "Project(s) 'real' not found" — that run is BLOCKED, not passed.
-    ...(process.env.E2E_REAL === "1"
-      ? [
-          {
-            name: "real",
-            grep: /@real/,
-            use: { ...devices["Desktop Chrome"] },
-          },
-        ]
-      : []),
-    // Compatibility-only quarantine. This group may contain unaudited live
-    // behavior and is never present unless the caller explicitly opts in.
-    ...(process.env.E2E_LEGACY === "1"
-      ? [
-          {
-            name: "legacy",
-            grepInvert: /@(mocked|real)/,
-            use: { ...devices["Desktop Chrome"] },
-          },
-        ]
-      : []),
+    { name: "real", grep: /@real/, use: { ...devices["Desktop Chrome"] } },
+    { name: "legacy", grepInvert: /@(mocked|real)/, use: { ...devices["Desktop Chrome"] } },
   ],
   expect: {
     timeout: 10000,

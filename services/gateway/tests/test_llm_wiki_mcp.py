@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', executor='independent', judge='none', status='reviewed', tier='host')
+
 import importlib
 import json
 import unittest

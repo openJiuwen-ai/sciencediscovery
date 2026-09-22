@@ -13,19 +13,33 @@ The image contains Node.js 22.19, pnpm 11.1.2, Python 3.12, uv, bubblewrap,
 build tools, and Playwright's Chromium system libraries. Product source and
 test dependencies are supplied only by the checkout mounted at `/src`.
 
-## Existing tests and CI mapping
+## One plan, three layers
 
-| CI layer | Repository commands used | Scope |
+The three hermetic layers are three slices of one plan, not three suites. Each
+runs `test/support/tagged/shared.mjs` against the single selector in
+[test/support/tagged/profiles.mjs](../test/support/tagged/profiles.mjs),
+narrowed only by the group that layer schedules:
+
+| CI layer | Entry point | Slice of the shared selector |
 |---|---|---|
-| UT | `pnpm check`, then `pnpm memory-graph:test` | TypeScript type checks/builds and package tests, binary script tests, paper/gateway Python tests, and memory-graph pytest |
-| ST | `test/api/run_m1_smoke.sh` after `pnpm build` | Hermetic Node-native agent loop through a local scripted OpenAI-compatible endpoint and a real workspace tool round trip |
-| E2E | `.e2e` `npm run test:mocked` | Tagged `@mocked` Playwright journeys against an isolated API/Runner/Gateway stack |
+| UT | `pnpm ci:ut` (`ci:ut:host` / `ci:ut:guest`) | `category:ut`, as `tier:host` then `tier:guest` |
+| ST | `pnpm ci:st` | `category:st` |
+| E2E | `pnpm ci:e2e` | `category:e2e`, driving `.ci/run-e2e.sh` for the stack lifecycle |
 
-The repository has no test layer literally named `ST`. This mapping uses the
-current hermetic integration/smoke entry point as ST. In particular,
-`test/gateway/run_m0_smoke.sh` does not exist on this revision and is not an
-invented CI dependency. Live-model smoke tests and `@real` E2E are excluded
-from every default command.
+`category` is single-valued and required, so those three slices partition the
+plan: together they are exactly `pnpm test:shared`, the command a developer
+runs. Which cases are selected comes from the tags in each test's own source —
+never from the machine, its credentials, its devices or its installed
+services. A missing capability fails the plan's preflight, and a skip is a
+failed run, so a layer cannot go green by running less.
+[test/support/tagged/MIGRATION.md](../test/support/tagged/MIGRATION.md) records
+what the plan covers and why live-model, NPU, legacy and macOS work is outside
+it; those keep their own opt-in entry points (`ci:st:real`, `ci:e2e:real`,
+`ci:st:npu`, `ci:e2e:legacy`).
+
+`node .ci/tagged-summary.mjs` reads each slice's frozen plan back and fails
+unless `planned == executed == passed` with nothing skipped — including when a
+layer stopped before it produced a plan at all.
 
 ## Coverage reporting
 
@@ -62,10 +76,12 @@ step that produced it.
 ## Test tags and CI selection
 
 `.ci/test-catalog.mjs` classifies every repository CI test family as a stable
-case. It is metadata over the existing commands above, not a second test
-suite. Tests inherit the environment envelope of their case; when one child
-needs a stricter capability, split it into a separate case instead of weakening
-the tag. Each case has tags for all required environment dimensions:
+case, for the CI scheduler and the merge-request result table. It is metadata
+over the layer entry points above, not a second test suite and not the list of
+cases a layer runs — that list is the plan. Cases inherit the environment
+envelope of their layer; when one child needs a stricter capability, split it
+into a separate case instead of weakening the tag. Each case has tags for all
+required environment dimensions:
 
 - `arch:amd64|arm64`
 - `llm:none|stub|real|unreviewed`
@@ -75,8 +91,10 @@ the tag. Each case has tags for all required environment dimensions:
 - `layer:ut|st|e2e`, `container:*`, and runtime `network:*`
 
 No case carries `sandbox:seatbelt` today: the macOS Seatbelt tests live in
-`services/runner/src/macos-seatbelt.test.ts`, inside the guest tier's package
-command, and skip themselves off macOS.
+`services/runner/src/macos-seatbelt.test.ts` and carry `os:macos`, so the
+Linux/amd64 target this repository's CI plans against never selects them. They
+no longer skip themselves off macOS — a Linux run simply does not contain them,
+and a macOS plan would.
 
 List the vocabulary or cases without executing tests:
 
@@ -120,10 +138,14 @@ them, and their union is all of UT:
 
 `pnpm ci:ut` is the aggregate for a worker that can run both. It is not a third
 definition: `.ci/test-catalog.mjs` derives it as the host tier's steps followed
-by the guest tier's, from one list of workloads that each declare their tier.
-The guest tier is the sandbox packages listed in `utGuestPackages`; the host
-tier is `--recursive` over everything else, so a new package joins the host
-tier automatically and a package that needs the sandbox has to be named.
+by the guest tier's.
+
+Each tier is one slice of the one shared plan, and the tier itself is a tag on
+each test — `tier:host` or `tier:guest`, declared where the test is declared.
+`pnpm ci:catalog:check` reads those tags back out of the sources and fails when
+a workspace package with tests declares two tiers, declares none, or disagrees
+with the `utGuestPackages` list. A `category:ut` test with no tier fails the run
+outright, because it would be scheduled by neither CI job.
 
 When adding a UT test, put it in the package or suite that already matches its
 requirements. A host-tier test may not depend on a guest capability, and a
@@ -165,9 +187,12 @@ which emulated services routinely exceed.
 `pnpm ci:catalog:check` is the guard. It fails when a case has an unknown tag
 or the wrong number of values for a dimension, when a UT case has no tier or
 two, when a `layer:ut` case's tier disagrees with its `sandbox:*` tag, when a
-workspace package with tests is claimed by both tiers or by neither, when
-`ci:ut` stops being exactly the two tiers, when the guest tier grows an install
-or build step, or when a `ci:ut:*` entry point appears outside the two tiers.
+workspace package's own `tier:` tags claim both tiers or neither or disagree
+with the guest-package list, when one of that package's test files sits outside
+the shared runner's collection patterns and so would be run by no layer at all,
+when `ci:ut` stops being exactly the two tiers, when the guest tier grows an
+install or build step, when a layer runs something that is not a slice of the
+shared plan, or when an entry point drifts off that slice.
 `pnpm ci:selftest` runs the regression tests for that guard, and the host tier
 runs it.
 

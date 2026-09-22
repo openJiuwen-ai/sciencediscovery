@@ -27,6 +27,9 @@ import {
   waitForRunTerminal,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-deliver-result.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: A researcher can receive one declared report, inspect and download it, update it as a new version, and distinguish scratch files from Artifacts.
@@ -244,4 +247,6 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
     await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

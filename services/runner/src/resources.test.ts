@@ -3,11 +3,13 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 // http://www.apache.org/licenses/LICENSE-2.0
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:guest", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm, statfs, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import test from "node:test";
+
 import { collectRunnerResources } from "./resources.js";
 
 test("resources measure the persistent workspace filesystem with user-available blocks", async (t) => {

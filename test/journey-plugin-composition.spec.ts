@@ -5,6 +5,9 @@ import {test} from "./helpers/e2e.ts";
 import {apiBaseUrl,authorizationHeader} from "./e2e-auth.js";
 import {artifactTree,cleanupJourney,createProjectAndSession,openProjectSession,scriptedModel,sendUserMessage,waitForRunTerminal} from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-plugin-composition.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 async function api(page:Page,path:string,data?:unknown) {
   const response=await page.request.fetch(apiBaseUrl()+path,{headers:authorizationHeader(),method:data===undefined?"GET":"POST",...(data===undefined?{}:{data})});
   expect(response.ok(),await response.text()).toBe(true);
@@ -189,4 +192,6 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
     if(otherProjectId) await page.request.delete(apiBaseUrl()+"/api/projects/"+otherProjectId,{headers:authorizationHeader()});
     await cleanupJourney(page,fixture).catch(()=>undefined);await stub.stop();
   }
+});
+
 });

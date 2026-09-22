@@ -25,6 +25,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("issue-85-foreground-exec-inbox.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 interface SessionRunRecord {
@@ -361,3 +364,5 @@ async function expectNoAutomaticWakeBeyond(page: Page, sessionId: string, allowe
     await page.waitForTimeout(250);
   }
 }
+
+});

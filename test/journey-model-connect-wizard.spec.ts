@@ -20,6 +20,9 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { requireFirstRunState } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-model-connect-wizard.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -739,4 +742,6 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     await cleanupProviders();
     stubServer.close();
   }
+});
+
 });

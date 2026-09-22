@@ -227,9 +227,12 @@ tags within one clause mean OR; `--exclude` removes matches. Keep `e2e.mocked`,
 their requirements change. Never reclassify an unaudited dependency as safe:
 use an `unreviewed` tag or keep the case unsupported until evidence exists.
 
-The catalog chooses a CI-capability group; Playwright still discovers and
-filters the individual specs in that group. Use the pinned `.e2e` commands
-below for file/title-level discovery.
+The catalog chooses a CI-capability group; it no longer decides which journeys
+run. That is the shared plan: `pnpm ci:e2e` freezes `category:e2e` from the
+source tags and requires every planned journey to report a pass. To see the
+plan without running anything, `pnpm test:list --slice e2e` writes it to
+`.test-runs/e2e/plan.json`. Use the pinned `.e2e` commands below for
+file/title-level discovery while writing a spec.
 
 Run from `.e2e/` after synchronizing and installing the committed environment:
 
@@ -500,6 +503,19 @@ an untracked exception.
   spec must prove a call happened, assert on the stub (request counters,
   captured bodies), not on timing.
 - Mocked specs must pass repeatedly on a clean stack with no credentials.
+- A mocked journey may not skip itself. It is in the shared plan
+  (`test/support/tagged/MIGRATION.md`), which is frozen from source tags before
+  the run looks at anything, so a skip is a planned journey that did not
+  execute — the run fails on it rather than reporting green. The layer starts
+  its own stack on a run-scoped data directory, so a precondition it owns
+  (empty first-run state, no writable Skill library, a ready managed Python
+  base) is asserted with `expect`, and a failure there is an isolation bug in
+  the layer, not a reason to decline the journey. A precondition the layer
+  genuinely cannot own belongs to another group: give the spec the tag that
+  says so (`@model:real`, `@status:legacy`, `@status:external`,
+  `@status:unreviewed`) with a comment explaining why, and it leaves the shared
+  selector instead of skipping inside it. The gates below still apply to
+  `@real` journeys, which are outside that plan.
 
 ## Browser real rules
 

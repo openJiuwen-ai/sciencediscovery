@@ -14,6 +14,9 @@ import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-custom-mcp.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN", actionTimeout: 15_000 });
 
 /**
@@ -242,4 +245,6 @@ test("Agent uses a selected custom MCP server", { tag: "@mocked" }, async ({ pag
     await stub.stop();
     await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${saved.id}`, { headers: authorizationHeader() });
   }
+});
+
 });

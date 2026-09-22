@@ -14,6 +14,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', executor='independent', judge='none', status='reviewed', tier='host')
+
 import json
 import os
 import socket

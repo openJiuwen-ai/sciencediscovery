@@ -16,6 +16,11 @@ import { expect, type Page, type TestInfo } from "@playwright/test";
 
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey. This
+// file mixes a live-model journey with a quarantined one, so `model` and
+// `status` are declared per journey rather than here.
+test.describe("literature-review.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@executor:independent", "@judge:none", "@sandbox:bubblewrap"] }, () => {
+
 // Screenshots land under the local e2e environment (cwd when run from .e2e/).
 const SCREENSHOTS = "screenshots";
 
@@ -134,7 +139,7 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
    * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; seeded model key.
    * CostSideEffects: Billable tokens, PubMed traffic, local projects/sessions, screenshots.
  */
-  test("Linux Web工作台、模型配置与简单文献调研主路径", { tag: "@real" }, async ({ page }, testInfo) => {
+  test("Linux Web工作台、模型配置与简单文献调研主路径", { tag: ["@real", "@model:real", "@status:reviewed"] }, async ({ page }, testInfo) => {
     // The product allows progress-producing literature turns up to 600 s.
     // Keep the browser alive long enough to assert success or its explicit
     // product error instead of racing the application timeout.
@@ -279,7 +284,9 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
   // fixme: the manual paper-search form was removed from the workspace panel
   // (literature downloads now go through the chat agent's MCP tools), so this
   // journey no longer exists as written; redesign around the MCP flow.
-  test.fixme("Connector 未启用时的失败反馈", { tag: "@mocked" }, async ({ page }) => {
+  // `status:unreviewed` keeps this permanently-fixme journey out of the shared
+  // plan: a plan entry that can only report a skip is a failure, not a pass.
+  test.fixme("Connector 未启用时的失败反馈", { tag: ["@mocked", "@model:mock", "@status:unreviewed"] }, async ({ page }) => {
     await openWorkspace(page);
     await createProject(page, `E2E Failure Case ${Date.now()}`);
     // "Add session" creates and selects an untitled session directly; new
@@ -298,4 +305,6 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
     await expect(toast).toBeVisible();
     await screenshot(page, "12-failure-connector-not-enabled");
   });
+});
+
 });

@@ -31,6 +31,9 @@ import {
   type JourneySession,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-first-run.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -384,4 +387,6 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
     await api.dispose().catch(() => undefined);
     await stub.stop();
   }
+});
+
 });

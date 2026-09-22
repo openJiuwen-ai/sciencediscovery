@@ -30,6 +30,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-provider-model-catalog.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 interface ProviderStub {
@@ -1191,4 +1194,6 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
     }
     await stub.stop();
   }
+});
+
 });

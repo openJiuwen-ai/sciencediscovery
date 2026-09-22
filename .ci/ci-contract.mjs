@@ -15,15 +15,24 @@
 /**
  * The guard behind `pnpm ci:catalog:check`. It fails closed on a missing or
  * unknown tag, and on any way the two UT tiers could stop covering every UT
- * case exactly once: an unclassified entry point, a workspace package claimed
- * by both tiers or by neither, an aggregate that no longer equals the sum of
- * the tiers, or a guest tier that has started installing or building again.
+ * case exactly once: an unclassified entry point, a workspace package whose
+ * tests declare both tiers or neither or disagree with the catalog, an
+ * aggregate that no longer equals the sum of the tiers, or a guest tier that
+ * has started installing or building again.
+ *
+ * It also guards the two ways coverage could leave CI without anyone noticing:
+ * a layer running something that is not a slice of the shared plan — the
+ * hand-maintained list of cases that tags replaced — and a package's test file
+ * sitting outside the collection patterns that plan is built from, which would
+ * simply never be collected.
  */
 
+import { globSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { nodeSources } from "../test/support/tagged/profiles.mjs";
 import * as defaultCatalog from "./test-catalog.mjs";
 
 export const defaultRepositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,6 +43,47 @@ const utEntryPoints = {
   "ci:ut:host": "ut-host",
 };
 const utTiers = ["host", "guest"];
+
+/**
+ * The one runner every hermetic layer calls. `st-real` and `st-npu` are the
+ * explicitly opt-in live layers and drive their own scripts; everything the
+ * merge gate runs is a slice of the shared plan and nothing else, which is
+ * what stops a second, hand-written list of cases from coming back.
+ */
+const sharedRunner = "test/support/tagged/shared.mjs";
+const optInLayers = new Set(["st-npu", "st-real"]);
+const testSourcePattern = /\.test\.(?:mjs|cjs|js|jsx|ts|tsx)$/;
+const skippedDirectories = new Set(["node_modules", "dist", "build", ".venv", "__pycache__"]);
+
+/** Every test source a package actually holds, found the way `pnpm test` would reach it. */
+async function testSources(directory) {
+  const found = [];
+  async function walk(path) {
+    let entries;
+    try {
+      entries = await readdir(path, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (skippedDirectories.has(entry.name)) continue;
+      if (entry.isDirectory()) await walk(join(path, entry.name));
+      else if (testSourcePattern.test(entry.name)) found.push(join(path, entry.name));
+    }
+  }
+  await walk(directory);
+  return found.sort();
+}
+
+/** The UT tiers those sources declare, read back from the sources themselves. */
+async function declaredTiers(files) {
+  const tiers = new Set();
+  for (const file of files) {
+    const source = await readFile(file, "utf8");
+    for (const [, tier] of source.matchAll(/\btier:(host|guest)\b/g)) tiers.add(tier);
+  }
+  return tiers;
+}
 
 export function knownTags(catalog = defaultCatalog) {
   return new Set(Object.entries(catalog.tagDimensions).flatMap(([dimension, definition]) =>
@@ -184,40 +234,46 @@ export async function utContractProblems(catalog = defaultCatalog, repositoryRoo
     if (guestNames.has(guestPackage.name)) problems.push(`UT guest package ${guestPackage.name}: duplicate entry`);
     guestNames.add(guestPackage.name);
   }
-  // Read the tiers back out of the commands the layers actually run, so an
-  // edited filter is measured against the workspace instead of against the
-  // declaration it was supposed to follow.
-  const filtersOf = (id) => {
-    const command = utWorkloads.find((workload) => workload.id === id)?.command ?? [];
-    return command.filter((part, index) => command[index - 1] === "--filter");
-  };
-  const guestSelected = new Set(filtersOf("sandbox-packages").filter((filter) => !filter.startsWith("!")));
-  const hostExcluded = new Set(filtersOf("workspace-packages")
-    .filter((filter) => filter.startsWith("!"))
-    .map((filter) => filter.slice(1)));
+  // The tier travels with each test as a tag now, so read the tiers back out of
+  // the test sources themselves. A package is measured against the workspace,
+  // not against the declaration the tags were supposed to follow.
+  //
+  // The scope check beside it closes the other half: a package can carry
+  // correct tags and still contribute nothing, if its tests sit somewhere the
+  // shared runner's collection patterns never look. That is coverage silently
+  // leaving CI, so it fails here.
+  const collected = new Set(globSync([...nodeSources], { cwd: repositoryRoot })
+    .map((file) => file.replaceAll("\\", "/")));
   for (const project of testable) {
-    const inHost = !hostExcluded.has(project.name);
-    const inGuest = guestSelected.has(project.name);
-    if (inHost && inGuest) problems.push(`${project.name} has tests and is claimed by both UT tiers`);
-    if (!inHost && !inGuest) problems.push(`${project.name} has tests but belongs to neither UT tier`);
-  }
-  for (const name of guestSelected) {
-    if (!testable.some((project) => project.name === name)) {
-      problems.push(`the guest tier selects ${name}, which is not a workspace project with tests`);
+    const expectedTier = guestNames.has(project.name) ? "guest" : "host";
+    const files = await testSources(join(repositoryRoot, project.directory));
+    const declared = await declaredTiers(files);
+    if (declared.size === 0) problems.push(`${project.name} has tests but belongs to neither UT tier`);
+    else if (declared.size > 1) problems.push(`${project.name} has tests and is claimed by both UT tiers`);
+    else if (!declared.has(expectedTier)) {
+      problems.push(`${project.name} declares tier:${[...declared][0]}, but the catalog puts it in the ${expectedTier} tier`);
+    }
+    for (const file of files) {
+      const path = relative(repositoryRoot, file).replaceAll("\\", "/");
+      if (!collected.has(path)) problems.push(`${path} is outside the shared runner's collection scope, so no layer would run it`);
     }
   }
 
-  // The two package commands are generated from utGuestPackages; re-derive them
-  // so a hand-edited filter cannot orphan a package.
-  const expected = {
-    "sandbox-packages": ["pnpm", ...[...guestNames].flatMap((name) => ["--filter", name]), "test"],
-    "workspace-packages": ["pnpm", "--recursive", ...[...guestNames].flatMap((name) => ["--filter", `!${name}`]), "test"],
-  };
-  for (const [id, command] of Object.entries(expected)) {
-    const workload = utWorkloads.find((candidate) => candidate.id === id);
-    if (!workload) problems.push(`UT workload ${id} is missing`);
-    else if (!stepsEqual(workload.command, command)) {
-      problems.push(`UT workload ${id} runs ${workload.command.join(" ")}, expected ${command.join(" ")}`);
+  // Each tier is one slice of the one shared plan. Anything else here is the
+  // second, hand-maintained list of cases the tags replaced.
+  for (const tier of utTiers) {
+    const workloads = utWorkloads.filter((workload) => workload.tier === tier);
+    const expected = ["node", sharedRunner, "run", "--slice", `ut-${tier}`];
+    if (workloads.length !== 1 || !stepsEqual(workloads[0].command, expected)) {
+      problems.push(`UT tier ${tier} must run exactly ${expected.join(" ")}`);
+    }
+  }
+  for (const [name, steps] of Object.entries(layers)) {
+    if (optInLayers.has(name)) continue;
+    for (const [command, args] of steps) {
+      if (command !== "node" || args[0] !== sharedRunner) {
+        problems.push(`layer ${name} runs ${[command, ...args].join(" ")}, which is not a slice of the shared plan`);
+      }
     }
   }
 
@@ -236,6 +292,15 @@ export async function utContractProblems(catalog = defaultCatalog, repositoryRoo
   }
   for (const name of Object.keys(utEntryPoints)) {
     if (!utScripts.includes(name)) problems.push(`script ${name} is missing`);
+  }
+  // The other two hermetic entry points every pipeline calls run the same one
+  // selector, so CodeArts and GitHub cannot end up running different sets.
+  // E2E skips the layer wrapper: run-e2e.sh already owns that layer's run.log.
+  for (const [name, command] of Object.entries({
+    "ci:e2e": `node ${sharedRunner} run --slice e2e`,
+    "ci:st": "node .ci/run-layer.mjs st",
+  })) {
+    if (scripts[name] !== command) problems.push(`script ${name} must run ${command}`);
   }
   for (const testCase of testCases.filter((candidate) => candidate.tags?.includes("layer:ut"))) {
     const [tier] = tagsOfDimension(testCase.tags, "ut").map((tag) => tag.split(":")[1]);

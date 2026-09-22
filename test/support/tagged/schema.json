@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "groups": {
+    "category": {
+      "multiple": false,
+      "values": [
+        "ut",
+        "st",
+        "e2e"
+      ]
+    },
+    "os": {
+      "multiple": true,
+      "values": [
+        "linux",
+        "macos",
+        "windows"
+      ]
+    },
+    "arch": {
+      "multiple": true,
+      "values": [
+        "amd64",
+        "arm64"
+      ]
+    },
+    "npu": {
+      "multiple": false,
+      "values": [
+        "none",
+        "required"
+      ]
+    },
+    "model": {
+      "multiple": false,
+      "values": [
+        "none",
+        "mock",
+        "real"
+      ]
+    },
+    "executor": {
+      "multiple": true,
+      "values": [
+        "independent",
+        "native",
+        "jiuwenswarm"
+      ]
+    },
+    "judge": {
+      "multiple": false,
+      "values": [
+        "none",
+        "llm"
+      ]
+    },
+    "status": {
+      "multiple": false,
+      "required": false,
+      "values": [
+        "reviewed",
+        "external",
+        "legacy",
+        "unreviewed"
+      ]
+    },
+    "tier": {
+      "multiple": false,
+      "required": false,
+      "values": [
+        "host",
+        "guest"
+      ]
+    },
+    "sandbox": {
+      "multiple": false,
+      "required": false,
+      "values": [
+        "none",
+        "bubblewrap",
+        "seatbelt"
+      ]
+    }
+  }
+}

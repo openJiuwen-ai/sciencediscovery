@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { after, before, describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
 import assert from "node:assert/strict";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+
 
 import type { ServeCredentials } from "./bootstrap-tokens.js";
 import { defaultSettings } from "./cli-options.js";

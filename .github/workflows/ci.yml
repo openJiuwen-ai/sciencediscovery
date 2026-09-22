@@ -20,6 +20,20 @@
 # credentials, no live endpoints, no NPU. The opt-in live layers
 # (ci:st:real, ci:e2e:real, ci:st:npu, ci:e2e:legacy) stay out of this file.
 #
+# The three test jobs below are three slices of one plan, not three suites.
+# `ci:ut`, `ci:st` and `ci:e2e` each run `test/support/tagged/shared.mjs`
+# against the single selector in `test/support/tagged/profiles.mjs`, narrowed
+# by `category` (and, inside UT, by `tier`). Those groups partition the plan,
+# so the three jobs together run exactly what `pnpm test:shared` runs on a
+# developer's machine — a case cannot be in two jobs or in none. Selection
+# reads source tags only; no job's environment, credential or installed
+# capability may add or remove a case. A missing capability fails the plan's
+# preflight, which fails the job.
+#
+# `node .ci/tagged-summary.mjs` reads each slice's frozen plan back and fails
+# the job unless planned == executed == passed with nothing skipped, including
+# when a layer stopped before producing any plan at all.
+#
 # This file is also the one definition of that gate for the scheduled and
 # tagged pipelines: nightly.yml and release.yml call it instead of restating
 # its jobs. When their coverage diverges from the merge gate, give this
@@ -97,18 +111,26 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
           bwrap --version
 
+      # The `category:ut` slice, run as its two tiers in order: the host tier,
+      # then the guest tier whose tests drive the sandbox provisioned above.
       - name: Run UT
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
         run: pnpm ci:ut
 
+      - name: Report the shared plan
+        if: always()
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        run: node .ci/tagged-summary.mjs
+
       - name: Upload UT results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ut-results
-          path: .ci-results/ut
+          path: .ci-results
           if-no-files-found: warn
 
   coverage:
@@ -270,12 +292,18 @@ jobs:
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
         run: pnpm ci:st
 
+      - name: Report the shared plan
+        if: always()
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        run: node .ci/tagged-summary.mjs
+
       - name: Upload ST results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: st-results
-          path: .ci-results/st
+          path: .ci-results
           if-no-files-found: warn
 
   e2e:
@@ -315,10 +343,13 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('test/e2e.package-lock.json') }}
           restore-keys: playwright-${{ runner.os }}-
 
-      # run-e2e.sh owns the whole lifecycle: it syncs .e2e, installs Chromium,
-      # generates an ephemeral token, starts and stops its own isolated stack,
-      # runs the @mocked project and collects reports. E2E_COMMIT_SHA stamps
-      # journey reports with the revision under test.
+      # The `category:e2e` slice. The layer still drives run-e2e.sh, which owns
+      # the whole lifecycle: it generates an ephemeral token, starts and stops
+      # its own isolated stack on a port block of its own, runs the journeys
+      # and collects reports. What changed is which journeys run and how they
+      # are counted: the plan is frozen from the source tags first, and every
+      # planned journey must report a pass. E2E_COMMIT_SHA stamps journey
+      # reports with the revision under test.
       - name: Run mocked E2E
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
@@ -326,43 +357,15 @@ jobs:
           E2E_COMMIT_SHA: ${{ github.sha }}
         run: pnpm ci:e2e
 
-      # Playwright exits 0 on skips, so a BLOCKED journey — J3 whenever the
-      # default run keeps SCIENTIFIC_ENVS=0 — would otherwise vanish behind a
-      # green check. The repository rule is that blocked is not passed, so the
-      # counts and every not-passed title go into the run summary.
-      - name: Summarize the E2E outcome
+      # Playwright exits 0 on skips and produces no results.json at all when
+      # the stack never came up, so neither its exit code nor its report can be
+      # the verdict here. The frozen plan is: a journey that was planned and
+      # did not report a pass fails this step, and so does a missing plan.
+      - name: Report the shared plan
         if: always()
-        run: |
-          results=.ci-results/e2e/test-results/results.json
-          if [[ ! -f "$results" ]]; then
-            echo "### E2E (mocked)" >> "$GITHUB_STEP_SUMMARY"
-            echo "No Playwright results.json; the layer stopped before test execution." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          node -e '
-            const fs = require("node:fs");
-            const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const stats = report.stats;
-            const notPassed = [];
-            const walk = (suite) => {
-              for (const spec of suite.specs ?? []) {
-                const status = spec.tests?.[0]?.results?.[0]?.status ?? "unknown";
-                if (!spec.ok || status === "skipped") notPassed.push(`${status} — ${spec.title}`);
-              }
-              for (const child of suite.suites ?? []) walk(child);
-            };
-            for (const suite of report.suites ?? []) walk(suite);
-            const lines = [
-              "### E2E (mocked)",
-              "",
-              `passed **${stats.expected}** · skipped/blocked **${stats.skipped}** · failed **${stats.unexpected}** · flaky **${stats.flaky}**`,
-            ];
-            if (notPassed.length > 0) {
-              lines.push("", "Not passed (a skip may be a BLOCKED precondition, not a success):", "");
-              for (const entry of notPassed) lines.push(`- ${entry}`);
-            }
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
-          ' "$results"
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        run: node .ci/tagged-summary.mjs
 
       # Failure evidence — Playwright report, traces, screenshots, journey
       # reports, and the stack log that attributes a stack-side failure.
@@ -371,7 +374,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-results
-          path: .ci-results/e2e
+          path: .ci-results
           if-no-files-found: warn
           retention-days: 14
 

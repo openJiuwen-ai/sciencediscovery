@@ -20,6 +20,9 @@ import { expect } from "@playwright/test";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-skill-folder-import.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 /** Write one importable folder on disk; the browser is handed the directory, not a ZIP. */
 async function writeSkillFolder(root: string, files: Record<string, string>): Promise<string> {
   for (const [path, content] of Object.entries(files)) {
@@ -153,4 +156,6 @@ test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async (
       }).catch(() => undefined);
     }
   }
+});
+
 });

@@ -89,3 +89,7 @@ services/evolve/data/
 # Local run data from ad-hoc stacks (data-demo/, data-pr21/, …). Never
 # committed: these hold a session's own secrets and CAS blobs.
 data-*/
+
+# Frozen test plans and execution evidence
+.test-runs/
+.ci-results/

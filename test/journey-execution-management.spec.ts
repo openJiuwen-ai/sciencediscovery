@@ -4,6 +4,9 @@ import { expect, type Locator } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-execution-management.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * Open everything the activity panel keeps folded.
  *
@@ -93,4 +96,6 @@ test("执行日志、取消与一次性提醒可管理", { tag: "@mocked" }, asy
       await expect(panel.locator("details.workspace-fold")).toHaveCount(0);
     });
   } finally { await cleanupJourney(page, fixture); }
+});
+
 });

@@ -15,7 +15,7 @@
     "build": "pnpm --recursive build",
     "catalog:fetch": "node scripts/fetch-model-catalog.mjs --output resources/model-catalog/models-dev.json",
     "check": "pnpm architecture:check && pnpm typecheck && pnpm ci:selftest && pnpm paper:test && pnpm gateway:test && pnpm test",
-    "ci:e2e": "bash .ci/run-e2e.sh",
+    "ci:e2e": "node test/support/tagged/shared.mjs run --slice e2e",
     "ci:e2e:legacy": "bash .ci/run-e2e.sh legacy",
     "ci:e2e:real": "bash .ci/run-e2e.sh real",
     "ci:catalog:check": "node .ci/test-selector.mjs check",
@@ -43,7 +43,12 @@
     "start": "bash scripts/run-local.sh",
     "smoke": "pnpm build && pnpm --filter @sciencediscovery/api test",
     "test": "pnpm build && pnpm binary:test && pnpm --recursive test",
-    "typecheck": "pnpm --recursive typecheck"
+    "typecheck": "pnpm --recursive typecheck",
+    "test:shared": "node test/support/tagged/shared.mjs run",
+    "test:list": "node test/support/tagged/shared.mjs list",
+    "test:tagged:selftest": "node test/support/tagged/selftest.mjs",
+    "test:tagged:list": "node test/support/tagged/cli.mjs list",
+    "test:tagged:run": "node test/support/tagged/cli.mjs run"
   },
   "devDependencies": {
     "@babel/parser": "7.28.5",

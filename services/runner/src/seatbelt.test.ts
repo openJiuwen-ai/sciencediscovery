@@ -1,11 +1,13 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:guest", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+
 
 import { buildSeatbeltProfile, seatbeltString, seatbeltWorkspaceMapping } from "./seatbelt.js";
 
