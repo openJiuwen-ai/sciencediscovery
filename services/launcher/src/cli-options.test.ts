@@ -94,6 +94,24 @@ describe("launcher option parsing", () => {
     assert.deepEqual(messages, []);
   });
 
+  test("defaults to JiuwenSwarm, opt-out via SCIENCE_AGENT_EXECUTOR=native or --no-jiuwenswarm", () => {
+    assert.equal(defaultSettings({}, cwd).jiuwenswarm, true);
+    assert.equal(defaultSettings({ SCIENCE_AGENT_EXECUTOR: "jiuwenswarm" }, cwd).jiuwenswarm, true);
+    assert.equal(defaultSettings({ SCIENCE_AGENT_EXECUTOR: "native" }, cwd).jiuwenswarm, false);
+    assert.equal(parseInvocation(["serve"], {}, cwd).settings.jiuwenswarm, true);
+    assert.equal(parseInvocation(["serve", "--no-jiuwenswarm"], {}, cwd).settings.jiuwenswarm, false);
+    assert.equal(
+      parseInvocation(["serve", "--no-jiuwenswarm", "--jiuwenswarm"], {}, cwd).settings.jiuwenswarm,
+      true,
+      "the last flag wins",
+    );
+    assert.equal(
+      parseInvocation(["serve", "--no-jiuwenswarm"], { SCIENCE_AGENT_EXECUTOR: "jiuwenswarm" }, cwd).settings.jiuwenswarm,
+      false,
+      "a CLI flag overrides the environment",
+    );
+  });
+
   test("accepts an explicit macOS Seatbelt launcher", () => {
     const settings = parseInvocation([
       "serve",

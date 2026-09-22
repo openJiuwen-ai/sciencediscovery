@@ -22,6 +22,12 @@
 # needs no network, and the bind-mounted host directory holds application state
 # only. Creating the managed starter Python environment remains a separate,
 # channel-dependent step unless an offline package cache is supplied.
+#
+# JiuwenSwarm and the adapter are baked in the same way (also under
+# /opt/sciencediscovery, read-only): pass --jiuwenswarm to start-stack.sh
+# --mode docker to run agent turns on JiuwenSwarm instead of the native loop.
+# JiuwenSwarm's own instance state still lives under the bind-mounted data
+# directory — see scripts/jiuwenswarm.sh and docs/en/how-to/run-with-jiuwenswarm.md.
 
 ARG NODE_BUILD_IMAGE=node:22-bookworm
 ARG NODE_RUNTIME_IMAGE=node:22-bookworm-slim
@@ -29,6 +35,9 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.9.26
 ARG PNPM_VERSION=11.1.2
 # Matches services/gateway/.python-version; the PDF worker (>=3.11) reuses it.
 ARG PYTHON_VERSION=3.12
+# Keep in step with scripts/jiuwenswarm.sh and scripts/binary-release/build-payload.sh,
+# which install the same pinned tag for source mode and the release binary.
+ARG JIUWENSWARM_TAG=workswarm0.2.6
 
 FROM ${UV_IMAGE} AS uv
 
@@ -79,6 +88,7 @@ RUN node scripts/fetch-model-catalog.mjs \
 FROM ${NODE_BUILD_IMAGE} AS builder
 ARG PNPM_VERSION
 ARG PYTHON_VERSION
+ARG JIUWENSWARM_TAG
 
 COPY --from=uv /uv /usr/local/bin/uv
 
@@ -109,7 +119,8 @@ RUN pnpm install --frozen-lockfile --ignore-scripts
 # becoming part of the layer.
 RUN mkdir -p \
       services/paper \
-      services/gateway
+      services/gateway \
+      services/adapter
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv python install "${PYTHON_VERSION}"
@@ -130,6 +141,33 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       uv sync --project services/gateway --frozen --no-install-project \
         --python "${PYTHON_VERSION}"
 
+# The adapter, same treatment: our own code, a locked third-party dependency
+# tree (compiled extensions among them, e.g. uvloop, httptools, pydantic-core).
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=services/adapter/pyproject.toml,target=/app/services/adapter/pyproject.toml \
+    --mount=type=bind,source=services/adapter/uv.lock,target=/app/services/adapter/uv.lock \
+    UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/adapter \
+      uv sync --project services/adapter --frozen --no-install-project \
+        --python "${PYTHON_VERSION}"
+
+# JiuwenSwarm itself: not our code and not a workspace project, so it has no
+# lockfile to sync against here — installed straight from its PyPI release
+# ("workswarm") into its own venv, at the same path scripts/jiuwenswarm.sh
+# expects (JIUWENSWARM_SRC below points start-stack.sh's runtime helper at
+# it). The pinned tag's PyPI publish resolves its own git-pinned transitive
+# dependency (openjiuwen) as a plain PyPI version, so this needs no cloning
+# or wheel-building — see scripts/binary-release/build-payload.sh, which
+# embeds it into the release binary the same way. Independent of the
+# application source, so this stays cacheable across source-only changes.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    case "${JIUWENSWARM_TAG}" in \
+      workswarm*) jiuwenswarm_pypi_version="${JIUWENSWARM_TAG#workswarm}" ;; \
+      *) echo "JIUWENSWARM_TAG must look like workswarm<version> (its PyPI package+version); got: ${JIUWENSWARM_TAG}" >&2; exit 1 ;; \
+    esac \
+ && uv venv /opt/sciencediscovery/jiuwenswarm/src/.venv --python "${PYTHON_VERSION}" \
+ && uv pip install --python /opt/sciencediscovery/jiuwenswarm/src/.venv/bin/python \
+      "workswarm==${jiuwenswarm_pypi_version}"
+
 COPY . .
 
 RUN pnpm build && pnpm runner:binary
@@ -139,7 +177,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/paper \
       uv sync --project services/paper --locked --python "${PYTHON_VERSION}" \
  && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/gateway \
-      uv sync --project services/gateway --locked --python "${PYTHON_VERSION}"
+      uv sync --project services/gateway --locked --python "${PYTHON_VERSION}" \
+ && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/adapter \
+      uv sync --project services/adapter --locked --python "${PYTHON_VERSION}"
 
 # ---------------------------------------------------------------- runtime ---
 FROM ${NODE_RUNTIME_IMAGE} AS runtime
@@ -175,7 +215,9 @@ ENV NODE_ENV=production \
     SCIENCE_AGENT_MODEL_CATALOG_PATH=/opt/sciencediscovery/resources/model-catalog/models-dev.json \
     SCIENCE_AGENT_ENVS_ROOT=/opt/sciencediscovery/envs \
     SCIENCE_AGENT_PAPER_PYTHON_PATH=/opt/sciencediscovery/envs/paper/bin/python \
-    SCIENCE_AGENT_GATEWAY_PYTHON_PATH=/opt/sciencediscovery/envs/gateway/bin/python
+    SCIENCE_AGENT_GATEWAY_PYTHON_PATH=/opt/sciencediscovery/envs/gateway/bin/python \
+    SCIENCE_AGENT_ADAPTER_PYTHON_PATH=/opt/sciencediscovery/envs/adapter/bin/python \
+    JIUWENSWARM_SRC=/opt/sciencediscovery/jiuwenswarm/src
 
 COPY --from=builder /opt/sciencediscovery /opt/sciencediscovery
 COPY --from=micromamba /opt/sciencediscovery/provisioner /opt/sciencediscovery/provisioner

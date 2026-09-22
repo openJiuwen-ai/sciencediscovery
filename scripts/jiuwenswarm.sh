@@ -38,7 +38,12 @@ jw_tag="${JIUWENSWARM_TAG:-workswarm0.2.6}"
 jw_git_url="${JIUWENSWARM_GIT_URL:-https://gitcode.com/openJiuwen/jiuwenswarm.git}"
 jw_root="${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}"
 jw_instance="${JIUWENSWARM_INSTANCE:-sciencediscovery}"
-jw_src="$jw_root/src"
+# Independent of jw_root: the Docker image bakes the install under /opt at
+# build time (read-only, no git clone at container start) while jw_root still
+# points at the bind-mounted data directory, so the instance's own state
+# (created below by cmd_setup, same as local mode) lands on the persisted
+# volume instead of inside the image.
+jw_src="${JIUWENSWARM_SRC:-$jw_root/src}"
 jw_bin="$jw_src/.venv/bin"
 jw_data_dir="$jw_root/data"
 jw_log="$jw_root/jiuwenswarm.log"
@@ -63,6 +68,10 @@ Environment:
   JIUWENSWARM_TAG        git tag to install (default workswarm0.2.6)
   JIUWENSWARM_GIT_URL    where to clone it from
   JIUWENSWARM_ROOT       install directory (default .sciencediscovery-data/jiuwenswarm)
+  JIUWENSWARM_SRC        where the .venv lives (default <root>/src); set apart
+                         from JIUWENSWARM_ROOT when the venv is pre-baked
+                         read-only (the Docker image does this) and only the
+                         instance's own state should live under the root
   JIUWENSWARM_INSTANCE   instance name (default sciencediscovery)
   SCIENCE_AGENT_PYPI_INDEX  PyPI mirror for uv, as start-stack.sh uses it
   UV_HTTP_TIMEOUT        seconds uv waits on a download (default 300; the default 30 fails on slow links)
@@ -127,31 +136,37 @@ PY
 }
 
 cmd_setup() {
-  require git "install git"
-  require uv "https://docs.astral.sh/uv/"
-  mkdir -p "$jw_root" "$jw_data_dir"
-  if [[ ! -d "$jw_src/.git" ]]; then
-    echo "Cloning JiuwenSwarm $jw_tag..." >&2
-    git clone --quiet --depth 1 --branch "$jw_tag" "$jw_git_url" "$jw_src"
+  if [[ -x "$jw_bin/jiuwenswarm-start" && ! -d "$jw_src/.git" ]]; then
+    # Pre-baked, not git-managed (the Docker image installs it this way at
+    # build time, straight from PyPI — see Dockerfile). Nothing to clone or
+    # sync; only the instance below is this container's own state to create.
+    echo "Using the pre-installed JiuwenSwarm at $jw_src." >&2
   else
-    local have
-    have="$(git -C "$jw_src" describe --tags --exact-match 2>/dev/null || true)"
-    [[ "$have" == "$jw_tag" ]] || {
-      echo "$jw_src is at '${have:-an untagged commit}', not $jw_tag. Remove it or set JIUWENSWARM_ROOT." >&2
-      exit 1
-    }
+    require git "install git"
+    require uv "https://docs.astral.sh/uv/"
+    mkdir -p "$jw_root"
+    if [[ ! -d "$jw_src/.git" ]]; then
+      echo "Cloning JiuwenSwarm $jw_tag..." >&2
+      git clone --quiet --depth 1 --branch "$jw_tag" "$jw_git_url" "$jw_src"
+    else
+      local have
+      have="$(git -C "$jw_src" describe --tags --exact-match 2>/dev/null || true)"
+      [[ "$have" == "$jw_tag" ]] || {
+        echo "$jw_src is at '${have:-an untagged commit}', not $jw_tag. Remove it or set JIUWENSWARM_ROOT." >&2
+        exit 1
+      }
+    fi
+    # Apply source compatibility fixes before syncing the editable installation.
+    apply_compatibility_patches
+    echo "Installing JiuwenSwarm (Python 3.12, its own virtualenv)..." >&2
+    (
+      cd "$jw_src"
+      export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
+      [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]] && export UV_DEFAULT_INDEX="$SCIENCE_AGENT_PYPI_INDEX"
+      uv sync --python 3.12
+    )
   fi
-  # ScienceDiscovery carries only narrowly scoped JiuwenSwarm bug fixes and
-  # extension hooks here. Applying them during setup keeps the pinned upstream
-  # source reproducible while making the intrusion explicit and reviewable.
-  apply_compatibility_patches
-  echo "Installing JiuwenSwarm (Python 3.12, its own virtualenv)..." >&2
-  (
-    cd "$jw_src"
-    export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
-    [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]] && export UV_DEFAULT_INDEX="$SCIENCE_AGENT_PYPI_INDEX"
-    uv sync --python 3.12
-  )
+  mkdir -p "$jw_data_dir"
   if [[ ! -d "$(instance_workspace)" ]]; then
     echo "Creating instance $jw_instance..." >&2
     jw jiuwenswarm-init --name "$jw_instance" >/dev/null

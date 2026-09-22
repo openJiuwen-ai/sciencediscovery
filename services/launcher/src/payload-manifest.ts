@@ -62,6 +62,13 @@ export interface PayloadManifest {
   };
   /** Present from format version 2 on; absent in embedded-dependency payloads. */
   bootstrap?: PayloadBootstrap;
+  /**
+   * Present when the packaging script embedded JiuwenSwarm and its adapter
+   * (see scripts/binary-release/build-payload.sh). Both are flat, PYTHONPATH
+   * -addressable installs rather than a venv — see serve.ts for why — so
+   * these are directories to put on PYTHONPATH, not executables.
+   */
+  jiuwenswarm?: { tag: string; sitePackages: string; adapterSitePackages: string };
 }
 
 export function parsePayloadManifest(raw: string, source: string): PayloadManifest {

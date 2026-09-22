@@ -125,6 +125,11 @@ export class Supervisor {
     throw new Error(`${service.definition.name} did not become healthy at ${url}.`);
   }
 
+  /** True while the named service is still running. Lets a caller outside the class (e.g. a port-discovery poll for a service with no healthUrl) notice it died instead of polling forever. */
+  isRunning(name: string): boolean {
+    return this.running.some((service) => service.definition.name === name && !service.settled);
+  }
+
   /**
    * Resolve when the first service exits. `serve` awaits this so that a dead
    * gateway or runner brings the stack down instead of leaving a broken UI up.

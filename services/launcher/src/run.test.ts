@@ -33,6 +33,7 @@ const baseSettings = (overrides: Partial<ServeSettings> = {}): ServeSettings => 
   runnerPort: 4311,
   scientificEnvironments: false,
   skipSandboxCheck: false,
+  jiuwenswarm: false,
   ...overrides,
 });
 

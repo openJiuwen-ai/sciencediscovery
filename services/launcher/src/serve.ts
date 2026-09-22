@@ -29,6 +29,7 @@ import {
   type ServeCredentials,
 } from "./bootstrap-tokens.js";
 import { runBootstrap } from "./bootstrap.js";
+import { adapterServiceDefinition, ensureInstance, jiuwenswarmServiceDefinition, waitForGateway } from "./jiuwenswarm.js";
 import type { PayloadManifest } from "./payload-manifest.js";
 import { runPreflight } from "./preflight.js";
 import { Supervisor, type ServiceDefinition } from "./supervisor.js";
@@ -44,6 +45,13 @@ export interface ServeSettings {
   runnerPort: number;
   scientificEnvironments: boolean;
   skipSandboxCheck: boolean;
+  /**
+   * Run agent turns on the embedded JiuwenSwarm instead of the native loop:
+   * the adapter takes the public port and proxies everything it has not
+   * migrated to the API, which moves to port + 100. Requires a payload built
+   * with JiuwenSwarm embedded (manifest.jiuwenswarm) — see jiuwenswarm.ts.
+   */
+  jiuwenswarm: boolean;
 }
 
 export interface ServeContext {
@@ -96,6 +104,11 @@ export function runnerUrl(settings: ServeSettings, baseEnv: NodeJS.ProcessEnv = 
 /** Absolute path of a payload-relative entry recorded in the manifest. */
 const payloadPath = (root: string, relative: string): string => join(root, relative);
 
+/** The bundled interpreter: the first-launch-provisioned gateway environment once bootstrap has run, otherwise the payload's own CPython. */
+export function resolvePythonBinary(context: ServeContext): string {
+  return context.gatewayPythonPath ?? payloadPath(context.payloadRoot, context.manifest.python.path);
+}
+
 /** Working directory and environment the bundled Python is exercised in. */
 export function mcpProbeRuntime(context: ServeContext): { cwd: string; env: NodeJS.ProcessEnv } {
   // The app root, not the launcher's own working tree: the bundled servers
@@ -122,8 +135,13 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
   const { credentials, manifest, payloadRoot, settings } = context;
   const baseEnv: NodeJS.ProcessEnv = { ...context.baseEnv };
   const nodeBinary = payloadPath(payloadRoot, manifest.node.path);
-  const pythonBinary = context.gatewayPythonPath ?? payloadPath(payloadRoot, manifest.python.path);
+  const pythonBinary = resolvePythonBinary(context);
   const appRoot = payloadPath(payloadRoot, manifest.app.root);
+  // --jiuwenswarm: the adapter takes the public port and proxies everything it
+  // has not migrated to the API, which moves here (see jiuwenswarm.ts for the
+  // adapter's own ServiceDefinition, started separately once its JiuwenSwarm
+  // dependency reports the ports it chose).
+  const apiPort = settings.jiuwenswarm ? settings.port + 100 : settings.port;
 
   const runnerBase = runnerUrl(settings, baseEnv);
 
@@ -152,9 +170,16 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
     // own site-packages already carry the gateway package.
     SCIENCE_AGENT_GATEWAY_PYTHON_PATH: pythonBinary,
     SCIENCE_AGENT_HOST: settings.host,
-    SCIENCE_AGENT_PORT: String(settings.port),
+    SCIENCE_AGENT_PORT: String(apiPort),
     SCIENCE_AGENT_RUNNER_TOKEN: runnerEnvironment.SCIENCE_AGENT_RUNNER_TOKEN,
     SCIENCE_AGENT_RUNNER_URL: runnerBase,
+    ...(settings.jiuwenswarm
+      ? {
+        SCIENCE_AGENT_EXECUTOR: "jiuwenswarm",
+        // Loopback regardless of settings.host: the adapter always accepts this on 127.0.0.1.
+        SCIENCE_AGENT_ADAPTER_URL: `http://127.0.0.1:${settings.port}`,
+      }
+      : {}),
   };
 
   return [
@@ -172,7 +197,7 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
       args: [payloadPath(payloadRoot, manifest.app.apiEntry)],
       cwd: appRoot,
       env: apiEnvironment,
-      healthUrl: `http://${settings.host === "0.0.0.0" ? "127.0.0.1" : settings.host}:${settings.port}/health`,
+      healthUrl: `http://${settings.host === "0.0.0.0" ? "127.0.0.1" : settings.host}:${apiPort}/health`,
     },
   ];
 }
@@ -257,7 +282,32 @@ export async function serve(context: ServeContext, log: (message: string) => voi
   process.on("SIGTERM", shutdown);
 
   try {
-    await supervisor.start(services);
+    const [runnerService, apiService] = services;
+    await supervisor.start([runnerService!]);
+
+    // Between the runner and the API, matching scripts/start-stack.sh's
+    // --jiuwenswarm order: JiuwenSwarm itself, then the adapter that fronts
+    // it (health-gated), only once JiuwenSwarm reports the ports it chose.
+    if (settings.jiuwenswarm) {
+      const paths = await ensureInstance({
+        manifest,
+        payloadRoot: context.payloadRoot,
+        dataDir: settings.dataDir,
+        baseEnv: context.baseEnv,
+        pythonBinary: resolvePythonBinary(context),
+        log,
+      });
+      await supervisor.start([jiuwenswarmServiceDefinition(paths, context.baseEnv)]);
+      const endpoints = await waitForGateway(paths, context.baseEnv, () => !supervisor.isRunning("JiuwenSwarm"));
+      await supervisor.start([adapterServiceDefinition(paths, context.baseEnv, {
+        publicPort: settings.port,
+        legacyPort: settings.port + 100,
+        host: settings.host,
+        endpoints,
+      })]);
+    }
+
+    await supervisor.start([apiService!]);
 
     const host = settings.host === "0.0.0.0" || settings.host === "::" ? "127.0.0.1" : settings.host;
     const uiHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;

@@ -22,6 +22,22 @@
 # package index (Huawei Cloud mirror by default), pinned here to exact
 # versions: a hash-locked requirements export of services/gateway/uv.lock and
 # a sha256-pinned uv wheel.
+#
+# JiuwenSwarm and its adapter ARE embedded (unlike the gateway): both are
+# installed at build time into flat, PYTHONPATH-addressable directories rather
+# than a venv, because a venv's shebangs and pyvenv.cfg hardcode the build
+# machine's absolute path and stop working once the payload is extracted
+# somewhere else. The launcher invokes each by importing its entry-point
+# module directly (see serve.ts) instead of running the (broken, if it even
+# shipped) console-script wrapper. JiuwenSwarm is installed straight from its
+# PyPI release ("workswarm"), not cloned: the pinned tag's PyPI publish
+# resolves its own git-pinned transitive dependency (openjiuwen) as a plain
+# PyPI version, so no cloning or wheel-building is needed for it or its
+# dependencies. JiuwenSwarm's own dependency closure is large (some 1GB+:
+# transformers, onnxruntime, playwright, ...), so this is the single biggest
+# contributor to release size; see docs/en/how-to/run-with-jiuwenswarm.md for
+# the trade-off this was chosen over (first-launch install, like the
+# gateway's deps get).
 # Docker is never involved: every architecture-specific piece is downloaded
 # from a pinned manifest, so both architectures build on any x86_64 or
 # aarch64 host.
@@ -29,6 +45,15 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_dir/../.." && pwd)"
+
+# Keep in step with scripts/jiuwenswarm.sh, which installs the same pinned tag
+# for source-mode development (there, by cloning; the git tag and the PyPI
+# release below are the same publish, just reached two different ways).
+jiuwenswarm_tag="${JIUWENSWARM_TAG:-workswarm0.2.6}"
+case "$jiuwenswarm_tag" in
+  workswarm*) jiuwenswarm_pypi_version="${jiuwenswarm_tag#workswarm}" ;;
+  *) echo "JIUWENSWARM_TAG must look like workswarm<version> (its PyPI package+version) to embed from PyPI; got: $jiuwenswarm_tag" >&2; exit 1 ;;
+esac
 
 architecture=""
 output=""
@@ -124,13 +149,34 @@ assert_no_build_paths() { # <payload root>
   # has HOME=/root, and a substring search for that flags the Model Context
   # Protocol's own `/roots/list_changed` on the right and a fixture path like
   # `/workspace/root script.sh` on the left. Neither discloses anything.
-  for needle in "$repository_root" "$shared_dir" "$output" "${HOME:-}" "${USERPROFILE:-}"; do
+  #
+  # jiuwenswarm/ and adapter/ hold JiuwenSwarm's own huge, unmodified PyPI
+  # dependency closure (transformers, google-adk, lxml, ...). At that scale,
+  # the needles below that are only ever generic words rather than specific
+  # build-machine identifiers turn up constantly in unrelated upstream source
+  # and stop meaning anything: a bare $HOME like this build's /root inside an
+  # XML `</root>` tag or SSH tooling's default `/root/.ssh`; JiuwenSwarm's own
+  # git-worktree-based agent sandboxing feature literally uses a `.worktrees`
+  # directory, coincidentally the same convention this check otherwise polices
+  # for this build agent's own workspace. install_flat_python already strips
+  # the one thing a --target install of a *local* wheel can leak there
+  # (direct_url.json), and $repository_root/$shared_dir/$output — genuinely
+  # specific to this build, never a plausible coincidence — stay fully
+  # scanned everywhere, so excluding those two trees from the generic needles
+  # only drops noise, not coverage.
+  for needle in "$repository_root" "$shared_dir" "$output"; do
     if [[ -n "$needle" ]]; then
       pattern="$(printf '%s' "$needle" | sed 's/[][\\.*^$(){}?+|/]/\\&/g')"
       leaks+="$(grep -rIlE -- "(^|[^[:alnum:]])$pattern([^[:alnum:]]|\$)" "$root" || true)"$'\n'
     fi
   done
-  leaks+="$(grep -rIlE '\.missioncrew|MissionCrew|\.worktrees' "$root" || true)"
+  for needle in "${HOME:-}" "${USERPROFILE:-}"; do
+    if [[ -n "$needle" ]]; then
+      pattern="$(printf '%s' "$needle" | sed 's/[][\\.*^$(){}?+|/]/\\&/g')"
+      leaks+="$(grep -rIlE --exclude-dir=jiuwenswarm --exclude-dir=adapter -- "(^|[^[:alnum:]])$pattern([^[:alnum:]]|\$)" "$root" || true)"$'\n'
+    fi
+  done
+  leaks+="$(grep -rIlE --exclude-dir=jiuwenswarm --exclude-dir=adapter '\.missioncrew|MissionCrew|\.worktrees' "$root" || true)"
   leaks="$(printf '%s\n' "$leaks" | sed '/^$/d' | sort -u)"
   if [[ -n "$leaks" ]]; then
     echo "Payload files leak build-machine paths:" >&2
@@ -219,6 +265,23 @@ prepare_shared() {
   (cd services/gateway && uv export --frozen --no-dev --no-emit-project --no-header \
     --format requirements.txt -o "$shared_dir/requirements-gateway.txt")
 
+  # The adapter is our own code too, same treatment as the gateway: a prebuilt
+  # wheel plus a locked third-party requirements export, installed per
+  # architecture below (its deps include compiled extensions, e.g. uvloop,
+  # httptools, pydantic-core).
+  echo "Building the adapter wheel..." >&2
+  uv build --wheel --out-dir "$shared_dir/wheels" services/adapter
+  (cd services/adapter && uv export --frozen --no-dev --no-emit-project --no-header \
+    --format requirements.txt -o "$shared_dir/requirements-adapter.txt")
+
+  # JiuwenSwarm itself is installed straight from its PyPI release below, per
+  # architecture (its dependency closure includes compiled extensions —
+  # onnxruntime, faiss-cpu and friends — so it cannot be resolved once here
+  # the way the gateway/adapter wheels are; there is also nothing of our own
+  # to build a wheel from). No clone, no export: the pinned tag's PyPI publish
+  # resolves cleanly with plain version pins, including its own transitive
+  # dependency that upstream's lockfile pins from git.
+
   touch "$shared_dir/.complete"
 }
 
@@ -256,6 +319,7 @@ verify_extension_architecture() { # <python prefix> <expected `file` fragment>
 
 prepare_shared
 assert_requirements_clean "$shared_dir/requirements-gateway.txt"
+assert_requirements_clean "$shared_dir/requirements-adapter.txt"
 
 echo "Assembling the $architecture payload in $output" >&2
 rm -rf -- "$output"
@@ -309,6 +373,53 @@ case "$architecture" in
   aarch64) verify_extension_architecture "$output/python" "ARM aarch64" ;;
 esac
 
+# JiuwenSwarm and the adapter, embedded (see the file header for why this is a
+# flat --target install rather than a venv). --python-platform picks the wheel
+# platform, so this also works building aarch64 on an x86_64 host or vice
+# versa (requires each dependency to publish a wheel for that platform, which
+# is not guaranteed the way a native install would be); it does not need a
+# foreign-architecture interpreter to run. --python 3.12 (a version, not a
+# path) still has to resolve to *some* local 3.12 interpreter, of the host's
+# own architecture, because uv's Requires-Python gate for a local (non-index)
+# wheel checks the interpreter it ran with rather than --python-version alone
+# — that flag only steers environment-marker evaluation, not this gate.
+# install_flat_python <target dir> <requirements file> <wheel glob>...
+install_flat_python() { # <target dir> <requirements file> <own-wheel glob> [more wheel globs...]
+  local target="$1" requirements="$2" wheel_glob wheels=()
+  shift 2
+  for wheel_glob in "$@"; do
+    wheels+=($(ls $wheel_glob))
+  done
+  mkdir -p "$target"
+  uv pip install --target "$target" --python-platform "$python_platform" --python 3.12 \
+    -r "$requirements" "${wheels[@]}"
+  # uv records the exact source it installed a *local* (non-index) wheel
+  # from — here, our own prebuilt wheel's absolute path under $shared_dir —
+  # in that package's dist-info/direct_url.json. Nothing reads it at
+  # runtime; left in, it's a build-machine path shipped to every user.
+  find "$target" -path '*.dist-info/direct_url.json' -type f -delete
+  # Not produced by a --target install of these two projects today, but
+  # cheap insurance: any console-script wrapper here has this build's path
+  # baked into its shebang and would fail (or worse, silently run some other
+  # interpreter) once the payload is extracted somewhere else. The launcher
+  # never runs one — it imports each entry point's module directly — so any
+  # that did appear are dead weight at best.
+  find "$target" -maxdepth 1 -name bin -type d -exec rm -rf -- {} +
+  find "$target" -name '__pycache__' -type d -exec rm -rf -- {} + 2>/dev/null || true
+}
+
+echo "Installing the adapter (target: $python_platform)..." >&2
+install_flat_python "$output/adapter/site-packages" "$shared_dir/requirements-adapter.txt" \
+  "$shared_dir"'/wheels/sciencediscovery_adapter-*.whl'
+
+echo "Installing JiuwenSwarm $jiuwenswarm_tag from PyPI (target: $python_platform)..." >&2
+mkdir -p "$output/jiuwenswarm/site-packages"
+uv pip install --target "$output/jiuwenswarm/site-packages" \
+  --python-platform "$python_platform" --python 3.12 \
+  "workswarm==$jiuwenswarm_pypi_version"
+find "$output/jiuwenswarm/site-packages" -maxdepth 1 -name bin -type d -exec rm -rf -- {} +
+find "$output/jiuwenswarm/site-packages" -name '__pycache__' -type d -exec rm -rf -- {} + 2>/dev/null || true
+
 micromamba_version="$(node "$repository_root/scripts/fetch-managed-micromamba.mjs" \
   --arch "$architecture" --print-tsv | cut -f1)"
 read_version() { # <runtime>
@@ -355,6 +466,11 @@ cat >"$output/manifest.json" <<EOF
     },
     "requirementsPath": "bootstrap/requirements-gateway.txt",
     "gatewayWheelPath": "bootstrap/wheels/$gateway_wheel_name"
+  },
+  "jiuwenswarm": {
+    "tag": "$jiuwenswarm_tag",
+    "sitePackages": "jiuwenswarm/site-packages",
+    "adapterSitePackages": "adapter/site-packages"
   }
 }
 EOF
