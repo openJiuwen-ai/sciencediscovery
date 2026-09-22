@@ -10,5 +10,15 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2024"
-  }
+  },
+  "//": [
+    "Test sources sit beside the modules they cover, so every package's",
+    "`include: src/**/*.ts` would otherwise compile them into `dist/` and make",
+    "the product build depend on the test adapter under `test/`. Excluding them",
+    "here reaches every package because none declares its own `exclude`, and an",
+    "inherited one applies wherever the deriving config does not replace it.",
+    "The tests are still type-checked: `tsconfig.tests.json` at the root owns",
+    "exactly the files this drops, and `pnpm typecheck` runs it."
+  ],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx"]
 }

@@ -1,0 +1,29 @@
+{
+  "//": [
+    "The test sources `tsconfig.base.json` keeps out of every package's build,",
+    "type-checked here instead so excluding them from the product output does",
+    "not quietly stop checking them. Nothing emits: this config exists to fail.",
+    "",
+    "It is deliberately not part of any package. The image runs `pnpm build`",
+    "and nothing else, so the moment a package's own tsconfig reaches a test",
+    "file the build needs `test/support/tagged/compat.mjs` in the build",
+    "context — which is the failure this arrangement removes.",
+    "",
+    "The `.test.tsx` patterns match nothing today; they mirror the base config's",
+    "exclude so a first one cannot land unchecked. `apps/web` is not here: its",
+    "tests sit in `tests/`, which its own `include` (`src/**`) never reached,",
+    "so the base exclude takes nothing away from it."
+  ],
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false
+  },
+  "exclude": [],
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "packages/*/src/**/*.test.tsx",
+    "services/*/src/**/*.test.ts",
+    "services/*/src/**/*.test.tsx"
+  ]
+}

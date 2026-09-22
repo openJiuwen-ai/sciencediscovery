@@ -41,7 +41,7 @@
     "start": "bash scripts/run-local.sh",
     "smoke": "pnpm build && pnpm --filter @sciencediscovery/api test",
     "test": "pnpm build && pnpm binary:test && pnpm --recursive test",
-    "typecheck": "pnpm --recursive typecheck",
+    "typecheck": "pnpm --recursive typecheck && tsc -p tsconfig.tests.json",
     "test:shared": "node test/support/tagged/shared.mjs run",
     "test:list": "node test/support/tagged/shared.mjs list",
     "test:run": "node test/support/tagged/shared.mjs run",

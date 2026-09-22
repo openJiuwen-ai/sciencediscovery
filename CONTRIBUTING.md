@@ -30,6 +30,15 @@ pnpm dev          # API watch (after build; does not start runner/gateway by its
 pnpm --filter @sciencediscovery/web dev   # UI hot reload on :5173 (proxies API :4310)
 ```
 
+Test sources are not part of the product build. `tsconfig.base.json` excludes
+`**/*.test.ts` and `**/*.test.tsx`, so no package compiles a test into `dist/`
+and the Docker image needs nothing from `test/`. They are still type-checked:
+the root `tsconfig.tests.json` owns exactly those files, and `pnpm typecheck`
+runs it after the per-package pass. A package's own `pnpm test` therefore runs
+the sources, `node --import tsx --test "src/**/*.test.ts"`, and the quotes have
+to stay — Node's test runner does that matching itself, and a pattern the shell
+ate would leave the command passing with nothing run.
+
 ## Agent-loop smoke tests
 
 Targeted adapter/integration smokes, not wired into `pnpm smoke`; run from the

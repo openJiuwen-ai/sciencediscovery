@@ -46,34 +46,14 @@ data/
 .mcp.json
 .ripgreprc
 
-# Docs and integration tests are not needed by the running services.
+# Docs and integration tests are not needed by the running services. All of
+# test/ stays out: no package's build reaches a test file any more, so the
+# image never resolves test/support/tagged/compat.mjs. Keeping the whole
+# directory out matters because the runtime stage is
+# `COPY --from=builder /app /app` — anything admitted here ships.
 docs/
+test/
 .github/
-
-# One exception under test/: the tagged-test adapter. Every package tsconfig
-# includes src/**/*.ts, so the image's `pnpm build` type-checks the ~299
-# *.test.ts files that import test/support/tagged/compat.mjs, and a module
-# outside the context is `error TS2307` — which is how the Docker image job
-# failed. `compat.d.mts` refers to nothing but `node:test`, so this directory
-# closes over itself and admitting it pulls nothing else in.
-#
-# Docker never descends into an excluded directory, so `test/` followed by
-# `!test/support/tagged` would not bring it back. The contents are excluded one
-# level at a time and each parent is re-admitted on the way down, which is the
-# only form Docker honours.
-test/*
-!test/support
-test/support/*
-!test/support/tagged
-
-# Everything else under test/ stays out: the Playwright journeys, their
-# helpers and fixtures are never needed by a running service, and the runtime
-# stage is `COPY --from=builder /app /app`, so anything admitted here ships.
-# The two patterns below re-state the language-runtime exclusions inside the
-# directory just re-admitted — the last matching pattern wins, so a developer
-# machine's __pycache__ or .venv there would otherwise ride along.
-test/support/tagged/**/__pycache__
-test/support/tagged/**/.venv
 
 # Docker inputs themselves.
 Dockerfile
