@@ -157,7 +157,7 @@ contradictory findings across studies.
 ```
 
 Click **Run analysis**.
-![Dispatch task](../../images/task.gif)
+![Dispatch task](../../images/task.png)
 
 ---
 

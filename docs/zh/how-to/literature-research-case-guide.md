@@ -159,7 +159,7 @@ contradictory findings across studies.
 ```
 
 点击 **运行分析**。
-![下发任务](../../images/task.gif)
+![下发任务](../../images/task.png)
 ---
 
 ## 6. 审批与权限

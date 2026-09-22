@@ -13,7 +13,7 @@
 
 [下载](#安装) · [快速开始](docs/zh/tutorial/01-quick-start.md) · [文档](docs/README.md) · [贡献指南](CONTRIBUTING.md) · [English](README.md)
 
-<img src="docs/images/task.gif" width="920" alt="ScienceDiscovery 工作区：项目与会话导航、输入框，以及产物、审阅与溯源面板" />
+<img src="docs/images/task_zh.gif" width="920" alt="ScienceDiscovery 工作区：项目与会话导航、输入框，以及产物、审阅与溯源面板" />
 
 </div>
 
