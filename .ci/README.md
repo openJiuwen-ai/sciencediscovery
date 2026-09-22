@@ -54,7 +54,7 @@ Playwright tests are outside these percentages.
 The same job writes a human-readable `Coverage summary` to the GitHub Actions
 run summary. It reports Node.js and Python separately, including whether each
 scan was full, incremental, or skipped, the measured file and group counts,
-and the available line, branch, and function totals. The summary explicitly
+and the available line and branch totals. The summary explicitly
 states that no minimum percentage is enforced. Missing output is shown as
 unavailable for diagnosis; it does not hide or replace the failing coverage
 step that produced it.

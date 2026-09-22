@@ -57,8 +57,9 @@ test("renders full and incremental coverage without a threshold", () => {
   });
 
   assert.match(output, /Coverage is informational\. \*\*No minimum percentage is enforced\.\*\*/);
-  assert.match(output, /\| Node\.js \| Full \| 12 \| 2 \| 80\.00% \(80\/100\) \| 75\.00% \(30\/40\) \| 90\.00% \(18\/20\) \|/);
-  assert.match(output, /\| Python \| Incremental \| 4 \| 1 \| 90\.00% \(45\/50\) \| 60\.00% \(6\/10\) \| n\/a \|/);
+  assert.match(output, /\| Node\.js \| Full \| 12 \| 2 \| 80\.00% \(80\/100\) \| 75\.00% \(30\/40\) \|/);
+  assert.match(output, /\| Python \| Incremental \| 4 \| 1 \| 90\.00% \(45\/50\) \| 60\.00% \(6\/10\) \|/);
+  assert.doesNotMatch(output, /Functions/);
   assert.match(output, /`packages\/agent-core`, `scripts`/);
   assert.match(output, /`services\/gateway`/);
 });
@@ -76,8 +77,8 @@ test("shows skipped and unavailable scans without inventing percentages", () => 
     },
   });
 
-  assert.match(output, /\| Node\.js \| Skipped \| — \| — \| n\/a \| n\/a \| n\/a \|/);
-  assert.match(output, /\| Python \| Unavailable \| — \| — \| n\/a \| n\/a \| n\/a \|/);
+  assert.match(output, /\| Node\.js \| Skipped \| — \| — \| n\/a \| n\/a \|/);
+  assert.match(output, /\| Python \| Unavailable \| — \| — \| n\/a \| n\/a \|/);
   assert.match(output, /Skipped — no covered Node group changed/);
   assert.match(output, /Unavailable — coverage generation failed/);
 });

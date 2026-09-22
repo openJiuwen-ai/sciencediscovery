@@ -70,7 +70,6 @@ export function renderCoverageJobSummary({ node, python }) {
     state.document ? scannedGroups(state.document).length : "—",
     percentage(state.document?.totals?.lines),
     percentage(state.document?.totals?.branches),
-    percentage(state.document?.totals?.functions),
   ]);
 
   const lines = [
@@ -78,8 +77,8 @@ export function renderCoverageJobSummary({ node, python }) {
     "",
     "Coverage is informational. **No minimum percentage is enforced.**",
     "",
-    "| Runtime | Scan | Files measured | Groups measured | Lines | Branches | Functions |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Runtime | Scan | Files measured | Groups measured | Lines | Branches |",
+    "| --- | --- | ---: | ---: | ---: | ---: |",
     ...rows.map((row) => `| ${row.map(markdownText).join(" | ")} |`),
     "",
     "### Scanned groups",
