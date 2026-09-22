@@ -236,6 +236,19 @@ selects only this spec. The mocked journey remains in the default PR gate;
 only the real research journey requires `E2E_RESEARCH=1`. Do not set that
 real-research switch in PR gates.
 
+`test/swarm-specialist-mcp-mocked.spec.ts` also runs in the default mocked gate.
+It registers a custom Specialist and a real local stdio MCP echo server, binds
+the connector only through the Specialist, and delegates through platform `task`.
+Assertions inspect the actual child LLM system prompt and tool list, the MCP
+result in child history, the handoff in the parent's next LLM input, persisted
+Specialist identity/completion, and parent/child browser output. The model is
+scripted; no public literature service or paid API is called. Temporary server,
+Specialist, model and project are cleaned up after the test.
+
+```bash
+E2E_SWARM_TASK=1 npm --prefix .e2e run test:mocked -- swarm-specialist-mcp-mocked.spec.ts
+```
+
 The live test requires `E2E_REAL=1` and either a preconfigured live model ID in
 `E2E_LLM_MODEL_ID`, or all three of `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL` and
 `E2E_LLM_TOKEN`. Keys should come from the environment/secret store, never from

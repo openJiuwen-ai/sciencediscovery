@@ -84,6 +84,8 @@ export interface ScriptedTextStep {
 export type ScriptedModelStep = ScriptedTextStep | ScriptedToolStep;
 
 export interface ScriptedModelCall {
+  systemPrompt?: string;
+  toolResults?: string[];
   offeredTools?: string[];
   arguments?: Record<string, unknown>;
   route: "main" | "subagent";
@@ -191,6 +193,7 @@ function userText(content: unknown): unknown {
 export function scriptedModel(
   mainSteps: ScriptedTurns,
   subagentSteps?: ScriptedTurns,
+  options: { captureContext?: boolean } = {},
 ): Promise<ScriptedModel> {
   const calls: ScriptedModelCall[] = [];
   const model = "journey-scripted-model";
@@ -257,6 +260,11 @@ export function scriptedModel(
         sequence += 1;
         const id = `chatcmpl-journey-${sequence}`;
         calls.push({
+          ...(options.captureContext ? {
+            systemPrompt,
+            toolResults: messages.filter((message) => message.role === "tool").map((message) =>
+              typeof message.content === "string" ? message.content : JSON.stringify(message.content)),
+          } : {}),
           offeredTools: body.tools?.map((tool) => tool.function?.name ?? ""),
           ...("tool" in step ? { arguments: step.arguments, tool: step.tool } : {}),
           route,
