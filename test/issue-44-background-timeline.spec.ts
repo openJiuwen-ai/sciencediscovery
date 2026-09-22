@@ -15,7 +15,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("issue-44-background-timeline.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("issue-44-background-timeline.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
 
 // Follow-up to the Session Stop / per-Session run isolation change: a run that
 // keeps streaming while the user works in another Session must still show its

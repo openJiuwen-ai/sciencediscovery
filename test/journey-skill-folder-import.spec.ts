@@ -21,7 +21,7 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-skill-folder-import.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-skill-folder-import.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 /** Write one importable folder on disk; the browser is handed the directory, not a ZIP. */
 async function writeSkillFolder(root: string, files: Record<string, string>): Promise<string> {

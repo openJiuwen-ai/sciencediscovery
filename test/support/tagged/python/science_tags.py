@@ -44,7 +44,12 @@ def normalize_tags(values: list[str], *, partial: bool = False) -> list[str]:
         members.add(value)
     for name, rule in SCHEMA.items():
         count = len(groups.get(name, set()))
-        if not partial and rule.get('required', True) and not count:
+        # A group with a default is declared only where a test deviates from it.
+        # Materialised on the complete identity, never on the inheritance pass.
+        if not partial and not count and 'default' in rule:
+            groups[name] = {rule['default']}
+            continue
+        if not partial and 'default' not in rule and not count:
             raise ValueError(f'Missing tag group: {name}')
         if count > 1 and not rule['multiple']:
             raise ValueError(f'Conflicting values for {name}')

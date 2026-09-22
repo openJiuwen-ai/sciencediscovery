@@ -33,7 +33,7 @@ from typing import List, Optional, Tuple
 
 import pytest
 
-pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', judge='none', status='reviewed')
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 from agentdescent.selection import Candidate, FlatPuct, SelectionContext
 
 from sciencediscovery_evolve.vendor.puct import (

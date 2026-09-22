@@ -19,6 +19,7 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collect, execute } from './coordinator.mjs';
 import { createPlan, verifyResults, fileDigest, digest } from './plan.mjs';
+import { schema } from './tags.mjs';
 import { shared, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources } from './profiles.mjs';
 import { preflight } from './environment.mjs';
 import { checks } from './checks.mjs';
@@ -36,13 +37,46 @@ function run(command,args,env,log,cwd=root) {
 }
 function python(project){return join(root,'services',project,'.venv/bin/python');}
 function projectEnv(env,project){return {...env,PYTHONPATH:[join(root,'services',project,'tests'),join(root,'services',project,'src')].join(':')};}
+/**
+ * Two ways to name a set of tests, and they are deliberately different.
+ *
+ * `--slice` narrows the shared policy: whatever it names is a subset of
+ * `pnpm test:shared`, because the predicate is appended to `shared.selector`
+ * with `and`. That is what CI uses, so a job cannot reach outside the plan.
+ *
+ * A `--<group> <value>` query builds its own selector from the tag vocabulary
+ * instead, which is how a developer asks for something the shared plan
+ * excludes on purpose — a live-model journey, the legacy quarantine. Repeating
+ * a group is OR within it; different groups are AND. The environment still
+ * gates execution: a `model:real` case without `CI_ALLOW_REAL=1` and its
+ * credentials fails preflight rather than running.
+ */
+function selectorFrom(query) {
+  return Object.entries(query)
+    .map(([group, values]) => values.length > 1 ? `(${values.map(v => `${group}:${v}`).join(' or ')})` : `${group}:${values[0]}`)
+    .join(' and ');
+}
 export async function main(args=process.argv.slice(2)) {
-  const action=args.shift()??'run';let slice='shared',output;
-  while(args.length){const flag=args.shift();if(flag==='--slice')slice=args.shift();else if(flag==='--output')output=args.shift();else throw new Error(`Unknown option ${flag}`);}
-  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error('Usage: test:shared [--slice ut|st|e2e] [--output DIR]');
+  const action=args.shift()??'run';let slice,output;const query={};
+  while(args.length){
+    const flag=args.shift();
+    if(flag==='--slice')slice=args.shift();
+    else if(flag==='--output')output=args.shift();
+    else if(flag?.startsWith('--')&&schema.groups[flag.slice(2)]){
+      const group=flag.slice(2),value=args.shift();
+      if(!schema.groups[group].values.includes(value))throw new Error(`Unknown ${group}: ${value}; expected ${schema.groups[group].values.join('|')}`);
+      (query[group]??=[]).push(value);
+    }
+    else throw new Error(`Unknown option ${flag}; tag dimensions are --${Object.keys(schema.groups).join(', --')}`);
+  }
+  const dimensions=Object.keys(query);
+  if(slice!==undefined&&dimensions.length)throw new Error('--slice names a part of the shared plan; a tag query builds its own. Use one or the other');
+  slice??='shared';
+  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error(`Usage: test:run|test:list [--${Object.keys(schema.groups).join(' V] [--')} V] [--slice ut|st|e2e] [--output DIR]`);
   // Under CI the layer entry point owns `<CI_RESULTS_DIR>/<layer>/run.log` and
   // its own summary; the frozen plan and its evidence go beside them, not over them.
-  const outputDir=resolve(output??(process.env.CI_RESULTS_DIR?join(process.env.CI_RESULTS_DIR,slice,'tagged'):join(root,'.test-runs',slice)));
+  const label=dimensions.length?'query':slice;
+  const outputDir=resolve(output??(process.env.CI_RESULTS_DIR?join(process.env.CI_RESULTS_DIR,label,'tagged'):join(root,'.test-runs',label)));
   mkdirSync(outputDir,{recursive:true});
   // Caches and run data are kept inside the workspace; TMPDIR deliberately is
   // not. The Runner builds its egress socket under it, and a Unix socket path
@@ -58,7 +92,11 @@ export async function main(args=process.argv.slice(2)) {
     // virtualenvs preparation just built are the ones this revision pins.
     SCIENCE_TEST_PYTHON:python('paper'),
     SCIENCE_DISCOVERY_DATA_DIR:join(outputDir,'runtime'),SCIENCE_AGENT_DATA_DIR:join(outputDir,'runtime')};
-  const needUT=['shared','ut'].includes(slice), needPW=['shared','e2e'].includes(slice);
+  // Collection scope follows the categories asked for, whichever way they were
+  // asked: a query for `--category e2e` needs Chromium and not the Python
+  // virtualenvs, exactly as `--slice e2e` does.
+  const categories=query.category??(slice==='shared'?['ut','st','e2e']:[slice]);
+  const needUT=categories.includes('ut'), needPW=categories.includes('e2e');
   // The E2E group can split preparation from execution: a host installs
   // everything and hands the workspace over, and this half only runs.
   const prepared=process.env.CI_E2E_PREPARED==='1';
@@ -73,7 +111,7 @@ export async function main(args=process.argv.slice(2)) {
   if(prepareOnly){console.log(`Prepared ${slice}; no test was collected or executed here.`);return 0;}
   // Source scopes follow workspace layout, never installed capabilities or environment gates.
   const nodeFiles=[...globSync([...nodeSources],{cwd:root}), ...nodeExtraSources].sort();
-  const wantedCategory=slice==='shared'?null:slice.startsWith('ut')?'ut':slice;
+  const wantedCategory=categories.length===1?categories[0]:null;
   const files=nodeFiles.filter(file=>{
     const source=readFileSync(join(root,file),'utf8');
     return !wantedCategory||source.includes(`category:${wantedCategory}`);
@@ -97,10 +135,19 @@ export async function main(args=process.argv.slice(2)) {
     const text=readFileSync(join(root,source),'utf8');catalog.push({id:`command:${source}`,source,sourceHash:fileDigest(text),runner:'command',tags:JSON.parse(text.match(/science-tags: (\[[^\n]+\])/)[1])});
   }
   const revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
-  const selector=shared.selector+(slices[slice]?` and (${slices[slice]})`:'');
-  const plan=createPlan(catalog,{revision,selector,targets:shared.targets});
+  const {os:requestedOs,arch:requestedArch,...predicates}=query;
+  const selector=dimensions.length?selectorFrom(predicates):shared.selector+(slices[slice]?` and (${slices[slice]})`:'');
+  // `os` and `arch` name the execution target rather than filter the tags: the
+  // plan expands a multi-platform test into one instance per target, and the
+  // selector is then evaluated on that concrete instance.
+  const targets=dimensions.length
+    ?(requestedOs??[shared.targets[0].os]).flatMap(os=>(requestedArch??[shared.targets[0].arch]).map(arch=>({os,arch})))
+    :shared.targets;
+  const plan=createPlan(catalog,{revision,selector:selector||'',targets});
   json(join(outputDir,'catalog.json'),catalog);json(join(outputDir,'plan.json'),plan);
-  console.log(`Frozen ${plan.entries.length} identities for slice ${slice}; selector=${selector}`);
+  const asked=dimensions.length?`query ${dimensions.map(g=>`--${g} ${query[g].join(' --'+g+' ')}`).join(' ')}`:`slice ${slice}`;
+  console.log(`Frozen ${plan.entries.length} identities for ${asked}`);
+  console.log(`selector=${selector||'(everything collected)'}; targets=${plan.targets.map(t=>`${t.os}/${t.arch}`).join(' ')}`);
   console.log(`digest=${plan.digest}; plan=${join(outputDir,'plan.json')}`);
   if(action==='list')return 0;
   const checked=await preflight(plan);

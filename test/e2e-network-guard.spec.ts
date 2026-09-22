@@ -22,7 +22,7 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("e2e-network-guard.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("e2e-network-guard.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 async function webSocketOutcome(page: import("@playwright/test").Page, url: string): Promise<string> {
   return page.evaluate((target) => new Promise<string>((resolve) => {

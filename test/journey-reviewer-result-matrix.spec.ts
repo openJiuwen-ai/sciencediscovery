@@ -9,7 +9,7 @@ import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-reviewer-result-matrix.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-reviewer-result-matrix.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 type Case = { checkpoint: "completed" | "failed"; toolCallId: string; review?: ArtifactReviewRun };
 

@@ -19,7 +19,7 @@ import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 // Static suite metadata is inherited by each framework-expanded journey. This
 // file mixes a live-model journey with a quarantined one, so `model` and
 // `status` are declared per journey rather than here.
-test.describe("literature-review.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@judge:none", "@sandbox:bubblewrap"] }, () => {
+test.describe("literature-review.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@sandbox:bubblewrap"] }, () => {
 
 // Screenshots land under the local e2e environment (cwd when run from .e2e/).
 const SCREENSHOTS = "screenshots";
@@ -139,7 +139,7 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
    * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; seeded model key.
    * CostSideEffects: Billable tokens, PubMed traffic, local projects/sessions, screenshots.
  */
-  test("Linux Web工作台、模型配置与简单文献调研主路径", { tag: ["@real", "@model:real", "@status:reviewed"] }, async ({ page }, testInfo) => {
+  test("Linux Web工作台、模型配置与简单文献调研主路径", { tag: ["@real", "@model:real"] }, async ({ page }, testInfo) => {
     // The product allows progress-producing literature turns up to 600 s.
     // Keep the browser alive long enough to assert success or its explicit
     // product error instead of racing the application timeout.

@@ -6,7 +6,7 @@ import {apiBaseUrl,authorizationHeader} from "./e2e-auth.js";
 import {artifactTree,cleanupJourney,createProjectAndSession,openProjectSession,scriptedModel,sendUserMessage,waitForRunTerminal} from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-plugin-composition.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-plugin-composition.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 async function api(page:Page,path:string,data?:unknown) {
   const response=await page.request.fetch(apiBaseUrl()+path,{headers:authorizationHeader(),method:data===undefined?"GET":"POST",...(data===undefined?{}:{data})});

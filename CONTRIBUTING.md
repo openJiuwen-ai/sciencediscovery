@@ -19,6 +19,7 @@ Alternatively, provide a standalone `services/gateway/.venv`.
 ```bash
 pnpm test:shared  # the one plan CI runs: freeze it from source tags, then run all of it
 pnpm test:list    # freeze and print that plan without running a single test body
+pnpm test:run --category e2e --model mock   # any query over the tag dimensions
 pnpm check        # typecheck, paper tests, build, and package unit tests
 pnpm test         # build + recursive package unit tests
 pnpm smoke        # build + @sciencediscovery/api unit tests only
@@ -330,6 +331,15 @@ pnpm ci:e2e
 `pnpm test:shared` is those three in one process, on the same plan. Either way,
 report the numbers each slice's `summary.json` gives — `planned`, `executed`,
 `passed` — not "tests pass".
+
+`pnpm test:run` / `pnpm test:list` take one `--<group> <value>` per tag
+dimension (`--category`, `--os`, `--arch`, `--npu`, `--model`, `--judge`,
+`--status`, `--sandbox`) when you want something the shared plan excludes on
+purpose — the live-model journeys, the legacy quarantine, a macOS target.
+Repeating a group is OR within it, different groups are AND, and the flags come
+from the tag schema rather than a hand-written list. That is a developer query,
+not a CI entry point: CI uses `--slice`, which can only ever name a subset of
+the shared plan.
 
 In addition to those existing CI gates, report a user-perspective E2E
 conclusion for affected product paths, including API/CLI/stack journeys when

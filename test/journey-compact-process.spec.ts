@@ -19,7 +19,7 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-compact-process.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-compact-process.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * E2E-META

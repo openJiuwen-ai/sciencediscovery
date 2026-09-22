@@ -26,7 +26,7 @@ import {
 } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("issue-85-foreground-exec-inbox.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("issue-85-foreground-exec-inbox.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 test.use({ locale: "zh-CN" });
 

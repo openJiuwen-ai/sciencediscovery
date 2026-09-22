@@ -18,7 +18,7 @@ import type { SessionRunEvent } from "@sciencediscovery/schema";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("session-run-api-queue-stop.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("session-run-api-queue-stop.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
 
 const API_BASE = apiBaseUrl();
 const AUTH = authorizationHeader();

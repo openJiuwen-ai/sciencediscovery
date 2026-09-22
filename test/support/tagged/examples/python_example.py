@@ -17,8 +17,7 @@ from science_tags import normalize_tags
 
 pytestmark = pytest.mark.science_tags(
     category='ut', os=('linux', 'macos', 'windows'), arch=('amd64', 'arm64'),
-    npu='none', model='none', judge='none',
-)
+    )
 
 
 @pytest.mark.parametrize('tag', ['model:moke', 'judge:hybrid'], ids=['bad-model', 'bad-judge'])

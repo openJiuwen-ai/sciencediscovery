@@ -16,8 +16,7 @@ import assert from 'node:assert/strict';
 import { createTest } from '../node.mjs';
 import { normalizeTags, compileSelector } from '../tags.mjs';
 const { test, describe } = createTest(import.meta.url, {
-  tags: ['category:ut', 'os:linux', 'os:macos', 'os:windows', 'arch:amd64', 'arch:arm64',
-    'npu:none', 'model:none', 'judge:none'],
+  tags: ['category:ut', 'os:linux', 'os:macos', 'os:windows', 'arch:amd64', 'arch:arm64'],
 });
 
 describe('tag vocabulary', () => {
@@ -25,6 +24,6 @@ describe('tag vocabulary', () => {
     assert.throws(() => normalizeTags(['model:moke']), /Unknown tag/);
   });
   test('selects by a fixed conjunction', () => {
-    assert.equal(compileSelector('category:ut and judge:none')(['category:ut', 'judge:none']), true);
+    assert.equal(compileSelector('category:ut and judge:none')(['category:ut']), true);
   });
 });

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "judge:none", "status:reviewed", "sandbox:bubblewrap"] });
+const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";

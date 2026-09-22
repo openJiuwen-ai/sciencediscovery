@@ -42,22 +42,26 @@ pytest phases cannot be collapsed into an apparently clean pass.
 
 ## Tags
 
-| Group | Values | Meaning |
-| --- | --- | --- |
-| `category` | `ut`, `st`, `e2e` | One test layer. |
-| `os` | `linux`, `macos`, `windows` | Supported platforms; one or more. |
-| `arch` | `amd64`, `arm64` | Supported architectures; one or more. |
-| `npu` | `none`, `required` | `none` means **not required**, not forbidden. |
-| `model` | `none`, `mock`, `real` | Model used by the system under test. |
-| `judge` | `none`, `llm` | Whether the test uses an LLM assertion. |
+| Group | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `category` | `ut`, `st`, `e2e` | — | One test layer. |
+| `os` | `linux`, `macos`, `windows` | — | Supported platforms; one or more. |
+| `arch` | `amd64`, `arm64` | — | Supported architectures; one or more. |
+| `npu` | `none`, `required` | `none` | `none` means **not required**, not forbidden. |
+| `model` | `none`, `mock`, `real` | `none` | Model used by the system under test. |
+| `judge` | `none`, `llm` | `none` | Whether the test uses an LLM assertion. |
+| `status` | `reviewed`, `external`, `legacy`, `unreviewed` | `reviewed` | Only `reviewed` is in the shared suite. `external` needs a live third-party service, `legacy` is the unaudited quarantine, `unreviewed` is not yet fit to run. |
+| `sandbox` | `none`, `bubblewrap`, `seatbelt` | `none` | The execution sandbox the test itself drives. A plan holding `sandbox:bubblewrap` fails preflight on a host where `bwrap` cannot start. |
 
-Two further groups are optional, and are what keeps this repository's plan
-honest:
-
-| Group | Values | Meaning |
-| --- | --- | --- |
-| `status` | `reviewed`, `external`, `legacy`, `unreviewed` | Only `reviewed` is in the shared suite. `external` needs a live third-party service, `legacy` is the unaudited quarantine, `unreviewed` is not yet fit to run. |
-| `sandbox` | `none`, `bubblewrap`, `seatbelt` | The execution sandbox the test itself drives. A plan holding `sandbox:bubblewrap` fails preflight on a host where `bwrap` cannot start. |
+**A group with a default is declared only where a test deviates from it.** A
+declaration therefore names `category`, `os`, `arch`, and then whatever is
+unusual about the test — nothing else. The default is materialised when the
+complete identity is normalised, so `plan.json` still carries a concrete value
+for every group on every entry and a selector can ask for one positively
+(`npu:none` matches a test that never mentions `npu`). Inheritance runs before
+that, so a suite's own declaration is never outranked by a child's implicit
+one, and adding a dimension with a default costs no edit to the tests that take
+it.
 
 Every collected test must resolve every required group. A closer declaration can override
 a whole group inherited from its suite/module; it cannot silently union conflicting
@@ -90,8 +94,7 @@ import assert from 'node:assert/strict';
 import { createTest } from './relative/path/to/tagged/compat.mjs';
 
 const { test, describe, before, after } = createTest(import.meta.url, {
-  tags: ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'arch:arm64',
-    'npu:none', 'model:none', 'judge:none', 'status:reviewed'],
+  tags: ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'arch:arm64'],
 });
 
 describe('normalization', () => {
@@ -134,7 +137,6 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(
     category='ut', os=('linux', 'macos'), arch=('amd64', 'arm64'),
-    npu='none', model='none', judge='none', status='reviewed',
 )
 
 @pytest.mark.parametrize('value', [1, 2], ids=['first', 'second'])
@@ -161,8 +163,7 @@ are inherited by every test inside it:
 
 ```typescript
 test.describe("journey-example.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64",
-  "@npu:none", "@model:mock", "@judge:none",
-  "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+  "@model:mock", "@sandbox:bubblewrap"] }, () => {
   test("a user reaches the result", { tag: "@mocked" }, async ({ page }) => { /* … */ });
 });
 ```
@@ -191,6 +192,28 @@ its slice needs first — the workspace build, the four service virtualenvs and
 the pinned Chromium — so no separate setup step can disagree with it.
 [MIGRATION.md](MIGRATION.md) records which existing cases the plan covers and
 why each of the rest is outside it.
+
+To ask for something the shared plan excludes on purpose, query the tag
+vocabulary directly — one `--<group> <value>` per dimension:
+
+```bash
+pnpm test:run  --category e2e --os linux --npu none --model mock --judge none
+pnpm test:list --category e2e --model real          # the live-model journeys
+pnpm test:list --category ut --os macos --sandbox seatbelt
+pnpm test:list --category ut --category st --status external
+```
+
+Repeating a group is OR within it; different groups are AND. `--os` and
+`--arch` name the execution target rather than filter tags, and default to
+`linux/amd64`. The flags come from `schema.json`, so a dimension added there is
+immediately available and one removed is rejected by name.
+
+The difference from `--slice` is deliberate and the two cannot be combined. A
+slice is appended to the shared selector with `and`, so it is always a subset
+of `pnpm test:shared` — that is what CI uses, and it is why no job can reach
+outside the plan. A query builds its own selector from the flags alone. The
+environment still gates execution either way: a `model:real` case without
+`CI_ALLOW_REAL=1` and its credentials fails preflight instead of running.
 
 The harness has its own regression suite, which needs an interpreter with
 pytest (`SCIENCE_TEST_PYTHON`; without it, `python3`):

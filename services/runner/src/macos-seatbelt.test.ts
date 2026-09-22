@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { after, before, test } = createTest(import.meta.url, { tags: ["category:ut", "os:macos", "arch:amd64", "arch:arm64", "npu:none", "model:none", "judge:none", "status:reviewed", "sandbox:seatbelt"] });
+const { after, before, test } = createTest(import.meta.url, { tags: ["category:ut", "os:macos", "arch:amd64", "arch:arm64", "sandbox:seatbelt"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";

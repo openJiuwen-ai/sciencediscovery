@@ -28,7 +28,7 @@ from typing import Any, Dict
 
 import pytest
 
-pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', judge='none', status='reviewed')
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 
 from sciencediscovery_evolve.script_domain import ScriptError, script_domain
 from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability

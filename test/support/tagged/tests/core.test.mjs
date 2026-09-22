@@ -26,13 +26,29 @@ const plan = (catalog = [item()], options = {}) => createPlan(catalog, { revisio
 const pass = entry => ({ key: entry.key, outcome: 'PASS', actualTarget: entry.target });
 
 test('tag schema validates all groups and multi-valued capabilities', () => {
-  assert.equal(normalizeTags(tags).length, tags.length);
-  assert.throws(() => normalizeTags(tags.filter(t => !t.startsWith('judge:'))), /Missing tag group/);
+  // Nothing declared is lost; the extra entries are the filled defaults.
+  assert.deepEqual(normalizeTags(tags).filter(t => tags.includes(t)), [...tags].sort());
+  // `category`, `os` and `arch` have no default, so omitting one is an error.
+  assert.throws(() => normalizeTags(tags.filter(t => !t.startsWith('category:'))), /Missing tag group/);
   assert.throws(() => normalizeTags([...tags, 'model:mock']), /Conflicting/);
   assert.throws(() => normalizeTags([...tags, 'model:fake']), /Unknown tag/);
   assert.throws(() => normalizeTags([...tags, 'judge:none']), /Duplicate/);
   // The vocabulary is closed: a group this repository retired is not merely unused.
   assert.throws(() => normalizeTags([...tags, 'executor:native']), /Unknown tag/);
+});
+test('a group with a default is materialised on the identity, never on inheritance', () => {
+  const declared = ['category:ut', 'os:linux', 'arch:amd64'];
+  const complete = normalizeTags(declared);
+  // The plan still carries a concrete value for every group.
+  assert.deepEqual(complete, ['arch:amd64', 'category:ut', 'judge:none', 'model:none',
+    'npu:none', 'os:linux', 'sandbox:none', 'status:reviewed']);
+  // An explicit value wins over the default, and only that group changes.
+  assert.ok(normalizeTags([...declared, 'status:external']).includes('status:external'));
+  assert.ok(!normalizeTags([...declared, 'status:external']).includes('status:reviewed'));
+  // Inheritance must not see a filled default, or a suite's own declaration
+  // would be overridden by the child's implicit one.
+  assert.deepEqual(inheritTags(declared, []), ['arch:amd64', 'category:ut', 'os:linux']);
+  assert.ok(normalizeTags(inheritTags(['category:ut', 'os:linux', 'arch:amd64', 'model:real'], [])).includes('model:real'));
 });
 test('suite defaults are overridden by group, not accidentally unioned', () => {
   const actual = normalizeTags(inheritTags(tags, ['os:windows', 'model:real']));

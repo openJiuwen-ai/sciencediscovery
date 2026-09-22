@@ -26,7 +26,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', judge='none', status='reviewed')
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 
 from sciencediscovery_evolve import measurement
 from sciencediscovery_evolve.measurement import (

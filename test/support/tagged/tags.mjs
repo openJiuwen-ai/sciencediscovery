@@ -38,7 +38,16 @@ export function normalizeTags(tags, { partial = false } = {}) {
   }
   for (const [group, rule] of Object.entries(schema.groups)) {
     const count = groups.get(group)?.size ?? 0;
-    if (!partial && rule.required !== false && !count) throw new Error(`Missing tag group: ${group}`);
+    // A group with a default is declared only where a test deviates from it.
+    // The default is materialised here, on the complete identity, so the frozen
+    // plan still carries a concrete value for every group on every entry and a
+    // selector can ask for it positively. `partial` is the inheritance pass,
+    // where filling a default would silently outrank a suite's own declaration.
+    if (!partial && !count && rule.default !== undefined) {
+      groups.set(group, new Set([rule.default]));
+      continue;
+    }
+    if (!partial && rule.default === undefined && !count) throw new Error(`Missing tag group: ${group}`);
     if (!rule.multiple && count > 1) throw new Error(`Conflicting values for ${group}`);
   }
   return Object.freeze([...groups].flatMap(([g, vs]) => [...vs].map(v => `${g}:${v}`)).sort());

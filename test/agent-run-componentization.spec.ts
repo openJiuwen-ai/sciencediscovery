@@ -20,7 +20,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("agent-run-componentization.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("agent-run-componentization.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * AgentRun / RequestExecution 组件化(commit 63db651)用户场景 E2E。

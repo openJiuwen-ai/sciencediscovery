@@ -15,7 +15,7 @@
 // Checks that are a command rather than a framework test still get exactly one
 // planned identity each, so they are selected, executed and counted like any
 // other case instead of living in a separate list of CI steps.
-const host = ['category:ut', 'os:linux', 'arch:amd64', 'npu:none', 'model:none', 'judge:none', 'status:reviewed'];
+const host = ['category:ut', 'os:linux', 'arch:amd64'];
 export const checks = [
   { id: 'check:architecture', command: ['node', 'scripts/check-architecture.mjs'], tags: host },
   { id: 'check:typecheck', command: ['pnpm', 'typecheck'], tags: host },

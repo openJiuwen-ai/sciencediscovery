@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# science-tags: ["category:st", "os:linux", "arch:amd64", "npu:required", "model:none", "judge:none", "status:reviewed"]
+# science-tags: ["category:st", "os:linux", "arch:amd64", "npu:required"]
 
 """Fixed Ascend MindSpore smoke test for the Runner NPU Broker."""
 

@@ -27,7 +27,7 @@
  * the mechanism behind the review-correction turn.
  */
 import { createTest } from "../support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux", "arch:amd64", "npu:none", "model:mock", "judge:none", "status:reviewed"] });
+const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux", "arch:amd64", "model:mock"] });
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

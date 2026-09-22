@@ -29,7 +29,8 @@
       "values": [
         "none",
         "required"
-      ]
+      ],
+      "default": "none"
     },
     "model": {
       "multiple": false,
@@ -37,33 +38,35 @@
         "none",
         "mock",
         "real"
-      ]
+      ],
+      "default": "none"
     },
     "judge": {
       "multiple": false,
       "values": [
         "none",
         "llm"
-      ]
+      ],
+      "default": "none"
     },
     "status": {
       "multiple": false,
-      "required": false,
       "values": [
         "reviewed",
         "external",
         "legacy",
         "unreviewed"
-      ]
+      ],
+      "default": "reviewed"
     },
     "sandbox": {
       "multiple": false,
-      "required": false,
       "values": [
         "none",
         "bubblewrap",
         "seatbelt"
-      ]
+      ],
+      "default": "none"
     }
   }
 }
