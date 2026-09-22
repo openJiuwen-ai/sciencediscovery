@@ -30,6 +30,7 @@
     "ci:ut:guest": "node .ci/run-layer.mjs ut-guest",
     "ci:ut:host": "node .ci/run-layer.mjs ut-host",
     "coverage:node": "uv sync --project services/gateway --locked && pnpm paper:setup && pnpm build && node scripts/run-node-coverage.mjs",
+    "coverage:python": "node scripts/run-python-coverage.mjs",
     "dev": "pnpm --filter @sciencediscovery/api dev",
     "paper:setup": "uv sync --project services/paper --locked",
     "paper:test": "uv run --project services/paper --locked python -m unittest discover -s services/paper/tests",

@@ -132,35 +132,44 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ github.workflow }}" == "Nightly" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo "mode=full" >> "$GITHUB_OUTPUT"
-            echo "groups=" >> "$GITHUB_OUTPUT"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "artifact=node-coverage-summary-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "node_mode=full" >> "$GITHUB_OUTPUT"
+            echo "node_groups=" >> "$GITHUB_OUTPUT"
+            echo "node_skip=false" >> "$GITHUB_OUTPUT"
+            echo "python_mode=full" >> "$GITHUB_OUTPUT"
+            echo "python_groups=" >> "$GITHUB_OUTPUT"
+            echo "python_skip=false" >> "$GITHUB_OUTPUT"
+            echo "node_artifact=node-coverage-summary-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "python_artifact=python-coverage-summary-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           else
-            node scripts/select-coverage-groups.mjs "$BASE_SHA" HEAD >> "$GITHUB_OUTPUT"
+            while IFS= read -r output; do echo "node_${output}" >> "$GITHUB_OUTPUT"; done \
+              < <(node scripts/select-coverage-groups.mjs "$BASE_SHA" HEAD)
+            while IFS= read -r output; do echo "python_${output}" >> "$GITHUB_OUTPUT"; done \
+              < <(node scripts/select-python-coverage-groups.mjs "$BASE_SHA" HEAD)
             if [[ "$EVENT_NAME" == "pull_request" ]]; then
-              echo "artifact=node-coverage-summary-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+              echo "node_artifact=node-coverage-summary-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+              echo "python_artifact=python-coverage-summary-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
             else
-              echo "artifact=node-coverage-summary-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+              echo "node_artifact=node-coverage-summary-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+              echo "python_artifact=python-coverage-summary-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
             fi
           fi
 
       - uses: pnpm/action-setup@v4
-        if: steps.scope.outputs.skip != 'true'
+        if: steps.scope.outputs.node_skip != 'true' || steps.scope.outputs.python_skip != 'true'
 
       - uses: actions/setup-node@v4
-        if: steps.scope.outputs.skip != 'true'
+        if: steps.scope.outputs.node_skip != 'true' || steps.scope.outputs.python_skip != 'true'
         with:
           node-version: 22.19.0
           cache: pnpm
 
       - uses: astral-sh/setup-uv@v6
-        if: steps.scope.outputs.skip != 'true'
+        if: steps.scope.outputs.node_skip != 'true' || steps.scope.outputs.python_skip != 'true'
         with:
           enable-cache: true
 
       - name: Provision the bubblewrap sandbox
-        if: steps.scope.outputs.skip != 'true'
+        if: steps.scope.outputs.node_skip != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends bubblewrap
@@ -168,16 +177,16 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
 
       - name: Install dependencies
-        if: steps.scope.outputs.skip != 'true'
+        if: steps.scope.outputs.node_skip != 'true'
         run: pnpm install --frozen-lockfile
 
-      - name: Generate coverage
-        if: steps.scope.outputs.skip != 'true'
+      - name: Generate Node.js coverage
+        if: steps.scope.outputs.node_skip != 'true'
         env:
           COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          COVERAGE_MODE: ${{ steps.scope.outputs.mode }}
+          COVERAGE_MODE: ${{ steps.scope.outputs.node_mode }}
           COVERAGE_SOURCE_SHA: ${{ github.sha }}
-          SELECTED_GROUPS: ${{ steps.scope.outputs.groups }}
+          SELECTED_GROUPS: ${{ steps.scope.outputs.node_groups }}
         run: |
           if [[ -n "$SELECTED_GROUPS" ]]; then
             pnpm coverage:node -- --groups "$SELECTED_GROUPS"
@@ -185,14 +194,38 @@ jobs:
             pnpm coverage:node
           fi
 
-      - name: Upload coverage summary
-        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.skip != 'true'
+      - name: Generate Python coverage
+        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.python_skip != 'true'
+        env:
+          COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_MODE: ${{ steps.scope.outputs.python_mode }}
+          COVERAGE_SOURCE_SHA: ${{ github.sha }}
+          SELECTED_GROUPS: ${{ steps.scope.outputs.python_groups }}
+        run: |
+          if [[ -n "$SELECTED_GROUPS" ]]; then
+            node scripts/run-python-coverage.mjs --groups "$SELECTED_GROUPS"
+          else
+            node scripts/run-python-coverage.mjs
+          fi
+
+      - name: Upload Node.js coverage summary
+        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.node_skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.scope.outputs.artifact }}
+          name: ${{ steps.scope.outputs.node_artifact }}
           path: |
             coverage/summary.json
             coverage/groups/**/summary.json
+          if-no-files-found: warn
+
+      - name: Upload Python coverage summary
+        if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.python_skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.scope.outputs.python_artifact }}
+          path: |
+            coverage/python/summary.json
+            coverage/python/groups/**/summary.json
           if-no-files-found: warn
 
   st:
