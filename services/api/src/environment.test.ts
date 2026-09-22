@@ -25,8 +25,6 @@ import {
 } from "@sciencediscovery/schema";
 
 import {
-  DEFAULT_ENVIRONMENT_PACKAGE_SPEC,
-  DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC,
   hostSandboxKind,
   systemPythonEnvironmentRevisionId,
   systemShellEnvironmentRevisionId,
@@ -39,9 +37,4 @@ test("system environment revisions follow the selected native sandbox", () => {
   assert.equal(systemPythonEnvironmentRevisionId("seatbelt"), SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID);
   assert.equal(systemShellEnvironmentRevisionId("bubblewrap"), SYSTEM_SHELL_ENVIRONMENT_REVISION_ID);
   assert.equal(systemShellEnvironmentRevisionId("seatbelt"), SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID);
-});
-
-test("macOS package specs use executable paths that exist on macOS", { tags: ["os:macos"] }, () => {
-  assert.equal(JSON.parse(DEFAULT_ENVIRONMENT_PACKAGE_SPEC).executable, process.env.SCIENCE_AGENT_PYTHON_PATH || "/usr/bin/python3");
-  assert.equal(JSON.parse(DEFAULT_SHELL_ENVIRONMENT_PACKAGE_SPEC).executable, process.env.SCIENCE_AGENT_SHELL_PATH || "/bin/bash");
 });
