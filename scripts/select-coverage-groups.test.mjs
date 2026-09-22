@@ -44,6 +44,13 @@ test("uses a full run when shared coverage infrastructure changes", () => {
   assert.deepEqual(selected.groups, []);
 });
 
+test("uses a full run when the Actions summary renderer changes", () => {
+  const selected = selectCoverageGroups({ paths: ["scripts/coverage-job-summary.mjs"], ...graph });
+  assert.equal(selected.mode, "full");
+  assert.deepEqual(selected.groups, []);
+  assert.equal(selected.skip, false);
+});
+
 test("skips Node coverage for documentation or browser-only changes", () => {
   const selected = selectCoverageGroups({ paths: ["docs/guide.md", "apps/web/src/App.tsx"], ...graph });
   assert.equal(selected.skip, true);

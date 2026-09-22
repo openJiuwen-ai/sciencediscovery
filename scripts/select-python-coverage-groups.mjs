@@ -26,6 +26,8 @@ export const pythonCoverageGroups = [
 const globalCoverageFiles = new Set([
   ".github/workflows/ci.yml",
   "package.json",
+  "scripts/coverage-job-summary.mjs",
+  "scripts/coverage-job-summary.test.mjs",
   "scripts/python-coverage-summary.mjs",
   "scripts/python-coverage-summary.test.mjs",
   "scripts/run-python-coverage.mjs",

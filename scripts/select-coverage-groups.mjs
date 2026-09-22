@@ -25,6 +25,8 @@ const globalCoverageFiles = new Set([
   "pnpm-workspace.yaml",
   "scripts/coverage-summary.mjs",
   "scripts/coverage-summary.test.mjs",
+  "scripts/coverage-job-summary.mjs",
+  "scripts/coverage-job-summary.test.mjs",
   "scripts/run-node-coverage.mjs",
   "scripts/select-coverage-groups.mjs",
   "scripts/select-coverage-groups.test.mjs",

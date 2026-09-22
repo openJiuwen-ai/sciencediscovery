@@ -181,6 +181,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Generate Node.js coverage
+        id: node_coverage
         if: steps.scope.outputs.node_skip != 'true'
         env:
           COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -195,6 +196,7 @@ jobs:
           fi
 
       - name: Generate Python coverage
+        id: python_coverage
         if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.python_skip != 'true'
         env:
           COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -207,6 +209,20 @@ jobs:
           else
             node scripts/run-python-coverage.mjs
           fi
+
+      - name: Summarize coverage
+        if: always()
+        env:
+          COVERAGE_SCOPE_OUTCOME: ${{ steps.scope.outcome }}
+          NODE_COVERAGE_MODE: ${{ steps.scope.outputs.node_mode }}
+          NODE_COVERAGE_OUTCOME: ${{ steps.node_coverage.outcome }}
+          NODE_COVERAGE_REASON: ${{ steps.scope.outputs.node_reason }}
+          NODE_COVERAGE_SKIP: ${{ steps.scope.outputs.node_skip }}
+          PYTHON_COVERAGE_MODE: ${{ steps.scope.outputs.python_mode }}
+          PYTHON_COVERAGE_OUTCOME: ${{ steps.python_coverage.outcome }}
+          PYTHON_COVERAGE_REASON: ${{ steps.scope.outputs.python_reason }}
+          PYTHON_COVERAGE_SKIP: ${{ steps.scope.outputs.python_skip }}
+        run: node scripts/coverage-job-summary.mjs >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Node.js coverage summary
         if: always() && steps.scope.outcome == 'success' && steps.scope.outputs.node_skip != 'true'

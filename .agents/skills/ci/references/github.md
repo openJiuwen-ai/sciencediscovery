@@ -39,6 +39,12 @@ points into a generated report. The E2E job summary must include executed,
 skipped/blocked, failed, and flaky counts; a green conclusion alone is not
 enough.
 
+The Coverage job summary must show the Node.js and Python results directly in
+the run page, label each result as full, incremental, skipped, or unavailable,
+and identify the selected groups when the scan is partial. Coverage is
+informational: do not add a percentage threshold. A coverage test failure must
+still fail the job even when a partial summary can be rendered.
+
 ## Validate workflow changes
 
 Keep workflow steps as orchestration around repository-owned `pnpm ci:*`

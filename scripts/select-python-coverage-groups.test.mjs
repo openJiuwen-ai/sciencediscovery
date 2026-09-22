@@ -38,6 +38,13 @@ test("uses a full run when shared Python coverage infrastructure changes", () =>
   assert.equal(selected.skip, false);
 });
 
+test("uses a full run when the Actions summary renderer changes", () => {
+  const selected = selectPythonCoverageGroups({ paths: ["scripts/coverage-job-summary.mjs"] });
+  assert.equal(selected.mode, "full");
+  assert.deepEqual(selected.groups, []);
+  assert.equal(selected.skip, false);
+});
+
 test("skips Python coverage for unrelated changes", () => {
   const selected = selectPythonCoverageGroups({ paths: ["docs/guide.md", "services/api/src/server.ts"] });
   assert.deepEqual(selected.groups, []);
