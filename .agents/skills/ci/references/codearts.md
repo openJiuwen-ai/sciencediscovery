@@ -436,7 +436,7 @@ The bot's `result_html` input is an OBS object key, not inline HTML.
 
 CodeArts PaC runs do not register in GitCode's `/api/v8/.../actions` endpoints.
 The result comment and `ci-*` labels the bot puts on the merge request are
-described in the create-pr skill; this section is about the run itself.
+described in the create-gitcode-pr skill; this section is about the run itself.
 
 The MR check page (`/pull/<number>/check`) exposes the job status and
 build-log entry. Complete CodeArts
