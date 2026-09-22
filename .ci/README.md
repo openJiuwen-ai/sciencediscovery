@@ -27,6 +27,30 @@ current hermetic integration/smoke entry point as ST. In particular,
 invented CI dependency. Live-model smoke tests and `@real` E2E are excluded
 from every default command.
 
+## Coverage reporting
+
+The `Coverage` job in `.github/workflows/ci.yml` reuses the repository's
+existing tests. Pull requests and default-branch pushes measure affected Node.js
+workspaces (including transitive dependents) and changed Python services. The
+existing Nightly workflow measures the complete maintained Node.js and Python
+scope; Release calls skip the job.
+
+Node.js coverage uses the built-in V8 collector. Python coverage uses
+`coverage.py` with the existing gateway and paper `unittest` suites and the
+existing memory-graph and evolve `pytest` suites. Run them locally with:
+
+```bash
+pnpm coverage:node
+pnpm coverage:python
+```
+
+CI uploads separate SHA-qualified Node.js and Python artifacts containing only
+aggregate and per-group `summary.json` files. Raw LCOV and `coverage.py` data
+remain local intermediates. Partial PR/main summaries identify their selected
+groups and are not complete repository baselines; coverage percentages are
+informational, while test failures still fail the job. Browser/TSX and
+Playwright tests are outside these percentages.
+
 ## Test tags and CI selection
 
 `.ci/test-catalog.mjs` classifies every repository CI test family as a stable
