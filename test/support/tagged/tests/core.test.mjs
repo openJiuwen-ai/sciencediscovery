@@ -19,9 +19,9 @@ import { createPlan, validatePlan, verifyResults, digest } from '../plan.mjs';
 import { preflight, hostPlatform } from '../environment.mjs';
 import { parse } from '../cli.mjs';
 
-const tags = ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'npu:none', 'model:none', 'executor:independent', 'judge:none'];
+const tags = ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'npu:none', 'model:none', 'judge:none'];
 const item = overrides => ({ id: 'one', source: 'one.test.mjs', sourceHash: 'a'.repeat(64), runner: 'node', tags, ...overrides });
-const target = { os: 'linux', arch: 'amd64', executor: 'native' };
+const target = { os: 'linux', arch: 'amd64' };
 const plan = (catalog = [item()], options = {}) => createPlan(catalog, { revision: 'abc123', targets: [target], ...options });
 const pass = entry => ({ key: entry.key, outcome: 'PASS', actualTarget: entry.target });
 
@@ -31,7 +31,8 @@ test('tag schema validates all groups and multi-valued capabilities', () => {
   assert.throws(() => normalizeTags([...tags, 'model:mock']), /Conflicting/);
   assert.throws(() => normalizeTags([...tags, 'model:fake']), /Unknown tag/);
   assert.throws(() => normalizeTags([...tags, 'judge:none']), /Duplicate/);
-  assert.throws(() => normalizeTags([...tags, 'executor:native']), /independent/);
+  // The vocabulary is closed: a group this repository retired is not merely unused.
+  assert.throws(() => normalizeTags([...tags, 'executor:native']), /Unknown tag/);
 });
 test('suite defaults are overridden by group, not accidentally unioned', () => {
   const actual = normalizeTags(inheritTags(tags, ['os:windows', 'model:real']));
@@ -60,14 +61,15 @@ test('concrete OS instance is selected correctly for multi-OS tests', () => {
   assert.equal(actual.entries.length, 1);
   assert.equal(actual.entries[0].target.os, 'macos');
 });
-test('independent tests run once per OS/arch, not once per product executor', () => {
-  const actual = plan([item()], { targets: [target, { ...target, executor: 'jiuwenswarm' }, target] });
+test('a repeated target produces one instance, not one per mention', () => {
+  const actual = plan([item()], { targets: [target, target, { ...target }] });
   assert.equal(actual.entries.length, 1);
-  assert.equal(actual.entries[0].target.executor, 'independent');
+  assert.deepEqual(actual.entries[0].target, target);
+  assert.equal(actual.targets.length, 1);
 });
 test('unsupported combination and empty selection fail explicitly', () => {
   assert.throws(() => plan([item()], { selector: 'npu:required' }), /EMPTY_SELECTION/);
-  assert.throws(() => plan([item({ tags: tags.filter(t => t !== 'executor:independent').concat('executor:native') })], { targets: [{ ...target, executor: 'jiuwenswarm' }] }), /EMPTY_SELECTION/);
+  assert.throws(() => plan([item({ tags: tags.filter(t => !t.startsWith('os:')).concat('os:windows') })]), /EMPTY_SELECTION/);
   assert.throws(() => createPlan([item()], { revision: 'x' }), /explicit target/);
   assert.throws(() => plan([item(), item()]), /Duplicate/);
 });
@@ -83,13 +85,13 @@ test('equal counts with wrong identities never pass', () => {
   assert.ok(result.problems.some(p => p.startsWith('DUPLICATE')));
   assert.ok(result.problems.some(p => p.startsWith('NOT_RUN')));
 });
-test('skip, xfail, todo, missing and wrong-executor outcomes fail the plan', () => {
+test('skip, xfail, todo, missing and wrong-host outcomes fail the plan', () => {
   const p = plan();
   for (const outcome of ['FAIL', 'SKIPPED', 'XFAIL', 'XPASS', 'TODO', 'BLOCKED', 'NOT_RUN']) {
     assert.equal(verifyResults(p, [{ ...pass(p.entries[0]), outcome }]).exitCode, 1);
   }
   assert.equal(verifyResults(p, []).exitCode, 1);
-  assert.equal(verifyResults(p, [{ ...pass(p.entries[0]), actualTarget: target }]).exitCode, 1);
+  assert.equal(verifyResults(p, [{ ...pass(p.entries[0]), actualTarget: { ...target, os: 'macos' } }]).exitCode, 1);
   assert.equal(verifyResults(p, [pass(p.entries[0])]).exitCode, 0);
   assert.equal(verifyResults(p, [pass(p.entries[0])], ['after-hook failed']).exitCode, 1);
 });
@@ -128,7 +130,7 @@ test('the plan ignores the host platform while the compatibility shim honours it
   // The frozen plan selects a foreign-platform case on the target it names, on
   // any machine; only `node --test` outside a plan declines to register it.
   const foreign = plan([item({ tags: [...base, `os:${elsewhere}`] })], {
-    targets: [{ os: elsewhere, arch: 'amd64', executor: 'independent' }],
+    targets: [{ os: elsewhere, arch: 'amd64' }],
   });
   assert.equal(foreign.entries.length, 1);
   const inert = createTest(import.meta.url, { tags: [...base, `os:${elsewhere}`] });

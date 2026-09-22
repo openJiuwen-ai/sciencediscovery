@@ -22,10 +22,10 @@ import { collect, execute, discoverFiles } from '../coordinator.mjs';
 import { createPlan } from '../plan.mjs';
 import { hostPlatform, hostArch } from '../environment.mjs';
 const adapter = new URL('../node.mjs', import.meta.url).href;
-const target = { os: hostPlatform(process.platform), arch: hostArch(process.arch), executor: 'independent' };
-const tags = ['category:ut', 'os:linux', 'os:macos', 'os:windows', 'arch:amd64', 'arch:arm64', 'npu:none', 'model:none', 'executor:independent', 'judge:none'];
+const target = { os: hostPlatform(process.platform), arch: hostArch(process.arch) };
+const tags = ['category:ut', 'os:linux', 'os:macos', 'os:windows', 'arch:amd64', 'arch:arm64', 'npu:none', 'model:none', 'judge:none'];
 const header = `import assert from 'node:assert/strict';\nimport { createTest } from '${adapter}';\nconst {test,describe,before,after}=createTest(import.meta.url, { tags: ${JSON.stringify(tags)} });\n`;
-const pyHeader = `import pytest\npytestmark = pytest.mark.science_tags(category='ut', os=('linux','macos','windows'), arch=('amd64','arm64'), npu='none', model='none', executor='independent', judge='none')\n`;
+const pyHeader = `import pytest\npytestmark = pytest.mark.science_tags(category='ut', os=('linux','macos','windows'), arch=('amd64','arm64'), npu='none', model='none', judge='none')\n`;
 function fixture(t, filename, source) {
   const root = mkdtempSync(join(tmpdir(), 'science-tagged-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

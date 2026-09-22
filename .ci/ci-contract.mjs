@@ -14,17 +14,11 @@
 
 /**
  * The guard behind `pnpm ci:catalog:check`. It fails closed on a missing or
- * unknown tag, and on any way the two UT tiers could stop covering every UT
- * case exactly once: an unclassified entry point, a workspace package whose
- * tests declare both tiers or neither or disagree with the catalog, an
- * aggregate that no longer equals the sum of the tiers, or a guest tier that
- * has started installing or building again.
- *
- * It also guards the two ways coverage could leave CI without anyone noticing:
- * a layer running something that is not a slice of the shared plan — the
- * hand-maintained list of cases that tags replaced — and a package's test file
- * sitting outside the collection patterns that plan is built from, which would
- * simply never be collected.
+ * unknown tag in the scheduler's own catalog, and on the two ways coverage
+ * could leave CI without anyone noticing: a layer running something that is
+ * not a slice of the shared plan — the hand-maintained list of cases that tags
+ * replaced — and a package's test file sitting outside the collection patterns
+ * that plan is built from, which would simply never be collected.
  */
 
 import { globSync } from "node:fs";
@@ -37,12 +31,11 @@ import * as defaultCatalog from "./test-catalog.mjs";
 
 export const defaultRepositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const utEntryPoints = {
-  "ci:ut": "ut",
-  "ci:ut:guest": "ut-guest",
-  "ci:ut:host": "ut-host",
+const layerEntryPoints = {
+  "ci:e2e": "node test/support/tagged/shared.mjs run --slice e2e",
+  "ci:st": "node .ci/run-layer.mjs st",
+  "ci:ut": "node .ci/run-layer.mjs ut",
 };
-const utTiers = ["host", "guest"];
 
 /**
  * The one runner every hermetic layer calls. `st-real` and `st-npu` are the
@@ -73,16 +66,6 @@ async function testSources(directory) {
   }
   await walk(directory);
   return found.sort();
-}
-
-/** The UT tiers those sources declare, read back from the sources themselves. */
-async function declaredTiers(files) {
-  const tiers = new Set();
-  for (const file of files) {
-    const source = await readFile(file, "utf8");
-    for (const [, tier] of source.matchAll(/\btier:(host|guest)\b/g)) tiers.add(tier);
-  }
-  return tiers;
 }
 
 export function knownTags(catalog = defaultCatalog) {
@@ -181,93 +164,32 @@ async function repositoryScripts(repositoryRoot) {
   return manifest.scripts ?? {};
 }
 
-function stepsEqual(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 /**
- * Everything that keeps UT a two-tier partition. Kept separate from the tag
- * checks above because it reads the workspace and the repository scripts.
+ * Everything that keeps the layers honest once the cases themselves are tagged.
+ * Kept separate from the tag checks above because it reads the workspace and
+ * the repository scripts.
  */
 export async function utContractProblems(catalog = defaultCatalog, repositoryRoot = defaultRepositoryRoot) {
-  const { layers, testCases, utGuestPackages, utWorkloads } = catalog;
+  const { layers, testCases } = catalog;
   const problems = [];
 
-  const workloadIds = new Set();
-  for (const workload of utWorkloads) {
-    if (!utTiers.includes(workload.tier)) problems.push(`UT workload ${workload.id}: unknown tier ${workload.tier}`);
-    if (workloadIds.has(workload.id)) problems.push(`UT workload ${workload.id}: duplicate id`);
-    workloadIds.add(workload.id);
-  }
-  for (const tier of utTiers) {
-    if (!utWorkloads.some((workload) => workload.tier === tier)) problems.push(`UT tier ${tier} has no workload`);
-    const cases = testCases.filter((testCase) => testCase.tags?.includes(`ut:${tier}`));
-    if (cases.length === 0) problems.push(`UT tier ${tier} has no catalog case`);
-    for (const testCase of cases) {
-      const requiredSandbox = tier === "guest" ? "sandbox:bubblewrap" : "sandbox:none";
-      if (!testCase.tags.includes(requiredSandbox)) {
-        problems.push(`${testCase.id}: ut:${tier} requires ${requiredSandbox}`);
-      }
-    }
-  }
-
-  // The aggregate is the sum of the tiers, in that order, and nothing else.
-  if (!stepsEqual(layers.ut, [...layers["ut-host"], ...layers["ut-guest"]])) {
-    problems.push("layer ut is not exactly ut-host followed by ut-guest");
-  }
-  for (const [command, args] of layers["ut-guest"]) {
-    if (command === "pnpm" && (args[0] === "install" || args[0] === "build")) {
-      problems.push(`layer ut-guest must not ${args[0]}: its host prepares the workspace`);
-    }
-  }
-
-  const projects = await workspaceProjects(repositoryRoot);
-  const testable = projects.filter((project) => project.hasTestScript);
-  const guestNames = new Set();
-  for (const guestPackage of utGuestPackages) {
-    const project = projects.find((candidate) => candidate.name === guestPackage.name);
-    if (!project) problems.push(`UT guest package ${guestPackage.name} is not a workspace project`);
-    else if (!project.hasTestScript) problems.push(`UT guest package ${guestPackage.name} has no test script`);
-    else if (project.directory !== guestPackage.directory) {
-      problems.push(`UT guest package ${guestPackage.name} is at ${project.directory}, not ${guestPackage.directory}`);
-    }
-    if (guestNames.has(guestPackage.name)) problems.push(`UT guest package ${guestPackage.name}: duplicate entry`);
-    guestNames.add(guestPackage.name);
-  }
-  // The tier travels with each test as a tag now, so read the tiers back out of
-  // the test sources themselves. A package is measured against the workspace,
-  // not against the declaration the tags were supposed to follow.
-  //
-  // The scope check beside it closes the other half: a package can carry
-  // correct tags and still contribute nothing, if its tests sit somewhere the
-  // shared runner's collection patterns never look. That is coverage silently
-  // leaving CI, so it fails here.
+  // A package can carry correct tags and still contribute nothing, if its tests
+  // sit somewhere the shared runner's collection patterns never look. That is
+  // coverage silently leaving CI, so it fails here.
   const collected = new Set(globSync([...nodeSources], { cwd: repositoryRoot })
     .map((file) => file.replaceAll("\\", "/")));
-  for (const project of testable) {
-    const expectedTier = guestNames.has(project.name) ? "guest" : "host";
+  const projects = await workspaceProjects(repositoryRoot);
+  for (const project of projects.filter((candidate) => candidate.hasTestScript)) {
     const files = await testSources(join(repositoryRoot, project.directory));
-    const declared = await declaredTiers(files);
-    if (declared.size === 0) problems.push(`${project.name} has tests but belongs to neither UT tier`);
-    else if (declared.size > 1) problems.push(`${project.name} has tests and is claimed by both UT tiers`);
-    else if (!declared.has(expectedTier)) {
-      problems.push(`${project.name} declares tier:${[...declared][0]}, but the catalog puts it in the ${expectedTier} tier`);
-    }
+    if (files.length === 0) problems.push(`${project.name} has a test script but no test file the runner could collect`);
     for (const file of files) {
       const path = relative(repositoryRoot, file).replaceAll("\\", "/");
       if (!collected.has(path)) problems.push(`${path} is outside the shared runner's collection scope, so no layer would run it`);
     }
   }
 
-  // Each tier is one slice of the one shared plan. Anything else here is the
+  // Every layer runs a slice of the one shared plan. Anything else here is the
   // second, hand-maintained list of cases the tags replaced.
-  for (const tier of utTiers) {
-    const workloads = utWorkloads.filter((workload) => workload.tier === tier);
-    const expected = ["node", sharedRunner, "run", "--slice", `ut-${tier}`];
-    if (workloads.length !== 1 || !stepsEqual(workloads[0].command, expected)) {
-      problems.push(`UT tier ${tier} must run exactly ${expected.join(" ")}`);
-    }
-  }
   for (const [name, steps] of Object.entries(layers)) {
     if (optInLayers.has(name)) continue;
     for (const [command, args] of steps) {
@@ -277,37 +199,21 @@ export async function utContractProblems(catalog = defaultCatalog, repositoryRoo
     }
   }
 
-  // No UT entry point may exist outside the aggregate and the two tiers.
+  // The entry points every pipeline calls run that same selector, so a local
+  // run and CI cannot end up on different sets. E2E skips the layer wrapper:
+  // run-e2e.sh already owns that layer's run.log.
   const scripts = await repositoryScripts(repositoryRoot);
-  const utScripts = Object.keys(scripts).filter((name) => name === "ci:ut" || name.startsWith("ci:ut:"));
-  for (const name of utScripts) {
-    const layer = utEntryPoints[name];
-    if (!layer) {
-      problems.push(`script ${name} is a UT entry point outside the two tiers; fold it into ci:ut:host or ci:ut:guest`);
-      continue;
-    }
-    if (scripts[name] !== `node .ci/run-layer.mjs ${layer}`) {
-      problems.push(`script ${name} must run node .ci/run-layer.mjs ${layer}`);
-    }
+  for (const [name, command] of Object.entries(layerEntryPoints)) {
+    if (!(name in scripts)) problems.push(`script ${name} is missing`);
+    else if (scripts[name] !== command) problems.push(`script ${name} must run ${command}`);
   }
-  for (const name of Object.keys(utEntryPoints)) {
-    if (!utScripts.includes(name)) problems.push(`script ${name} is missing`);
-  }
-  // The other two hermetic entry points every pipeline calls run the same one
-  // selector, so CodeArts and GitHub cannot end up running different sets.
-  // E2E skips the layer wrapper: run-e2e.sh already owns that layer's run.log.
-  for (const [name, command] of Object.entries({
-    "ci:e2e": `node ${sharedRunner} run --slice e2e`,
-    "ci:st": "node .ci/run-layer.mjs st",
-  })) {
-    if (scripts[name] !== command) problems.push(`script ${name} must run ${command}`);
+  for (const name of Object.keys(scripts)) {
+    if (name.startsWith("ci:ut:")) {
+      problems.push(`script ${name} is a second UT entry point; UT is one slice of the shared plan, so fold it into ci:ut`);
+    }
   }
   for (const testCase of testCases.filter((candidate) => candidate.tags?.includes("layer:ut"))) {
-    const [tier] = tagsOfDimension(testCase.tags, "ut").map((tag) => tag.split(":")[1]);
-    const script = testCase.command?.[1];
-    if (tier && utEntryPoints[script] !== `ut-${tier}`) {
-      problems.push(`${testCase.id}: ut:${tier} case must run pnpm ci:ut:${tier}`);
-    }
+    if (testCase.command?.[1] !== "ci:ut") problems.push(`${testCase.id}: a layer:ut case must run pnpm ci:ut`);
   }
   return problems;
 }

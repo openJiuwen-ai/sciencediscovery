@@ -27,7 +27,7 @@ import {
 } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("e2e-auth.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@executor:independent", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("e2e-auth.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * The suite's own access-token wiring. These assertions need no stack and no

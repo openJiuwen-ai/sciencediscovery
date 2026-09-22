@@ -19,7 +19,7 @@ import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 // Static suite metadata is inherited by each framework-expanded journey. This
 // file mixes a live-model journey with a quarantined one, so `model` and
 // `status` are declared per journey rather than here.
-test.describe("literature-review.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@executor:independent", "@judge:none", "@sandbox:bubblewrap"] }, () => {
+test.describe("literature-review.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@judge:none", "@sandbox:bubblewrap"] }, () => {
 
 // Screenshots land under the local e2e environment (cwd when run from .e2e/).
 const SCREENSHOTS = "screenshots";

@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pytest
 
-pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', executor='independent', judge='none', status='reviewed', tier='host')
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', judge='none', status='reviewed')
 
 from sciencediscovery_evolve.completion import CompletionUsage
 from sciencediscovery_evolve.engine import RunSpec

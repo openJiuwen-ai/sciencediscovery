@@ -36,8 +36,8 @@ An exit code of zero alone is not sufficient. Results left by a previous run are
 removed before starting a worker, so an early `exit(0)` cannot reuse stale PASS
 records.
 
-Identity reconciliation uses the testcase ID plus the concrete OS, architecture,
-and executor, not just an aggregate count. Retry plugins are not enabled; repeated
+Identity reconciliation uses the testcase ID plus the concrete OS and
+architecture, not just an aggregate count. Retry plugins are not enabled; repeated
 pytest phases cannot be collapsed into an apparently clean pass.
 
 ## Tags
@@ -49,27 +49,31 @@ pytest phases cannot be collapsed into an apparently clean pass.
 | `arch` | `amd64`, `arm64` | Supported architectures; one or more. |
 | `npu` | `none`, `required` | `none` means **not required**, not forbidden. |
 | `model` | `none`, `mock`, `real` | Model used by the system under test. |
-| `executor` | `independent`, `native`, `jiuwenswarm` | Supported product backends, or independence. |
 | `judge` | `none`, `llm` | Whether the test uses an LLM assertion. |
 
-Three further groups are optional, and are what keeps this repository's plan
+Two further groups are optional, and are what keeps this repository's plan
 honest:
 
 | Group | Values | Meaning |
 | --- | --- | --- |
 | `status` | `reviewed`, `external`, `legacy`, `unreviewed` | Only `reviewed` is in the shared suite. `external` needs a live third-party service, `legacy` is the unaudited quarantine, `unreviewed` is not yet fit to run. |
-| `tier` | `host`, `guest` | Required on every `category:ut` test: `guest` needs a kernel that grants the user namespaces bubblewrap creates, `host` does not. A UT test without one fails the run. |
 | `sandbox` | `none`, `bubblewrap`, `seatbelt` | The execution sandbox the test itself drives. A plan holding `sandbox:bubblewrap` fails preflight on a host where `bwrap` cannot start. |
 
 Every collected test must resolve every required group. A closer declaration can override
 a whole group inherited from its suite/module; it cannot silently union conflicting
 single-valued values. Unknown tags, duplicate groups/values, and missing groups
-are errors. `independent` is exclusive of other executor values.
+are errors. The vocabulary is closed, so a group this repository has retired is
+rejected rather than ignored.
 
-Platform/executor support is expanded into concrete planned instances before a
-query is evaluated. Thus a test supporting Linux and macOS can match `not os:linux`
-on its macOS instance. An executor-independent test runs once per OS/architecture,
-not twice just because both product executors appear in the target matrix.
+Platform support is expanded into concrete planned instances before a query is
+evaluated. Thus a test supporting Linux and macOS can match `not os:linux` on
+its macOS instance, and a test runs once per OS/architecture in the target
+matrix — a repeated target does not produce a second instance.
+
+There is no `executor` group today. Issue #126 lists one, with the values
+`native` and `jiuwenswarm`, but this branch has no JiuwenSwarm backend: every
+test would carry the same value, and a dimension that never varies is a
+dimension nobody maintains correctly. The group comes back with the backend.
 
 ## Node declarations
 
@@ -87,8 +91,7 @@ import { createTest } from './relative/path/to/tagged/compat.mjs';
 
 const { test, describe, before, after } = createTest(import.meta.url, {
   tags: ['category:ut', 'os:linux', 'os:macos', 'arch:amd64', 'arch:arm64',
-    'npu:none', 'model:none', 'executor:independent', 'judge:none',
-    'status:reviewed', 'tier:host'],
+    'npu:none', 'model:none', 'judge:none', 'status:reviewed'],
 });
 
 describe('normalization', () => {
@@ -131,8 +134,7 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(
     category='ut', os=('linux', 'macos'), arch=('amd64', 'arm64'),
-    npu='none', model='none', executor='independent', judge='none',
-    status='reviewed', tier='host',
+    npu='none', model='none', judge='none', status='reviewed',
 )
 
 @pytest.mark.parametrize('value', [1, 2], ids=['first', 'second'])
@@ -159,7 +161,7 @@ are inherited by every test inside it:
 
 ```typescript
 test.describe("journey-example.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64",
-  "@npu:none", "@model:mock", "@executor:independent", "@judge:none",
+  "@npu:none", "@model:mock", "@judge:none",
   "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
   test("a user reaches the result", { tag: "@mocked" }, async ({ page }) => { /* … */ });
 });
@@ -181,7 +183,7 @@ pnpm test:shared              # freeze the plan, then run all of it
 pnpm test:list                # freeze and print the plan only; runs no test body
 ```
 
-`--slice ut|st|e2e|ut-host|ut-guest` narrows the same selector to the group a
+`--slice ut|st|e2e` narrows the same selector to the group a
 CI job schedules; their union is `pnpm test:shared` exactly. `--output DIR`
 chooses where the plan and evidence land (`.test-runs/<slice>/` by default,
 `<CI_RESULTS_DIR>/<layer>/tagged/` under CI). `pnpm test:shared` prepares what
@@ -207,7 +209,7 @@ pnpm test:tagged:list \
   --path test/support/tagged/examples/node.example.mjs \
   --path test/support/tagged/examples/python_example.py \
   --select 'category:ut and (model:none or model:mock) and judge:none' \
-  --os linux --arch amd64 --executor independent \
+  --os linux --arch amd64 \
   --output .test-runs/tagged-plan
 
 # Execute the saved plan, with no new selection or automatic host-based rewriting.
@@ -272,13 +274,9 @@ four Python service suites, the mocked browser journeys and the two static
 command checks are all in the one plan, and
 [MIGRATION.md](MIGRATION.md) is the ledger of what that covers.
 
-Everything in the plan is `executor:independent`. Schema and planning
-understand `native` and `jiuwenswarm`, but the execution coordinator **fails
-closed** on those product executors until real lifecycle/identity adapters are
-connected; it does not copy a requested label into an alleged verified backend.
-NPU capability must likewise be verified by an adapter — an environment
-variable alone is not sufficient, which is why `npu:required` work stays on its
-own opt-in layer.
+NPU capability must be verified by an adapter — an environment variable alone
+is not sufficient, which is why `npu:required` work stays on its own opt-in
+layer and the plan's preflight refuses to assume the device is there.
 
 The examples under `examples/` deliberately use non-default filenames so the
 repository's own collection scopes do not pick them up.

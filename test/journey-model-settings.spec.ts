@@ -19,7 +19,7 @@ import { test } from "./helpers/e2e.ts";
 import { requireFirstRunState } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-model-settings.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-model-settings.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:mock", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
 
 test.use({ locale: "zh-CN" });
 

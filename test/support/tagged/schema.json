@@ -39,14 +39,6 @@
         "real"
       ]
     },
-    "executor": {
-      "multiple": true,
-      "values": [
-        "independent",
-        "native",
-        "jiuwenswarm"
-      ]
-    },
     "judge": {
       "multiple": false,
       "values": [
@@ -62,14 +54,6 @@
         "external",
         "legacy",
         "unreviewed"
-      ]
-    },
-    "tier": {
-      "multiple": false,
-      "required": false,
-      "values": [
-        "host",
-        "guest"
       ]
     },
     "sandbox": {

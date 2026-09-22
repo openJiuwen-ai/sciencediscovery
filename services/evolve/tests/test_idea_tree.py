@@ -2,7 +2,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 
-pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', executor='independent', judge='none', status='reviewed', tier='host')
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'), npu='none', model='none', judge='none', status='reviewed')
 from sciencediscovery_evolve.vendor.idea_tree.idea_tree import IdeaTreeError
 from sciencediscovery_evolve.vendor.idea_tree.idea_tree_service import IdeaTreeStore
 from sciencediscovery_evolve.tree import Tree

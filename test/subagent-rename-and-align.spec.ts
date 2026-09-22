@@ -20,7 +20,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("subagent-rename-and-align.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@executor:independent", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("subagent-rename-and-align.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
 
 const SCREENSHOTS = "screenshots";
 const { authorization: AUTH } = authorizationHeader();

@@ -48,9 +48,6 @@ def normalize_tags(values: list[str], *, partial: bool = False) -> list[str]:
             raise ValueError(f'Missing tag group: {name}')
         if count > 1 and not rule['multiple']:
             raise ValueError(f'Conflicting values for {name}')
-    ex = groups.get('executor', set())
-    if 'independent' in ex and len(ex) != 1:
-        raise ValueError('executor:independent cannot be combined with product executors')
     return sorted(f'{group}:{value}' for group, values in groups.items() for value in values)
 
 
@@ -282,10 +279,9 @@ def pytest_runtest_setup(item):
         if item.get_closest_marker(name):
             pytest.fail(f'Forbidden {name}: selected cases must run and pass', pytrace=False)
     actual = {'os': {'Darwin': 'macos', 'Windows': 'windows', 'Linux': 'linux'}.get(platform.system(), platform.system()),
-              'arch': {'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), platform.machine()),
-              'executor': 'independent'}
+              'arch': {'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), platform.machine())}
     if entry['target'] != actual:
-        pytest.fail('Execution target mismatch or missing product executor adapter', pytrace=False)
+        pytest.fail('Execution target mismatch', pytrace=False)
     if 'npu:required' in entry['tags']:
         pytest.fail('NPU runtime has not been verified by an execution adapter', pytrace=False)
     if 'model:real' in entry['tags'] or 'judge:llm' in entry['tags']:
@@ -328,8 +324,7 @@ def pytest_sessionfinish(session, exitstatus):
             outcome = 'FAIL'
         entry = item._science_entry
         actual = {'os': {'Darwin': 'macos', 'Windows': 'windows', 'Linux': 'linux'}.get(platform.system(), platform.system()),
-                  'arch': {'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), platform.machine()),
-                  'executor': 'independent'}
+                  'arch': {'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), platform.machine())}
         results.append({'key': entry['key'], 'outcome': outcome, 'actualTarget': actual,
                         'evidence': state['contexts'].get(item.nodeid, {}).get('evidence', [])})
     Path(destination).write_text(json.dumps({'results': results}, ensure_ascii=False), encoding='utf8')

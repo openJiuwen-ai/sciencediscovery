@@ -41,10 +41,6 @@ export function normalizeTags(tags, { partial = false } = {}) {
     if (!partial && rule.required !== false && !count) throw new Error(`Missing tag group: ${group}`);
     if (!rule.multiple && count > 1) throw new Error(`Conflicting values for ${group}`);
   }
-  const executors = groups.get('executor');
-  if (executors?.has('independent') && executors.size !== 1) {
-    throw new Error('executor:independent cannot be combined with a product executor');
-  }
   return Object.freeze([...groups].flatMap(([g, vs]) => [...vs].map(v => `${g}:${v}`)).sort());
 }
 

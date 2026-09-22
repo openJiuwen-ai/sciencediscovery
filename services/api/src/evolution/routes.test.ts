@@ -27,7 +27,7 @@
  */
 
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
-const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
+const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "judge:none", "status:reviewed"] });
 // Hooks are frozen once collection ends, so a helper a test body calls cannot
 // register one while it runs. It hands its teardown to this list instead, and
 // the one hook declared here — at collection time — drains it, which is the

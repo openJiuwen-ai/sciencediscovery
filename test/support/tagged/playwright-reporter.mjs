@@ -46,7 +46,7 @@ export default class TaggedReporter {
     const d=descriptor(test), e=this.entries.get(d.id);
     if(!e) { this.errors.push(`UNEXPECTED_RESULT: ${d.id}`);return; }
     this.results.push({key:e.key, outcome:result.status==='passed'?'PASS':result.status==='skipped'?'SKIPPED':'FAIL',
-      actualTarget:{os:hostPlatform(process.platform),arch:hostArch(process.arch),executor:'independent'},
+      actualTarget:{os:hostPlatform(process.platform),arch:hostArch(process.arch)},
       errors:result.errors.map(error=>error.message)});
   }
   onError(error) { this.errors.push(error.message); }

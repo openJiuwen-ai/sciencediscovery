@@ -229,129 +229,66 @@ part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
 image, the per-layer Docker commands, and the tag catalog used to select cases
 (`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
 
-### The two UT tiers
+### The sandbox capability
 
-UT is split into exactly two tiers, and every UT case belongs to one of them:
+UT is one layer. A test that drives a real bubblewrap sandbox declares
+`sandbox:bubblewrap`, and the plan turns that tag into a preflight: a host that
+cannot create the user namespaces bubblewrap needs fails the whole run instead
+of quietly running the rest.
 
 ```bash
-pnpm ci:ut:host    # tier:host — no sandbox: static checks, the Python suites,
-                   # and every workspace package except the sandbox ones
-pnpm ci:ut:guest   # tier:guest — the sandbox packages, which execute a real bubblewrap
+bwrap --ro-bind / / --dev /dev true && echo sandbox ok
 ```
 
-`pnpm ci:ut` is the aggregate for a host that can run both, and is derived as
-the host tier followed by the guest tier — it is not a third definition. The
-tier is the `tier:host` / `tier:guest` tag on each test, so the two tiers
-partition `category:ut` the way `category` partitions the whole plan; a UT test
-that declares no tier fails the run rather than being scheduled by neither job.
+On Ubuntu 24.04 a failure here is usually the AppArmor restriction on
+unprivileged user namespaces:
 
-When you add a unit test, it inherits the tier of the package or suite it lives
-in. Two rules keep the split honest:
+```bash
+sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+```
 
-- A host-tier test may not depend on a guest capability. If it needs
-  bubblewrap or user namespaces, it belongs to a guest-tier package.
-- A guest-tier assertion may not be weakened so the test can move to the host
-  tier. Isolation and the sandbox's `/workspace` view are the point of those
-  tests.
+Every CI job that needs the sandbox clears it the same way before using it.
 
-`.ci/test-catalog.mjs` lists the guest-tier packages; everything else is the
-host tier by construction. `pnpm ci:catalog:check` reads the `tier:` tags back
-out of the test sources and fails when a package with tests ends up in both
-tiers or in neither, when its tags disagree with that list, when the aggregate
-stops equalling the two tiers, when the guest tier grows an install or build
-step, when a layer runs something that is not a slice of the shared plan, or
-when a `ci:ut:*` entry point appears outside the two tiers. `pnpm ci:selftest`
-runs that guard's own regression tests, and the host tier runs it.
+When you add a unit test it inherits the tags of the file it lives in. Two
+rules keep that honest: a test may not depend on a capability it does not
+declare, and an isolation assertion may not be weakened so a test can run
+without the sandbox — isolation and the sandbox's `/workspace` view are the
+point of those tests.
 
 `services/runner/src/macos-seatbelt.test.ts` carries `os:macos`, so a Linux
 plan does not contain it at all — it no longer skips itself at run time. To
 exercise Seatbelt, run `pnpm --filter @sciencediscovery/runner test` natively on
 macOS.
 
-### What each pipeline covers
+`.ci/ci-contract.mjs` is the guard behind `pnpm ci:catalog:check`. It fails when
+a package's test file sits outside the shared runner's collection patterns and
+so would be run by no layer at all, when a package has a test script but no test
+file, when a layer runs something that is not a slice of the shared plan, or
+when an entry point drifts off that slice. `pnpm ci:selftest` runs that guard's
+own regression tests, and the UT layer runs it.
 
-**GitHub Actions is the gate.** It runs on the pull request, and it is what
-decides whether a change is ready. CodeArts still runs on a GitCode merge
-request and its output is still worth reading when you are looking at one, but
-it gates nothing — a green CodeArts run says nothing about whether a change can
-land, and a red one blocks nothing.
+### What the pipeline covers
 
-| Pipeline | Gate | UT | ST | Browser E2E subset | Release binaries |
-| --- | --- | --- | --- | --- | --- |
-| GitHub Actions — `.github/workflows/ci.yml` | yes, on the pull request | full `ci:ut` | yes | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
-| CodeArts — `.codearts/workflow/` on a merge request to `main` | no | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | off while its Playwright timeouts are sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
+**GitHub Actions is the only CI, and it is the gate.** It runs on the pull
+request and decides whether a change is ready. gitcode.com is a read-only
+mirror: nothing runs there.
 
-Neither runs the opt-in live layers — `ci:st:real`, `ci:e2e:real`,
+| Job | Runs |
+| --- | --- |
+| UT | `pnpm ci:ut` — the `category:ut` slice, including the tests that drive a real bubblewrap sandbox |
+| ST | `pnpm ci:st` — the `category:st` slice |
+| E2E (mocked) | `pnpm ci:e2e` — the `category:e2e` slice on an isolated stack |
+| Binary release | both architectures, each built and smoke-gated on its own runner |
+| Docker image | a cold `docker compose build`, then the deployment contract against the running container |
+
+`nightly.yml` (18:00 UTC) and `release.yml` (version tag) call `ci.yml` through
+`workflow_call`, so they run exactly the table above; they add only a version
+stamp and, for a release, the publishing step. They are not a second and third
+definition of the gate.
+
+The pipeline does not run the opt-in live layers — `ci:st:real`, `ci:e2e:real`,
 `ci:st:npu`, `ci:e2e:legacy` — which need credentials, live endpoints or an
-NPU, and stay out of both by design.
-
-This repository intentionally has no `.gitcode/workflows/` Actions pipeline.
-
-Every CodeArts job runs on a build task rather than a pipeline executor,
-because the two are billed against separate quotas and only the build one has
-room. No job's own status decides the run: each records an exit code in OBS and
-a single verification job reads them back, which is also what the merge
-request's result table reports. Its x86_64 and aarch64 jobs each call
-`scripts/package-binary-release.sh` and verifies `SHA256SUMS`. The x86_64 job
-runs directly on the hosted x64 runner and uploads its files to a run-specific
-OBS path. The aarch64 job invokes the separately configured ARM CodeArts Build
-task: the pipeline passes only `.ci/package-binary-codearts.sh`, line-oriented
-environment records, and line-oriented arguments, while
-the Build task's reusable bootstrap fetches both the target branch and MR ref,
-rebases its system `COMMIT_ID` onto the current target, and calls
-`.ci/codearts-build-dispatch.sh`. The integration SHA verifies the code being
-built, while the original source SHA keeps artifact names and OBS paths
-stable. The pasted bootstrap deliberately contains no backslashes because the
-graphical Build shell action compiles its command as Groovy before invoking
-Bash. It records
-the real command status and full output even on failure so the following Build
-step can upload available artifacts plus `run.log` and `exit-code` to the
-run-specific aarch64 OBS path. A dependent pipeline job probes the binary,
-`SHA256SUMS`, `VERSION`, `run.log`, and `exit-code`, then validates the recorded
-exit code and checksum format, so an empty or misconfigured Build task cannot
-produce a false successful result. Both paths probe bubblewrap before
-packaging; if the runner cannot create user namespaces, they pass
-`--skip-smoke` and log that the artifact is packaging-only rather than
-claiming that the release smoke gate passed. Both Linux packaging paths fetch
-the pinned micromamba conda package from the Tsinghua TUNA conda-forge mirror,
-verify the package SHA256, extract `bin/micromamba`, and then verify the
-executable against the existing release-binary SHA256. The mirror is limited
-to this debug pipeline; normal runtime provisioning keeps its upstream URL.
-
-CodeArts's `default` pool has the same shape. The job is a pod on a CCE
-Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
-the unprivileged user `octopus` with Docker's default capability bounding set
-and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
-`sudo` is not setuid, so nothing can be installed with `dnf` either. The
-checked-in workflow runs the `ci:ut:host` tier and the hermetic `ci:st` layer
-directly. A second hosted x64 job runs the `ci:ut:guest` tier inside an Ubuntu
-VM under QEMU's software-only TCG accelerator. The VM supplies an independent
-kernel whose user namespaces work even though the outer CodeArts container
-denies them; `/dev/kvm` is not requested. Its checksum-pinned qcow2 is
-pre-provisioned by the separate `ci/codearts-resources` workflow, so a run
-never repeats apt, Node, pnpm, uv, or bubblewrap installation.
-
-That job installs and builds on its own CodeArts host and hands the guest a
-packed workspace, so the guest runs tests and nothing else. A third job reuses
-the same guest for the mocked E2E group: its host runs `pnpm ci:e2e` with
-`CI_E2E_PREPARE_ONLY=1` to install `.e2e` and the pinned Chromium, and the
-guest runs the same entry point with `CI_E2E_PREPARED=1` to start the stack and
-drive the journeys. Emulated CPU is
-far slower than native: before the split, one run spent 476 s on `pnpm build`
-and 92 s on `pnpm install` inside the VM to reach 142 s of tests, while
-downloading the pinned image took 17 s. A self-hosted Linux resource pool that
-passes the real bubblewrap probe remains the preferred long-term sandbox
-runner.
-
-The parent CodeArts workflow also invokes the externally registered reusable
-code-check child. That child runs SCA, anti-poison, static-analysis, and
-blacklist CloudBuild tasks whose complete commands remain in CodeArts; it does
-not write PR labels or comments. On merge-request runs, the parent reads each
-child task's result JSON and renders its own `PASSED` or `FAILED` status and
-detail link, alongside UT, ST, and both debug binary jobs, before publishing
-the final PR label. Manual runs always execute UT/ST and both debug binary jobs
-without modifying a PR; they run the PR-oriented child only when a `PR_ID` is
-supplied.
+Ascend device. Run those deliberately, on a machine that has what they need.
 
 ## Repositories
 
@@ -365,9 +302,11 @@ under a different SHA on each host.
 | gitcode.com | `openJiuwen/sciencediscovery` | synced mirror |
 
 This direction is the reverse of what it was: changes used to be proposed on
-GitCode and mirrored to GitHub. Older merge requests, and documentation that
-has not caught up, describe that arrangement — read a pairing from the
-direction in this table, not from which number is lower.
+GitCode and mirrored to GitHub, and GitCode ran a CodeArts pipeline on the
+merge request. Neither is true now — the mirror has no pipeline, and older
+merge requests and any documentation that has not caught up describe the old
+arrangement. Read a pairing from the direction in this table, not from which
+number is lower.
 
 Two consequences. A commit id is only meaningful alongside the host it came
 from — `refactor: move domain capabilities into packages` is `c151f58` on
@@ -375,7 +314,7 @@ GitCode and `625d7e0` on GitHub, and neither resolves on the other. And a GitHub
 remote can look diverged when the trees are identical, so compare trees
 (`git diff --stat`) rather than SHAs before concluding that work is missing.
 
-## Opening a merge request
+## Opening a pull request
 
 **Run all three layers locally first.** GitHub Actions runs them again on the
 pull request, so this is not the only check any more — it is the one that costs
@@ -383,7 +322,7 @@ a reviewer nothing. A change pushed unexercised spends eleven minutes of CI and
 somebody's attention discovering what the local run would have said:
 
 ```bash
-pnpm ci:ut     # not ci:ut:host — the sandbox tests run only here and on GitHub
+pnpm ci:ut
 pnpm ci:st
 pnpm ci:e2e
 ```
@@ -440,10 +379,6 @@ choosing one and what to do without the access to apply it.
 State in the body what was verified, with the numbers each layer reported.
 "Tests pass" is not reviewable. If the change cannot pass a layer, say which and
 why — do not weaken an assertion to get a green run.
-
-A merge request opened on GitCode still works and CodeArts still runs on it;
-[the create-pr skill](.agents/skills/create-gitcode-pr/SKILL.md) documents that path.
-It is no longer where changes are proposed by default.
 
 Check `git status` before committing: no `.tmp/`, no local editor or tooling
 config, no private notes.

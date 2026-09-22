@@ -47,7 +47,7 @@ function register(node) {
   const name = `${node.name} [science:${token}]`;
   native.test(name, { timeout: node.options.timeout ?? request.timeoutMs ?? 300_000 }, async context => {
     assert.equal(node.descriptor.forbiddenSkip, undefined, 'skip/todo declarations are forbidden');
-    const actualTarget = { os: hostPlatform(process.platform), arch: hostArch(process.arch), executor: 'independent' };
+    const actualTarget = { os: hostPlatform(process.platform), arch: hostArch(process.arch) };
     assert.deepEqual(actualTarget, entry.target, 'Execution host does not match the frozen plan');
     const wrapped = new Proxy(context, { get(target, key) {
       if (['skip', 'todo', 'test'].includes(key)) return () => { throw new Error(`Forbidden runtime ${String(key)}: selected tests cannot skip or create unplanned subtests`); };

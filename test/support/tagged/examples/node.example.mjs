@@ -17,7 +17,7 @@ import { createTest } from '../node.mjs';
 import { normalizeTags, compileSelector } from '../tags.mjs';
 const { test, describe } = createTest(import.meta.url, {
   tags: ['category:ut', 'os:linux', 'os:macos', 'os:windows', 'arch:amd64', 'arch:arm64',
-    'npu:none', 'model:none', 'executor:independent', 'judge:none'],
+    'npu:none', 'model:none', 'judge:none'],
 });
 
 describe('tag vocabulary', () => {

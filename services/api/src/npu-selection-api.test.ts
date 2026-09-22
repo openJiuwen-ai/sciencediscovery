@@ -14,7 +14,7 @@
 
 import type { TestContext } from "node:test";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test, describe, before, after } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "executor:independent", "judge:none", "status:reviewed", "tier:host"] });
+const { test, describe, before, after } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "npu:none", "model:none", "judge:none", "status:reviewed"] });
 import assert from "node:assert/strict";
 import { mkdir, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";

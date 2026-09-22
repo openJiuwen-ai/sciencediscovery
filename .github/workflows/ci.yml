@@ -23,7 +23,7 @@
 # The three test jobs below are three slices of one plan, not three suites.
 # `ci:ut`, `ci:st` and `ci:e2e` each run `test/support/tagged/shared.mjs`
 # against the single selector in `test/support/tagged/profiles.mjs`, narrowed
-# by `category` (and, inside UT, by `tier`). Those groups partition the plan,
+# by `category`. Those three groups partition the plan,
 # so the three jobs together run exactly what `pnpm test:shared` runs on a
 # developer's machine — a case cannot be in two jobs or in none. Selection
 # reads source tags only; no job's environment, credential or installed
@@ -111,8 +111,8 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
           bwrap --version
 
-      # The `category:ut` slice, run as its two tiers in order: the host tier,
-      # then the guest tier whose tests drive the sandbox provisioned above.
+      # The `category:ut` slice, including the tests that drive the real
+      # bubblewrap sandbox provisioned above.
       - name: Run UT
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results

@@ -19,13 +19,11 @@ Defined once, in [profiles.mjs](profiles.mjs):
   and status:reviewed
 ```
 
-against the single target `os=linux, arch=amd64, executor=independent`.
+against the single target `os=linux, arch=amd64`.
 
 `pnpm test:shared` runs all of it. CI runs the same plan as slices that
 partition it — `category` is single-valued and required, so `ut`, `st` and
-`e2e` cover it exactly once each, and inside `ut` the required `tier` tag does
-the same for `ut-host` and `ut-guest`. A `category:ut` test with no tier fails
-the run (`MISSING_TIER`) rather than falling out of both CI jobs.
+`e2e` cover it exactly once each.
 
 Nothing in that selector can be satisfied or defeated by the machine a run
 happens on. The plan is frozen from source before anything looks at the host,
@@ -36,9 +34,7 @@ capability, a skip, or `executed != planned` are all failures of the run.
 
 | Before | Now |
 | --- | --- |
-| `ci:ut` → `ut.host` + `ut.guest` workloads | `--slice ut`, i.e. `ut-host` then `ut-guest` |
-| `ci:ut:host` → install, build, 9 pnpm workloads | `--slice ut-host` (`category:ut and tier:host`) |
-| `ci:ut:guest` → `pnpm --filter @sciencediscovery/runner test` | `--slice ut-guest` (`category:ut and tier:guest`) |
+| `ci:ut` → install, build, 9 pnpm workloads, then the sandbox package in a QEMU guest | `--slice ut` (`category:ut`) |
 | `ci:st` → `bash test/api/run_m1_smoke.sh` | `--slice st` (`category:st`) |
 | `ci:e2e` → `bash .ci/run-e2e.sh mocked` | `--slice e2e` (`category:e2e`), which still drives `run-e2e.sh` for the stack lifecycle |
 
@@ -50,10 +46,12 @@ and are planned and counted like any other case. `pnpm ci:selftest`
 (`scripts/binary-release/*.test.mjs`) needed no command entry: their files are
 ordinary tagged Node tests and are collected as such.
 
-The tier is no longer a `pnpm --filter` list. It is the `tier:host` /
-`tier:guest` tag each test declares, and `pnpm ci:catalog:check` reads those
-tags back out of the sources to confirm that every workspace package with
-tests still belongs to exactly one tier.
+UT used to be split into a host tier and a guest tier, because the CodeArts
+pool could not create the user namespaces bubblewrap needs and those tests had
+to run inside a QEMU guest. GitHub's runners create them natively, so with
+CodeArts gone the split has no subject: UT is one slice, and the capability a
+test actually needs is the `sandbox:bubblewrap` tag the plan turns into a
+preflight.
 
 ## What stayed out of the shared suite, and why
 
@@ -95,7 +93,7 @@ table above).
 - **Sandbox probes** — `services/runner/src/{server,sandbox-network,sandbox-launch,sandbox-process}.test.ts`,
   `services/api/src/evolution/sandbox.test.ts`, `services/launcher/src/preflight.test.ts`
   and the evolve suites no longer answer "no sandbox backend on this host" with
-  a skip. They are `tier:guest` / `sandbox:bubblewrap`, and a run whose host
+  a skip. They are `sandbox:bubblewrap`, and a run whose host
   cannot create user namespaces fails preflight with `BUBBLEWRAP_UNAVAILABLE`
   before a single test body runs.
 - **Interpreter and toolchain probes** — `pytest.importorskip`, "no host

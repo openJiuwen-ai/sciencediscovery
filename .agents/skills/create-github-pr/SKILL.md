@@ -8,21 +8,19 @@ description: >
   the pull request and its Actions run back. Use when asked to create a PR,
   submit a change for review, when a branch is ready to propose, when
   labelling a pull request for the release note, or when reading a GitHub
-  Actions result on a pull request. This is the default path for proposing a
-  change; for a merge request on gitcode.com, which still works but is no
-  longer the default, use the create-gitcode-pr skill instead.
+  Actions result on a pull request. This is the only path for proposing a
+  change: gitcode.com is a read-only mirror with no pipeline of its own.
 ---
 
 # Open a pull request (GitHub)
 
 Project-local skill for **ScienceDiscovery**.
 
-**This is the default path.** Changes are proposed here and GitHub syncs to
+**This is the only path.** Changes are proposed here and GitHub syncs to
 GitCode; [CONTRIBUTING.md](../../../CONTRIBUTING.md)'s *Repositories* table is
-the authority. That direction is the reverse of what it was, so older merge
-requests and any documentation that has not caught up describe GitCode as the
-place to propose — [create-gitcode-pr](../create-gitcode-pr/SKILL.md) still documents that
-path, which still works, but it is no longer the default.
+the authority. That direction is the reverse of what it once was, and the
+GitCode side no longer has a pipeline at all, so older merge requests and any
+documentation describing GitCode as the place to propose are out of date.
 
 Pipeline internals — which platform runs which layer, the workflow files, run
 logs, failure attribution: [ci](../ci/SKILL.md). Journey design and reporting:
@@ -52,7 +50,7 @@ logs, failure attribution: [ci](../ci/SKILL.md). Journey design and reporting:
 
 ```bash
 bwrap --ro-bind / / --dev /dev true && echo sandbox ok      # ci:ut and ci:e2e need it
-CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:ut   # not ci:ut:host
+CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:ut
 CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:st
 CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:e2e
 ```
@@ -70,8 +68,8 @@ on unmodified `main` in a separate detached worktree
 pre-existing — say so in the body with the step, the error and the baseline
 run, and leave the fix to its own pull request. A failure only on your commit
 is yours. Never weaken an assertion or skip a layer to get green; if a layer
-cannot run on this host, say which and why, and remember `ci:ut:host` is not a
-substitute for `ci:ut`.
+cannot run on this host, say which and why. Report the numbers each layer's
+`summary.json` gives — `planned`, `executed`, `passed` — not "tests pass".
 
 `pnpm ci:e2e` is the mocked **browser subset** only. Changed user-observable
 behaviour also needs the relevant API, CLI or local-stack journey.

@@ -29,7 +29,7 @@ export function parse(args) {
   if (!['list', 'run', 'doctor', 'tags'].includes(action)) throw new Error(`Unknown action: ${action}`);
   const options = { action, paths: [], nodeImports: [] };
   const fields = { '--root': 'root', '--path': 'paths', '--select': 'selector', '--os': 'os', '--arch': 'arch',
-    '--executor': 'executor', '--profile': 'profile', '--plan': 'plan', '--output': 'output', '--python': 'python',
+    '--profile': 'profile', '--plan': 'plan', '--output': 'output', '--python': 'python',
     '--revision': 'revision', '--import': 'nodeImports' };
   const seen = new Set();
   for (let i = 0; i < rest.length; i++) {
@@ -44,10 +44,10 @@ export function parse(args) {
       seen.add(key); options[key] = value;
     }
   }
-  if (options.plan && (options.paths.length || options.selector || options.profile || options.os || options.arch || options.executor)) {
+  if (options.plan && (options.paths.length || options.selector || options.profile || options.os || options.arch)) {
     throw new Error('--plan cannot be combined with a new selection or target');
   }
-  if (options.profile && (options.selector || options.os || options.arch || options.executor)) {
+  if (options.profile && (options.selector || options.os || options.arch)) {
     throw new Error('A fixed profile cannot be overridden; use an explicit selector/target instead');
   }
   return options;
@@ -64,12 +64,12 @@ export async function main(args = process.argv.slice(2)) {
   } else {
     const profile = options.profile ? profiles[options.profile] : null;
     if (options.profile && !profile) throw new Error(`Unknown profile: ${options.profile}`);
-    if (!profile && !(options.os && options.arch && options.executor)) throw new Error('Specify --os, --arch and --executor; target selection never uses the host environment');
+    if (!profile && !(options.os && options.arch)) throw new Error('Specify --os and --arch; target selection never uses the host environment');
     const files = discoverFiles(root, options.paths);
     const catalog = collect({ root, files, outputDir, python: options.python, nodeImports: options.nodeImports });
     const revision = options.revision ?? spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout?.trim();
     plan = createPlan(catalog, { revision, selector: profile?.selector ?? options.selector,
-      targets: profile?.targets ?? [{ os: options.os, arch: options.arch, executor: options.executor }] });
+      targets: profile?.targets ?? [{ os: options.os, arch: options.arch }] });
   }
   writeFileSync(join(outputDir, 'plan.json'), JSON.stringify(plan, null, 2) + '\n');
   if (options.action === 'list') { console.log(JSON.stringify(plan, null, 2)); return 0; }

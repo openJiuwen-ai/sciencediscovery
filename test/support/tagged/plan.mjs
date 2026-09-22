@@ -32,15 +32,15 @@ export function freeze(value) {
   return value;
 }
 export function validateTarget(target) {
-  if (!target || Object.keys(target).sort().join(',') !== 'arch,executor,os') {
-    throw new Error('Target must explicitly contain os, arch and executor');
+  if (!target || Object.keys(target).sort().join(',') !== 'arch,os') {
+    throw new Error('Target must explicitly contain os and arch');
   }
-  for (const key of ['os', 'arch', 'executor']) {
+  for (const key of ['os', 'arch']) {
     if (!schema.groups[key].values.includes(target[key])) throw new Error(`Invalid target ${key}:${target[key]}`);
   }
-  return { os: target.os, arch: target.arch, executor: target.executor };
+  return { os: target.os, arch: target.arch };
 }
-export function instanceKey(id, target) { return `${id}@${target.os}/${target.arch}/${target.executor}`; }
+export function instanceKey(id, target) { return `${id}@${target.os}/${target.arch}`; }
 
 /** Pure: NEVER reads process.env, the host OS, credentials, devices or services. */
 export function createPlan(catalog, { revision, selector = '', targets } = {}) {
@@ -60,13 +60,11 @@ export function createPlan(catalog, { revision, selector = '', targets } = {}) {
   for (const test of [...byId.values()].sort((a,b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
     for (const requested of matrix) {
       if (!test.tags.includes(`os:${requested.os}`) || !test.tags.includes(`arch:${requested.arch}`)) continue;
-      const independent = test.tags.includes('executor:independent');
-      if (!independent && !test.tags.includes(`executor:${requested.executor}`)) continue;
-      const target = { ...requested, executor: independent ? 'independent' : requested.executor };
-      // Match platform/executor tags on concrete execution instances, not on a
-      // capability union; e.g. `not os:linux` still selects a multi-OS test on macOS.
-      const concrete = [...test.tags.filter(t => !/^(os|arch|executor):/.test(t)),
-        `os:${target.os}`, `arch:${target.arch}`, `executor:${target.executor}`];
+      const target = { ...requested };
+      // Match platform tags on concrete execution instances, not on a capability
+      // union; e.g. `not os:linux` still selects a multi-OS test on macOS.
+      const concrete = [...test.tags.filter(t => !/^(os|arch):/.test(t)),
+        `os:${target.os}`, `arch:${target.arch}`];
       if (!match(concrete)) continue;
       const key = instanceKey(test.id, target);
       entries.set(key, { ...test, key, target, selectedTags: concrete.sort() });

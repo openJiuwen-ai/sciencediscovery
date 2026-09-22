@@ -19,7 +19,7 @@ import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("issue-67-34-inline-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:real", "@executor:independent", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
+test.describe("issue-67-34-inline-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:real", "@judge:none", "@status:reviewed", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * Verification for inline run activity cards on the modularized layout:

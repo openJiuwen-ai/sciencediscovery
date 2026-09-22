@@ -19,7 +19,7 @@ export const hostArch = arch => ({ x64: 'amd64', arm64: 'arm64' })[arch] ?? arch
 
 /** Only this post-plan layer may inspect environment. Missing data fails closed. */
 export async function preflight(plan, {
-  platform = process.platform, arch = process.arch, env = process.env, probes = {}, availableExecutors = ['independent'],
+  platform = process.platform, arch = process.arch, env = process.env, probes = {},
 } = {}) {
   validatePlan(plan);
   const problems = [];
@@ -40,9 +40,6 @@ export async function preflight(plan, {
     if (checked.get(name)) problems.push({ key: entry.key, code: 'UNVERIFIED_CAPABILITY', requirement: name });
   };
   for (const entry of plan.entries) {
-    if (!availableExecutors.includes(entry.target.executor)) problems.push({
-      key: entry.key, code: 'EXECUTOR_ADAPTER_REQUIRED', requirement: entry.target.executor,
-    });
     if (entry.target.os !== actualHost.os || entry.target.arch !== actualHost.arch) {
       problems.push({ key: entry.key, code: 'HOST_MISMATCH', required: entry.target, actual: actualHost });
     }
@@ -54,10 +51,6 @@ export async function preflight(plan, {
     if (entry.tags.includes('judge:llm')) {
       needEnv(entry, ['E2E_JUDGE_BASE_URL', 'E2E_JUDGE_MODEL', 'E2E_JUDGE_TOKEN']);
       if (env.CI_ALLOW_REAL !== '1') problems.push({ key: entry.key, code: 'OPT_IN_REQUIRED', requirement: 'CI_ALLOW_REAL=1' });
-    }
-    if (entry.target.executor === 'jiuwenswarm') {
-      needEnv(entry, ['JIUWENSWARM_GATEWAY_URL', 'JIUWENSWARM_MGMT_URL']);
-      await check(entry, 'jiuwenswarm');
     }
   }
   return { ok: !problems.length, planDigest: plan.digest, actualHost, problems };

@@ -15,7 +15,7 @@
 import { expect, test } from "@playwright/test";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("timeouts-runtime-status-user.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@executor:independent", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+test.describe("timeouts-runtime-status-user.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@npu:none", "@model:none", "@judge:none", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
 
 const SCREENSHOTS = "screenshots";
 

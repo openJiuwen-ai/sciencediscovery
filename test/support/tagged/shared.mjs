@@ -39,7 +39,7 @@ function projectEnv(env,project){return {...env,PYTHONPATH:[join(root,'services'
 export async function main(args=process.argv.slice(2)) {
   const action=args.shift()??'run';let slice='shared',output;
   while(args.length){const flag=args.shift();if(flag==='--slice')slice=args.shift();else if(flag==='--output')output=args.shift();else throw new Error(`Unknown option ${flag}`);}
-  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error('Usage: test:shared [--slice ut|st|e2e|ut-host|ut-guest] [--output DIR]');
+  if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error('Usage: test:shared [--slice ut|st|e2e] [--output DIR]');
   // Under CI the layer entry point owns `<CI_RESULTS_DIR>/<layer>/run.log` and
   // its own summary; the frozen plan and its evidence go beside them, not over them.
   const outputDir=resolve(output??(process.env.CI_RESULTS_DIR?join(process.env.CI_RESULTS_DIR,slice,'tagged'):join(root,'.test-runs',slice)));
@@ -58,10 +58,10 @@ export async function main(args=process.argv.slice(2)) {
     // virtualenvs preparation just built are the ones this revision pins.
     SCIENCE_TEST_PYTHON:python('paper'),
     SCIENCE_DISCOVERY_DATA_DIR:join(outputDir,'runtime'),SCIENCE_AGENT_DATA_DIR:join(outputDir,'runtime')};
-  const needUT=['shared','ut','ut-host'].includes(slice), needPW=['shared','e2e'].includes(slice);
-  // A workspace its host already installed and built (the QEMU guest, and the
-  // E2E group that splits preparation from execution) must not install again.
-  const prepared=slice==='ut-guest' || process.env.CI_E2E_PREPARED==='1';
+  const needUT=['shared','ut'].includes(slice), needPW=['shared','e2e'].includes(slice);
+  // The E2E group can split preparation from execution: a host installs
+  // everything and hands the workspace over, and this half only runs.
+  const prepared=process.env.CI_E2E_PREPARED==='1';
   const prepareOnly=action==='prepare' || process.env.CI_E2E_PREPARE_ONLY==='1';
   if(prepared && process.env.CI_E2E_PREPARE_ONLY==='1')throw new Error('CI_E2E_PREPARE_ONLY and CI_E2E_PREPARED are mutually exclusive');
   if(action!=='list' && !prepared) {
@@ -76,7 +76,7 @@ export async function main(args=process.argv.slice(2)) {
   const wantedCategory=slice==='shared'?null:slice.startsWith('ut')?'ut':slice;
   const files=nodeFiles.filter(file=>{
     const source=readFileSync(join(root,file),'utf8');
-    return (!wantedCategory||source.includes(`category:${wantedCategory}`)) && (!slice.startsWith('ut-')||source.includes(`tier:${slice.slice(3)}`));
+    return !wantedCategory||source.includes(`category:${wantedCategory}`);
   });
   let catalog=[];
   if(files.length)catalog.push(...collect({root,files,outputDir,nodeImports:['tsx'],env}));
@@ -99,11 +99,6 @@ export async function main(args=process.argv.slice(2)) {
   const revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
   const selector=shared.selector+(slices[slice]?` and (${slices[slice]})`:'');
   const plan=createPlan(catalog,{revision,selector,targets:shared.targets});
-  // `ut-host` plus `ut-guest` only adds up to `ut` while every UT identity
-  // declares exactly one tier. One without a tier is scheduled by no CI job at
-  // all, so it fails the run here instead of quietly leaving the plan.
-  const untiered=plan.entries.filter(e=>e.tags.includes('category:ut') && !e.tags.some(t=>t.startsWith('tier:')));
-  if(untiered.length)throw new Error(`MISSING_TIER: every category:ut test needs tier:host or tier:guest; ${untiered.map(e=>e.id).join(', ')}`);
   json(join(outputDir,'catalog.json'),catalog);json(join(outputDir,'plan.json'),plan);
   console.log(`Frozen ${plan.entries.length} identities for slice ${slice}; selector=${selector}`);
   console.log(`digest=${plan.digest}; plan=${join(outputDir,'plan.json')}`);

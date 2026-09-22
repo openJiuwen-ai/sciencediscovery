@@ -138,7 +138,7 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
             const entry = tokens.get(token);
             if (!entry) { errors.push(`UNEXPECTED_NODE_TEST: ${token}`); continue; }
             results.push({ key: entry.key, outcome: event.skip ? 'SKIPPED' : event.todo ? 'TODO' : event.type === 'test:pass' ? 'PASS' : 'FAIL',
-              actualTarget: { os: hostPlatform(process.platform), arch: hostArch(process.arch), executor: 'independent' } });
+              actualTarget: { os: hostPlatform(process.platform), arch: hostArch(process.arch) } });
           } else if (event.type === 'test:fail') errors.push(`NODE_HOOK_OR_COLLECTION_FAILED: ${event.name}`);
           else if (event.type === 'test:pass' && event.kind !== 'suite') errors.push(`UNPLANNED_NODE_TEST: ${event.name}`);
         }

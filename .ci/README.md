@@ -22,7 +22,7 @@ narrowed only by the group that layer schedules:
 
 | CI layer | Entry point | Slice of the shared selector |
 |---|---|---|
-| UT | `pnpm ci:ut` (`ci:ut:host` / `ci:ut:guest`) | `category:ut`, as `tier:host` then `tier:guest` |
+| UT | `pnpm ci:ut` | `category:ut` |
 | ST | `pnpm ci:st` | `category:st` |
 | E2E | `pnpm ci:e2e` | `category:e2e`, driving `.ci/run-e2e.sh` for the stack lifecycle |
 
@@ -87,7 +87,6 @@ required environment dimensions:
 - `llm:none|stub|real|unreviewed`
 - `npu:none|required|unreviewed`
 - `sandbox:none|bubblewrap|seatbelt|host|unreviewed`
-- `ut:host|guest` on every `layer:ut` case and on no other case
 - `layer:ut|st|e2e`, `container:*`, and runtime `network:*`
 
 No case carries `sandbox:seatbelt` today: the macOS Seatbelt tests live in
@@ -126,75 +125,32 @@ requires `CI_ALLOW_NPU=1` and an explicit `SCIENCE_AGENT_NPU_PYTHON` from the
 dedicated NPU environment; it fails closed in this generic image. Its catalog
 entry explains the host requirement.
 
-## The two UT tiers
+## The sandbox capability
 
-UT has exactly two tiers and no third bucket. Every UT case belongs to one of
-them, and their union is all of UT:
+UT is one layer. A test that drives a real bubblewrap sandbox says so with
+`sandbox:bubblewrap`, and that is the whole mechanism: the plan turns the tag
+into a preflight, and a host that cannot create the user namespaces bubblewrap
+needs fails the entire run rather than quietly running the rest.
 
-| Tier | Tag | Entry point | Where it runs |
-|---|---|---|---|
-| Host | `ut:host` | `pnpm ci:ut:host` | any ordinary CI host; no bubblewrap, no user namespaces |
-| Guest | `ut:guest` | `pnpm ci:ut:guest` | a Linux guest whose kernel grants the user namespaces bubblewrap needs |
+```bash
+bwrap --ro-bind / / --dev /dev true && echo sandbox ok
+```
 
-`pnpm ci:ut` is the aggregate for a worker that can run both. It is not a third
-definition: `.ci/test-catalog.mjs` derives it as the host tier's steps followed
-by the guest tier's.
-
-Each tier is one slice of the one shared plan, and the tier itself is a tag on
-each test — `tier:host` or `tier:guest`, declared where the test is declared.
-`pnpm ci:catalog:check` reads those tags back out of the sources and fails when
-a workspace package with tests declares two tiers, declares none, or disagrees
-with the `utGuestPackages` list. A `category:ut` test with no tier fails the run
-outright, because it would be scheduled by neither CI job.
+On Ubuntu 24.04 a failure here is usually the AppArmor restriction on
+unprivileged user namespaces, which every job that needs the sandbox clears
+with `sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0`.
 
 When adding a UT test, put it in the package or suite that already matches its
-requirements. A host-tier test may not depend on a guest capability, and a
-guest-tier assertion may not be weakened so the test can move to the host tier;
-see [.agents/skills/ci/SKILL.md](../.agents/skills/ci/SKILL.md).
+requirements, and never weaken an isolation assertion so a test can run without
+the sandbox; see [.agents/skills/ci/SKILL.md](../.agents/skills/ci/SKILL.md).
 
-A host that cannot create user namespaces runs the guest tier in a VM:
-
-```bash
-pnpm install --frozen-lockfile && pnpm build   # on the host, native CPU
-bash .ci/run-qemu-layer.sh ut-guest
-```
-
-`.ci/pack-workspace.sh` packs `git archive HEAD` together with the dependency
-tree and every `dist/` the host just produced, and `.ci/run-qemu-layer.sh`
-serves that payload to the guest, which streams it into place and runs
-`pnpm ci:ut:guest`. Nothing is installed or compiled inside the guest: both
-`run-qemu-layer.sh` and the `ut-guest` layer fail closed when the host did not
-prepare the workspace.
-
-A host without QEMU downloads the portable emulator the
-`ci/codearts-resources` branch publishes, pinned by `.ci/qemu-emulator.sha256`,
-instead of assembling one from Alpine packages per run.
-
-The mocked E2E group reuses that guest through the same split, without a
-second E2E definition:
-
-```bash
-CI_E2E_PREPARE_ONLY=1 CI_E2E_BROWSERS_DIR=.e2e/browsers pnpm ci:e2e
-bash .ci/run-qemu-layer.sh e2e
-```
-
-The first command installs `.e2e` and the pinned Chromium into the checkout
-and stops before starting the stack, so the payload can carry them; the guest
-then runs `pnpm ci:e2e` with `CI_E2E_PREPARED=1` and owns the stack and the
-journeys. `CI_E2E_STACK_TIMEOUT_SECONDS` raises the 180-second health wait,
-which emulated services routinely exceed.
-
-`pnpm ci:catalog:check` is the guard. It fails when a case has an unknown tag
-or the wrong number of values for a dimension, when a UT case has no tier or
-two, when a `layer:ut` case's tier disagrees with its `sandbox:*` tag, when a
-workspace package's own `tier:` tags claim both tiers or neither or disagree
-with the guest-package list, when one of that package's test files sits outside
-the shared runner's collection patterns and so would be run by no layer at all,
-when `ci:ut` stops being exactly the two tiers, when the guest tier grows an
-install or build step, when a layer runs something that is not a slice of the
-shared plan, or when an entry point drifts off that slice.
-`pnpm ci:selftest` runs the regression tests for that guard, and the host tier
-runs it.
+`pnpm ci:catalog:check` is the guard. It fails when a scheduler case has an
+unknown tag or the wrong number of values for a dimension, when a workspace
+package's test file sits outside the shared runner's collection patterns and so
+would be run by no layer at all, when a package has a test script but no test
+file, when a layer runs something that is not a slice of the shared plan, or
+when an entry point drifts off that slice. `pnpm ci:selftest` runs the
+regression tests for that guard, and the UT layer runs it.
 
 ## Build
 
@@ -374,12 +330,17 @@ outside the generic default command.
 The host directory mounted at `/ci-results` receives:
 
 ```text
-ut/                               # the aggregate; ut-host/ and ut-guest/ for the tiers
-  run.log
-  summary.json
+ut/
+  run.log                          # the layer entry point's own log
+  summary.json                     # the layer's exit code and per-step timings
+  tagged/                          # the frozen plan and its accounting
+    plan.json
+    preflight.json
+    summary.json                   # planned / executed / passed / failed / skipped
 st/
   run.log
   summary.json
+  tagged/
 e2e/
   run.log
   stack.log
@@ -426,9 +387,7 @@ container cannot safely or reliably provide.
 | Real NPU workloads such as `services/runner/workloads/npu-smoke-test.py` | Vendor device nodes, drivers, runtime libraries, model/data assets, and usually a native aarch64/NPU host | Hardware-specific runner with explicit device mounts and its own acceptance record |
 | Full bubblewrap execution when the host denies unprivileged user namespaces | Docker flags cannot override a host kernel/AppArmor policy that rejects user namespace creation | Run on a Linux worker with user namespaces enabled; record UT/E2E as BLOCKED if the bwrap preflight fails |
 | Host-only sandbox fallback/full-profile validation | A container cannot reproduce every host `/proc/sys`, AppArmor, LXC, and distribution-specific bwrap combination | Keep the existing stubbed capability/unit tests in UT; run real preflight/fallback checks on representative native hosts |
-| Playwright or sandbox runs for the other CPU architecture under QEMU | Browser sandboxing and timing under emulation are not representative and may not be supported by the downloaded browser | Build the two-platform manifest with buildx, but execute amd64 and arm64 jobs on native workers |
 | Docker Desktop on macOS/Windows | The product runner requires Linux user/mount namespaces and bubblewrap | Use a native Linux CI worker or VM |
-| J3 in the default mocked job | J3 intentionally does not install the base or access conda channels; the generic E2E command sets `SCIENTIFIC_ENVS=0` so startup cannot turn a user journey into environment provisioning | In a separate, explicitly network-enabled job, set `E2E_SCIENTIFIC_ENVS=1` and reuse a pre-seeded `CI_RUNTIME_DIR`; keep that opt-in out of the default command |
 
 The tag catalog keeps unsupported generic-container capabilities discoverable
 instead of silently dropping them. For example,
