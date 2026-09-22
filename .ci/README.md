@@ -340,18 +340,19 @@ selection/
 ```
 
 The versioned design contract for this report is
-[`docs/designs/test-coverage.v2.md`](../docs/designs/test-coverage.v2.md).
+[`docs/designs/test-coverage.v3.md`](../docs/designs/test-coverage.v3.md).
 
-The dedicated GitHub `Node coverage` workflow runs `pnpm coverage:node` every
-Monday at 03:30 Asia/Shanghai on the default branch, on manual dispatch, and
-once when its coverage infrastructure changes on `main`. It publishes
-`node-coverage-<source-sha>` for 90 days. The report covers the built Node
-workspace and CI-script tests only; browser/TSX, Python, and Playwright suites
-use different runners and are outside its totals. The report is additional
-evidence, not a CI layer or a pull-request gate, and not a replacement for UT,
-ST, or E2E. The ScienceDiscovery GitHub status board auto-discovers the
-artifact and reads `lcov.info`; it does not need to be added to the board's
-UT/ST/E2E result-artifact list.
+The dedicated GitHub `Node coverage` workflow runs affected Node-test groups
+on pull requests and pushes to `main`, then runs the complete Node scope daily
+at 03:30 Asia/Shanghai and on manual dispatch. Summary artifacts are retained
+for 90 days; larger LCOV detail artifacts are retained for 30 days. The report
+covers built Node workspace and CI-script tests only; browser/TSX, Python, and
+Playwright suites use different runners and are outside its totals. PR
+percentage changes are informational, while test failures still fail the
+check. The ScienceDiscovery GitHub status board uses the daily result as its
+authoritative baseline and labels any group-replaced main result as an
+incremental estimate. Coverage artifacts remain separate from UT/ST/E2E
+result artifacts.
 
 `run-layer.mjs` stops at the first failing UT/ST command and records every
 attempted command, exit code, and duration. It gives each run a unique

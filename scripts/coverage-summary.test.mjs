@@ -13,9 +13,12 @@
 // limitations under the License.
 
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
-import { isTestSource, markdownSummary, parseLcov, summarizeCoverage } from "./coverage-summary.mjs";
+import { isTestSource, markdownSummary, parseLcov, summarizeCoverage, writeCoverageSummary } from "./coverage-summary.mjs";
 
 const lcov = `TN:
 SF:packages/example/dist/index.js
@@ -61,4 +64,27 @@ test("accepts an LCOV file whose final record has no trailing newline", () => {
   const records = parseLcov(lcov.trimEnd());
   assert.equal(records.length, 2);
   assert.equal(records[1].file, "packages/example/dist/index.test.js");
+});
+
+test("writes schema-versioned group metadata beside totals", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "science-coverage-summary-"));
+  try {
+    const input = join(directory, "input.lcov");
+    const jsonOutput = join(directory, "summary.json");
+    await writeFile(input, lcov);
+    await writeCoverageSummary({
+      input,
+      jsonOutput,
+      lcovOutput: join(directory, "lcov.info"),
+      markdownOutput: join(directory, "summary.md"),
+      metadata: { group: "packages/example", mode: "incremental" },
+    });
+    const doc = JSON.parse(await readFile(jsonOutput, "utf8"));
+    assert.equal(doc.schema_version, 1);
+    assert.equal(doc.group, "packages/example");
+    assert.equal(doc.mode, "incremental");
+    assert.equal(doc.totals.lines.percentage, 75);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

@@ -1,6 +1,6 @@
 # Node Test Coverage Design v2
 
-Status: accepted for implementation
+Status: superseded by [v3](test-coverage.v3.md)
 
 Supersedes [v1](test-coverage.v1.md). Version 2 moves publication out of the
 per-PR CI workflow and into a source-owned weekly baseline, matching the

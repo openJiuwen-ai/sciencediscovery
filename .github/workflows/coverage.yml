@@ -12,35 +12,46 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The source-owned weekly coverage baseline. This does not restate the merge
-# gate in ci.yml: coverage has different instrumentation, output, cadence and
-# retention, and remains non-gating. The status board only consumes the
-# SHA-qualified artifact produced here.
-
 name: Node coverage
 
 on:
+  pull_request:
+    paths:
+      - ".ci/**"
+      - ".github/workflows/coverage.yml"
+      - "config/**"
+      - "packages/**"
+      - "scripts/**"
+      - "services/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
   push:
     branches: [main]
     paths:
+      - ".ci/**"
       - ".github/workflows/coverage.yml"
-      - "scripts/coverage-summary.mjs"
-      - "scripts/coverage-summary.test.mjs"
-      - "scripts/run-node-coverage.mjs"
+      - "config/**"
+      - "packages/**"
+      - "scripts/**"
+      - "services/**"
       - "package.json"
       - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig*.json"
   schedule:
-    # 19:30 UTC on Sunday is 03:30 Monday in Asia/Shanghai. Nightly starts at
-    # 02:00, so the offset avoids launching both resource-heavy runs together.
-    - cron: "30 19 * * 0"
+    # 19:30 UTC is 03:30 the next day in Asia/Shanghai. The ordinary nightly
+    # starts at 02:00, so the offset avoids launching both heavy runs together.
+    - cron: "30 19 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: sciencediscovery-node-coverage
-  cancel-in-progress: false
+  group: sciencediscovery-node-coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   node-coverage:
@@ -49,24 +60,61 @@ jobs:
     steps:
       - name: Check out ScienceDiscovery
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select coverage scope
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            echo "groups=" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=daily authoritative baseline" >> "$GITHUB_OUTPUT"
+            echo "artifact=node-coverage-summary-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "lcov_artifact=node-coverage-lcov-nightly-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/select-coverage-groups.mjs "$BASE_SHA" HEAD >> "$GITHUB_OUTPUT"
+            if [[ "$EVENT_NAME" == "pull_request" ]]; then
+              echo "artifact=node-coverage-summary-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+              echo "lcov_artifact=node-coverage-lcov-pr-${PR_NUMBER}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            else
+              echo "artifact=node-coverage-summary-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+              echo "lcov_artifact=node-coverage-lcov-main-incremental-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Explain skipped coverage
+        if: steps.scope.outputs.skip == 'true'
+        run: echo "No built Node coverage group changed; ${{ steps.scope.outputs.reason }}."
 
       - name: Set up pnpm
+        if: steps.scope.outputs.skip != 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
 
       - name: Set up Node
+        if: steps.scope.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
           cache: pnpm
 
       - name: Set up uv
+        if: steps.scope.outputs.skip != 'true'
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
       - name: Provision the sandbox
+        if: steps.scope.outputs.skip != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -76,16 +124,45 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
 
       - name: Install dependencies
+        if: steps.scope.outputs.skip != 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Generate Node coverage
-        run: pnpm coverage:node
+        if: steps.scope.outputs.skip != 'true'
+        shell: bash
+        env:
+          COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COVERAGE_MODE: ${{ steps.scope.outputs.mode }}
+          COVERAGE_SOURCE_SHA: ${{ github.sha }}
+          SELECTED_GROUPS: ${{ steps.scope.outputs.groups }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$SELECTED_GROUPS" ]]; then
+            pnpm coverage:node -- --groups "$SELECTED_GROUPS"
+          else
+            pnpm coverage:node
+          fi
 
-      - name: Upload Node coverage
-        if: always()
+      - name: Upload coverage summaries
+        if: always() && steps.scope.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: node-coverage-${{ github.sha }}
-          path: coverage
+          name: ${{ steps.scope.outputs.artifact }}
+          path: |
+            coverage/summary.json
+            coverage/summary.md
+            coverage/groups/**/summary.json
+            coverage/groups/**/summary.md
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Upload LCOV detail
+        if: always() && steps.scope.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.scope.outputs.lcov_artifact }}
+          path: |
+            coverage/lcov.info
+            coverage/groups/**/lcov.info
+          if-no-files-found: warn
+          retention-days: 30

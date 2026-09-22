@@ -38,6 +38,7 @@ below `coverage/`:
 lcov.info       # machine-readable LCOV, excluding test and temporary source files
 summary.json    # line, branch, and function totals
 summary.md      # human-readable totals
+groups/         # per-workspace LCOV and summaries
 ```
 
 The report intentionally covers only Node tests that can run through the Node
@@ -50,6 +51,13 @@ groups active by default. This preserves package-relative fixture and
 environment discovery while avoiding unrelated integration fixtures sharing
 ports or temporary resources. Set `COVERAGE_TEST_CONCURRENCY` to a positive
 integer only when a dedicated runner needs a different group limit.
+
+Pass `--groups` through pnpm for a focused local rerun, for example
+`pnpm coverage:node -- --groups packages/schema,services/api`. GitHub selects
+affected groups and their transitive Node-test dependents for pull requests and
+pushes to `main`; the daily/manual run remains the authoritative complete
+baseline. PR percentage changes are informational, but a failing selected test
+still fails the check.
 
 ## Agent-loop smoke tests
 
@@ -209,11 +217,11 @@ user-perspective E2E. Record separately executed API/CLI/stack journeys in the
 E2E conclusion with their actual commands; these are not automatically
 discovered by `pnpm ci:e2e`. `ci:st` remains the hermetic adapter smoke layer.
 
-The dedicated GitHub `Node coverage` workflow publishes an SHA-qualified
-coverage artifact from the default branch every Monday at 03:30 Asia/Shanghai
-and on manual dispatch.
-It is a report generated from the existing Node test files, not a pull-request
-gate, a new UT tier, or a replacement for the UT/ST/E2E layers.
+The dedicated GitHub `Node coverage` workflow publishes affected-group
+summaries for pull requests and pushes to `main`, plus an authoritative
+SHA-qualified complete baseline every day at 03:30 Asia/Shanghai and on manual
+dispatch. It is generated from the existing Node test files, not a new UT tier
+or a replacement for the UT/ST/E2E layers.
 
 Each writes `run.log` and a machine-readable summary below `CI_RESULTS_DIR`,
 and gives the run a scratch data directory below `CI_RUNTIME_DIR`. Both default

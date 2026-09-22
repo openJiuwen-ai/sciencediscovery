@@ -24,6 +24,14 @@ const partsDirectory = join(coverageDirectory, ".parts");
 const rawLcov = join(coverageDirectory, ".node.lcov");
 const groupConcurrency = Number(process.env.COVERAGE_TEST_CONCURRENCY?.trim() || "4");
 const repositoryRoots = [".ci", "apps", "config", "packages", "scripts", "services"];
+const groupsOptionIndex = process.argv.indexOf("--groups");
+const requestedGroupNames = groupsOptionIndex === -1
+  ? []
+  : (process.argv[groupsOptionIndex + 1] || "").split(",").map((name) => name.trim()).filter(Boolean);
+const coverageMode = process.env.COVERAGE_MODE?.trim() || (requestedGroupNames.length > 0 ? "incremental" : "full");
+const generatedAt = new Date().toISOString();
+const sourceSha = process.env.GITHUB_SHA?.trim() || process.env.COVERAGE_SOURCE_SHA?.trim() || null;
+const baseSha = process.env.COVERAGE_BASE_SHA?.trim() || null;
 
 if (!Number.isInteger(groupConcurrency) || groupConcurrency < 1) {
   throw new Error("COVERAGE_TEST_CONCURRENCY must be a positive integer");
@@ -65,7 +73,8 @@ function portable(path) {
 }
 
 function safeName(path) {
-  return portable(path).replaceAll("/", "-").replace(/[^a-zA-Z0-9._-]/g, "-");
+  const name = portable(path).replaceAll("/", "-").replace(/[^a-zA-Z0-9._-]/g, "-");
+  return name.replace(/^\.+/, "") || "group";
 }
 
 async function testGroups() {
@@ -165,11 +174,42 @@ async function normalizedRecords(result) {
   });
 }
 
+async function writeGroupReport(result) {
+  const records = await normalizedRecords(result);
+  if (records.length === 0) return undefined;
+  const directory = join(coverageDirectory, "groups", safeName(result.group.name));
+  const input = join(directory, ".node.lcov");
+  await mkdir(directory, { recursive: true });
+  await writeFile(input, records.join(""));
+  const summary = await writeCoverageSummary({
+    input,
+    jsonOutput: join(directory, "summary.json"),
+    lcovOutput: join(directory, "lcov.info"),
+    markdownOutput: join(directory, "summary.md"),
+    metadata: {
+      base_sha: baseSha,
+      generated_at: generatedAt,
+      group: result.group.name,
+      mode: coverageMode,
+      source_sha: sourceSha,
+    },
+  });
+  return { files: summary.files, name: result.group.name, totals: summary.totals };
+}
+
 await mkdir(coverageDirectory, { recursive: true });
+await rm(join(coverageDirectory, "groups"), { recursive: true, force: true });
 await rm(partsDirectory, { recursive: true, force: true });
 await mkdir(partsDirectory, { recursive: true });
 
-const groups = await testGroups();
+const availableGroups = await testGroups();
+const availableNames = new Set(availableGroups.map((group) => group.name));
+const unknownGroups = requestedGroupNames.filter((name) => !availableNames.has(name));
+if (unknownGroups.length > 0) throw new Error(`Unknown coverage groups: ${unknownGroups.join(", ")}`);
+const selectedNames = new Set(requestedGroupNames);
+const groups = requestedGroupNames.length > 0
+  ? availableGroups.filter((group) => selectedNames.has(group.name))
+  : availableGroups;
 if (groups.length === 0) throw new Error("No built Node test files were found; run pnpm build before collecting coverage");
 
 const testFileCount = groups.reduce((total, group) => total + group.files.length, 0);
@@ -178,8 +218,9 @@ const results = await runBounded(groups);
 const failed = results.filter((result) => result.code !== 0);
 for (const result of failed) console.error(`[coverage] ${result.group.name} failed with exit code ${result.code}`);
 
+const groupReports = (await Promise.all(results.map(writeGroupReport))).filter(Boolean);
 const records = (await Promise.all(results.map(normalizedRecords))).flat();
-if (records.length === 0) throw new Error("Node did not produce any in-scope LCOV records");
+if (records.length === 0 || groupReports.length === 0) throw new Error("Node did not produce any in-scope LCOV records");
 await writeFile(rawLcov, records.join(""));
 
 try {
@@ -188,6 +229,15 @@ try {
     jsonOutput: join(coverageDirectory, "summary.json"),
     lcovOutput: join(coverageDirectory, "lcov.info"),
     markdownOutput: join(coverageDirectory, "summary.md"),
+    metadata: {
+      authoritative: coverageMode === "full",
+      base_sha: baseSha,
+      generated_at: generatedAt,
+      groups: groupReports,
+      mode: coverageMode,
+      selected_groups: groups.map((group) => group.name),
+      source_sha: sourceSha,
+    },
   });
   console.log(`Coverage reports written to ${coverageDirectory}`);
 } catch (error) {
@@ -196,4 +246,5 @@ try {
   throw error;
 }
 
+await rm(partsDirectory, { recursive: true, force: true });
 process.exitCode = failed.length === 0 ? 0 : 1;

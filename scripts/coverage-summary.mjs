@@ -84,13 +84,15 @@ export function markdownSummary(summary) {
   ].join("\n");
 }
 
-export async function writeCoverageSummary({ input, lcovOutput, markdownOutput, jsonOutput }) {
+export async function writeCoverageSummary({ input, lcovOutput, markdownOutput, jsonOutput, metadata = {} }) {
   const records = parseLcov(await readFile(input, "utf8"));
   const summary = summarizeCoverage(records);
   await Promise.all([
     writeFile(lcovOutput, summary.records.map((record) => record.text).join("")),
     writeFile(markdownOutput, markdownSummary(summary)),
     writeFile(jsonOutput, `${JSON.stringify({
+      schema_version: 1,
+      ...metadata,
       files: summary.files,
       scope: "Built Node.js workspace tests and repository CI-script tests; excludes browser/TSX, Python, and Playwright suites.",
       totals: summary.totals,
