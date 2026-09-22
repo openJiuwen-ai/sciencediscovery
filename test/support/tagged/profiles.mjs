@@ -24,13 +24,27 @@
  * not have — a live-model journey, a `judge:llm` case — as soon as there are
  * cases to put in them.
  */
+const PR = [
+  { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
+];
+
+/**
+ * Daily is PR plus the rows PR deliberately leaves out — a live-model journey,
+ * a `judge:llm` case. It is PR exactly until there are cases to put in them:
+ * no test in this repository declares `judge:llm` yet.
+ */
+const DAILY = [...PR];
+
 const policies = {
-  pr: [
-    { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
-  ],
-  daily: [
-    { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
-  ],
+  pr: PR,
+  daily: DAILY,
+  // A version tag is held to the nightly standard, not the merge standard, so
+  // release is defined as daily rather than copied from it: strengthening
+  // daily strengthens a release, and the two cannot drift apart by being
+  // edited separately. When a release needs something a nightly does not —
+  // the SEA boot smoke against the packaged artifact is the obvious first —
+  // this becomes its own list and the comment above it says what differs.
+  release: DAILY,
 };
 
 /** One rule: a group with several values is OR, different groups are AND. */
@@ -47,8 +61,12 @@ export function policySelector(rules) {
   return rules.length === 1 ? ruleSelector(rules[0]) : rules.map(r => `(${ruleSelector(r)})`).join(' or ');
 }
 
-export const profiles = Object.freeze(Object.fromEntries(Object.entries(policies).map(([name, rules]) => [name, Object.freeze({
+const entries = Object.entries(policies);
+export const profiles = Object.freeze(Object.fromEntries(entries.map(([name, rules]) => [name, Object.freeze({
   name,
+  // Two profiles sharing one rule list are the same policy by construction, not
+  // by somebody keeping two copies in step. `test:policy` says which.
+  definedAs: entries.find(([, other]) => other === rules)[0],
   rules: Object.freeze(rules.map(Object.freeze)),
   selector: policySelector(rules),
   // Every rule in a profile names the same execution target today; a profile

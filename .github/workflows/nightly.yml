@@ -66,6 +66,9 @@ jobs:
     needs: stamp
     uses: ./.github/workflows/ci.yml
     with:
+      # The nightly standard, not the merge one. `daily` is `pr` today and grows
+      # the live-model and judge rows `pr` deliberately leaves out.
+      profile: daily
       release-version: ${{ needs.stamp.outputs.version }}
 
   # The nightly build is only useful if a failure is visible without opening

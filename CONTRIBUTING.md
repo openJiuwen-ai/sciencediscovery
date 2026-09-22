@@ -347,9 +347,17 @@ pr:
   run it:   pnpm test:run --profile pr
 ```
 
-`--profile pr|daily` picks one and `pr` is the default. `daily` is identical to
-`pr` today; it exists so the live-model and `judge:llm` rows have somewhere to
-land, and `nightly.yml` still calls the same gate until they do.
+`--profile pr|daily|release` picks one and `pr` is the default. The three
+pipelines each name theirs: a pull request takes `pr`, `nightly.yml` takes
+`daily`, and `release.yml` takes `release`, which is *defined as* `daily` — a
+version tag is held to the nightly standard, not the merge one. All three
+select the same set today; they diverge the moment a live-model or `judge:llm`
+row lands, at which point the nightly and the tag need that row's credentials
+or their plan fails its preflight.
+
+CI names it as an argument (`pnpm ci:ut -- --profile release`) rather than an
+environment variable, so the same commit and the same command always mean the
+same plan and a tagged run's failure reproduces by copying the command.
 
 `pnpm test:run` / `pnpm test:list` take one `--<group> <value>` per tag
 dimension (`--category`, `--os`, `--arch`, `--npu`, `--model`, `--judge`,

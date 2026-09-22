@@ -59,7 +59,7 @@ function selectorFrom(query) {
 /** Print each CI policy the way it would be asked for on the command line. */
 function showPolicies() {
   for (const profile of Object.values(profiles)) {
-    console.log(`${profile.name}:`);
+    console.log(profile.definedAs === profile.name ? `${profile.name}:` : `${profile.name}: (defined as ${profile.definedAs})`);
     for (const rule of profile.rules) {
       const flags=Object.entries(rule).flatMap(([g,v])=>[v].flat().map(x=>`--${g} ${x}`)).join(' ');
       console.log(`  pnpm test:list ${flags}`);
@@ -74,6 +74,9 @@ export async function main(args=process.argv.slice(2)) {
   const action=args.shift()??'run';let slice,output,profileName='pr';const query={};
   while(args.length){
     const flag=args.shift();
+    // pnpm versions differ on whether the conventional separator is stripped,
+    // so `pnpm ci:st -- --profile release` can arrive with it still attached.
+    if(flag==='--')continue;
     if(flag==='--slice')slice=args.shift();
     else if(flag==='--profile')profileName=args.shift();
     else if(flag==='--output')output=args.shift();

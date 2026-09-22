@@ -64,6 +64,17 @@ on:
           output pass a real version.
         type: string
         default: ""
+      profile:
+        description: >-
+          Which CI policy the three test jobs select, from
+          `test/support/tagged/profiles.mjs`. `pr` is the merge gate. A
+          scheduled or tagged run passes `daily` or `release`, which is held to
+          the nightly standard rather than the merge one — today they select
+          the same set, and they diverge the moment a live-model or `judge:llm`
+          row lands, at which point the caller has to supply that row's
+          credentials or the plan fails its preflight.
+        type: string
+        default: pr
 
 # Keyed on the calling workflow as well as the ref: a nightly run and a push
 # run land on refs/heads/main at the same time, and without the workflow name
@@ -117,7 +128,7 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:ut
+        run: pnpm ci:ut -- --profile ${{ inputs.profile || 'pr' }}
 
       - name: Report the shared plan
         if: always()
@@ -290,7 +301,7 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:st
+        run: pnpm ci:st -- --profile ${{ inputs.profile || 'pr' }}
 
       - name: Report the shared plan
         if: always()
@@ -355,7 +366,7 @@ jobs:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-e2e
           E2E_COMMIT_SHA: ${{ github.sha }}
-        run: pnpm ci:e2e
+        run: pnpm ci:e2e -- --profile ${{ inputs.profile || 'pr' }}
 
       # Playwright exits 0 on skips and produces no results.json at all when
       # the stack never came up, so neither its exit code nor its report can be

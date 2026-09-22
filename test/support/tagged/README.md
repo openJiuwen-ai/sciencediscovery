@@ -223,9 +223,18 @@ pr:
   run it:   pnpm test:run --profile pr
 ```
 
-`--profile pr|daily` picks one; `pr` is the default, and `daily` is identical
-to it until there are live-model and `judge:llm` cases to put in the rows `pr`
-does not have.
+`--profile pr|daily|release` picks one and `pr` is the default. `release` is
+*defined as* `daily` rather than copied from it, so strengthening the nightly
+policy strengthens a release and the two cannot drift apart by being edited
+separately; `test:policy` prints `defined as` when two names share a policy.
+Both are identical to `pr` until there are live-model and `judge:llm` cases to
+put in the rows `pr` does not have — and from the moment there are, a nightly
+or a tag needs those rows' credentials or the plan fails its preflight.
+
+CI passes the profile explicitly: `pnpm ci:ut -- --profile release`. It is an
+argument and not an environment variable on purpose — the same commit and the
+same command have to mean the same plan, so reproducing a tagged run's failure
+is a matter of copying the command out of the log.
 
 ## Ad-hoc queries
 

@@ -44,11 +44,15 @@ One workflow defines the gate. `nightly.yml` and `release.yml` are not a second
 and third definition: both call `ci.yml` through `workflow_call`, so what they
 run is the row below, and the reason they exist is in their own file headers.
 
-| Pipeline | Gate | Trigger | Jobs |
-| --- | --- | --- | --- |
-| `.github/workflows/ci.yml` | yes | push to `main`, pull request, or `workflow_dispatch` | `ci:ut`, `ci:st`, mocked `ci:e2e`, x86_64 + aarch64 release binaries (smoke-gated), the Docker image |
-| `.github/workflows/nightly.yml` | — | 18:00 UTC daily, or manual | calls `ci.yml` with a `nightly-<date>-<sha>` version |
-| `.github/workflows/release.yml` | — | push of a version tag | calls `ci.yml` with the tag's version, then publishes if it passes |
+| Pipeline | Gate | Trigger | Profile | Jobs |
+| --- | --- | --- | --- | --- |
+| `.github/workflows/ci.yml` | yes | push to `main`, pull request, or `workflow_dispatch` | `pr` | `ci:ut`, `ci:st`, mocked `ci:e2e`, x86_64 + aarch64 release binaries (smoke-gated), the Docker image |
+| `.github/workflows/nightly.yml` | — | 18:00 UTC daily, or manual | `daily` | calls `ci.yml` with a `nightly-<date>-<sha>` version |
+| `.github/workflows/release.yml` | — | push of a version tag | `release` | calls `ci.yml` with the tag's version, then publishes if it passes |
+
+The binary and Docker jobs are distribution gates and sit outside the plan: the
+four-entry smoke that proves a built binary boots is a job's exit code, not a
+planned identity, so `planned == executed == passed` says nothing about it.
 
 ## One plan, three layers
 
@@ -57,7 +61,11 @@ run is the row below, and the reason they exist is in their own file headers.
 `test/support/tagged/profiles.mjs`, narrowed to that layer's `category`. That
 profile is stated as tag dimensions rather than as a selector string, and
 `pnpm test:policy` prints it — read that before theorising about what a job
-covers. `daily` exists beside it and is identical for now. The
+covers. Each pipeline names its own: a pull request takes `pr`, `nightly.yml`
+takes `daily`, and `release.yml` takes `release`, which is defined as `daily`
+so a version tag is held to the nightly standard. The job passes it as an
+argument, so the command in the log is the command that reproduces the run.
+All three select the same set today. The
 three groups partition the plan, so the layers together run exactly
 `pnpm test:shared`, the command a developer runs locally.
 

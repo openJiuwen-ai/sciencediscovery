@@ -75,6 +75,9 @@ jobs:
     needs: version
     uses: ./.github/workflows/ci.yml
     with:
+      # A version tag is held to the nightly standard: `release` is defined as
+      # `daily`, so strengthening the nightly policy strengthens a release.
+      profile: release
       release-version: ${{ needs.version.outputs.version }}
 
   publish:

@@ -21,9 +21,14 @@ import { isAbsolute, join, resolve } from "node:path";
 import { layers } from "./test-catalog.mjs";
 
 const layer = process.argv[2];
+// Anything after the layer name is forwarded to the shared runner — `--profile`
+// is how a scheduled or tagged pipeline asks for a policy other than `pr`.
+// Only to the shared runner: the opt-in live layers' install and build steps
+// would choke on a flag meant for the planner.
+const forwarded = process.argv.slice(3);
 
 if (!(layer in layers)) {
-  console.error(`Usage: node .ci/run-layer.mjs ${Object.keys(layers).sort().join("|")}`);
+  console.error(`Usage: node .ci/run-layer.mjs ${Object.keys(layers).sort().join("|")} [--profile <name>]`);
   process.exit(2);
 }
 
@@ -112,7 +117,8 @@ try {
   runtimeRoot = await mkdtemp(join(configuredRuntimeRoot, `${layer}-`));
   await stat(join(repositoryRoot, "package.json"));
   for (const [command, args] of layers[layer]) {
-    const result = await run(command, args);
+    const plans = command === "node" && args[0] === "test/support/tagged/shared.mjs";
+    const result = await run(command, plans ? [...args, ...forwarded] : args);
     exitCode = result.exitCode;
     if (layer === "st-npu" && exitCode === 0 && !validNpuSmoke(result.stdout)) {
       exitCode = 1;
