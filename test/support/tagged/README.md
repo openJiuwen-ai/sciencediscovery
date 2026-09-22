@@ -236,6 +236,14 @@ argument and not an environment variable on purpose — the same commit and the
 same command have to mean the same plan, so reproducing a tagged run's failure
 is a matter of copying the command out of the log.
 
+Coverage answers to the same policy. [coverage.mjs](coverage.mjs) cuts a frozen
+plan into the directories its identities live under, and `pnpm coverage:node`
+and `scripts/run-python-coverage.mjs` run those identities through the same
+workers the slices use, taking `--profile` the same way. So the coverage job
+chooses *which directories* to measure and never which cases: a case the merge
+gate leaves out is missing from a coverage run for one reason, the selector,
+and reading it off the machine is not an option the code has.
+
 ## Ad-hoc queries
 
 To ask for something a profile excludes on purpose, query the tag vocabulary

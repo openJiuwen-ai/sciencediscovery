@@ -220,12 +220,13 @@ jobs:
           COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           COVERAGE_MODE: ${{ steps.scope.outputs.node_mode }}
           COVERAGE_SOURCE_SHA: ${{ github.sha }}
+          PROFILE: ${{ inputs.profile || 'pr' }}
           SELECTED_GROUPS: ${{ steps.scope.outputs.node_groups }}
         run: |
           if [[ -n "$SELECTED_GROUPS" ]]; then
-            pnpm coverage:node -- --groups "$SELECTED_GROUPS"
+            pnpm coverage:node -- --profile "$PROFILE" --groups "$SELECTED_GROUPS"
           else
-            pnpm coverage:node
+            pnpm coverage:node -- --profile "$PROFILE"
           fi
 
       - name: Generate Python coverage
@@ -235,12 +236,13 @@ jobs:
           COVERAGE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           COVERAGE_MODE: ${{ steps.scope.outputs.python_mode }}
           COVERAGE_SOURCE_SHA: ${{ github.sha }}
+          PROFILE: ${{ inputs.profile || 'pr' }}
           SELECTED_GROUPS: ${{ steps.scope.outputs.python_groups }}
         run: |
           if [[ -n "$SELECTED_GROUPS" ]]; then
-            node scripts/run-python-coverage.mjs --groups "$SELECTED_GROUPS"
+            node scripts/run-python-coverage.mjs --profile "$PROFILE" --groups "$SELECTED_GROUPS"
           else
-            node scripts/run-python-coverage.mjs
+            node scripts/run-python-coverage.mjs --profile "$PROFILE"
           fi
 
       - name: Summarize coverage

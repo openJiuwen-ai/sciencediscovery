@@ -42,6 +42,89 @@ export function parseLcov(source) {
   }).filter(Boolean);
 }
 
+/**
+ * One file is measured by many runs — the tests that cover it are isolated from
+ * each other, so each reports the part it exercised. Summing those records as
+ * they stand would count the same lines once per run. Merge them the way
+ * `lcov --add-tracefile` does instead: a line's hits add up, a line is covered
+ * if any run covered it, and the denominators are the distinct lines,
+ * functions and branches rather than their repetitions.
+ */
+function readRecord(text) {
+  const record = { file: "", functionLines: new Map(), functionHits: new Map(), lines: new Map(), branches: new Map() };
+  for (const line of text.split("\n")) {
+    if (line.startsWith("SF:")) record.file = line.slice(3);
+    else if (line.startsWith("FN:")) {
+      const [at, ...name] = line.slice(3).split(",");
+      record.functionLines.set(name.join(","), at);
+    } else if (line.startsWith("FNDA:")) {
+      const [hits, ...name] = line.slice(5).split(",");
+      const key = name.join(",");
+      record.functionHits.set(key, (record.functionHits.get(key) ?? 0) + Number(hits));
+    } else if (line.startsWith("DA:")) {
+      const [at, hits] = line.slice(3).split(",");
+      record.lines.set(at, (record.lines.get(at) ?? 0) + Number(hits));
+    } else if (line.startsWith("BRDA:")) {
+      const [at, block, branch, taken] = line.slice(5).split(",");
+      const key = `${at},${block},${branch}`;
+      const previous = record.branches.get(key);
+      // `-` means the branch was never reached in that run, which is not the
+      // same as reached zero times; a run that did reach it wins.
+      record.branches.set(key, taken === "-" ? previous ?? "-" : String(Number(previous === "-" || previous === undefined ? 0 : previous) + Number(taken)));
+    }
+  }
+  return record;
+}
+
+function combineRecords(left, right) {
+  const merged = readRecord(`SF:${left.file}`);
+  merged.functionLines = new Map([...left.functionLines, ...right.functionLines]);
+  for (const source of [left, right]) {
+    for (const [name, hits] of source.functionHits) merged.functionHits.set(name, (merged.functionHits.get(name) ?? 0) + hits);
+    for (const [at, hits] of source.lines) merged.lines.set(at, (merged.lines.get(at) ?? 0) + hits);
+    for (const [key, taken] of source.branches) {
+      const previous = merged.branches.get(key);
+      merged.branches.set(key, taken === "-" ? previous ?? "-"
+        : String(Number(previous === "-" || previous === undefined ? 0 : previous) + Number(taken)));
+    }
+  }
+  return merged;
+}
+
+function writeRecord(record) {
+  const numeric = (value) => value !== "-" && Number(value) > 0;
+  const body = [
+    `SF:${record.file}`,
+    ...[...record.functionLines].map(([name, at]) => `FN:${at},${name}`),
+    ...[...record.functionHits].map(([name, hits]) => `FNDA:${hits},${name}`),
+    `FNF:${record.functionLines.size}`,
+    `FNH:${[...record.functionHits.values()].filter((hits) => hits > 0).length}`,
+    ...[...record.branches].map(([key, taken]) => `BRDA:${key},${taken}`),
+    `BRF:${record.branches.size}`,
+    `BRH:${[...record.branches.values()].filter(numeric).length}`,
+    ...[...record.lines].map(([at, hits]) => `DA:${at},${hits}`),
+    `LF:${record.lines.size}`,
+    `LH:${[...record.lines.values()].filter((hits) => hits > 0).length}`,
+  ];
+  const text = `${body.join("\n")}\nend_of_record\n`;
+  return parseLcov(text)[0];
+}
+
+export function mergeLcovRecords(records) {
+  const byFile = new Map();
+  for (const record of records) byFile.set(record.file, [...(byFile.get(record.file) ?? []), record]);
+  return [...byFile.values()].map((group) => {
+    if (group.length === 1) return group[0];
+    // Merging is arithmetic over per-line detail. A record that carries only
+    // its totals cannot be added to another, so the most-covered one stands
+    // rather than a rebuilt record that would read as zero.
+    if (!group.every((record) => /^DA:/m.test(record.text))) {
+      return group.reduce((best, record) => (record.metrics.lines.covered > best.metrics.lines.covered ? record : best));
+    }
+    return writeRecord(group.map((record) => readRecord(record.text)).reduce(combineRecords));
+  });
+}
+
 export function isTestSource(file) {
   const normalized = file.replaceAll("\\", "/");
   return /(^|\/)(?:test|tests|__tests__|\.tmp)\//.test(normalized)
@@ -53,7 +136,7 @@ function percentage(covered, total) {
 }
 
 export function summarizeCoverage(records) {
-  const measured = records.filter((record) => !isTestSource(record.file));
+  const measured = mergeLcovRecords(records).filter((record) => !isTestSource(record.file));
   const totals = Object.fromEntries(Object.keys(metricKeys).map((name) => {
     const covered = measured.reduce((sum, record) => sum + record.metrics[name].covered, 0);
     const total = measured.reduce((sum, record) => sum + record.metrics[name].total, 0);

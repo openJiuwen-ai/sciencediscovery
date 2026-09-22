@@ -16,6 +16,8 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { planSources } from "../test/support/tagged/coverage.mjs";
+
 export const pythonCoverageGroups = [
   "services/evolve",
   "services/gateway",
@@ -33,6 +35,7 @@ const globalCoverageFiles = new Set([
   "scripts/run-python-coverage.mjs",
   "scripts/select-python-coverage-groups.mjs",
   "scripts/select-python-coverage-groups.test.mjs",
+  ...planSources,
 ]);
 
 function portable(path) {

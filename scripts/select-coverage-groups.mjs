@@ -17,6 +17,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { nodeGroups, planSources } from "../test/support/tagged/coverage.mjs";
+
 const root = process.cwd();
 const globalCoverageFiles = new Set([
   ".github/workflows/ci.yml",
@@ -30,6 +32,7 @@ const globalCoverageFiles = new Set([
   "scripts/run-node-coverage.mjs",
   "scripts/select-coverage-groups.mjs",
   "scripts/select-coverage-groups.test.mjs",
+  ...planSources,
 ]);
 
 function portable(path) {
@@ -96,7 +99,12 @@ async function workspaceDirectories() {
 }
 
 async function workspaceGraph() {
-  const allGroups = [".ci", "scripts"];
+  // A directory is a coverage group when the shared plan's source patterns
+  // reach a test in it. Reading the group list from those patterns is what
+  // keeps this in step with what `pnpm coverage:node` can actually measure; a
+  // regex over each package's `test` script used to stand in for it, and went
+  // silently empty the moment those scripts changed shape.
+  const allGroups = nodeGroups(root).map((group) => group.name);
   const packageByRoot = new Map();
   const dependencies = new Map();
   for (const directory of await workspaceDirectories()) {
@@ -109,8 +117,6 @@ async function workspaceGraph() {
     }
     const workspace = portable(relative(root, directory));
     if (doc.name) packageByRoot.set(workspace, doc.name);
-    const test = doc.scripts?.test || "";
-    if (/\bnode\s+--test\b/.test(test)) allGroups.push(workspace);
     dependencies.set(doc.name, new Set(Object.keys({
       ...doc.dependencies,
       ...doc.devDependencies,

@@ -42,6 +42,18 @@ export function validateTarget(target) {
 }
 export function instanceKey(id, target) { return `${id}@${target.os}/${target.arch}`; }
 
+/**
+ * The same plan narrowed to a subset of its own entries: same revision, same
+ * selector, same targets, a digest of its own. Everything that hands part of a
+ * plan to a worker goes through here, so a subset can never be a plan somebody
+ * rebuilt with different inputs.
+ */
+export function subplan(plan, entries) {
+  const { digest: _replaced, ...data } = plan;
+  const value = { ...data, entries };
+  return freeze({ ...value, digest: digest(value) });
+}
+
 /** Pure: NEVER reads process.env, the host OS, credentials, devices or services. */
 export function createPlan(catalog, { revision, selector = '', targets } = {}) {
   if (typeof revision !== 'string' || !revision) throw new Error('A revision is required');

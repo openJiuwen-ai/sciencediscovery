@@ -87,3 +87,42 @@ test("writes schema-versioned group metadata beside totals", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+// Every test file is measured in a process of its own, the way the shared
+// runner executes them, so one source file arrives as many partial records.
+const partial = (covered) => `TN:
+SF:packages/example/src/index.ts
+FN:3,alpha
+FN:9,beta
+FNDA:${covered === "alpha" ? 1 : 0},alpha
+FNDA:${covered === "beta" ? 2 : 0},beta
+FNF:2
+FNH:1
+BRDA:4,0,0,${covered === "alpha" ? 1 : "-"}
+BRDA:4,0,1,${covered === "beta" ? 3 : "-"}
+BRF:2
+BRH:1
+DA:3,${covered === "alpha" ? 1 : 0}
+DA:4,1
+DA:9,${covered === "beta" ? 2 : 0}
+LF:3
+LH:${covered === "alpha" ? 2 : 2}
+end_of_record
+`;
+
+test("one source measured by several isolated runs is merged, not counted twice", () => {
+  const summary = summarizeCoverage(parseLcov(partial("alpha") + partial("beta")));
+  assert.equal(summary.files, 1);
+  // Three distinct lines, all of them reached once the runs are put together.
+  assert.deepEqual(summary.totals.lines, { covered: 3, percentage: 100, total: 3 });
+  assert.deepEqual(summary.totals.functions, { covered: 2, percentage: 100, total: 2 });
+  assert.deepEqual(summary.totals.branches, { covered: 2, percentage: 100, total: 2 });
+  // Hits add up: line 4 was executed by both runs.
+  assert.match(summary.records[0].text, /^DA:4,2$/m);
+});
+
+test("a record carrying only totals is not merged into a zero", () => {
+  const summary = summarizeCoverage(parseLcov(lcov + lcov));
+  assert.equal(summary.files, 1);
+  assert.deepEqual(summary.totals.lines, { covered: 6, percentage: 75, total: 8 });
+});

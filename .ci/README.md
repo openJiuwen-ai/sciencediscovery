@@ -43,27 +43,47 @@ layer stopped before it produced a plan at all.
 
 ## Coverage reporting
 
-The `Coverage` job in `.github/workflows/ci.yml` reuses the repository's
-existing tests. Pull requests and default-branch pushes measure affected Node.js
-workspaces (including transitive dependents) and changed Python services. The
-existing Nightly workflow measures the complete maintained Node.js and Python
-scope; Release calls skip the job.
+The `Coverage` job in `.github/workflows/ci.yml` runs the same plan the test
+jobs run. A coverage group is a directory; what runs for it is the set of
+frozen-plan identities whose source lives under that directory, selected by the
+profile's selector and target matrix — `pr` unless the caller passes another
+one, exactly as `ci:ut` takes it. Incremental runs choose *which* directories to
+measure: pull requests and default-branch pushes take the affected Node.js
+workspaces (including transitive dependents) and the changed Python services.
+Nightly measures every group; Release calls skip the job.
 
-Node.js coverage uses the built-in V8 collector. Python coverage uses
-`coverage.py` with the existing gateway and paper `unittest` suites and the
-existing memory-graph and evolve `pytest` suites. Run them locally with:
+What that buys is one answer to "why did this case not run": because the plan
+did not select it. A `status:external` case — `services/memory-graph` has 77 of
+them, all needing a live Neo4j — is absent from a coverage run for the same
+reason it is absent from `pnpm ci:ut`, and it still fails loudly if something
+does select it. `model:real`, `npu:required` and another platform's cases are
+out for the same reason. No probe of the machine can add or remove one.
+
+Node.js coverage uses the built-in V8 collector, driving the harness's own
+worker one source file at a time — the isolation the slices give those files is
+part of how they run, not an optimisation — so its reports are over the
+TypeScript sources as written. Records for a file arrive from every run that
+touched it and are merged, so a line is counted once. Python coverage runs
+`coverage.py` in front of the same pytest adapter for all four service
+projects. Each group writes `tagged-summary.json` beside its report:
+planned, executed, passed, and the plan digest they came from. Run them locally
+with:
 
 ```bash
-pnpm coverage:node
-pnpm coverage:python
+pnpm coverage:node                              # every group
+pnpm coverage:node -- --groups packages/cas     # one directory
+node scripts/run-python-coverage.mjs --groups services/memory-graph
 ```
 
 CI uploads separate SHA-qualified Node.js and Python artifacts containing only
 aggregate and per-group `summary.json` files. Raw LCOV and `coverage.py` data
 remain local intermediates. Partial PR/main summaries identify their selected
 groups and are not complete repository baselines; coverage percentages are
-informational, while test failures still fail the job. Browser/TSX and
-Playwright tests are outside these percentages.
+informational, while test failures still fail the job. Generated output
+(`dist/`) and installed dependencies are not attributed to a group, so a test
+that loads a built module does not report the same code twice. Playwright
+journeys are outside these percentages: they drive a running stack rather than
+load it.
 
 The same job writes a human-readable `Coverage summary` to the GitHub Actions
 run summary. It reports Node.js and Python separately, including whether each

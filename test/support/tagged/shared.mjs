@@ -18,7 +18,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, globSync } 
 import { resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collect, execute } from './coordinator.mjs';
-import { createPlan, verifyResults, fileDigest, digest } from './plan.mjs';
+import { createPlan, verifyResults, fileDigest, subplan } from './plan.mjs';
 import { schema } from './tags.mjs';
 import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources } from './profiles.mjs';
 import { preflight } from './environment.mjs';
@@ -26,7 +26,6 @@ import { checks } from './checks.mjs';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
 const json=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n');
-const subplan=(plan,entries)=>{const {digest:old,...data}=plan;const value={...data,entries};return {...value,digest:digest(value)};};
 function run(command,args,env,log,cwd=root) {
   return new Promise((done,reject)=>{
     const child=spawn(command,args,{cwd,env,stdio:['ignore','pipe','pipe']});

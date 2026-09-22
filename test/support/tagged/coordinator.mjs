@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, realpathSync, statSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { resolve, relative, join, isAbsolute, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createPlan, validatePlan, verifyResults, digest, canonical } from './plan.mjs';
+import { validatePlan, verifyResults, digest, canonical, subplan } from './plan.mjs';
 import { preflight, hostPlatform, hostArch } from './environment.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -66,7 +66,15 @@ function invoke(command, args, { root, env, outputDir, name, timeoutMs = 120_000
 const childEnv = env => ({ ...env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1', PYTEST_ADDOPTS: '', PYTEST_PLUGINS: '',
   PYTHONPATH: [join(here, 'python'), env.PYTHONPATH].filter(Boolean).join(delimiter) });
 
-export function collect({ root, files, outputDir, python = 'python3', nodeImports = [], env = process.env }) {
+/**
+ * How to reach an interpreter, as a whole command rather than a path, because
+ * the thing that runs pytest is not always an interpreter: coverage collection
+ * puts `uv run … coverage run` in front of it. Everything after this prefix is
+ * `-m pytest …` either way, which is what `coverage run` expects too.
+ */
+const pytest = (command, args, options) => invoke(command[0], [...command.slice(1), '-m', 'pytest', ...args], options);
+
+export function collect({ root, files, outputDir, python = 'python3', pythonCommand = [python], nodeImports = [], env = process.env }) {
   mkdirSync(outputDir, { recursive: true });
   const catalog = [];
   const groups = { node: files.filter(f => !f.endsWith('.py')), python: files.filter(f => f.endsWith('.py')) };
@@ -83,7 +91,7 @@ export function collect({ root, files, outputDir, python = 'python3', nodeImport
   if (groups.python.length) {
     const output = join(outputDir, 'python-catalog.json');
     rmSync(output, { force: true });
-    const result = invoke(python, ['-m', 'pytest', '-p', 'science_tags', '--strict-markers', '--rootdir', root, '--collect-only', '-q',
+    const result = pytest(pythonCommand, ['-p', 'science_tags', '--strict-markers', '--rootdir', root, '--collect-only', '-q',
       '--science-root', root, '--science-catalog', output, ...groups.python],
     { root, env: childEnv(env), outputDir, name: 'python-collect' });
     if (result.status !== 0 || !existsSync(output)) throw new Error('PYTHON_COLLECTION_FAILED; inspect python-collect.log');
@@ -94,7 +102,32 @@ export function collect({ root, files, outputDir, python = 'python3', nodeImport
   return catalog.sort((a,b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
-export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', nodeImports = [], env = process.env, timeoutMs = 300_000 }) {
+/**
+ * Read a run's reporter events back onto the identities that were planned.
+ * Each planned test carries a token derived from its execution key, so a result
+ * belongs to an identity rather than to a name that two files could share.
+ * Anything that reports without a token ran outside the plan and is a problem,
+ * not a result.
+ */
+export function nodeResults({ reportPath, entries, label }) {
+  const results = [], errors = [];
+  const tokens = new Map(entries.map(e => [digest(e.key), e]));
+  if (existsSync(reportPath)) for (const line of readFileSync(reportPath, 'utf8').split('\n').filter(Boolean)) {
+    let event;
+    try { event = JSON.parse(line); } catch { errors.push(`MALFORMED_EVENT: ${label}`); continue; }
+    const token = event.name?.match(/\[science:([0-9a-f]{64})\]$/)?.[1];
+    if (token) {
+      const entry = tokens.get(token);
+      if (!entry) { errors.push(`UNEXPECTED_NODE_TEST: ${token}`); continue; }
+      results.push({ key: entry.key, outcome: event.skip ? 'SKIPPED' : event.todo ? 'TODO' : event.type === 'test:pass' ? 'PASS' : 'FAIL',
+        actualTarget: { os: hostPlatform(process.platform), arch: hostArch(process.arch) } });
+    } else if (event.type === 'test:fail') errors.push(`NODE_HOOK_OR_COLLECTION_FAILED: ${event.name}`);
+    else if (event.type === 'test:pass' && event.kind !== 'suite') errors.push(`UNPLANNED_NODE_TEST: ${event.name}`);
+  }
+  return { results, errors };
+}
+
+export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pythonCommand = [python], nodeImports = [], env = process.env, timeoutMs = 300_000 }) {
   validatePlan(plan);
   for (const entry of plan.entries) inside(root, entry.source);
   mkdirSync(outputDir, { recursive: true });
@@ -114,14 +147,12 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
     for (const entries of groups.values()) {
       const name = `worker-${++index}`;
       const files = [...new Set(entries.map(e => e.source))];
-      const { digest: _old, ...base } = plan;
-      const data = { ...base, entries };
-      const subplan = { ...data, digest: digest(data) };
+      const part = subplan(plan, entries);
       const request = join(outputDir, `${name}.json`);
       const resultPath = join(outputDir, `${name}-results.json`);
       rmSync(resultPath, { force: true });
       if (entries[0].runner === 'node') {
-        writeJSON(request, { root, files, plan: subplan, timeoutMs });
+        writeJSON(request, { root, files, plan: part, timeoutMs });
         const nativeReport = join(outputDir, `${name}-events.jsonl`);
         rmSync(nativeReport, { force: true });
         const completed = invoke(process.execPath, [...nodeImports.flatMap(p => ['--import', p]), '--test',
@@ -129,22 +160,11 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
           join(here, 'node-worker.mjs')],
         { root: cwd, env: { ...env, SCIENCE_TAG_RUN_REQUEST: request }, outputDir, name, timeoutMs });
         if (completed.status !== 0) errors.push(`NODE_WORKER_FAILED: ${name}`);
-        const tokens = new Map(entries.map(e => [digest(e.key), e]));
-        if (existsSync(nativeReport)) for (const line of readFileSync(nativeReport, 'utf8').split('\n').filter(Boolean)) {
-          let event;
-          try { event = JSON.parse(line); } catch { errors.push(`MALFORMED_EVENT: ${name}`); continue; }
-          const token = event.name?.match(/\[science:([0-9a-f]{64})\]$/)?.[1];
-          if (token) {
-            const entry = tokens.get(token);
-            if (!entry) { errors.push(`UNEXPECTED_NODE_TEST: ${token}`); continue; }
-            results.push({ key: entry.key, outcome: event.skip ? 'SKIPPED' : event.todo ? 'TODO' : event.type === 'test:pass' ? 'PASS' : 'FAIL',
-              actualTarget: { os: hostPlatform(process.platform), arch: hostArch(process.arch) } });
-          } else if (event.type === 'test:fail') errors.push(`NODE_HOOK_OR_COLLECTION_FAILED: ${event.name}`);
-          else if (event.type === 'test:pass' && event.kind !== 'suite') errors.push(`UNPLANNED_NODE_TEST: ${event.name}`);
-        }
+        const reported = nodeResults({ reportPath: nativeReport, entries, label: name });
+        results.push(...reported.results); errors.push(...reported.errors);
       } else {
-        writeJSON(request, subplan);
-        const completed = invoke(python, ['-m', 'pytest', '-p', 'science_tags', '--strict-markers', '--rootdir', root, '-q',
+        writeJSON(request, part);
+        const completed = pytest(pythonCommand, ['-p', 'science_tags', '--strict-markers', '--rootdir', root, '-q',
           '--science-root', root, '--science-plan', request, '--science-report', resultPath, ...files.map(f => resolve(root, f))],
         { root: cwd, env: childEnv(env), outputDir, name, timeoutMs });
         if (completed.status !== 0) errors.push(`PYTHON_WORKER_FAILED: ${name}`);
