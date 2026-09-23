@@ -1086,7 +1086,9 @@ async function executeAgentRun(
       );
     }
     launchedSubagentCalls += 1;
-    const releaseWait = mainExecution?.beginExternalWait();
+    // A notification continuation resumes an existing child without starting
+    // a main AgentRun. There is no parent deadline to pause while it queues.
+    const releaseWait = continuation ? undefined : mainExecution?.beginExternalWait();
     try { return await subagentPool.acquire(signal); }
     finally { releaseWait?.(); }
   };
