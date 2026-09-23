@@ -159,6 +159,8 @@ jobs:
         with:
           name: ut-coverage
           path: .ci-results/ut/tagged/coverage
+          # upload-artifact drops dot-files by default; every file here is data.
+          include-hidden-files: true
           if-no-files-found: warn
 
   coverage:
@@ -293,6 +295,8 @@ jobs:
         with:
           name: st-coverage
           path: .ci-results/st/tagged/coverage
+          # upload-artifact drops dot-files by default; every file here is data.
+          include-hidden-files: true
           if-no-files-found: warn
 
   e2e:

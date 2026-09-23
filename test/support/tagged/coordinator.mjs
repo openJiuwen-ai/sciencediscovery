@@ -165,8 +165,10 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
         const nativeReport = join(outputDir, `${name}-events.jsonl`);
         rmSync(nativeReport, { force: true });
         // A Node worker holds exactly one source (the grouping key above), so
-        // the coverage it records is that one test file's, named after it.
-        const lcov = coverageDir && join(coverageDir, `${files[0].replaceAll('/', '__')}.lcov`);
+        // the coverage it records is that one test file's, named after it —
+        // never with a leading dot: `.ci/…` would make a hidden file, which
+        // artifact uploads leave out without a word.
+        const lcov = coverageDir && join(coverageDir, `${files[0].replaceAll('/', '__').replace(/^\./, '_')}.lcov`);
         if (lcov) { mkdirSync(coverageDir, { recursive: true }); rmSync(lcov, { force: true }); }
         const completed = invoke(process.execPath, [...nodeImports.flatMap(p => ['--import', p]),
           // Source maps let records from built output a test reaches — another
