@@ -262,7 +262,10 @@ class OpenEvolveEngine:
             "repo_path": str(repo),
             "run": make_run(domain),
             "eval_concurrency": max(1, min(spec.workers, spec.expansions)),
-            "solved_threshold": 1.0,
+            # Never skip a rollout as solved, as in the PUCT engine: a shard is a measurement of one
+            # program, not a task to finish. Measured: the first candidate scored 1.0, every later
+            # rollout counted as solved and proposed nothing, and a run planned for 4 expansions made 1.
+            "solved_threshold": 2.0,
             "self_verify": False,
             "strategy": strategy,
             "usage": None,

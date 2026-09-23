@@ -224,7 +224,9 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         };
         fixture = { model: model!, project: created.project, session: created.firstSession };
 
-        await expect(page.getByRole("heading", { name: created.firstSession.title })).toBeVisible();
+        // The API stores its locale-neutral default as "Untitled session", while the
+        // zh-CN workbench deliberately localizes that title for display.
+        await expect(page.getByRole("heading", { name: "未命名会话" })).toBeVisible();
         // The composer trigger opens the connector-style popover; the model row
         // carries the manually registered model. Close the popover with Escape
         // (the popover has no explicit close button).

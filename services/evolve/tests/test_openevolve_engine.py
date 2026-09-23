@@ -342,3 +342,17 @@ def test_finish_warns_when_all_scores_identical():
     reporter.finish("succeeded")
     logs = [e for e in collector.events if e["type"] == "log" and e["level"] == "warn"]
     assert any("scored the same" in e["message"] for e in logs)
+
+
+def test_rollouts_are_never_skipped_as_solved():
+    """As in the PUCT engine: a rollout scoring past `solved_threshold` proposes nothing.
+
+    Measured live: the first candidate scored 1.0 and a run planned for 4 expansions made 1
+    ("stopped because rounds"), every later rollout counted as solved.
+    """
+    import inspect
+
+    from sciencediscovery_evolve.openevolve_engine import OpenEvolveEngine
+
+    source = inspect.getsource(OpenEvolveEngine._search)
+    assert '"solved_threshold": 2.0' in source

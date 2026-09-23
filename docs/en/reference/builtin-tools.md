@@ -77,7 +77,7 @@ Enabled sources expose `mcp__<source>__<tool>` with manifest descriptions and sc
 | Tool | Condition | Boundary |
 |---|---|---|
 | `artifact_download` | any MCP source enabled | Uses a prior `mcpInvocationId` and `candidateId`, optional `destinationPath`; waits for permission and terminal download state; never parses PDF |
-| `paper_extract_pdf` | paper extraction wired | Accepts a completed `artifactJobId` and performs bounded extraction |
+| `paper_extract_pdf` | paper extraction wired | Accepts a completed `artifactJobId`, or the `path` of a PDF already in the workspace (such as an upload), and performs bounded extraction |
 
 Download and extraction require different model turns because same-turn calls are independent and there is no `dependsOn` mechanism.
 

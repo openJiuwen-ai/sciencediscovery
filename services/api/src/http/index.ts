@@ -3671,7 +3671,7 @@ export async function startApiServer(config = loadServerConfig()): Promise<Serve
   const port = typeof address === "object" && address ? address.port : config.port;
   apiLog.info("service_started", { host: config.host, port });
   console.log(`ScienceDiscovery listening on http://${config.host}:${port}`);
-  for (const line of accessTokenBanner({ ...config, port })) console.log(line);
+  for (const line of accessTokenBanner({ ...config, port: config.publicPort ?? port })) console.log(line);
   if (config.host !== "127.0.0.1" && config.host !== "localhost" && config.host !== "::1") {
     console.warn("Warning: M0 authentication and Python execution are not safe for untrusted networks.");
   }

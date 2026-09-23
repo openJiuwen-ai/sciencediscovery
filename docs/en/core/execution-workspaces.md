@@ -1,6 +1,9 @@
 # Shell, environments and workspaces
 
-An execution names a Runner and an environment ID. The Runner supplies the sandbox; the environment supplies Python, R and other installed tools. An environment is not a machine, and a Workspace is not an environment.
+An execution names a Runner and an environment ID. The Runner supplies the sandbox; the environment
+supplies Python, R and other installed tools. An environment is not a machine, and a Workspace is not an
+environment. This page covers user-visible execution behavior. For Runner internals and sandbox design,
+see [Sandbox execution](../developer-docs/sandbox-execution.md).
 
 | Object | Identity and lifetime |
 |---|---|

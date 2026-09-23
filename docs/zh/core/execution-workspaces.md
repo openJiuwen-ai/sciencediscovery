@@ -1,6 +1,7 @@
 # Shell、环境与 Workspace
 
-一次执行选择 Runner 和环境 ID：Runner 提供沙箱，环境提供 Python、R 等工具。环境不是机器，Workspace 也不是环境。
+一次执行选择 Runner 和环境 ID：Runner 提供沙箱，环境提供 Python、R 等工具。环境不是机器，Workspace
+也不是环境。本文讲用户可见的执行行为；Runner 内部与沙箱设计见[沙箱执行](../developer-docs/sandbox-execution.md)。
 
 | 对象 | 身份与生命周期 |
 |---|---|

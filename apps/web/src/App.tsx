@@ -253,9 +253,11 @@ import { PermissionCards, PermissionGrantManager } from "./Permissions.js";
 import { translateActive, useLocale, type MessageKey } from "./i18n/index.js";
 import { formatRunFailure } from "./run-failure.js";
 import {
+  artifactOriginLabel,
   ComposerCommandChips,
   ComposerReferenceChips,
   ComposerReferenceMenu,
+  composerInsertionCaret,
   composerReferenceToken,
   composerSkillSuggestions,
   GLOBAL_SEARCH_DEBOUNCE_MS,
@@ -2356,7 +2358,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isInFlight: () => sessionCreationInFlight.current,
       onCreated: (created) => {
         if (activeProjectIdRef.current !== projectId) {
-          pushToast("success", t("app.sessionCreated"), created.title);
+          pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
@@ -2369,7 +2371,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           setMessage(initialMessage);
           setComposerReferences([]);
         }
-        pushToast("success", t("app.sessionCreated"), created.title);
+        pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
       },
       onError: setError,
       setInFlight: (value) => { sessionCreationInFlight.current = value; },
@@ -3803,9 +3805,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const cursor = composerTextarea.current?.selectionStart ?? message.length;
     const trigger = getComposerTrigger(message, cursor);
     if (!trigger) return;
+    // Typing goes on behind what was inserted, not at the start of the box.
+    const placeCaret = (position: number) => requestAnimationFrame(() => {
+      const textarea = composerTextarea.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(position, position);
+    });
     if (suggestion.command) {
       setMessage(insertComposerCommand(message, trigger, suggestion.command, cursor));
-      requestAnimationFrame(() => composerTextarea.current?.focus());
+      placeCaret(composerInsertionCaret(trigger, suggestion.command));
       return;
     }
     setMessage(insertComposerReference(message, trigger, suggestion.reference, cursor));
@@ -3813,7 +3822,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       reference.kind === suggestion.reference.kind && reference.id === suggestion.reference.id)
       ? current
       : [...current, suggestion.reference]);
-    requestAnimationFrame(() => composerTextarea.current?.focus());
+    placeCaret(composerInsertionCaret(trigger, composerReferenceToken(suggestion.reference)));
   }
 
   function removeComposerReference(reference: ComposerReference): void {
@@ -4007,8 +4016,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
     : t("app.workspace");
+  // A new session is stored as UNTITLED_SESSION_TITLE until it is named; shown in the UI's language.
+  const sessionTitle = (title: string) => title === UNTITLED_SESSION_TITLE ? t("app.untitledSession") : title;
   const activeSessionLabel = session
-    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, session.title)
+    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, sessionTitle(session.title))
     : t("app.startResearchSession");
   const mainProjectRenameTarget = activeProject
     && renameTarget?.kind === "project"
@@ -4035,7 +4046,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
     ? artifacts.map((artifact) => ({
-      detail: `${artifact.kind} · ${artifact.origin} · v${artifact.currentVersion}`,
+      detail: `${artifact.kind} · ${artifactOriginLabel(artifact.origin, t)} · v${artifact.currentVersion}`,
       reference: {
         createdInSessionTitle: artifact.createdInSessionTitle,
         id: artifact.id,
@@ -4271,12 +4282,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     && renameTarget.location === "sidebar"
                     ? renameTarget
                     : undefined;
-                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, item.title);
+                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, sessionTitle(item.title));
                   return <div className="nav-resource" key={item.id}>
                     {inlineTarget && !item.archivedAt ? <div className={item.id === activeSessionId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                       <span className="nav-icon"><SessionIcon size={15} /></span>
                       <InlineRenameInput
-                        ariaLabel={t("app.renameSessionAria", { name: item.title })}
+                        ariaLabel={t("app.renameSessionAria", { name: sessionTitle(item.title) })}
                         className="nav-inline-rename"
                         disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                         onChange={setRenameDraft}
@@ -4287,17 +4298,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
                       onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
-                      title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: item.title })}
+                      title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item.title) })}
                       type="button"
                     >
-                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : item.title}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
+                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : sessionTitle(item.title)}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
                     </button>}
                     <SessionOverflowMenu
                       archived={Boolean(item.archivedAt)}
                       busy={runningSessionIds.has(item.id) || lifecycleBusy}
                       label={label}
                       onArchive={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("archive", item.id); }}
-                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: item.title }); }}
+                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: sessionTitle(item.title) }); }}
                       onRename={() => { setOpenSessionMenuId(undefined); beginInlineRename(target, "sidebar"); }}
                       onRestore={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("restore", item.id); }}
                       onSettings={() => { setOpenSessionMenuId(undefined); void openScopedSettings({ id: item.id, kind: "session", label: item.title }); }}
@@ -4403,7 +4414,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 ) : null}
               </div>
               <div className="session-bar-meta">
-                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: session.title })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
+                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: sessionTitle(session.title) })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
                 {session ? <span className="session-runner-target" title={selectedRunnerIds.length
                   ? t("app.runnerSelectionTooltip", { hosts: selectedRunnerNames.join(", ") })
                   : t("app.runnerSelectionEmpty")}>
@@ -4433,7 +4444,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </ol>
               </div>
             ) : trajectorySession && session.id === trajectorySession.id ? (
-              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={session.title} port={client.trajectory} locale={locale} onClose={() => {
+              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={sessionTitle(session.title)} port={client.trajectory} locale={locale} onClose={() => {
                 setTrajectorySession(undefined);
                 // The inline view lives in the document flow, so on narrow stacked
                 // layouts the page may sit scrolled past the session bar; bring the

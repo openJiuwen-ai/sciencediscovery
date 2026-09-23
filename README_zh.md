@@ -8,7 +8,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-1f6feb?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/badge/Release-0.2.0-1f6feb?style=flat-square)](https://github.com/openJiuwen-ai/sciencediscovery/releases/tag/0.2.0)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-6e7781?style=flat-square)](#环境要求)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20binary%20%7C%20macOS%20source-6e7781?style=flat-square)](#环境要求)
 [![Docs](https://img.shields.io/badge/Docs-EN%20%7C%20ZH-6e7781?style=flat-square)](docs/README.md)
 
 [下载](#安装) · [快速开始](docs/zh/getting-started/quick-start.md) · [文档](docs/README.md) · [贡献指南](CONTRIBUTING.md) · [English](README.md)
@@ -44,16 +44,18 @@ chmod +x ScienceDiscovery-<version>-linux-<architecture>
 
 ## 配置模型
 
-ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏底部的**系统配置**，完成两处配置：
-
-1. **模型注册表** —— 选择预置服务商或手动填写**基础 URL**，填入 **API Key**，然后添加需要使用的模型。
-2. **全局默认值** —— 将上一步添加的模型设为**任务模型**。
+ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏底部的**系统设置**，再进入
+**模型注册表**。选择预置服务商或手动添加服务商，填写服务商信息和 API Key 后点击**保存并连接**。
+该操作会登记服务商的模型并测试第一个模型的连通性；如果这是系统中的第一个模型，它也会自动成为
+默认任务模型。已有模型时，请在模型注册表顶部的**全局默认任务模型**中选择。
 
 各字段的含义，以及可改用环境变量配置的项，参见[配置参考](docs/zh/reference/configuration.md)。
 
 ## 第一个任务
 
-新建 Project 与 Session，将 CSV 或 PDF 拖入工作区，并描述分析目标。首次执行代码前会出现权限卡片，批准后即可在时间线中查看工具调用与产物。完整步骤参见[快速开始](docs/zh/getting-started/quick-start.md)。
+新建 Project 与 Session，将 CSV 或 PDF 拖入工作区，并描述分析目标。首次执行代码前会出现权限卡片，
+批准后可在时间线查看工具调用与结果；任务登记为**产物**的生成文件可在工作区的**产物**区查看。
+完整步骤参见[快速开始](docs/zh/getting-started/quick-start.md)。
 
 ## 核心能力
 

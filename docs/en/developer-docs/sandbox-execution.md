@@ -155,6 +155,7 @@ Historical Session profiles are not injected. Select cwd and environment on ever
 
 ## Related documentation
 
+- [Shell, environments and workspaces](../core/execution-workspaces.md): user-visible execution behavior.
 - [Control plane](control-plane.md)
 - [Runtime architecture](architecture.md)
 - [Configuration reference](../reference/configuration.md)

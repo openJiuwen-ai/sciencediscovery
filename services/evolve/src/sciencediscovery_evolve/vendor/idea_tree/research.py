@@ -35,6 +35,16 @@ def text(value: Any, name: str, limit: int = 24000) -> str:
     return value.strip()
 
 
+def parse_json(raw: str) -> Any:
+    """The model's JSON, also when it is wrapped in one Markdown code fence as many models do."""
+    body = raw.strip() if isinstance(raw, str) else raw
+    if isinstance(body, str) and body.startswith('```'):
+        first, _, rest = body.partition('\n')
+        if rest.rstrip().endswith('```') and first.strip('`').strip().lower() in ('', 'json'):
+            body = rest.rstrip()[:-3].strip()
+    return json.loads(body)
+
+
 def validate_result(role: str, value: Any, assessor_roles: set[str]) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
@@ -159,7 +169,8 @@ class IdeaTreeEngine:
         return self.state.setdefault('template', snapshot('scientific-hypothesis-general/v1'))['assessors']
 
     def transport(self, system, payload, ceiling):
-        body = json.dumps(dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling, temperature=0.5)).encode()
+        # No temperature: some gateways accept only their own value (Kimi: "only 1 is allowed"). See completion.py.
+        body = json.dumps(dict(messages=[dict(role='system', content=system), dict(role='user', content=json.dumps(payload, ensure_ascii=False))], max_tokens=ceiling)).encode()
         request = urllib.request.Request(self.endpoint['url'], data=body, headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + self.endpoint['token']})
         for attempt in range(2):
             try:
@@ -174,13 +185,13 @@ class IdeaTreeEngine:
             except (urllib.error.URLError, TimeoutError):
                 raise
 
-    async def ask(self, role: str, payload: dict) -> dict:
+    async def ask(self, role: str, payload: dict, check=None) -> dict:
         activity = dict(role=role, nodeId=self.state.get('currentNodeId'),
                         round=self.state['round'] + (1 if role == 'ideate' else 0), status='running', startedAt=now(), finishedAt=None, error=None)
         self.state.setdefault('activities', []).append(activity)
         self.save()
         try:
-            result = await self._ask(role, payload)
+            result = await self._ask(role, payload, check)
             activity['status'] = 'completed'
             return result
         except (Interrupted, BudgetReached):
@@ -193,7 +204,8 @@ class IdeaTreeEngine:
             activity['finishedAt'] = now()
             self.save()
 
-    async def _ask(self, role: str, payload: dict) -> dict:
+    async def _ask(self, role: str, payload: dict, check=None) -> dict:
+        """The model's validated result. `check` adds rules that need the tree; breaking one gets the same one correction."""
         self.check_stop()
         shape = '{"candidates":[{"parentId":"selected id", "direction":"new direction when needed", "refinements":[], "hypothesis":"...", "basedOnCandidateIds":[], "addressesInsightIds":[], "targetedWeakness":"...", "expectedImprovement":"...", "newRisk":"...", "rationale":"...", "explorationType":"exploit or explore"}],"reason":"..."}' if role == 'ideate' else ('{"text":"...","score":1.0}' if role in {item['id'] for item in self.assessors()} else ('{"text":"...","strengths":[],"failureModes":[],"uncertainties":[],"evidenceGaps":[],"recommendedNextMoves":[],"constraintFlags":[],"confidence":0.0}' if role == 'aggregate' else '{"text":"..."}'))
         system = self.role_prompt(role) + '\nReturn JSON only, matching: ' + shape
@@ -227,7 +239,9 @@ class IdeaTreeEngine:
             if missing_usage:
                 raise RuntimeError('Model did not report token usage; cannot enforce the configured token budget')
             try:
-                result = validate_result(role, json.loads(raw), {item['id'] for item in self.assessors()})
+                result = validate_result(role, parse_json(raw), {item['id'] for item in self.assessors()})
+                if check:
+                    check(result)
                 return result
             except (ValueError, TypeError) as error:
                 if attempt:
@@ -460,13 +474,14 @@ class IdeaTreeEngine:
                     self.save()
                     count = min(s['settings']['candidatesPerRound'], remaining)
                     s['phase'] = 'ideate'
-                    ideas = await self.ask('ideate', {**self.context(), 'template': dict(id=s['template']['id'], label=s['template']['label'], assessors=[item['label'] for item in s['template']['assessors']]), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']})
-                    # Reject the whole proposal before changing the tree.
-                    known_ids = {n['id'] for n in s['nodes']}
-                    if any(p.get('parentId') and p['parentId'] not in known_ids for p in ideas['candidates'][:count]):
-                        raise ValueError('Proposed parent does not exist')
-                    for proposal in ideas['candidates'][:count]:
-                        self.validate_proposal(proposal, s['selectedDirectionIds'])
+                    def check_proposals(ideas, count=count):
+                        # Reject the whole proposal before changing the tree.
+                        known_ids = {n['id'] for n in s['nodes']}
+                        if any(p.get('parentId') and p['parentId'] not in known_ids for p in ideas['candidates'][:count]):
+                            raise ValueError('Proposed parent does not exist')
+                        for proposal in ideas['candidates'][:count]:
+                            self.validate_proposal(proposal, s['selectedDirectionIds'])
+                    ideas = await self.ask('ideate', {**self.context(), 'template': dict(id=s['template']['id'], label=s['template']['label'], assessors=[item['label'] for item in s['template']['assessors']]), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']}, check_proposals)
                     batch = []
                     existing = {n['hypothesis'].strip().casefold() for n in s['nodes']}
                     for proposal in ideas['candidates'][:count]:

@@ -81,7 +81,7 @@ PUCT 和 OpenEvolve 共用同一套骨架（Domain 接缝、事件流、沙箱�
 | 业务状态 | **不持有**。目标、评分卡、产物地址、run 记录全在控制面 |
 | 模型密钥 | **不持有**。只拿一个 run 级临时 token 调控制面的代理 |
 
-它自己的模块文档写着：*"this process holds no business state and no model key"*。这不是事后总结，是当初就按这个边界切的。
+它自己的模块文档明确：该进程不持有业务状态或模型密钥。这不是事后总结，是当初就按这个边界切的。
 
 `services/evolve/` 目录可以原样复制到一个新仓库，`uv sync` 之后 `uvicorn` 起来就能跑——只是没有调用方喂给它合法的请求。
 
@@ -104,7 +104,8 @@ POST /runs/{search_id}/stop  → 停止
 
 `search_id`、`algorithm`、`expansions`、`workers`、`statement`、`scorecard`（冻结的评分卡正文）、`scorecard_hash`、`baseline_code`、`rubric`、`script`（评测脚本原文）、`source_material`、`candidate_timeout_seconds`、`max_tokens_per_call`、`thinking`、`packages`、`baseline_score`、`resume_from_sequence`、`engine`、`options`。
 
-评分卡正文和评测脚本是**按值传的**，不是引用——注释写明理由：*"this side has no CAS, and an evaluator is a page of Python — smaller than one candidate."* 这个决定让侧车不需要访问内容库，是它能独立的重要一步。
+评分卡正文和评测脚本是**按值传的**，不是引用。原因是侧车没有 CAS，而评测器只是一页 Python，
+比一个候选更小。这个决定让侧车不需要访问内容库，是它能独立的重要一步。
 
 **(b) 文件系统路径**
 
@@ -112,7 +113,8 @@ POST /runs/{search_id}/stop  → 停止
 
 **(c) 回调地址 + 临时凭据**
 
-`llm: {url, token}`、`judge: {url, token}`。`url` 必须是绝对地址——注释说明过：*"a sidecar that had to guess the API's origin would turn every expansion into a failed candidate."* 这一点本来就是为跨进程准备的，跨机也不用改。
+`llm: {url, token}`、`judge: {url, token}`。`url` 必须是绝对地址，否则侧车若要猜测 API
+源地址，每次扩展都可能因与候选无关的原因失败。这一点本来就是为跨进程准备的，跨机也不用改。
 
 **(d) 上游探测结果**
 
@@ -135,7 +137,8 @@ manifest.json
 <criterionId>/<shard>/truth.json 目标值，候选拿不到
 ```
 
-切分策略（种子、每片行数、哪些索引是 gate 分片）**由控制面决定**，侧车只读结果——`dataset.ts` 的注释：*"The split is decided here and read there... deciding it twice is how two answers disagree."*
+切分策略（种子、每片行数、哪些索引是 gate 分片）**由控制面决定**，侧车只读结果。若两侧各自
+决定切分，结果就会不一致。
 
 `test_gate` 模式下还有 `workspace_dir`：项目的一份纯净副本，每次运行在一次性克隆里进行，冻结路径在执行前从这里还原。
 
@@ -143,7 +146,8 @@ manifest.json
 
 侧车把每个候选的源码按内容哈希写到 `evolve-candidates/<runId>/<sha256>.py`，控制面通过 `CandidateSources.read()` 直接读文件。`candidates.ts` 的注释说得很直白：
 
-> The two processes share one filesystem and one data dir, so the sidecar writes and this reads; **there is no protocol between them beyond the layout**, which is content-addressed and therefore has nothing to agree about but the hash.
+> 两个进程共用一个文件系统和数据目录，所以侧车写入、控制面读取。两者之间除该布局外没有协议；
+> 布局按内容寻址，因此唯一需要一致的是哈希。
 
 它不进 CAS，因为一个候选还不是产物——大多数会被拒绝，全部收进内容库只会塞满没人要的程序；用户保存某一个时才复制进去。
 
@@ -165,7 +169,7 @@ manifest.json
 
 `events.py` 的模块文档写着：
 
-> Mirrors `EvolveEvent` / `EvolveEventRecord` in `packages/schema` — the Node API parses exactly these shapes.
+> 它镜像 `packages/schema` 中的 `EvolveEvent` / `EvolveEventRecord`，Node API 按这些形状解析。
 
 **这是一份手工维护的镜像。** 侧车用普通 dict 加小函数构造事件，理由是"这个联合类型有十个分支，唯一的消费者是 `json.dumps`，在这边再写一份 schema 就是多一处要同步的东西"。在同一个仓库里这个取舍成立——两边一起改，CI 一起跑。
 

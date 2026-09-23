@@ -25,7 +25,7 @@ test.describe("journey-compact-process.spec", { tag: ["@category:e2e", "@os:linu
  * E2E-META
  * Purpose: A researcher sees live cards become compact records without losing tool output, files or authorization behavior.
  * Steps:
- *   1. Open a local Project and check default-open workspace folders, closed secondary sections and absent disabled features.
+ *   1. Open a local Project and check default-open workspace folders and closed secondary sections.
  *   2. Collapse Files, send a request, verify streaming updates keep it closed, then grant permission and observe the running tool.
  *   3. Check completed records, copyable output and the unchanged declared Artifact card.
  *   4. Run a failing tool and verify its compact error record.
@@ -61,26 +61,27 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
   ]);
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
   try {
-    await journey.step("有内容的一级分区默认展开", "文件默认展开；没有任务内容时任务分区隐藏，未启用的科学记忆也不显示。",
+    await journey.step("有内容的一级分区默认展开", "文件与可用的科学记忆默认展开；没有任务内容时任务分区隐藏。",
       async () => {
         fixture = await createProjectAndSession(page, { approvalMode: "ask_for_dangerous",
           model: { ...stub, apiVariant: "deepseek", name: `卡片本地测试 ${Date.now()}` }, projectName: `卡片验收 ${Date.now()}`, sessionTitle: "卡片生命周期" });
         await openProjectSession(page, fixture);
-        const folders = page.locator(".workspace-folder:visible");
-        await expect(folders).toHaveCount(1);
+        const files = page.locator('[data-folder="files"]');
+        const memory = page.locator('[data-folder="memory"]');
+        await expect(files).toBeVisible();
+        await expect(memory).toBeVisible();
         await expect(page.locator('[data-folder="tasks"]')).toBeHidden();
-        await expect(page.locator('[data-folder="memory"]')).toHaveCount(0);
-        await expect(page.locator(".workspace-folder[open]:visible")).toHaveCount(1);
+        await expect(files).toHaveAttribute("open", "");
+        await expect(memory).toHaveAttribute("open", "");
         await expect(page.locator(".workspace-folder .workspace-fold[open]")).toHaveCount(0);
-        for (const [index, name] of ["文件"].entries()) {
-          const heading = folders.nth(index).locator(":scope > summary");
+        for (const [folder, name] of [[files, "文件"], [memory, "记忆"]] as const) {
+          const heading = folder.locator(":scope > summary");
           await expect(heading).toHaveText(name);
           await expect(heading.locator("svg")).toHaveCount(1);
           await expect(heading).toHaveCSS("border-top-width", "1px");
           await expect(heading).toHaveCSS("background-color", "rgb(250, 251, 252)");
         }
         await expect(page.locator('[data-folder="tasks"] .workspace-fold')).toHaveCount(0);
-        await expect(page.locator('[data-folder="files"]')).toHaveAttribute("open", "");
       });
     await journey.step("空列表隐藏，上传仍可用", "没有文件或产物时不显示空入口，拖放文件保留白底与虚线框以及大小限制。", async () => {
       const files = page.locator('[data-folder="files"]');

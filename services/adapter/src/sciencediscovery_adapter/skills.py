@@ -73,6 +73,8 @@ class SkillSync:
         self._rpc = rpc
         self._url = mgmt_url
         self._lock = asyncio.Lock()
+        # JiuwenSwarm's directory of each imported skill -> its ScienceDiscovery id, for sandbox_skill_paths.
+        self.directories: dict[str, str] = {}
 
     async def _installed(self) -> dict[str, Path]:
         """Every skill JiuwenSwarm has, by name, with its directory."""
@@ -116,24 +118,35 @@ class SkillSync:
         Returns, by id, the name JiuwenSwarm lists it under, or the reason it could not be imported.
         """
         async with self._lock:
-            installed = await self._installed()
-            result: dict[str, dict[str, str]] = {}
-            for skill in skills:
-                skill_id, source, digest = skill["id"], Path(skill["path"]), skill["hash"]
-                name = skill_id
-                if name in installed and _marker(installed[name]) is None:
-                    name = RENAMED_PREFIX + skill_id  # JiuwenSwarm's own skill of that name stays
-                current = _marker(installed[name]) if name in installed else None
-                if current and current.get("id") == skill_id and current.get("hash") == digest:
-                    result[skill_id] = {"name": name}
-                    continue
-                try:
-                    await self._import(source, skill_id, name, digest)
-                    result[skill_id] = {"name": name}
-                except Exception as error:  # a refused package must not stop the run
-                    logger.warning("could not import skill %s into JiuwenSwarm: %s", skill_id, error)
-                    result[skill_id] = {"error": str(error)[:300]}
+            result = await self._sync(skills)
+            try:
+                for directory in (await self._installed()).values():
+                    marker = _marker(directory)
+                    if marker and isinstance(marker.get("id"), str):
+                        self.directories[str(directory)] = marker["id"]
+            except Exception as error:  # only path rewriting depends on it
+                logger.warning("could not list JiuwenSwarm's skill directories: %s", error)
             return result
+
+    async def _sync(self, skills: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+        installed = await self._installed()
+        result: dict[str, dict[str, str]] = {}
+        for skill in skills:
+            skill_id, source, digest = skill["id"], Path(skill["path"]), skill["hash"]
+            name = skill_id
+            if name in installed and _marker(installed[name]) is None:
+                name = RENAMED_PREFIX + skill_id  # JiuwenSwarm's own skill of that name stays
+            current = _marker(installed[name]) if name in installed else None
+            if current and current.get("id") == skill_id and current.get("hash") == digest:
+                result[skill_id] = {"name": name}
+                continue
+            try:
+                await self._import(source, skill_id, name, digest)
+                result[skill_id] = {"name": name}
+            except Exception as error:  # a refused package must not stop the run
+                logger.warning("could not import skill %s into JiuwenSwarm: %s", skill_id, error)
+                result[skill_id] = {"error": str(error)[:300]}
+        return result
 
     async def _import(self, source: Path, skill_id: str, name: str, digest: str) -> None:
         if not (source / "SKILL.md").is_file():
@@ -151,3 +164,42 @@ class SkillSync:
             answer = await self._rpc(self._url, "skills.import_local", {"path": str(package), "force": True}, timeout=120)
         if not answer.get("success", False):
             raise RuntimeError(str(answer.get("detail") or answer)[:300])
+
+
+SKILLS_VARIABLE = "SCIENCEDISCOVERY_SKILLS_DIR"
+
+
+def sandbox_skill_paths(command: str, directories: dict[str, str]) -> str:
+    """A shell command with JiuwenSwarm's copy of a skill replaced by the package the sandbox mounts.
+
+    JiuwenSwarm's `skill_tool` points the model at the skill in its own skills directory, which the Runner
+    sandbox does not have; the same frozen package is there as `$SCIENCEDISCOVERY_SKILLS_DIR/<id>`. The
+    variable is written so that it expands where the path stood: bare, in double quotes, or in single quotes.
+    """
+    found = sorted((d for d in directories if d and d in command), key=len, reverse=True)
+    if not found:
+        return command
+    out: list[str] = []
+    single = double = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        match = next((d for d in found if command.startswith(d, index)
+                      and (index + len(d) == len(command) or not (command[index + len(d)].isalnum() or command[index + len(d)] in "-_."))), None)
+        if match:
+            target = f"/{directories[match]}"
+            variable = f"${SKILLS_VARIABLE}"
+            out.append(f"'\"{variable}\"'{target}" if single else f"{variable}{target}" if double else f"\"{variable}\"{target}")
+            index += len(match)
+            continue
+        if char == "\\" and not single:
+            out.append(command[index:index + 2])
+            index += 2
+            continue
+        if char == "'" and not double:
+            single = not single
+        elif char == '"' and not single:
+            double = not double
+        out.append(char)
+        index += 1
+    return "".join(out)

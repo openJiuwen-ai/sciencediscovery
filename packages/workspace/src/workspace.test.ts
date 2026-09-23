@@ -33,7 +33,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath } from "./workspace.js";
+import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -130,6 +130,57 @@ test("run_shell selects the latest environment by ID and preserves its execution
   assert.equal(executedCode, "python -m sample");
   assert.equal(executedToolCallId, "tool-call");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
+});
+
+test("a command written with the workspace's host path uses the sandbox's /workspace instead", () => {
+  const root = "/data/projects/p/sessions/s/workspace";
+  assert.equal(
+    sandboxWorkspacePaths(root, `cat > ${root}/ols_fit.py << 'EOF'\nprint(1)\nEOF\npython ${root}/ols_fit.py`),
+    "cat > /workspace/ols_fit.py << 'EOF'\nprint(1)\nEOF\npython /workspace/ols_fit.py",
+  );
+  assert.equal(sandboxWorkspacePaths(root, `cd ${root} && ls "${root}"`), `cd /workspace && ls "/workspace"`);
+  assert.equal(sandboxWorkspacePaths(`${root}/`, `ls ${root}`), "ls /workspace");
+  // Another directory that merely starts with the same characters is not the workspace.
+  assert.equal(sandboxWorkspacePaths(root, `ls ${root}2/a`), `ls ${root}2/a`);
+  assert.equal(sandboxWorkspacePaths(root, "ls /workspace/a"), "ls /workspace/a");
+});
+
+test("workspaceRelativeCwd makes a cwd that names the workspace relative and leaves any other one alone", () => {
+  const root = resolve("/data/projects/p/sessions/s/workspace");
+  assert.equal(workspaceRelativeCwd(root, undefined), undefined);
+  assert.equal(workspaceRelativeCwd(root, "analysis"), "analysis");
+  assert.equal(workspaceRelativeCwd(root, root), ".");
+  assert.equal(workspaceRelativeCwd(root, `${root}/`), ".");
+  assert.equal(workspaceRelativeCwd(root, `${root}/analysis/run1`), "analysis/run1");
+  assert.equal(workspaceRelativeCwd(root, "/workspace"), ".");
+  assert.equal(workspaceRelativeCwd(root, "/workspace/analysis"), "analysis");
+  assert.equal(workspaceRelativeCwd(root, "/etc"), "/etc");
+  assert.equal(workspaceRelativeCwd(root, `${root}-other`), `${root}-other`);
+});
+
+test("run_shell runs in the workspace when the model passes the workspace's host path as cwd", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `workspace-cwd-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const seen: Array<string | undefined> = [];
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("legacy tool must not run"); },
+    executeShell: async (_code, _mode, _signal, _toolCallId, _runnerId, environment): Promise<ShellExecutionResult> => {
+      seen.push(environment?.cwd);
+      return {
+        cgroupMode: "none", createdFiles: [], environmentRevisionId: "test-python", environmentVariables: {},
+        executionId: "execution", exitCode: 0, finishedAt: new Date().toISOString(), kernelId: "ephemeral:execution",
+        kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
+        sandbox: "bubblewrap", startedAt: new Date().toISOString(), stderr: "", stdout: "ok", workingDirectory: "/workspace",
+      };
+    },
+  });
+  const tool = tools.find((candidate) => candidate.name === "run_shell");
+  assert.ok(tool);
+  await tool.execute("tool-call-1", { command: "true", cwd: root });
+  await tool.execute("tool-call-2", { command: "true", cwd: `${root}/analysis` });
+  assert.deepEqual(seen, [".", "analysis"]);
 });
 
 for (const selection of [
@@ -313,9 +364,12 @@ test("run_shell executes an existing workspace script without rewriting or path 
     scriptPath: "root script.sh",
   });
   await tool.execute("shell-child", { scriptPath: "scripts/child script.sh" });
+  // Arguments run with a command too: a model that splits `python -c code` is not left running bare `python`.
+  await tool.execute("shell-command", { arguments: ["-c", "print('hi')"], command: "python" });
   assert.deepEqual(executedCodes, [
     "/usr/bin/bash '/workspace/root script.sh' 'value with spaces' 'quote'\"'\"'value' '$HOME; touch never'",
     "/usr/bin/bash '/workspace/scripts/child script.sh'",
+    "python '-c' 'print('\"'\"'hi'\"'\"')'",
   ]);
   await assert.rejects(
     tool.execute("shell-missing", { scriptPath: "missing.sh" }),
@@ -626,6 +680,27 @@ test("read_file pages a large file instead of returning it whole", async (contex
   assert.equal(secondText.endsWith("line-2001\nline-2002\nline-2003\nline-2004\nline-2005\n"), true);
 });
 
+test("file tools take a path written with the workspace's host path or /workspace", async (context) => {
+  // JiuwenSwarm tells the model its project directory by the host path; observed: read_file(<host workspace>/notes.md).
+  const root = resolve(process.cwd(), ".tmp", `workspace-read-absolute-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await writeFile(resolve(root, "notes.md"), "hello from the workspace\n");
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const read = tools.find((candidate) => candidate.name === "read_file")!;
+  const text = async (path: string) => {
+    const result = await read.execute("read", { path });
+    return result.content[0]?.type === "text" ? result.content[0].text : "";
+  };
+  assert.match(await text(resolve(root, "notes.md")), /hello from the workspace/);
+  assert.match(await text("/workspace/notes.md"), /hello from the workspace/);
+  await assert.rejects(read.execute("outside", { path: "/etc/hostname" }), /non-empty and relative/);
+  await assert.rejects(read.execute("root", { path: root }), /non-empty and relative/);
+});
+
 test("read_file returns metadata for a binary file and never its bytes", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `workspace-read-binary-${process.pid}-${Date.now()}`);
   await mkdir(root, { recursive: true });
@@ -789,6 +864,11 @@ test("artifact download and PDF extraction are separate tools", async () => {
   assert.deepEqual(calls, ["download"]);
   await extract.execute("extract-call", { artifactJobId: "job" });
   assert.deepEqual(calls, ["download", "extract"]);
+  await extract.execute("extract-upload", { path: "enzyme_paper.pdf" });
+  assert.deepEqual(calls, ["download", "extract", "extract"]);
+  await assert.rejects(extract.execute("extract-none", {}), /exactly one/);
+  await assert.rejects(extract.execute("extract-both", { artifactJobId: "job", path: "a.pdf" }), /exactly one/);
+  assert.equal(calls.length, 3);
 });
 
 test("project artifact tools declare, list, and read catalog entries", async () => {

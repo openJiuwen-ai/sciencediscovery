@@ -184,7 +184,7 @@ interface ArtifactDownloadResult {
 
 ### 6.3 PDF extraction
 
-`paper_extract_pdf({artifactJobId})` accepts only a completed PDF download. It creates a separate ExtractionJob, invokes Paper Worker, and returns extraction/acquisition IDs, text/manifest paths, page count, and warnings. Download does not auto-extract, and extraction failure does not change completed download state.
+`paper_extract_pdf({artifactJobId})` accepts only a completed PDF download; `paper_extract_pdf({path})` instead extracts a PDF already in the workspace, such as one the user uploaded, and returns the earlier extraction when the same bytes were extracted before in the Session. The download form creates a separate ExtractionJob, invokes Paper Worker, and returns extraction/acquisition IDs, text/manifest paths, page count, and warnings. Download does not auto-extract, and extraction failure does not change completed download state.
 
 ## 7. Agent loop
 

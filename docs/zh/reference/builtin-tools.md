@@ -78,7 +78,7 @@
 | 工具 | 出现条件 | 参数与边界 |
 |---|---|---|
 | `artifact_download` | 任一 MCP 来源启用 | `mcpInvocationId` + `candidateId`（来自此前 MCP 调用返回的 `ArtifactCandidate`），可选 `destinationPath`；等待权限与下载终态，**不**解析 PDF |
-| `paper_extract_pdf` | 论文抽取接线 | `artifactJobId`（必须是已完成的下载任务）；触发有界 PDF 抽取（见 [../developer-docs/paper-worker.md](../developer-docs/paper-worker.md)） |
+| `paper_extract_pdf` | 论文抽取接线 | `artifactJobId`（必须是已完成的下载任务）或 `path`（工作区里已有的 PDF，例如用户上传的文件），二选一；触发有界 PDF 抽取（见 [../developer-docs/paper-worker.md](../developer-docs/paper-worker.md)） |
 
 下载与抽取必须分属不同模型回合——同回合工具并行执行，没有 `dependsOn` 机制。
 

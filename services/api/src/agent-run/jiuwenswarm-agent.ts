@@ -391,9 +391,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   private answerApproval(question: ApprovalQuestion): void {
     const ask = this.options.requestApproval;
     // A stable resource for a tool whose native equivalent always checks one fixed resource (run_shell and
-    // the rest of JIUWENSWARM_APPROVAL_RESOURCE), so a standing grant applies here too; the call's own text
-    // otherwise, as before.
-    const resource = (question.toolName && JIUWENSWARM_APPROVAL_RESOURCE.get(question.toolName))
+    // the rest of JIUWENSWARM_APPROVAL_RESOURCE), so a standing grant applies here too. Any other tool the
+    // adapter matched to its call is named by the tool itself: JiuwenSwarm's own question text ("mcp_sci_…
+    // （当前模式默认需确认） > 选择「会话内记住」…") is internal wording that the card would show verbatim.
+    const resource = (question.toolName && (JIUWENSWARM_APPROVAL_RESOURCE.get(question.toolName) ?? question.toolName))
       ?? question.resource ?? question.summary ?? "tool call";
     // A human can take arbitrarily long to answer; that wait must not itself look "stalled".
     const release = this.beginExternalWait();

@@ -53,6 +53,19 @@ test("the create tool names the approval the user will actually see", () => {
   assert.match(asks!.description, /approval card/);
 });
 
+test("the algorithm the user picked reaches the proposal", async () => {
+  // The picker writes `--algorithm openevolve` into the command and the skill says to set
+  // `algorithm`; without it in the schema OpenEvolve could never be chosen from a conversation.
+  const proposals: unknown[] = [];
+  const create = createEvolveTools(runtime({
+    createEvolveRun: async (proposal) => { proposals.push(proposal); return { refusedBecause: "probe" }; },
+  })).find((tool) => tool.name === "create_evolve_run")!;
+  const algorithm = (create.parameters as { properties: Record<string, { anyOf?: Array<{ const: string }> }> }).properties.algorithm;
+  assert.deepEqual(algorithm?.anyOf?.map((option) => option.const), ["puct", "openevolve"]);
+  await create.execute("call", { algorithm: "openevolve" } as never, new AbortController().signal);
+  assert.equal((proposals[0] as { algorithm?: string }).algorithm, "openevolve");
+});
+
 test("the tools reach the runtime they were built with", async () => {
   const calls: string[] = [];
   const tools = createEvolveTools(runtime({

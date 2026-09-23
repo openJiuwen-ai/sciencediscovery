@@ -151,6 +151,8 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
     : node.label === "SearchNode" ? `#${String(extra.node_index ?? "?")}`
     : node.label === "SearchCell" ? `i${String(extra.island ?? "?")} (${String(extra.complexity_bin ?? "?")},${String(extra.diversity_bin ?? "?")})`
     : node.label === "SourceFile" ? pick("name") ?? pick("path")
+    // A claim is known by what it says; its id told the user nothing.
+    : node.label === "Claim" ? pick("content") ?? pick("claim_id")
     // WebPage picks title → identifier (wiki path) → url, mirroring the detail
     // card's display order; identifier survives a missing title (wiki pages
     // sometimes arrive without one), and the url is the last resort.
@@ -177,23 +179,38 @@ export function graphNodeName(node: { label: MemoryGraphNodeLabel; id: string; e
 /**
  * Display names for a whole graph. A run of six `run_python` dots is
  * unreadable — every one of them says the same thing — so repeated names get a
- * `#n` suffix in graph order. Unique names are left exactly as they are.
+ * `#n` suffix in the order they ran. Unique names are left exactly as they are.
+ * Counted per node kind: a tool call and the code it ran share the tool's
+ * name, and one count across both numbered five calls #1–#5 and their code
+ * #6–#10.
  */
 export function graphNodeDisplayNames(
   nodes: Array<{ label: MemoryGraphNodeLabel; id: string; extra?: Record<string, unknown> }>,
 ): Map<string, string> {
+  const key = (node: { label: MemoryGraphNodeLabel }, name: string) => `${node.label}\u0000${name}`;
   const totals = new Map<string, number>();
   for (const node of nodes) {
-    const name = graphNodeName(node);
+    const name = key(node, graphNodeName(node));
     totals.set(name, (totals.get(name) ?? 0) + 1);
   }
+  // Numbered in the order the work happened (a tool call's seq, else when it started), not in whatever order the
+  // graph lists them: the API lists tool calls newest first, which made "run_shell #1" the last call.
+  const when = (node: { extra?: Record<string, unknown> }, position: number): [number, string, number] => {
+    const extra = node.extra ?? {};
+    const seq = typeof extra.seq === "number" ? extra.seq : Number.POSITIVE_INFINITY;
+    const time = typeof extra.started_at === "string" ? extra.started_at : typeof extra.created_at === "string" ? extra.created_at : "";
+    return [seq, time, position];
+  };
+  const ordered = nodes.map((node, position) => ({ node, order: when(node, position) })).sort((a, b) =>
+    a.order[0] - b.order[0] || (a.order[1] < b.order[1] ? -1 : a.order[1] > b.order[1] ? 1 : 0) || a.order[2] - b.order[2]);
   const seen = new Map<string, number>();
   const display = new Map<string, string>();
-  for (const node of nodes) {
+  for (const { node } of ordered) {
     const name = graphNodeName(node);
-    if ((totals.get(name) ?? 0) < 2) { display.set(node.id, name); continue; }
-    const index = (seen.get(name) ?? 0) + 1;
-    seen.set(name, index);
+    const counted = key(node, name);
+    if ((totals.get(counted) ?? 0) < 2) { display.set(node.id, name); continue; }
+    const index = (seen.get(counted) ?? 0) + 1;
+    seen.set(counted, index);
     display.set(node.id, `${name} #${index}`);
   }
   return display;

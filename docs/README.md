@@ -1,6 +1,6 @@
 # ScienceDiscovery Documentation
 
-ScienceDiscovery documentation is organized into matching English and Chinese trees:
+ScienceDiscovery documentation is available in English and Chinese:
 
 - **Getting started** helps a new user install, configure, and complete a first task.
 - **Core capabilities** explains product concepts and execution behavior.

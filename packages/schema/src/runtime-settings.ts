@@ -219,7 +219,9 @@ export interface MemoryGraphSettings {
 }
 
 export const DEFAULT_MEMORY_GRAPH_SETTINGS: MemoryGraphSettings = {
-  enabled: false,
+  // On for a new data directory: the local backend needs nothing installed. A directory keeps the value it
+  // was created with, so an existing installation is not switched on behind its user's back.
+  enabled: true,
   backend: "local",
   neo4jHttp: "http://127.0.0.1:7474",
   neo4jUser: "neo4j",

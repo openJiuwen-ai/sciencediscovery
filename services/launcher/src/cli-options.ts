@@ -100,8 +100,8 @@ run options:
   --output <jsonl|text>    Output format, default jsonl (no TTY) / text (TTY)
   --timeout <ms>           Wall-clock timeout for the run
 
-Bubblewrap is the only required host dependency. Neo4j is not bundled, so the
-memory-graph feature stays off unless a separate server is configured.
+Bubblewrap is the only required host dependency. The memory graph is on for a
+new data directory and kept as local files; Neo4j is optional and not bundled.
 
 First launch downloads uv and the Python dependencies of the bundled MCP
 servers into the data directory (later launches skip this). Optional overrides:

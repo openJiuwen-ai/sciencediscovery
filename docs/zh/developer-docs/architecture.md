@@ -64,7 +64,7 @@ ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：
 | **services/paper** | 否 | PDF 需要时，API 用 `execFile` **按次拉起** `paper_worker.py` 子进程，跑完退出 |
 | **deer-flow** | 已移除 | agent 循环与 web provider 都在 Node 进程内实现，gateway 的 venv 不再安装 `deerflow-harness`，对应 submodule 也已删除 |
 | **apps/web** | 否（生产路径） | 构建为静态资源，由 **API 进程** 从 `apps/web/dist` 托管；开发时可用 Vite 另起 `:5173`（可选） |
-| **services/memory-graph** | 否（默认） | 实验性可选侧车（Python，仅回环 `:17674`）；在 System Settings 中启用并配置后由启动脚本拉起，禁用时 API 写入为静默 no-op |
+| **services/memory-graph** | 是（默认开启；Docker 中关闭） | 实验性可选侧车（Python，仅回环 `:17674`）；由启动脚本拉起，默认以本地文件存储，也可在 System Settings 中改用 Neo4j；关闭时 API 写入为静默 no-op |
 | **持久内核 / bwrap 任务** | 否（按需） | Runner 在执行代码时派生子进程；空闲超时后回收 |
 | **Host NPU Broker job** | 否（按需） | 仅当 `SCIENCE_AGENT_NPU_BROKER=1` 时由 Runner 启动白名单宿主 workload；不是独立 daemon，不开放任意命令 |
 | **外部模型 / PubMed 等** | 远端 | 出站 HTTPS，不是本机进程 |

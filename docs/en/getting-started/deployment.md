@@ -16,7 +16,7 @@ variables, default ports, quotas, and storage layout.
 
 **These paths are independent. Choose one and do not mix them.** The binary path never uses Docker: the executable embeds Node, CPython, gateway dependencies, the web assets, and micromamba. Use the image path for container deployment instead of putting the binary inside an image.
 
-None of the modes bundles Neo4j. ScienceMemory needs an external Neo4j server and remains disabled when it is not configured; this does not affect the web or conversation path.
+None of the modes bundles Neo4j. ScienceMemory keeps its graph as local files by default and is on for a new installation in local and binary mode; Neo4j is an optional backend. It does not affect the web or conversation path.
 
 ## Single-file binary deployment
 
@@ -329,7 +329,14 @@ ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>   # then open http://127.0.0.
 
 ### Step 5: configure a model and start the first task
 
-The image ships no model. The "Configure a model" entry on the home page leads to **System configuration → Model registry**: create a model connection, enter the provider's API key, save it, and select it as the task model under **Global defaults**. Then create a project and start the first session; see the [Quick Start tutorial](quick-start.md). The container reaches the model provider directly; see [Frequently asked questions](#frequently-asked-questions) when it must go through a proxy or when the model server runs on the host itself.
+The image ships no model. The "Configure a model" entry on the home page leads to
+**System configuration → Model registry**: create a model connection, enter the provider's API key,
+then select **Save & connect**. It registers the provider's models and tests the first one. When this
+is the first model in the system, it becomes the default task model. Otherwise, select one from
+**Global default task model** at the top of Model registry. Then create a project and start the first
+session; see the [Quick Start tutorial](quick-start.md). The container reaches the model provider
+directly; see [Frequently asked questions](#frequently-asked-questions) when it must go through a
+proxy or when the model server runs on the host itself.
 
 ### Run agent turns on JiuwenSwarm
 
@@ -511,7 +518,7 @@ Work through these in order; do not skip the first two and change a kernel switc
 - This is a single-user trust model: one static bearer token, no TLS, and no multi-user accounts. The port is published only on `127.0.0.1` by default because Docker-published ports bypass many host firewall rules. Set `SCIENCE_AGENT_PUBLISH_HOST=0.0.0.0` only on a trusted network and replace the token first.
 - The image contains no API tokens, model credentials, or host `.sciencediscovery-data/` content. `.dockerignore` excludes `.sciencediscovery-data/`, `.env`, `node_modules/`, build outputs, and local caches. Credentials enter only through Compose variables and the bind-mounted data directory.
 - The image includes fixed micromamba and does not access GitHub for it at runtime, but this iteration does **not** bundle starter Python/R environments or a conda package cache. First-time starter Python creation still needs permitted package channels. Package resolution becomes offline only after an administrator populates and selects `SCIENCE_AGENT_PACKAGE_CACHE_DIR`.
-- The image carries neither the memory-graph nor the evolve Python sidecar environment, and `start-stack.sh --mode docker` does not start them: the ScienceMemory graph stays off in Docker (`memoryGraph` in `/health` is `disabled` and only becomes `degraded` when switched on), and an evolution search cannot start. Use local mode or the binary deployment for those two features.
+- The image carries neither the memory-graph nor the evolve Python sidecar environment, and `start-stack.sh --mode docker` does not start them: the ScienceMemory graph starts off in a new Docker data directory (`start-stack.sh --mode docker` sets `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0`; `memoryGraph` in `/health` is `disabled` and only becomes `degraded` when switched on), and an evolution search cannot start. Use local mode or the binary deployment for those two features.
 - The image is a convenience package, not a hardened multi-tenant deployment. Containerization does not change the security boundaries of a static bearer token, no TLS, and no runner CPU/memory quotas.
 
 ### Build micromamba packages for both architectures

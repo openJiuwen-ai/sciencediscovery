@@ -14,7 +14,7 @@ sciencediscovery/
 │   ├── gateway/              # bundled Python MCP servers + their venv
 │   ├── runner/               # Bubblewrap executor
 │   ├── paper/                # uv PDF worker
-│   └── memory-graph/         # experimental ScienceMemory sidecar, off by default
+│   └── memory-graph/         # experimental ScienceMemory sidecar, on by default (off in Docker)
 ├── packages/
 │   ├── agent-runtime/        # prompts, tools, agent event types
 │   ├── schema/               # shared TypeScript types and schemas

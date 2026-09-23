@@ -202,6 +202,45 @@ async def test_new_tools_never_disconnect_the_server_a_running_run_is_calling_th
     assert runner.registry.shared.keys() == {"task", "run_shell"}, "the newest generation serves every tool"
 
 
+async def test_bound_tools_map_skill_paths_and_keep_run_timeout_and_context(harness):
+    app, runner, _ = harness
+    seen = []
+    runner.skills.directories["/jw/skills/demo"] = "demo"
+
+    def bridge(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"text": "ran skill", "isError": False})
+
+    class SkillRun(FakeRun):
+        def __aiter__(self):
+            async def frames():
+                toolset, = runner.registry._sets.values()
+                assert toolset.timeout_s == 7200
+                assert toolset.trace_context == {
+                    "run_id": "r1", "agent_id": "a1", "session_id": "s1", "swarm_session": "s1",
+                }
+                assert await toolset.call("run_shell", {
+                    "command": "python /jw/skills/demo/scripts/run.py",
+                }) == ("ran skill", False)
+                for frame in self.frames:
+                    yield frame
+            return frames()
+
+    runner.chat_run = SkillRun
+    async with httpx.AsyncClient(transport=httpx.MockTransport(bridge)) as client:
+        runner.client = lambda: client
+        _, lines = await post(app, {
+            "sessionId": "s1", "runId": "r1", "agentId": "a1", "prompt": "run the skill",
+            "tools": [{"name": "run_shell"}], "bridge": {"url": "http://legacy.test/bridge"},
+            "toolTimeoutSeconds": 7200,
+        })
+    assert lines[-1]["done"]["status"] == "completed"
+    assert seen == [{"name": "run_shell", "arguments": {
+        "command": 'python "$SCIENCEDISCOVERY_SKILLS_DIR"/demo/scripts/run.py',
+    }}]
+    assert not runner.registry._sets
+
+
 async def test_tools_without_a_bridge_fail_the_run_cleanly(harness):
     app, _, rpcs = harness
     _, lines = await post(app, {"sessionId": "s1", "prompt": "go", "tools": [{"name": "x"}]})

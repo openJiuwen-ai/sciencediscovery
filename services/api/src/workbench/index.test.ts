@@ -93,3 +93,26 @@ test("server-side query reaches matching mixed-catalog records beyond the first 
   assert.deepEqual(targeted.results.map((result) => result.label), ["target-after-250.csv"]);
   assert.deepEqual({ hasMore: targeted.hasMore, total: targeted.total }, { hasMore: false, total: 1 });
 });
+
+test("results carry the parts of their English detail, so a client can show them in its own language", async () => {
+  const archived = { ...session(1), archivedAt: "2026-01-02T00:00:00.000Z" };
+  const orphan = { ...artifact(2), createdInSessionId: "session-gone", name: "orphan.csv" };
+  const store = {
+    listProjectArtifacts: () => [artifact(1), orphan],
+    listProjects: () => [project],
+    listSessions: () => [session(0), archived],
+  } as unknown as SessionStore;
+
+  const byId = new Map((await searchWorkbench(store, "")).results.map((result) => [result.id, result]));
+  assert.deepEqual(byId.get("project:project-1"), {
+    detail: "Project", id: "project:project-1", kind: "project", label: "Mixed catalog", projectId: "project-1", projectName: "Mixed catalog",
+  });
+  assert.equal(byId.get("session:session-0")?.archived, undefined);
+  assert.equal(byId.get("session:session-1")?.archived, true);
+  assert.equal(byId.get("session:session-1")?.detail, "Mixed catalog · Archived");
+  const kept = byId.get("artifact:artifact-1")!;
+  assert.deepEqual([kept.projectName, kept.sessionTitle, kept.origin], ["Mixed catalog", "Analysis session 0", "user_upload"]);
+  const deleted = byId.get("artifact:artifact-2")!;
+  assert.equal(deleted.sessionTitle, undefined);
+  assert.equal(deleted.detail, "Mixed catalog / Deleted Session · user_upload");
+});

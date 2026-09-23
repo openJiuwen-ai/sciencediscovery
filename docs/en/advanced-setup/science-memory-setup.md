@@ -1,6 +1,6 @@
 # Install Neo4j and configure ScienceMemory
 
-ScienceMemory is an optional ScienceDiscovery feature that stores a session's research goal, each task, the code run, the files produced, and each cited assertion in the final report with its supporting evidence as a Neo4j graph, making "where did this conclusion come from" traceable and clickable. It is disabled by default and has no effect on the web or conversation path.
+ScienceMemory is an optional ScienceDiscovery feature that stores a session's research goal, each task, the code run, the files produced, and each cited assertion in the final report with its supporting evidence as a Neo4j graph, making "where did this conclusion come from" traceable and clickable. It is on by default for a new installation (the local backend needs nothing installed; the Docker image, which has no memory-graph service, starts with it off), and it has no effect on the web or conversation path.
 
 > This guide covers the built-in local store, how to install Neo4j and configure it in system settings, and how to use ScienceMemory in the frontend. For the feature's architecture, node/edge types, and API, see [ScienceMemory](../developer-docs/science-memory.md); for environment variables and ports, see the [configuration reference](../reference/configuration.md).
 
@@ -104,7 +104,7 @@ The Memory section has:
 
 | Field | What to enter | Default placeholder |
 |---|---|---|
-| Enable ScienceMemory (toggle) | Turn on to actually enable | Off |
+| Enable ScienceMemory (toggle) | Turn off to stop recording | On (a new installation; off in Docker) |
 | Storage backend | Local files (default) or Neo4j server; the fields below appear only for Neo4j | Local files |
 | Neo4j HTTP | Neo4j's HTTP address | `http://127.0.0.1:7474` |
 | Neo4j user | Neo4j username | `neo4j` |

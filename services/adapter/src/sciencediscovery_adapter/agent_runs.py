@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import sys
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
@@ -51,7 +52,7 @@ from .llm_proxy import DEFAULT_ALIAS, LlmRoute, LlmRoutes
 from .mcp_server import SERVER_NAME, Toolset, ToolsetRegistry
 from .models import ModelProfile, ModelSync
 from .schema import relax_schema
-from .skills import SkillSync
+from .skills import SkillSync, sandbox_skill_paths
 
 # SCIENCE_AGENT_ADAPTER_DEBUG=1 prints every tool event of every run to stderr.
 _DEBUG = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") == "1"
@@ -149,6 +150,11 @@ class PermissionAnswer(BaseModel):
     decision: Literal["allow_once", "allow_matching", "deny"]
 
 
+# The start of a JiuwenSwarm question about one of our tools: "mcp_sci_<tool>…" or, on a later generation of the
+# shared server, "mcp_sci<ten digits>_<tool>…" (see llm_proxy._ANY_RUN_PREFIX).
+_OUR_TOOL_QUESTION = re.compile(r"\s*mcp_sci(?:[0-9a-z]{10})?_([A-Za-z0-9_.\-]+)")
+
+
 def describe_approval(request: dict[str, Any], route: LlmRoute | None) -> None:
     """Say what a JiuwenSwarm approval question is about: the tool and the arguments of the call it stopped.
 
@@ -159,21 +165,34 @@ def describe_approval(request: dict[str, Any], route: LlmRoute | None) -> None:
     descriptive, per-call text for the approval card; unlike before, it is not reused as the resource. Its own
     text stays as the summary when no call matches.
     """
-    call = route.take_call(str(request.get("summary") or "")) if route else None
+    question = str(request.get("summary") or "")
+    call = route.take_call(question) if route else None
     if call is None:
+        # No call left to match: JiuwenSwarm asked again about a call already described (measured: with parallel
+        # calls it re-asks one after the others ran). One of ours is still named by its tool, not by JiuwenSwarm's
+        # wording, so the card reads the same and a grant the user already gave for that tool still applies.
+        ours = _OUR_TOOL_QUESTION.match(question)
+        if ours:
+            request["summary"] = request["toolName"] = ours.group(1)
         return
     name, arguments = call
     shown = name.removeprefix(route.tool_prefix) if route and name.startswith(route.tool_prefix) else name
     main = next((arguments[key] for key in ("command", "scriptPath", "code", "file_path", "path", "url", "query")
                  if isinstance(arguments.get(key), str) and arguments[key].strip()), None)
     detail = main if main is not None else json.dumps(arguments, ensure_ascii=False)
+    extra = arguments.get("arguments")
+    if main is not None and isinstance(extra, list) and extra and all(isinstance(item, str) for item in extra):
+        # run_shell's arguments run with the command; the card shows what the user is approving.
+        detail = f"{detail} {shlex.join(extra)}"
     text = f"{shown}: {detail}" if arguments else shown
     request["summary"] = text[:500]
     request["toolName"] = shown
 
 
-def bridge_caller(bridge: Bridge, client: httpx.AsyncClient):
+def bridge_caller(bridge: Bridge, client: httpx.AsyncClient, skill_directories: dict[str, str] | None = None):
     async def call(name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
+        if skill_directories and name == "run_shell" and isinstance(arguments.get("command"), str):
+            arguments = {**arguments, "command": sandbox_skill_paths(arguments["command"], skill_directories)}
         response = await client.post(
             bridge.url, json={"name": name, "arguments": arguments},
             headers={"authorization": f"Bearer {bridge.token}"} if bridge.token else {},
@@ -374,7 +393,7 @@ class AgentRunner:
                 # JiuwenSwarm validates strictly; the model still sees the originals (see LlmRoute).
                 token = self.registry.add(Toolset(
                     tools=[{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools],
-                    call=bridge_caller(request.bridge, self.client()),
+                    call=bridge_caller(request.bridge, self.client(), self.skills.directories),
                     timeout_s=request.toolTimeoutSeconds or self.settings.tool_timeout_s,
                     trace_context=trace_context,
                 ))

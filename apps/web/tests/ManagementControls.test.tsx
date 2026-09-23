@@ -35,6 +35,7 @@ import {
   SidebarPanelResizer,
   SidebarSectionHeader,
 } from "../src/ManagementControls.js";
+import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
 
 const impact: DeletionImpact = {
   activeSessionCount: 1,
@@ -307,6 +308,19 @@ test("renders the server deletion preview and requires an exact typed confirmati
   assert.match(blocked, /Permanently delete/);
   assert.match(blocked, /disabled=""[^>]*>Permanently delete/);
   assert.doesNotMatch(confirmed, /disabled=""[^>]*>Permanently delete/);
+});
+
+test("deletion data categories are localized; one the UI does not know stays as sent", () => {
+  const zh = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(DeletionDialog, {
+    confirmation: "",
+    impact,
+    label: "Cancer research",
+    onCancel: () => undefined,
+    onChangeConfirmation: () => undefined,
+    onConfirm: () => undefined,
+  })));
+  assert.match(zh, /消息、工作区文件、audit ledgers/);
+  assert.doesNotMatch(zh, /workspace files/);
 });
 
 test("keeps a valid selection and chooses the next resource after removal", () => {

@@ -427,3 +427,19 @@ def test_an_approval_question_is_described_by_the_call_it_stopped():
     assert second["summary"] == "run_shell: ls" and second["toolName"] == "run_shell"
     assert unknown["summary"] == "acp_chat（需确认）"  # no call seen: JiuwenSwarm's own words stay
     assert "toolName" not in unknown
+    # JiuwenSwarm asks again about a call already described (parallel calls), on a later server generation:
+    # still named by our tool, so a grant for that tool applies and the card is not JiuwenSwarm's wording.
+    again = {"id": "q4", "summary": "mcp_sci0000000001_mcp__pubmed__search（当前模式默认需确认） > 选择「会话内记住」", "resource": "x"}
+    describe_approval(again, route)
+    assert again["summary"] == "mcp__pubmed__search" and again["toolName"] == "mcp__pubmed__search"
+
+
+def test_an_approval_card_shows_the_arguments_that_run_with_the_command():
+    from sciencediscovery_adapter.agent_runs import describe_approval
+
+    route = LlmRoute(**{**ROUTE.__dict__, "tool_names": frozenset({"run_shell"}), "run_tag": "r1", "shadowed": set(), "recent_calls": []})
+    arguments = json.dumps({"command": "python", "arguments": ["-c", "print('hi')"], "environment_id": "env"})
+    rewrite_response({"choices": [{"delta": {"tool_calls": [{"function": {"name": "run_shell", "arguments": arguments}}]}}]}, route)
+    request = {"id": "q1", "summary": "mcp_sci_run_shell（当前模式默认需确认）", "resource": "x"}
+    describe_approval(request, route)
+    assert request["summary"] == "run_shell: python -c 'print('\"'\"'hi'\"'\"')'"

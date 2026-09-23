@@ -1,6 +1,6 @@
 # ScienceMemory (Task and Citation Chains)
 
-ScienceMemory is an experimental, disabled-by-default option that records a Session's execution and argumentation as a graph, kept as local text files by default or in Neo4j when selected. Its value is making "where did this conclusion come from" traceable and clickable: from the research goal, to each task, the code run, the files produced, down to each cited Claim in the final report and its supporting Evidence.
+ScienceMemory is an experimental option, on by default for a new data directory (off in the Docker image, which runs no memory-graph service), that records a Session's execution and argumentation as a graph, kept as local text files by default or in Neo4j when selected. Its value is making "where did this conclusion come from" traceable and clickable: from the research goal, to each task, the code run, the files produced, down to each cited Claim in the final report and its supporting Evidence.
 
 Two core chains in the graph:
 

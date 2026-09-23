@@ -1889,16 +1889,41 @@ test("SessionStore seeds, validates, and persists product timeout settings", asy
   assert.deepEqual(reopened.getQuotaSettings(), quotas);
 });
 
+test("a new data directory starts with the memory graph on, or off where no sidecar runs; an existing choice stays", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-memory-graph-seed-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const local = new SessionStore(resolve(tempRoot, "local"));
+  await local.load();
+  assert.equal(local.getMemoryGraphSettings().enabled, true);
+
+  const docker = new SessionStore(resolve(tempRoot, "docker"), undefined, undefined, undefined, false);
+  await docker.load();
+  assert.equal(docker.getMemoryGraphSettings().enabled, false);
+  // Switched on by the user, it stays on across restarts even where no sidecar runs.
+  await docker.updateMemoryGraphSettings({ enabled: true });
+  const reopened = new SessionStore(resolve(tempRoot, "docker"), undefined, undefined, undefined, false);
+  await reopened.load();
+  assert.equal(reopened.getMemoryGraphSettings().enabled, true);
+
+  // A directory that already chose off keeps it under the new default.
+  await local.updateMemoryGraphSettings({ enabled: false });
+  const localAgain = new SessionStore(resolve(tempRoot, "local"));
+  await localAgain.load();
+  assert.equal(localAgain.getMemoryGraphSettings().enabled, false);
+});
+
 test("SessionStore seeds, validates, and persists memory-graph settings + password", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-memory-graph-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
 
-  // Default state: disabled, no password, defaults for Bolt/User.
+  // Default state: enabled on the local backend, no password, defaults for Bolt/User.
   const store = new SessionStore(tempRoot);
   await store.load();
   assert.deepEqual(store.getMemoryGraphSettings(), {
-    enabled: false,
+    enabled: true,
     backend: "local",
     neo4jHttp: "http://127.0.0.1:7474",
     neo4jUser: "neo4j",
@@ -1916,6 +1941,7 @@ test("SessionStore seeds, validates, and persists memory-graph settings + passwo
   );
 
   // 2B: saving the password alone does NOT flip enabled.
+  assert.equal((await store.updateMemoryGraphSettings({ enabled: false })).enabled, false);
   const initialPassword = `pw-${randomUUID()}`;
   await store.updateMemoryGraphSettings({ neo4jPassword: initialPassword });
   assert.equal(store.getMemoryGraphSettings().enabled, false);

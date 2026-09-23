@@ -7,7 +7,7 @@ the [tutorial](evolve-a-solution.md).
 
 ## Before you start
 
-- A task model configured under **System configuration → Global defaults**.
+- A task model configured through [Quick Start's model setup](../getting-started/quick-start.md#3-configure-a-task-model).
 - Sandboxed execution available — candidates are evaluated in bubblewrap, so a stack started with
   `--skip-sandbox-check` cannot run a search.
 - Something to start from, and something that can score it. Both are designed with you during

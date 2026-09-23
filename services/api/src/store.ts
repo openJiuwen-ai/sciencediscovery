@@ -454,17 +454,21 @@ export class SessionStore {
    * settings became the sole entry point.
    */
   private readonly initialNeo4jPassword?: string;
+  /** Whether a data directory with no memory-graph settings yet starts with the graph on (see ServerConfig). */
+  private readonly memoryGraphAvailable: boolean;
 
   constructor(
     dataDir: string,
     initialTimeoutSettings: SystemTimeoutSettings = DEFAULT_SYSTEM_TIMEOUT_SETTINGS,
     initialQuotaSettings: SystemQuotaSettings = DEFAULT_SYSTEM_QUOTA_SETTINGS,
     initialNeo4jPassword?: string,
+    memoryGraphAvailable = true,
   ) {
     this.dataDir = resolve(dataDir);
     this.initialTimeoutSettings = initialTimeoutSettings;
     this.initialQuotaSettings = initialQuotaSettings;
     this.initialNeo4jPassword = initialNeo4jPassword?.trim() || undefined;
+    this.memoryGraphAvailable = memoryGraphAvailable;
   }
 
   get notifications(): AgentNotifications {
@@ -767,6 +771,8 @@ export class SessionStore {
       globalSettings.enabledConnectorIds = [...globalSettings.enabledConnectorIds, "web"];
     }
     const memoryGraphSettings = normalizeMemoryGraphSettings(saved.memoryGraphSettings);
+    // Seeded once, for a directory that has no setting yet: where no sidecar runs, the graph starts off.
+    if (saved.memoryGraphSettings === undefined && !this.memoryGraphAvailable) memoryGraphSettings.enabled = false;
     // Per-Runner NPU selections. Unknown shapes are dropped rather than
     // trusted: a malformed entry would otherwise reach a sandbox launch.
     const npuDeviceSelections = normalizeNpuDeviceSelections(saved.npuDeviceSelections);

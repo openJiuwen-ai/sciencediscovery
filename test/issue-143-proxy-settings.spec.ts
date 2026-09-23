@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { randomUUID } from "node:crypto";
+
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Static suite metadata is inherited by each framework-expanded journey.
@@ -164,7 +166,12 @@ test("proxy settings remain usable at a narrow viewport", async ({ page }) => {
 });
 
 test("custom URL remains complete after refresh and is prefilled for editing", async ({ page }) => {
-  const name = "Plaintext URL E2E proxy";
+  // The E2E stack can keep its data directory between CI attempts. A fixed
+  // name makes a retry depend on whether the previous attempt reached the
+  // cleanup at the end of this test: if it did not, creating the server fails
+  // with the registry's duplicate-name validation before the refresh behavior
+  // is exercised. Give every run its own registry entry instead.
+  const name = `Plaintext URL E2E proxy ${randomUUID()}`;
   const url = "http://e2e%40user:e2e%3Apass@proxy.example.test:8080";
   let configuration = await openProxySettings(page);
   await configuration.getByRole("button", { name: "Add proxy server" }).click();

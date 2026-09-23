@@ -104,6 +104,9 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
   };
   tools.push(getEvolveRun);
   const evolveParameters = Type.Object({
+    algorithm: Type.Optional(Type.Union([Type.Literal("puct"), Type.Literal("openevolve")], {
+      description: "The search algorithm the user chose (`/evolve-design --algorithm …`). Default puct.",
+    })),
     caseSplit: Type.Optional(Type.Object({
       gateGroups: Type.Integer({ maximum: 64, minimum: 4 }),
       rolloutGroups: Type.Integer({ maximum: 64, minimum: 1 }),

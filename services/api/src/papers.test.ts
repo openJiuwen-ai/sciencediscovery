@@ -137,3 +137,28 @@ test("failed PDF extraction persists a terminal failed task", async (context) =>
   assert.equal(jobs[0]?.state, "failed");
   assert.equal(jobs[0]?.error?.code, "NORMALIZATION_FAILED");
 });
+
+test("a PDF the user uploaded to the workspace is extracted by its path, once", async (context) => {
+  const { service, session, store } = await fixture(context);
+  const target = resolve(store.workspacePath(session.id), "enzyme_paper.pdf");
+  await execFileAsync(resolve(paperRoot, ".venv/bin/python"), ["-c", [
+    "from reportlab.pdfgen import canvas",
+    "import sys",
+    "pdf=canvas.Canvas(sys.argv[1])",
+    "pdf.drawString(72,720,'Uploaded enzyme half-life at 70 C')",
+    "pdf.save()",
+  ].join("\n"), target]);
+
+  const first = await service.extractWorkspacePdf({ path: "enzyme_paper.pdf", sessionId: session.id });
+  assert.equal(first.connectorId, "upload");
+  assert.equal(first.title, "enzyme_paper");
+  const textPath = `${first.manifestPath.replace(/manifest\.json$/, "")}${first.extraction.textPath}`;
+  assert.match(await readFile(resolve(store.workspacePath(session.id), textPath), "utf8"), /enzyme half-life/);
+
+  const again = await service.extractWorkspacePdf({ path: "enzyme_paper.pdf", sessionId: session.id });
+  assert.equal(again.id, first.id);
+  assert.equal((await store.listPaperAcquisitions(session.id)).length, 1);
+
+  await writeFile(resolve(store.workspacePath(session.id), "notes.pdf"), "not a pdf", "utf8");
+  await assert.rejects(service.extractWorkspacePdf({ path: "notes.pdf", sessionId: session.id }), /PDF signature/);
+});

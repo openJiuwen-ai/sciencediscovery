@@ -239,11 +239,12 @@ interface ArtifactDownloadResult {
 
 ```ts
 paper_extract_pdf({
-  artifactJobId: string
+  artifactJobId?: string  // 已完成的下载任务
+  path?: string           // 工作区里已有的 PDF，例如用户上传的文件
 })
 ```
 
-只接受已经完成的 PDF paper 下载。工具先创建独立的 ExtractionJob，再调用 Paper Worker，返回
+`artifactJobId` 与 `path` 二选一。`path` 形式直接抽取工作区里的 PDF；同一会话里相同内容的 PDF 已抽取过时返回先前的结果。`artifactJobId` 形式只接受已经完成的 PDF paper 下载。工具先创建独立的 ExtractionJob，再调用 Paper Worker，返回
 ExtractionJob ID、PaperAcquisition ID、文本路径、Manifest 路径、页数和警告。
 
 下载完成不会自动抽取，抽取失败也不会改变原 PDF 下载的 completed 状态。

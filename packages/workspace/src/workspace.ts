@@ -304,8 +304,10 @@ export interface WorkspaceToolOptions {
     job: NpuJob,
     artifacts: Array<{ artifact_id: string; path: string; version: number }>,
   ) => void;
+  /** Exactly one of a completed download's artifactJobId or a workspace PDF path. */
   paperExtractPdf?: (input: {
-    artifactJobId: string;
+    artifactJobId?: string;
+    path?: string;
   }, signal?: AbortSignal) => Promise<unknown>;
   webFetch?: (toolCallId: string, url: string, signal?: AbortSignal) => Promise<unknown>;
   webSearch?: (toolCallId: string, query: string, signal?: AbortSignal) => Promise<unknown>;
@@ -412,7 +414,10 @@ export interface WorkspaceToolOptions {
   toolPolicy?: ToolFilterPolicy;
 }
 
-function assertWorkspacePath(workspaceRoot: string, requestedPath: string): string {
+function assertWorkspacePath(workspaceRoot: string, path: string): string {
+  // An absolute path naming this workspace (JiuwenSwarm tells the model its host path) is taken as relative.
+  const named = isAbsolute(path) ? workspaceRelativeCwd(workspaceRoot, path) : path;
+  const requestedPath = named === "." ? path : named ?? path;
   if (!requestedPath.trim() || isAbsolute(requestedPath)) {
     throw new Error("Workspace paths must be non-empty and relative");
   }
@@ -423,6 +428,34 @@ function assertWorkspacePath(workspaceRoot: string, requestedPath: string): stri
     throw new Error(`Path escapes the workspace: ${requestedPath}`);
   }
   return candidate;
+}
+
+/**
+ * A Shell cwd as the Runner takes it: relative to the workspace. An absolute path that names the
+ * workspace itself (its host path, or the sandbox's `/workspace`) is made relative; the JiuwenSwarm
+ * backend tells the model the host path of its working directory, so the model passes it on. Any
+ * other absolute path is left as it is and refused by the Runner.
+ */
+export function workspaceRelativeCwd(workspaceRoot: string, cwd: string | undefined): string | undefined {
+  if (cwd === undefined || !isAbsolute(cwd)) return cwd;
+  const trimmed = cwd.replace(/\/+$/, "") || "/";
+  if (trimmed === "/workspace") return ".";
+  if (trimmed.startsWith("/workspace/")) return trimmed.slice("/workspace/".length);
+  const root = resolve(workspaceRoot);
+  const candidate = resolve(trimmed);
+  if (candidate === root) return ".";
+  return descendantPath(root, candidate) ?? cwd;
+}
+
+/**
+ * A command written with the Agent Workspace's host path, as the sandbox sees it: mounted at `/workspace`.
+ * JiuwenSwarm tells the model its project directory by that host path, which the sandbox does not have.
+ */
+export function sandboxWorkspacePaths(workspaceRoot: string, command: string): string {
+  const root = resolve(workspaceRoot);
+  if (root === "/" || !command.includes(root)) return command;
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return command.replace(new RegExp(`${escaped}(?=$|[/\\s'"\`;:|&()<>])`, "g"), "/workspace");
 }
 
 function descendantPath(parent: string, child: string): string | undefined {
@@ -1283,7 +1316,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const shellParameters = Type.Object({
       background: Type.Optional(Type.Boolean({ description: "Return after acceptance without waiting for completion." })),
       wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000, description: "Foreground wait budget (default 10000 ms), not a process timeout." })),
-      arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32 })),
+      arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32, description: "Arguments passed to command or scriptPath, each quoted as one word." })),
       command: Type.Optional(Type.String({ maxLength: 20_000, minLength: 1 })),
       environment_id: Type.Optional(Type.String({ minLength: 1 })),
       cwd: Type.Optional(Type.String({ maxLength: 1_000 })),
@@ -1297,7 +1330,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
         }
-        let code = params.command?.trim() ?? "";
+        let code = sandboxWorkspacePaths(workspaceRoot,
+          [params.command?.trim() ?? "", ...(params.command ? params.arguments ?? [] : []).map(shellQuote)].join(" ").trim());
         if (params.scriptPath) {
           const script = await resolveSandboxScriptPath(
             workspaceRoot,
@@ -1310,9 +1344,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             : shellQuote(script.path);
           code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
+        const cwd = workspaceRelativeCwd(workspaceRoot, params.cwd);
         if (options.shellExecutions) {
           let execution = await options.shellExecutions.start(code, {
-            environmentId: params.environment_id, cwd: params.cwd,
+            environmentId: params.environment_id, cwd,
           }, signal, toolCallId, params.runner_id);
           if (!params.background) execution = await options.shellExecutions.wait(execution.id, params.wait_ms ?? 10_000, signal);
           const pending = execution.state === "queued" || execution.state === "running";
@@ -1327,7 +1362,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }
         if (params.background || params.wait_ms !== undefined) throw new Error("Managed Shell Execution is unavailable on this runtime");
         const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
-          environmentId: params.environment_id, cwd: params.cwd,
+          environmentId: params.environment_id, cwd,
         });
         return {
           isError: result.exitCode !== 0,
@@ -1571,11 +1606,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.paperExtractPdf) {
     const extractPdfParameters = Type.Object({
-      artifactJobId: Type.String({ minLength: 1 }),
+      artifactJobId: Type.Optional(Type.String({ minLength: 1, description: "A completed artifact_download job" })),
+      path: Type.Optional(Type.String({ minLength: 1, description: "A PDF already in the workspace, such as one the user uploaded" })),
     });
     const extractPdf: AgentTool<typeof extractPdfParameters> = {
-      description: "Extract text, tables, and page metadata from a completed PDF artifact download. Call this only after artifact_download has returned a completed artifactJobId.",
+      description: "Extract text, tables, and page metadata from a PDF. Pass artifactJobId for a paper fetched with artifact_download (only after it has returned a completed artifactJobId), or path for a PDF already in the workspace, such as one the user uploaded. Read the returned textPath instead of decoding the PDF yourself.",
       execute: async (_toolCallId, params, signal) => {
+        if (Boolean(params.artifactJobId) === Boolean(params.path)) {
+          throw new Error("paper_extract_pdf takes exactly one of artifactJobId or path");
+        }
         const result = await options.paperExtractPdf!(params, signal);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],

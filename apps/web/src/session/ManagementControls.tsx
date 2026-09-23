@@ -18,7 +18,7 @@ import type { ConnectorManifest, DeletionImpact, ModelProfile, RuntimeSettingsDe
 
 import { ArchiveIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, EditIcon, EllipsisIcon, PlusIcon, RestoreIcon, SettingsIcon, TrashIcon } from "../icons.js";
 import { ScopedSettingsEditor } from "../ScopedSettingsEditor.js";
-import { useLocale } from "../i18n/index.js";
+import { useLocale, type MessageKey } from "../i18n/index.js";
 
 export function selectAfterRemoval<T extends { id: string }>(items: T[], removedId: string, selectedId?: string): string | undefined {
   if (selectedId !== removedId && items.some((item) => item.id === selectedId)) return selectedId;
@@ -432,6 +432,16 @@ export function SessionOverflowMenu({
   />;
 }
 
+/** The data categories a deletion impact names (the API's fixed English strings), as message keys. */
+const DELETION_CATEGORY_KEYS: Partial<Record<string, MessageKey>> = {
+  "connector and evidence records": "delete.category.connectorEvidence",
+  "execution records": "delete.category.executionRecords",
+  messages: "delete.category.messages",
+  "paper records": "delete.category.paperRecords",
+  "provenance and reviews": "delete.category.provenanceReviews",
+  "workspace files": "delete.category.workspaceFiles",
+};
+
 export function DeletionDialog({
   confirmation,
   impact,
@@ -461,7 +471,10 @@ export function DeletionDialog({
         <div><dt>{t("delete.active")}</dt><dd>{impact.activeSessionCount}</dd></div>
         <div><dt>{t("delete.archived")}</dt><dd>{impact.archivedSessionCount}</dd></div>
       </dl>
-      <div className="impact-categories"><strong>{t("delete.dataRemoved")}</strong><span>{impact.dataCategories.join(", ") || t("delete.catalogMetadata")}</span></div>
+      <div className="impact-categories"><strong>{t("delete.dataRemoved")}</strong><span>{impact.dataCategories.map((category) => {
+        const key = DELETION_CATEGORY_KEYS[category];
+        return key ? t(key) : category;
+      }).join(t("delete.categorySeparator")) || t("delete.catalogMetadata")}</span></div>
       <label><span>{t("delete.confirm", { label })}</span><input autoFocus value={confirmation} onChange={(event) => onChangeConfirmation(event.target.value)} /></label>
       <div className="dialog-actions">
         <button className="secondary-button" onClick={onCancel} type="button">{t("common.cancel")}</button>

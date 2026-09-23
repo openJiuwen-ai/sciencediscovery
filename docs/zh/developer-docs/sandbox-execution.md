@@ -194,6 +194,7 @@ HTTP `/execute`、`/execute-shell`、`/shell-executions` 在创建 Workspace 或
 
 ## 相关文档
 
+- [Shell、环境与 Workspace](../core/execution-workspaces.md)：用户可见的执行行为。
 - [control-plane.md](control-plane.md) — API 如何调用 Runner（签名、端点）
 - [architecture.md](architecture.md) — 进程模型与端口
 - [配置参考](../reference/configuration.md) — 相关环境变量、配额与数据落点

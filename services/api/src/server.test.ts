@@ -7650,7 +7650,7 @@ test("WPC-003 the web-page content endpoint requires auth like the rest of /api"
 });
 
 test("WPC-004 the memory-graph disabled toggle short-circuits the endpoint without crashing", async (context) => {
-  // Default state: the toggle is OFF. /api/memory/subgraph returns an empty
+  // With the toggle OFF, /api/memory/subgraph returns an empty
   // body with reason="memory_graph_disabled", and the new endpoint should
   // translate that into a 404 "not found" — never a 5xx. The user-visible
   // effect is identical to "this session has no WebPage with content".
@@ -7678,7 +7678,14 @@ test("WPC-004 the memory-graph disabled toggle short-circuits the endpoint witho
     method: "POST",
   });
   const sessionId = project.body.firstSession.id;
-  // Toggle is off by default — no PUT to /api/memory/settings.
+  // The toggle is on by default; this checks the off state, so switch it off.
+  const off = await fetch(`${origin}/api/memory/settings`, {
+    body: JSON.stringify({ enabled: false }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "PUT",
+  });
+  assert.equal(off.status, 200);
+  sidecarCalls.length = 0;
   const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/wp-hash/content`, { headers: authorization });
   assert.equal(response.status, 404);
   assert.match((await response.json() as { error?: string }).error ?? "", /WebPage not found or has no content_hash/);

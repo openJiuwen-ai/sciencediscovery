@@ -17,7 +17,7 @@ import re
 import shutil
 from pathlib import Path
 
-from sciencediscovery_adapter.skills import MARKER, SkillSync
+from sciencediscovery_adapter.skills import MARKER, SkillSync, sandbox_skill_paths
 import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
@@ -133,3 +133,25 @@ async def test_the_list_says_which_skills_came_from_sciencediscovery_and_which_a
         {"name": "skill-creator", "description": "skill-creator things", "enabled": True, "source": "builtin"},
         {"name": "xlsx", "description": "xlsx things", "enabled": False, "source": "builtin"},
     ]
+
+
+async def test_sync_records_where_jiuwenswarm_keeps_each_imported_skill(tmp_path):
+    jw = jiuwenswarm(tmp_path, "evolve-design")  # its own skill of that name: ours is renamed
+    sync = SkillSync(jw.rpc, URL)
+    await sync.sync([{"id": "evolve-design", "path": str(package(tmp_path, "evolve-design")), "hash": "h1"}])
+    assert sync.directories == {str(jw.root / "sciencediscovery-evolve-design"): "evolve-design"}
+
+
+def test_a_command_reading_jiuwenswarms_copy_of_a_skill_reads_the_sandbox_package():
+    # Observed: skill_tool pointed the model at JiuwenSwarm's skills directory and it ran
+    # `cat <that>/references/custom-script.md`, which the sandbox does not have.
+    jw = "/root/.jiuwenswarm-instances/sd/agent/workspace/skills/sciencediscovery-evolve-design"
+    dirs = {jw: "evolve-design"}
+    assert sandbox_skill_paths(f"cat {jw}/references/custom-script.md", dirs) \
+        == 'cat "$SCIENCEDISCOVERY_SKILLS_DIR"/evolve-design/references/custom-script.md'
+    assert sandbox_skill_paths(f'cat "{jw}/a b.md"', dirs) == 'cat "$SCIENCEDISCOVERY_SKILLS_DIR/evolve-design/a b.md"'
+    assert sandbox_skill_paths(f"cat '{jw}/a.md'", dirs) == "cat ''\"$SCIENCEDISCOVERY_SKILLS_DIR\"'/evolve-design/a.md'"
+    assert sandbox_skill_paths(f"ls {jw}", dirs) == 'ls "$SCIENCEDISCOVERY_SKILLS_DIR"/evolve-design'
+    # A longer name that only starts the same is another skill; a command without the path is untouched.
+    assert sandbox_skill_paths(f"ls {jw}-2", dirs) == f"ls {jw}-2"
+    assert sandbox_skill_paths("ls /workspace", dirs) == "ls /workspace"
