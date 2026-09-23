@@ -134,7 +134,10 @@ const execFileAsync = promisify(execFile);
 const onJiuwenSwarm = process.env.SCIENCE_AGENT_EXECUTOR?.trim() === "jiuwenswarm";
 
 /**
- * scripts/with-jiuwenswarm.sh deliberately leaves subagent delegation at its real-deployment default:
+ * Historical background for the unreviewed cases below (not the current wrapper policy).
+ * The wrapper now defaults to SUBAGENTS=task, with an explicit jiuwenswarm override;
+ * this does not automatically reclassify previously unreviewed cases.
+ * Previously, scripts/with-jiuwenswarm.sh left subagent delegation at its real-deployment default:
  * JiuwenSwarm's own native subagent_spawn/subagent_wait, not ScienceDiscovery's task-delegation bridge
  * (SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task, an opt-in a caller reaches for on purpose, trading native
  * subagent_spawn for full sandbox/approval/provenance parity — see gap 1a in

@@ -10,6 +10,11 @@ import { preflight } from '../test/support/tagged/environment.mjs';
 import { planGrep } from '../test/support/tagged/playwright-selection.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
 
+test('Swarm UT defaults to platform task delegation and preserves an explicit native override', () => {
+  const source = readFileSync(new URL('../scripts/with-jiuwenswarm.sh', import.meta.url), 'utf8');
+  assert.ok(source.includes('export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS="${SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS:-task}"'));
+});
+
 test('Docker and binaries build patched Swarm; service start only verifies it', () => {
   for (const path of ['Dockerfile', 'scripts/binary-release/build-payload.sh']) {
     const source = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
