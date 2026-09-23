@@ -65,6 +65,12 @@ function invoke(command, args, { root, env, outputDir, name, timeoutMs = 120_000
 }
 const childEnv = env => ({ ...env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1', PYTEST_ADDOPTS: '', PYTEST_PLUGINS: '',
   PYTHONPATH: [join(here, 'python'), env.PYTHONPATH].filter(Boolean).join(delimiter) });
+// pytest looks for its config before the science_tags plugin has declared its
+// options, so a value passed as a separate argument is taken for a test path:
+// `--science-root <repo>` made the repository root the place to search, and a
+// project's own pytest settings (services/<name>/pyproject.toml) were never
+// read. One token per option keeps the value out of that search.
+const scienceOptions = options => Object.entries(options).map(([name, value]) => `--science-${name}=${value}`);
 
 export function collect({ root, files, outputDir, python = 'python3', nodeImports = [], env = process.env }) {
   mkdirSync(outputDir, { recursive: true });
@@ -84,7 +90,7 @@ export function collect({ root, files, outputDir, python = 'python3', nodeImport
     const output = join(outputDir, 'python-catalog.json');
     rmSync(output, { force: true });
     const result = invoke(python, ['-m', 'pytest', '-p', 'science_tags', '--strict-markers', '--rootdir', root, '--collect-only', '-q',
-      '--science-root', root, '--science-catalog', output, ...groups.python],
+      ...scienceOptions({ root, catalog: output }), ...groups.python],
     { root, env: childEnv(env), outputDir, name: 'python-collect' });
     if (result.status !== 0 || !existsSync(output)) throw new Error('PYTHON_COLLECTION_FAILED; inspect python-collect.log');
     const pythonCatalog = readJSON(output).catalog;
@@ -186,7 +192,7 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
       } else {
         writeJSON(request, part);
         const completed = invoke(python, ['-m', 'pytest', '-p', 'science_tags', '--strict-markers', '--rootdir', root, '-q',
-          '--science-root', root, '--science-plan', request, '--science-report', resultPath, ...files.map(f => resolve(root, f))],
+          ...scienceOptions({ root, plan: request, report: resultPath }), ...files.map(f => resolve(root, f))],
         { root: cwd, env: childEnv(env), outputDir, name, timeoutMs });
         if (completed.status !== 0) errors.push(`PYTHON_WORKER_FAILED: ${name}`);
         if (existsSync(resultPath)) results.push(...readJSON(resultPath).results);
