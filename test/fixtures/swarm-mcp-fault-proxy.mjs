@@ -9,8 +9,20 @@ const target = new URL(process.env.E2E_MCP_PROXY_TARGET ?? "http://127.0.0.1:468
 if (target.hostname !== "127.0.0.1" || target.protocol !== "http:") throw new Error("Loopback HTTP target required");
 const injected = new Set();
 const server = createServer(async (incoming, outgoing) => {
+  if (incoming.url === "/health" && incoming.method === "GET") {
+    outgoing.writeHead(204);
+    outgoing.end();
+    return;
+  }
   const chunks = [];
-  for await (const chunk of incoming) chunks.push(chunk);
+  try {
+    for await (const chunk of incoming) chunks.push(chunk);
+  } catch (error) {
+    // A cancelled MCP request can close its socket while the body is being
+    // read. The fixture must survive so later journeys can still use it.
+    if (error?.code === "ECONNRESET") return;
+    throw error;
+  }
   const body = Buffer.concat(chunks);
   if (incoming.url?.startsWith("/mcp/") && incoming.method === "POST") {
     try {

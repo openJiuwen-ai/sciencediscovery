@@ -266,8 +266,27 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     export E2E_MCP_PROXY_PORT="$((SCIENCE_AGENT_PORT + 5))"
     export E2E_MCP_PROXY_TARGET="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
     export SCIENCE_AGENT_ADAPTER_PUBLIC_URL="http://127.0.0.1:${E2E_MCP_PROXY_PORT}"
-    node test/fixtures/swarm-mcp-fault-proxy.mjs >> "$stack_log" 2>&1 &
+    if ss -ltn "sport = :$E2E_MCP_PROXY_PORT" 2>/dev/null | grep -q LISTEN; then
+      printf 'BLOCKED: MCP fault proxy port %s is already in use.\n' "$E2E_MCP_PROXY_PORT" >&2
+      exit 2
+    fi
+    # Keep fixture startup diagnostics separate: start-stack redirects stack_log
+    # with `>`, which otherwise erases any early proxy bind failure.
+    node test/fixtures/swarm-mcp-fault-proxy.mjs > "$results_root/mcp-proxy.log" 2>&1 &
     fixture_pid=$!
+    proxy_ready=0
+    for _ in $(seq 1 50); do
+      if curl --silent --fail --max-time 1 --output /dev/null "http://127.0.0.1:${E2E_MCP_PROXY_PORT}/health"; then
+        proxy_ready=1
+        break
+      fi
+      if ! kill -0 "$fixture_pid" 2>/dev/null; then break; fi
+      sleep 0.1
+    done
+    if [[ "$proxy_ready" -ne 1 ]]; then
+      printf 'BLOCKED: MCP fault proxy did not listen on port %s; see %s.\n' "$E2E_MCP_PROXY_PORT" "$results_root/mcp-proxy.log" >&2
+      exit 2
+    fi
     if [[ "$fixture" == literature ]]; then
       export E2E_LITERATURE_FIXTURE=1
       export SCIENCE_AGENT_API_ENTRYPOINT="$repository_root/test/fixtures/literature-api.mjs"
@@ -293,9 +312,13 @@ if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
 # journeys reach whoever already owns the address, and the run reports a wall of
 # 401s that reads like a broken token. Say it here instead, while the port is
 # still the answer.
-for busy_port in "$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT"; do
+busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
+if [[ "$backend" == jiuwenswarm ]]; then
+  busy_ports+=("${SCIENCE_AGENT_LEGACY_PORT:-$((SCIENCE_AGENT_PORT + 100))}")
+fi
+for busy_port in "${busy_ports[@]}"; do
   if ss -ltn "sport = :$busy_port" 2>/dev/null | grep -q LISTEN; then
-    printf 'BLOCKED: port %s is already in use; another stack owns it. Set SCIENCE_AGENT_PORT / SCIENCE_AGENT_RUNNER_PORT / SCIENCE_AGENT_EVOLVE_PORT / SCIENCE_AGENT_MEMORY_GRAPH_PORT to a free block.\n' \
+    printf 'BLOCKED: port %s is already in use; another stack owns it. Choose free API (including its legacy port +100), runner, evolve and memory-graph ports.\n' \
       "$busy_port" | tee -a "$test_log" >&2
     exit 2
   fi
