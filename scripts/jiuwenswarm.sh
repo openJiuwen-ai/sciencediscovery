@@ -47,6 +47,18 @@ jw_src="${JIUWENSWARM_SRC:-$jw_root/src}"
 jw_bin="$jw_src/.venv/bin"
 jw_data_dir="$jw_root/data"
 jw_log="$jw_root/jiuwenswarm.log"
+patch_root="$repository_root/jiuwen_swarm/patches/$jw_tag"
+
+apply_compatibility_patches() {
+  [[ -d "$patch_root" ]] || return 0
+  while IFS= read -r patch_file; do
+    if git -C "$jw_src" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
+      continue
+    fi
+    git -C "$jw_src" apply --check "$patch_file"
+    git -C "$jw_src" apply "$patch_file"
+  done < <(find "$patch_root" -maxdepth 1 -type f -name '*.patch' -print | sort)
+}
 
 usage() {
   sed -n '15,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -144,6 +156,8 @@ cmd_setup() {
         exit 1
       }
     fi
+    # Apply source compatibility fixes before syncing the editable installation.
+    apply_compatibility_patches
     echo "Installing JiuwenSwarm (Python 3.12, its own virtualenv)..." >&2
     (
       cd "$jw_src"
@@ -171,6 +185,7 @@ cmd_start() {
   [[ -x "$jw_bin/jiuwenswarm-start" ]] || { echo "Not installed; run: scripts/jiuwenswarm.sh setup" >&2; exit 1; }
   apply_config >/dev/null
   if is_up; then echo "JiuwenSwarm instance $jw_instance is already up." >&2; return; fi
+  apply_compatibility_patches
   # Detach completely (stdin, stdout, stderr): a background job that keeps the caller's stdout open
   # makes `scripts/jiuwenswarm.sh start | tee ...`, or any script capturing its output, wait forever.
   cd "$jw_root"

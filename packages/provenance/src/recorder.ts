@@ -369,7 +369,7 @@ export class ProvenanceRecorder {
       kind,
       logicalName: options.name,
       origin: "llm_declared",
-      originMeta: { declaredPath: options.sourcePath },
+      originMeta: { declaredPath: options.sourcePath, ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}) },
       parentSubagentId: options.parentSubagentId,
       path: options.path,
       sessionId: options.sessionId,

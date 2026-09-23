@@ -63,6 +63,10 @@ test("subagent config accepts any requested type as a general-purpose delegation
     resolveSubagentConfig({ description: "Short general test", prompt: "Run.", subagentType: "general-purpose", timeoutSeconds: 2 }).timeoutSeconds,
     2,
   );
+  assert.deepEqual(
+    resolveSubagentConfig({ description: "Implicit general budget", maxTurns: 10, prompt: "Run.", timeoutSeconds: 360 }),
+    { ...GENERAL_PURPOSE_SUBAGENT, maxTurns: 10, timeoutSeconds: 360 },
+  );
   const roleConfig = resolveSubagentConfig({
     description: "Analyze data",
     maxTurns: 30,

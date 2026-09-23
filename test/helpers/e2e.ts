@@ -69,6 +69,9 @@ export const test = base.extend<{ journey: JourneyReporter; mockedNetworkGuard: 
   },
   mockedNetworkGuard: [
     async ({ context }, use, testInfo) => {
+      if (testInfo.tags.includes("@real") && process.env.CI_ALLOW_REAL !== "1" && process.env.E2E_REAL !== "1") {
+        throw new Error("BLOCKED: explicitly set E2E_REAL=1 or CI_ALLOW_REAL=1 before real execution");
+      }
       if (testInfo.tags.includes("@mocked")) await blockNonLocalRequests(context);
       await use();
     },
@@ -87,7 +90,7 @@ export function requireRealEnv(testInfo: TestInfo, ...names: string[]): Record<s
   if (missing.length) {
     const reason = `BLOCKED: missing required env ${missing.join(", ")}`;
     console.warn(reason);
-    testInfo.skip(true, reason);
+    throw new Error(reason);
   }
   return Object.fromEntries(names.map((name) => [name, process.env[name] ?? ""]));
 }

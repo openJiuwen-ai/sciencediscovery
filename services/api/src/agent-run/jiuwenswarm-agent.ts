@@ -127,7 +127,7 @@ export const JIUWENSWARM_WEB_TOOLS: Record<string, string> = { web_search: "free
 export const JIUWENSWARM_HOST_TOOLS = ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf"] as const;
 
 /** What the model is told instead: JiuwenSwarm's own prompt still names those tools. */
-export const HOST_TOOLS_SECTION = "Commands, scripts and file writes run in the sandbox through run_shell; read workspace files with read_file and list_files. JiuwenSwarm's bash, write_file, edit_file, glob, grep and read_pdf are not available here.";
+export const HOST_TOOLS_SECTION = "Commands, scripts and file writes run in the sandbox through run_shell; read workspace files with read_file and list_files. Use workspace-relative paths in run_shell (for example, report.md): the host working directory shown by JiuwenSwarm is not accessible at the same absolute path inside the sandbox. JiuwenSwarm's bash, write_file, edit_file, glob, grep and read_pdf are not available here.";
 
 /**
  * ScienceDiscovery's tools JiuwenSwarm's permission engine asks the user about: those that needed approval before
@@ -159,6 +159,10 @@ export const JIUWENSWARM_TODO_TOOLS = ["todo_create", "todo_modify", "todo_list"
 
 /** JiuwenSwarm's own sub-agent tools, offered in place of `task` unless subagents is `task`. */
 export const JIUWENSWARM_SUBAGENT_TOOLS = ["subagent_spawn", "subagent_wait"] as const;
+// Hide the whole native lifecycle, not just the two tools explicitly offered above.
+const JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS = [
+  ...JIUWENSWARM_SUBAGENT_TOOLS, "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume",
+] as const;
 
 /** Selected by SCIENCE_AGENT_EXECUTOR=jiuwenswarm; the native agent stays the default. */
 export function jiuwenSwarmConfigFromEnv(env: NodeJS.ProcessEnv = process.env): JiuwenSwarmAgentConfig | undefined {
@@ -184,7 +188,7 @@ interface ApprovalQuestion { id: string; resource?: string; summary?: string; to
 /** A line of the adapter's NDJSON stream. */
 type RunLine =
   | { event: { type: string; [key: string]: unknown } }
-  | { done: { finalText: string; unmapped?: string[]; cancelled?: boolean } };
+  | { done: { finalText: string; status?: "completed" | "failed" | "cancelled"; unmapped?: string[]; cancelled?: boolean } };
 
 export function createJiuwenSwarmAgentFactory(config: JiuwenSwarmAgentConfig) {
   return (options: NativeAgentOptions): NativeAgentHandle => new JiuwenSwarmAgent(config, options);
@@ -193,6 +197,7 @@ export function createJiuwenSwarmAgentFactory(config: JiuwenSwarmAgentConfig) {
 class JiuwenSwarmAgent implements NativeAgentHandle {
   private readonly listeners = new Set<Listener>();
   private readonly controller = new AbortController();
+  private approvalDeliveryError?: Error;
   private executed = false;
   /** The run's skills installed in JiuwenSwarm: JiuwenSwarm's name for each, and back. */
   private readonly skillNames = new Map<string, string>();
@@ -298,7 +303,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       config: { planning: this.config.planning ?? "todo", prompt: this.config.prompt ?? "prepend", tools: this.config.tools ?? "jiuwenswarm", skills: this.config.skills ?? "jiuwenswarm", subagents: this.config.subagents ?? "jiuwenswarm" },
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
-      trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined);
+      trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,
+      { progress: () => this.deadlines?.progress(), beforeTurn: () => this.emit({ type: "turn_start" }) });
     const deadlines = new RunDeadlines(this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS,
       this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS, () => this.controller.abort());
     this.deadlines = deadlines;
@@ -306,6 +312,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     deadlines.start();
     try {
       const finalText = await this.stream(text, tools, bridge.url, bridgeToken, announcements, transcript, modelGateway, jiuwenSwarmPlans, jiuwenSwarmSubagents);
+      this.controller.signal.throwIfAborted();
       // The model was cut at max_tokens and JiuwenSwarm ended the run there. Say so as the native loop does;
       // a turn that produced no visible text (a reasoning model spending its whole budget on thought) would
       // otherwise end the run in the middle of a thought with nothing to show for it.
@@ -322,8 +329,13 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     } catch (error) {
       // Keep "timeout" in these errors: classifySubagentFailure matches /timeout/i for a sub-agent's timed_out status.
       if (deadlines.expired) throw deadlines.error();
+      if (this.approvalDeliveryError) throw this.approvalDeliveryError;
       if (this.controller.signal.aborted) throw new Error("Agent run cancelled");
       console.warn(`[jiuwenswarm-agent] run of ${this.options.sessionId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error) {
+        const cause = error.cause as { name?: string; code?: string; message?: string } | undefined;
+        console.warn(`[jiuwenswarm-agent] transport diagnostic: ${JSON.stringify({ name: error.name, stack: error.stack, cause: cause && { name: cause.name, code: cause.code, message: cause.message } })}`);
+      }
       throw error;
     } finally {
       deadlines.stop();
@@ -387,17 +399,39 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     const decided = (ask
       ? ask({ resource, summary: question.summary ?? question.resource ?? "tool call",
         ...(question.toolCallId ? { toolCallId: question.toolCallId } : {}) }, this.controller.signal)
-      : Promise.resolve("deny" as const)).finally(release);
+      : Promise.resolve("deny" as const));
     void decided.catch(() => "deny" as const).then(async (decision) => {
-      const response = await (this.config.fetch ?? fetch)(`${this.config.adapterUrl}/agent/approvals/${encodeURIComponent(question.id)}`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...(this.config.adapterToken ? { authorization: `Bearer ${this.config.adapterToken}` } : {}) },
-        body: JSON.stringify({ decision }),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      for (let attempt = 0; ; attempt += 1) {
+        this.controller.signal.throwIfAborted();
+        let response: Response;
+        try {
+          response = await (this.config.fetch ?? fetch)(`${this.config.adapterUrl}/agent/approvals/${encodeURIComponent(question.id)}`, {
+            method: "POST",
+            signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(10_000)]),
+            headers: { "content-type": "application/json", ...(this.config.adapterToken ? { authorization: `Bearer ${this.config.adapterToken}` } : {}) },
+            body: JSON.stringify({ decision }),
+          });
+        } catch (error) {
+          if (this.controller.signal.aborted || attempt >= 2) throw error;
+          const cause = (error as { cause?: { code?: string } })?.cause;
+          console.warn(`[jiuwenswarm-agent] approval transport retry ${attempt + 1}/2 question=${question.id} cause=${cause?.code ?? (error instanceof Error ? error.name : "unknown")}`);
+          await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+          continue;
+        }
+        if (response.ok) break;
+        // Adapter 502 means an uncertain downstream delivery: do not replay it.
+        // Only retry HTTP service availability failures using the same decision ID.
+        if (![503, 504].includes(response.status) || attempt >= 2) throw new Error(`HTTP ${response.status}`);
+        await response.body?.cancel();
+        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      }
     }).catch((error) => {
       console.warn(`[jiuwenswarm-agent] could not answer JiuwenSwarm's approval question ${question.id}: ${error instanceof Error ? error.message : String(error)}`);
-    });
+      if (!this.controller.signal.aborted) {
+        this.approvalDeliveryError = new Error("JiuwenSwarm approval delivery failed; the run cannot safely resume.");
+        this.controller.abort();
+      }
+    }).finally(release);
   }
 
   /** JiuwenSwarm's own web search and fetching, recorded in the memory graph as ours are. Fire and forget. */
@@ -452,7 +486,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       ...(jiuwenSwarmPlans ? [TODO_PLANNING_SECTION] : []),
       ...(jiuwenSwarmSubagents ? [SUBAGENT_DELEGATION_SECTION] : []),
     ];
-    const systemPrompt = [withHostRule, ...replacementSections].join("\n\n");
+    const delegationRule = jiuwenSwarmSubagents ? [] : [toolNames.has("task")
+      ? "Delegation for this run uses only the platform task tool. Swarm-native subagent tools are unavailable; ignore any generic instructions recommending them. Use task to delegate and collect results."
+      : "Delegation is unavailable for this run. Ignore any generic instructions recommending Swarm-native subagent tools; complete the assigned work with the available tools."];
+    const systemPrompt = [withHostRule, ...replacementSections, ...delegationRule].join("\n\n");
     const nativeToolNames = [...(jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []), ...(jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_TOOLS : [])];
     const response = await (this.config.fetch ?? fetch)(`${this.config.adapterUrl}/agent/runs`, {
       method: "POST",
@@ -462,6 +499,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       },
       body: JSON.stringify({
         sessionId: this.options.sessionId,
+        runId: this.options.versioning?.trajectoryId,
+        agentId: this.options.versioning?.agentId,
         sessionKey: jiuwenSwarmSessionKey(this.options),
         prompt: text,
         systemPrompt,
@@ -472,7 +511,10 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         model: { model: model.model, baseUrl: modelGateway.url, apiKey: modelGateway.token, provider: "OpenAI" },
         ...(nativeToolNames.length ? { nativeTools: nativeToolNames } : {}),
         jiuwenSwarmTools: allJiuwenSwarmTools ? "all" : "listed",
-        ...(allJiuwenSwarmTools ? { hiddenJiuwenSwarmTools: [...JIUWENSWARM_HOST_TOOLS] } : {}),
+        hiddenJiuwenSwarmTools: [
+          ...(allJiuwenSwarmTools ? JIUWENSWARM_HOST_TOOLS : []),
+          ...(!jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS : []),
+        ],
         // JiuwenSwarm gives a tool call 30 s unless told otherwise; the run's own timeout is the limit here.
         ...(this.options.runTimeoutMs ? { toolTimeoutSeconds: Math.ceil(this.options.runTimeoutMs / 1000) } : {}),
         tools: [...tools.values()].map((tool) => ({
@@ -496,14 +538,25 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       });
     let finalText = "";
     let failure: string | undefined;
+    let receivedTerminal = false;
     for await (const line of ndjson(response.body)) {
+      if (receivedTerminal) throw new Error("Swarm adapter sent data after its terminal result");
       this.deadlines?.progress();
       if ("event" in line && line.event.type === "permission.required") this.answerApproval(line.event.request as ApprovalQuestion);
-      if ("done" in line) finalText = line.done.finalText;
+      if ("done" in line) {
+        receivedTerminal = true;
+        finalText = line.done.finalText;
+        if (line.done.cancelled || line.done.status === "cancelled") failure ??= "Swarm run was cancelled";
+        if (line.done.status === "failed") failure ??= "Swarm run failed without an error event";
+        if (line.done.status !== undefined && !["completed", "failed", "cancelled"].includes(line.done.status)) {
+          failure ??= "Swarm adapter returned an invalid terminal status";
+        }
+      }
       else if (line.event.type === "run.failed") failure = String(line.event.error);
       else translator.handle(line.event);
     }
     if (failure !== undefined) throw new Error(failure);
+    if (!receivedTerminal) throw new Error("Swarm adapter stream ended without a terminal result");
     translator.finish();
     return finalText;
   }
@@ -522,6 +575,7 @@ class ToolAnnouncements {
   /** Every call announced so far, in the order the model made them, with the response it belongs to. */
   readonly all: Array<{ args: Record<string, unknown>; batch: number; id: string; name: string; seq: number }> = [];
   private batch = 0;
+  readonly failedBeforeBridge = new Set<string>();
 
   /** A new model response begins: its calls form the next batch. */
   newResponse(): void {
@@ -529,9 +583,19 @@ class ToolAnnouncements {
   }
 
   announce(call: { args: unknown; id: string; input: string; name: string }): void {
+    if (this.all.some((item) => item.id === call.id)) return;
     this.all.push({ args: (call.args ?? {}) as Record<string, unknown>, batch: this.batch, id: call.id, name: call.name, seq: this.all.length });
     this.pending.push(call);
     for (const wake of [...this.waiters]) wake();
+  }
+
+  /** Only an unclaimed call may be completed by the Swarm fallback reporter. */
+  failUnclaimed(id: string) {
+    const index = this.pending.findIndex((call) => call.id === id);
+    if (index < 0) return undefined;
+    const [call] = this.pending.splice(index, 1);
+    this.failedBeforeBridge.add(id);
+    return call;
   }
 
   /**
@@ -585,7 +649,7 @@ class ToolScheduler {
   async run(call: { args: Record<string, unknown>; id: string; name: string }, signal: AbortSignal, started: () => void): Promise<Dispatch> {
     const own = this.announcements.all.find((item) => item.id === call.id);
     // A call nobody announced (see claim) has no place in an order: run it as it comes.
-    if (!own) { started(); return await this.registry.execute(call as never, signal); }
+    if (!own) { signal.throwIfAborted(); started(); return await this.registry.execute(call as never, signal); }
     this.arrived.add(call.id);
     try {
       // Announcements of one response arrive back to back; let them all in before deciding.
@@ -602,11 +666,13 @@ class ToolScheduler {
       const mine = exclusive(own);
       for (const earlier of batchCalls.filter((item) => item.seq < own.seq && (mine || exclusive(item)))) {
         const deadline = Date.now() + this.graceMs;
-        while (!this.finished.has(earlier.id) && (this.arrived.has(earlier.id) || Date.now() < deadline)) {
+        while (!this.finished.has(earlier.id) && !this.announcements.failedBeforeBridge.has(earlier.id)
+          && (this.arrived.has(earlier.id) || Date.now() < deadline)) {
           if (signal.aborted) break;
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       }
+      signal.throwIfAborted();
       started();
       return await prepared.execute({ args: call.args, id: call.id, name: call.name } as never, signal);
     } finally {
@@ -670,11 +736,10 @@ class Transcript {
 
 /**
  * Turns the adapter's run events into the agent events the run consumes. Tool
- * events are deliberately not translated: the bridge reports them, from the
- * place the tool really runs, with its real result.
+ * Platform events normally come from the bridge. Pre-bridge failures have no
+ * bridge reporter, so the Swarm event is their authoritative fallback.
  */
 class EventTranslator {
-  private turn = 0;
   private total: { cacheReadTokens: number | null; cacheWriteTokens: number | null; inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
 
   constructor(
@@ -694,11 +759,10 @@ class EventTranslator {
   handle(event: { type: string; [key: string]: unknown }): void {
     switch (event.type) {
       case "agent.phase":
-        this.startTurn(Number(event.turn));
+        // Display events must not drive model-call admission or budgets.
         break;
       case "assistant.response.started": {
         const turn = Number(event.turn);
-        if (turn > this.turn) this.startTurn(turn);
         this.announcements.newResponse();
         this.emit({ type: "response_start", responseId: String(event.responseId), turn });
         break;
@@ -735,7 +799,18 @@ class EventTranslator {
       }
       case "tool.completed": {
         const trace = event.trace as { id: string; name: string; output?: string; status?: string };
-        if (!this.nativeCalls.has(trace.id)) break;
+        if (!this.nativeCalls.has(trace.id)) {
+          if (trace.status !== "failed") break;
+          const call = this.announcements.failUnclaimed(trace.id);
+          if (!call) break; // Already claimed/reported at the bridge, or duplicate.
+          const text = trace.output ?? "Tool failed before reaching the execution bridge";
+          this.emit({ type: "tool_execution_start", toolCallId: trace.id, toolName: call.name,
+            args: (call.args ?? {}) as Record<string, unknown> });
+          this.emit({ type: "tool_execution_end", toolCallId: trace.id, toolName: call.name, isError: true,
+            result: { content: [{ type: "text", text }] } });
+          this.transcript.toolResult(trace.id, call.name, text);
+          break;
+        }
         const text = trace.output ?? "";
         this.emit({
           type: "tool_execution_end", toolCallId: trace.id, toolName: trace.name, isError: trace.status === "failed",
@@ -743,6 +818,7 @@ class EventTranslator {
         });
         this.transcript.toolResult(trace.id, trace.name, text);
         this.onNativeResult?.({ args: this.nativeCalls.get(trace.id)?.args, id: trace.id, name: trace.name, output: text, failed: trace.status === "failed" });
+        this.nativeCalls.delete(trace.id);
         break;
       }
       case "plan.updated":
@@ -782,10 +858,6 @@ class EventTranslator {
     if (this.total) this.emit({ type: "usage", usage: this.total });
   }
 
-  private startTurn(turn: number): void {
-    this.turn = turn;
-    this.emit({ type: "turn_start" });
-  }
 }
 
 async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<RunLine> {
@@ -873,17 +945,48 @@ async function startBridge(
       reply(404, { error: `unknown tool: ${body.name}` });
       return;
     }
+    // Watch before waiting for announcements: the caller can disconnect while
+    // queued, not only after tool execution has started.
+    const disconnected = new AbortController();
+    response.once("close", () => {
+      if (!response.writableEnded) disconnected.abort(new Error("MCP caller disconnected"));
+    });
+    const callSignal = AbortSignal.any([signal, disconnected.signal]);
     // Run under the model's own id and arguments, and only after the adapter has reported the call
     // (see ToolAnnouncements).
     const claimed = await announcements.claim(tool.name, body.arguments ?? {}, announcementTimeoutMs);
+    if (callSignal.aborted) {
+      if (!response.destroyed) reply(499, { error: "MCP caller disconnected before execution" });
+      return;
+    }
     if (!claimed) console.warn(`[jiuwenswarm-bridge] no model call was reported for ${tool.name}; running it under a generated id`);
     const toolCallId = claimed?.id ?? randomUUID();
     const args = claimed?.args ?? body.arguments ?? {};
+    // A timed-out MCP client closes this HTTP response. Stop the corresponding
+    // tool (notably a child agent) instead of leaving it running after the
+    // parent has already received a transport failure.
     // registry.execute never throws for a failing tool: it answers with the standard error shape.
     // The scheduler holds the call back until the calls it may not overlap with have finished, so
     // the start is reported when the tool really starts, as the native loop does.
-    const dispatched = await scheduler.run({ id: toolCallId, name: tool.name, args }, signal, () =>
-      emit({ type: "tool_execution_start", toolCallId, toolName: tool.name, args }));
+    let dispatched: Dispatch;
+    try {
+      dispatched = await scheduler.run({ id: toolCallId, name: tool.name, args }, callSignal, () =>
+        emit({ type: "tool_execution_start", toolCallId, toolName: tool.name, args }));
+    } catch (error) {
+      // Tool handlers are normalized by the registry, but result persistence
+      // can still fail after the action has executed. Never let an async HTTP
+      // handler rejection terminate the API, or invite a blind replay.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[jiuwenswarm-bridge] dispatch of ${tool.name} failed: ${error instanceof Error ? error.stack : message}`);
+      const details = { ok: false, error: { code: "TOOL_DISPATCH_FAILED", message,
+        retryable: false, outcome: "unknown", instruction: "The action may have executed. Inspect its state before attempting it again." } };
+      const text = JSON.stringify(details);
+      emit({ type: "tool_execution_end", toolCallId, toolName: tool.name, isError: true,
+        result: { content: [{ type: "text", text }], details } });
+      transcript.toolResult(toolCallId, tool.name, text);
+      reply(200, { text, isError: true });
+      return;
+    }
     const isError = dispatched.isError === true;
     // Tool failures reach the model as text; without this line they are invisible to the operator.
     if (isError) console.warn(`[jiuwenswarm-bridge] tool ${tool.name} failed: ${dispatched.content.slice(0, 300)}`);

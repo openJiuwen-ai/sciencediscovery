@@ -1857,7 +1857,7 @@ export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | 
 }
 
 /** Default delegation preserves the established request/result and budget semantics. */
-export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy">): AgentTool[] {
+export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy" | "listArtifacts">): AgentTool[] {
   const tools: AgentTool[] = [];
   if (options.runSubagent) {
     const specialistSummary = summarizeSpecialistsForTaskTool(options.specialists);
@@ -1887,18 +1887,18 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
       inputPaths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), { maxItems: 50 })),
       max_turns: Type.Optional(Type.Integer({
         default: DEFAULT_SUBAGENT_MAX_TURNS,
-        description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
+        description: "Optional model-turn budget for this subagent. Set a smaller value for focused work or increase it for unusually deep delegated work.",
         maximum: MAX_SUBAGENT_MAX_TURNS,
-        minimum: DEFAULT_SUBAGENT_MAX_TURNS,
+        minimum: 1,
       })),
       prompt: Type.String({ maxLength: 20_000, minLength: 1 }),
       specialistId: Type.Optional(specialistIdSchema),
       subagent_type: Type.Optional(Type.String({ maxLength: 80, minLength: 1 })),
       timeout_seconds: Type.Optional(Type.Integer({
         default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-        description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
+        description: "Optional hard wall-clock runtime budget in seconds for this subagent, including model and tool waits.",
         maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
-        minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+        minimum: 1,
       })),
       tools: Type.Optional(Type.Union([
         Type.Null(),
@@ -1908,6 +1908,7 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
     const task: AgentTool<typeof taskParameters> = {
       description: [
         "Run one focused task in a subagent. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
+        "Subagents have isolated workspaces: their file paths are NOT local files in your workspace. Ask them to declare deliverables with declare_artifact. Read returned artifacts with read_artifact using artifact_id and version; use workspace_transfer only when you need a local copy. An undeclared file mentioned in prose is not an artifact reference.",
         specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
       ].filter(Boolean).join(" "),
       execute: async (toolCallId, params, signal) => {
@@ -1922,7 +1923,11 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
           ...(params.timeout_seconds === undefined ? {} : { timeoutSeconds: params.timeout_seconds }),
           ...(params.tools === undefined ? {} : { tools: params.tools }),
         }, signal);
-        const summary = summarizeSubagentResult(subagent);
+        const artifacts = (await options.listArtifacts?.() ?? [])
+          .filter((artifact) => !artifact.deletedAt && artifact.originMeta?.subagentId === subagent.id)
+          .map((artifact) => ({ artifact_id: artifact.id, name: artifact.name, version: artifact.currentVersion }));
+        const summary = { ...summarizeSubagentResult(subagent), artifacts,
+          artifact_read_hint: "Use read_artifact with artifact_id and version. Child workspace paths are not parent-local paths." };
         return { content: [{ type: "text", text: JSON.stringify(summary) }], details: { subagent, summary } };
       },
       isConcurrencySafe: () => true,

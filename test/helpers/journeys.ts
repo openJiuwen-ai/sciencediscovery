@@ -18,6 +18,7 @@ import type { AddressInfo } from "node:net";
 import { expect, request, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
+import { RunPollRecovery } from "./run-poll-recovery.js";
 
 export interface JourneyModel {
   id: string;
@@ -84,6 +85,8 @@ export interface ScriptedTextStep {
 export type ScriptedModelStep = ScriptedTextStep | ScriptedToolStep;
 
 export interface ScriptedModelCall {
+  systemPrompt?: string;
+  toolResults?: string[];
   offeredTools?: string[];
   arguments?: Record<string, unknown>;
   route: "main" | "subagent";
@@ -191,6 +194,7 @@ function userText(content: unknown): unknown {
 export function scriptedModel(
   mainSteps: ScriptedTurns,
   subagentSteps?: ScriptedTurns,
+  options: { captureContext?: boolean } = {},
 ): Promise<ScriptedModel> {
   const calls: ScriptedModelCall[] = [];
   const model = "journey-scripted-model";
@@ -257,6 +261,11 @@ export function scriptedModel(
         sequence += 1;
         const id = `chatcmpl-journey-${sequence}`;
         calls.push({
+          ...(options.captureContext ? {
+            systemPrompt,
+            toolResults: messages.filter((message) => message.role === "tool").map((message) =>
+              typeof message.content === "string" ? message.content : JSON.stringify(message.content)),
+          } : {}),
           offeredTools: body.tools?.map((tool) => tool.function?.name ?? ""),
           ...("tool" in step ? { arguments: step.arguments, tool: step.tool } : {}),
           route,
@@ -423,8 +432,8 @@ export async function openProjectSession(
   );
   await page.goto("/");
   await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
-  await page.locator("button.nav-item").filter({ hasText: fixture.project.name }).click();
-  await page.locator("button.nav-item").filter({ hasText: currentSession.title }).click();
+  await page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture.project.name }).click();
+  await page.locator("#sessions-panel-content button.nav-item").filter({ hasText: currentSession.title }).click();
   await expect(page.getByRole("heading", { exact: true, name: currentSession.title })).toBeVisible();
 }
 
@@ -455,9 +464,19 @@ export async function waitForRunTerminal(
   timeout = 420_000,
 ): Promise<JourneyRun> {
   let current: JourneyRun | undefined;
+  const recovery = new RunPollRecovery();
   await expect.poll(async () => {
-    current = (await apiJson<JourneyRun[]>(page, `/api/sessions/${encodeURIComponent(sessionId)}/runs`))
-      .find((run) => run.id === runId);
+    try {
+      current = (await apiJson<JourneyRun[]>(page, `/api/sessions/${encodeURIComponent(sessionId)}/runs`))
+        .find((run) => run.id === runId);
+      recovery.succeeded();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Only this read-only poll is retried. Never replay task creation or writes.
+      const failures = recovery.failed(error);
+      console.warn(`[run-poll] run=${runId} transient failure ${failures}/3: ${message}`);
+      return "poll_unavailable";
+    }
     return current?.status;
   }, { message: `Run ${runId} should reach a terminal state`, timeout }).toMatch(/^(cancelled|completed|failed|interrupted)$/);
   return current!;

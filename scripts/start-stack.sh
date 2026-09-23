@@ -595,6 +595,14 @@ EOF
 
 start_stack() {
   configure_endpoints
+  # Explicit local composition seam for integration fixtures; the normal entry
+  # point is unchanged. Never load this override in distributed Docker mode.
+  if [[ -n "${SCIENCE_AGENT_API_ENTRYPOINT:-}" ]]; then
+    [[ "$mode" == "local" && -f "$SCIENCE_AGENT_API_ENTRYPOINT" ]] || {
+      echo "SCIENCE_AGENT_API_ENTRYPOINT requires a local existing module" >&2; exit 2;
+    }
+    api_command=(node "$SCIENCE_AGENT_API_ENTRYPOINT")
+  fi
   trap cleanup EXIT INT TERM
 
   echo "Starting the sandbox runner daemon..." >&2

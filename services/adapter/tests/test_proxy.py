@@ -68,6 +68,7 @@ async def test_streams_server_sent_events_unchanged():
     response = await call(handler)
     assert response.headers["content-type"] == "text/event-stream"
     assert response.content == payload
+    assert len(response.headers["x-sciencediscovery-request-id"]) == 32
 
 
 async def test_passes_error_status_and_repeated_headers():
@@ -86,6 +87,39 @@ async def test_legacy_down_is_a_502_with_a_json_body():
     response = await call(handler)
     assert response.status_code == 502
     assert json.loads(response.text)["error"] == "legacy_unavailable"
+
+
+async def test_read_failure_is_correlated_without_logging_secrets_or_retrying(caplog):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        try:
+            raise OSError("secret-upstream-body")
+        except OSError as cause:
+            raise httpx.ReadError("secret-url-key") from cause
+    response = await call(handler, "POST", "/api/run?key=secret-query", content="secret-body",
+                          headers={"Authorization": "Bearer secret-auth"})
+    assert response.status_code == 502 and len(calls) == 1
+    assert response.json()["requestId"] in caplog.text
+    assert "ReadError" in caplog.text and "OSError" in caplog.text
+    assert "phase=headers" in caplog.text and "path=/api/run" in caplog.text
+    assert "secret-" not in caplog.text
+
+
+async def test_body_read_failure_closes_stream_and_logs_phase(caplog):
+    class BrokenStream(httpx.AsyncByteStream):
+        closed = False
+        async def __aiter__(self):
+            yield b"partial"
+            raise httpx.ReadError("secret-response")
+        async def aclose(self):
+            self.closed = True
+    stream = BrokenStream()
+    with pytest.raises(httpx.ReadError):
+        await call(lambda _: httpx.Response(200, stream=stream))
+    assert stream.closed
+    assert "phase=body" in caplog.text
+    assert "secret-response" not in caplog.text
 
 
 async def test_hop_by_hop_headers_are_not_forwarded():

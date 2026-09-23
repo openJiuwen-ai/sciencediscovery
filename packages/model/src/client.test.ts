@@ -37,7 +37,39 @@ import {
   streamModelTurn,
   toAnthropicMessages,
   type ModelClientPolicy,
+  type ModelStreamCallbacks,
 } from "./client.js";
+
+for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
+  test(`${protocol} emits append-only tool arguments without duplicating terminal snapshots`, async () => {
+    const frames = protocol === "openai-chat-completions" ? [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "write", arguments: '{"text":' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"report"}' } }] } }] },
+    ] : protocol === "openai-responses" ? [
+      { type: "response.output_item.added", output_index: 1, item: { type: "function_call", id: "item1", call_id: "c1", name: "write", arguments: "" } },
+      { type: "response.function_call_arguments.delta", output_index: 1, delta: '{"text":' },
+      { type: "response.function_call_arguments.delta", output_index: 1, delta: '"report"}' },
+      { type: "response.output_item.done", output_index: 1, item: { type: "function_call", id: "item1", call_id: "c1", name: "write", arguments: '{"text":"report"}' } },
+    ] : [
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "c1", name: "write", input: {} } },
+      { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"text":' } },
+      { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '"report"}' } },
+      { type: "content_block_stop", index: 1 },
+    ];
+    await withServer(async (request, response) => {
+      await readBody(request);
+      sse(response, frames);
+    }, async (baseUrl) => {
+      const deltas: Parameters<NonNullable<ModelStreamCallbacks["onToolCallDelta"]>>[0][] = [];
+      const turn = await streamModelTurn({ apiProtocol: protocol, baseUrl, model: "stub" }, "s", [], [], policy,
+        new AbortController().signal, { onToolCallDelta: (delta) => deltas.push(delta) });
+      assert.equal(deltas.map((d) => d.arguments).join(""), '{"text":"report"}');
+      assert.deepEqual(deltas.filter((d) => d.id).map((d) => d.id), ["c1"]);
+      assert.deepEqual(deltas.filter((d) => d.name).map((d) => d.name), ["write"]);
+      assert.deepEqual(turn.toolCalls[0]?.args, { text: "report" });
+    });
+  });
+}
 
 test("provider context overflow is normalized without treating arbitrary token errors as recoverable", () => {
   assert.equal(isModelInputTooLargeError(new ModelRequestError(

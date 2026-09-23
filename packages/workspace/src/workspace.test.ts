@@ -1631,16 +1631,16 @@ test("subagent tools preserve structured governance inputs", async () => {
   });
   assert.deepEqual(taskProperties.max_turns, {
     default: DEFAULT_SUBAGENT_MAX_TURNS,
-    description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
+    description: "Optional model-turn budget for this subagent. Set a smaller value for focused work or increase it for unusually deep delegated work.",
     maximum: MAX_SUBAGENT_MAX_TURNS,
-    minimum: DEFAULT_SUBAGENT_MAX_TURNS,
+    minimum: 1,
     type: "integer",
   });
   assert.deepEqual(taskProperties.timeout_seconds, {
     default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-    description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
+    description: "Optional hard wall-clock runtime budget in seconds for this subagent, including model and tool waits.",
     maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
-    minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+    minimum: 1,
     type: "integer",
   });
   assert.match(JSON.stringify(taskProperties.specialistId), /specialist-evidence/);
@@ -1678,6 +1678,8 @@ test("subagent tools preserve structured governance inputs", async () => {
   assert.equal((result.details as { subagent: Subagent }).subagent.input.brief?.goal, "Evaluate method A independently");
   assert.equal((result.details as { subagent: Subagent }).subagent.input.prompt, "Read the inputs, run method A, and summarize the result.");
   assert.deepEqual(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : ""), {
+    artifacts: [],
+    artifact_read_hint: "Use read_artifact with artifact_id and version. Child workspace paths are not parent-local paths.",
     brief: "Method A found a stable result.",
     finalText: "Method A found a stable result.",
     id: "subagent-1",
@@ -1701,6 +1703,12 @@ test("two task tool calls can run subagents concurrently", async () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
+    listArtifacts: async () => [
+      { id: "artifact-a", name: "sources.md", currentVersion: 2, originMeta: { subagentId: "subagent-a" } },
+      { id: "artifact-b", name: "sources.md", currentVersion: 1, originMeta: { subagentId: "subagent-b" } },
+      { id: "deleted", name: "old.md", currentVersion: 1, deletedAt: timestamp, originMeta: { subagentId: "subagent-a" } },
+      { id: "unrelated", name: "parent.md", currentVersion: 1 },
+    ] as Awaited<ReturnType<NonNullable<Parameters<typeof createWorkspaceTools>[1]["listArtifacts"]>>>,
     runSubagent: async (input): Promise<Subagent> => {
       active += 1;
       maxActive = Math.max(maxActive, active);
@@ -1730,6 +1738,10 @@ test("two task tool calls can run subagents concurrently", async () => {
 
   assert.equal(maxActive, 2);
   assert.deepEqual(results.map((result) => (result.details as { subagent: Subagent }).subagent.id), ["subagent-a", "subagent-b"]);
+  const summaries = results.map((result) => JSON.parse((result.content[0] as { text: string }).text));
+  assert.deepEqual(summaries[0].artifacts, [{ artifact_id: "artifact-a", name: "sources.md", version: 2 }]);
+  assert.deepEqual(summaries[1].artifacts, [{ artifact_id: "artifact-b", name: "sources.md", version: 1 }]);
+  assert.match(task.description, /isolated workspaces/);
 });
 
 test("task tool summarizes failed subagents with status contract metadata", async () => {

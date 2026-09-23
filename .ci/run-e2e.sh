@@ -68,6 +68,10 @@ test_log="$results_root/run.log"
 summary="$results_root/summary.txt"
 stack_pid=""
 jiuwenswarm_started=0
+fixture_pid=""
+fixture="${CI_E2E_FIXTURE:-standard}"
+case "$fixture" in standard|research|literature) ;; *) echo 'Unknown E2E fixture' >&2; exit 2;; esac
+if [[ "$fixture" != standard && "$group" != mocked ]]; then echo 'Offline fixtures must never reach real E2E' >&2; exit 2; fi
 test_started=0
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -79,6 +83,7 @@ finish() {
   local status=$?
   local result_status="failed"
   trap - EXIT INT TERM
+  if [[ -n "$fixture_pid" ]]; then kill -TERM "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true; fi
   if [[ -n "$stack_pid" ]]; then
     # start-stack runs several children and keeps the API in the foreground.
     # Terminate the dedicated session as a group so its shell cannot remain
@@ -229,6 +234,8 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # Likewise they script ScienceDiscovery's read_file/list_files with its argument shapes; JiuwenSwarm's own
   # tools are covered by test/contract/jw-only/live.mjs native-tools.
   export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
+  export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task
+  export E2E_SWARM_TASK=1
   # A JiuwenSwarm instance of this layer's own, so a run never shares skills, config or sessions with the
   # instance a developer uses (the install itself, JIUWENSWARM_ROOT, is shared).
   export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-e2e}"
@@ -246,6 +253,23 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     exit 2
   }
   jiuwenswarm_gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; jiuwenswarm_gateway_port="${jiuwenswarm_gateway_port%%/*}"
+  if [[ "$fixture" != standard ]]; then
+    if (exec 3<>"/dev/tcp/127.0.0.1/$jiuwenswarm_gateway_port") 2>/dev/null; then
+      echo 'BLOCKED: research fixture refuses to modify a running Swarm instance' >&2; exit 2
+    fi
+    swarm_python="${JIUWENSWARM_SRC:-${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}/src}/.venv/bin/python"
+    "$swarm_python" .ci/prepare-research-fixture.py >> "$test_log" 2>&1 || exit 2
+    export E2E_SWARM_EXCLUSIVE=1 E2E_SWARM_COMPACTION=1 E2E_MCP_FAULT_PROXY=1
+    export E2E_MCP_PROXY_PORT="$((SCIENCE_AGENT_PORT + 5))"
+    export E2E_MCP_PROXY_TARGET="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
+    export SCIENCE_AGENT_ADAPTER_PUBLIC_URL="http://127.0.0.1:${E2E_MCP_PROXY_PORT}"
+    node test/fixtures/swarm-mcp-fault-proxy.mjs >> "$stack_log" 2>&1 &
+    fixture_pid=$!
+    if [[ "$fixture" == literature ]]; then
+      export E2E_LITERATURE_FIXTURE=1
+      export SCIENCE_AGENT_API_ENTRYPOINT="$repository_root/test/fixtures/literature-api.mjs"
+    fi
+  fi
   if ! (exec 3<>"/dev/tcp/127.0.0.1/$jiuwenswarm_gateway_port") 2>/dev/null; then
     "$repository_root/scripts/jiuwenswarm.sh" start >> "$stack_log" 2>&1 || {
       printf 'BLOCKED: JiuwenSwarm did not start; see %s.\n' "$stack_log" | tee -a "$test_log" >&2
@@ -294,9 +318,18 @@ if [[ "$healthy" -ne 1 ]]; then
   exit 2
 fi
 
-node test/check-e2e-meta.mjs 2>&1 | tee -a "$test_log" || exit $?
+if [[ "$group" == real ]]; then
+  node .ci/configure-real-e2e.mjs >> "$test_log" 2>&1 || exit 2
+fi
+
+node test/check-e2e-meta.mjs 2>&1 | tee -a "$test_log"
+metadata_status=${PIPESTATUS[0]}
+if [[ "$metadata_status" -ne 0 ]]; then exit "$metadata_status"; fi
 test_started=1
-npm --prefix .e2e run "test:$group" 2>&1 | tee -a "$test_log"
+playwright_args=()
+if [[ -n "${CI_E2E_SPEC:-}" ]]; then playwright_args+=("$CI_E2E_SPEC"); fi
+if [[ -n "${CI_E2E_GREP:-}" ]]; then playwright_args+=(--grep "$CI_E2E_GREP"); fi
+npm --prefix .e2e run "test:$group" -- "${playwright_args[@]}" 2>&1 | tee -a "$test_log"
 journeys_status=${PIPESTATUS[0]}
 
 # What only the JiuwenSwarm backend does, checked against the same stack: the
@@ -307,7 +340,7 @@ journeys_status=${PIPESTATUS[0]}
 # journeys plan with update_plan), web-search (the internet), compression and
 # history-restart (a small context window, a JiuwenSwarm restart).
 live_status=0
-if [[ "$backend" == "jiuwenswarm" && "$group" == "mocked" ]]; then
+if [[ "$backend" == "jiuwenswarm" && "$group" == "mocked" && "$fixture" == standard ]]; then
   live_checks="${CI_E2E_JIUWENSWARM_CHECKS:-history history-names run-shell host-tools approvals skills skill-switch trajectory language}"
   # shellcheck disable=SC2086 # the list is words on purpose
   node test/contract/jw-only/live.mjs $live_checks 2>&1 | tee "$results_root/jiuwenswarm-checks.log" | tee -a "$test_log"

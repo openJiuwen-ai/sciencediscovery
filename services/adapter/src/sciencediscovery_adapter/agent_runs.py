@@ -29,11 +29,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Any, Literal
 
 import httpx
@@ -44,6 +45,7 @@ from pydantic import BaseModel, Field
 
 from . import gateway
 from .config import Settings
+from .diagnostics import emit as trace_boundary
 from .events import RunEventMapper
 from .llm_proxy import DEFAULT_ALIAS, LlmRoute, LlmRoutes
 from .mcp_server import SERVER_NAME, Toolset, ToolsetRegistry
@@ -53,7 +55,7 @@ from .skills import SkillSync
 
 # SCIENCE_AGENT_ADAPTER_DEBUG=1 prints every tool event of every run to stderr.
 _DEBUG = os.environ.get("SCIENCE_AGENT_ADAPTER_DEBUG") == "1"
-_SAFE_NAME = re.compile(r"[^a-z0-9]")
+logger = logging.getLogger("uvicorn.error.run_binding")
 
 
 class ToolSpec(BaseModel):
@@ -79,6 +81,8 @@ class ModelSpec(BaseModel):
 
 class AgentRunRequest(BaseModel):
     sessionId: str
+    runId: str | None = None
+    agentId: str | None = None
     prompt: str
     mode: str = "agent.work.normal"
     cwd: str = "/tmp"
@@ -104,7 +108,7 @@ class AgentRunRequest(BaseModel):
     # (they act on the host; see LlmRoute.hidden_native_tools).
     hiddenJiuwenSwarmTools: list[str] = Field(default_factory=list, max_length=100)
     # Longest a single tool call may take, in seconds; the run's own timeout, when the caller has one.
-    toolTimeoutSeconds: int | None = None
+    toolTimeoutSeconds: int | None = Field(default=None, gt=0)
 
 
 # JiuwenSwarm's own tools that act on the host, outside ScienceDiscovery's sandbox and Runner (the API's
@@ -143,11 +147,6 @@ class AgentLanguage(BaseModel):
 
 class PermissionAnswer(BaseModel):
     decision: Literal["allow_once", "allow_matching", "deny"]
-
-
-def model_alias_base(model: str) -> str:
-    """A model id as a JiuwenSwarm entry name: letters, digits, `.`, `_` and `-` only, at most 48 characters."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", model).strip("-")[:48] or "model"
 
 
 def describe_approval(request: dict[str, Any], route: LlmRoute | None) -> None:
@@ -212,8 +211,12 @@ class AgentRunner:
         # more than the configured default ever triggers that dance for this reason.
         self._shared_timeout_s = settings.tool_timeout_s
         self._permissions_on = False
+        self._tool_approvals: dict[str, str] = {}
         # Runs paused on one of JiuwenSwarm's approval questions, by the question's id.
         self.pending_approvals: dict[str, tuple[Any, RunEventMapper]] = {}
+        # Keep completed acknowledgements for lost HTTP responses. Never resend an
+        # uncertain WebSocket delivery, and never evict an in-flight decision.
+        self._approval_deliveries: dict[str, tuple[str, asyncio.Task[None]]] = {}
 
     async def ensure_default_model(self) -> None:
         """Point JiuwenSwarm's default model at the adapter (see `llm_proxy.DEFAULT_ALIAS`)."""
@@ -221,27 +224,32 @@ class AgentRunner:
             DEFAULT_ALIAS, f"{self.settings.public_url}/llm/default/v1", self.routes.default_key, "OpenAI"))
 
     async def ensure_shared_tools(self, tools: list[dict[str, Any]], timeout_s: int) -> None:
-        """Give JiuwenSwarm the one MCP server for every run's tools (see mcp_server), and its list again when a run
-        brought a tool (or an argument) it did not have.
+        """Register once; refresh the catalog without replacing the shared client.
 
-        A bare `mcp.connect` on an already-connected server does *not* make JiuwenSwarm re-read the tool
-        list (confirmed live: a run whose only new tools arrived through that path never saw JiuwenSwarm
-        issue `tools/list` again, so those tools were never callable) -- only the full
-        disconnect/delete_custom/register_custom cycle does. So `changed` forces that full cycle too, not
-        just the first-ever registration or a larger timeout.
+        Execution deadlines are enforced by Toolset; timeout_s is validated
+        here but must never trigger a transport-wide configuration change.
         """
+        if timeout_s <= 0:
+            raise ValueError("Tool timeout must be positive")
         async with self._shared_lock:
-            new = [tool for tool in tools if tool["name"] not in self.registry.shared]
+            # Swarm permissions are global by tool name. Reject conflicting
+            # contracts before mutating the catalog or another run's policy.
+            policies = dict(self._tool_approvals)
+            for tool in tools:
+                level = tool.get("approval") or "allow"
+                previous = policies.setdefault(tool["name"], level)
+                if previous != level:
+                    raise ValueError(f"Conflicting approval policy for {tool['name']}: "
+                                     f"registered {previous}, requested {level}; "
+                                     "Swarm requires a consistent policy for shared tool names")
+            await self._apply_approvals(tools)
             changed = self.registry.merge(tools)
-            await self._apply_approvals(new)
-            longer = timeout_s > self._shared_timeout_s
-            if self._shared_registered and not changed and not longer:
+            if self._shared_registered and not changed:
                 return
-            self._shared_timeout_s = max(timeout_s, self._shared_timeout_s)
-            if not self._shared_registered or changed or longer:
-                # An earlier adapter left it registered with another URL (its token changed), new tools
-                # arrived, or a longer timeout is needed -- any of these needs JiuwenSwarm to actually
-                # re-read the tool list, which only a fresh connection cycle reliably does.
+            if not self._shared_registered:
+                # Only startup replaces a stale registration. Tool execution
+                # deadlines belong to each Toolset, never to this shared client.
+                self._shared_timeout_s = self.settings.tool_timeout_s
                 for method in ("mcp.disconnect", "mcp.delete_custom"):
                     try:
                         await self.rpc(self.settings.mgmt_url, method, {"name": SERVER_NAME})
@@ -261,15 +269,35 @@ class AgentRunner:
         caller (a deny sent on abort, `jiuwenswarm-agent.ts`'s `answerApproval`) has nothing left to resume
         by then, so that race is a no-op here rather than a 500 from an unhandled send-on-closed-socket.
         """
+        previous = self._approval_deliveries.get(request_id)
+        if previous is not None:
+            prior_decision, delivery = previous
+            if prior_decision != decision:
+                raise ValueError("approval already has a different decision")
+            await asyncio.shield(delivery)
+            return
         pending = self.pending_approvals.pop(request_id, None)
         if pending is None:
             raise KeyError(request_id)
         run, mapper = pending
         answer, _ = mapper.decide(request_id, decision)
-        try:
-            await run.answer(request_id, "permission_interrupt", answer)
-        except (gateway.GatewayError, websockets.WebSocketException):
-            pass
+        async def deliver() -> None:
+            try:
+                await run.answer(request_id, "permission_interrupt", answer)
+            except (gateway.GatewayError, websockets.WebSocketException) as error:
+                if not mapper.finished and not mapper._cancel_requested:
+                    raise gateway.GatewayError("approval delivery failed") from error
+
+        for key, (_, task) in list(self._approval_deliveries.items()):
+            if len(self._approval_deliveries) < 1024:
+                break
+            if task.done():
+                del self._approval_deliveries[key]
+        delivery = asyncio.create_task(deliver())
+        # Retrieve failures even when the HTTP caller disappears before the result.
+        delivery.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+        self._approval_deliveries[request_id] = (decision, delivery)
+        await asyncio.shield(delivery)
 
     async def _apply_approvals(self, tools: list[dict[str, Any]]) -> None:
         """JiuwenSwarm's permission engine decides every call (ScienceDiscovery's approval layer allows what it
@@ -278,21 +306,30 @@ class AgentRunner:
             await self.rpc(self.settings.mgmt_url, "config.set", {"permissions_enabled": True})
             self._permissions_on = True
         for tool in tools:
+            if tool["name"] in self._tool_approvals:
+                continue
             await self.rpc(self.settings.mgmt_url, "permissions.tools.update", {
                 "tool": f"mcp_{SERVER_NAME}_{tool['name']}", "level": tool.get("approval") or "allow",
             })
+            self._tool_approvals[tool["name"]] = tool.get("approval") or "allow"
 
-    async def stream(self, request: AgentRunRequest) -> AsyncIterator[str]:
+    async def stream(self, request: AgentRunRequest) -> AsyncGenerator[str, None]:
         name = SERVER_NAME
         token = None
         llm_token = None
-        model_alias = None
+        terminal_status = "completed"
         jw_session = request.sessionKey or request.sessionId
+        trace_context = {"run_id": request.runId, "agent_id": request.agentId,
+                         "session_id": request.sessionId, "swarm_session": jw_session}
+        trace_boundary("run.started", **trace_context, tool_count=len(request.tools))
+        logger.info("run-binding start run=%s agent=%s session=%s swarm_session=%s tools=%d",
+                    request.runId, request.agentId, request.sessionId, jw_session, len(request.tools))
         mapper = RunEventMapper(session_id=request.sessionId, mcp_prefixes=(f"mcp_{name}_",))
         params: dict[str, Any] = {
             "session_id": jw_session, "content": request.prompt, "query": request.prompt,
             "mode": request.mode, "cwd": request.cwd, "project_dir": request.cwd, "trusted_dirs": [request.cwd],
-            "supports_user_interaction": True, "agent_ref": {"mode": request.mode, "id": "default"},
+            "supports_user_interaction": True, "sci_persistent_output": True,
+            "agent_ref": {"mode": request.mode, "id": "default"},
         }
         try:
             if request.tools:
@@ -302,14 +339,15 @@ class AgentRunner:
                 token = self.registry.add(Toolset(
                     tools=[{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools],
                     call=bridge_caller(request.bridge, self.client()),
+                    timeout_s=request.toolTimeoutSeconds or self.settings.tool_timeout_s,
+                    trace_context=trace_context,
                 ))
+                trace_boundary("run.tools.bound", **trace_context, run_tag=token, tool_count=len(request.tools))
             if request.model:
                 if request.model.provider != "OpenAI":
                     raise ValueError(f"the {request.model.provider} protocol is not supported by this executor yet")
-                # JiuwenSwarm talks to a private alias that points at this run's proxy route, which
-                # forwards to the real endpoint with the real id, tool names and system prompt.
-                # Its host tools are turned away whatever the caller asked: leaving one unlisted only keeps it out
-                # of the model's tool list, and a call the model makes to it anyway would run on the host.
+                # A private connection routes this run's tools and prompt without
+                # changing the real model name or the global model configuration.
                 hidden = frozenset(request.hiddenJiuwenSwarmTools) | JIUWENSWARM_HOST_TOOLS
                 llm_token = self.routes.add(LlmRoute(
                     base_url=request.model.baseUrl.rstrip("/"), api_key=request.model.apiKey, model=request.model.model,
@@ -320,12 +358,14 @@ class AgentRunner:
                     native_tools=frozenset(request.nativeTools) - hidden, all_native_tools=request.jiuwenSwarmTools == "all",
                     hidden_native_tools=hidden, run_tag=token,
                 ))
-                # Named after the real model: JiuwenSwarm tells the model its own model's name (runtime state), and
-                # the alias is all it knows. The suffix keeps two runs of one model apart.
-                model_alias = f"{model_alias_base(request.model.model)}-{llm_token[:6]}"
-                await self.ensure_default_model()
-                params["model_name"] = await self.models.ensure(ModelProfile(
-                    model_alias, f"{self.settings.public_url}/llm/{llm_token}/v1", llm_token, "OpenAI",))
+                params["model_name"] = request.model.model
+                # Private, in-memory session binding. Never publish per-run credentials
+                # into Swarm's global model list or trigger a global model reload.
+                params["run_model"] = {
+                    "model_name": request.model.model,
+                    "api_base": f"{self.settings.public_url}/llm/{llm_token}/v1",
+                    "api_key": llm_token, "client_provider": "OpenAI",
+                }
             if request.tools:
                 if request.bridge is None:
                     raise ValueError("tools were given without a bridge to run them")
@@ -336,6 +376,15 @@ class AgentRunner:
                 try:
                     async for frame in run:
                         for event in mapper.feed(frame):
+                            if event["type"] in {"tool.started", "tool.completed", "permission.required",
+                                                  "assistant.response.settled", "run.failed", "run.cancelled"}:
+                                trace = event.get("trace") or {}
+                                trace_boundary("swarm.event", **trace_context, event_type=event["type"],
+                                               tool=trace.get("name"), tool_call_id=trace.get("id"), status=trace.get("status"))
+                            if event["type"] == "run.failed":
+                                terminal_status = "failed"
+                            elif event["type"] == "run.cancelled":
+                                terminal_status = "cancelled"
                             if event["type"] == "permission.required":
                                 self.pending_approvals[event["request"]["id"]] = (run, mapper)
                                 route = self.routes.get(llm_token) if llm_token else None
@@ -353,26 +402,60 @@ class AgentRunner:
                         except Exception:
                             pass
                     raise
+            if not mapper.finished:
+                raise gateway.GatewayError("Swarm stream ended without a terminal event")
             yield json.dumps({"done": {
+                "status": "cancelled" if mapper._cancel_requested else terminal_status,
                 "finalText": mapper.final_text or "", "unmapped": mapper.unmapped,
                 "cancelled": mapper._cancel_requested,
             }}, ensure_ascii=False) + "\n"
         except (gateway.GatewayError, ValueError, httpx.HTTPError) as error:
+            terminal_status = "failed"
+            trace_boundary("run.error", **trace_context, error_type=type(error).__name__)
             failure = {"type": "run.failed", "error": str(error), "errorCode": "transport-error"}
             yield json.dumps({"event": failure}, ensure_ascii=False) + "\n"
-            yield json.dumps({"done": {"finalText": "", "unmapped": mapper.unmapped, "cancelled": False}}) + "\n"
+            yield json.dumps({"done": {"status": "failed", "finalText": "", "unmapped": mapper.unmapped, "cancelled": False}}) + "\n"
         finally:
+            trace_boundary("run.released", **trace_context, run_tag=token, terminal=mapper.finished,
+                           status="cancelled" if mapper._cancel_requested else terminal_status)
+            logger.info("run-binding release run=%s agent=%s swarm_session=%s terminal=%s",
+                        request.runId, request.agentId, jw_session, mapper.finished)
             if llm_token:
                 self.routes.remove(llm_token)
-            if model_alias:
-                try:
-                    await self.models.remove(model_alias)
-                except Exception:
-                    pass
             if token:
                 self.registry.remove(token)  # the shared server stays; calls for this run find nothing now
             for request_id in [key for key, (_, owner) in self.pending_approvals.items() if owner is mapper]:
                 self.pending_approvals.pop(request_id, None)
+
+
+async def stream_with_keepalive(source: AsyncGenerator[str, None], interval: float = 15.0) -> AsyncIterator[str]:
+    """Keep the HTTP body alive while a run waits on tools or user approval.
+
+    Gateway WebSocket heartbeats are filtered before reaching this stream.
+    A blank NDJSON line keeps transport readers alive without reporting agent
+    progress or resetting the run's own idle deadline. Never cancel an active
+    read just because a heartbeat is due: that would cancel the agent itself.
+    """
+    pending = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(anext(source))
+            ready, _ = await asyncio.wait({pending}, timeout=interval)
+            if not ready:
+                yield "\n"
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield item
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await source.aclose()
 
 
 def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
@@ -382,7 +465,7 @@ def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
     async def create_run(body: AgentRunRequest, authorization: str | None = Header(default=None)) -> StreamingResponse:
         if settings.agent_token and authorization != f"Bearer {settings.agent_token}":
             raise HTTPException(status_code=401, detail="unauthorized")
-        return StreamingResponse(runner.stream(body), media_type="application/x-ndjson")
+        return StreamingResponse(stream_with_keepalive(runner.stream(body)), media_type="application/x-ndjson")
 
     @router.post("/agent/jiuwenswarm-config")
     async def jiuwenswarm_config(body: JiuwenSwarmConfig, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -433,6 +516,10 @@ def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
             await runner.answer_approval(request_id, body.decision)
         except KeyError:
             raise HTTPException(status_code=404, detail="no run is waiting on that question") from None
+        except ValueError:
+            raise HTTPException(status_code=409, detail="approval already has a different decision") from None
+        except gateway.GatewayError:
+            raise HTTPException(status_code=502, detail="approval delivery failed") from None
         return {"answered": request_id, "decision": body.decision}
 
     @router.get("/agent/skills")

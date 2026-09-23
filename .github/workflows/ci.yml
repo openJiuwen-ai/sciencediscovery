@@ -92,6 +92,74 @@ defaults:
     shell: bash
 
 jobs:
+  real-e2e:
+    name: E2E (real, daily only)
+    if: ${{ inputs.profile == 'daily' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: nightly-research
+    env:
+      CI_ALLOW_REAL: "1"
+      CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+      CI_RUNTIME_DIR: ${{ runner.temp }}/ci-real-e2e
+      E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
+      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
+      E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
+      E2E_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      E2E_JUDGE_TOKEN: ${{ secrets.E2E_JUDGE_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+      E2E_DRB_EVALUATION: full
+      E2E_BIOMNI_EVALUATION: rubric
+      E2E_DRB_MAX_SUBAGENTS: "2"
+      E2E_TEAM_CONCURRENCY_HINT: "2"
+      E2E_DRB_RUN_TIMEOUT_MS: "1200000"
+      E2E_DRB_EVAL_TIMEOUT_MS: "600000"
+      E2E_TEAM_RUN_TIMEOUT_MS: "2400000"
+      E2E_BIOMNI_RUN_TIMEOUT_MS: "1200000"
+      LLM_BACKEND: openai
+      OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
+      RACE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      CLEAN_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      FACT_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      BIOMNI_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      BIOMNI_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      BIOMNI_JUDGE_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Prepare real-research prerequisites (no model calls)
+        run: bash .ci/prepare-real-research.sh
+      - name: Provision sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --dev /dev true
+      - name: Run the frozen real-E2E daily slice
+        run: pnpm ci:e2e:real
+      - name: Summarize actual planned and executed cases
+        if: always()
+        run: node .ci/tagged-summary.mjs
+      - name: Upload real E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-results
+          path: .ci-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
   ut:
     name: UT
     runs-on: ubuntu-latest
@@ -395,7 +463,7 @@ jobs:
       - name: Summarize the JiuwenSwarm checks
         if: always()
         run: |
-          checks=.ci-results/e2e/jiuwenswarm-checks.log
+          checks=.ci-results/mocked-standard/e2e/jiuwenswarm-checks.log
           if [[ -f "$checks" ]]; then
             {
               echo

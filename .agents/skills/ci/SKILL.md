@@ -47,7 +47,7 @@ run is the row below, and the reason they exist is in their own file headers.
 | Pipeline | Gate | Trigger | Profile | Jobs |
 | --- | --- | --- | --- | --- |
 | `.github/workflows/ci.yml` | yes | push to `main`, pull request, or `workflow_dispatch` | `pr` | `ci:ut` and `ci:st` (each recording coverage), mocked `ci:e2e`, Coverage (merges UT's and ST's data, runs nothing), x86_64 + aarch64 release binaries (smoke-gated), the Docker image |
-| `.github/workflows/nightly.yml` | — | 18:00 UTC daily, or manual | `daily` | calls `ci.yml` with a `nightly-<date>-<sha>` version |
+| `.github/workflows/nightly.yml` | — | 16:00 UTC daily, or manual | `daily` | calls `ci.yml`, adds real E2E, with a `nightly-<date>-<sha>` version |
 | `.github/workflows/release.yml` | — | push of a version tag | `release` | calls `ci.yml` with the tag's version, then publishes if it passes |
 
 The binary and Docker jobs are distribution gates and sit outside the plan: the
@@ -62,11 +62,10 @@ planned identity, so `planned == executed == passed` says nothing about it.
 profile is stated as tag dimensions rather than as a selector string, and
 `pnpm test:policy` prints it — read that before theorising about what a job
 covers. Each pipeline names its own: a pull request takes `pr`, `nightly.yml`
-takes `daily`, and `release.yml` takes `release`, which is defined as `daily`
-so a version tag is held to the nightly standard. The job passes it as an
+takes `daily`, and `release.yml` takes the credential-free `release` profile
+(same policy as `pr`). Daily adds the disjoint `e2e-real` slice. The job passes it as an
 argument, so the command in the log is the command that reproduces the run.
-All three select the same set today. The
-three groups partition the plan, so the layers together run exactly
+The three hermetic groups partition the PR plan, so these layers together run exactly
 `pnpm test:shared`, the command a developer runs locally.
 
 What this means when reading a failure: selection comes from the tags in each
@@ -76,7 +75,7 @@ capability fails the plan's preflight instead, before any test body runs. A
 skipped case is a failed run. So "the layer passed but ran fewer tests" is not
 a possible outcome any more; `node .ci/tagged-summary.mjs` fails the job unless
 `planned == executed == passed`, including when no plan was produced at all.
-Live-model, NPU, legacy and macOS work is tagged out of the shared selector and
+Real E2E runs only in daily CI with explicit credentials. Live ST, NPU, legacy and macOS work is tagged out of the shared selector and
 keeps its own opt-in entry points; `test/support/tagged/MIGRATION.md` is the
 ledger of what is in and what is out.
 

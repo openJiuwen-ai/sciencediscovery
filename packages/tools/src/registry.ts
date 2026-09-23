@@ -132,6 +132,26 @@ function sanitizeDetailValue(value: unknown, state: DetailSanitizeState, depth: 
     state.truncated = true;
     return "[max-depth]";
   }
+  // CAS references are atomic metadata. Truncating their individual strings
+  // produces a reference-shaped object with an invalid pool/digest, which
+  // cannot be recorded in a trajectory. Keep the whole reference or omit the
+  // whole value; the authoritative object remains in its original store.
+  if (typeof value === "object" && value !== null) {
+    const ref = value as Record<string, unknown>;
+    if ((ref.pool === "data" || ref.pool === "agent-state")
+      && typeof ref.digest === "string" && /^sha256:[a-f0-9]{64}$/.test(ref.digest)
+      && typeof ref.size === "number" && Number.isSafeInteger(ref.size) && ref.size >= 0
+      && typeof ref.mediaType === "string" && ref.mediaType.length > 0
+      && Object.keys(ref).length === 4) {
+      const chars = ref.pool.length + ref.digest.length + ref.mediaType.length;
+      if (chars > state.remainingChars || ref.mediaType.length > MAX_DETAIL_STRING_CHARS) {
+        state.truncated = true;
+        return "[reference omitted: detail budget]";
+      }
+      state.remainingChars -= chars;
+      return { pool: ref.pool, digest: ref.digest, size: ref.size, mediaType: ref.mediaType };
+    }
+  }
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
   if (value instanceof Error) {
     return {

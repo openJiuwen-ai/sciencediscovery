@@ -180,6 +180,19 @@ export function QuotaSettingsEditor({
     </div>
     <div className="timeout-grid">
       <fieldset>
+        <legend>{t("runtime.quotas.subagents.label")}</legend>
+        <p>{t("runtime.quotas.subagents.description")}</p>
+        <input
+          aria-label={t("runtime.quotas.subagents.label")}
+          type="number" min="1" max="10" step="1"
+          value={settings.maxConcurrentSubagents ?? 10}
+          onChange={(event) => {
+            const value = Number(event.target.value);
+            if (Number.isInteger(value) && value >= 1 && value <= 10) onChange({ ...settings, maxConcurrentSubagents: value });
+          }}
+        />
+      </fieldset>
+      <fieldset>
         <legend>{t("runtime.quotas.uploadFile.label")}</legend>
         <p>{t("runtime.quotas.uploadFile.description")}</p>
         <label className="timeout-value">

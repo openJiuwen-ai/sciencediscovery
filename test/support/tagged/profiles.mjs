@@ -29,22 +29,18 @@ const PR = [
 ];
 
 /**
- * Daily is PR plus the rows PR deliberately leaves out — a live-model journey,
- * a `judge:llm` case. It is PR exactly until there are cases to put in them:
- * no test in this repository declares `judge:llm` yet.
+ * Daily is PR plus real browser journeys. Credentials are checked only after
+ * this policy has frozen identities; a missing secret never removes a case.
  */
-const DAILY = [...PR];
+const DAILY = [...PR,
+  { category: 'e2e', os: 'linux', arch: 'amd64', npu: 'none', model: 'real', judge: ['none', 'llm'], status: ['reviewed', 'external'] },
+];
 
 const policies = {
   pr: PR,
   daily: DAILY,
-  // A version tag is held to the nightly standard, not the merge standard, so
-  // release is defined as daily rather than copied from it: strengthening
-  // daily strengthens a release, and the two cannot drift apart by being
-  // edited separately. When a release needs something a nightly does not —
-  // the SEA boot smoke against the packaged artifact is the obvious first —
-  // this becomes its own list and the comment above it says what differs.
-  release: DAILY,
+  // Paid research belongs to daily CI only. Releases keep all hermetic gates.
+  release: PR,
 };
 
 /** One rule: a group with several values is OR, different groups are AND. */
@@ -86,7 +82,8 @@ export const slices = Object.freeze({
   shared: '',
   ut: 'category:ut',
   st: 'category:st',
-  e2e: 'category:e2e',
+  e2e: 'category:e2e and not model:real',
+  'e2e-real': 'category:e2e and model:real',
 });
 
 /**
@@ -106,6 +103,10 @@ export const nodeSources = Object.freeze([
   'services/*/src/**/*.test.ts',
   'services/runner/scripts/*.test.mjs',
   'test/contract/*.test.mjs',
+  'test/helpers/*.unit.ts',
+  'test/fixtures/*.test.mjs',
+  'test/benchmarks/**/*.test.ts',
+  'test/benchmarks/**/*.unit.ts',
 ]);
 
 /** Declarations that are not named like one, and so cannot be found by a pattern. */
@@ -122,4 +123,3 @@ export const pythonSources = project => `services/${project}/tests/test_*.py`;
  * explicitly. The adapter writes its tests as `async def` for pytest-asyncio.
  */
 export const pythonPlugins = Object.freeze({ adapter: Object.freeze(['pytest_asyncio.plugin']) });
-

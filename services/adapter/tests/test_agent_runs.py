@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
 from pathlib import Path
 
 import httpx
 import pytest
 
-from sciencediscovery_adapter.agent_runs import JIUWENSWARM_HOST_TOOLS, AgentRunner
+from sciencediscovery_adapter.agent_runs import JIUWENSWARM_HOST_TOOLS, AgentRunner, stream_with_keepalive
 from sciencediscovery_adapter.app import create_app
 from sciencediscovery_adapter.config import Settings
 from sciencediscovery_adapter.llm_proxy import rewrite_response
@@ -28,6 +29,44 @@ pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 
 FIXTURES = Path(__file__).parent / "fixtures"
 SETTINGS = Settings(host="127.0.0.1", port=4310, legacy_url="http://legacy.test",
                     gateway_url="ws://gw/tui", mgmt_url="ws://gw/ws", public_url="http://adapter.test")
+
+
+async def test_keepalive_does_not_cancel_pending_tool_or_fabricate_progress():
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def source():
+        try:
+            await release.wait()
+            yield '{"done":{"finalText":"ok"}}\n'
+        finally:
+            closed.set()
+
+    stream = stream_with_keepalive(source(), interval=0.01)
+    try:
+        assert await asyncio.wait_for(anext(stream), 1) == "\n"
+        assert not closed.is_set()
+        release.set()
+        assert json.loads(await asyncio.wait_for(anext(stream), 1))["done"]["finalText"] == "ok"
+    finally:
+        await stream.aclose()
+    assert closed.is_set()
+
+
+async def test_closing_keepalive_cancels_pending_source_and_finalizes_it():
+    closed = asyncio.Event()
+
+    async def source():
+        try:
+            await asyncio.Event().wait()
+            yield "unreachable"
+        finally:
+            closed.set()
+
+    stream = stream_with_keepalive(source(), interval=0.01)
+    assert await asyncio.wait_for(anext(stream), 1) == "\n"
+    await asyncio.wait_for(stream.aclose(), 1)
+    assert closed.is_set()
 
 
 def recorded(name):
@@ -94,7 +133,22 @@ async def test_streams_run_events_then_a_done_line(harness):
     assert response.headers["content-type"].startswith("application/x-ndjson")
     events = [line["event"]["type"] for line in lines if "event" in line]
     assert events[0] == "agent.phase" and "assistant.delta" in events
-    assert lines[-1] == {"done": {"finalText": "hello from stub", "unmapped": [], "cancelled": False}}
+    assert lines[-1] == {"done": {"status": "completed", "finalText": "hello from stub", "unmapped": [], "cancelled": False}}
+
+
+async def test_truncated_gateway_stream_is_failure_not_success(harness):
+    app, runner, _ = harness
+    class Truncated(FakeRun):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.frames = []
+    runner.chat_run = Truncated
+    _, lines = await post(app, {"sessionId": "s", "prompt": "go"})
+    failed = [line["event"] for line in lines if line.get("event", {}).get("type") == "run.failed"]
+    assert len(failed) == 1
+    assert "without a terminal event" in failed[0]["error"]
+    assert lines[-1]["done"]["status"] == "failed"
+
 
 
 async def test_the_run_is_sent_to_the_gateway_with_the_session_and_prompt(harness):
@@ -116,12 +170,11 @@ async def test_tools_go_to_the_one_shared_mcp_server_which_is_only_given_again_w
     wider = [*tools, {"name": "declare_artifact", "description": "d", "inputSchema": {"type": "object"}}]
     await post(app, {"sessionId": "s3", "prompt": "go", "tools": wider, "bridge": bridge})
     mcp = [(m, p) for _, m, p in rpcs if m.startswith("mcp.")]
-    # First run: any earlier registration is replaced, then connected. Second: nothing (same tools). Third: a new
-    # tool arrived, so it gets the same full cycle as the first (a bare reconnect does not make JiuwenSwarm
-    # re-read the tool list).
+    # Register once. A wider catalog refreshes through the patched mcp.connect
+    # without disconnecting active sibling runs or replacing the shared client.
     assert [m for m, _ in mcp] == [
         "mcp.disconnect", "mcp.delete_custom", "mcp.register_custom", "mcp.connect",
-        "mcp.disconnect", "mcp.delete_custom", "mcp.register_custom", "mcp.connect",
+        "mcp.connect",
     ]
     assert all(p["name"] == "sci" for _, p in mcp)
     register = next(p for m, p in mcp if m == "mcp.register_custom")
@@ -160,6 +213,7 @@ async def test_the_token_is_enforced_when_configured(harness):
     _, runner, _ = harness
     guarded = Settings(**{**SETTINGS.__dict__, "agent_token": "secret"})
     app = create_app(guarded)
+    app.state.agent_runner.rpc = runner.rpc
     assert (await post(app, {"sessionId": "s", "prompt": "p"}))[0].status_code == 401
     assert (await post(app, {"sessionId": "s", "prompt": "p"}, {"authorization": "Bearer wrong"}))[0].status_code == 401
 
@@ -202,7 +256,7 @@ async def test_closing_the_stream_cancels_the_gateway_run(harness):
     assert FakeRun.instances[0].cancelled is True
 
 
-async def test_the_run_talks_to_a_private_alias_that_routes_to_the_real_model(harness):
+async def test_the_run_binds_a_private_route_without_registering_a_model_alias(harness):
     app, runner, rpcs = harness
     listed = {"models": []}
 
@@ -222,7 +276,7 @@ async def test_the_run_talks_to_a_private_alias_that_routes_to_the_real_model(ha
         def __init__(self, url, params, **kwargs):
             super().__init__(url, params, **kwargs)
             seen["alias"] = params["model_name"]
-            seen["entry"] = next(m for m in listed["models"] if m["model_name"] == params["model_name"])
+            seen["entry"] = params["run_model"]
             seen["route"] = runner.routes.get(seen["entry"]["api_key"])
 
     runner.chat_run = Spy
@@ -230,7 +284,7 @@ async def test_the_run_talks_to_a_private_alias_that_routes_to_the_real_model(ha
                      "tools": [{"name": "run_shell"}], "bridge": {"url": "http://legacy.test/b"},
                      "model": {"model": "gpt-x", "baseUrl": "http://llm/v1/", "apiKey": "sk"}})
     entry, route = seen["entry"], seen["route"]
-    assert seen["alias"].startswith("gpt-x-") and len(seen["alias"]) == len("gpt-x-") + 6, "named after the real model"
+    assert seen["alias"] == "gpt-x", "routing identity must not change the model name"
     assert entry["api_base"] == f"http://adapter.test/llm/{entry['api_key']}/v1"
     assert (route.base_url, route.api_key, route.model, route.system_prompt) == ("http://llm/v1", "sk", "gpt-x", "Be a scientist.")
     assert route.tool_names == frozenset({"run_shell"}) and route.tool_prefix.startswith("mcp_sci")
@@ -238,9 +292,43 @@ async def test_the_run_talks_to_a_private_alias_that_routes_to_the_real_model(ha
     assert JIUWENSWARM_HOST_TOOLS <= route.hidden_native_tools
     chunk = {"choices": [{"delta": {"tool_calls": [{"function": {"name": "bash", "arguments": '{"command": "touch /tmp/x"}'}}]}}]}
     assert rewrite_response(chunk, route)["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "unavailable__bash"
-    # after the run: the alias is gone from the list and the route is closed
+    # Only startup bootstraps the default; no run-level global registration.
+    replacements = [p for _, m, p in rpcs if m == "models.replace_all"]
+    assert len(replacements) == 1
     assert [m["model_name"] for m in listed["models"]] == ["sciencediscovery-default"], "only the default-model entry is left"
     assert runner.routes.get(entry["api_key"]) is None
+
+
+async def test_concurrent_same_model_runs_have_isolated_routes_and_no_catalog_writes(harness):
+    from sciencediscovery_adapter.agent_runs import AgentRunRequest
+    _, runner, rpcs = harness
+    ready = asyncio.Event()
+    checked = asyncio.Event()
+    checks = []
+    bindings = []
+    class Concurrent(FakeRun):
+        async def __aenter__(self):
+            bindings.append(self.params["run_model"])
+            if len(bindings) == 2:
+                ready.set()
+            await asyncio.wait_for(ready.wait(), 2)
+            assert all(runner.routes.get(b["api_key"]) is not None for b in bindings)
+            checks.append(True)
+            if len(checks) == 2:
+                checked.set()
+            await asyncio.wait_for(checked.wait(), 2)
+            return self
+    runner.chat_run = Concurrent
+    async def execute(sid):
+        request = AgentRunRequest(sessionId=sid, prompt="go", model={
+            "model": "same-model", "baseUrl": "http://llm/v1", "apiKey": "fixture"})
+        return [json.loads(line) async for line in runner.stream(request)]
+    results = await asyncio.gather(execute("child-a"), execute("child-b"))
+    assert all("done" in result[-1] for result in results)
+    assert {b["model_name"] for b in bindings} == {"same-model"}
+    assert bindings[0]["api_key"] != bindings[1]["api_key"]
+    assert not any(method.startswith("models.") for _, method, _ in rpcs)
+    assert all(runner.routes.get(b["api_key"]) is None for b in bindings)
 
 
 async def test_a_protocol_other_than_openai_chat_is_refused_clearly(harness):
@@ -273,8 +361,16 @@ async def test_start_up_removes_stale_aliases_left_by_an_earlier_process():
     assert calls == ["models.list", "models.replace_all", "models.list", "models.replace_all"], "the default model, then prune"
 
 
-async def test_the_per_run_mcp_server_gets_a_tool_timeout_far_beyond_jiuwenswarms_30_seconds(harness):
-    app, _, rpcs = harness
+async def test_tool_deadlines_are_per_run_without_replacing_shared_transport(harness, monkeypatch):
+    app, runner, rpcs = harness
+    deadlines = []
+    original_add = runner.registry.add
+
+    def add(toolset):
+        deadlines.append(toolset.timeout_s)
+        return original_add(toolset)
+
+    monkeypatch.setattr(runner.registry, "add", add)
     FakeRun.fixture = "jw_chat_mcp_direct.raw"
     tools = [{"name": "run_shell", "description": "d", "inputSchema": {"type": "object"}}]
     bridge = {"url": "http://legacy.test/bridge", "token": "t"}
@@ -282,7 +378,9 @@ async def test_the_per_run_mcp_server_gets_a_tool_timeout_far_beyond_jiuwenswarm
     assert next(p for _, m, p in rpcs if m == "mcp.register_custom")["timeout_s"] == 3600
     rpcs.clear()
     await post(app, {"sessionId": "s1", "prompt": "go", "tools": tools, "bridge": bridge, "toolTimeoutSeconds": 7200})
-    assert next(p for _, m, p in rpcs if m == "mcp.register_custom")["timeout_s"] == 7200
+    assert not any(m in {"mcp.disconnect", "mcp.delete_custom", "mcp.register_custom"}
+                   for _, m, _ in rpcs), "A longer run must not rebuild the shared transport"
+    assert deadlines == [3600, 7200]
 
 
 async def test_the_session_key_names_the_jiuwenswarm_session_and_the_prompt_goes_as_it_is(harness):
@@ -322,14 +420,18 @@ async def test_info_reports_an_executor_of_jiuwenswarm_and_a_gateway_that_does_n
 
 
 async def test_info_needs_a_token_when_there_is_one():
+    from unittest.mock import AsyncMock
     guarded = create_app(Settings(**{**SETTINGS.__dict__, "agent_token": "secret"}))
+    guarded.state.agent_runner.rpc = AsyncMock(return_value={})
     assert (await get(guarded, "/agent/info")).status_code == 401
     assert (await get(guarded, "/agent/info", {"authorization": "Bearer wrong"})).status_code == 401
     assert (await get(guarded, "/agent/info", {"authorization": "Bearer secret"})).status_code == 200
 
 
 async def test_info_also_opens_with_the_apis_own_access_token():
+    from unittest.mock import AsyncMock
     app = create_app(Settings(**{**SETTINGS.__dict__, "api_token": "api-token"}))
+    app.state.agent_runner.rpc = AsyncMock(return_value={})
     assert (await get(app, "/agent/info")).status_code == 401
     assert (await get(app, "/agent/info", {"authorization": "Bearer api-token"})).status_code == 200
 
@@ -348,14 +450,6 @@ async def test_the_system_prompt_mode_reaches_the_route(harness):
     await post(app, {"sessionId": "s1", "prompt": "hi", "model": model, "systemPrompt": "ours", "systemPromptMode": "append"})
     await post(app, {"sessionId": "s1", "prompt": "hi", "model": model, "systemPrompt": "ours"})
     assert modes == [("ours", "append"), ("ours", "replace")]
-
-
-def test_a_model_id_becomes_a_safe_entry_name():
-    from sciencediscovery_adapter.agent_runs import model_alias_base
-    assert model_alias_base("DeepSeek-V4-Flash-0731") == "DeepSeek-V4-Flash-0731"
-    assert model_alias_base("openai/gpt 5:latest") == "openai-gpt-5-latest"
-    assert model_alias_base("///") == "model"
-    assert len(model_alias_base("x" * 100)) == 48
 
 
 async def post_config(app, values, headers=None):
@@ -417,8 +511,36 @@ async def test_an_approval_answer_resumes_the_run_waiting_on_that_question(harne
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
         ok = await client.post("/agent/approvals/q1", json={"decision": "allow_matching"})
         missing = await client.post("/agent/approvals/q1", json={"decision": "deny"})
-    assert ok.status_code == 200 and missing.status_code == 404
+        duplicate = await client.post("/agent/approvals/q1", json={"decision": "allow_matching"})
+    assert ok.status_code == 200 and missing.status_code == 409
+    assert duplicate.status_code == 200
     assert answered == [("q1", "permission_interrupt", {"selected_options": ["本会话允许"], "custom_input": "本会话允许"})]
+
+
+async def test_concurrent_approval_retries_share_one_delivery(harness):
+    from sciencediscovery_adapter.events import RunEventMapper
+    _, runner, _ = harness
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    class Waiting:
+        async def answer(self, *args):
+            calls.append(args)
+            entered.set()
+            await release.wait()
+    mapper = RunEventMapper(session_id="s1")
+    mapper._permissions["q1"] = ["本次允许", "拒绝"]
+    mapper._pending_requests["q1"] = {"id": "q1", "state": "pending"}
+    runner.pending_approvals["q1"] = (Waiting(), mapper)
+    first = asyncio.create_task(runner.answer_approval("q1", "allow_once"))
+    await asyncio.wait_for(entered.wait(), 1)
+    first.cancel()  # Lost HTTP caller must not cancel the downstream delivery.
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    second = asyncio.create_task(runner.answer_approval("q1", "allow_once"))
+    release.set()
+    await asyncio.wait_for(second, 1)
+    await runner.answer_approval("q1", "allow_once")
+    assert len(calls) == 1
 
 
 async def test_the_language_is_set_on_the_tui_channel(harness):
@@ -434,3 +556,171 @@ async def test_the_language_is_set_on_the_tui_channel(harness):
         bad = await client.post("/agent/language", json={"language": "fr"})
     assert ok.status_code == 200 and bad.status_code == 422
     assert rpcs[-1] == ("ws://gw/tui", "config.set", {"preferred_language": "en"})
+
+
+@pytest.mark.parametrize("cancelled, expected", [(False, 502), (True, 200)])
+async def test_approval_delivery_failure_is_visible_unless_already_cancelled(harness, cancelled, expected):
+    from sciencediscovery_adapter.events import RunEventMapper
+    from sciencediscovery_adapter.gateway import GatewayError
+    app, runner, _ = harness
+    class Broken:
+        async def answer(self, *args):
+            raise GatewayError("closed")
+    mapper = RunEventMapper(session_id="s1")
+    mapper._cancel_requested = cancelled
+    mapper._permissions["q1"] = ["本次允许", "拒绝"]
+    mapper._pending_requests["q1"] = {"id": "q1", "state": "pending"}
+    runner.pending_approvals["q1"] = (Broken(), mapper)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
+        response = await client.post("/agent/approvals/q1", json={"decision": "allow_once"})
+    assert response.status_code == expected
+
+
+async def test_boundary_longer_child_timeout_preserves_active_shared_transport(harness):
+    """A child must not disconnect the transport serving its waiting parent."""
+    from sciencediscovery_adapter.mcp_server import Toolset
+    from unittest.mock import AsyncMock
+    _, runner, rpcs = harness
+    tools = [{"name": "task", "description": "delegate", "inputSchema": {}}]
+    await runner.ensure_shared_tools(tools, 3600)
+    tag = runner.registry.add(Toolset(tools=tools, call=AsyncMock()))
+    rpcs.clear()
+    try:
+        await runner.ensure_shared_tools(tools, 7200)
+        destructive = [method for _, method, _ in rpcs
+                       if method in {"mcp.disconnect", "mcp.delete_custom"}]
+        assert destructive == [], f"Active parent transport was torn down: {destructive}"
+    finally:
+        runner.registry.remove(tag)
+
+
+@pytest.mark.parametrize("first,second", [("allow", "ask"), ("ask", "allow")])
+async def test_boundary_same_tool_permission_conflict_is_not_silently_ignored(harness, first, second):
+    """A later ask policy must not silently inherit an earlier allow policy."""
+    _, runner, rpcs = harness
+    tool = {"name": "run_shell", "description": "shell", "inputSchema": {}}
+    await runner.ensure_shared_tools([{**tool, "approval": first}], 3600)
+    rpcs.clear()
+    with pytest.raises(ValueError, match="Conflicting approval policy"):
+        await runner.ensure_shared_tools([{**tool, "approval": second}], 3600)
+    assert rpcs == [], "A rejected run must not change another run's permissions or transport"
+    assert runner._tool_approvals["run_shell"] == first
+
+
+async def test_permission_rpc_failure_is_retried_without_publishing_unconfigured_tool(harness):
+    from sciencediscovery_adapter.gateway import GatewayError
+    _, runner, _ = harness
+    calls = []
+
+    async def rpc(url, method, params=None, **kwargs):
+        if method == "permissions.tools.update":
+            calls.append(params)
+            if len(calls) == 1:
+                raise GatewayError("fixture permission update failure")
+        return {}
+
+    runner.rpc = rpc
+    tools = [{"name": "run_shell", "approval": "ask", "inputSchema": {}}]
+    with pytest.raises(GatewayError):
+        await runner.ensure_shared_tools(tools, 3600)
+    assert "run_shell" not in runner.registry.shared
+    assert "run_shell" not in runner._tool_approvals
+    await runner.ensure_shared_tools(tools, 3600)
+    assert len(calls) == 2
+    assert runner._tool_approvals["run_shell"] == "ask"
+
+
+@pytest.mark.parametrize("same_run", [True, False])
+async def test_boundary_independent_approvals_can_finish_out_of_order(harness, same_run):
+    from sciencediscovery_adapter.events import RunEventMapper
+    _, runner, _ = harness
+    started, release = asyncio.Event(), asyncio.Event()
+    answers = []
+
+    class Waiting:
+        async def answer(self, request_id, source, answer):
+            if request_id == "parent-approval":
+                started.set()
+                await release.wait()
+            answers.append((request_id, answer["selected_options"]))
+
+    shared_mapper = RunEventMapper(session_id="parent")
+    for session in ("parent", "child"):
+        question = f"{session}-approval"
+        mapper = shared_mapper if same_run else RunEventMapper(session_id=session)
+        mapper._permissions[question] = ["本次允许", "拒绝"]
+        mapper._pending_requests[question] = {"id": question, "state": "pending"}
+        runner.pending_approvals[question] = (Waiting(), mapper)
+    parent = asyncio.create_task(runner.answer_approval("parent-approval", "allow_once"))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert "child-approval" in runner.pending_approvals
+        await asyncio.wait_for(runner.answer_approval("child-approval", "deny"), 1)
+        assert answers == [("child-approval", ["拒绝"])]
+        assert not parent.done()
+        release.set()
+        await asyncio.wait_for(parent, 1)
+        assert answers[-1] == ("parent-approval", ["本次允许"])
+    finally:
+        release.set()
+        await parent
+
+
+async def test_boundary_cancel_one_run_keeps_sibling_routes_and_approval(harness):
+    from sciencediscovery_adapter.agent_runs import AgentRunRequest
+    from sciencediscovery_adapter.events import RunEventMapper
+    app, runner, _ = harness
+
+    class Endless(FakeRun):
+        def __aiter__(self):
+            async def frames():
+                yield recorded("jw_chat_plain.raw")[2]
+                await asyncio.Event().wait()
+            return frames()
+
+    runner.chat_run = Endless
+    streams = []
+    async with app.router.lifespan_context(app):
+        try:
+            for session in ("parent", "sibling"):
+                stream = runner.stream(AgentRunRequest(sessionId=session, prompt="go",
+                    tools=[{"name": "run_shell"}], bridge={"url": "http://legacy.test/bridge"},
+                    model={"provider": "OpenAI", "model": "fixture", "baseUrl": "http://mock", "apiKey": "fixture"}))
+                streams.append(stream)
+                await asyncio.wait_for(anext(stream), 1)
+            sibling = FakeRun.instances[-1]
+            route = sibling.params["run_model"]["api_key"]
+            mapper = RunEventMapper(session_id="sibling")
+            runner.pending_approvals["sibling-question"] = (sibling, mapper)
+            assert len(runner.registry._sets) == len(runner.routes._routes) == 2
+            await streams[0].aclose()
+            assert FakeRun.instances[0].cancelled
+            assert not sibling.cancelled
+            assert runner.routes.get(route) is not None
+            assert len(runner.registry._sets) == len(runner.routes._routes) == 1
+            assert "sibling-question" in runner.pending_approvals
+        finally:
+            for stream in streams:
+                await stream.aclose()
+            runner.pending_approvals.pop("sibling-question", None)
+        assert not runner.registry._sets
+        assert not runner.routes._routes
+
+
+async def test_boundary_failed_start_releases_private_routes_and_toolsets(harness):
+    from sciencediscovery_adapter.gateway import GatewayError
+    app, runner, _ = harness
+
+    async def broken_rpc(url, method, params=None, **kwargs):
+        if method == "mcp.connect":
+            raise GatewayError("fixture connect failure")
+        return {}
+
+    runner.rpc = broken_rpc
+    _, lines = await post(app, {"sessionId": "failed-start", "prompt": "go",
+        "tools": [{"name": "run_shell"}], "bridge": {"url": "http://legacy.test/bridge"},
+        "model": {"provider": "OpenAI", "model": "fixture", "baseUrl": "http://mock", "apiKey": "fixture"}})
+    assert lines[-1]["done"]["status"] == "failed"
+    assert not runner.routes._routes
+    assert not runner.registry._sets
+    assert not runner.pending_approvals

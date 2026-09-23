@@ -17,26 +17,20 @@
 # stamped with the date and commit so a build can be traced back to what went
 # into it.
 #
-# What it adds over the merge gate is time, not coverage: a pull request is
-# checked against its own merge commit, so nothing here notices a main that
-# broke between merges, a dependency that moved under a floating range, or an
-# external source the Docker build reaches. A nightly run does.
-#
-# The nightly set is expected to grow past the merge gate. When it does, add
-# an input to ci.yml describing the wider run and pass it from here; do not
-# start a second copy of the jobs in this file.
+# Daily adds real-model E2E to the hermetic merge gate. The reusable workflow
+# owns both jobs; the daily profile selects paid journeys from source tags.
 
 name: Nightly
 
 on:
   schedule:
-    # 18:00 UTC is 02:00 the next day in Asia/Shanghai, so the run starts
+    # 16:00 UTC is 00:00 the next day in Asia/Shanghai, so the run starts
     # overnight for the team that reads it and has finished by the working
     # morning. GitHub schedules cron only on the default branch, evaluates it
     # in UTC with no daylight-saving adjustment, and drops or delays runs when
     # its queue is busy — treat a missing night as a scheduling miss and
     # re-dispatch rather than as a build failure.
-    - cron: "0 18 * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch:
 
 permissions:
@@ -54,7 +48,7 @@ jobs:
     steps:
       - id: stamp
         # The date is the run's own, in the same zone as the cron above, so a
-        # build started at 02:00 Asia/Shanghai carries that day. The short SHA
+        # build started at 00:00 Asia/Shanghai carries that day. The short SHA
         # is what makes the name resolvable: two nights can share a date, but
         # not a commit.
         run: |
@@ -65,9 +59,9 @@ jobs:
     name: Gate
     needs: stamp
     uses: ./.github/workflows/ci.yml
+    secrets: inherit
     with:
-      # The nightly standard, not the merge one. `daily` is `pr` today and grows
-      # the live-model and judge rows `pr` deliberately leaves out.
+      # Includes real-model and judge cases; PR remains credential-free.
       profile: daily
       release-version: ${{ needs.stamp.outputs.version }}
 

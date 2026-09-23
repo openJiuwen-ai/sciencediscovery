@@ -168,7 +168,7 @@ export async function main(args=process.argv.slice(2)) {
   // Collection scope follows the categories asked for, whichever way they were
   // asked: a query for `--category e2e` needs Chromium and not the Python
   // virtualenvs, exactly as `--slice e2e` does.
-  const categories=query.category??(slice==='shared'?['ut','st','e2e']:[slice]);
+  const categories=query.category??(slice==='shared'?['ut','st','e2e']:[slice === 'e2e-real' ? 'e2e' : slice]);
   const needUT=categories.includes('ut'), needPW=categories.includes('e2e');
   // The E2E group can split preparation from execution: a host installs
   // everything and hands the workspace over, and this half only runs.
@@ -208,14 +208,14 @@ export async function main(args=process.argv.slice(2)) {
     if(code||!existsSync(destination))throw new Error('PLAYWRIGHT_COLLECTION_FAILED');
     catalog.push(...JSON.parse(readFileSync(destination)).catalog);
   }
-  if(needUT)catalog.push(...checks.map(check=>({...check,source:'test/support/tagged/checks.mjs',sourceHash:fileDigest(readFileSync(join(root,'test/support/tagged/checks.mjs'))),runner:'command'})));
+  catalog.push(...checks.filter(check=>categories.some(c=>check.tags.includes(`category:${c}`))).map(check=>({...check,source:'test/support/tagged/checks.mjs',sourceHash:fileDigest(readFileSync(join(root,'test/support/tagged/checks.mjs'))),runner:'command'})));
   // Explicit opt-in entry points are discoverable metadata, never executed by this policy.
   for(const source of ['test/api/agent_loop_real_smoke.ts','services/runner/workloads/npu-smoke-test.py']){
     const text=readFileSync(join(root,source),'utf8');catalog.push({id:`command:${source}`,source,sourceHash:fileDigest(text),runner:'command',tags:JSON.parse(text.match(/science-tags: (\[[^\n]+\])/)[1])});
   }
   const revision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
   const {os:requestedOs,arch:requestedArch,...predicates}=query;
-  const selector=dimensions.length?selectorFrom(predicates):profile.selector+(slices[slice]?` and (${slices[slice]})`:'');
+  const selector=dimensions.length?selectorFrom(predicates):`(${profile.selector})`+(slices[slice]?` and (${slices[slice]})`:'');
   // `os` and `arch` name the execution target rather than filter the tags: the
   // plan expands a multi-platform test into one instance per target, and the
   // selector is then evaluated on that concrete instance.
@@ -265,18 +265,26 @@ export async function main(args=process.argv.slice(2)) {
       const [command,...argv]=entry.command;const code=await run(command,argv,env,join(outputDir,entry.id.replaceAll(':','-')+'.log'));
       results.push({key:entry.key,outcome:code?'FAIL':'PASS',actualTarget:entry.target});
     }
-    const journeys=plan.entries.filter(e=>e.runner==='playwright');
-    if(journeys.length){
-      const report=join(outputDir,'playwright-results.json');rmSync(report,{force:true});
+    const batches=new Map();
+    for(const entry of plan.entries.filter(e=>e.runner==='playwright')) {
+      const group=entry.tags.includes('model:real')?'real':'mocked';
+      const fixture=entry.tags.find(tag=>tag.startsWith('fixture:'))?.split(':')[1]??'standard';
+      const key=`${group}-${fixture}`;
+      const batch=batches.get(key)??{group,fixture,entries:[]};batch.entries.push(entry);batches.set(key,batch);
+    }
+    for(const [key,batch] of batches){
+      const report=join(outputDir,`playwright-${key}-results.json`);rmSync(report,{force:true});
+      const batchPlan=join(outputDir,`playwright-${key}-plan.json`);json(batchPlan,subplan(plan,batch.entries));
       // run-e2e.sh keeps writing its stack log, journey reports and Playwright
       // output where every reader already looks for them — `<results>/e2e/` —
       // while the frozen plan and its accounting stay in this slice's own
       // directory beside them.
-      const code=await run('bash',['.ci/run-e2e.sh'],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
-        CI_RESULTS_DIR:process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,
-        CI_RUNTIME_DIR:process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),
-        SCIENCE_TAG_PLAN:join(outputDir,'plan.json'),SCIENCE_TAG_PW_REPORT:report,
-        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,'e2e-driver.log'));
+      const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
+        CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,key),
+        CI_RUNTIME_DIR:join(process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),key),
+        CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${key}`,
+        SCIENCE_TAG_PLAN:batchPlan,SCIENCE_TAG_PW_REPORT:report,
+        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${key}-driver.log`));
       if(code)errors.push(`PLAYWRIGHT_WORKER_FAILED: ${code}`);
       if(existsSync(report)){const data=JSON.parse(readFileSync(report));results.push(...data.results);errors.push(...data.errors);}else errors.push('PLAYWRIGHT_REPORT_MISSING');
     }

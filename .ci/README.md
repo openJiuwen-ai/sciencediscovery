@@ -15,6 +15,66 @@ test dependencies are supplied only by the checkout mounted at `/src`.
 
 ## One plan, three layers
 
+### Research-test scheduling after PR #154
+
+| Profile / job | Scope | Paid credentials |
+| --- | --- | --- |
+| PR: `ci:ut` | Tagged package/helper tests and offline benchmark-verifier checks | None |
+| PR: `ci:st` | Mock agent-loop smoke and pinned Swarm SDK/MCP contract checks | None |
+| PR: `ci:e2e` | All reviewed mocked browser journeys, including research lifecycle/source fixtures | None |
+| Daily: `ci:e2e:real` | Every tagged real browser journey: five DRB, research team, two BiomniBench and existing real journeys | `nightly-research` environment only |
+
+`daily` adds a real-E2E policy row; `release` keeps the credential-free PR policy.
+The three hermetic jobs remain unchanged entry points; daily adds the disjoint
+`e2e-real` slice. Always parenthesize the OR-ed profile before intersecting a slice.
+The browser worker receives a frozen subplan, including exact test identities;
+inherited Playwright suite tags must not change which titles match that plan.
+
+Mocked source tags declare `fixture:standard`, `fixture:research` (MCP fault
+proxy and small-context Swarm), or `fixture:literature` (also offline sources).
+The shared runner starts separate disposable stacks for these batches. It does
+not weaken missing-fixture assertions into skips or inject fake sources into
+real benchmarks. `SCIENCE_AGENT_API_ENTRYPOINT` is a local-only startup seam
+used by the literature fixture; the default product API entry point is unchanged.
+
+The two Python benchmark-verifier suites are a planned UT command check;
+the pinned Swarm patch/SDK suites are a planned ST command check. Their individual
+framework case counts remain in logs rather than being counted as separate
+frozen identities. New Node helper/fixture tests are individually tagged.
+The UT preparation downloads the pinned DRB evaluator, but all of its judge and
+fetch calls in this suite are mocked. Empty or skipped Python suites fail the
+command; no live credentials are required for these verification tests.
+
+### Daily real-E2E prerequisites
+
+Nightly runs at **00:00 Asia/Shanghai (16:00 UTC)**, with a separate real E2E job
+in the reusable CI workflow. GitHub schedules only workflows on the default
+branch: merging into `feat/jiuwenswarm` alone does not activate the schedule.
+The nightly workflow passes secrets to the reusable workflow; PR jobs do not
+receive live credentials. Nothing here dispatches a paid run during development.
+
+Configure the GitHub environment `nightly-research`:
+
+- Variables: `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_JUDGE_BASE_URL`, `E2E_JUDGE_MODEL`.
+- Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`.
+- The HF account must have accepted BiomniBench-DA access terms. Setup downloads
+  only the two tasks' CSVs, instructions and rubrics, not the full dataset.
+- The DRB evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`;
+  BiomniBench inputs are verified against committed blob hashes before model use.
+
+Missing credentials/data/dependencies fail explicitly. No case disappears from
+discovery because an environment variable is absent. Selected skips, missing
+results and assertion failures fail plan accounting. `real-e2e-results` retains
+the plan, per-case metrics, scores and diagnostics even on failure (seven days).
+Treat these artifacts as research data; restrict access appropriately.
+
+Real tests use one browser worker; the isolated runtime enforces child concurrency
+two. DRB additionally requests at most two total children; the team retains six
+roles. Each DRB gets 20 minutes generation plus 10 minutes evaluation, team gets
+40 minutes and BiomniBench 20 minutes per case. Timeouts are failures, not success
+or a monetary cap. The job has a six-hour ceiling and does not retry failed cases.
+Judge scores and token usage are recorded separately from generator usage.
+
 The three hermetic layers are three slices of one plan, not three suites. Each
 runs `test/support/tagged/shared.mjs` against the single selector in
 [test/support/tagged/profiles.mjs](../test/support/tagged/profiles.mjs),
@@ -24,17 +84,18 @@ narrowed only by the group that layer schedules:
 |---|---|---|
 | UT | `pnpm ci:ut` | `category:ut` |
 | ST | `pnpm ci:st` | `category:st` |
-| E2E | `pnpm ci:e2e` | `category:e2e`, driving `.ci/run-e2e.sh` for the stack lifecycle |
+| Mock E2E | `pnpm ci:e2e` | `category:e2e and not model:real`, driving `.ci/run-e2e.sh` |
+| Daily real E2E | `pnpm ci:e2e:real` | `category:e2e and model:real`, daily profile only |
 
-`category` is single-valued and required, so those three slices partition the
-plan: together they are exactly `pnpm test:shared`, the command a developer
+The three hermetic slices partition the PR plan; the fourth slice adds real
+journeys for daily CI. The hermetic slices together are `pnpm test:shared`, the command a developer
 runs. Which cases are selected comes from the tags in each test's own source —
 never from the machine, its credentials, its devices or its installed
 services. A missing capability fails the plan's preflight, and a skip is a
 failed run, so a layer cannot go green by running less.
 [test/support/tagged/MIGRATION.md](../test/support/tagged/MIGRATION.md) records
-what the plan covers and why live-model, NPU, legacy and macOS work is outside
-it; those keep their own opt-in entry points (`ci:st:real`, `ci:e2e:real`,
+what the plan covers. Real E2E is included only in the daily profile; live ST,
+NPU, legacy and macOS work keep their own opt-in entry points (`ci:st:real`, `ci:e2e:real`,
 `ci:st:npu`, `ci:e2e:legacy`).
 
 `node .ci/tagged-summary.mjs` reads each slice's frozen plan back and fails
