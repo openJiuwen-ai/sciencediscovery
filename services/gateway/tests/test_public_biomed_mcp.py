@@ -23,10 +23,12 @@ import os
 import socket
 import socketserver
 import ssl
+import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -360,6 +362,34 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(arxiv_context.check_hostname)
         self.assertEqual(arxiv_context.verify_mode, ssl.CERT_REQUIRED)
         self.assertNotIn("verify", client_options[1])
+
+    async def test_arxiv_429_diagnostics_keep_headers_without_logging_query(self) -> None:
+        async_client = httpx.AsyncClient
+
+        def make_client(**kwargs):
+            return async_client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(
+                    429, headers={"retry-after": "7", "x-cache": "Error from cloudfront"},
+                )),
+                **kwargs,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "arxiv-http.jsonl"
+            with (
+                patch.dict(os.environ, {"SCIENCE_AGENT_ARXIV_HTTP_LOG": str(path)}),
+                patch("sciencediscovery_gateway.public_biomed_mcp.httpx.AsyncClient", side_effect=make_client),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                    await _arxiv_search("secret cardiology query", 5)
+            raw = path.read_text()
+            event = json.loads(raw)
+            self.assertEqual(event["status"], 429)
+            self.assertEqual(event["retry_after"], "7")
+            self.assertEqual(event["x_cache"], "Error from cloudfront")
+            self.assertEqual(event["error_type"], "RuntimeError")
+            self.assertEqual(len(event["query_sha256"]), 64)
+            self.assertNotIn("secret cardiology query", raw)
 
     async def test_pubmed_empty_search_does_not_make_a_summary_request(self) -> None:
         getter = AsyncMock(return_value={"esearchresult": {"idlist": []}})

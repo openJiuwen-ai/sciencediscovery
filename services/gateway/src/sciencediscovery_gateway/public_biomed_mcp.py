@@ -22,8 +22,12 @@ downloads remain in the Node governance broker.
 from __future__ import annotations
 
 import html
+import hashlib
+import json
+import os
 import re
 import ssl
+import time
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from typing import Any
@@ -59,6 +63,41 @@ def _raise_for_status(response: httpx.Response) -> None:
     raise RuntimeError(message)
 
 
+def _log_arxiv_http(
+    *, started_at: str, elapsed_ms: int, params: dict[str, Any] | None,
+    response: httpx.Response | None, error_type: str | None,
+) -> None:
+    """Optional per-attempt diagnostics; never persist the raw research query."""
+    path = os.environ.get("SCIENCE_AGENT_ARXIV_HTTP_LOG")
+    if not path:
+        return
+    query = str((params or {}).get("search_query", ""))
+    headers = response.headers if response is not None else {}
+    event = {
+        "at": started_at,
+        "elapsed_ms": elapsed_ms,
+        "pid": os.getpid(),
+        "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+        "status": response.status_code if response is not None else None,
+        "error_type": error_type,
+        "retry_after": headers.get("retry-after"),
+        "date": headers.get("date"),
+        "server": headers.get("server"),
+        "via": headers.get("via"),
+        "x_cache": headers.get("x-cache"),
+        "cf_ray": headers.get("cf-ray"),
+    }
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(descriptor, (json.dumps(event, separators=(",", ":")) + "\n").encode())
+        finally:
+            os.close(descriptor)
+    except OSError:
+        # Diagnostics must never change the result of a provider call.
+        pass
+
+
 async def _get_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
         response = await client.get(url, params=params, headers={"accept": "application/json"})
@@ -72,12 +111,27 @@ async def _get_text(
     params: dict[str, Any] | None = None,
     accept: str = "text/plain",
     ssl_context: ssl.SSLContext | None = None,
+    arxiv_diagnostics: bool = False,
 ) -> str:
     client_options = {"verify": ssl_context} if ssl_context is not None else {}
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, **client_options) as client:
-        response = await client.get(url, params=params, headers={"accept": accept})
-        _raise_for_status(response)
-        return response.text
+        started_at = _now()
+        started = time.monotonic()
+        response: httpx.Response | None = None
+        error_type: str | None = None
+        try:
+            response = await client.get(url, params=params, headers={"accept": accept})
+            _raise_for_status(response)
+            return response.text
+        except Exception as error:
+            error_type = type(error).__name__
+            raise
+        finally:
+            if arxiv_diagnostics:
+                _log_arxiv_http(
+                    started_at=started_at, elapsed_ms=round((time.monotonic() - started) * 1000),
+                    params=params, response=response, error_type=error_type,
+                )
 
 
 async def _post_json(url: str, payload: Any) -> Any:
@@ -179,6 +233,7 @@ async def _arxiv_search(query: str, limit: int) -> dict[str, Any]:
         },
         accept="application/atom+xml",
         ssl_context=ssl_context,
+        arxiv_diagnostics=True,
     )
     root = ET.fromstring(payload)
     atom = {"atom": "http://www.w3.org/2005/Atom"}
