@@ -185,7 +185,11 @@ test("ScienceDiscovery completes one antibody-design NPU invocation with a commi
   for (const path of expected) {
     assert.ok(remote.files.find((file) => file.path === path)?.size > 0, `Missing or empty remote output ${path}`);
     assert.ok(local.find((file) => file.path === path)?.size > 0, `Output was not synced to Session workspace: ${path}`);
-    assert.ok(artifacts.some((artifact) => artifact.name === path), `Output was not declared as an Artifact: ${path}`);
+    assert.ok(
+      artifacts.some((artifact) => artifact.origin === "llm_declared"
+        && artifact.originMeta?.declaredPath === path && artifact.currentVersion >= 1),
+      `Output was not declared as an Artifact from the synced path: ${path}`,
+    );
   }
   const transferred = new Set(activity.transfers.filter((entry) => entry.state === "completed")
     .flatMap((entry) => entry.files?.map((file) => file.targetPath) ?? []));
