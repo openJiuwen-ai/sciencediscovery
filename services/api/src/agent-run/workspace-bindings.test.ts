@@ -655,7 +655,7 @@ test("cards ticked for a Runner reach the Runner request of every execution kind
 test("mock NPU managed invocation retains card selection and requires a committed zero-exit receipt", async () => {
   const { bindings, cleanup, payloads } = await npuChain([5]);
   try {
-    const accepted = await bindings.shellExecutions!.start("echo MOCK_NPU_CALL_OK", { background: true });
+    const accepted = await bindings.shellExecutions!.start("echo MOCK_NPU_CALL_OK", {});
     assert.equal(accepted.accepted, true);
     const completed = await bindings.shellExecutions!.wait(accepted.id, 5_000);
     assert.equal(payloads.length, 1, "a managed NPU call is submitted exactly once");
