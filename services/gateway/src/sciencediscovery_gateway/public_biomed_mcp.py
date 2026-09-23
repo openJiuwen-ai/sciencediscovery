@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import html
 import re
+import ssl
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from typing import Any
@@ -65,8 +66,15 @@ async def _get_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
         return response.json()
 
 
-async def _get_text(url: str, *, params: dict[str, Any] | None = None, accept: str = "text/plain") -> str:
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False) as client:
+async def _get_text(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    accept: str = "text/plain",
+    ssl_context: ssl.SSLContext | None = None,
+) -> str:
+    client_options = {"verify": ssl_context} if ssl_context is not None else {}
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, **client_options) as client:
         response = await client.get(url, params=params, headers={"accept": accept})
         _raise_for_status(response)
         return response.text
@@ -157,6 +165,11 @@ def _clean(value: Any, limit: int = 4_000) -> str:
 
 
 async def _arxiv_search(query: str, limit: int) -> dict[str, Any]:
+    # arXiv's edge rejects cold requests from the default httpx TLS handshake
+    # with HTTP 406. Advertising post-handshake auth restores the origin path;
+    # it does not disable certificate verification or present a client cert.
+    ssl_context = ssl.create_default_context()
+    ssl_context.post_handshake_auth = True
     payload = await _get_text(
         external_url("data_sources.arxiv.api_query"),
         params={
@@ -165,6 +178,7 @@ async def _arxiv_search(query: str, limit: int) -> dict[str, Any]:
             "start": 0,
         },
         accept="application/atom+xml",
+        ssl_context=ssl_context,
     )
     root = ET.fromstring(payload)
     atom = {"atom": "http://www.w3.org/2005/Atom"}
