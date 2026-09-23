@@ -26,11 +26,14 @@ import { checks } from './checks.mjs';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
 const json=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n');
-function run(command,args,env,log,cwd=root) {
+// The log always gets the child's output; `echo` also passes it through as it
+// arrives, for a step whose progress is what the reader of a job log waits for.
+function run(command,args,env,log,cwd=root,{echo=false}={}) {
   return new Promise((done,reject)=>{
     const child=spawn(command,args,{cwd,env,stdio:['ignore','pipe','pipe']});
     let output='';
-    child.stdout.on('data',chunk=>{output+=chunk;});child.stderr.on('data',chunk=>{output+=chunk;});
+    child.stdout.on('data',chunk=>{output+=chunk;if(echo)process.stdout.write(chunk);});
+    child.stderr.on('data',chunk=>{output+=chunk;if(echo)process.stderr.write(chunk);});
     child.on('error',reject);child.on('close',code=>{writeFileSync(log,output);done(code??1);});
   });
 }
@@ -284,7 +287,7 @@ export async function main(args=process.argv.slice(2)) {
         CI_RUNTIME_DIR:join(process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),key),
         CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${key}`,
         SCIENCE_TAG_PLAN:batchPlan,SCIENCE_TAG_PW_REPORT:report,
-        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${key}-driver.log`));
+        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${key}-driver.log`),root,{echo:true});
       if(code)errors.push(`PLAYWRIGHT_WORKER_FAILED: ${code}`);
       if(existsSync(report)){const data=JSON.parse(readFileSync(report));results.push(...data.results);errors.push(...data.errors);}else errors.push('PLAYWRIGHT_REPORT_MISSING');
     }
