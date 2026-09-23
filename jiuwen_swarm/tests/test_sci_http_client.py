@@ -5,6 +5,7 @@
 
 """Loopback transport regressions; no LLM, credentials, or Swarm services."""
 import asyncio
+import json
 import socket
 import unittest
 from unittest.mock import patch
@@ -15,8 +16,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from openjiuwen.core.foundation.tool import McpServerConfig
 from openjiuwen.core.runner.resources_manager.tool_manager import ToolMgr
+from mcp.shared.exceptions import McpError
 from jiuwenswarm.server.runtime.mcp.call_timeout_patch import apply_mcp_call_timeout_patch
-from jiuwenswarm.server.runtime.mcp.sci_http_client import SciHttpClient
+from jiuwenswarm.server.runtime.mcp.sci_http_client import SciHttpClient, transport_failure_details
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
@@ -97,14 +99,16 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[1], "done")
         self.assertEqual(await self.client.call_tool("task", {}), "done")
 
-    async def test_transport_failure_wakes_all_waiters(self):
-        results = await asyncio.wait_for(asyncio.gather(
-            self.client.call_tool("task", {"delay": .4}),
-            self.client.call_tool("task", {"fail": True}), return_exceptions=True), 2)
-        self.assertTrue(all(isinstance(result, Exception) for result in results))
-        self.assertTrue(self.client._owner.done())
-        with self.assertRaises(RuntimeError):
-            await self.client.call_tool("task", {})
+    async def test_transport_failure_logs_sanitized_cause_not_just_generic_message(self):
+        # Diagnostic coverage only. Survival/recovery expectations live in
+        # test_mcp_boundary; do not bless permanent failure as correct behavior.
+        with self.assertLogs("jiuwenswarm.server.runtime.mcp.sci_http_client", level="ERROR") as logs:
+            with self.assertRaises(Exception):
+                await asyncio.wait_for(self.client.call_tool("task", {"fail": True}), 2)
+        text = "\n".join(logs.output)
+        self.assertIn("HTTPStatusError", text)
+        self.assertIn('"http_status": 503', text)
+        self.assertNotIn("http://", text)
 
     async def test_forced_http_read_timeout_is_reported_without_hanging(self):
         # Reproduce the original failure at a small timescale, even though
@@ -114,8 +118,10 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             request.extensions["timeout"]["read"] = .03
             return await original(client, request, **kwargs)
         with patch.object(httpx.AsyncClient, "send", send):
-            with self.assertRaisesRegex(RuntimeError, "transport failed"):
+            with self.assertRaisesRegex(McpError, "request failed.*ReadTimeout"):
                 await asyncio.wait_for(self.client.call_tool("task", {"delay": .2}), 1)
+        self.assertFalse(self.client._owner.done())
+        self.assertEqual(await self.client.call_tool("task", {}), "done")
 
     async def test_explicit_disconnect_wakes_pending_call(self):
         call = asyncio.create_task(self.client.call_tool("task", {"delay": .4}))
@@ -138,6 +144,31 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.client.call_tool("task", {"fail": True}), 2)
         self.assertTrue(await self.client.connect())
         self.assertEqual(await self.client.call_tool("task", {}), "done")
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_nested_exception_log_never_contains_headers_body_url_or_error_message(self):
+        secret = "fixture-credential-never-log"
+        request = httpx.Request("POST", f"https://example.invalid/mcp/{secret}",
+                               headers={"authorization": f"Bearer {secret}"}, content=secret)
+        response = httpx.Response(503, request=request, text=secret)
+        try:
+            raise httpx.HTTPStatusError(secret, request=request, response=response)
+        except httpx.HTTPStatusError as cause:
+            error = ExceptionGroup(secret, [cause, httpx.ReadError(secret, request=request)])
+            details = json.dumps(transport_failure_details(error))
+        self.assertIn("HTTPStatusError", details)
+        self.assertIn("ReadError", details)
+        self.assertIn('"http_status": 503', details)
+        self.assertIn("frames", details)
+        self.assertNotIn(secret, details)
+        self.assertNotIn("example.invalid", details)
+        self.assertNotIn("authorization", details)
+
+    def test_cyclic_causes_are_bounded(self):
+        first, second = RuntimeError("one"), RuntimeError("two")
+        first.__cause__, second.__cause__ = second, first
+        self.assertLess(len(json.dumps(transport_failure_details(first))), 1000)
 
 
 if __name__ == "__main__":

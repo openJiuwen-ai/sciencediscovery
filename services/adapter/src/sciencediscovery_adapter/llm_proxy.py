@@ -382,7 +382,10 @@ def llm_router(routes: LlmRoutes, client_getter) -> APIRouter:
         client: httpx.AsyncClient = client_getter()
         upstream_request = client.build_request(
             "POST", f"{route.base_url}/chat/completions", json=body,
-            headers={"authorization": f"Bearer {route.api_key}"} if route.api_key else {},
+            headers={
+                **({"authorization": f"Bearer {route.api_key}"} if route.api_key else {}),
+                **({"x-sciencediscovery-model-purpose": "housekeeping"} if not restore_names else {}),
+            },
         )
         try:
             upstream = await client.send(upstream_request, stream=True)

@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field
 
 from . import gateway
 from .config import Settings
+from .diagnostics import emit as trace_boundary
 from .events import RunEventMapper
 from .llm_proxy import DEFAULT_ALIAS, LlmRoute, LlmRoutes
 from .mcp_server import SERVER_NAME, Toolset, ToolsetRegistry
@@ -282,6 +283,9 @@ class AgentRunner:
         llm_token = None
         terminal_status = "completed"
         jw_session = request.sessionKey or request.sessionId
+        trace_context = {"run_id": request.runId, "agent_id": request.agentId,
+                         "session_id": request.sessionId, "swarm_session": jw_session}
+        trace_boundary("run.started", **trace_context, tool_count=len(request.tools))
         logger.info("run-binding start run=%s agent=%s session=%s swarm_session=%s tools=%d",
                     request.runId, request.agentId, request.sessionId, jw_session, len(request.tools))
         mapper = RunEventMapper(session_id=request.sessionId, mcp_prefixes=(f"mcp_{name}_",))
@@ -300,7 +304,9 @@ class AgentRunner:
                     tools=[{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools],
                     call=bridge_caller(request.bridge, self.client()),
                     timeout_s=request.toolTimeoutSeconds or self.settings.tool_timeout_s,
+                    trace_context=trace_context,
                 ))
+                trace_boundary("run.tools.bound", **trace_context, run_tag=token, tool_count=len(request.tools))
             if request.model:
                 if request.model.provider != "OpenAI":
                     raise ValueError(f"the {request.model.provider} protocol is not supported by this executor yet")
@@ -333,6 +339,11 @@ class AgentRunner:
                 try:
                     async for frame in run:
                         for event in mapper.feed(frame):
+                            if event["type"] in {"tool.started", "tool.completed", "permission.required",
+                                                  "assistant.response.settled", "run.failed", "run.cancelled"}:
+                                trace = event.get("trace") or {}
+                                trace_boundary("swarm.event", **trace_context, event_type=event["type"],
+                                               tool=trace.get("name"), tool_call_id=trace.get("id"), status=trace.get("status"))
                             if event["type"] == "run.failed":
                                 terminal_status = "failed"
                             elif event["type"] == "run.cancelled":
@@ -362,10 +373,14 @@ class AgentRunner:
                 "cancelled": mapper._cancel_requested,
             }}, ensure_ascii=False) + "\n"
         except (gateway.GatewayError, ValueError, httpx.HTTPError) as error:
+            terminal_status = "failed"
+            trace_boundary("run.error", **trace_context, error_type=type(error).__name__)
             failure = {"type": "run.failed", "error": str(error), "errorCode": "transport-error"}
             yield json.dumps({"event": failure}, ensure_ascii=False) + "\n"
             yield json.dumps({"done": {"status": "failed", "finalText": "", "unmapped": mapper.unmapped, "cancelled": False}}) + "\n"
         finally:
+            trace_boundary("run.released", **trace_context, run_tag=token, terminal=mapper.finished,
+                           status="cancelled" if mapper._cancel_requested else terminal_status)
             logger.info("run-binding release run=%s agent=%s swarm_session=%s terminal=%s",
                         request.runId, request.agentId, jw_session, mapper.finished)
             if llm_token:

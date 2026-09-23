@@ -22,6 +22,20 @@ from sciencediscovery_adapter.events import RunEventMapper, classify_failure, pa
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.mark.parametrize("tool_count", [1, 3])
+def test_missing_initial_status_and_parallel_results_do_not_corrupt_display_turns(tool_count):
+    mapper = RunEventMapper()
+    events = mapper.feed({"type": "event", "event": "chat.delta", "payload": {"content": "first"}})
+    for i in range(tool_count):
+        events += mapper.feed({"type": "event", "event": "chat.tool_call", "payload": {
+            "tool_call": {"name": "test", "tool_call_id": str(i), "arguments": "{}"}}})
+    for i in range(tool_count):
+        events += mapper.feed({"type": "event", "event": "chat.tool_result", "payload": {
+            "tool_name": "test", "tool_call_id": str(i), "result": "ok"}})
+    events += mapper.feed({"type": "event", "event": "chat.delta", "payload": {"content": "second"}})
+    assert [e["turn"] for e in events if e["type"] == "assistant.response.started"] == [1, 2]
+
+
 def frames(name: str) -> list[dict]:
     lines = [line.strip() for line in (FIXTURES / name).read_text().splitlines() if line.strip()]
     return [json.loads(line.removeprefix("ACK ")) for line in lines]

@@ -234,7 +234,8 @@ async def test_jiuwenswarms_own_model_calls_go_to_the_model_of_the_run_in_progre
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.update(url=str(request.url), auth=request.headers["authorization"], body=json.loads(request.content))
+        seen.update(url=str(request.url), auth=request.headers["authorization"], body=json.loads(request.content),
+                    purpose=request.headers.get("x-sciencediscovery-model-purpose"))
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "summary", "tool_calls": [
             {"id": "c", "type": "function", "function": {"name": "run_shell", "arguments": "{}"}}]}}]})
 
@@ -244,6 +245,7 @@ async def test_jiuwenswarms_own_model_calls_go_to_the_model_of_the_run_in_progre
     assert response.status_code == 200
     assert seen["url"] == "http://llm.test/v1/chat/completions" and seen["auth"] == "Bearer sk-real"
     assert seen["body"]["model"] == "gpt-real", "the real model id"
+    assert seen["purpose"] == "housekeeping"
     assert seen["body"]["messages"][0]["content"] == "Summarise this.", "JiuwenSwarm's own system prompt, not the agent's"
     assert [t["function"]["name"] for t in seen["body"]["tools"]] == ["bash"], "no tool list cut or renamed"
     assert response.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "run_shell", "names are not prefixed"

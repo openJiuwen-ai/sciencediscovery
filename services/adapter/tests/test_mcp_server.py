@@ -23,6 +23,47 @@ TOOLS = [{"name": "run_shell", "description": "Run a command.",
           "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}]
 
 
+async def test_cancel_notification_is_scoped_to_connection_and_request(setup):
+    client, _, _, registry = setup
+    entered = {name: asyncio.Event() for name in ("a", "b")}
+    cancelled = {name: asyncio.Event() for name in ("a", "b")}
+    release = asyncio.Event()
+
+    async def call(name, args):
+        label = args["command"]
+        entered[label].set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled[label].set()
+            raise
+        return label, False
+
+    tag = registry.add(Toolset(TOOLS, call))
+    tasks = []
+    async with client:
+        try:
+            for label in ("a", "b"):
+                tasks.append(asyncio.create_task(client.post(f"/mcp/{registry.token}",
+                    headers={"x-sci-mcp-connection": label}, json={"jsonrpc": "2.0", "id": 1,
+                        "method": "tools/call", "params": call_of(tag, "run_shell", command=label)})))
+            await asyncio.wait_for(asyncio.gather(*(e.wait() for e in entered.values())), 2)
+            result = await client.post(f"/mcp/{registry.token}", headers={"x-sci-mcp-connection": "a"},
+                json={"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}})
+            assert result.status_code == 202
+            await asyncio.wait_for(cancelled["a"].wait(), 1)
+            assert not cancelled["b"].is_set()
+            assert (await tasks[0]).json()["error"]["code"] == -32800
+            release.set()
+            assert (await tasks[1]).json()["result"]["content"][0]["text"] == "b"
+        finally:
+            release.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def test_per_run_deadline_cancels_only_its_own_bridge_call(setup):
     client, _, _, registry = setup
     expired = asyncio.Event()

@@ -292,7 +292,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       config: { planning: this.config.planning ?? "todo", prompt: this.config.prompt ?? "prepend", tools: this.config.tools ?? "jiuwenswarm", skills: this.config.skills ?? "jiuwenswarm", subagents: this.config.subagents ?? "jiuwenswarm" },
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
-      trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined);
+      trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,
+      { progress: () => this.deadlines?.progress(), beforeTurn: () => this.emit({ type: "turn_start" }) });
     const deadlines = new RunDeadlines(this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS,
       this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS, () => this.controller.abort());
     this.deadlines = deadlines;
@@ -300,6 +301,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     deadlines.start();
     try {
       const finalText = await this.stream(text, tools, bridge.url, bridgeToken, announcements, transcript, modelGateway, jiuwenSwarmPlans, jiuwenSwarmSubagents);
+      this.controller.signal.throwIfAborted();
       // The model was cut at max_tokens and JiuwenSwarm ended the run there. Say so as the native loop does;
       // a turn that produced no visible text (a reasoning model spending its whole budget on thought) would
       // otherwise end the run in the middle of a thought with nothing to show for it.
@@ -545,6 +547,7 @@ class ToolAnnouncements {
   /** Every call announced so far, in the order the model made them, with the response it belongs to. */
   readonly all: Array<{ args: Record<string, unknown>; batch: number; id: string; name: string; seq: number }> = [];
   private batch = 0;
+  readonly failedBeforeBridge = new Set<string>();
 
   /** A new model response begins: its calls form the next batch. */
   newResponse(): void {
@@ -552,9 +555,19 @@ class ToolAnnouncements {
   }
 
   announce(call: { args: unknown; id: string; input: string; name: string }): void {
+    if (this.all.some((item) => item.id === call.id)) return;
     this.all.push({ args: (call.args ?? {}) as Record<string, unknown>, batch: this.batch, id: call.id, name: call.name, seq: this.all.length });
     this.pending.push(call);
     for (const wake of [...this.waiters]) wake();
+  }
+
+  /** Only an unclaimed call may be completed by the Swarm fallback reporter. */
+  failUnclaimed(id: string) {
+    const index = this.pending.findIndex((call) => call.id === id);
+    if (index < 0) return undefined;
+    const [call] = this.pending.splice(index, 1);
+    this.failedBeforeBridge.add(id);
+    return call;
   }
 
   /**
@@ -608,7 +621,7 @@ class ToolScheduler {
   async run(call: { args: Record<string, unknown>; id: string; name: string }, signal: AbortSignal, started: () => void): Promise<Dispatch> {
     const own = this.announcements.all.find((item) => item.id === call.id);
     // A call nobody announced (see claim) has no place in an order: run it as it comes.
-    if (!own) { started(); return await this.registry.execute(call as never, signal); }
+    if (!own) { signal.throwIfAborted(); started(); return await this.registry.execute(call as never, signal); }
     this.arrived.add(call.id);
     try {
       // Announcements of one response arrive back to back; let them all in before deciding.
@@ -625,11 +638,13 @@ class ToolScheduler {
       const mine = exclusive(own);
       for (const earlier of batchCalls.filter((item) => item.seq < own.seq && (mine || exclusive(item)))) {
         const deadline = Date.now() + this.graceMs;
-        while (!this.finished.has(earlier.id) && (this.arrived.has(earlier.id) || Date.now() < deadline)) {
+        while (!this.finished.has(earlier.id) && !this.announcements.failedBeforeBridge.has(earlier.id)
+          && (this.arrived.has(earlier.id) || Date.now() < deadline)) {
           if (signal.aborted) break;
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       }
+      signal.throwIfAborted();
       started();
       return await prepared.execute({ args: call.args, id: call.id, name: call.name } as never, signal);
     } finally {
@@ -693,11 +708,10 @@ class Transcript {
 
 /**
  * Turns the adapter's run events into the agent events the run consumes. Tool
- * events are deliberately not translated: the bridge reports them, from the
- * place the tool really runs, with its real result.
+ * Platform events normally come from the bridge. Pre-bridge failures have no
+ * bridge reporter, so the Swarm event is their authoritative fallback.
  */
 class EventTranslator {
-  private turn = 0;
   private total: { cacheReadTokens: number | null; cacheWriteTokens: number | null; inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
 
   constructor(
@@ -717,11 +731,10 @@ class EventTranslator {
   handle(event: { type: string; [key: string]: unknown }): void {
     switch (event.type) {
       case "agent.phase":
-        this.startTurn(Number(event.turn));
+        // Display events must not drive model-call admission or budgets.
         break;
       case "assistant.response.started": {
         const turn = Number(event.turn);
-        if (turn > this.turn) this.startTurn(turn);
         this.announcements.newResponse();
         this.emit({ type: "response_start", responseId: String(event.responseId), turn });
         break;
@@ -758,7 +771,18 @@ class EventTranslator {
       }
       case "tool.completed": {
         const trace = event.trace as { id: string; name: string; output?: string; status?: string };
-        if (!this.nativeCalls.has(trace.id)) break;
+        if (!this.nativeCalls.has(trace.id)) {
+          if (trace.status !== "failed") break;
+          const call = this.announcements.failUnclaimed(trace.id);
+          if (!call) break; // Already claimed/reported at the bridge, or duplicate.
+          const text = trace.output ?? "Tool failed before reaching the execution bridge";
+          this.emit({ type: "tool_execution_start", toolCallId: trace.id, toolName: call.name,
+            args: (call.args ?? {}) as Record<string, unknown> });
+          this.emit({ type: "tool_execution_end", toolCallId: trace.id, toolName: call.name, isError: true,
+            result: { content: [{ type: "text", text }] } });
+          this.transcript.toolResult(trace.id, call.name, text);
+          break;
+        }
         const text = trace.output ?? "";
         this.emit({
           type: "tool_execution_end", toolCallId: trace.id, toolName: trace.name, isError: trace.status === "failed",
@@ -766,6 +790,7 @@ class EventTranslator {
         });
         this.transcript.toolResult(trace.id, trace.name, text);
         this.onNativeResult?.({ args: this.nativeCalls.get(trace.id)?.args, id: trace.id, name: trace.name, output: text, failed: trace.status === "failed" });
+        this.nativeCalls.delete(trace.id);
         break;
       }
       case "plan.updated":
@@ -805,10 +830,6 @@ class EventTranslator {
     if (this.total) this.emit({ type: "usage", usage: this.total });
   }
 
-  private startTurn(turn: number): void {
-    this.turn = turn;
-    this.emit({ type: "turn_start" });
-  }
 }
 
 async function* ndjson(body: ReadableStream<Uint8Array>): AsyncGenerator<RunLine> {
@@ -896,20 +917,26 @@ async function startBridge(
       reply(404, { error: `unknown tool: ${body.name}` });
       return;
     }
+    // Watch before waiting for announcements: the caller can disconnect while
+    // queued, not only after tool execution has started.
+    const disconnected = new AbortController();
+    response.once("close", () => {
+      if (!response.writableEnded) disconnected.abort(new Error("MCP caller disconnected"));
+    });
+    const callSignal = AbortSignal.any([signal, disconnected.signal]);
     // Run under the model's own id and arguments, and only after the adapter has reported the call
     // (see ToolAnnouncements).
     const claimed = await announcements.claim(tool.name, body.arguments ?? {}, announcementTimeoutMs);
+    if (callSignal.aborted) {
+      if (!response.destroyed) reply(499, { error: "MCP caller disconnected before execution" });
+      return;
+    }
     if (!claimed) console.warn(`[jiuwenswarm-bridge] no model call was reported for ${tool.name}; running it under a generated id`);
     const toolCallId = claimed?.id ?? randomUUID();
     const args = claimed?.args ?? body.arguments ?? {};
     // A timed-out MCP client closes this HTTP response. Stop the corresponding
     // tool (notably a child agent) instead of leaving it running after the
     // parent has already received a transport failure.
-    const disconnected = new AbortController();
-    response.once("close", () => {
-      if (!response.writableEnded) disconnected.abort(new Error("MCP caller disconnected"));
-    });
-    const callSignal = AbortSignal.any([signal, disconnected.signal]);
     // registry.execute never throws for a failing tool: it answers with the standard error shape.
     // The scheduler holds the call back until the calls it may not overlap with have finished, so
     // the start is reported when the tool really starts, as the native loop does.

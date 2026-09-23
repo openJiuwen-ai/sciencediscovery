@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { recordInvalidArguments } from "./model-argument-diagnostics.js";
 
 import {
   ModelRequestError,
@@ -118,12 +119,32 @@ const toolCallsOf = (turn: ModelTurn) => turn.toolCalls.map((call, index) => ({
 }));
 
 /**
- * Told about each model call of the run (a call with tools: a title or a summary JiuwenSwarm asks for is not one):
+ * Told about each task model call of the run (not Swarm housekeeping or compaction):
  * its exact input before it is made, the answer after. The run's trajectory is recorded from these.
  */
 export interface ModelCallObserver {
   request(input: { history: unknown[]; systemPrompt: string; tools: WireToolSpec[] }): Promise<void>;
   completed(turn: ModelTurn, history: unknown[]): Promise<void>;
+}
+
+/** Run control is independent of optional, best-effort trajectory logging. */
+export interface ModelGatewayLifecycle {
+  progress(): void;
+  /** Synchronous admission, before sending a task model request upstream. */
+  beforeTurn?(): void;
+}
+
+// The pinned Swarm forked compressor retains tool schemas for prefix caching.
+// Tool presence cannot distinguish it from task reasoning. Fail closed (count
+// the call) if a future compressor changes this explicitly recognised prompt.
+export function isSwarmCompaction(body: ChatRequest): boolean {
+  const last = body.messages?.at(-1);
+  const content = last?.content;
+  return last?.role === "user" && typeof content === "string"
+    && content.startsWith("## NON-NEGOTIABLE OUTPUT RULES")
+    && content.includes("Do NOT call any tools.")
+    && content.includes("You are an Execution State Compression Assistant.")
+    && content.includes("<coverage_check>") && content.includes("<state_snapshot>");
 }
 
 export async function startModelGateway(
@@ -132,6 +153,7 @@ export async function startModelGateway(
   signal: AbortSignal,
   streamer: Streamer = streamModelTurn,
   observer?: ModelCallObserver,
+  lifecycle?: ModelGatewayLifecycle,
 ): Promise<ModelGateway> {
   const token = randomUUID();
   const produced = new Map<string, Record<string, unknown>>();
@@ -166,7 +188,12 @@ export async function startModelGateway(
       return;
     }
     const { history, systemPrompt, tools } = toModelRequest(body, restore);
-    const observed = observer && tools.length ? observer : undefined;
+    const housekeeping = request.headers["x-sciencediscovery-model-purpose"] === "housekeeping";
+    const auxiliary = housekeeping || isSwarmCompaction(body);
+    // The legacy default-model route selects the latest active endpoint, not
+    // necessarily the owner of its housekeeping work. It cannot renew a run.
+    const progress = () => { if (!housekeeping) lifecycle?.progress(); };
+    const observed = auxiliary ? undefined : observer;
     const record = async (turn: ModelTurn) => { await observed?.completed(turn, history).catch(warnTrajectory); };
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -187,6 +214,10 @@ export async function startModelGateway(
     const chunk = (delta: Record<string, unknown>, finish: string | null = null, extra: Record<string, unknown> = {}) =>
       `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: endpoint.model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
     try {
+      signal.throwIfAborted();
+      if (!auxiliary) lifecycle?.beforeTurn?.();
+      // Admission listeners can abort the run when its turn budget is spent.
+      signal.throwIfAborted();
       if (body.stream) {
         // Headers wait for the first byte of the answer so that a refused request is a real HTTP error.
         let started = false;
@@ -200,6 +231,7 @@ export async function startModelGateway(
         const toolIndexes = new Set<number>();
         const writeDelta = (delta: Record<string, unknown>) => {
           controller.signal.throwIfAborted();
+          progress();
           start();
           response.write(chunk(delta));
           downstreamChunks++;
@@ -209,7 +241,7 @@ export async function startModelGateway(
         trace("start", true);
         await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
         const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
-          onProgress: () => { upstreamChunks++; lastUpstreamAt = Date.now(); trace("receive"); },
+          onProgress: () => { progress(); upstreamChunks++; lastUpstreamAt = Date.now(); trace("receive"); },
           onTextDelta: (delta) => writeDelta({ content: delta }),
           onThinkingDelta: (delta) => writeDelta({ reasoning_content: delta }),
           onToolCallDelta: (delta) => {
@@ -221,9 +253,12 @@ export async function startModelGateway(
           },
         });
         controller.signal.throwIfAborted();
-        if (turn.toolCalls.some((call) => call.argsParseError)) throw new Error("Model returned invalid tool arguments");
+        if (turn.toolCalls.some((call) => call.argsParseError)) {
+          await recordInvalidArguments(turn, id);
+          throw new Error("Model returned invalid tool arguments");
+        }
         start();
-        remember(turn);
+        if (!auxiliary) remember(turn);
         // Compatibility with streamers/providers that return only completed calls.
         // Never append the full arguments again after incremental delivery.
         let fallbackIndex = toolIndexes.size ? Math.max(...toolIndexes) + 1 : 0;
@@ -238,8 +273,14 @@ export async function startModelGateway(
         return;
       }
       await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
-      const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal);
-      remember(turn);
+      const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
+        onProgress: progress,
+        onTextDelta: progress,
+        onThinkingDelta: progress,
+        onToolCallDelta: progress,
+      });
+      await recordInvalidArguments(turn, id);
+      if (!auxiliary) remember(turn);
       await record(turn);
       const content = typeof turn.assistantMessage.content === "string" ? turn.assistantMessage.content : textOf(turn.assistantMessage.content);
       const usage = usageOf(turn);
