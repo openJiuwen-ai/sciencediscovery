@@ -26,11 +26,14 @@ import { checks } from './checks.mjs';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
 const json=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n');
-function run(command,args,env,log,cwd=root) {
+// The log always gets the child's output; `echo` also passes it through as it
+// arrives, for a step whose progress is what the reader of a job log waits for.
+function run(command,args,env,log,cwd=root,{echo=false}={}) {
   return new Promise((done,reject)=>{
     const child=spawn(command,args,{cwd,env,stdio:['ignore','pipe','pipe']});
     let output='';
-    child.stdout.on('data',chunk=>{output+=chunk;});child.stderr.on('data',chunk=>{output+=chunk;});
+    child.stdout.on('data',chunk=>{output+=chunk;if(echo)process.stdout.write(chunk);});
+    child.stderr.on('data',chunk=>{output+=chunk;if(echo)process.stderr.write(chunk);});
     child.on('error',reject);child.on('close',code=>{writeFileSync(log,output);done(code??1);});
   });
 }
@@ -271,12 +274,14 @@ export async function main(args=process.argv.slice(2)) {
       // run-e2e.sh keeps writing its stack log, journey reports and Playwright
       // output where every reader already looks for them — `<results>/e2e/` —
       // while the frozen plan and its accounting stay in this slice's own
-      // directory beside them.
+      // directory beside them. Its output, each journey as it passes or fails,
+      // is echoed as well: the job log is where a failure is read first, and
+      // it said nothing for the quarter of an hour the journeys take.
       const code=await run('bash',['.ci/run-e2e.sh'],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
         CI_RESULTS_DIR:process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,
         CI_RUNTIME_DIR:process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),
         SCIENCE_TAG_PLAN:join(outputDir,'plan.json'),SCIENCE_TAG_PW_REPORT:report,
-        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,'e2e-driver.log'));
+        E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,'e2e-driver.log'),root,{echo:true});
       if(code)errors.push(`PLAYWRIGHT_WORKER_FAILED: ${code}`);
       if(existsSync(report)){const data=JSON.parse(readFileSync(report));results.push(...data.results);errors.push(...data.errors);}else errors.push('PLAYWRIGHT_REPORT_MISSING');
     }
