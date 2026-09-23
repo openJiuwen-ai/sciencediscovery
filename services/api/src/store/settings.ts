@@ -272,9 +272,15 @@ const QUOTA_SETTING_FIELDS = [
 
 export function normalizeQuotaSettings(value: unknown): SystemQuotaSettings {
   if (!isRecord(value)) throw new Error("Quota settings must be an object");
-  const unknown = Object.keys(value).find((key) => !QUOTA_SETTING_FIELDS.includes(key as keyof SystemQuotaSettings));
+  const unknown = Object.keys(value).find((key) => key !== "maxConcurrentSubagents" && !QUOTA_SETTING_FIELDS.includes(key as typeof QUOTA_SETTING_FIELDS[number]));
   if (unknown) throw new Error(`Unknown quota setting: ${unknown}`);
   const result = {} as SystemQuotaSettings;
+  if (value.maxConcurrentSubagents !== undefined) {
+    if (!Number.isInteger(value.maxConcurrentSubagents) || (value.maxConcurrentSubagents as number) < 1 || (value.maxConcurrentSubagents as number) > 10) {
+      throw new Error("maxConcurrentSubagents must be an integer from 1 to 10");
+    }
+    result.maxConcurrentSubagents = value.maxConcurrentSubagents as number;
+  }
   for (const field of QUOTA_SETTING_FIELDS) {
     const setting = value[field];
     if (!Number.isSafeInteger(setting) || (setting as number) < 0) {
@@ -294,6 +300,7 @@ export function resolveQuotaSettings(value: unknown, fallback: SystemQuotaSettin
     runnerMaxWorkspaceBytes: value.runnerMaxWorkspaceBytes ?? fallback.runnerMaxWorkspaceBytes,
     uploadMaxFileBytes: value.uploadMaxFileBytes ?? fallback.uploadMaxFileBytes,
     uploadMaxRequestBytes: value.uploadMaxRequestBytes ?? fallback.uploadMaxRequestBytes,
+    maxConcurrentSubagents: value.maxConcurrentSubagents ?? fallback.maxConcurrentSubagents,
   });
 }
 

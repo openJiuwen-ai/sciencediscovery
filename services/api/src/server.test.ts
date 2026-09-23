@@ -5724,9 +5724,15 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
-  const taskCount = DEFAULT_MAX_CONCURRENT_SUBAGENTS + 1;
+  const quotaResponse = await jsonRequest<Record<string, unknown>>(`${origin}/api/quota-settings`, { headers: authorization });
+  const savedQuota = await jsonRequest<Record<string, unknown>>(`${origin}/api/quota-settings`, {
+    method: "PUT", headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({ ...quotaResponse.body, maxConcurrentSubagents: 2 }),
+  });
+  assert.equal(savedQuota.body.maxConcurrentSubagents, 2);
+  const taskCount = 3;
   const fixture = await startSubagentModel(context, {
-    concurrentSubagentTarget: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+    concurrentSubagentTarget: 2,
     requireConcurrentSubagents: true,
     taskCount,
   });
@@ -5756,7 +5762,7 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
   assert.match(stream, /"type":"run.completed"/);
   assert.equal(fixture.concurrencyBarrierTimedOut(), false,
     `Subagent startup did not reach the concurrency barrier within ${CONCURRENCY_BARRIER_TIMEOUT_MS}ms`);
-  assert.equal(fixture.getMaxConcurrentSubagents(), DEFAULT_MAX_CONCURRENT_SUBAGENTS);
+  assert.equal(fixture.getMaxConcurrentSubagents(), 2);
 
   const subagents = await jsonRequest<Subagent[]>(
     `${origin}/api/sessions/${session.body.id}/subagents`,

@@ -37,6 +37,7 @@ import {
   createMainAgentProfile,
   createSubagentProfile,
   resolveSubagentConfig,
+  SubagentPool,
   type AgentHistoryMessage,
 } from "@sciencediscovery/orchestration";
 import { normalizeWorkspaceRelativePath, projectArtifactContent, resolveWorkspaceFile } from "@sciencediscovery/workspace";
@@ -796,6 +797,7 @@ async function executeAgentRun(
     await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
     scientificEnvironments = store.listEnvironments();
   }
+  const maxConcurrentSubagents = store.getQuotaSettings().maxConcurrentSubagents ?? DEFAULT_MAX_CONCURRENT_SUBAGENTS;
   const systemPrompt = buildWorkspaceSystemPrompt(
     runtimeSkills,
     Boolean(scientificEnvironments),
@@ -808,7 +810,7 @@ async function executeAgentRun(
       ...(enabledBuiltinSpecialists.length
         ? { builtinSpecialists: enabledBuiltinSpecialists.map((specialist) => ({ description: specialist.description, name: specialist.name })) }
         : {}),
-      subagentOrchestration: true,
+      subagentOrchestration: { maxConcurrent: maxConcurrentSubagents },
       workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
     },
   );
@@ -1073,29 +1075,20 @@ async function executeAgentRun(
   });
   const reviewerSpecialistSettings = store.getReviewerSpecialistSettings();
   const sessionReviewerSpecialistSettings = store.getSessionReviewerSpecialistSettings(sessionId);
-  let activeSubagentCalls = 0;
+  const subagentPool = new SubagentPool(maxConcurrentSubagents);
   let launchedSubagentCalls = 0;
-  const reserveSubagentSlot = (description: string): (() => void) => {
-    if (activeSubagentCalls >= DEFAULT_MAX_CONCURRENT_SUBAGENTS) {
-      throw new Error(
-        `Subagent concurrency limit reached: at most ${DEFAULT_MAX_CONCURRENT_SUBAGENTS} task calls may run at once. `
-        + `The rejected task was "${description}". Wait for the current batch to finish before launching another batch.`,
-      );
-    }
+  const reserveSubagentSlot = async (description: string, signal: AbortSignal): Promise<() => void> => {
+    signal.throwIfAborted();
     if (launchedSubagentCalls >= DEFAULT_MAX_TOTAL_SUBAGENTS) {
       throw new Error(
         `Subagent total limit reached: at most ${DEFAULT_MAX_TOTAL_SUBAGENTS} task calls may be launched for this run. `
         + `The rejected task was "${description}". Synthesize existing results or continue directly.`,
       );
     }
-    activeSubagentCalls += 1;
     launchedSubagentCalls += 1;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      activeSubagentCalls = Math.max(0, activeSubagentCalls - 1);
-    };
+    const releaseWait = mainExecution?.beginExternalWait();
+    try { return await subagentPool.acquire(signal); }
+    finally { releaseWait?.(); }
   };
   const createArtifactBindings = (
     workspaceRoot: string,
@@ -1486,9 +1479,11 @@ async function executeAgentRun(
       const subagentInput: SubagentInput = specialist && input.specialistId?.trim() !== specialist.id
         ? { ...input, specialistId: specialist.id }
         : input;
-      const releaseSubagentSlot = reserveSubagentSlot(subagentInput.description);
+      const parentSignal = signal ? AbortSignal.any([signal, requestExecution.abortSignal]) : requestExecution.abortSignal;
+      const releaseSubagentSlot = await reserveSubagentSlot(subagentInput.description, parentSignal);
       let childId: string | undefined;
       try {
+        parentSignal.throwIfAborted();
         let subagent = continuation ? await store.updateSubagent(reopenSubagentForContinuation(continuation)) : await store.createSubagent(sessionId, runId, subagentInput, {
           maxTurns: subagentConfig.maxTurns,
           model: { id: selectedModel.id, model: selectedModel.model, name: selectedModel.name },
@@ -1498,7 +1493,6 @@ async function executeAgentRun(
         childId = subagent.id;
         const childController = new AbortController();
         activeSubagentAbortControllers.set(childId, childController);
-        const parentSignal = signal ?? requestExecution.abortSignal;
         // AgentRun deadlines pause while waiting on external systems. A task's
         // timeout_seconds is instead a wall-clock budget, including MCP calls,
         // approvals, and model/provider waits. Keep that hard deadline outside
