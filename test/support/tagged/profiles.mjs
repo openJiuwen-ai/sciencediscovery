@@ -106,6 +106,7 @@ export const nodeSources = Object.freeze([
   'services/*/src/**/*.test.ts',
   'services/runner/scripts/*.test.mjs',
   'test/contract/*.test.mjs',
+  'test/api/*.test.mjs',
 ]);
 
 /** Declarations that are not named like one, and so cannot be found by a pattern. */
