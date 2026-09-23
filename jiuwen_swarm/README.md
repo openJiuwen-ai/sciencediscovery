@@ -75,7 +75,7 @@ MCP transport lifetime is managed separately from this continuation contract.
 Tool execution deadlines are enforced by the adapter for each run's toolset
 (`toolTimeoutSeconds`, or `SCIENCE_AGENT_ADAPTER_TOOL_TIMEOUT_S` by default).
 Starting a child with a longer deadline does not replace the shared MCP client.
-Compatibility patch `0007-platform-per-run-deadlines.patch` removes the shared
+Compatibility patch `0004-platform-mcp-transport.patch` removes the shared
 registration's default execution deadline only for the platform `sci` client;
 explicit SDK call deadlines and discovery/connect deadlines remain effective.
 Deploy the adapter and this patch together. Timeout errors warn that execution
@@ -115,6 +115,34 @@ and reuse after a timeout. `jiuwen_swarm/tests/test_sci_http_client.py` checks t
 real SDK transport with a loopback MCP server, including long calls and explicit
 timeouts. These checks do not assert a downstream authorization bypass existed.
 
+The broader [MCP boundary audit](tests/README.md) tests request isolation,
+new-call recovery, downstream cancellation and pre-bridge UI events. The
+platform-only JSON transport retains the SDK's ClientSession but correlates
+HTTP/protocol errors per request. It does not change third-party MCP clients,
+implement SSE resumption, or automatically replay calls with unknown outcomes.
+Explicit disconnect stays closed until explicitly connected again.
+
+Request failures log `platform_mcp_request_failed`; shared lifecycle failures
+log `platform_mcp_transport_failed`. Both retain exception types and stack
+locations without credential-bearing URLs or exception messages. Cancellation
+closes the corresponding HTTP request and propagates through the adapter to
+the Node tool abort signal; it cannot roll back an already-completed side effect.
+
+For cross-framework debugging, set `SCIENCE_AGENT_BOUNDARY_TRACE=1` on the
+adapter. Optional `SCIENCE_AGENT_BOUNDARY_TRACE_FILE=/private/path/boundary.jsonl`
+also writes a private rotating JSONL file (10 MiB plus three backups). Events
+link run/agent/session ids, the MCP connection/request id, tool-call ids, status,
+elapsed time and result character counts. No prompts, arguments, result bodies,
+URLs, headers or exception messages are added to this diagnostic stream. Full
+model input/output remains in the existing session trajectory store, separately
+from these metadata-only logs. Diagnostic write failures do not abort a run.
+
+Real research tests normally clean up their application records. On an isolated
+debug stack, `E2E_KEEP_RESEARCH_RECORDS=1` retains projects, sessions and model
+records for later trajectory inspection; it does not change any assertion or
+enable quality judging. Treat retained model configurations and model inputs as
+private data and remove them explicitly when the investigation is complete.
+
 Adapter INFO logs named `run-binding start` / `run-binding release` correlate
 platform run/agent identifiers with the Swarm session and show whether a terminal
 event was received. They omit tokens, endpoint URLs, prompts and tool arguments.
@@ -129,7 +157,7 @@ unchanged; this is not a complete redesign of the tool transport.
 Run focused patch checks with the patched Swarm environment:
 
 ```bash
-PYTHONPATH=.sciencediscovery-data/jiuwenswarm/src \
+PYTHONPATH=services/adapter/src:.sciencediscovery-data/jiuwenswarm/src \
   .sciencediscovery-data/jiuwenswarm/src/.venv/bin/python \
   -m unittest discover -s jiuwen_swarm/tests -v
 ```
@@ -203,6 +231,38 @@ content, reasoning and usage merge. This prevents parallel calls from sharing
 JSON tails. Remove the shim when upgrading to an SDK with indexed merging;
 the regression test in `tests/test_platform_interaction.py` covers interleaved
 fragments and metadata preservation. No installed SDK files are modified.
+
+### Subagent concurrency
+
+In **System settings → Quotas**, set **Maximum concurrent subagents** to an
+integer from 1 to 10 (default 10). On a small server, start with 1. Click **Save**
+or **Save and close** to persist the setting; cancel discards the draft. It is
+stored as `maxConcurrentSubagents` in `/api/quota-settings` and takes effect for
+new parent runs without restarting the server.
+
+Platform `task` children in both Native and Swarm backends share a FIFO pool per
+parent run. A permit is held until the child finishes, fails, times out or is
+cancelled. Surplus calls wait before creating a child execution, so waiting does
+not consume `timeout_seconds`; parent cancellation removes waiting calls. Pending
+calls remain unfinished tool calls until admitted, not independently running
+subagent records. The existing per-run total task limit is unchanged. This is
+not a server-wide concurrency or memory limit: separate sessions have separate
+pools, and Swarm's own native spawn mechanism is outside the platform `task` pool.
+
+### Invalid tool argument diagnostics
+
+Invalid model tool arguments produce a `[model-arguments]` warning with the gateway
+request ID, tool-call IDs, tool names, token usage and truncation flag. Ordinary logs
+exclude raw arguments and parser messages (which may quote private input).
+For reproduction, set `SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE=/private/path/invalid-arguments.jsonl`
+on the Node API process before startup. The parent directory must exist and should
+be private. This opt-in file includes parser errors and assembled raw arguments,
+not API credentials or request headers; arguments themselves can contain sensitive
+task data. Files use mode `0600`, rotate at 5 MiB with one backup, and record at most
+20 failed calls per response. Arguments over 16,384 characters retain their head and
+tail with an explicit `clipped` flag. This is the model client's assembled response,
+not a raw upstream SSE capture; it does not by itself prove whether a provider or
+stream assembler caused malformed JSON. Logging failures do not change task behavior.
 
 Set `SCIENCE_AGENT_TRACE_MODEL_STREAM=1` on the Node API process to enable
 `[model-stream]` diagnostics (restart required). They record a request ID and
@@ -343,6 +403,23 @@ docstring lists the local stub scripts and gateway configuration needed.
   their defaults for bounded retrieval work.
 - HTTP keepalives maintain transport liveness, not agent progress. They do
   not reset agent idle limits or demonstrate that a tool is making progress.
+- Actual model transport/text/thinking/tool-argument progress renews only the
+  owning run's idle deadline, including run-scoped compaction. It does not
+  extend the wall-clock cap. Default-route housekeeping is not evidence of
+  progress for the latest active run and does not renew that run's deadline.
+- Task turns are counted at model-request admission, before contacting the
+  provider; UI events and parallel tool results do not consume extra turns.
+  Title/default-route housekeeping and the pinned Swarm forked-compaction
+  prompt are excluded. The latter is recognised by its explicit final
+  instruction, since it retains tool schemas; a changed/unrecognised prompt
+  counts as a task turn rather than bypassing the limit. This is a compatibility
+  rule, not a security boundary. Provider retries inside one admitted request
+  do not consume additional turns; a fresh task request does.
+- Governed PDF downloads check a bounded 1 KiB prefix for a PDF header before
+  publishing completion. An HTML login/error page is a non-retryable content
+  validation failure, even with HTTP 200 or a PDF Content-Type. This is not
+  full PDF validation: corrupt files with a PDF header still fail at extraction.
+  Other artifact formats retain their existing download behavior.
 - A bridge persistence/dispatch failure reports a non-retryable unknown
   outcome. The action may already have executed; inspect state before replay.
 - External source failures (for example, an arXiv HTTP 406) are not repaired

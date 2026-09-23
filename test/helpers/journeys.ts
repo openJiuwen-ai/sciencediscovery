@@ -431,8 +431,8 @@ export async function openProjectSession(
   );
   await page.goto("/");
   await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
-  await page.locator("button.nav-item").filter({ hasText: fixture.project.name }).click();
-  await page.locator("button.nav-item").filter({ hasText: currentSession.title }).click();
+  await page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture.project.name }).click();
+  await page.locator("#sessions-panel-content button.nav-item").filter({ hasText: currentSession.title }).click();
   await expect(page.getByRole("heading", { exact: true, name: currentSession.title })).toBeVisible();
 }
 

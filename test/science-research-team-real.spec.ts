@@ -221,7 +221,7 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: "@
     if (metrics.integration === "running") metrics.integration = "failed";
     await save("team-metrics.json", metrics); await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
     await info.attach("team-metrics", { path: info.outputPath("team-metrics.json"), contentType: "application/json" });
-    try { if (fixture) await cleanupJourney(page, fixture); }
+    try { if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture); }
     finally {
       if (skill) await page.request.delete(`${apiBaseUrl()}/api/skills/${skill}`, { headers, data: { force: true } }).catch(() => undefined);
       if (specialist) await page.request.delete(`${apiBaseUrl()}/api/specialists/${specialist}`, { headers }).catch(() => undefined);

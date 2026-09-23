@@ -158,7 +158,7 @@ for (const sample of selectedDrbSamples()) {
       const path = testInfo.outputPath("benchmark-metrics.json");
       await writeFile(path, JSON.stringify(metrics, null, 2));
       await testInfo.attach("benchmark-metrics", { path, contentType: "application/json" });
-      if (fixture) await cleanupJourney(page, fixture);
+      if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
     }
   });
 }
