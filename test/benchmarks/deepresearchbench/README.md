@@ -11,6 +11,25 @@ separate workstream. That implementation can consume the records below.
 
 ## Setup and execution
 
+The original five workload-stratified questions are preserved in `samples.ts`:
+
+| ID | Local difficulty | Topic |
+| --- | --- | --- |
+| 59 | easy | Bird migration navigation |
+| 64 | medium | UAV PID control |
+| 58 | medium-hard | Horizontal gene transfer in plants and animals |
+| 62 | hard | Scaling trapped-ion quantum computers |
+| 75 | very-hard | Metal-ion interventions and cardiovascular disease |
+
+These are local workload labels, **not official benchmark difficulty ratings**.
+Original questions are unchanged; the shared prompt adds scientific-report and
+platform Artifact delivery instructions. This is a platform integration study,
+not an unmodified leaderboard submission. All five run by default. Set
+`E2E_DRB_CASE_IDS=59,64` to select a subset (unknown or duplicate IDs fail early).
+Run serially on memory-constrained machines. For cold-start comparisons restart
+the isolated Swarm stack between cases and retain each case's service logs;
+shared MCP state can otherwise make results order-dependent.
+
 Clone `https://github.com/Ayanami0730/deep_research_bench` outside this repository
 and check out revision `852f4022d1f98fb707222e395405136e8f0e8d52`. The runner
 rejects another revision or tracked edits to upstream evaluation code/data.
@@ -43,7 +62,7 @@ in `../../../jiuwen_swarm/README.md` (from the repository root, see
 E2E_RESEARCH=1 E2E_SWARM_TASK=1 npm --prefix .e2e run test:real -- deepresearchbench-swarm.spec.ts
 ```
 
-Only this real case is excluded from default test collection unless
+These real cases are excluded from default test collection unless
 `E2E_RESEARCH=1`. The `swarm-research-mocked.spec.ts` journey remains in the
 default mocked PR gate. Do not enable the real research switch in PR gates;
 use an explicit local/manual benchmark run. Real evaluation additionally needs
@@ -97,7 +116,8 @@ output directory. CI should upload artifacts even when tests fail.
 | File | Consumer-facing information |
 | --- | --- |
 | `benchmark-metrics.json` | `schema_version`, case/run/model identifiers, timestamps, exact generation prompt, run/evaluation budgets, integration status, generation duration and raw session usage, child statuses, embedded evaluation result |
-| `deepresearchbench-59.json` | Original benchmark question and exact persisted report, usable for independent reevaluation |
+| `deepresearchbench-<id>.json` | Original benchmark question and exact persisted report, usable for independent reevaluation |
+| `child-trajectories.json` | Persisted child execution records, including recovered tool failures |
 | `evaluation/scorecard.json` | Overall evaluation status, mode, thresholds, RACE/FACT results, Judge models/backend, upstream revision, report/reference hashes, evaluation duration and per-call Judge usage |
 | `evaluation/criteria.json`, `reference.json`, `cleaned.json` | Reproducible scoring inputs |
 | `evaluation/judge-input-*.json`, `judge-output-*.json` | Actual Judge prompts/responses and usage; may contain sensitive research content |
@@ -117,9 +137,15 @@ thresholds or generation prompts. Store raw usage: providers differ in their
 reasoning/cache-token accounting. Research token usage and Judge usage are
 separate cost streams. This PR intentionally supplies **no dashboard**.
 
+`generation_usage` is the raw platform session accounting response. Do not label
+it total benchmark token cost unless it demonstrably includes every parent and
+child model call. Missing usage is unknown, not zero. Integration passes do not
+establish citation correctness or scientific completeness when judging is off.
+
 ## Offline tests
 
 ```bash
+node --experimental-strip-types --test test/benchmarks/deepresearchbench/samples.test.ts
 DRB_UPSTREAM_DIR=/absolute/path/to/deep_research_bench \
   /absolute/path/to/evaluator-venv/bin/python -m unittest discover \
   -s test/benchmarks/deepresearchbench -p 'test_*.py'

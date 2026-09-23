@@ -7,14 +7,17 @@ import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 
 export const drbQuestion = "In ecology, how do birds achieve precise location and direction navigation during migration? What cues and disturbances influence this process?";
 export const drbOutput = "deepresearchbench-59.md";
-export const drbPrompt = [
+export const drbPrompt = researchPrompt(drbQuestion, drbOutput);
+export function researchPrompt(question: string, output: string): string {
+  return [
   "Complete the following DeepResearchBench task as a scientific literature review.",
   "The original question defines the research scope. Choose your own research strategy, delegation and search depth.",
   "Use credible sources, synthesize the evidence, and distinguish established findings, contested claims and limitations.",
   "Support substantive claims with inline citations linked to source URLs in the references.",
-  `Deliver the full report as a declared Markdown Artifact named ${drbOutput}; mention it in your final answer.`,
-  "<task>", drbQuestion, "</task>",
-].join("\n");
+  `Deliver the full report as a declared Markdown Artifact named ${output}; mention it in your final answer.`,
+  "<task>", question, "</task>",
+  ].join("\n");
+}
 
 export function positiveNumber(name: string, fallback: number): number {
   const value = process.env[name] === undefined ? fallback : Number(process.env[name]);
@@ -28,10 +31,10 @@ export async function drbApi<T>(page: Page, path: string): Promise<T> {
   return response.json();
 }
 
-export async function drbArticle(page: Page, sessionId: string): Promise<{ article: string; versionId: string }> {
+export async function drbArticle(page: Page, sessionId: string, output = drbOutput): Promise<{ article: string; versionId: string }> {
   const prefix = `/api/sessions/${encodeURIComponent(sessionId)}`;
   const artifacts = await drbApi<Array<{ id: string; logicalName: string }>>(page, `${prefix}/artifacts`);
-  const artifact = artifacts.find((a) => a.logicalName === drbOutput);
+  const artifact = artifacts.find((a) => a.logicalName === output);
   if (!artifact) throw new Error("Expected declared report not found");
   const versions = await drbApi<Array<{ id: string; version: number }>>(page, `${prefix}/artifacts/${encodeURIComponent(artifact.id)}/versions`);
   const latest = versions.sort((a, b) => b.version - a.version)[0];
