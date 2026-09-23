@@ -14,13 +14,16 @@
 
 - [程序演进](core/evolve.md) — 理解搜索、打分模式、引擎、数据切分和结果可信度。
 - [Shell、环境与 Workspace](core/execution-workspaces.md) — 理解执行、文件、环境、完成与停止行为。
-- [Idea Tree](core/idea-tree.md) — 理解自主研究引擎的使用方式、状态和边界。
+- [Idea Tree](core/idea-tree.md) — 理解研究方案的探索、评估和改进，以及评分与使用边界。
+- [Agent Team](core/agent-team.md) — 了解科研团队怎样分工完成调研、分析、复核和报告。
 
 ## 领域指南
 
 - [演进出一个更优解](domains/evolve-a-solution.md) — 完整跑一次程序演进搜索，并判断改进是不是真的。
 - [运行一次演进搜索](domains/run-an-evolution-search.md) — 定搜索规模、选择打分模式、看过程，并读留出结果。
 - [文献调研](domains/literature-research.md) — 以跨数据库文献调研为例，演示从启动服务、配置系统到审批与查看结果的全流程。
+- [用 Idea Tree 探索水处理催化剂](domains/idea-tree-catalyst-design.md) — 提出并比较降解水中污染物的催化剂设计，选择下一步验证方向。
+- [用 Agent Team 分析免疫特征](domains/agent-team-data-analysis.md) — 以脓毒症免疫特征为例，完成相关性分析、层次聚类、复核和报告。
 
 ## 进阶设置
 
