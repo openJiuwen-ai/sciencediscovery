@@ -4264,7 +4264,7 @@ test("task timeout_seconds is a hard wall-clock budget while a subagent waits on
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
-  const fixture = await startSubagentModel(context, { pauseSubagent: true, taskTimeoutSeconds: 1 });
+  const fixture = await startSubagentModel(context, { pauseSubagent: true, taskTimeoutSeconds: 10 });
   context.after(() => fixture.releaseSubagent());
   const model = await createTestModel(origin, {
     baseUrl: fixture.baseUrl,
@@ -4290,18 +4290,25 @@ test("task timeout_seconds is a hard wall-clock budget while a subagent waits on
   });
   assert.equal(run.status, 200);
   const stream = await run.text();
-  // The child has a one-second deadline, but the outer JiuwenSwarm request also
-  // includes gateway startup and the parent's final model turn. Check the
-  // child's persisted deadline below and bound only the overall completion here.
-  assert.ok(Date.now() - startedAt < 30_000, "the task should not remain blocked on the paused model");
+  // The outer request includes gateway startup and the parent's final model turn.
+  // Measure the child's own persisted interval below for the hard deadline.
+  assert.ok(Date.now() - startedAt < 45_000, "the task should not remain blocked on the paused model");
   assert.match(stream, /"type":"run.completed"/);
   const subagents = await jsonRequest<Subagent[]>(
     `${origin}/api/sessions/${session.body.id}/subagents`,
     { headers: authorization },
   );
   assert.equal(subagents.body[0]?.status, "timed_out");
-  assert.equal(subagents.body[0]?.timeoutSeconds, 1);
-  assert.match(subagents.body[0]?.error ?? "", /wall-clock timeout after 1 seconds/);
+  assert.equal(subagents.body[0]?.timeoutSeconds, 10);
+  assert.match(subagents.body[0]?.error ?? "", /wall-clock timeout after 10 seconds/);
+  assert.ok(fixture.requests.some((request) => request.messages?.some((message) =>
+    message.role === "system" && message.content?.includes("Applied subagent preset general-purpose"))),
+  "the subagent must have reached the paused model");
+  const childStartedAt = Date.parse(subagents.body[0]?.createdAt ?? "");
+  const childFinishedAt = Date.parse(subagents.body[0]?.finishedAt ?? "");
+  assert.ok(Number.isFinite(childStartedAt) && Number.isFinite(childFinishedAt));
+  assert.ok(childFinishedAt - childStartedAt < 15_000,
+    "the ten-second task deadline should end the paused child promptly");
   fixture.releaseSubagent();
 });
 
