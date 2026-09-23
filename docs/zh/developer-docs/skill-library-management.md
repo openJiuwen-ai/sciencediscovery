@@ -59,7 +59,7 @@
 
 ```yaml
 ---
-name: antibody-protenix-pipeline
+name: antibody-design
 description: Run the governed antibody design pipeline.
 metadata:
   version: 1.0.0
