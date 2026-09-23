@@ -144,14 +144,15 @@ for (const failed of [false, true]) {
   });
 }
 
-for (const [name, reply, message] of [
-  ["EOF without done", "", /without a terminal result/],
-  ["cancelled terminal", line({ done: { finalText: "partial", cancelled: true } }), /cancelled/],
-  ["failed status without event", line({ done: { finalText: "", status: "failed" } }), /failed without an error event/],
-  ["invalid terminal status", line({ done: { finalText: "", status: "unknown" } }), /invalid terminal status/],
-  ["duplicate terminal", line({ done: { finalText: "ok" } }).repeat(2), /after its terminal result/],
+for (const [name, makeReply, message] of [
+  ["EOF without done", () => "", /without a terminal result/],
+  ["cancelled terminal", () => line({ done: { finalText: "partial", cancelled: true } }), /cancelled/],
+  ["failed status without event", () => line({ done: { finalText: "", status: "failed" } }), /failed without an error event/],
+  ["invalid terminal status", () => line({ done: { finalText: "", status: "unknown" } }), /invalid terminal status/],
+  ["duplicate terminal", () => line({ done: { finalText: "ok" } }).repeat(2), /after its terminal result/],
 ] as const) {
   test(`Swarm run contract rejects ${name}`, async () => {
+    const reply = makeReply();
     const adapter = await fakeAdapter((_request, response) => { response.writeHead(200); response.end(reply); });
     try {
       const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options());
