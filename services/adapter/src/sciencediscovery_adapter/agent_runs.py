@@ -201,17 +201,17 @@ class AgentRunner:
         self.skills = SkillSync(lambda *a, **k: self.rpc(*a, **k), settings.mgmt_url)
         self._shared_lock = asyncio.Lock()
         self._shared_registered = False
-        # Starts at the configured ceiling, not 0: a run that omits toolTimeoutSeconds already falls back to
-        # this same value (see ensure_shared_tools's caller), so starting low only matters for a run that
-        # asks for less than it (a short-lived test, for one). Concurrent runs' start order is a race, and
-        # whichever reaches ensure_shared_tools first sets this value for everyone; starting it low let an
-        # early short-timeout run set a low bar that every normal-timeout run after it then had to bump back
-        # up, each bump re-running the whole disconnect/register/connect dance under _shared_lock while every
-        # other concurrent run waits on it. Starting at the ceiling means only a run that genuinely asks for
-        # more than the configured default ever triggers that dance for this reason.
+        # Transport configuration is stable; Toolset owns each run's deadline.
+        # A longer child deadline must not create a new transport generation.
         self._shared_timeout_s = settings.tool_timeout_s
+        # The shared server's generations (see ensure_shared_tools): the current name, how many runs are on each
+        # name still registered, and the approval level each tool was first given (a new name needs them all again).
+        self._generation = 0
+        self._server = SERVER_NAME
+        self._server_runs: dict[str, int] = {}
+        self._approval_levels: dict[str, str] = {}
         self._permissions_on = False
-        self._tool_approvals: dict[str, str] = {}
+        self._tool_approvals: dict[tuple[str, str], str] = {}
         # Runs paused on one of JiuwenSwarm's approval questions, by the question's id.
         self.pending_approvals: dict[str, tuple[Any, RunEventMapper]] = {}
         # Keep completed acknowledgements for lost HTTP responses. Never resend an
@@ -223,44 +223,78 @@ class AgentRunner:
         await self.models.ensure_default(ModelProfile(
             DEFAULT_ALIAS, f"{self.settings.public_url}/llm/default/v1", self.routes.default_key, "OpenAI"))
 
-    async def ensure_shared_tools(self, tools: list[dict[str, Any]], timeout_s: int) -> None:
-        """Register once; refresh the catalog without replacing the shared client.
+    async def ensure_shared_tools(self, tools: list[dict[str, Any]], timeout_s: int) -> str:
+        """Give JiuwenSwarm the one MCP server for every run's tools (see mcp_server), and its list again when a run
+        brought a tool (or an argument) it did not have. Returns the server's name for this run, which holds it until
+        `release_shared_tools`.
 
-        Execution deadlines are enforced by Toolset; timeout_s is validated
-        here but must never trigger a transport-wide configuration change.
+        A bare `mcp.connect` on an already-connected server does *not* make JiuwenSwarm re-read the tool
+        list (confirmed live: a run whose only new tools arrived through that path never saw JiuwenSwarm
+        issue `tools/list` again, so those tools were never callable) -- only a fresh registration does. But
+        `mcp.disconnect` is global: done to the server other runs are calling through, it drops their calls in
+        flight, and a run waiting on one (a `task` whose sub-agent is the very run that brought the new tools)
+        never gets its result and hangs. So a new list goes to a new name, the next generation (`sci` + ten
+        digits, see llm_proxy._ANY_RUN_PREFIX); the runs already on the old name keep it, and it is disconnected
+        once the last of them has ended.
         """
         if timeout_s <= 0:
             raise ValueError("Tool timeout must be positive")
         async with self._shared_lock:
-            # Swarm permissions are global by tool name. Reject conflicting
-            # contracts before mutating the catalog or another run's policy.
-            policies = dict(self._tool_approvals)
+            policies = dict(self._approval_levels)
             for tool in tools:
                 level = tool.get("approval") or "allow"
-                previous = policies.setdefault(tool["name"], level)
-                if previous != level:
-                    raise ValueError(f"Conflicting approval policy for {tool['name']}: "
-                                     f"registered {previous}, requested {level}; "
-                                     "Swarm requires a consistent policy for shared tool names")
-            await self._apply_approvals(tools)
-            changed = self.registry.merge(tools)
-            if self._shared_registered and not changed:
-                return
-            if not self._shared_registered:
-                # Only startup replaces a stale registration. Tool execution
-                # deadlines belong to each Toolset, never to this shared client.
+                if policies.setdefault(tool["name"], level) != level:
+                    raise ValueError(f"Conflicting approval policy for {tool['name']}")
+            # Stage the catalog: failed permission setup must not publish tools.
+            preview = ToolsetRegistry()
+            preview.shared = dict(self.registry.shared)
+            changed = preview.merge(tools)
+            target = f"{SERVER_NAME}{self._generation + 1:010d}" if self._shared_registered and changed else self._server
+            await self._apply_approvals([{"name": name, "approval": level} for name, level in policies.items()], target)
+            self._approval_levels = policies
+            self.registry.shared = preview.shared
+            if not self._shared_registered or changed:
                 self._shared_timeout_s = self.settings.tool_timeout_s
+                previous = self._server if self._shared_registered else None
+                if previous is not None:
+                    self._generation += 1
+                    self._server = f"{SERVER_NAME}{self._generation:010d}"
+                # An earlier adapter may have left this name registered with another URL (its token changed).
                 for method in ("mcp.disconnect", "mcp.delete_custom"):
                     try:
-                        await self.rpc(self.settings.mgmt_url, method, {"name": SERVER_NAME})
+                        await self.rpc(self.settings.mgmt_url, method, {"name": self._server})
                     except Exception:
                         pass
                 await self.rpc(self.settings.mgmt_url, "mcp.register_custom", {
-                    "name": SERVER_NAME, "transport": "streamable-http",
+                    "name": self._server, "transport": "streamable-http",
                     "url": f"{self.settings.public_url}/mcp/{self.registry.token}", "timeout_s": self._shared_timeout_s,
                 })
-            await self.rpc(self.settings.mgmt_url, "mcp.connect", {"name": SERVER_NAME})
-            self._shared_registered = True
+                await self.rpc(self.settings.mgmt_url, "mcp.connect", {"name": self._server})
+                self._shared_registered = True
+                # Approval levels are per tool name, and the name carries the server's: all of them again.
+                await self._apply_approvals([{"name": name, "approval": level} for name, level in self._approval_levels.items()],
+                                            self._server)
+                if previous is not None and not self._server_runs.get(previous):
+                    await self._retire(previous)
+            self._server_runs[self._server] = self._server_runs.get(self._server, 0) + 1
+            return self._server
+
+    async def release_shared_tools(self, server: str) -> None:
+        """A run on `server` ended: an earlier generation nobody is on any more is disconnected."""
+        async with self._shared_lock:
+            self._server_runs[server] = self._server_runs.get(server, 1) - 1
+            if server != self._server and self._server_runs[server] <= 0:
+                await self._retire(server)
+
+    async def _retire(self, server: str) -> None:
+        self._server_runs.pop(server, None)
+        for key in [key for key in self._tool_approvals if key[0] == server]:
+            self._tool_approvals.pop(key, None)
+        for method in ("mcp.disconnect", "mcp.delete_custom"):
+            try:
+                await self.rpc(self.settings.mgmt_url, method, {"name": server})
+            except Exception:
+                pass
 
     async def answer_approval(self, request_id: str, decision: str) -> None:
         """Resume a run paused on one of JiuwenSwarm's approval questions with the user's decision.
@@ -299,22 +333,24 @@ class AgentRunner:
         self._approval_deliveries[request_id] = (decision, delivery)
         await asyncio.shield(delivery)
 
-    async def _apply_approvals(self, tools: list[dict[str, Any]]) -> None:
+    async def _apply_approvals(self, tools: list[dict[str, Any]], server: str) -> None:
         """JiuwenSwarm's permission engine decides every call (ScienceDiscovery's approval layer allows what it
         lets through). Switched on once; a tool it has not seen yet gets the level the API asked for."""
         if not self._permissions_on:
             await self.rpc(self.settings.mgmt_url, "config.set", {"permissions_enabled": True})
             self._permissions_on = True
         for tool in tools:
-            if tool["name"] in self._tool_approvals:
+            key = (server, tool["name"])
+            if key in self._tool_approvals:
                 continue
             await self.rpc(self.settings.mgmt_url, "permissions.tools.update", {
-                "tool": f"mcp_{SERVER_NAME}_{tool['name']}", "level": tool.get("approval") or "allow",
+                "tool": f"mcp_{server}_{tool['name']}", "level": tool.get("approval") or "allow",
             })
-            self._tool_approvals[tool["name"]] = tool.get("approval") or "allow"
+            self._tool_approvals[key] = tool.get("approval") or "allow"
 
     async def stream(self, request: AgentRunRequest) -> AsyncGenerator[str, None]:
         name = SERVER_NAME
+        server_held = False
         token = None
         llm_token = None
         terminal_status = "completed"
@@ -343,6 +379,12 @@ class AgentRunner:
                     trace_context=trace_context,
                 ))
                 trace_boundary("run.tools.bound", **trace_context, run_tag=token, tool_count=len(request.tools))
+                # Before the model route: the server's name is in every tool name the model and JiuwenSwarm use.
+                tools = [{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools]
+                name = await self.ensure_shared_tools(tools, request.toolTimeoutSeconds or self.settings.tool_timeout_s)
+                server_held = True
+                mapper.mcp_prefixes = (f"mcp_{name}_",)
+                params["mcp"] = [name]
             if request.model:
                 if request.model.provider != "OpenAI":
                     raise ValueError(f"the {request.model.provider} protocol is not supported by this executor yet")
@@ -366,12 +408,6 @@ class AgentRunner:
                     "api_base": f"{self.settings.public_url}/llm/{llm_token}/v1",
                     "api_key": llm_token, "client_provider": "OpenAI",
                 }
-            if request.tools:
-                if request.bridge is None:
-                    raise ValueError("tools were given without a bridge to run them")
-                tools = [{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools]
-                await self.ensure_shared_tools(tools, request.toolTimeoutSeconds or self.settings.tool_timeout_s)
-                params["mcp"] = [name]
             async with self.chat_run(self.settings.gateway_url, params) as run:
                 try:
                     async for frame in run:
@@ -424,6 +460,11 @@ class AgentRunner:
                 self.routes.remove(llm_token)
             if token:
                 self.registry.remove(token)  # the shared server stays; calls for this run find nothing now
+            if server_held:
+                try:
+                    await self.release_shared_tools(name)
+                except Exception:
+                    pass
             for request_id in [key for key, (_, owner) in self.pending_approvals.items() if owner is mapper]:
                 self.pending_approvals.pop(request_id, None)
 

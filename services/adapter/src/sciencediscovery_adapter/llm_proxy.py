@@ -114,7 +114,9 @@ class LlmRoutes:
 # The prefix JiuwenSwarm gave the tools of each run's own MCP server, before there was one server for all (`mcp_` + the server name `sci` + 10 characters,
 # see agent_runs). Each run has its own server, and a session's history, which JiuwenSwarm keeps across runs,
 # holds the calls of earlier runs under their prefixes. Those servers are gone once their run ended.
-_ANY_RUN_PREFIX = re.compile(r"^mcp_sci[0-9a-z]{10}_")
+# The shared server's later generations (agent_runs.ensure_shared_tools) are named the same way, `sci` + ten digits, and
+# its first is plain `sci`: a session's history can hold calls made through any of them.
+_ANY_RUN_PREFIX = re.compile(r"^mcp_sci(?:[0-9a-z]{10})?_")
 
 
 def _unprefixed(name: str, route: LlmRoute) -> str:

@@ -1006,6 +1006,7 @@ test("by default the model plans with JiuwenSwarm's todo tools, not our update_p
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ planStore: planRecorder().store as never })).execute("go");
     assert.deepEqual(sent.nativeTools, ["todo_create", "todo_modify", "todo_list", "todo_get"]);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "update_plan"), false);
+    assert.equal(sent.hiddenJiuwenSwarmTools.includes("todo_create"), false);
   } finally {
     await adapter.close();
   }
@@ -1030,6 +1031,8 @@ test("a run with no plan store offers no plan tool of either kind", async () => 
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options()).execute("go");
     assert.equal("nativeTools" in sent, false);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "update_plan"), false);
+    // Not merely unlisted: with all of JiuwenSwarm's tools offered, its todo tools are hidden (a Plan plugin switched off).
+    assert.ok(["todo_create", "todo_modify", "todo_list", "todo_get"].every((name) => sent.hiddenJiuwenSwarmTools.includes(name)));
   } finally {
     await adapter.close();
   }
@@ -1110,6 +1113,7 @@ test("by default the model delegates with JiuwenSwarm's subagent_spawn/subagent_
     assert.deepEqual(sent.nativeTools, ["subagent_spawn", "subagent_wait"]);
     assert.equal(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"), false);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
+    assert.equal(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"), false);
   } finally {
     await adapter.close();
   }
@@ -1478,6 +1482,7 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
     assert.equal(sent.systemPrompt.includes("Use only the registered workspace tools"), false);
     // Commands and file writes stay in ScienceDiscovery's sandbox: JiuwenSwarm's host tools are hidden, and the prompt says so.
     assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf",
+      "todo_create", "todo_modify", "todo_list", "todo_get",
       "subagent_spawn", "subagent_wait", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
     assert.match(sent.systemPrompt, /run in the sandbox through run_shell/);
     const start = events.find((event) => event.type === "tool_execution_start") as any;

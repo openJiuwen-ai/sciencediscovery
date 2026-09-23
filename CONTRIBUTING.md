@@ -22,7 +22,7 @@ scripts/jiuwenswarm.sh setup                          # once: clone the pinned t
 ./scripts/start-stack.sh --mode local --jiuwenswarm    # starts JiuwenSwarm if needed, then the stack
 ```
 
-See [Run agent turns on JiuwenSwarm](docs/en/how-to/run-with-jiuwenswarm.md) for requirements, every environment
+See [Local mode](docs/en/getting-started/deployment.md#local-mode-host-processes) for requirements, every environment
 variable, and troubleshooting, and [JiuwenSwarm migration: status and hand-over](docs/en/reference/jiuwenswarm-migration-status.md)
 for what is verified and what is still open.
 

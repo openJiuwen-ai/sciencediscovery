@@ -1,6 +1,6 @@
 # Network Proxy Mechanism
 
-ScienceDiscovery provides an instance-level proxy registry and unified policy model. Configuration steps are in [Configure the network proxy](../how-to/configure-network-proxy.md); API fields are in [REST API](../reference/rest-api.md#proxy-configuration).
+ScienceDiscovery provides an instance-level proxy registry and unified policy model. Configuration steps are in [Configure the network proxy](../advanced-setup/configure-network-proxy.md); API fields are in [REST API](../reference/rest-api.md#proxy-configuration).
 
 ## Configuration model
 

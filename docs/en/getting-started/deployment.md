@@ -8,11 +8,11 @@ variables, default ports, quotas, and storage layout.
 
 ## Three deployment modes
 
-| Mode | Supported operating systems | What the user receives | Host dependencies | Intended use |
+| Mode | Supported operating systems | What the user receives | System dependencies | Intended use |
 |---|---|---|---|---|
 | [Single-file binary](#single-file-binary-deployment) | Linux x86_64/aarch64 | Prebuilt executable, or a source-built artifact | Bubblewrap at runtime, source toolchain only when building | Shortest path for new users, or portable internal release artifacts |
 | [Docker image](#docker-deployment) | Linux x86_64/aarch64 | Container image and Compose file | Docker Engine 24+ and Compose v2 | Advanced container operations |
-| [Local mode](#local-mode-host-processes) | Linux x86_64/aarch64, macOS x64/arm64 | Source repository | Node, pnpm, uv, and Python. Linux uses Bubblewrap, while macOS uses the built-in Seatbelt sandbox | Development and debugging |
+| [Local mode](#local-mode-source-checkout) | Linux x86_64/aarch64, macOS x64/arm64 | Source repository | Node, pnpm, uv, and Python. Linux uses Bubblewrap, while macOS uses the built-in Seatbelt sandbox | Development and debugging |
 
 **These paths are independent. Choose one and do not mix them.** The binary path never uses Docker: the executable embeds Node, CPython, gateway dependencies, the web assets, and micromamba. Use the image path for container deployment instead of putting the binary inside an image.
 
@@ -24,7 +24,7 @@ None of the modes bundles Neo4j. ScienceMemory needs an external Neo4j server an
 
 The prebuilt binary is the shortest path for a new user. On the
 [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases), download
-the asset whose filename matches the host architecture:
+the asset whose filename matches your system architecture:
 
 ```text
 ScienceDiscovery-<version>-linux-x86_64
@@ -47,7 +47,7 @@ ScienceDiscovery-<version>-linux-x86_64
 ScienceDiscovery-<version>-linux-aarch64
 ```
 
-Build, verify, and run for the host architecture from the repository root:
+Build, verify, and run for the current system architecture from the repository root:
 
 ```bash
 case "$(uname -m)" in
@@ -62,7 +62,15 @@ artifact="dist/binary-release-local/ScienceDiscovery-local-linux-$arch"
 "$artifact" serve
 ```
 
-`serve` starts the Bubblewrap runner, then the control API with the Web UI, using the same health checks as [local mode](#local-mode-host-processes), then prints the `Open to sign in` URL and the local service access token. Those two are the whole resident stack: the agent loop, the model calls, and the web providers all run inside the API process, and the bundled Python MCP servers are spawned on demand rather than supervised. It listens on <http://127.0.0.1:4310> by default. Open the `Open to sign in` URL from the startup output; the browser saves the local service access token automatically and signs in. (If opening <http://127.0.0.1:4310> directly, the Connection guide allows pasting the local service access token.) Keep the sign-in URL private. When `SCIENCE_AGENT_AUTH_TOKEN` is set, that configured token is used. Ctrl-C stops all services in reverse order.
+`serve` starts the Bubblewrap runner, JiuwenSwarm, its adapter, and the control API with the Web UI,
+using the same health checks as [local mode](#local-mode-source-checkout). It then prints the
+`Open to sign in` URL and the local service access token. The adapter serves the public port and the
+API runs behind it. The bundled Python MCP servers are spawned on demand rather than supervised. It
+listens on <http://127.0.0.1:4310> by default. Open the `Open to sign in` URL from the startup output;
+the browser saves the local service access token automatically and signs in. (If opening
+<http://127.0.0.1:4310> directly, the Connection guide allows pasting the local service access token.)
+Keep the sign-in URL private. When `SCIENCE_AGENT_AUTH_TOKEN` is set, that configured token is used.
+Ctrl-C stops all services in reverse order.
 
 ## First-run troubleshooting for binary and local mode
 
@@ -79,9 +87,9 @@ startup error in the terminal, then check the logs below. On a normal start, run
 `curl -fsS http://127.0.0.1:4310/health`. Its top-level `status` should be `ok`.
 
 **`bwrap` is missing or the sandbox check fails on Linux.** Install Bubblewrap with the
-commands in [Host dependency: Bubblewrap](#host-dependency-bubblewrap). If it is
+commands in [System dependency: Bubblewrap](#system-dependency-bubblewrap). If it is
 installed but user namespaces are unavailable, follow
-[Sandbox and host requirements](#sandbox-and-host-requirements). macOS local source mode
+[Sandbox and system requirements](#sandbox-and-system-requirements). macOS local source mode
 uses Seatbelt instead of Bubblewrap.
 
 **Where to find logs.** By default, binary and local mode write rotating service logs
@@ -109,9 +117,9 @@ Related environment variables (usable in `--env-file`):
 
 For air-gapped hosts, run the first launch once on a connected machine and copy the whole data directory over, or point `SCIENCE_AGENT_UV_PATH` at a pre-installed uv and `SCIENCE_AGENT_PYPI_INDEX` at a reachable mirror.
 
-### Host dependency: Bubblewrap
+### System dependency: Bubblewrap
 
-Bubblewrap is the **only** host dependency users install. It cannot be bundled because the sandbox needs host-kernel user namespaces. When it is absent, `serve` fails immediately and prints installation commands:
+Bubblewrap is the **only** system dependency users install. It cannot be bundled because the sandbox needs kernel user namespaces. When it is absent, `serve` fails immediately and prints installation commands:
 
 ```bash
 sudo apt-get install -y bubblewrap   # Debian / Ubuntu
@@ -120,9 +128,9 @@ sudo pacman -S bubblewrap            # Arch
 sudo apk add bubblewrap              # Alpine
 ```
 
-Enabling the `domain-allowlist` mode of **sandbox network access** additionally needs a usable `python3` on the host (the interpreter for the in-sandbox egress bridge; override it with `SCIENCE_AGENT_EGRESS_PYTHON`). Without it, executions in that mode fail with an explicit reason and the default `none` mode is unaffected. Neither mode needs root, extra capabilities, or host firewall configuration.
+Enabling the `domain-allowlist` mode of **sandbox network access** additionally needs a usable `python3` on the system (the interpreter for the in-sandbox egress bridge; override it with `SCIENCE_AGENT_EGRESS_PYTHON`). Without it, executions in that mode fail with an explicit reason and the default `none` mode is unaffected. Neither mode needs root, extra capabilities, or firewall configuration.
 
-To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; `run_shell` will fail while other functions remain available. If Bubblewrap exists but unprivileged user namespaces are restricted, `serve` warns and continues. Diagnose it as described under [Sandbox and host requirements](#sandbox-and-host-requirements).
+To inspect the UI without sandbox execution, start with `--skip-sandbox-check`; `run_shell` will fail while other functions remain available. If Bubblewrap exists but unprivileged user namespaces are restricted, `serve` warns and continues. Diagnose it as described under [Sandbox and system requirements](#sandbox-and-system-requirements).
 
 ### Commands and options
 
@@ -144,7 +152,7 @@ ScienceDiscovery help                  Show help
 | `--bwrap <path>` | `bwrap` on `PATH` | Bubblewrap executable |
 | `--skip-sandbox-check` | off | Start without Bubblewrap; sandbox execution is unavailable |
 | `--no-scientific-envs` | off | Do not initialize managed scientific environments |
-| `--jiuwenswarm` | **on** | Run agent turns on the embedded [JiuwenSwarm](../how-to/run-with-jiuwenswarm.md) instead of the native loop; accepted for compatibility, this is already the default |
+| `--jiuwenswarm` | **on** | Run agent turns on the embedded JiuwenSwarm instead of the native loop; accepted for compatibility, this is already the default |
 | `--no-jiuwenswarm` | off | Run agent turns on the native loop instead; also `SCIENCE_AGENT_EXECUTOR=native` |
 
 The variables in [Configuration reference](../reference/configuration.md#environment-variables-local-mode) also apply and can be exported or placed in `--env-file`. The API and the runner bind to loopback by default. To expose the API, first replace `SCIENCE_AGENT_AUTH_TOKEN`, then explicitly use `--host 0.0.0.0` only on a trusted, protected network.
@@ -173,7 +181,7 @@ It connects to `http://127.0.0.1:4310` by default and reads the token `serve` ge
 | CPython 3.12 | Relocatable distribution; no host Python needed, and it is the base interpreter for the first-launch gateway venv |
 | Web assets | Prebuilt `apps/web/dist` |
 | Gateway wheel and bootstrap pins | The `sciencediscovery-gateway` wheel (our own code), the hash-locked dependency export, and the uv wheel pin |
-| JiuwenSwarm and adapter | The pinned [JiuwenSwarm](../how-to/run-with-jiuwenswarm.md) tag and the `sciencediscovery-adapter` wheel (our own code), each with its full third-party dependency tree already installed — unlike the gateway's, not deferred to first launch, since JiuwenSwarm's own footprint (roughly 1.5 GB) makes this the largest single contributor to release size |
+| JiuwenSwarm and adapter | The pinned JiuwenSwarm tag and the `sciencediscovery-adapter` wheel (our own code), each with its full third-party dependency tree already installed — unlike the gateway's, not deferred to first launch, since JiuwenSwarm's own footprint (roughly 1.5 GB) makes this the largest single contributor to release size |
 | micromamba | Fixed version, seeded to `<data-dir>/scientific-envs/bin/micromamba` on first `serve`, then checked by the runner against the same release manifest |
 
 It does not contain uv or the gateway's third-party Python dependencies (see [Dependencies installed on first launch](#dependencies-installed-on-first-launch)), nor Neo4j, starter Python/R scientific environments, or a conda package cache. Creating a starter environment for the first time still needs access to permitted package channels.
@@ -193,23 +201,22 @@ The build host needs `node`, `pnpm`, `uv`, `tar`, `zstd`, and `sha256sum`; it ne
 
 The output contains both executables, `VERSION`, and `SHA256SUMS`. The gateway dependency tree (duckdb, pandas, numpy, onnxruntime, and others) is no longer shipped, so the artifacts are much smaller than the older format that embedded it; that tree is downloaded through the configured mirror at first launch instead. Compression defaults to zstd level 19; use `SCIENCE_AGENT_PAYLOAD_ZSTD_LEVEL` to lower it during iteration.
 
-## Local mode (host processes)
+## Local mode (source checkout)
 
 Source mode supports Linux x86_64/aarch64 and macOS x64/arm64. Both platforms use the same startup command and require Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git, and curl. The sandbox dependency is platform-specific:
 
 - Linux needs Bubblewrap 0.6+ (0.8+ recommended) and usable unprivileged user namespaces.
 - macOS uses the built-in Seatbelt sandbox through `/usr/bin/sandbox-exec`; Bubblewrap is not required.
 
-The agent loop runs on [JiuwenSwarm](https://gitcode.com/openJiuwen/jiuwenswarm); install it once, then start the
-stack with `--jiuwenswarm`. See [Run agent turns on JiuwenSwarm](../how-to/run-with-jiuwenswarm.md) for the full requirements,
-every environment variable, and troubleshooting.
+Like the packaged binary and Docker image, local source mode uses JiuwenSwarm by default. Install the
+pinned version once, then start the stack:
 
 From the repository root, run:
 
 ```bash
-scripts/jiuwenswarm.sh setup                                   # once: clone the pinned tag, install it, create the instance
-./scripts/start-stack.sh --mode local --jiuwenswarm             # install, build, and start all services on JiuwenSwarm
-./scripts/start-stack.sh --mode local --jiuwenswarm --no-build  # start only after a previous build
+scripts/jiuwenswarm.sh setup                         # once: clone the pinned tag, install it, create the instance
+./scripts/start-stack.sh --mode local                 # install, build, and start all services
+./scripts/start-stack.sh --mode local --no-build      # start only after a previous build
 ```
 
 SSH auto-deployment uses a single-file Runner SEA with its own Node runtime, so the target machine does not need Node installed. A full local start on Linux, a Docker build, and a binary release all prepare both Linux x64 and arm64 Runners; developers who build only some packages can run `pnpm runner:binary` after building the Runner and the Executor. The files land in `services/runner/dist/sea/`, ship with the product, and are not committed to the source tree.
@@ -218,12 +225,13 @@ On connect the product picks the file matching the remote `uname -m`, streams it
 
 Each binary is named after its own SHA-256, so upgrading the control plane and reconnecting adds a file rather than overwriting one. Once the new binary has started and passed its health check, the control plane deletes the other SHA-256-named Runner binaries in that directory that no process is executing — each is about 120 MB, and a long run of iterations accumulates several GB. A binary a process is still executing is always kept, including one another control plane's connection is using, and files in that directory that do not carry such a name are left alone. The step is best effort: a failure is recorded in the connection log and does not affect the connection.
 
-In local mode the shared entry point reads the root `.env`, checks the dependencies from [Requirements](../../../README.md#requirements), installs and builds when needed, and starts ordinary host processes. It automatically selects Bubblewrap on Linux and Seatbelt on macOS, so `SCIENCE_AGENT_SANDBOX_PROVIDER` does not need to be set manually:
+In local mode the shared entry point reads the root `.env`, checks the dependencies from
+[Requirements](../../../README.md#requirements), installs and builds when needed, and starts ordinary
+local processes. It automatically selects Bubblewrap on Linux and Seatbelt on macOS, so
+`SCIENCE_AGENT_SANDBOX_PROVIDER` does not need to be set manually. The default stack has these services:
 
 | Service | Address | Purpose |
 |---|---|---|
-| `services/gateway` | no port | Interpreter environment for the bundled Python MCP servers |
-| `services/runner` | 127.0.0.1:4311 | Rootless Bubblewrap (Linux) or Seatbelt (macOS) executor (background) |
 | JiuwenSwarm | `~/.jiuwenswarm-instances/sciencediscovery` | Runs the agent loop; started by `scripts/jiuwenswarm.sh` if not already running |
 | adapter | 127.0.0.1:4310 | Public port; reverse-proxies the API and bridges JiuwenSwarm's model and tool calls |
 | `services/api` | 127.0.0.1:4410 | Control API and Web UI, behind the adapter (foreground) |
@@ -238,7 +246,7 @@ Ascend host NPU workloads use the same local-mode entry point. The Runner expose
 
 ## Docker deployment
 
-One image contains the complete stack. The container entry point `docker-entrypoint.sh` wraps `scripts/start-stack.sh --mode docker`, which starts the Bubblewrap runner and the control API with the Web UI in one container in the same order as local mode; the bundled Python MCP servers are launched by the API on demand, and Docker-specific checks run only in this mode. The builder uses pnpm and uv. The runtime image contains Node, prebuilt service Python environments, Bubblewrap, and a fixed micromamba selected and verified for `TARGETARCH`. The image also bakes in [JiuwenSwarm](../how-to/run-with-jiuwenswarm.md) and its adapter, the same way the single-file binary does, and runs agent turns on it **by default**; `--no-jiuwenswarm` on `start-stack.sh --mode docker` switches back to the native loop (see [Run agent turns on JiuwenSwarm](../how-to/run-with-jiuwenswarm.md)). The host needs only Docker.
+One image contains the complete stack. The container entry point `docker-entrypoint.sh` wraps `scripts/start-stack.sh --mode docker`, which starts the Bubblewrap runner and the control API with the Web UI in one container in the same order as local mode; the bundled Python MCP servers are launched by the API on demand, and Docker-specific checks run only in this mode. The builder uses pnpm and uv. The runtime image contains Node, prebuilt service Python environments, Bubblewrap, and a fixed micromamba selected and verified for `TARGETARCH`. The image also bakes in JiuwenSwarm and its adapter, the same way the single-file binary does, and runs agent turns on it **by default**. The system needs only Docker.
 
 This section walks through prepare → build → start → connect in the browser → configure a model, followed by day-to-day management, the data directory, several instances, environment variables, sandbox requirements, and frequently asked questions. Run every command from the repository root.
 
@@ -265,7 +273,7 @@ mkdir -p data                 # host directory for all runtime state; create it 
 docker compose build
 ```
 
-The result is `sciencediscovery:local` (`SCIENCE_AGENT_IMAGE` changes the tag). The first build installs the workspace dependencies, compiles the Web UI, resolves the paper, gateway and adapter Python environments, installs [JiuwenSwarm](../how-to/run-with-jiuwenswarm.md) from its PyPI release, and downloads micromamba and the model catalog snapshot, so it needs network access throughout; with an empty cache it takes a few minutes on an ordinary x86_64 machine, longer on a slow connection. Later rebuilds that only change application source reuse the dependency layers, JiuwenSwarm's included — it is not re-downloaded unless `JIUWENSWARM_TAG` changes.
+The result is `sciencediscovery:local` (`SCIENCE_AGENT_IMAGE` changes the tag). The first build installs the workspace dependencies, compiles the Web UI, resolves the paper, gateway and adapter Python environments, installs JiuwenSwarm from its PyPI release, and downloads micromamba and the model catalog snapshot, so it needs network access throughout; with an empty cache it takes a few minutes on an ordinary x86_64 machine, longer on a slow connection. Later rebuilds that only change application source reuse the dependency layers, JiuwenSwarm's included — it is not re-downloaded unless `JIUWENSWARM_TAG` changes.
 
 BuildKit selects the `linux/amd64` or `linux/arm64` micromamba for `TARGETARCH` and verifies it against the runner's shared release manifest. The binary is stored at `/opt/sciencediscovery/provisioner/micromamba`; when `/app/data` is an empty bind mount, the first start copies it to the managed default path and the runner verifies it again. This does not access GitHub at **run time**.
 
@@ -325,7 +333,7 @@ The image ships no model. The "Configure a model" entry on the home page leads t
 
 ### Run agent turns on JiuwenSwarm
 
-The image already has [JiuwenSwarm](../how-to/run-with-jiuwenswarm.md) and its adapter baked in, and **runs on it by default** — nothing to install or configure. First start creates the instance under `./data`, so it survives `docker compose down` and image rebuilds the same way as everything else there. The public port serves the adapter, which proxies routes it has not migrated to the API behind it (`+ 100` by default); the browser URL and token flow are unchanged. `GET /agent/info` on the public port says which backend is running.
+The image already has JiuwenSwarm and its adapter baked in, and **runs on it by default** — nothing to install or configure. First start creates the instance under `./data`, so it survives `docker compose down` and image rebuilds the same way as everything else there. The public port serves the adapter, which proxies routes it has not migrated to the API behind it (`+ 100` by default); the browser URL and token flow are unchanged. `GET /agent/info` on the public port says which backend is running.
 
 For the native loop instead, add `--no-jiuwenswarm` to the container's command:
 
@@ -486,7 +494,7 @@ Work through these in order; do not skip the first two and change a kernel switc
 
 **The runner startup log says it fell back to binding the container's `/proc`.** `systempaths=unconfined` is missing from the Compose service (typical for hand-written `docker run` commands or Kubernetes manifests). Executions still run, but the sandbox sees the container's process list; adding the entry back restores the private procfs.
 
-**The model cannot be reached: timeouts, `ECONNREFUSED`, or a mandatory proxy.** Three options: add a `custom_url` proxy under **System configuration → Network proxies** and make it the global default, which needs no container restart; or inject `HTTPS_PROXY` and friends through the `docker-compose.override.yml` shown above, run `up -d`, and choose the `environment` proxy type in the same settings (see [Configure a network proxy](../how-to/configure-network-proxy.md)). When the model server runs on the host itself (a local Ollama, for example), `127.0.0.1` inside the container is the container: add `extra_hosts: ["host.docker.internal:host-gateway"]` to the service in the override file and use `http://host.docker.internal:<port>` as the model address, or use the host's LAN IP.
+**The model cannot be reached: timeouts, `ECONNREFUSED`, or a mandatory proxy.** Three options: add a `custom_url` proxy under **System configuration → Network proxies** and make it the global default, which needs no container restart; or inject `HTTPS_PROXY` and friends through the `docker-compose.override.yml` shown above, run `up -d`, and choose the `environment` proxy type in the same settings (see [Configure a network proxy](../advanced-setup/configure-network-proxy.md)). When the model server runs on the host itself (a local Ollama, for example), `127.0.0.1` inside the container is the container: add `extra_hosts: ["host.docker.internal:host-gateway"]` to the service in the override file and use `http://host.docker.internal:<port>` as the model address, or use the host's LAN IP.
 
 **After the first start the CPU stays busy, `./data` grows to about 2 GB, and `micromamba` shows up in the process list.** Expected: the starter Python scientific environment is being created in the background; `runner.scientificEnvs.startersReady` in `/health` turns `true` when it is done. When conda-forge is slow, point `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` at a mirror; for an offline host, pre-populate `SCIENCE_AGENT_PACKAGE_CACHE_DIR`; when managed environments are not needed at all, set `SCIENTIFIC_ENVS=0`.
 

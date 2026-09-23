@@ -1,6 +1,6 @@
 # MCP Backend Design
 
-[简体中文](../../zh/developer-docs/mcp-tool-protocol.md) | [Configuration guide](../how-to/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
+[简体中文](../../zh/developer-docs/mcp-tool-protocol.md) | [Configuration guide](../advanced-setup/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
 
 ## 1. Design objective
 

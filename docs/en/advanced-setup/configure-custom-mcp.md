@@ -1,6 +1,6 @@
 # Configure custom MCP servers, OAuth and Inspector
 
-[中文](../../zh/how-to/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
+[中文](../../zh/advanced-setup/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
 
 This guide covers custom MCP management in system settings. Existing built-in sources remain available in their own tab and do not need to be added again.
 

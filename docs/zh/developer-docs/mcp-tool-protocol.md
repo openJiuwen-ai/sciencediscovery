@@ -1,6 +1,6 @@
 # MCP 后端设计
 
-[English](../../en/developer-docs/mcp-tool-protocol.md) | [配置指南](../how-to/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
+[English](../../en/developer-docs/mcp-tool-protocol.md) | [配置指南](../advanced-setup/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
 
 ## 1. 设计目标
 

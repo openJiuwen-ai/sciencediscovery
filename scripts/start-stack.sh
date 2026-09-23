@@ -18,7 +18,8 @@
 # its prebuilt image and bind-mounted runtime paths. Both modes reuse the same
 # process ordering, health waits, and shutdown handling.
 #
-# The agent loop runs on JiuwenSwarm (see docs/en/how-to/run-with-jiuwenswarm.md):
+# The agent loop runs on JiuwenSwarm in packaged and Docker deployments (see
+# docs/en/getting-started/deployment.md):
 # in local mode, install it once with `scripts/jiuwenswarm.sh setup`, then pass
 # --jiuwenswarm below.
 set -euo pipefail
@@ -45,7 +46,7 @@ Usage: ./scripts/start-stack.sh --mode local --jiuwenswarm [--no-build] [--no-no
                   setup first; the Docker image bakes it in and already
                   defaults to it, so this flag is redundant there — first
                   start still creates the instance under the bind-mounted
-                  data directory. See docs/en/how-to/run-with-jiuwenswarm.md.
+                  data directory. See docs/en/getting-started/deployment.md.
   --no-jiuwenswarm
                   run agent turns on the native loop instead. Only meaningful
                   in Docker mode, where it overrides the default; local mode

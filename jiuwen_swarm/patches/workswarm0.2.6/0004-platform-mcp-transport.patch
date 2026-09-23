@@ -6,7 +6,7 @@ diff --git a/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py b/jiuwenswarm/
  
      def _create_client_with_timeout(config):
 -        client = _orig_create_client(config)
-+        if config.server_name == "sci" and config.client_type in {"streamable-http", "streamable_http"}:
++        if (config.server_name == "sci" or (config.server_name.startswith("sci") and len(config.server_name) == 13 and config.server_name[3:].isdigit())) and config.client_type in {"streamable-http", "streamable_http"}:
 +            from .sci_http_client import SciHttpClient
 +            client = SciHttpClient(config)
 +        else:

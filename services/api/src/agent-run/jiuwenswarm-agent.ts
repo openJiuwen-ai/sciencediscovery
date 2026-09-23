@@ -273,8 +273,9 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       scope: this.options.sessionId,
       signal: this.controller.signal,
     });
-    // With JiuwenSwarm's own todo tools the model does not also get ours.
-    const jiuwenSwarmPlans = (this.config.planning ?? "todo") === "todo" && Boolean(this.options.planStore);
+    // With JiuwenSwarm's own todo tools the model does not also get ours. Only in place of ours: a run whose Plan
+    // plugin is switched off has no update_plan, and then no planning tool of either kind.
+    const jiuwenSwarmPlans = (this.config.planning ?? "todo") === "todo" && Boolean(this.options.planStore) && tools.has("update_plan");
     if (jiuwenSwarmPlans) tools.delete("update_plan");
     // Web search and page fetching are JiuwenSwarm's own when its tools are in use.
     const allJiuwenSwarmTools = (this.config.tools ?? "jiuwenswarm") === "jiuwenswarm";
@@ -513,6 +514,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         jiuwenSwarmTools: allJiuwenSwarmTools ? "all" : "listed",
         hiddenJiuwenSwarmTools: [
           ...(allJiuwenSwarmTools ? JIUWENSWARM_HOST_TOOLS : []),
+          ...(!jiuwenSwarmPlans ? JIUWENSWARM_TODO_TOOLS : []),
           ...(!jiuwenSwarmSubagents ? JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS : []),
         ],
         // JiuwenSwarm gives a tool call 30 s unless told otherwise; the run's own timeout is the limit here.

@@ -326,14 +326,11 @@ test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, 
     [{ text: "普通分析已完成。" }],
     [{ delayMs: 6500, text: "这次分析没有足够可复用知识，不创建提案。" }],
     [
-      // create_skill refuses until skill-creator has been loaded, and which tool loads it depends on
-      // the run's tool mode. The E2E layer pins SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours (see
-      // .ci/run-e2e.sh: the mocked journeys script ScienceDiscovery's own tools and argument
-      // shapes), so the skills stay ours and read_skill is the loader. A run left on JiuwenSwarm's
-      // own tools installs the skills there and loads them with skill_tool instead, which the agent
-      // replays through read_skill for this very guard — that path is covered by the jw-only live
-      // checks, not here, and scripting skill_tool in this layer calls a tool the run does not have.
-      { tool: "read_skill", arguments: { skillId: "skill-creator" } },
+      // create_skill refuses until skill-creator has been loaded. The journeys run on JiuwenSwarm's own tools
+      // (.ci/run-e2e.sh), so the skills are installed in JiuwenSwarm and loaded with its skill_tool:
+      // ScienceDiscovery's skill-creator under this name (JiuwenSwarm has a skill-creator of its own), which
+      // the agent replays through read_skill for this very guard.
+      { tool: "skill_tool", arguments: { skill_name: "sciencediscovery-skill-creator" } },
       { tool: "create_skill", arguments: { name: skillName, description: "Validate a small local table.",
         instructions: "# Table validation\n\nRead the input table and report its row count without changing its values." } },
       { text: "草稿已生成，等待用户审核。" },

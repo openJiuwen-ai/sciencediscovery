@@ -1,6 +1,6 @@
 # 运行一次演进搜索
 
-在会话里驱动 `/evolve-design`：提出搜索、定规模、看过程、读结果。搜索是什么、什么时候根本不适用，见[程序演进](../core/evolve.md)；要一次能完整跑完的第一次运行，见[教程](../domains/evolve-a-solution.md)。
+在会话里驱动 `/evolve-design`：提出搜索、定规模、看过程、读结果。搜索是什么、什么时候根本不适用，见[程序演进](../core/evolve.md)；要一次能完整跑完的第一次运行，见[教程](evolve-a-solution.md)。
 
 ## 开始之前
 
@@ -96,5 +96,5 @@ OpenEvolve 运行多一个**网格**视图展示归档 —— 每岛一列，★
 ## 相关文档
 
 - [程序演进](../core/evolve.md) —— 搜索是什么、三分数据、探针、冻结。
-- [演进出一个更优解](../domains/evolve-a-solution.md) —— 走一遍第一次运行。
+- [演进出一个更优解](evolve-a-solution.md) —— 走一遍第一次运行。
 - [沙箱执行](../developer-docs/sandbox-execution.md) —— 候选在哪里评测。

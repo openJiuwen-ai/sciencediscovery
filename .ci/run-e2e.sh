@@ -227,15 +227,18 @@ export E2E_ALLOW_STACK_RESET=1
 if [[ "$backend" == "jiuwenswarm" ]]; then
   export SCIENCE_AGENT_ADAPTER=1
   export SCIENCE_AGENT_EXECUTOR=jiuwenswarm
-  # JiuwenSwarm plans with its own todo tools by default. The mocked journeys script the model's calls
-  # to ScienceDiscovery's `update_plan`, so they run with that tool; the todo path is covered by
-  # test/contract/jw-only/live.mjs todo-plan.
-  export SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan
-  # Likewise they script ScienceDiscovery's read_file/list_files with its argument shapes; JiuwenSwarm's own
-  # tools are covered by test/contract/jw-only/live.mjs native-tools.
-  export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
+  # The journeys run on the tools the product ships: JiuwenSwarm's own (its todo planning, its skill_tool),
+  # its host tools replaced by ScienceDiscovery's sandboxed ones. Sub-agents are the one exception: they
+  # delegate with ScienceDiscovery's `task`, because a JiuwenSwarm `subagent_spawn` sub-agent has none of the
+  # tools, sandbox, deliverables or sub-agent cards the delegation journeys are about (see Known gap 1a in
+  # docs/en/reference/jiuwenswarm-migration-status.md).
   export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task
   export E2E_SWARM_TASK=1
+  if [[ "$fixture" != standard ]]; then
+    # Research mocks script platform tool contracts; standard/real use product defaults.
+    export SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan
+    export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
+  fi
   # A JiuwenSwarm instance of this layer's own, so a run never shares skills, config or sessions with the
   # instance a developer uses (the install itself, JIUWENSWARM_ROOT, is shared).
   export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-e2e}"

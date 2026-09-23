@@ -80,7 +80,7 @@ serve options:
   --no-jiuwenswarm         Run agent turns on the native loop instead of the
                            embedded JiuwenSwarm (the release binary always
                            embeds it and runs on it by default; see
-                           docs/en/how-to/run-with-jiuwenswarm.md)
+                           docs/en/getting-started/deployment.md)
   --jiuwenswarm            Accepted for compatibility; this is already the
                            default
 

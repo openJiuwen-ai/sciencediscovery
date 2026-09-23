@@ -112,7 +112,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 自定义 MCP 服务器与 Inspector
 
-界面操作见[配置自定义 MCP](../how-to/configure-custom-mcp.md)。路由位于 `services/api/src/http/custom-mcp.ts`，请求和响应类型位于 `packages/schema/src/custom-mcp.ts`。下表接口均需本地服务访问令牌（Bearer token）。
+界面操作见[配置自定义 MCP](../advanced-setup/configure-custom-mcp.md)。路由位于 `services/api/src/http/custom-mcp.ts`，请求和响应类型位于 `packages/schema/src/custom-mcp.ts`。下表接口均需本地服务访问令牌（Bearer token）。
 
 | 方法与路径 | 请求 | 响应 |
 |---|---|---|
@@ -157,7 +157,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 代理配置
 
-以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置网络代理](../how-to/configure-network-proxy.md)。
+以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置网络代理](../advanced-setup/configure-network-proxy.md)。
 
 | 方法与路径 | 请求 | 成功响应 |
 |---|---|---|

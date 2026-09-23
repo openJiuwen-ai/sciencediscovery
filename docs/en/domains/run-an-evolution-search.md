@@ -3,7 +3,7 @@
 How to drive `/evolve-design` from a session: proposing a search, sizing it, watching it, and reading
 what comes back. For what a search is and when it works at all, see
 [Program evolution](../core/evolve.md); for a first run you can complete end to end, see
-the [tutorial](../domains/evolve-a-solution.md).
+the [tutorial](evolve-a-solution.md).
 
 ## Before you start
 
@@ -123,5 +123,5 @@ the search node links to its starting point with an `input` edge and to its resu
 ## Related
 
 - [Program evolution](../core/evolve.md) — what a search is, the shards, the probe, freezing.
-- [Evolve a solution](../domains/evolve-a-solution.md) — a worked first run.
+- [Evolve a solution](evolve-a-solution.md) — a worked first run.
 - [Sandbox execution](../developer-docs/sandbox-execution.md) — where candidates are evaluated.

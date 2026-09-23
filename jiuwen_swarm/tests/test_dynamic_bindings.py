@@ -39,6 +39,16 @@ class DynamicCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(first[0].properties["resilience"]["timeout_s"])
 
 
+class GenerationTransportTests(unittest.TestCase):
+    def test_each_platform_generation_uses_the_isolated_transport(self):
+        from jiuwenswarm.server.runtime.mcp.sci_http_client import SciHttpClient
+        apply_mcp_call_timeout_patch()
+        for name in ("sci", "sci0000000001", "sci0000000027"):
+            config = McpServerConfig(server_name=name, server_id=name, client_type="streamable-http",
+                                     server_path="http://localhost/mcp", params={"timeout_s": 3600})
+            self.assertIsInstance(ToolMgr._create_client(config), SciHttpClient)
+
+
 class ModelRouteTests(unittest.TestCase):
     def resolve(self, entries):
         # Exercise the actual patched resolver without constructing a full

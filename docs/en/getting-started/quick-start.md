@@ -1,22 +1,30 @@
 # Quick Start
 
-This tutorial starts with a ready-to-run ScienceDiscovery executable, then configures a model and submits a first task.
+This tutorial uses a prepackaged Linux executable, then configures a model and submits a first task.
+If you use macOS, prefer a source-built binary, or need Docker, follow the [deployment guide](deployment.md)
+first and return here at [Configure a task model](#3-configure-a-task-model) once the service is running.
 
 > See the root [README](../../../README.md) for product scope and risk boundaries, the [deployment guide](deployment.md) for complete deployment procedures, and the [configuration reference](../reference/configuration.md) for parameters and quotas.
 
-## 1. Prepare the environment
+## 1. Install a prepackaged binary
+
+For the shortest Linux path, prepare:
 
 - Linux on `x86_64` or `aarch64`.
 - `bwrap` (Bubblewrap) for sandboxed command execution.
-- A ScienceDiscovery executable matching the host architecture.
+- A ScienceDiscovery executable for your Linux architecture, available from the
+  [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases).
 - At least one external model API Key.
 
-Bubblewrap must be provided by the host:
+Bubblewrap must be available on your system:
 
 ```bash
 sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 # Or: sudo dnf install -y bubblewrap # Fedora / RHEL / openEuler
 ```
+
+For another operating system or deployment method, use the [deployment guide](deployment.md) instead.
+After its service is running, continue with [Configure a task model](#3-configure-a-task-model).
 
 ## 2. Start ScienceDiscovery
 

@@ -24,10 +24,9 @@
 # channel-dependent step unless an offline package cache is supplied.
 #
 # JiuwenSwarm and the adapter are baked in the same way (also under
-# /opt/sciencediscovery, read-only): pass --jiuwenswarm to start-stack.sh
-# --mode docker to run agent turns on JiuwenSwarm instead of the native loop.
-# JiuwenSwarm's own instance state still lives under the bind-mounted data
-# directory — see scripts/jiuwenswarm.sh and docs/en/how-to/run-with-jiuwenswarm.md.
+# /opt/sciencediscovery, read-only) and run agent turns by default. JiuwenSwarm's
+# own instance state still lives under the bind-mounted data directory — see
+# scripts/jiuwenswarm.sh and docs/en/getting-started/deployment.md.
 
 ARG NODE_BUILD_IMAGE=node:22-bookworm
 ARG NODE_RUNTIME_IMAGE=node:22-bookworm-slim

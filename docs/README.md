@@ -1,6 +1,13 @@
 # ScienceDiscovery Documentation
 
-ScienceDiscovery documentation is organized into matching English and Chinese trees. Each tree separates getting started, core capabilities, domain guides, how-to guides, reference material, and developer documentation.
+ScienceDiscovery documentation is organized into matching English and Chinese trees:
+
+- **Getting started** helps a new user install, configure, and complete a first task.
+- **Core capabilities** explains product concepts and execution behavior.
+- **Domain guides** apply the product to end-to-end research examples.
+- **Advanced setup** covers optional configuration for users who need it.
+- **Reference** records exact settings, interfaces, limits, and user-facing behavior.
+- **Developer documentation** describes architecture, module boundaries, and implementation detail.
 
 - [English documentation](en/README.md)
 - [中文文档](zh/README.md)

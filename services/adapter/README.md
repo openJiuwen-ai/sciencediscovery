@@ -4,7 +4,7 @@ Python front door for the JiuwenSwarm migration (issue 84). It owns the public
 port, proxies every route it has not taken over to the legacy TypeScript API, and
 runs agent turns on JiuwenSwarm when `SCIENCE_AGENT_EXECUTOR=jiuwenswarm`.
 
-To run it, see [Run with JiuwenSwarm](../../docs/en/how-to/run-with-jiuwenswarm.md).
+To run it from source, see [Local mode](../../docs/en/getting-started/deployment.md#local-mode-host-processes).
 This file is for people working on the adapter.
 
 ## Direction
@@ -110,7 +110,7 @@ so a run is reproducible.
 ## Configuration
 
 Choosing the backend and every variable, with defaults, is in one place:
-[Run agent turns on JiuwenSwarm](../../docs/en/how-to/run-with-jiuwenswarm.md#choose-the-backend). In short:
+[Local mode](../../docs/en/getting-started/deployment.md#local-mode-host-processes). In short:
 `./scripts/start-stack.sh --mode local --jiuwenswarm` (the same as `SCIENCE_AGENT_ADAPTER=1
 SCIENCE_AGENT_EXECUTOR=jiuwenswarm`); `GET /agent/info` on the public port says which backend runs and
 whether JiuwenSwarm answers (it takes the API's `SCIENCE_AGENT_AUTH_TOKEN`, or `SCIENCE_AGENT_ADAPTER_TOKEN`).

@@ -14,7 +14,9 @@
 
 import { expect, type Page, type TestInfo } from "@playwright/test";
 
+import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey. This
 // file mixes a live-model journey with a quarantined one, so `model` and
@@ -264,46 +266,82 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
 
   /**
    * E2E-META
-   * Purpose: Searching a paper source whose connector is disabled surfaces a
-   *   clear error toast instead of failing silently.
+   * Purpose: A paper source whose connector is not enabled cannot be searched behind the user's back: the Agent's
+   *   call to it fails visibly in the conversation, nothing is sent to the source, and once the user enables the
+   *   connector in the Composer the next Run is given its tools.
    * Steps:
-   *   1. Create a project and a session with no connectors enabled.
-   *   2. Search arXiv from the paper panel.
-   *   3. Assert the "enable the connector first" error feedback.
-   * Environment: Running isolated local stack at E2E_BASE_URL; no model run is started and no
- *   connector precondition is needed.
- * Type: mocked
-   * LLM: None.
+   *   1. Create a Project and Session with arXiv switched off in the Composer's connector picker.
+   *   2. Ask for an arXiv search; the scripted model calls the arXiv tool anyway. The Run still completes, the tool
+   *      call shows as failed, the model was never offered an arXiv tool, and no arXiv invocation was recorded.
+   *   3. Enable arXiv in the connector picker and ask again: this Run is offered the arXiv tools.
+   * Environment: Isolated local stack at E2E_BASE_URL with a journey-owned Project/Session.
+   * Type: mocked
+   * LLM: journey-owned OpenAI-compatible HTTP stub on 127.0.0.1, capturing the offered tool names.
    * WebSearch: None.
-   * PaperSources: arXiv request is rejected locally before source access.
-   * MCP: None.
-   * OtherExternal: Local ScienceDiscovery API and browser UI only.
-   * Credentials: None.
-   * CostSideEffects: Creates local project/session data and screenshots; no fees.
+   * PaperSources: None — arXiv is never reached: disabled, its call fails locally; enabled, it is only offered.
+   * MCP: arXiv connector's tool offering only.
+   * OtherExternal: Local ScienceDiscovery API and browser UI only; non-local browser requests are aborted.
+   * Credentials: E2E_API_TOKEN for the isolated local API only.
+   * CostSideEffects: No external cost; the journey's Project and model are removed in finally.
    */
-  // fixme: the manual paper-search form was removed from the workspace panel
-  // (literature downloads now go through the chat agent's MCP tools), so this
-  // journey no longer exists as written; redesign around the MCP flow.
-  // `status:unreviewed` keeps this permanently-fixme journey out of the shared
-  // plan: a plan entry that can only report a skip is a failure, not a pass.
-  test.fixme("Connector 未启用时的失败反馈", { tag: ["@mocked", "@model:mock", "@status:unreviewed"] }, async ({ page }) => {
-    await openWorkspace(page);
-    await createProject(page, `E2E Failure Case ${Date.now()}`);
-    // "Add session" creates and selects an untitled session directly; new
-    // sessions start with no connectors enabled.
-    await page.getByRole("button", { name: "Add session" }).click();
-    await expect(page.getByText("Session workspace ready")).toBeVisible();
-    await screenshot(page, "11-failure-session-created");
+  test("Connector 未启用时的失败反馈", { tag: ["@mocked", "@model:mock"] }, async ({ journey, page }) => {
+    test.setTimeout(180_000);
+    await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
+    const stub = await scriptedModel([
+      [{ tool: "mcp__arxiv__search", arguments: { query: "CRISPR TP53" } }, { text: "arXiv 连接器未启用，无法检索。请先在连接器中启用 arXiv。" }],
+      [{ text: "arXiv 已可用。" }],
+    ]);
+    const fixture = await createProjectAndSession(page, {
+      approvalMode: "always_allow",
+      model: { apiToken: stub.apiToken, baseUrl: stub.baseUrl, model: stub.model, name: `Connector feedback ${Date.now()}` },
+      projectName: `Connector feedback ${Date.now()}`,
+      sessionTitle: "未启用的文献源",
+    });
+    journey.scenario({
+      goal: "研究员请 Agent 检索一个没有启用的文献源时，能在对话里看到这次调用失败、知道要先启用它；启用之后下一次运行就能用。",
+      preconditions: ["隔离栈已启动，本旅程独占 Project/Session", "模型是本机脚本桩，arXiv 不会被真正访问"],
+    });
+    const arxivChoice = page.locator(".connector-picker-popover").getByRole("checkbox", { name: /arXiv/ });
+    const setArxiv = async (enabled: boolean) => {
+      await page.locator(".connector-picker-trigger").click();
+      await expect(arxivChoice).toBeVisible();
+      if (await arxivChoice.isChecked() !== enabled) await arxivChoice.click();
+      if (enabled) await expect(arxivChoice).toBeChecked();
+      else await expect(arxivChoice).not.toBeChecked();
+      await page.keyboard.press("Escape");
+    };
+    const offeredArxiv = (turn: number) => stub.calls.filter((call) => call.turn === turn)
+      .flatMap((call) => call.offeredTools ?? []).filter((name) => name.startsWith("mcp__arxiv__"));
+    try {
+      await journey.step("在会话里关闭 arXiv", "Composer 的连接器选择里 arXiv 未勾选。", async () => {
+        await openProjectSession(page, fixture);
+        await setArxiv(false);
+      });
 
-    // 不启用任何 connector，直接搜索论文
-    await page.getByRole("combobox", { name: "Paper source" }).selectOption("arxiv");
-    await page.getByRole("textbox", { name: "Paper search query" }).fill("CRISPR TP53");
-    await page.locator("form.paper-search").getByRole("button", { name: "Search", exact: true }).click();
+      await journey.step("请 Agent 检索 arXiv", "运行正常结束；对 arXiv 的调用显示为失败，模型从未拿到 arXiv 工具，也没有任何 arXiv 调用记录。", async () => {
+        const run = await sendUserMessage(page, fixture.session.id, "在 arXiv 上检索 CRISPR TP53 的论文。");
+        expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
+        expect(offeredArxiv(0)).toEqual([]);
+        const failed = page.locator(".timeline-disclosure.tool.failed").filter({ hasText: /arxiv/i });
+        await expect(failed).toHaveCount(1);
+        await expect(failed.locator(":scope > summary")).toContainText("失败");
+        await expect(page.getByText("arXiv 连接器未启用，无法检索。请先在连接器中启用 arXiv。", { exact: true }).first()).toBeVisible();
+        const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/mcp/invocations`, { headers: authorizationHeader() });
+        expect(response.ok()).toBe(true);
+        const invocations = await response.json() as Array<{ sourceId?: string }>;
+        expect(invocations.filter((invocation) => invocation.sourceId === "arxiv")).toEqual([]);
+      });
 
-    // 应出现错误提示：要求先启用 connector
-    const toast = await waitForToast(page, /Enable arXiv before searching it|Paper search failed|Request error/);
-    await expect(toast).toBeVisible();
-    await screenshot(page, "12-failure-connector-not-enabled");
+      await journey.step("启用 arXiv 后再问一次", "勾选 arXiv 后，下一次运行的模型拿到了 arXiv 的工具。", async () => {
+        await setArxiv(true);
+        const run = await sendUserMessage(page, fixture.session.id, "现在可以用 arXiv 了吗？");
+        expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
+        expect(offeredArxiv(1)).toContain("mcp__arxiv__search");
+      });
+    } finally {
+      await cleanupJourney(page, fixture);
+      await stub.stop();
+    }
   });
 });
 

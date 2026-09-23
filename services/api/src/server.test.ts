@@ -127,7 +127,7 @@ const execFileAsync = promisify(execFile);
  * Agent turns run on JiuwenSwarm (behind a real adapter) when this suite is invoked under
  * scripts/with-jiuwenswarm.sh (which `pnpm ci:ut` wraps around the shared runner). Some assertions are true only
  * of one backend and are branched on this: JiuwenSwarm has one set of skills for every session
- * (Settings > Skills, not per-Project/Session selection — see docs/en/how-to/run-with-jiuwenswarm.md),
+ * (Settings > Skills, not per-Project/Session selection),
  * and it runs behind extra process hops (Node API -> Python adapter -> JiuwenSwarm gateway), which
  * some very tight built-in-loop timing assumptions do not survive unchanged.
  */
@@ -2652,7 +2652,7 @@ test("native MCP literature flow produces an audited cited summary", async (cont
   });
   assert.deepEqual(session.body.enabledConnectorIds, ["pubmed"]);
   // With the JiuwenSwarm backend a Session's skills are not a selection: every installed skill is
-  // available everywhere (see docs/en/how-to/run-with-jiuwenswarm.md), so the store resolves "all",
+  // available everywhere, so the store resolves "all",
   // not the one Skill this test configured.
   if (!onJiuwenSwarm) assert.deepEqual(session.body.enabledSkillIds, ["life-science-evidence-brief"]);
 

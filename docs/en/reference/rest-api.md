@@ -110,7 +110,7 @@ the `create_evolve_run` tool, not by this API. See
 
 ## Custom MCP servers and Inspector
 
-See [Configure custom MCP servers](../how-to/configure-custom-mcp.md) for the UI workflow. Routes are implemented in `services/api/src/http/custom-mcp.ts`; request/response types are in `packages/schema/src/custom-mcp.ts`. All routes in this table require the local service access token (Bearer token).
+See [Configure custom MCP servers](../advanced-setup/configure-custom-mcp.md) for the UI workflow. Routes are implemented in `services/api/src/http/custom-mcp.ts`; request/response types are in `packages/schema/src/custom-mcp.ts`. All routes in this table require the local service access token (Bearer token).
 
 | Method and path | Request | Response |
 |---|---|---|
@@ -155,7 +155,7 @@ This is the exception to local bearer authentication described above, not a gene
 
 ## Proxy configuration
 
-All routes below require bearer authentication. See [Configure the network proxy](../how-to/configure-network-proxy.md).
+All routes below require bearer authentication. See [Configure the network proxy](../advanced-setup/configure-network-proxy.md).
 
 | Method and path | Request | Success |
 |---|---|---|

@@ -1,6 +1,6 @@
 # 配置自定义 MCP、OAuth 与 Inspector
 
-[English](../../en/how-to/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
+[English](../../en/advanced-setup/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
 
 本指南介绍系统设置中的自定义 MCP 服务器管理。已有内置数据源仍在独立页签中查看，不需要重新添加。
 

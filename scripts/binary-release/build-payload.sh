@@ -35,7 +35,7 @@
 # PyPI version, so no cloning or wheel-building is needed for it or its
 # dependencies. JiuwenSwarm's own dependency closure is large (some 1GB+:
 # transformers, onnxruntime, playwright, ...), so this is the single biggest
-# contributor to release size; see docs/en/how-to/run-with-jiuwenswarm.md for
+# contributor to release size; see docs/en/getting-started/deployment.md for
 # the trade-off this was chosen over (first-launch install, like the
 # gateway's deps get).
 # Docker is never involved: every architecture-specific piece is downloaded

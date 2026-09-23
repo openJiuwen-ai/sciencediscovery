@@ -403,10 +403,16 @@ const checks = {
       const outputs = events + JSON.stringify(streams);
       if (!outputs.includes("APPROVED-RUN")) throw new Error("the allowed command did not run");
       if (/DENIED-RUN\\n|"DENIED-RUN"/.test(JSON.stringify(streams))) throw new Error("the denied command ran");
+      // Each call JiuwenSwarm asked about is recorded once, as the user's answer to its question: the bridge-side
+      // check reuses that record by toolCallId instead of booking a second, `jiuwenswarm`-sourced one (store.ts,
+      // authorizeByJiuwenSwarm). Two questions, so exactly two records, one allowed and one denied.
       const authorizations = await api("GET", `/api/sessions/${sessionId}/permission-authorizations`);
-      const byJiuwenSwarm = authorizations.filter((authorization) => authorization.source === "jiuwenswarm");
-      if (!byJiuwenSwarm.length) throw new Error(`no authorization recorded as JiuwenSwarm's: ${JSON.stringify(authorizations).slice(0, 300)}`);
-      console.log(`approvals: ok (asked twice: "${first.summary.slice(0, 50)}"; allowed once it ran, denied it did not; ${byJiuwenSwarm.length} action(s) recorded as JiuwenSwarm's decision)`);
+      const outcomes = authorizations.map((authorization) => authorization.outcome).sort();
+      const callIds = new Set(authorizations.map((authorization) => authorization.toolCallId));
+      if (authorizations.length !== 2 || outcomes.join() !== "allowed,denied" || callIds.size !== 2 || callIds.has(undefined)) {
+        throw new Error(`expected one authorization per asked call (allowed, denied): ${JSON.stringify(authorizations).slice(0, 600)}`);
+      }
+      console.log(`approvals: ok (asked twice: "${first.summary.slice(0, 50)}"; allowed once it ran, denied it did not; one authorization per call, not double-booked)`);
     } finally {
       await cleanup();
     }

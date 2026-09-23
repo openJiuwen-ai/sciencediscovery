@@ -1,24 +1,29 @@
 # 01 快速开始
 
-本教程从已准备好的 ScienceDiscovery 可执行文件开始，说明如何启动服务、配置模型并创建第一次 Agent 任务。
+本教程使用预编译 Linux 可执行文件，说明如何启动服务、配置模型并创建第一次 Agent 任务。
+若你使用 macOS、想从源码构建二进制，或需要 Docker，请先按[部署指南](deployment.md)启动服务，
+再回到[配置任务模型](#3-配置任务模型)。
 
 > 系统定位与风险边界见 [README_zh.md](../../../README_zh.md)；部署的完整操作步骤见[部署指南](deployment.md)；参数和配额见[配置参考](../reference/configuration.md)。
 
-## 1. 准备环境
+## 1. 安装预编译二进制
 
-运行时需要：
+最快的 Linux 路径需要：
 
 - Linux x86_64 或 aarch64；
 - bubblewrap；
-- 与宿主架构匹配的 ScienceDiscovery 可执行文件；
+- 与你的 Linux 架构匹配的 ScienceDiscovery 可执行文件，可在
+  [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases)下载；
 - 至少一个外部模型 API Key。
 
-bubblewrap 需由宿主提供：
+bubblewrap 需已安装在本机：
 
 ```bash
 sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 # 或：sudo dnf install -y bubblewrap # Fedora / RHEL / openEuler
 ```
+
+使用其他操作系统或部署方式时，请改看[部署指南](deployment.md)。服务启动后，继续[配置任务模型](#3-配置任务模型)。
 
 ## 2. 启动 ScienceDiscovery
 
