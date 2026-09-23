@@ -4290,7 +4290,10 @@ test("task timeout_seconds is a hard wall-clock budget while a subagent waits on
   });
   assert.equal(run.status, 200);
   const stream = await run.text();
-  assert.ok(Date.now() - startedAt < 5_000, "the task should not remain blocked on the paused model");
+  // The child has a one-second deadline, but the outer JiuwenSwarm request also
+  // includes gateway startup and the parent's final model turn. Check the
+  // child's persisted deadline below and bound only the overall completion here.
+  assert.ok(Date.now() - startedAt < 30_000, "the task should not remain blocked on the paused model");
   assert.match(stream, /"type":"run.completed"/);
   const subagents = await jsonRequest<Subagent[]>(
     `${origin}/api/sessions/${session.body.id}/subagents`,

@@ -570,7 +570,7 @@ async def test_an_approval_answer_resumes_the_run_waiting_on_that_question(harne
     mapper = RunEventMapper(session_id="s1")
     mapper._permissions["q1"] = ["本次允许", "本会话允许", "总是允许", "拒绝"]
     mapper._pending_requests["q1"] = {"id": "q1", "state": "pending"}
-    runner.pending_approvals["q1"] = (Waiting(), mapper)
+    runner.pending_approvals["q1"] = (Waiting(), mapper, "q1")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
         ok = await client.post("/agent/approvals/q1", json={"decision": "allow_matching"})
         missing = await client.post("/agent/approvals/q1", json={"decision": "deny"})
@@ -578,6 +578,38 @@ async def test_an_approval_answer_resumes_the_run_waiting_on_that_question(harne
     assert ok.status_code == 200 and missing.status_code == 409
     assert duplicate.status_code == 200
     assert answered == [("q1", "permission_interrupt", {"selected_options": ["本会话允许"], "custom_input": "本会话允许"})]
+
+
+async def test_reused_gateway_question_ids_answer_each_run_once(harness):
+    from sciencediscovery_adapter.events import RunEventMapper
+
+    _, runner, _ = harness
+    answered = []
+
+    class Waiting:
+        def __init__(self, run):
+            self.run = run
+
+        async def answer(self, request_id, source, answer):
+            answered.append((self.run, request_id, answer["selected_options"]))
+
+    public_ids = []
+    for run in ("first", "second"):
+        mapper = RunEventMapper(session_id=run)
+        mapper._permissions["call-python-1"] = ["本次允许", "拒绝"]
+        mapper._pending_requests["call-python-1"] = {"id": "call-python-1", "state": "pending"}
+        event = {"type": "permission.required", "request": {
+            "id": "call-python-1", "toolCallId": "call-python-1"}}
+        runner.register_approval(event, Waiting(run), mapper)
+        public_ids.append(event["request"]["id"])
+        assert event["request"]["toolCallId"] == "call-python-1"
+        await runner.answer_approval(public_ids[-1], "allow_once")
+
+    assert public_ids[0] != public_ids[1]
+    assert answered == [
+        ("first", "call-python-1", ["本次允许"]),
+        ("second", "call-python-1", ["本次允许"]),
+    ]
 
 
 async def test_concurrent_approval_retries_share_one_delivery(harness):
@@ -593,7 +625,7 @@ async def test_concurrent_approval_retries_share_one_delivery(harness):
     mapper = RunEventMapper(session_id="s1")
     mapper._permissions["q1"] = ["本次允许", "拒绝"]
     mapper._pending_requests["q1"] = {"id": "q1", "state": "pending"}
-    runner.pending_approvals["q1"] = (Waiting(), mapper)
+    runner.pending_approvals["q1"] = (Waiting(), mapper, "q1")
     first = asyncio.create_task(runner.answer_approval("q1", "allow_once"))
     await asyncio.wait_for(entered.wait(), 1)
     first.cancel()  # Lost HTTP caller must not cancel the downstream delivery.
@@ -633,7 +665,7 @@ async def test_approval_delivery_failure_is_visible_unless_already_cancelled(har
     mapper._cancel_requested = cancelled
     mapper._permissions["q1"] = ["本次允许", "拒绝"]
     mapper._pending_requests["q1"] = {"id": "q1", "state": "pending"}
-    runner.pending_approvals["q1"] = (Broken(), mapper)
+    runner.pending_approvals["q1"] = (Broken(), mapper, "q1")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
         response = await client.post("/agent/approvals/q1", json={"decision": "allow_once"})
     assert response.status_code == expected
@@ -713,7 +745,7 @@ async def test_boundary_independent_approvals_can_finish_out_of_order(harness, s
         mapper = shared_mapper if same_run else RunEventMapper(session_id=session)
         mapper._permissions[question] = ["本次允许", "拒绝"]
         mapper._pending_requests[question] = {"id": question, "state": "pending"}
-        runner.pending_approvals[question] = (Waiting(), mapper)
+        runner.pending_approvals[question] = (Waiting(), mapper, question)
     parent = asyncio.create_task(runner.answer_approval("parent-approval", "allow_once"))
     try:
         await asyncio.wait_for(started.wait(), 1)
@@ -754,7 +786,7 @@ async def test_boundary_cancel_one_run_keeps_sibling_routes_and_approval(harness
             sibling = FakeRun.instances[-1]
             route = sibling.params["run_model"]["api_key"]
             mapper = RunEventMapper(session_id="sibling")
-            runner.pending_approvals["sibling-question"] = (sibling, mapper)
+            runner.pending_approvals["sibling-question"] = (sibling, mapper, "sibling-question")
             assert len(runner.registry._sets) == len(runner.routes._routes) == 2
             await streams[0].aclose()
             assert FakeRun.instances[0].cancelled

@@ -231,8 +231,9 @@ class AgentRunner:
         self._approval_levels: dict[str, str] = {}
         self._permissions_on = False
         self._tool_approvals: dict[tuple[str, str], str] = {}
-        # Runs paused on one of JiuwenSwarm's approval questions, by the question's id.
-        self.pending_approvals: dict[str, tuple[Any, RunEventMapper]] = {}
+        # Gateway question ids are model tool-call ids and can repeat across runs.
+        # Expose a fresh adapter id to callers and retain the gateway id for the answer.
+        self.pending_approvals: dict[str, tuple[Any, RunEventMapper, str]] = {}
         # Keep completed acknowledgements for lost HTTP responses. Never resend an
         # uncertain WebSocket delivery, and never evict an in-flight decision.
         self._approval_deliveries: dict[str, tuple[str, asyncio.Task[None]]] = {}
@@ -315,6 +316,12 @@ class AgentRunner:
             except Exception:
                 pass
 
+    def register_approval(self, event: dict[str, Any], run: Any, mapper: RunEventMapper) -> None:
+        gateway_id = event["request"]["id"]
+        request_id = f"approval-{uuid.uuid4().hex}"
+        event["request"]["id"] = request_id
+        self.pending_approvals[request_id] = (run, mapper, gateway_id)
+
     async def answer_approval(self, request_id: str, decision: str) -> None:
         """Resume a run paused on one of JiuwenSwarm's approval questions with the user's decision.
 
@@ -332,11 +339,11 @@ class AgentRunner:
         pending = self.pending_approvals.pop(request_id, None)
         if pending is None:
             raise KeyError(request_id)
-        run, mapper = pending
-        answer, _ = mapper.decide(request_id, decision)
+        run, mapper, gateway_id = pending
+        answer, _ = mapper.decide(gateway_id, decision)
         async def deliver() -> None:
             try:
-                await run.answer(request_id, "permission_interrupt", answer)
+                await run.answer(gateway_id, "permission_interrupt", answer)
             except (gateway.GatewayError, websockets.WebSocketException) as error:
                 if not mapper.finished and not mapper._cancel_requested:
                     raise gateway.GatewayError("approval delivery failed") from error
@@ -441,7 +448,7 @@ class AgentRunner:
                             elif event["type"] == "run.cancelled":
                                 terminal_status = "cancelled"
                             if event["type"] == "permission.required":
-                                self.pending_approvals[event["request"]["id"]] = (run, mapper)
+                                self.register_approval(event, run, mapper)
                                 route = self.routes.get(llm_token) if llm_token else None
                                 describe_approval(event["request"], route)
                             if _DEBUG and event["type"].startswith("tool."):
@@ -484,7 +491,7 @@ class AgentRunner:
                     await self.release_shared_tools(name)
                 except Exception:
                     pass
-            for request_id in [key for key, (_, owner) in self.pending_approvals.items() if owner is mapper]:
+            for request_id in [key for key, (_, owner, _) in self.pending_approvals.items() if owner is mapper]:
                 self.pending_approvals.pop(request_id, None)
 
 
