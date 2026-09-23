@@ -349,8 +349,16 @@ async def test_start_up_removes_stale_aliases_left_by_an_earlier_process():
     assert calls == ["models.list", "models.replace_all", "models.list", "models.replace_all"], "the default model, then prune"
 
 
-async def test_the_per_run_mcp_server_gets_a_tool_timeout_far_beyond_jiuwenswarms_30_seconds(harness):
-    app, _, rpcs = harness
+async def test_tool_deadlines_are_per_run_without_replacing_shared_transport(harness, monkeypatch):
+    app, runner, rpcs = harness
+    deadlines = []
+    original_add = runner.registry.add
+
+    def add(toolset):
+        deadlines.append(toolset.timeout_s)
+        return original_add(toolset)
+
+    monkeypatch.setattr(runner.registry, "add", add)
     FakeRun.fixture = "jw_chat_mcp_direct.raw"
     tools = [{"name": "run_shell", "description": "d", "inputSchema": {"type": "object"}}]
     bridge = {"url": "http://legacy.test/bridge", "token": "t"}
@@ -358,7 +366,9 @@ async def test_the_per_run_mcp_server_gets_a_tool_timeout_far_beyond_jiuwenswarm
     assert next(p for _, m, p in rpcs if m == "mcp.register_custom")["timeout_s"] == 3600
     rpcs.clear()
     await post(app, {"sessionId": "s1", "prompt": "go", "tools": tools, "bridge": bridge, "toolTimeoutSeconds": 7200})
-    assert next(p for _, m, p in rpcs if m == "mcp.register_custom")["timeout_s"] == 7200
+    assert not any(m in {"mcp.disconnect", "mcp.delete_custom", "mcp.register_custom"}
+                   for _, m, _ in rpcs), "A longer run must not rebuild the shared transport"
+    assert deadlines == [3600, 7200]
 
 
 async def test_the_session_key_names_the_jiuwenswarm_session_and_the_prompt_goes_as_it_is(harness):
@@ -520,3 +530,153 @@ async def test_approval_delivery_failure_is_visible_unless_already_cancelled(har
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adapter") as client:
         response = await client.post("/agent/approvals/q1", json={"decision": "allow_once"})
     assert response.status_code == expected
+
+
+async def test_boundary_longer_child_timeout_preserves_active_shared_transport(harness):
+    """A child must not disconnect the transport serving its waiting parent."""
+    from sciencediscovery_adapter.mcp_server import Toolset
+    from unittest.mock import AsyncMock
+    _, runner, rpcs = harness
+    tools = [{"name": "task", "description": "delegate", "inputSchema": {}}]
+    await runner.ensure_shared_tools(tools, 3600)
+    tag = runner.registry.add(Toolset(tools=tools, call=AsyncMock()))
+    rpcs.clear()
+    try:
+        await runner.ensure_shared_tools(tools, 7200)
+        destructive = [method for _, method, _ in rpcs
+                       if method in {"mcp.disconnect", "mcp.delete_custom"}]
+        assert destructive == [], f"Active parent transport was torn down: {destructive}"
+    finally:
+        runner.registry.remove(tag)
+
+
+@pytest.mark.parametrize("first,second", [("allow", "ask"), ("ask", "allow")])
+async def test_boundary_same_tool_permission_conflict_is_not_silently_ignored(harness, first, second):
+    """A later ask policy must not silently inherit an earlier allow policy."""
+    _, runner, rpcs = harness
+    tool = {"name": "run_shell", "description": "shell", "inputSchema": {}}
+    await runner.ensure_shared_tools([{**tool, "approval": first}], 3600)
+    rpcs.clear()
+    with pytest.raises(ValueError, match="Conflicting approval policy"):
+        await runner.ensure_shared_tools([{**tool, "approval": second}], 3600)
+    assert rpcs == [], "A rejected run must not change another run's permissions or transport"
+    assert runner._tool_approvals["run_shell"] == first
+
+
+async def test_permission_rpc_failure_is_retried_without_publishing_unconfigured_tool(harness):
+    from sciencediscovery_adapter.gateway import GatewayError
+    _, runner, _ = harness
+    calls = []
+
+    async def rpc(url, method, params=None, **kwargs):
+        if method == "permissions.tools.update":
+            calls.append(params)
+            if len(calls) == 1:
+                raise GatewayError("fixture permission update failure")
+        return {}
+
+    runner.rpc = rpc
+    tools = [{"name": "run_shell", "approval": "ask", "inputSchema": {}}]
+    with pytest.raises(GatewayError):
+        await runner.ensure_shared_tools(tools, 3600)
+    assert "run_shell" not in runner.registry.shared
+    assert "run_shell" not in runner._tool_approvals
+    await runner.ensure_shared_tools(tools, 3600)
+    assert len(calls) == 2
+    assert runner._tool_approvals["run_shell"] == "ask"
+
+
+@pytest.mark.parametrize("same_run", [True, False])
+async def test_boundary_independent_approvals_can_finish_out_of_order(harness, same_run):
+    from sciencediscovery_adapter.events import RunEventMapper
+    _, runner, _ = harness
+    started, release = asyncio.Event(), asyncio.Event()
+    answers = []
+
+    class Waiting:
+        async def answer(self, request_id, source, answer):
+            if request_id == "parent-approval":
+                started.set()
+                await release.wait()
+            answers.append((request_id, answer["selected_options"]))
+
+    shared_mapper = RunEventMapper(session_id="parent")
+    for session in ("parent", "child"):
+        question = f"{session}-approval"
+        mapper = shared_mapper if same_run else RunEventMapper(session_id=session)
+        mapper._permissions[question] = ["本次允许", "拒绝"]
+        mapper._pending_requests[question] = {"id": question, "state": "pending"}
+        runner.pending_approvals[question] = (Waiting(), mapper)
+    parent = asyncio.create_task(runner.answer_approval("parent-approval", "allow_once"))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert "child-approval" in runner.pending_approvals
+        await asyncio.wait_for(runner.answer_approval("child-approval", "deny"), 1)
+        assert answers == [("child-approval", ["拒绝"])]
+        assert not parent.done()
+        release.set()
+        await asyncio.wait_for(parent, 1)
+        assert answers[-1] == ("parent-approval", ["本次允许"])
+    finally:
+        release.set()
+        await parent
+
+
+async def test_boundary_cancel_one_run_keeps_sibling_routes_and_approval(harness):
+    from sciencediscovery_adapter.agent_runs import AgentRunRequest
+    from sciencediscovery_adapter.events import RunEventMapper
+    app, runner, _ = harness
+
+    class Endless(FakeRun):
+        def __aiter__(self):
+            async def frames():
+                yield recorded("jw_chat_plain.raw")[2]
+                await asyncio.Event().wait()
+            return frames()
+
+    runner.chat_run = Endless
+    streams = []
+    async with app.router.lifespan_context(app):
+        try:
+            for session in ("parent", "sibling"):
+                stream = runner.stream(AgentRunRequest(sessionId=session, prompt="go",
+                    tools=[{"name": "run_shell"}], bridge={"url": "http://legacy.test/bridge"},
+                    model={"provider": "OpenAI", "model": "fixture", "baseUrl": "http://mock", "apiKey": "fixture"}))
+                streams.append(stream)
+                await asyncio.wait_for(anext(stream), 1)
+            sibling = FakeRun.instances[-1]
+            route = sibling.params["run_model"]["api_key"]
+            mapper = RunEventMapper(session_id="sibling")
+            runner.pending_approvals["sibling-question"] = (sibling, mapper)
+            assert len(runner.registry._sets) == len(runner.routes._routes) == 2
+            await streams[0].aclose()
+            assert FakeRun.instances[0].cancelled
+            assert not sibling.cancelled
+            assert runner.routes.get(route) is not None
+            assert len(runner.registry._sets) == len(runner.routes._routes) == 1
+            assert "sibling-question" in runner.pending_approvals
+        finally:
+            for stream in streams:
+                await stream.aclose()
+            runner.pending_approvals.pop("sibling-question", None)
+        assert not runner.registry._sets
+        assert not runner.routes._routes
+
+
+async def test_boundary_failed_start_releases_private_routes_and_toolsets(harness):
+    from sciencediscovery_adapter.gateway import GatewayError
+    app, runner, _ = harness
+
+    async def broken_rpc(url, method, params=None, **kwargs):
+        if method == "mcp.connect":
+            raise GatewayError("fixture connect failure")
+        return {}
+
+    runner.rpc = broken_rpc
+    _, lines = await post(app, {"sessionId": "failed-start", "prompt": "go",
+        "tools": [{"name": "run_shell"}], "bridge": {"url": "http://legacy.test/bridge"},
+        "model": {"provider": "OpenAI", "model": "fixture", "baseUrl": "http://mock", "apiKey": "fixture"}})
+    assert lines[-1]["done"]["status"] == "failed"
+    assert not runner.routes._routes
+    assert not runner.registry._sets
+    assert not runner.pending_approvals

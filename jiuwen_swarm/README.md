@@ -62,6 +62,59 @@ Route tokens are credentials, not model names or public correlation IDs; do not
 publish raw request bodies or private diagnostic traces. Only ephemeral proxy
 credentials cross this boundary, not the provider's API key.
 
+Approval answers are continuations, not fresh tasks. The adapter snapshots each
+run's configuration and resends its MCP selection, equipment, workspace and
+private model route on every answer (manual approval, automatic approval or
+denial). It never replays the original query or attachments. Explicit empty
+equipment remains empty; omitted fields remain omitted. This prevents approval
+recovery from depending on potentially stale session equipment metadata and
+dropping `mcp_sci_run_shell` / artifact tools with `Ability not found`.
+Regression coverage lives in `services/adapter/tests/test_gateway.py`; shared
+MCP transport lifetime is managed separately from this continuation contract.
+
+Tool execution deadlines are enforced by the adapter for each run's toolset
+(`toolTimeoutSeconds`, or `SCIENCE_AGENT_ADAPTER_TOOL_TIMEOUT_S` by default).
+Starting a child with a longer deadline does not replace the shared MCP client.
+Compatibility patch `0007-platform-per-run-deadlines.patch` removes the shared
+registration's default execution deadline only for the platform `sci` client;
+explicit SDK call deadlines and discovery/connect deadlines remain effective.
+Deploy the adapter and this patch together. Timeout errors warn that execution
+may be incomplete: cancelling an HTTP wait does not prove an external side
+effect was rolled back, so callers must inspect state before replaying it.
+
+Swarm's permission policy is global by tool name. The adapter therefore requires
+one consistent approval contract for each shared tool name during its lifetime.
+Conflicting `allow` / `ask` registrations fail explicitly before changing the
+catalog or permission policy; they never inherit the first value silently or
+overwrite another run's policy. This is a fail-closed limitation, **not** support
+for different per-run Swarm policies. Platform user approval modes continue to
+be handled by the existing approval bridge. Permission RPC failures are retried
+on the next registration attempt before publishing the tool.
+
+### Cross-framework boundary regression checks
+
+Run the deterministic adapter checks without a model or live Swarm service:
+
+```bash
+PYTHONPATH=services/adapter/src services/adapter/.venv/bin/python -m pytest -q services/adapter/tests/test_agent_runs.py -k boundary
+```
+
+These tests execute adapter code with a simulated gateway; they are not browser
+E2E tests and do not prove parent-to-child cancellation propagation.
+
+| Boundary | Current result |
+| --- | --- |
+| A longer child timeout must not disconnect an active shared MCP transport | Passes: no transport replacement |
+| Conflicting policies must not silently inherit or overwrite one another | Passes: explicit rejection, checked in both directions |
+| Independent approval answers can finish out of order | Passes |
+| Cancelling one run preserves a sibling's routes and pending approval | Passes |
+| Failed startup releases private model and tool routes | Passes |
+
+Additional checks in `test_mcp_server.py` exercise independent per-run deadlines
+and reuse after a timeout. `jiuwen_swarm/tests/test_sci_http_client.py` checks the
+real SDK transport with a loopback MCP server, including long calls and explicit
+timeouts. These checks do not assert a downstream authorization bypass existed.
+
 Adapter INFO logs named `run-binding start` / `run-binding release` correlate
 platform run/agent identifiers with the Swarm session and show whether a terminal
 event was received. They omit tokens, endpoint URLs, prompts and tool arguments.

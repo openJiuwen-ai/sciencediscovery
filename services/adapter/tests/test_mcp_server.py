@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -20,6 +21,38 @@ from sciencediscovery_adapter.mcp_server import RUN_ARG, Toolset, ToolsetRegistr
 
 TOOLS = [{"name": "run_shell", "description": "Run a command.",
           "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}]
+
+
+async def test_per_run_deadline_cancels_only_its_own_bridge_call(setup):
+    client, _, _, registry = setup
+    expired = asyncio.Event()
+
+    async def short_call(name, arguments):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            expired.set()
+
+    async def long_call(name, arguments):
+        await expired.wait()
+        return "sibling completed", False
+
+    short = registry.add(Toolset(tools=TOOLS, call=short_call, timeout_s=.02))
+    long = registry.add(Toolset(tools=TOOLS, call=long_call, timeout_s=2))
+    async with client:
+        first, second = await asyncio.wait_for(asyncio.gather(
+            rpc(client, registry, "tools/call", call_of(short, "run_shell", command="short"), id=1),
+            rpc(client, registry, "tools/call", call_of(long, "run_shell", command="long"), id=2),
+        ), 3)
+        failure = first.json()["result"]
+        assert failure["isError"] is True
+        assert "timed out" in failure["content"][0]["text"]
+        assert "inspect state" in failure["content"][0]["text"]
+        assert second.json()["result"]["isError"] is False
+        assert second.json()["result"]["content"][0]["text"] == "sibling completed"
+        # A timeout has not poisoned the shared endpoint for subsequent calls.
+        again = await rpc(client, registry, "tools/call", call_of(long, "run_shell", command="again"))
+        assert again.json()["result"]["isError"] is False
 
 
 @pytest.fixture

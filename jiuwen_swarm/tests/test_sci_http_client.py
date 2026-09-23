@@ -85,6 +85,11 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                                        self.client.call_tool("task", {"value": "second"}))
         self.assertEqual(results, ["first", "second"])
 
+    async def test_default_tool_deadline_does_not_use_shared_registration_timeout(self):
+        self.client._jws_call_timeout = .01
+        result = await asyncio.wait_for(self.client.call_tool("task", {"delay": .15}), 2)
+        self.assertEqual(result, "done")
+
     async def test_single_tool_timeout_does_not_abort_sibling_or_transport(self):
         results = await asyncio.gather(self.client.call_tool("task", {"delay": .3}, timeout=.05),
                                        self.client.call_tool("task", {"delay": .15}), return_exceptions=True)

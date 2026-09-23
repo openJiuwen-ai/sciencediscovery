@@ -24,6 +24,7 @@ purpose: no session ids, no server-sent stream.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import secrets
@@ -52,6 +53,7 @@ ToolCall = Callable[[str, dict[str, Any]], Awaitable[tuple[str, bool]]]
 class Toolset:
     tools: list[dict[str, Any]]  # {name, description, inputSchema}
     call: ToolCall
+    timeout_s: float | None = None
 
 
 @dataclass
@@ -142,7 +144,11 @@ async def handle_rpc(registry: ToolsetRegistry, message: dict[str, Any]) -> dict
         started = time.monotonic()
         logger.info("tool bridge start: tool=%s request=%s run=%s", name, request_id, tag)
         try:
-            text, is_error = await toolset.call(str(name), arguments)
+            async with asyncio.timeout(toolset.timeout_s):
+                text, is_error = await toolset.call(str(name), arguments)
+        except TimeoutError:
+            text, is_error = (f"Tool execution timed out after {toolset.timeout_s}s; "
+                              "execution outcome may be incomplete; inspect state before retrying"), True
         except Exception as error:  # the callback is another process; surface, don't crash the run
             logger.exception("tools/call %r (run %r) failed", name, tag)
             text, is_error = f"tool bridge failed: {type(error).__name__}: {error}", True

@@ -106,7 +106,7 @@ class AgentRunRequest(BaseModel):
     # JiuwenSwarm's own tools the model must not get (they act on the host; see LlmRoute.hidden_native_tools).
     hiddenJiuwenSwarmTools: list[str] = Field(default_factory=list, max_length=100)
     # Longest a single tool call may take, in seconds; the run's own timeout, when the caller has one.
-    toolTimeoutSeconds: int | None = None
+    toolTimeoutSeconds: int | None = Field(default=None, gt=0)
 
 
 # JiuwenSwarm's configuration for web search (`config.set` keys): its two free engines and its paid-search keys.
@@ -196,6 +196,7 @@ class AgentRunner:
         self._shared_registered = False
         self._shared_timeout_s = 0
         self._permissions_on = False
+        self._tool_approvals: dict[str, str] = {}
         # Runs paused on one of JiuwenSwarm's approval questions, by the question's id.
         self.pending_approvals: dict[str, tuple[Any, RunEventMapper]] = {}
 
@@ -205,18 +206,32 @@ class AgentRunner:
             DEFAULT_ALIAS, f"{self.settings.public_url}/llm/default/v1", self.routes.default_key, "OpenAI"))
 
     async def ensure_shared_tools(self, tools: list[dict[str, Any]], timeout_s: int) -> None:
-        """Give JiuwenSwarm the one MCP server for every run's tools (see mcp_server), and its list again when a run
-        brought a tool (or an argument) it did not have. A reconnect makes JiuwenSwarm read the list afresh."""
+        """Register once; refresh the catalog without replacing the shared client.
+
+        Execution deadlines are enforced by Toolset; timeout_s is validated
+        here but must never trigger a transport-wide configuration change.
+        """
+        if timeout_s <= 0:
+            raise ValueError("Tool timeout must be positive")
         async with self._shared_lock:
-            new = [tool for tool in tools if tool["name"] not in self.registry.shared]
+            # Swarm permissions are global by tool name. Reject conflicting
+            # contracts before mutating the catalog or another run's policy.
+            policies = dict(self._tool_approvals)
+            for tool in tools:
+                level = tool.get("approval") or "allow"
+                previous = policies.setdefault(tool["name"], level)
+                if previous != level:
+                    raise ValueError(f"Conflicting approval policy for {tool['name']}: "
+                                     f"registered {previous}, requested {level}; "
+                                     "Swarm requires a consistent policy for shared tool names")
+            await self._apply_approvals(tools)
             changed = self.registry.merge(tools)
-            await self._apply_approvals(new)
-            longer = timeout_s > self._shared_timeout_s
-            if self._shared_registered and not changed and not longer:
+            if self._shared_registered and not changed:
                 return
-            self._shared_timeout_s = max(timeout_s, self._shared_timeout_s)
-            if not self._shared_registered or longer:
-                # An earlier adapter left it registered with another URL (its token changed), or a longer timeout is needed.
+            if not self._shared_registered:
+                # Only startup replaces a stale registration. Tool execution
+                # deadlines belong to each Toolset, never to this shared client.
+                self._shared_timeout_s = self.settings.tool_timeout_s
                 for method in ("mcp.disconnect", "mcp.delete_custom"):
                     try:
                         await self.rpc(self.settings.mgmt_url, method, {"name": SERVER_NAME})
@@ -254,9 +269,12 @@ class AgentRunner:
             await self.rpc(self.settings.mgmt_url, "config.set", {"permissions_enabled": True})
             self._permissions_on = True
         for tool in tools:
+            if tool["name"] in self._tool_approvals:
+                continue
             await self.rpc(self.settings.mgmt_url, "permissions.tools.update", {
                 "tool": f"mcp_{SERVER_NAME}_{tool['name']}", "level": tool.get("approval") or "allow",
             })
+            self._tool_approvals[tool["name"]] = tool.get("approval") or "allow"
 
     async def stream(self, request: AgentRunRequest) -> AsyncGenerator[str, None]:
         name = SERVER_NAME
@@ -281,6 +299,7 @@ class AgentRunner:
                 token = self.registry.add(Toolset(
                     tools=[{**t.model_dump(), "inputSchema": relax_schema(t.inputSchema)} for t in request.tools],
                     call=bridge_caller(request.bridge, self.client()),
+                    timeout_s=request.toolTimeoutSeconds or self.settings.tool_timeout_s,
                 ))
             if request.model:
                 if request.model.provider != "OpenAI":
