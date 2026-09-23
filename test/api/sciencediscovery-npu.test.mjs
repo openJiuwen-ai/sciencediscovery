@@ -78,6 +78,8 @@ test("ScienceDiscovery completes one antibody-design NPU invocation with a commi
   const skillCatalog = await request("/api/skills");
   assert.ok(JSON.stringify(skillCatalog).includes('"antibody-design"'), "antibody-design Skill must be loaded");
   await request(sessionPath);
+  const runner = await request(`/api/runners/${encodeURIComponent(runnerId)}`);
+  assert.equal(runner.runnerStatus?.state, "ready", "Selected remote NPU Runner must be connected before submission");
   const bindings = await request(`/api/runners/${encodeURIComponent(runnerId)}/workspaces`);
   assert.ok(bindings.some((entry) => entry.sessionId === sessionId), "Session must have a workspace on the selected Runner");
   const npu = await request("/api/runners/npu");
