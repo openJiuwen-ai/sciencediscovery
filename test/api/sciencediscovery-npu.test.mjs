@@ -155,6 +155,8 @@ test("ScienceDiscovery completes one antibody-design NPU invocation with a commi
         (!pipeline && output.includes("Launching sandbox pipeline:") && output.includes(runName))) pipeline = execution;
       if (pipeline) executionId = pipeline.id;
     }
+    assert.ok(run.status !== "completed" || pipeline,
+      `Agent Run completed without a managed NPU pipeline Execution for ${runName}`);
     if (pipeline?.state === "completed" && pipeline.provenance === "committed" && run.status === "completed") {
       const local = await request(`${sessionPath}/files`);
       synced = expected.every((path) => local.some((file) => file.path === path));
