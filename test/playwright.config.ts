@@ -49,6 +49,7 @@ export default defineConfig({
   // remains in the default mocked PR gate. Real LLMs also require E2E_REAL.
   testIgnore: process.env.E2E_RESEARCH === "1" ? [] : [
     "**/deepresearchbench-swarm.spec.ts",
+    "**/science-research-team-real.spec.ts",
   ],
   outputDir: resolve(envRoot, "test-results"),
   fullyParallel: false,
