@@ -4259,10 +4259,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.doesNotMatch(taskResultContent, /"steps"|"prompt"/);
 });
 
-// The scripted task bridge can stall its parent turn in JiuwenSwarm (gap 10 in
-// jiuwenswarm-migration-status.md). Keep this contract test for the built-in loop;
-// the shared Swarm UT plan cannot reliably exercise that nested gateway path.
-test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", { tags: ["status:unreviewed"] }, async (context) => {
+test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-wall-clock-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -5260,10 +5257,7 @@ test("switching to always-allow during a run stops asking for the tool calls tha
   );
 });
 
-// JiuwenSwarm can stop progressing after acknowledging the first native tool
-// approval on a shared instance. This test remains executable with the built-in
-// loop until the gateway can reliably resume that approval path.
-test("switching to ask during a run stops the tool calls that follow for approval", { tags: ["status:unreviewed"] }, async (context) => {
+test("switching to ask during a run stops the tool calls that follow for approval", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-toggle-to-ask-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -5296,8 +5290,7 @@ test("switching to ask during a run stops the tool calls that follow for approva
   while (!parseSseEvents(stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2)))
     .some((event) => event.type === "tool.completed")) {
     const chunk = await reader.read();
-    assert.equal(chunk.done, false,
-      `run ended before the first tool call finished; events: ${parseSseEvents(stream).map((event) => event.type).join(", ")}`);
+    assert.equal(chunk.done, false, "run ended before the first tool call finished");
     stream += decoder.decode(chunk.value, { stream: true });
   }
   assert.equal(
