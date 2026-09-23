@@ -43,60 +43,78 @@ layer stopped before it produced a plan at all.
 
 ## Coverage reporting
 
-Coverage is recorded by the run that gates, not by a second one. The `UT` job
-runs `pnpm ci:ut -- --profile <profile> --coverage`: the same plan, the same
-per-file Node workers and the same pytest invocation, with V8 coverage added to
-each Node worker and `coverage run` put in front of pytest. `--coverage` changes
-how the selected cases are measured and nothing about which cases are selected.
-The job uploads what the run wrote, `<CI_RESULTS_DIR>/ut/tagged/coverage/`, as
-the `ut-coverage` artifact, including when the run failed.
+Coverage is recorded by the runs that gate, not by a second one. The `UT` and
+`ST` jobs run their layer with `--coverage` — `pnpm ci:ut -- --profile <profile>
+--coverage`, and the same for `ci:st` — which measures exactly that execution
+and changes nothing about which cases are selected. Each job uploads what its
+run wrote, `<CI_RESULTS_DIR>/<layer>/tagged/coverage/`, as `ut-coverage` or
+`st-coverage`, including when the run failed.
 
-The `Coverage` job `needs` UT, downloads that artifact and runs
+What a run records:
+
+- **Node.** Each worker keeps its one-file-per-process isolation and adds V8
+  coverage, which the Node processes a test starts inherit — a Runner a test
+  launches from `services/runner/dist/server.js` is measured too. Much of what
+  a test executes arrives through built output, so a coverage run re-emits the
+  build with source maps and records built code against the TypeScript it came
+  from. Each test file leaves one lcov whose records name that test file and a
+  repository-relative source.
+- **Python.** Every interpreter the run starts imports
+  `test/support/tagged/python/coverage-hook` and measures itself: the pytest
+  worker, and any Python a test launches — `services/api`'s paper tests start
+  `services/paper/paper_worker.py`, which is product code no pytest run
+  reaches. The data is combined into one coverage.py report over the product
+  roots (`services/*/src`, the paper worker, Runner workloads, bundled
+  skills), so a product file nothing imported counts as 0% rather than
+  disappearing. Every start is logged with whether it could be measured; an
+  interpreter without `coverage`, or a sandbox that cannot write the data
+  directory, is reported rather than silently missing. Today the only
+  unmeasured starts are the Runner asking the system `python3` where its
+  standard library lives, which runs no product code. Python the Runner
+  executes inside bubblewrap starts from `--clearenv` and so never loads the
+  hook — by design, since what runs there is a test's snippet, not the
+  product.
+- **`manifest.json`** records the plan digest, the run's planned, executed and
+  passed counts, how many Node test files owed coverage, and the Python
+  process census.
+
+The `Coverage` job `needs` UT and ST, downloads both artifacts and runs
 `node scripts/coverage-report.mjs` (`pnpm coverage:report`), which only reads
-and merges files: it executes no test and starts no process. There is no second
-selection either — pull requests, pushes and the nightly run all report on the
-whole plan the gate ran, so there is no diff-based list of directories any
-more. Release calls skip both the recording and the job.
+and merges files: it executes no test and starts no process. It credits a
+source file with everything any layer executed in it — a unit test of its own
+package, another package's test reaching it through a dependency, the system
+test driving it end to end — and merges records for one file line by line.
+Built output, installed dependencies, the test harness and the tests
+themselves are not attributed. The run page shows the merged figure for Node.js
+and Python, then what each layer contributed on its own, its job result and
+counts, and any Python process that could not be measured. There is no
+diff-based selection: pull requests, pushes and the nightly run all report on
+the whole plan the gate ran. The mocked browser E2E is not measured. Release
+calls skip both the recording and the job.
 
-What that buys is one answer to "why did this case not run": because the plan
-did not select it. A `status:external` case — `services/memory-graph` has 77 of
-them, all needing a live Neo4j — is absent from coverage for the same reason it
-is absent from the gate, because it is the gate's run. `model:real`,
-`npu:required` and another platform's cases are out for the same reason. ST and
-the mocked browser E2E load no product module into a measured process, so they
-contribute no module coverage and the summary says so rather than reporting a
-number for them.
+A case the plan leaves out is missing from coverage for one reason, the
+selector: a `status:external` case — `services/memory-graph` has 77, all
+needing a live Neo4j — is absent from coverage because it is absent from the
+gate's run.
 
-What the run writes is self-describing. Each Node test file leaves one lcov
-whose records name that test file and a repository-relative source; each Python
-project leaves one `coverage.py` JSON report with repository-relative paths;
-`manifest.json` records the plan digest, the profile, the run's planned,
-executed and passed counts, and how many files it owed coverage for. The report
-credits a directory with what its own tests exercised — a record measuring
-`packages/cas` from a test under `services/api` is that test's dependency, not
-cas's coverage — merges records for one source file line by line, and leaves
-built output (`dist/`) and installed dependencies out. Reproduce CI locally
-with:
+Reproduce CI locally with:
 
 ```bash
-CI_RESULTS_DIR=$PWD/.ci-results CI_RUNTIME_DIR=$PWD/.ci-runtime \
-  pnpm ci:ut -- --profile pr --coverage
-pnpm coverage:report -- --input .ci-results/ut/tagged/coverage
+export CI_RESULTS_DIR=$PWD/.ci-results CI_RUNTIME_DIR=$PWD/.ci-runtime
+pnpm ci:ut -- --profile pr --coverage
+pnpm ci:st -- --profile pr --coverage
+pnpm coverage:report -- --layer ut=.ci-results/ut/tagged/coverage \
+  --layer st=.ci-results/st/tagged/coverage
 ```
 
-If the UT job passed, every file it ran must have left coverage, and the report
-step fails when one did not: that is a pipeline defect, not a partial result.
-If the UT job failed, the report summarises whatever it uploaded, labels it
-partial, and succeeds; nothing is re-run to fill the gap, and the UT job's own
+If a layer's job passed, every test file it ran must have left coverage and
+its measured Python must have a report; the merge step fails when one did not,
+because that is a pipeline defect, not a partial result. If a layer's job
+failed, its upload is summarised as far as it goes and labelled partial, and
+the step succeeds: nothing is re-run to fill the gap, and the job's own
 failure stays the signal. Coverage percentages are informational — there is no
-threshold.
-
-CI uploads separate SHA-qualified Node.js and Python artifacts containing only
-aggregate and per-group `summary.json` files. The same job writes a
-human-readable `Coverage summary` to the run page: the UT run's plan and
-counts, then Node.js and Python separately with the measured file and group
-counts and the line and branch totals, each row labelled by where its numbers
-came from — the UT run, a partial upload from a failed UT run, or unavailable.
+threshold. CI uploads separate SHA-qualified Node.js and Python artifacts
+containing the merged and per-group `summary.json` files.
 
 ## Test tags and CI selection
 

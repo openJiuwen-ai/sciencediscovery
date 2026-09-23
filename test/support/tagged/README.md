@@ -236,14 +236,17 @@ argument and not an environment variable on purpose — the same commit and the
 same command have to mean the same plan, so reproducing a tagged run's failure
 is a matter of copying the command out of the log.
 
-Coverage is a property of a run, not a run of its own. `--coverage` on the run
-that gates — `pnpm ci:ut -- --coverage` in CI — adds V8 coverage to each Node
-worker and puts `coverage run` in front of pytest, and writes the data beside
-the plan under `<output>/coverage/`. It changes how the selected cases are
-measured and never which cases are selected, so a case the policy leaves out is
-missing from coverage for one reason, the selector. `pnpm coverage:report` then
-merges those files and executes nothing; `.ci/README.md` describes the data and
-how the Coverage job uses it.
+Coverage is a property of a run, not a run of its own. `--coverage` on a run
+that gates — `pnpm ci:ut -- --coverage` and `pnpm ci:st -- --coverage` in CI —
+adds V8 coverage to each Node worker (with source maps for built output, so
+code a test reaches through `dist/` lands on its TypeScript), makes every
+Python process the run starts measure itself through
+[python/coverage-hook](python/coverage-hook/sitecustomize.py), and writes the
+data beside the plan under `<output>/coverage/`. It changes how the selected
+cases are measured and never which cases are selected, so a case the policy
+leaves out is missing from coverage for one reason, the selector.
+`pnpm coverage:report` then merges the layers and executes nothing;
+`.ci/README.md` describes the data and how the Coverage job uses it.
 
 ## Ad-hoc queries
 

@@ -236,9 +236,10 @@ and still have executed fewer cases than it froze.
 
 Coverage comes from the same run, never from a second one. `--coverage` makes a
 layer record it while it executes the plan — `pnpm ci:ut -- --coverage` writes
-it to `<CI_RESULTS_DIR>/ut/tagged/coverage/` — and `pnpm coverage:report --
---input <that directory>` merges it into `coverage/` without running anything.
-CI's Coverage job does exactly that with the UT job's upload; see
+it to `<CI_RESULTS_DIR>/ut/tagged/coverage/`, `ci:st` likewise — and
+`pnpm coverage:report -- --layer ut=<dir> --layer st=<dir>` merges the layers
+into `coverage/` without running anything. CI's Coverage job does exactly that
+with the UT and ST jobs' uploads; see
 [.ci/README.md](.ci/README.md#coverage-reporting).
 
 Live and hardware layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`,

@@ -163,12 +163,12 @@ jobs:
 
   coverage:
     name: Coverage
-    # Reports on the UT job's own run; it executes no test. ST and the mocked
-    # browser E2E load no product module into a measured process, so there is
-    # nothing of theirs to wait for. Runs after a failed UT as well, to report
-    # what that run uploaded; a cancelled pipeline has nothing to report.
-    # Release calls skip it: a tagged build publishes no coverage.
-    needs: ut
+    # Reports on the UT and ST jobs' own runs and merges them; it executes no
+    # test. The mocked browser E2E is not measured. Runs after a failed layer
+    # as well, to report what that run uploaded; a cancelled pipeline has
+    # nothing to report. Release calls skip it: a tagged build publishes no
+    # coverage.
+    needs: [ut, st]
     if: ${{ !cancelled() && github.workflow != 'Release' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -179,8 +179,8 @@ jobs:
         with:
           node-version: 22.19.0
 
-      # A UT run that stopped before recording anything uploaded nothing; the
-      # summary then says so instead of this step failing the job.
+      # A layer that stopped before recording anything uploaded nothing; the
+      # summary then says so instead of a download failing the job.
       - name: Download the UT run's coverage data
         continue-on-error: true
         uses: actions/download-artifact@v4
@@ -188,14 +188,25 @@ jobs:
           name: ut-coverage
           path: ${{ runner.temp }}/ut-coverage
 
+      - name: Download the ST run's coverage data
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: st-coverage
+          path: ${{ runner.temp }}/st-coverage
+
       - name: Merge coverage
         id: merge
-        run: node scripts/coverage-report.mjs --input "${{ runner.temp }}/ut-coverage" --producer "${{ needs.ut.result }}"
+        run: >-
+          node scripts/coverage-report.mjs
+          --layer "ut=${{ runner.temp }}/ut-coverage" --producer "ut=${{ needs.ut.result }}"
+          --layer "st=${{ runner.temp }}/st-coverage" --producer "st=${{ needs.st.result }}"
 
       - name: Summarize coverage
         if: always()
         env:
           UT_RESULT: ${{ needs.ut.result }}
+          ST_RESULT: ${{ needs.st.result }}
         run: node scripts/coverage-job-summary.mjs >> "$GITHUB_STEP_SUMMARY"
 
       - name: Name the summary artifacts
@@ -251,12 +262,14 @@ jobs:
           enable-cache: true
 
       # The hermetic agent loop drives a scripted local endpoint and performs a
-      # real workspace tool round trip; no sandbox and no model credential.
+      # real workspace tool round trip; no sandbox and no model credential. It
+      # runs the API's native agent in process, so `--coverage` records what
+      # the loop executes, exactly as it does for UT.
       - name: Run ST
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:st -- --profile ${{ inputs.profile || 'pr' }}
+        run: pnpm ci:st -- --profile ${{ inputs.profile || 'pr' }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
         if: always()
@@ -269,7 +282,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: st-results
-          path: .ci-results
+          path: |
+            .ci-results
+            !.ci-results/st/tagged/coverage
+          if-no-files-found: warn
+
+      - name: Upload ST coverage data
+        if: always() && github.workflow != 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: st-coverage
+          path: .ci-results/st/tagged/coverage
           if-no-files-found: warn
 
   e2e:

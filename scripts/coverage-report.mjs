@@ -12,26 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Merge the coverage a gate run recorded into the summaries CI publishes.
+// Merge the coverage the gate's layers recorded into the summaries CI publishes.
 //
 // This reads files and writes files. It runs no test and starts no process:
-// the numbers describe the run that gated the change, because they were
-// recorded by it — `pnpm ci:ut -- --coverage` writes one lcov per Node test
-// file and one coverage.py report per Python project, plus a manifest saying
-// which plan they measured. Nothing here can re-select or re-run a case, so
-// there is no second execution to disagree with the first.
+// every number describes a run that gated the change, because that run
+// recorded it — `pnpm ci:ut -- --coverage` and `pnpm ci:st -- --coverage` each
+// leave one lcov per Node test file, one coverage.py report for every Python
+// process they started, and a manifest saying which plan they measured.
+//
+// A source file is credited with everything any layer executed in it: a unit
+// test of its own package, another package's test reaching it through a
+// dependency, the system test driving it end to end. The merged figure is what
+// the gate, taken whole, ran of the product.
 
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseLcov, writeCoverageSummary } from "./coverage-summary.mjs";
-import { aggregatePythonCoverage, writePythonCoverageSummary } from "./python-coverage-summary.mjs";
+import { isTestSource, parseLcov, summarizeCoverage, writeCoverageSummary } from "./coverage-summary.mjs";
+import { aggregatePythonCoverage, isPythonTestSource, pythonSummaryDocument } from "./python-coverage-summary.mjs";
 
-/** The directory a report is attributed to: a workspace package, or a top-level tree of scripts. */
+/** The directory a source is reported under: a workspace package, or a top-level tree. */
 export function groupOf(source) {
   const parts = source.split("/");
-  if ([".ci", "config", "scripts"].includes(parts[0])) return parts[0];
+  if ([".ci", "config", "scripts", "skills"].includes(parts[0])) return parts[0];
   if (["apps", "packages", "services"].includes(parts[0]) && parts[1]) return `${parts[0]}/${parts[1]}`;
   return undefined;
 }
@@ -41,19 +45,16 @@ export function safeName(group) {
 }
 
 /**
- * Which group a Node record counts towards, if any. A package is credited with
- * what its own tests exercise: a record measuring `packages/cas` from a test
- * under `services/api` is that test's dependency, not cas's coverage. Built
- * output and installed dependencies are nobody's source, and a record without
- * a test name did not come from a gate run.
+ * Which group a measured file counts towards, if any. Built output and
+ * installed dependencies are nobody's source — with source maps the run
+ * already resolved built code to the TypeScript it came from — and the test
+ * harness and the tests themselves are not the product.
  */
-export function attribute(record) {
-  const test = record.text.match(/^TN:(.+)$/m)?.[1];
-  const group = test && groupOf(test);
-  if (!group || record.file.startsWith("/")) return undefined;
-  if (record.file !== group && !record.file.startsWith(`${group}/`)) return undefined;
-  if (record.file.split("/").some((part) => part === "dist" || part === "node_modules")) return undefined;
-  return group;
+export function attribute(file) {
+  if (!file || file.startsWith("/")) return undefined;
+  if (file.split("/").some((part) => part === "dist" || part === "node_modules" || part === ".venv")) return undefined;
+  if (isTestSource(file) || isPythonTestSource(file)) return undefined;
+  return groupOf(file);
 }
 
 async function listing(directory, suffix) {
@@ -74,25 +75,73 @@ async function readJson(path) {
   }
 }
 
-/** What the producing run said about itself, carried into every summary. */
-function runMetadata(manifest, producer) {
+/**
+ * coverage.py reports, merged line by line: a statement is covered if any
+ * process executed it, and a branch if any process took it. The result has the
+ * shape `summarizePythonCoverage` reads, so one summary serves one report or
+ * several.
+ */
+export function mergePythonReports(reports) {
+  const files = new Map();
+  for (const report of reports) {
+    for (const [file, data] of Object.entries(report?.files ?? {})) {
+      if (!attribute(file)) continue;
+      const merged = files.get(file) ?? { statements: new Set(), executed: new Set(), branches: new Set(), taken: new Set() };
+      for (const line of [...(data.executed_lines ?? []), ...(data.missing_lines ?? [])]) merged.statements.add(line);
+      for (const line of data.executed_lines ?? []) merged.executed.add(line);
+      for (const arc of [...(data.executed_branches ?? []), ...(data.missing_branches ?? [])]) merged.branches.add(String(arc));
+      for (const arc of data.executed_branches ?? []) merged.taken.add(String(arc));
+      files.set(file, merged);
+    }
+  }
+  return {
+    files: Object.fromEntries([...files].sort(([left], [right]) => left.localeCompare(right)).map(([file, merged]) => [file, {
+      summary: {
+        covered_branches: merged.taken.size,
+        covered_lines: merged.executed.size,
+        num_branches: merged.branches.size,
+        num_statements: merged.statements.size,
+      },
+    }])),
+  };
+}
+
+/** One layer's upload: its manifest, its Node records by group, its Python report. */
+async function readLayer({ layer, input, producer }) {
+  const manifest = await readJson(join(input, "manifest.json"));
+  const lcov = await listing(join(input, "node"), ".lcov");
+  const node = [];
+  for (const name of lcov) {
+    for (const record of parseLcov(await readFile(join(input, "node", name), "utf8"))) {
+      const group = attribute(record.file);
+      if (group) node.push({ group, record });
+    }
+  }
+  const python = await readJson(join(input, "python.json"));
+
+  const problems = [];
+  if (!manifest) problems.push("no manifest.json: the run did not finish writing its coverage");
+  if (manifest && lcov.length < manifest.node.expected) problems.push(`Node: ${lcov.length} of ${manifest.node.expected} test files left coverage`);
+  const processes = manifest?.python?.processes ?? null;
+  if (processes?.measured > 0 && !python) problems.push(`Python: ${processes.measured} measured process(es) but no report`);
+  if (manifest && manifest.status !== "PASS") problems.push(`the run ended ${manifest.status}`);
   const run = manifest
     ? Object.fromEntries(["profile", "slice", "revision", "plan_digest", "status", "planned", "executed", "passed", "failed", "skipped"]
       .map((key) => [key, manifest[key] ?? null]))
     : null;
-  return { producer, run };
+  return {
+    layer, producer, run, processes, problems,
+    complete: producer === "success" && problems.length === 0,
+    lcov: lcov.length, node, python,
+  };
 }
 
-async function reportNode({ input, output, metadata }) {
-  const files = await listing(join(input, "node"), ".lcov");
+async function writeNode({ output, layers, metadata }) {
   const byGroup = new Map();
-  for (const name of files) {
-    for (const record of parseLcov(await readFile(join(input, "node", name), "utf8"))) {
-      const group = attribute(record);
-      if (group) byGroup.set(group, [...(byGroup.get(group) ?? []), record.text]);
-    }
+  for (const { group, record } of layers.flatMap((layer) => layer.node)) {
+    byGroup.set(group, [...(byGroup.get(group) ?? []), record.text]);
   }
-  if (byGroup.size === 0) return { lcov: files.length, document: undefined };
+  if (byGroup.size === 0) return undefined;
   const groups = [];
   for (const [group, records] of [...byGroup].sort(([left], [right]) => left.localeCompare(right))) {
     const directory = join(output, "groups", safeName(group));
@@ -107,81 +156,106 @@ async function reportNode({ input, output, metadata }) {
     groups.push({ files: summary.files, name: group, totals: summary.totals });
   }
   await writeFile(join(output, ".node.lcov"), [...byGroup.values()].flat().join(""));
-  const summary = await writeCoverageSummary({
+  return writeCoverageSummary({
     input: join(output, ".node.lcov"),
     jsonOutput: join(output, "summary.json"),
     lcovOutput: join(output, "lcov.info"),
     metadata: { ...metadata, groups, selected_groups: groups.map((group) => group.name) },
   });
-  return { lcov: files.length, document: summary };
 }
 
-async function reportPython({ input, output, metadata }) {
-  const reports = await listing(join(input, "python"), ".json");
-  if (reports.length === 0) return { reports: 0, document: undefined };
+async function writePython({ output, layers, metadata }) {
+  const merged = mergePythonReports(layers.map((layer) => layer.python).filter(Boolean));
+  const byGroup = new Map();
+  for (const [file, data] of Object.entries(merged.files)) {
+    const group = attribute(file);
+    byGroup.set(group, { files: { ...(byGroup.get(group)?.files ?? {}), [file]: data } });
+  }
+  if (byGroup.size === 0) return undefined;
   const groups = [];
-  for (const name of reports) {
-    const group = `services/${name.slice(0, -".json".length)}`;
+  for (const [group, report] of [...byGroup].sort(([left], [right]) => left.localeCompare(right))) {
     const directory = join(output, "python", "groups", safeName(group));
     await mkdir(directory, { recursive: true });
-    groups.push(await writePythonCoverageSummary({
-      input: join(input, "python", name),
-      jsonOutput: join(directory, "summary.json"),
-      metadata: { ...metadata, group },
-    }));
+    const document = pythonSummaryDocument(report, { ...metadata, group });
+    await writeFile(join(directory, "summary.json"), `${JSON.stringify(document, null, 2)}\n`);
+    groups.push(document);
   }
   const aggregate = aggregatePythonCoverage(groups, { ...metadata, selected_groups: groups.map((group) => group.group) });
   await writeFile(join(output, "python", "summary.json"), `${JSON.stringify(aggregate, null, 2)}\n`);
-  return { reports: reports.length, document: aggregate };
+  return aggregate;
+}
+
+/** What each layer contributed on its own, next to the merged figure. */
+function layerTotals(layer) {
+  const node = layer.node.length ? summarizeCoverage(layer.node.map(({ record }) => record)) : null;
+  const python = layer.python ? pythonSummaryDocument(mergePythonReports([layer.python])) : null;
+  return {
+    complete: layer.complete,
+    node: node && { files: node.files, totals: node.totals },
+    problems: layer.problems,
+    processes: layer.processes,
+    producer: layer.producer,
+    python: python && { files: python.files, totals: python.totals },
+    run: layer.run,
+  };
 }
 
 /**
- * Build every summary from `input` into `output` and say whether the data is
- * whole. It is whole when the run that recorded it passed and left one lcov
- * for each Node test file it executed and one report for each Python project.
- * Data from a run that did not pass is summarised as far as it goes and marked
- * partial — nothing is re-run to complete it.
+ * Build every summary from the layers' uploads into `output`. A layer is whole
+ * when its job passed and it left coverage for every Node test file it ran and
+ * a report for the Python it measured. A layer whose job did not pass is
+ * summarised as far as its upload goes — nothing is re-run to complete it.
  */
-export async function buildCoverageReport({ input, output, producer = "success" }) {
+export async function buildCoverageReport({ layers: requested, output }) {
   await rm(join(output, "groups"), { recursive: true, force: true });
   await rm(join(output, "python"), { recursive: true, force: true });
-  for (const name of ["summary.json", "lcov.info", ".node.lcov"]) await rm(join(output, name), { force: true });
+  for (const name of ["summary.json", "lcov.info", ".node.lcov", "layers.json"]) await rm(join(output, name), { force: true });
   await mkdir(join(output, "python"), { recursive: true });
 
-  const manifest = await readJson(join(input, "manifest.json"));
-  const metadata = runMetadata(manifest, producer);
-  const node = await reportNode({ input, output, metadata });
-  const python = await reportPython({ input, output, metadata });
-
-  const problems = [];
-  if (!manifest) problems.push("no manifest.json: the producing run did not finish writing its coverage");
-  if (manifest && node.lcov < manifest.node.expected) problems.push(`Node: ${node.lcov} of ${manifest.node.expected} test files left coverage`);
-  const missing = (manifest?.python.expected ?? []).filter((project) => !(manifest.python.projects ?? []).includes(project));
-  if (missing.length > 0) problems.push(`Python: no report for ${missing.join(", ")}`);
-  if (manifest && manifest.status !== "PASS") problems.push(`the producing run ended ${manifest.status}`);
-  return { manifest, node, python, problems, complete: producer === "success" && problems.length === 0 };
+  const layers = [];
+  for (const layer of requested) layers.push(await readLayer(layer));
+  const byLayer = Object.fromEntries(layers.map((layer) => [layer.layer, layerTotals(layer)]));
+  const metadata = { layers: byLayer };
+  const node = await writeNode({ output, layers, metadata });
+  const python = await writePython({ output, layers, metadata });
+  // Written even when no layer uploaded anything, so the run page can say which
+  // job it was waiting on and how that job ended.
+  await writeFile(join(output, "layers.json"), `${JSON.stringify(byLayer, null, 2)}\n`);
+  return { layers, byLayer, node, python };
 }
 
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  return index === -1 ? fallback : process.argv[index + 1];
+function pairs(name) {
+  const values = [];
+  process.argv.forEach((argument, index) => { if (argument === name) values.push(process.argv[index + 1] ?? ""); });
+  return Object.fromEntries(values.map((value) => {
+    const at = value.indexOf("=");
+    return at === -1 ? ["ut", value] : [value.slice(0, at), value.slice(at + 1)];
+  }));
 }
 
 async function main() {
-  const input = resolve(option("--input", ".test-runs/ut/coverage"));
-  const output = resolve(option("--output", "coverage"));
-  // How the job that recorded the data ended, as the workflow saw it. A failed
-  // gate is reported on, not repaired: its partial data is summarised and the
-  // gate's own failure stays the signal.
-  const producer = option("--producer", "success");
-  const report = await buildCoverageReport({ input, output, producer });
-  console.log(`Node: ${report.node.lcov} test file(s) of coverage -> ${report.node.document ? `${report.node.document.files} source files` : "nothing attributable"}`);
-  console.log(`Python: ${report.python.reports} project report(s) -> ${report.python.document ? `${report.python.document.files} source files` : "nothing"}`);
-  for (const problem of report.problems) console.log(`- ${problem}`);
-  if (producer === "success" && !report.complete) {
-    // The gate passed, so every file it ran should have left coverage. Missing
+  const outputIndex = process.argv.indexOf("--output");
+  const output = resolve(outputIndex === -1 ? "coverage" : process.argv[outputIndex + 1]);
+  // `--layer ut=<dir>` for each uploaded layer, and how the job that recorded it
+  // ended as the workflow saw it: a failed layer is reported on, not repaired.
+  const inputs = pairs("--layer");
+  const producers = pairs("--producer");
+  const layers = Object.keys(inputs).length > 0
+    ? Object.entries(inputs).map(([layer, input]) => ({ layer, input: resolve(input), producer: producers[layer] ?? "success" }))
+    : ["ut", "st"].map((layer) => ({ layer, input: resolve(".test-runs", layer, "coverage"), producer: producers[layer] ?? "success" }));
+  const report = await buildCoverageReport({ layers, output });
+  for (const layer of report.layers) {
+    const totals = report.byLayer[layer.layer];
+    console.log(`${layer.layer}: ${layer.producer}; ${layer.lcov} Node test file(s) -> ${totals.node?.files ?? 0} source files; `
+      + `Python ${totals.python?.files ?? 0} source files from ${layer.processes?.measured ?? 0} measured process(es)`);
+    for (const problem of layer.problems) console.log(`  - ${problem}`);
+  }
+  console.log(`merged: Node ${report.node?.files ?? 0} source files, Python ${report.python?.files ?? 0} source files`);
+  const broken = report.layers.filter((layer) => layer.producer === "success" && !layer.complete);
+  if (broken.length > 0) {
+    // The job passed, so every file it ran should have left coverage. Missing
     // data here is a defect in the pipeline, not a partial result to shrug at.
-    console.error("The producing run passed but its coverage is incomplete.");
+    console.error(`${broken.map((layer) => layer.layer).join(", ")}: the run passed but its coverage is incomplete.`);
     process.exitCode = 1;
   }
 }

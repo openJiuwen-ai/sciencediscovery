@@ -66,15 +66,7 @@ function invoke(command, args, { root, env, outputDir, name, timeoutMs = 120_000
 const childEnv = env => ({ ...env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1', PYTEST_ADDOPTS: '', PYTEST_PLUGINS: '',
   PYTHONPATH: [join(here, 'python'), env.PYTHONPATH].filter(Boolean).join(delimiter) });
 
-/**
- * How to reach an interpreter, as a whole command rather than a path, because
- * the thing that runs pytest is not always an interpreter: coverage collection
- * puts `uv run … coverage run` in front of it. Everything after this prefix is
- * `-m pytest …` either way, which is what `coverage run` expects too.
- */
-const pytest = (command, args, options) => invoke(command[0], [...command.slice(1), '-m', 'pytest', ...args], options);
-
-export function collect({ root, files, outputDir, python = 'python3', pythonCommand = [python], nodeImports = [], env = process.env }) {
+export function collect({ root, files, outputDir, python = 'python3', nodeImports = [], env = process.env }) {
   mkdirSync(outputDir, { recursive: true });
   const catalog = [];
   const groups = { node: files.filter(f => !f.endsWith('.py')), python: files.filter(f => f.endsWith('.py')) };
@@ -91,7 +83,7 @@ export function collect({ root, files, outputDir, python = 'python3', pythonComm
   if (groups.python.length) {
     const output = join(outputDir, 'python-catalog.json');
     rmSync(output, { force: true });
-    const result = pytest(pythonCommand, ['-p', 'science_tags', '--strict-markers', '--rootdir', root, '--collect-only', '-q',
+    const result = invoke(python, ['-m', 'pytest', '-p', 'science_tags', '--strict-markers', '--rootdir', root, '--collect-only', '-q',
       '--science-root', root, '--science-catalog', output, ...groups.python],
     { root, env: childEnv(env), outputDir, name: 'python-collect' });
     if (result.status !== 0 || !existsSync(output)) throw new Error('PYTHON_COLLECTION_FAILED; inspect python-collect.log');
@@ -144,7 +136,7 @@ export function relocateLcov(text, { root, cwd, source }) {
   }).join('\n');
 }
 
-export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pythonCommand = [python], nodeImports = [], coverageDir, env = process.env, timeoutMs = 300_000 }) {
+export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', nodeImports = [], coverageDir, env = process.env, timeoutMs = 300_000 }) {
   validatePlan(plan);
   for (const entry of plan.entries) inside(root, entry.source);
   mkdirSync(outputDir, { recursive: true });
@@ -177,7 +169,10 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
         const lcov = coverageDir && join(coverageDir, `${files[0].replaceAll('/', '__')}.lcov`);
         if (lcov) { mkdirSync(coverageDir, { recursive: true }); rmSync(lcov, { force: true }); }
         const completed = invoke(process.execPath, [...nodeImports.flatMap(p => ['--import', p]),
-          ...(lcov ? ['--experimental-test-coverage'] : []), '--test',
+          // Source maps let records from built output a test reaches — another
+          // package's dist/, a child started from dist/server.js — resolve to
+          // the TypeScript they were compiled from.
+          ...(lcov ? ['--enable-source-maps', '--experimental-test-coverage'] : []), '--test',
           '--test-reporter', join(here, 'node-reporter.mjs'), '--test-reporter-destination', nativeReport,
           ...(lcov ? ['--test-reporter', 'lcov', '--test-reporter-destination', lcov] : []),
           join(here, 'node-worker.mjs')],
@@ -188,7 +183,7 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
         results.push(...reported.results); errors.push(...reported.errors);
       } else {
         writeJSON(request, part);
-        const completed = pytest(pythonCommand, ['-p', 'science_tags', '--strict-markers', '--rootdir', root, '-q',
+        const completed = invoke(python, ['-m', 'pytest', '-p', 'science_tags', '--strict-markers', '--rootdir', root, '-q',
           '--science-root', root, '--science-plan', request, '--science-report', resultPath, ...files.map(f => resolve(root, f))],
         { root: cwd, env: childEnv(env), outputDir, name, timeoutMs });
         if (completed.status !== 0) errors.push(`PYTHON_WORKER_FAILED: ${name}`);

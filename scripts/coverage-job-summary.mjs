@@ -13,13 +13,15 @@
 // limitations under the License.
 
 
-// Render the Coverage job's run-page summary from the summaries
-// `coverage-report.mjs` merged. Every number here was recorded by the UT job
-// while it ran the plan; this job ran nothing, and the page says so.
+// Render the Coverage job's run-page summary from what `coverage-report.mjs`
+// merged. Every number was recorded by the UT and ST jobs while they ran the
+// plan; this job ran nothing, and the page says so.
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const LAYERS = ["ut", "st"];
 
 function markdownText(value) {
   return String(value ?? "")
@@ -39,88 +41,102 @@ function measuredGroups(document) {
   return document.groups.map((group) => typeof group === "string" ? group : group?.name).filter(Boolean);
 }
 
-/** Where a row's numbers came from, in the terms a reader of the run page needs. */
-function source(state, producer) {
-  if (!state.document) return "Unavailable";
-  return producer === "success" ? "UT run" : "UT run (partial)";
+/** How a layer's job ended and what that means for the numbers beside it. */
+function runCell(name, info, producer) {
+  const result = info?.producer ?? producer ?? "unknown";
+  const run = info?.run;
+  const counts = run ? ` — ${run.planned} planned, ${run.executed} executed, ${run.passed} passed, ${run.failed} failed, ${run.skipped} skipped` : "";
+  if (!run && !info?.node && !info?.python) return `${result}; uploaded no coverage`;
+  if (result !== "success") return `${result}; partial upload${counts}`;
+  return `${result}${counts}`;
 }
 
-function detailLine(label, state, producer) {
-  if (state.document) {
-    const groups = measuredGroups(state.document);
-    return `- **${label}:** ${groups.length > 0 ? groups.map((group) => `\`${markdownText(group)}\``).join(", ") : "none recorded"}`;
-  }
-  const reason = state.error
-    || (producer === "success"
-      ? "the UT job passed but no coverage for this runtime reached this job"
-      : `the UT job ended \`${markdownText(producer || "unknown")}\` before it uploaded coverage for this runtime; nothing was re-run to fill the gap`);
-  return `- **${label}:** Unavailable — ${reason}`;
+function pythonProcesses(info) {
+  const processes = info?.processes;
+  if (!processes) return "—";
+  if (processes.started === 0) return "none started";
+  return `${processes.started} started, ${processes.measured} measured`;
 }
 
-function runLine(document) {
-  const run = document?.run;
-  if (!run) return undefined;
-  const counts = ["planned", "executed", "passed", "failed", "skipped"].map((key) => `${key} ${run[key] ?? "?"}`).join(", ");
-  const plan = run.plan_digest ? ` (plan \`${String(run.plan_digest).slice(0, 12)}\`)` : "";
-  return `UT run: profile \`${markdownText(run.profile ?? "query")}\`, slice \`${markdownText(run.slice ?? "?")}\` — ${counts}${plan}.`;
-}
-
-export function renderCoverageJobSummary({ node, python, producer = "success" }) {
-  const rows = [
-    ["Node.js", node],
-    ["Python", python],
-  ].map(([label, state]) => [
-    label,
-    source(state, producer),
-    state.document?.files ?? "—",
-    state.document ? measuredGroups(state.document).length : "—",
-    percentage(state.document?.totals?.lines),
-    percentage(state.document?.totals?.branches),
-  ]);
-
+export function renderCoverageJobSummary({ node, python, layers = {}, producers = {} }) {
   const lines = [
     "## Coverage summary",
     "",
     "Coverage is informational. **No minimum percentage is enforced.**",
     "",
-    "Recorded by the UT job while it ran the plan. This job merges what that run uploaded and executes no tests.",
+    "Recorded by the UT and ST jobs while they ran the plan. This job merges what they uploaded and executes no tests. The mocked browser E2E is not measured.",
+    "",
+    "### Merged (UT + ST)",
+    "",
+    "| Runtime | Files measured | Groups measured | Lines | Branches |",
+    "| --- | ---: | ---: | ---: | ---: |",
+    ...[["Node.js", node], ["Python", python]].map(([label, document]) => `| ${[
+      label,
+      document?.files ?? "—",
+      document ? measuredGroups(document).length : "—",
+      percentage(document?.totals?.lines),
+      percentage(document?.totals?.branches),
+    ].map(markdownText).join(" | ")} |`),
+    "",
+    "### By layer",
+    "",
+    "| Layer | Job | Node.js lines | Python lines | Python processes |",
+    "| --- | --- | ---: | ---: | --- |",
+    ...LAYERS.map((name) => {
+      const info = layers[name];
+      return `| ${[
+        name.toUpperCase(),
+        runCell(name, info, producers[name]),
+        percentage(info?.node?.totals?.lines),
+        percentage(info?.python?.totals?.lines),
+        pythonProcesses(info),
+      ].map(markdownText).join(" | ")} |`;
+    }),
   ];
-  const run = runLine(node.document) ?? runLine(python.document);
-  if (run) lines.push("", run);
-  if (producer !== "success") {
-    lines.push("", `> **The UT job did not pass (\`${markdownText(producer || "unknown")}\`).** The figures below cover only what it uploaded; nothing was re-run to fill the gap. The UT job's own result is the signal.`);
+
+  const failed = LAYERS.filter((name) => (layers[name]?.producer ?? producers[name] ?? "success") !== "success");
+  if (failed.length > 0) {
+    lines.push("", `> **${failed.map((name) => `${name.toUpperCase()} (\`${markdownText(layers[name]?.producer ?? producers[name])}\`)`).join(" and ")} did not pass.** Their rows cover only what they uploaded; nothing was re-run to fill the gap. The jobs' own results are the signal.`);
   }
-  lines.push(
-    "",
-    "| Runtime | Source | Files measured | Groups measured | Lines | Branches |",
-    "| --- | --- | ---: | ---: | ---: | ---: |",
-    ...rows.map((row) => `| ${row.map(markdownText).join(" | ")} |`),
-    "",
-    "### Measured groups",
-    "",
-    detailLine("Node.js", node, producer),
-    detailLine("Python", python, producer),
-    "",
-    "ST and the mocked browser E2E load no product module into a measured process, so they contribute no module coverage.",
-  );
+
+  const groupLine = (label, document) => {
+    const groups = measuredGroups(document);
+    return `- **${label}:** ${groups.length > 0 ? groups.map((group) => `\`${markdownText(group)}\``).join(", ") : "none"}`;
+  };
+  lines.push("", "### Measured groups", "", groupLine("Node.js", node), groupLine("Python", python));
+
+  const unmeasured = LAYERS.flatMap((name) => (layers[name]?.processes?.unmeasured ?? []).map((entry) => ({ ...entry, layer: name })));
+  if (unmeasured.length > 0) {
+    lines.push("", "### Python processes that could not be measured", "");
+    for (const entry of unmeasured) {
+      // What the process was doing tells a reader whether anything was lost.
+      const example = Array.isArray(entry.example) ? entry.example.join(" ").replaceAll(/\s+/g, " ").slice(0, 90) : "";
+      lines.push(`- ${entry.layer.toUpperCase()}: ${entry.count} × \`${markdownText(entry.executable)}\` — ${markdownText(entry.status)}${example ? `, e.g. \`${markdownText(example)}\`` : ""}`);
+    }
+  }
+  const problems = LAYERS.flatMap((name) => (layers[name]?.problems ?? []).map((problem) => `${name.toUpperCase()}: ${problem}`));
+  if (problems.length > 0) lines.push("", "### Problems", "", ...problems.map((problem) => `- ${markdownText(problem)}`));
   return `${lines.join("\n")}\n`;
 }
 
-async function loadState(path) {
+async function readJson(path) {
   try {
-    return { document: JSON.parse(await readFile(path, "utf8")) };
-  } catch (error) {
-    if (error?.code === "ENOENT") return { document: undefined };
-    return { document: undefined, error: error instanceof SyntaxError ? "summary.json was not valid JSON" : String(error.message ?? error) };
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return undefined;
   }
 }
 
 async function main() {
-  const [node, python] = await Promise.all([
-    loadState(resolve("coverage/summary.json")),
-    loadState(resolve("coverage/python/summary.json")),
+  const [node, python, layers] = await Promise.all([
+    readJson(resolve("coverage/summary.json")),
+    readJson(resolve("coverage/python/summary.json")),
+    readJson(resolve("coverage/layers.json")),
   ]);
-  process.stdout.write(renderCoverageJobSummary({ node, python, producer: process.env.UT_RESULT || "unknown" }));
+  process.stdout.write(renderCoverageJobSummary({
+    node, python, layers: layers ?? {},
+    producers: { ut: process.env.UT_RESULT, st: process.env.ST_RESULT },
+  }));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -16,7 +16,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const scope = "Maintained Python gateway, paper, memory-graph, and evolve services; excludes test sources.";
+const scope = "Product Python — the service sources, the paper worker, Runner workloads and bundled skills — as executed by every Python process the run started; excludes test sources.";
 
 function percentage(covered, total) {
   return total === 0 ? null : Number(((covered / total) * 100).toFixed(2));
@@ -49,9 +49,10 @@ export function summarizePythonCoverage(document) {
   };
 }
 
-export async function writePythonCoverageSummary({ input, jsonOutput, metadata = {} }) {
-  const summary = summarizePythonCoverage(JSON.parse(await readFile(input, "utf8")));
-  const document = {
+/** The summary document for a coverage.py report, without touching the disk. */
+export function pythonSummaryDocument(report, metadata = {}) {
+  const summary = summarizePythonCoverage(report);
+  return {
     schema_version: 1,
     language: "python",
     ...metadata,
@@ -59,6 +60,10 @@ export async function writePythonCoverageSummary({ input, jsonOutput, metadata =
     scope,
     totals: summary.totals,
   };
+}
+
+export async function writePythonCoverageSummary({ input, jsonOutput, metadata = {} }) {
+  const document = pythonSummaryDocument(JSON.parse(await readFile(input, "utf8")), metadata);
   await writeFile(jsonOutput, `${JSON.stringify(document, null, 2)}\n`);
   return document;
 }
