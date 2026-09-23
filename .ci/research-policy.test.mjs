@@ -10,6 +10,18 @@ import { preflight } from '../test/support/tagged/environment.mjs';
 import { planGrep } from '../test/support/tagged/playwright-selection.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
 
+test('Docker and binaries build patched Swarm; service start only verifies it', () => {
+  for (const path of ['Dockerfile', 'scripts/binary-release/build-payload.sh']) {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+    assert.match(source, /build-swarm-wheel\.sh/);
+    assert.match(source, /swarm-patches\.py"? verify/);
+  }
+  const service = readFileSync(new URL('../scripts/jiuwenswarm.sh', import.meta.url), 'utf8');
+  const start = service.split('cmd_start() {')[1].split('\ncmd_')[0];
+  assert.match(start, /verify_compatibility_patches/);
+  assert.doesNotMatch(start, /apply_compatibility_patches/);
+});
+
 test('PR gates hermetic UT/ST/mock and daily adds every real E2E; release spends no model tokens', () => {
   for (const category of ['ut','st','e2e']) for (const model of ['none','mock','real']) {
     const tags=normalizeTags([`category:${category}`,`model:${model}`,'os:linux','arch:amd64']);

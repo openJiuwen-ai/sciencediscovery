@@ -155,9 +155,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # expects (JIUWENSWARM_SRC below points start-stack.sh's runtime helper at
 # it). The pinned tag's PyPI publish resolves its own git-pinned transitive
 # dependency (openjiuwen) as a plain PyPI version, so this needs no cloning
-# or wheel-building — see scripts/binary-release/build-payload.sh, which
-# embeds it into the release binary the same way. Independent of the
-# application source, so this stays cacheable across source-only changes.
+# for dependency provisioning. After COPY, replace the Swarm package with a
+# patched wheel built from the pinned Git tag, as binary packaging also does.
+# This dependency layer stays cacheable across source-only changes.
 RUN --mount=type=cache,target=/root/.cache/uv \
     case "${JIUWENSWARM_TAG}" in \
       workswarm*) jiuwenswarm_pypi_version="${JIUWENSWARM_TAG#workswarm}" ;; \
@@ -170,6 +170,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 
 RUN pnpm build && pnpm runner:binary
+
+# Patch the actual installed package, not the virtualenv's parent directory.
+# A mismatch with the pinned Git sources fails the build, never container boot.
+RUN bash scripts/build-swarm-wheel.sh /tmp/swarm-wheels "$JIUWENSWARM_TAG" \
+ && swarm_python=/opt/sciencediscovery/jiuwenswarm/src/.venv/bin/python \
+ && uv pip install --python "$swarm_python" --no-deps --reinstall /tmp/swarm-wheels/*.whl \
+ && swarm_package_root="$("$swarm_python" -c 'import importlib.util,pathlib; print(pathlib.Path(importlib.util.find_spec("jiuwenswarm").origin).parent.parent)')" \
+ && "$swarm_python" scripts/swarm-patches.py apply "$swarm_package_root" "$JIUWENSWARM_TAG" \
+ && "$swarm_python" scripts/swarm-patches.py verify "$swarm_package_root" "$JIUWENSWARM_TAG"
 
 # Install the local projects from the complete source tree.
 RUN --mount=type=cache,target=/root/.cache/uv \

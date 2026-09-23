@@ -1,8 +1,28 @@
 # Swarm compatibility patches
 
-`scripts/jiuwenswarm.sh` applies the versioned patches in `patches/<tag>/` to
-the pinned checkout before starting it. These changes repair runtime binding
+`scripts/swarm-patches.py` applies the versioned patches in `patches/<tag>/`
+during installation/build, not during service startup. These changes repair runtime binding
 and transport bugs; research business logic remains in ScienceDiscovery.
+
+## Installation and release packages
+
+- Local `scripts/jiuwenswarm.sh setup` patches the pinned Git checkout before
+  installing it. After updating patches, run `setup` again before `start`.
+- Docker and binary builds retain the PyPI dependency provisioning layer, but
+  replace the Swarm distribution with a wheel built by
+  `scripts/build-swarm-wheel.sh` from the pinned Git tag plus our patches.
+  The PyPI release and same-named Git tag are not byte-identical; applying the
+  source patches directly to the PyPI wheel is not supported.
+- All three paths use `scripts/swarm-patches.py`. An unsupported tag or patch
+  mismatch fails installation/build. The helper records patch and modified-file
+  SHA-256 hashes in `.sciencediscovery-patches.json` beside the installed package.
+  Container/local startup only verifies that receipt; it does not patch code,
+  clone repositories, or require Git for verification. Binary packaging verifies
+  the receipt before bundling the payload.
+- The Git tag is the source identity. The `workswarm0.2.6` tag currently contains
+  package metadata `0.2.5.beta1`; do not infer source identity from that metadata.
+  Release builds still need their normal boot/tool smoke checks: hash verification
+  is not a substitute for exercising the installed runtime and its dependencies.
 
 For `workswarm0.2.6`:
 
