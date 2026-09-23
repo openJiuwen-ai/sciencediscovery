@@ -14,6 +14,8 @@
 
 import asyncio
 import json
+from copy import deepcopy
+from unittest.mock import AsyncMock
 
 import pytest
 import websockets
@@ -22,6 +24,59 @@ from sciencediscovery_adapter.gateway import ChatRun, GatewayError, chat, rpc
 
 
 DONE = {"type": "event", "event": "chat.processing_status", "payload": {"is_processing": False, "is_complete": True}}
+
+
+@pytest.mark.parametrize("approved", [True, False])
+@pytest.mark.parametrize("mcp", [["sci"], []])
+async def test_approval_preserves_run_context_without_replaying_input(approved, mcp):
+    context = {
+        "mode": "deep", "agent_ref": "researcher", "model_name": "private-route",
+        "run_model": {"endpoint_id": "test-route", "config": {"model": "test-model"}},
+        "cwd": "/workspace/research", "project_dir": "/workspace/research",
+        "trusted_dirs": ["/workspace/research"], "mcp": mcp,
+        "agent_template_name": "research", "plugin_names": [],
+    }
+    expected = deepcopy(context)
+    params = {**context, "session_id": "parent", "query": "original task",
+              "attachments": [{"name": "input.csv"}], "sci_persistent_output": True}
+    run = ChatRun("ws://unused", params)
+    run._connection = AsyncMock()
+    # Callers may mutate their configuration after constructing this run.
+    params["mcp"].append("unrelated")
+    params["run_model"]["config"]["model"] = "changed"
+    for question in ("shell-approval", "artifact-approval"):
+        await run.answer(question, "permission_interrupt", {"approved": approved})
+    for call in run._connection.send.call_args_list:
+        payload = json.loads(call.args[0])["params"]
+        assert {key: payload[key] for key in expected} == expected
+        assert payload["query"] == ""
+        assert "attachments" not in payload
+        assert payload["answers"] == [{"approved": approved}]
+        assert payload["sci_persistent_output"] is True
+
+
+async def test_parallel_parent_and_child_approval_contexts_are_isolated():
+    runs = []
+    for session, connector in (("parent", "sci"), ("child", "custom-scoped")):
+        run = ChatRun("ws://unused", {"session_id": session, "mcp": [connector],
+                                     "cwd": f"/workspace/{session}", "model_name": session})
+        run._connection = AsyncMock()
+        runs.append(run)
+    await asyncio.gather(*(run.answer("permission", "permission_interrupt", {"approved": True})
+                           for run in runs))
+    for run, session, connector in zip(runs, ("parent", "child"), ("sci", "custom-scoped")):
+        payload = json.loads(run._connection.send.call_args.args[0])["params"]
+        assert payload["mcp"] == [connector]
+        assert payload["cwd"] == f"/workspace/{session}"
+        assert payload["model_name"] == session
+
+
+async def test_approval_does_not_turn_omitted_equipment_into_explicit_clear():
+    run = ChatRun("ws://unused", {"session_id": "legacy-client"})
+    run._connection = AsyncMock()
+    await run.answer("question", "permission_interrupt", {"approved": True})
+    payload = json.loads(run._connection.send.call_args.args[0])["params"]
+    assert not {"mcp", "plugin_names", "agent_template_name", "run_model"} & payload.keys()
 
 
 @pytest.mark.parametrize("event", ["chat.error", "chat.final"])
@@ -221,8 +276,8 @@ async def test_a_connection_lost_mid_run_is_taken_up_again_with_chat_resume():
         lambda request: [DELTA("a")],
         lambda request: [*RESUMED, DELTA("b"), DONE],
     )
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with server as running_server:
+        port = running_server.sockets[0].getsockname()[1]
         frames, run = await drain(f"ws://127.0.0.1:{port}/tui", {"session_id": "s1", "mode": "m"})
     assert [r["method"] for r in requests] == ["chat.send", "chat.resume"]
     assert requests[1]["params"]["session_id"] == "s1"
@@ -237,16 +292,16 @@ async def test_a_run_that_ended_while_the_connection_was_down_is_an_error_not_a_
         lambda request: [DELTA("a")],
         lambda request: [{"type": "event", "event": "chat.interrupt_result", "payload": {"message": "任务已完成"}}],
     )
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with server as running_server:
+        port = running_server.sockets[0].getsockname()[1]
         with pytest.raises(GatewayError, match="ended while"):
             await drain(f"ws://127.0.0.1:{port}/tui", {"session_id": "s1"})
 
 
 async def test_a_gateway_that_never_comes_back_is_a_gateway_error_after_the_retries():
     server, requests = serve_connections(lambda request: [DELTA("a")])
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with server as running_server:
+        port = running_server.sockets[0].getsockname()[1]
         # Every later connection is accepted and then ignored: no answer to chat.resume, then the drop again.
         with pytest.raises(GatewayError, match="closed"):
             await drain(f"ws://127.0.0.1:{port}/tui", {"session_id": "s1"}, reconnects=2)

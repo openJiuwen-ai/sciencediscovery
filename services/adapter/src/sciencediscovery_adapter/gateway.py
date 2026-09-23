@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -100,7 +101,7 @@ class ChatRun:
     def __init__(self, url: str, params: dict[str, Any], *, idle_timeout: float | None = None,
                  reconnects: int = 3, reconnect_delay: float = 0.5) -> None:
         self._url = url
-        self._params = params
+        self._params = deepcopy(params)
         self._idle_timeout = idle_timeout
         self._connection: Any = None
         self._reconnects = reconnects
@@ -178,7 +179,15 @@ class ChatRun:
 
     async def answer(self, request_id: str, source: str, answer: dict[str, Any]) -> None:
         """Resume a run paused on `chat.ask_user_question`."""
+        # Approval continues this run; it must not replace its tools, workspace
+        # or private model route with session/global defaults. Do not replay the
+        # original query, attachments or other one-shot input fields.
+        context = {key: deepcopy(self._params[key]) for key in (
+            "mode", "agent_ref", "model_name", "run_model", "cwd", "project_dir",
+            "trusted_dirs", "mcp", "agent_template_name", "plugin_names",
+        ) if key in self._params}
         await self._send("answer", "chat.send", {
+            **context,
             "session_id": self._params["session_id"], "query": "", "request_id": request_id,
             "answers": [answer], "source": source, "mode": self._params.get("mode"),
             "supports_user_interaction": True,
