@@ -275,8 +275,8 @@ async def test_agent_runs_endpoint_drives_a_real_run_through_its_own_toolset():
             assert {json.loads(row).get("model") for row in log if row.strip()} == {"live-model-x"}
 
 
-@pytest.mark.skipif(SCENARIO != "agent_run_recover", reason="scenario is not agent_run_recover")
 async def test_a_timed_out_mcp_call_does_not_poison_the_next_agent_run():
+    live("agent_run_recover")
     import socket
 
     import httpx
