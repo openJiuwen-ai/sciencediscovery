@@ -49,6 +49,10 @@ test('scheduled real credentials are isolated from pull request jobs', () => {
   const live=text.slice(text.indexOf('  real-e2e:'),text.indexOf('\n  ut:'));
   assert.match(live,/inputs.profile == 'daily' && github.event_name != 'pull_request'/);
   assert.match(live,/environment: nightly-research/);
+  // runner is not available in jobs.<job_id>.env (it is available in step env).
+  const jobEnv = live.slice(live.indexOf('\n    env:'), live.indexOf('\n    steps:'));
+  assert.doesNotMatch(jobEnv, /\$\{\{[^}]*\brunner\./);
+  assert.match(jobEnv, /CI_RUNTIME_DIR: \$\{\{ github\.workspace \}\}\/\.ci-runtime\/real-e2e/);
   assert.match(live,/run: pnpm ci:e2e:real/);
   assert.doesNotMatch(text.slice(text.indexOf('\n  ut:')),/secrets\.E2E_LLM_TOKEN/);
 });

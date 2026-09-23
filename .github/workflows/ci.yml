@@ -101,7 +101,7 @@ jobs:
     env:
       CI_ALLOW_REAL: "1"
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
-      CI_RUNTIME_DIR: ${{ runner.temp }}/ci-real-e2e
+      CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
