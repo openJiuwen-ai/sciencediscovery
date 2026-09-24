@@ -144,6 +144,7 @@ done
 
 RF_DIFFUSION_DIR="$APP_DIR/rf_diffusion"
 PROTEINMPNN_DIR="$APP_DIR/proteinmpnn"
+PROTEINMPNN_CKPT="$PROTEINMPNN_DIR/weights/vanilla_model_weights/v_48_020.ckpt"
 PROTENIX_DIR="${PROTENIX_DIR:-$APP_DIR/protenix}"
 PROTENIX_CKPT="${PROTENIX_CKPT:-$PROTENIX_DIR/release_data/checkpoint/ms_model_v0.5.0.ckpt}"
 if [[ -z "$HMMER_HOME" && -n "$PIPELINE_HOME" ]]; then
@@ -227,7 +228,9 @@ check_dir "MindScience Protenix dir" "$PROTENIX_DIR"
 check_dir "Helper scripts dir" "$SCRIPTS_DIR"
 check_exe "Python" "$PYTHON_BIN"
 check_file "RFdiffusion run_inference.py" "$RF_DIFFUSION_DIR/run_inference.py"
+check_file "RFdiffusion sharker package" "$RF_DIFFUSION_DIR/env/sharker/__init__.py"
 check_file "ProteinMPNN script" "$PROTEINMPNN_DIR/proteinmpnn_interface_design.py"
+check_file "ProteinMPNN checkpoint" "$PROTEINMPNN_CKPT"
 check_file "Protenix inference.py" "$PROTENIX_DIR/inference.py"
 check_file "Protenix set_path.sh" "$PROTENIX_DIR/set_path.sh"
 check_file "RFdiffusion checkpoint" "$RF_CKPT"
@@ -280,9 +283,9 @@ import sys
 print("python:", sys.version.replace("\n", " "))
 print("exe:", sys.executable)
 PY
-  if (cd "$RF_DIFFUSION_DIR" && PYTHONPATH="$APP_DIR/../..:$RF_DIFFUSION_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" - <<'PY'
+  if (cd "$RF_DIFFUSION_DIR" && PYTHONPATH="$APP_DIR/../..:$RF_DIFFUSION_DIR/env:$RF_DIFFUSION_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" - <<'PY'
 import importlib
-mods = ["sympy", "safetensors", "mindspore", "mindscience", "rfdiffusion"]
+mods = ["sympy", "safetensors", "mindspore", "mindscience", "sharker", "rfdiffusion"]
 for mod in mods:
     importlib.import_module(mod)
 print("RFdiffusion python imports ok")

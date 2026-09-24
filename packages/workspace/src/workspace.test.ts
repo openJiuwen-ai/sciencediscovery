@@ -33,7 +33,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, workspaceRelativeCwd } from "./workspace.js";
+import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -1774,6 +1774,38 @@ test("subagent tools preserve structured governance inputs", async () => {
   });
   assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /Read the inputs/);
   assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /steps/);
+});
+
+test("subagent result joins adjacent streamed assistant fragments", () => {
+  const timestamp = new Date().toISOString();
+  const subagent = {
+    steps: [{
+      content: "An earlier progress note.",
+      createdAt: timestamp,
+      id: "earlier-assistant",
+      kind: "assistant" as const,
+      status: "completed" as const,
+    }, {
+      content: "tool boundary",
+      createdAt: timestamp,
+      id: "tool",
+      kind: "tool" as const,
+      status: "completed" as const,
+    }, {
+      content: "Header: x,y\n",
+      createdAt: timestamp,
+      id: "final-fragment-1",
+      kind: "assistant" as const,
+      status: "completed" as const,
+    }, {
+      content: "Last: 5,25\nPASS",
+      createdAt: timestamp,
+      id: "final-fragment-2",
+      kind: "assistant" as const,
+      status: "completed" as const,
+    }],
+  };
+  assert.equal(subagentFinalText(subagent), "Header: x,y\nLast: 5,25\nPASS");
 });
 
 test("two task tool calls can run subagents concurrently", async () => {

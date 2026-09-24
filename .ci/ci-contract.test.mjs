@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import {
   assertCiContract,
   catalogProblems,
+  defaultRepositoryRoot,
   utContractProblems,
   workspaceProjects,
 } from "./ci-contract.mjs";
@@ -160,4 +161,51 @@ test("an entry point's arguments reach the shared runner, also behind the Jiuwen
   assert.deepEqual(catalog.stepArguments(["node", ["test/support/tagged/shared.mjs", "run", "--slice", "st"]], forwarded).slice(-4), forwarded);
   // A step that is not the planner gets none of them.
   assert.deepEqual(catalog.stepArguments(["pnpm", ["install", "--frozen-lockfile"]], forwarded), ["install", "--frozen-lockfile"]);
+});
+
+/**
+ * The actions/upload-artifact steps of a workflow: each step's name, the paths
+ * it uploads (exclusions dropped) and whether it asks for hidden files. Read as
+ * text, since the steps are regular and nothing here parses YAML.
+ */
+function artifactUploads(workflow) {
+  return workflow.split(/\n(?= *- )/).filter((step) => /uses: actions\/upload-artifact@/.test(step)).map((step) => {
+    const lines = step.split("\n");
+    const at = lines.findIndex((line) => /^\s*path:/.test(line));
+    const inline = lines[at].replace(/^\s*path:\s*/, "").trim();
+    const block = [];
+    for (const line of lines.slice(at + 1)) {
+      if (!line.trim() || line.search(/\S/) <= lines[at].search(/\S/)) break;
+      block.push(line.trim());
+    }
+    return {
+      name: step.match(/- name:\s*(.+)/)?.[1] ?? "(unnamed)",
+      paths: (inline === "|" ? block : [inline]).filter((path) => !path.startsWith("!")),
+      hidden: /^\s*include-hidden-files:\s*true\s*$/m.test(step),
+    };
+  });
+}
+
+const throughDotDirectory = (upload) =>
+  upload.paths.some((path) => path.split("/").some((segment) => segment.startsWith(".")));
+
+test("every artifact upload from a dot-directory includes hidden files", async () => {
+  // upload-artifact@v4 leaves out whatever is named with a leading dot, the
+  // given path included: `path: .ci-results` uploads nothing and only warns.
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  const uploads = [];
+  for (const file of (await readdir(directory)).filter((name) => name.endsWith(".yml"))) {
+    for (const upload of artifactUploads(await readFile(join(directory, file), "utf8"))) uploads.push({ file, ...upload });
+  }
+  const fromDotDirectories = uploads.filter(throughDotDirectory);
+  assert.deepEqual(fromDotDirectories.filter((upload) => !upload.hidden).map((upload) => `${upload.file}: ${upload.name}`), []);
+  // Not vacuous: the layers' results are among the uploads it checked.
+  for (const name of ["Upload UT results", "Upload ST results", "Upload E2E results"]) {
+    assert.ok(fromDotDirectories.some((upload) => upload.name === name), `${name} was not found`);
+  }
+  // And it catches the step as it was.
+  const [before] = artifactUploads(
+    "      - name: Upload E2E results\n        uses: actions/upload-artifact@v4\n        with:\n          name: e2e-results\n          path: .ci-results\n          if-no-files-found: warn\n",
+  );
+  assert.ok(throughDotDirectory(before) && !before.hidden);
 });

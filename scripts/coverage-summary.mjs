@@ -145,6 +145,17 @@ export function summarizeCoverage(records) {
   return { files: measured.length, records: measured, totals };
 }
 
+/** Each measured file's own totals, so a reader can go from a directory down to a file. */
+export function sourceTotals(records) {
+  return records.map((record) => ({
+    path: record.file,
+    totals: Object.fromEntries(Object.keys(metricKeys).map((name) => {
+      const { covered, total } = record.metrics[name];
+      return [name, { covered, percentage: percentage(covered, total), total }];
+    })),
+  })).sort((left, right) => left.path.localeCompare(right.path));
+}
+
 export async function writeCoverageSummary({ input, lcovOutput, jsonOutput, metadata = {} }) {
   const records = parseLcov(await readFile(input, "utf8"));
   const summary = summarizeCoverage(records);
@@ -154,6 +165,7 @@ export async function writeCoverageSummary({ input, lcovOutput, jsonOutput, meta
       schema_version: 1,
       ...metadata,
       files: summary.files,
+      sources: sourceTotals(summary.records),
       scope: "Node.js sources as written, each credited with what its own directory's tests exercised in the UT run; excludes test files, built output and Playwright journeys.",
       totals: summary.totals,
     }, null, 2)}\n`),

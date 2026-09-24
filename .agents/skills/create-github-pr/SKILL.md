@@ -10,6 +10,8 @@ description: >
   labelling a pull request for the release note, or when reading a GitHub
   Actions result on a pull request. This is the only path for proposing a
   change: gitcode.com is a read-only mirror with no pipeline of its own.
+  Titles and bodies are English. For filing an issue, or for the gh commands
+  this procedure assumes, read the github skill first.
 ---
 
 # Open a pull request (GitHub)
@@ -22,9 +24,10 @@ the authority. That direction is the reverse of what it once was, and the
 GitCode side no longer has a pipeline at all, so older merge requests and any
 documentation describing GitCode as the place to propose are out of date.
 
-Pipeline internals — which platform runs which layer, the workflow files, run
-logs, failure attribution: [ci](../ci/SKILL.md). Journey design and reporting:
-[e2e-testing](../e2e-testing/SKILL.md).
+How to call `gh`, and the rule that issue and pull request text is English:
+[github](../github/SKILL.md). Pipeline internals — which platform runs which
+layer, the workflow files, run logs, failure attribution: [ci](../ci/SKILL.md).
+Journey design and reporting: [e2e-testing](../e2e-testing/SKILL.md).
 
 ## Rules
 
@@ -32,9 +35,10 @@ logs, failure attribution: [ci](../ci/SKILL.md). Journey design and reporting:
    three locally. GitHub Actions runs them too, but on a pull request that is
    feedback arriving twenty minutes later, not permission to skip them.
 2. **Push the branch to the operator's own fork, never to the upstream.**
-   Resolve the login from `gh api user --jq .login`; do not hard-code a person
-   and do not assume a remote named `origin` is a personal fork — in this
-   repository `origin` is GitCode. Open the pull request with
+   Resolve the login from `gh api user --jq .login`; do not hard-code a person.
+   `origin` is `openJiuwen-ai/sciencediscovery`. Do not `git push origin` a
+   task branch, and do not assume `origin` is a personal fork. Open the pull
+   request with
    `--repo openJiuwen-ai/sciencediscovery --head <login>:<branch> --base main`.
 3. **Exactly one `release:*` label**, from the whitelist below. The release
    note is grouped by it.
@@ -45,6 +49,8 @@ logs, failure attribution: [ci](../ci/SKILL.md). Journey design and reporting:
    2 skipped / 0 failed" is.
 6. **This skill stops at the pull request.** It does not merge, tag, or
    publish a release.
+7. **The title and the body are English.** See [github](../github/SKILL.md).
+   Write Chinese only when the person who asked explicitly wants Chinese.
 
 ## Run the layers first
 
@@ -131,6 +137,9 @@ invent a category outside the whitelist, and do not touch the `ci-*`,
 other purposes and this skill has no business rewriting them.
 
 ## Title and body
+
+**English.** The title and every section of the body are English, including
+validation numbers and the E2E conclusion.
 
 Title: `<type>(<scope>): <the change and its effect>`, scope optional. It
 becomes the release note entry, so it has to read as a sentence to somebody who

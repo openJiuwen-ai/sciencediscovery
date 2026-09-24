@@ -157,9 +157,14 @@ const JIUWENSWARM_APPROVAL_RESOURCE: ReadonlyMap<string, string> = new Map([
 /** JiuwenSwarm's own todo tools, left visible to the model unless planning is `update_plan`. */
 export const JIUWENSWARM_TODO_TOOLS = ["todo_create", "todo_modify", "todo_list", "todo_get"] as const;
 
-/** JiuwenSwarm's own sub-agent tools, offered in place of `task` unless subagents is `task`. */
-export const JIUWENSWARM_SUBAGENT_TOOLS = ["subagent_spawn", "subagent_wait"] as const;
-// Hide the whole native lifecycle, not just the two tools explicitly offered above.
+/**
+ * JiuwenSwarm's own sub-agent tools, offered in place of `task` unless
+ * subagents is `task`. Recent WorkSwarm releases also expose `task_tool`;
+ * hiding that alias is essential because otherwise it shadows the workspace
+ * `task` bridge and only accepts JiuwenSwarm's built-in agent types.
+ */
+export const JIUWENSWARM_SUBAGENT_TOOLS = ["subagent_spawn", "subagent_wait", "task_tool"] as const;
+// Hide the whole native lifecycle when platform task is selected.
 const JIUWENSWARM_SUBAGENT_LIFECYCLE_TOOLS = [
   ...JIUWENSWARM_SUBAGENT_TOOLS, "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume",
 ] as const;

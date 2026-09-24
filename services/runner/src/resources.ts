@@ -4,10 +4,28 @@
 // You may obtain a copy of the License at
 // http://www.apache.org/licenses/LICENSE-2.0
 
+import { execFile } from "node:child_process";
 import { mkdir, realpath, statfs } from "node:fs/promises";
 import { cpus, freemem, loadavg, totalmem, uptime } from "node:os";
 import { resolve } from "node:path";
+import { promisify } from "node:util";
 import type { NpuInventory, RunnerResources } from "@sciencediscovery/schema";
+
+const execFileAsync = promisify(execFile);
+
+async function linuxFilesystemFragmentSize(root: string, fallback: number): Promise<number> {
+  if (process.platform !== "linux") return fallback;
+  try {
+    // Node exposes statvfs.f_bsize but not f_frsize. On virtiofs/fuse mounts
+    // block counts use f_frsize, and multiplying them by f_bsize can inflate a
+    // 500 GB disk into hundreds of TB. GNU stat exposes the fundamental size.
+    const { stdout } = await execFileAsync("stat", ["-f", "--format=%S", "--", root]);
+    const size = Number(stdout.trim());
+    return Number.isSafeInteger(size) && size > 0 ? size : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 /**
  * How the Runner reads its machine's NPU cards. Injected so a status poll on a
@@ -16,6 +34,7 @@ import type { NpuInventory, RunnerResources } from "@sciencediscovery/schema";
  */
 export interface RunnerResourceSources {
   npuInventory?: () => Promise<NpuInventory>;
+  filesystemFragmentSize?: (root: string, fallback: number) => Promise<number>;
 }
 
 export async function collectRunnerResources(
@@ -38,10 +57,11 @@ export async function collectRunnerResources(
     // Measure the actual workspace mount, not dataDir or the host's root disk.
     // bavail excludes reserved blocks, unlike bfree. Do not scan users' files.
     const fs = await statfs(root);
+    const blockSize = await (sources.filesystemFragmentSize ?? linuxFilesystemFragmentSize)(root, fs.bsize);
     result.workspaceDisk = {
       path: root,
-      totalBytes: fs.blocks * fs.bsize,
-      availableBytes: Math.max(0, fs.bavail * fs.bsize),
+      totalBytes: fs.blocks * blockSize,
+      availableBytes: Math.max(0, fs.bavail * blockSize),
     };
   } catch {
     result.workspaceDiskError = "Workspace filesystem metrics unavailable; check the Runner workspace directory and permissions.";

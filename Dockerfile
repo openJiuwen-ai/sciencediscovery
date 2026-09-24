@@ -34,6 +34,10 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.9.26
 ARG PNPM_VERSION=11.1.2
 # Matches services/gateway/.python-version; the PDF worker (>=3.11) reuses it.
 ARG PYTHON_VERSION=3.12
+# Large Python wheels in the JiuwenSwarm dependency graph can exceed uv's
+# 30-second default on slower links. This affects builds only and remains
+# overridable (`--build-arg UV_HTTP_TIMEOUT=...`).
+ARG UV_HTTP_TIMEOUT=300
 # Keep in step with scripts/jiuwenswarm.sh and scripts/binary-release/build-payload.sh,
 # which install the same pinned tag for source mode and the release binary.
 ARG JIUWENSWARM_TAG=workswarm0.2.6
@@ -88,6 +92,8 @@ FROM ${NODE_BUILD_IMAGE} AS builder
 ARG PNPM_VERSION
 ARG PYTHON_VERSION
 ARG JIUWENSWARM_TAG
+ARG UV_HTTP_TIMEOUT
+ENV UV_HTTP_TIMEOUT=${UV_HTTP_TIMEOUT}
 
 COPY --from=uv /uv /usr/local/bin/uv
 
@@ -119,7 +125,9 @@ RUN pnpm install --frozen-lockfile --ignore-scripts
 RUN mkdir -p \
       services/paper \
       services/gateway \
-      services/adapter
+      services/adapter \
+      services/memory-graph \
+      services/evolve
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv python install "${PYTHON_VERSION}"
@@ -147,6 +155,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=services/adapter/uv.lock,target=/app/services/adapter/uv.lock \
     UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/adapter \
       uv sync --project services/adapter --frozen --no-install-project \
+        --python "${PYTHON_VERSION}"
+
+# UI-accessible sidecars must be present in the one-image deployment too.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=services/memory-graph/pyproject.toml,target=/app/services/memory-graph/pyproject.toml \
+    --mount=type=bind,source=services/memory-graph/uv.lock,target=/app/services/memory-graph/uv.lock \
+    UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/memory-graph \
+      uv sync --project services/memory-graph --frozen --no-install-project \
+        --python "${PYTHON_VERSION}"
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=services/evolve/pyproject.toml,target=/app/services/evolve/pyproject.toml \
+    --mount=type=bind,source=services/evolve/uv.lock,target=/app/services/evolve/uv.lock \
+    UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/evolve \
+      uv sync --project services/evolve --frozen --no-install-project --extra candidates \
         --python "${PYTHON_VERSION}"
 
 # JiuwenSwarm itself: not our code and not a workspace project, so it has no
@@ -187,7 +210,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
  && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/gateway \
       uv sync --project services/gateway --locked --python "${PYTHON_VERSION}" \
  && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/adapter \
-      uv sync --project services/adapter --locked --python "${PYTHON_VERSION}"
+      uv sync --project services/adapter --locked --python "${PYTHON_VERSION}" \
+ && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/memory-graph \
+      uv sync --project services/memory-graph --locked --python "${PYTHON_VERSION}" \
+ && UV_PROJECT_ENVIRONMENT=/opt/sciencediscovery/envs/evolve \
+      uv sync --project services/evolve --locked --extra candidates --python "${PYTHON_VERSION}"
 
 # ---------------------------------------------------------------- runtime ---
 FROM ${NODE_RUNTIME_IMAGE} AS runtime
@@ -225,6 +252,8 @@ ENV NODE_ENV=production \
     SCIENCE_AGENT_PAPER_PYTHON_PATH=/opt/sciencediscovery/envs/paper/bin/python \
     SCIENCE_AGENT_GATEWAY_PYTHON_PATH=/opt/sciencediscovery/envs/gateway/bin/python \
     SCIENCE_AGENT_ADAPTER_PYTHON_PATH=/opt/sciencediscovery/envs/adapter/bin/python \
+    SCIENCE_AGENT_MEMORY_GRAPH_PYTHON_PATH=/opt/sciencediscovery/envs/memory-graph/bin/python \
+    SCIENCE_AGENT_EVOLVE_PYTHON_PATH=/opt/sciencediscovery/envs/evolve/bin/python \
     JIUWENSWARM_SRC=/opt/sciencediscovery/jiuwenswarm/src
 
 COPY --from=builder /opt/sciencediscovery /opt/sciencediscovery

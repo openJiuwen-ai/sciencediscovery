@@ -3360,7 +3360,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   const initial = await jsonRequest<SkillDescriptor[]>(`${origin}/api/skills`, { headers: authorization });
   assert.equal(initial.response.status, 200);
   assert.deepEqual(initial.body.map((item) => item.id), [
-    "antibody-protenix-pipeline",
+    "antibody-design",
     "assessment-screening",
     "citation-reviewer",
     "code-engineer",
@@ -4473,8 +4473,8 @@ test("subagent handoff copies only declared or referenced parent files", async (
   await writeFile(resolve(workspaceRoot, "unmentioned.csv"), "value\n2\n");
 
   const handoff = await prepareSubagentHandoff(store, session.id, "subagent-selective-test", {
-    description: "Inspect needed.csv",
-    prompt: "Read needed.csv and summarize it.",
+    description: "Inspect the requested workspace input",
+    prompt: "Read /workspace/needed.csv and summarize it.",
   });
 
   assert.deepEqual(handoff.inputPaths, ["inputs/needed.csv"]);
@@ -4501,6 +4501,26 @@ test("subagent handoff copies only declared or referenced parent files", async (
   };
   assert.deepEqual(manifest.parentInputPaths, ["needed.csv"]);
   assert.equal(manifest.availableParentInputPaths, undefined);
+});
+
+test("subagent handoff accepts /workspace paths in explicit inputPaths", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-absolute-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Absolute handoff path");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+  await writeFile(resolve(store.workspacePath(session.id), "input.txt"), "delivered");
+
+  const handoff = await prepareSubagentHandoff(store, session.id, "absolute-child", {
+    description: "Read the explicit input",
+    inputPaths: ["/workspace/input.txt"],
+    prompt: "Inspect the delivered input.",
+  });
+
+  assert.deepEqual(handoff.inputPaths, ["inputs/input.txt"]);
+  assert.equal(await readFile(resolve(store.agentWorkspacePath(session.id, "absolute-child"), "input.txt"), "utf8"), "delivered");
 });
 
 test("subagent handoff keeps both aliases on one committed source despite parent changes", async (context) => {

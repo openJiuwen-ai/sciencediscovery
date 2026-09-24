@@ -1154,13 +1154,12 @@ function withRunSubagent(extra: Partial<NativeAgentOptions> = {}): NativeAgentOp
   return options({ runSubagent: (async () => ({ id: "sub-1", status: "completed" })) as never, ...extra });
 }
 
-test("by default the model delegates with JiuwenSwarm's subagent_spawn/subagent_wait, not our task", async () => {
+test("by default the model delegates with JiuwenSwarm's native subagent tools, not our task", async () => {
   let sent: any;
   const adapter = await fakeAdapter(async ({ body }, response) => { sent = body; response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
   try {
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(withRunSubagent()).execute("go");
-    assert.deepEqual(sent.nativeTools, ["subagent_spawn", "subagent_wait"]);
-    assert.equal(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"), false);
+    assert.deepEqual(sent.nativeTools, ["subagent_spawn", "subagent_wait", "task_tool"]);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
     assert.equal(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"), false);
   } finally {
@@ -1176,7 +1175,7 @@ test("subagents can be switched back to our task, and then JiuwenSwarm's sub-age
     assert.ok(sent.tools.some((tool: { name: string }) => tool.name === "task"));
     assert.equal("nativeTools" in sent, false);
     assert.equal(sent.jiuwenSwarmTools, "all");
-    for (const name of ["subagent_spawn", "subagent_wait", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]) {
+    for (const name of ["subagent_spawn", "subagent_wait", "task_tool", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]) {
       assert.ok(sent.hiddenJiuwenSwarmTools.includes(name), `${name} must be hidden even with all native tools enabled`);
     }
     assert.match(sent.systemPrompt, /Delegation for this run uses only the platform task tool/);
@@ -1206,6 +1205,7 @@ test("a run with no delegation capability offers no delegation tool of either ki
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
     assert.ok(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"));
     assert.match(sent.systemPrompt, /Delegation is unavailable for this run/);
+    assert.ok(["subagent_spawn", "subagent_wait", "task_tool"].every((name) => sent.hiddenJiuwenSwarmTools.includes(name)));
   } finally {
     await adapter.close();
   }
@@ -1532,7 +1532,7 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
     // Commands and file writes stay in ScienceDiscovery's sandbox: JiuwenSwarm's host tools are hidden, and the prompt says so.
     assert.deepEqual(sent.hiddenJiuwenSwarmTools, ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf",
       "todo_create", "todo_modify", "todo_list", "todo_get",
-      "subagent_spawn", "subagent_wait", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
+      "subagent_spawn", "subagent_wait", "task_tool", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
     assert.match(sent.systemPrompt, /run in the sandbox through run_shell/);
     const start = events.find((event) => event.type === "tool_execution_start") as any;
     const end = events.find((event) => event.type === "tool_execution_end") as any;

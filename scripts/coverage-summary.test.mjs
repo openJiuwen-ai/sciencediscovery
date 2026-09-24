@@ -83,6 +83,10 @@ test("writes schema-versioned group metadata beside totals", async () => {
     assert.equal(doc.group, "packages/example");
     assert.equal(doc.mode, "incremental");
     assert.equal(doc.totals.lines.percentage, 75);
+    // Per-file totals exclude test sources and add up to the summary.
+    assert.deepEqual(doc.sources.map((source) => source.path), ["packages/example/dist/index.js"]);
+    assert.deepEqual(doc.sources[0].totals.lines, doc.totals.lines);
+    assert.deepEqual(doc.sources[0].totals.functions, doc.totals.functions);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

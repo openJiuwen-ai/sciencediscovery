@@ -416,8 +416,7 @@ prepare_local() {
   # It is small (~38 MB, fastapi/uvicorn/neo4j driver/pydantic) and the
   # feature toggle now lives in System Settings → Memory graph, not env, so
   # the environment must be ready for the user to flip the switch without a
-  # rebuild. Docker mode leaves this unset because the image does not
-  # provision that service environment.
+  # rebuild. Docker bakes the same environment into the image.
   memory_graph_python="$envs_dir/memory-graph/bin/python"
   if [[ ! -x "$memory_graph_python" ]]; then
     echo "Provisioning the memory-graph Python environment..." >&2
@@ -426,8 +425,7 @@ prepare_local() {
 
   # Provision the evolve search sidecar environment. Same rationale as the
   # memory-graph one above: the feature is reached from the UI, so it must be
-  # ready without a rebuild. Docker mode leaves this unset because the image
-  # does not provision that service environment.
+  # ready without a rebuild. Docker bakes the same environment into the image.
   #
   # `--extra candidates` installs the candidate's runtime, not the sidecar's: a
   # candidate is executed with this environment's interpreter, and the AST gate
@@ -502,6 +500,8 @@ prepare_local() {
 prepare_docker() {
   local envs_root="${SCIENCE_AGENT_ENVS_ROOT:-/opt/sciencediscovery/envs}"
   gateway_python="${SCIENCE_AGENT_GATEWAY_PYTHON_PATH:-$envs_root/gateway/bin/python}"
+  memory_graph_python="${SCIENCE_AGENT_MEMORY_GRAPH_PYTHON_PATH:-$envs_root/memory-graph/bin/python}"
+  evolve_python="${SCIENCE_AGENT_EVOLVE_PYTHON_PATH:-$envs_root/evolve/bin/python}"
 
   data_dir="${SCIENCE_AGENT_DATA_DIR:-/app/data}"
   data_dir="$(absolute_from_repository "$data_dir")"
@@ -524,8 +524,14 @@ prepare_docker() {
   # default scripts/jiuwenswarm.sh otherwise assumes.
   export JIUWENSWARM_ROOT="${JIUWENSWARM_ROOT:-$data_dir/jiuwenswarm}"
 
-  # The image runs no memory-graph sidecar: a new data directory starts with the graph off, not on and degraded.
-  export SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE="${SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE:-0}"
+  # Docker includes the sidecar, while the System Settings toggle still
+  # controls whether the API mirrors any application data into it.
+  export SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE="${SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE:-1}"
+
+  # Native JiuwenSwarm sub-agents do not receive ScienceDiscovery's workspace
+  # or sandbox tools. In the product image use the task bridge so specialists
+  # can actually inspect and hand back workspace results.
+  export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS="${SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS:-task}"
 
   # A uid/gid mismatch on the host bind mount is the most common first-run
   # failure. Report it before any service starts.
@@ -569,6 +575,14 @@ EOF
 
   if [[ ! -x "$gateway_python" ]]; then
     echo "The Python MCP server environment is missing at $gateway_python. Rebuild the image." >&2
+    exit 1
+  fi
+  if [[ ! -x "$memory_graph_python" ]]; then
+    echo "The memory-graph Python environment is missing at $memory_graph_python. Rebuild the image." >&2
+    exit 1
+  fi
+  if [[ ! -x "$evolve_python" ]]; then
+    echo "The evolve Python environment is missing at $evolve_python. Rebuild the image." >&2
     exit 1
   fi
 

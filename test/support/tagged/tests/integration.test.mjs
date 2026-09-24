@@ -14,9 +14,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collect, execute, discoverFiles } from '../coordinator.mjs';
 import { createPlan } from '../plan.mjs';
@@ -29,6 +29,7 @@ const pyHeader = `import pytest\npytestmark = pytest.mark.science_tags(category=
 function fixture(t, filename, source) {
   const root = mkdtempSync(join(tmpdir(), 'science-tagged-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(dirname(join(root, filename)), { recursive: true });
   writeFileSync(join(root, filename), source);
   return { root, files: [filename], outputDir: join(root, 'output'), python: process.env.SCIENCE_TEST_PYTHON ?? 'python3' };
 }
@@ -97,6 +98,18 @@ test('native pytest executes and reports stable framework-expanded IDs', async t
   if (result.status !== 'PASS') console.log(readFileSync(join(scope.outputDir,'worker-1.log'),'utf8'));
   assert.deepEqual(result.problems, []);
   assert.equal(result.passed, 2);
+});
+test("pytest reads the project's own config, not the science root's", async t => {
+  // Laid out like services/<name>/: the config sits below the root the harness
+  // is given. The conftest declares `asyncio_mode` as pytest-asyncio does, so
+  // the test can read back what the project set.
+  const scope = fixture(t, 'project/tests/test_one.py', pyHeader + `def test_one(request):\n    assert request.config.getini('asyncio_mode') == 'auto'\n`);
+  writeFileSync(join(scope.root, 'project', 'pyproject.toml'), '[tool.pytest.ini_options]\nasyncio_mode = "auto"\n');
+  writeFileSync(join(scope.root, 'project', 'conftest.py'), `def pytest_addoption(parser):\n    parser.addini('asyncio_mode', 'default mode for async tests', default='strict')\n`);
+  const result = await execute({ ...scope, plan: makePlan(scope) });
+  if (result.status !== 'PASS') console.log(readFileSync(join(scope.outputDir, 'worker-1.log'), 'utf8'));
+  assert.deepEqual(result.problems, []);
+  assert.equal(result.passed, 1);
 });
 test('native pytest runtime skip, skip markers and xfail are failures', async t => {
   for (const body of [

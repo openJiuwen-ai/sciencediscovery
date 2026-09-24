@@ -168,7 +168,11 @@ sys.exit(main() or 0)
       ...baseEnv,
       HOME: paths.home,
       JIUWENSWARM_DATA_DIR: paths.dataDir,
-      PYTHONPATH: paths.sitePackages,
+      // Python loads sitecustomize from a PYTHONPATH entry itself. Point at the adapter package
+      // directory so its guarded startup hook applies JiuwenSwarm's MCP timeout patch before
+      // startup prewarming creates a client with the 30-second fallback.
+      PYTHONPATH: `${join(paths.adapterSitePackages, "sciencediscovery_adapter")}:${paths.sitePackages}`,
+      SCIENCE_AGENT_JIUWENSWARM_BOOTSTRAP: "1",
     },
   };
 }

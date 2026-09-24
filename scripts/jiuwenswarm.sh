@@ -188,7 +188,12 @@ cmd_start() {
   # makes `scripts/jiuwenswarm.sh start | tee ...`, or any script capturing its output, wait forever.
   cd "$jw_root"
   # Web search is configured from ScienceDiscovery's web settings, which the API applies with config.set.
-  JIUWENSWARM_DATA_DIR="$jw_data_dir" nohup "$jw_bin/jiuwenswarm-start" --name "$jw_instance" app \
+  # Put our guarded sitecustomize hook in every JiuwenSwarm Python process. It applies JiuwenSwarm's
+  # own MCP call-timeout patch before startup prewarming can create a client with the 30-second fallback.
+  local bootstrap_path="$repository_root/services/adapter/src/sciencediscovery_adapter"
+  SCIENCE_AGENT_JIUWENSWARM_BOOTSTRAP=1 \
+    PYTHONPATH="$bootstrap_path${PYTHONPATH:+:$PYTHONPATH}" \
+    JIUWENSWARM_DATA_DIR="$jw_data_dir" nohup "$jw_bin/jiuwenswarm-start" --name "$jw_instance" app \
     >"$jw_log" 2>&1 </dev/null &
   disown
   local attempt
