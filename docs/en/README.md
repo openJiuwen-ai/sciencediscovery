@@ -14,12 +14,16 @@ This is the complete English documentation set.
 
 - [Program evolution](core/evolve.md) — understand searches, scoring modes, engines, data splits, and result trustworthiness.
 - [Shell, environments, and workspaces](core/execution-workspaces.md) — understand execution, files, environments, completion, and stopping.
+- [Idea Tree](core/idea-tree.md) — understand how research proposals are explored, assessed, and improved, and what scores can tell you.
+- [Agent Team](core/agent-team.md) — learn how a research team divides research, analysis, review, and reporting.
 
 ## Domain guides
 
 - [Evolve a solution](domains/evolve-a-solution.md) — run a program-evolution search end to end and judge whether the improvement is real.
 - [Run an evolution search](domains/run-an-evolution-search.md) — size a search, choose a scoring mode, watch it run, and read the held-out result.
 - [Literature research](domains/literature-research.md) — run an end-to-end cross-database literature survey, from service startup to approvals and results.
+- [Explore water treatment catalysts with Idea Tree](domains/idea-tree-catalyst-design.md) — compare catalyst designs for pollutant degradation and choose what to validate next.
+- [Analyze immune features with Agent Team](domains/agent-team-data-analysis.md) — use sepsis immune features to work through correlation analysis, hierarchical clustering, review, and reporting.
 
 ## Advanced setup
 
