@@ -220,14 +220,12 @@ class AgentRunner:
         self.skills = SkillSync(lambda *a, **k: self.rpc(*a, **k), settings.mgmt_url)
         self._shared_lock = asyncio.Lock()
         self._shared_registered = False
-        # Transport configuration is stable; Toolset owns each run's deadline.
-        # A longer child deadline must not create a new transport generation.
-        self._shared_timeout_s = settings.tool_timeout_s
         # The shared server's generations (see ensure_shared_tools): the current name, how many runs are on each
         # name still registered, and the approval level each tool was first given (a new name needs them all again).
         self._generation = 0
         self._server = SERVER_NAME
         self._server_runs: dict[str, int] = {}
+        self._server_tools: dict[str, set[str]] = {}
         self._approval_levels: dict[str, str] = {}
         self._permissions_on = False
         self._tool_approvals: dict[tuple[str, str], str] = {}
@@ -260,40 +258,67 @@ class AgentRunner:
         if timeout_s <= 0:
             raise ValueError("Tool timeout must be positive")
         async with self._shared_lock:
-            policies = dict(self._approval_levels)
+            previous = self._server if self._shared_registered else None
+            old_shared = self.registry.shared.copy()
+            old_approvals = self._approval_levels.copy()
+            old_permissions_on = self._permissions_on
+            names = {tool["name"] for tool in tools}
+            # Keep historical tools only while their server generation serves a run.
+            active = set().union(*(self._server_tools.get(server, set())
+                                   for server, count in self._server_runs.items() if count > 0))
+            retained = names | active
+            policies = {name: level for name, level in self._approval_levels.items() if name in retained}
             for tool in tools:
                 level = tool.get("approval") or "allow"
                 if policies.setdefault(tool["name"], level) != level:
                     raise ValueError(f"Conflicting approval policy for {tool['name']}")
-            # Stage the catalog: failed permission setup must not publish tools.
+            # Stage catalog and policy changes until permissions are configured.
             preview = ToolsetRegistry()
-            preview.shared = dict(self.registry.shared)
-            changed = preview.merge(tools)
-            target = f"{SERVER_NAME}{self._generation + 1:010d}" if self._shared_registered and changed else self._server
-            await self._apply_approvals([{"name": name, "approval": level} for name, level in policies.items()], target)
-            self._approval_levels = policies
-            self.registry.shared = preview.shared
-            if not self._shared_registered or changed:
-                self._shared_timeout_s = self.settings.tool_timeout_s
-                previous = self._server if self._shared_registered else None
+            preview.shared = {name: tool for name, tool in old_shared.items() if name in retained}
+            changed = preview.merge(tools) or set(old_shared) != set(preview.shared)
+            if self._shared_registered and not changed:
+                await self._apply_approvals([{"name": name, "approval": level} for name, level in policies.items()], self._server)
+                self._approval_levels = policies
+                self.registry.shared = preview.shared
+                self._server_tools.setdefault(self._server, set()).update(names)
+            else:
                 if previous is not None:
                     self._generation += 1
-                    self._server = f"{SERVER_NAME}{self._generation:010d}"
-                # An earlier adapter may have left this name registered with another URL (its token changed).
-                for method in ("mcp.disconnect", "mcp.delete_custom"):
-                    try:
-                        await self.rpc(self.settings.mgmt_url, method, {"name": self._server})
-                    except Exception:
-                        pass
-                await self.rpc(self.settings.mgmt_url, "mcp.register_custom", {
-                    "name": self._server, "transport": "streamable-http",
-                    "url": f"{self.settings.public_url}/mcp/{self.registry.token}", "timeout_s": self._shared_timeout_s,
-                })
-                await self.rpc(self.settings.mgmt_url, "mcp.connect", {"name": self._server})
+                    candidate = f"{SERVER_NAME}{self._generation:010d}"
+                else:
+                    candidate = self._server
+                try:
+                    await self._apply_approvals([{"name": name, "approval": level} for name, level in policies.items()], candidate)
+                    self._approval_levels = policies
+                    self.registry.shared = preview.shared
+                    # An earlier adapter may have left this name registered with another URL (its token changed).
+                    for method in ("mcp.disconnect", "mcp.delete_custom"):
+                        try:
+                            await self.rpc(self.settings.mgmt_url, method, {"name": candidate})
+                        except Exception:
+                            pass
+                    await self.rpc(self.settings.mgmt_url, "mcp.register_custom", {
+                        "name": candidate, "transport": "streamable-http",
+                        # Toolset enforces each run's deadline; a longer child
+                        # deadline must not replace its parent's transport.
+                        "url": f"{self.settings.public_url}/mcp/{self.registry.token}", "timeout_s": self.settings.tool_timeout_s,
+                    })
+                    await self.rpc(self.settings.mgmt_url, "mcp.connect", {"name": candidate})
+                except Exception:
+                    self.registry.shared = old_shared
+                    self._approval_levels = old_approvals
+                    self._permissions_on = old_permissions_on
+                    for key in [key for key in self._tool_approvals if key[0] == candidate]:
+                        self._tool_approvals.pop(key, None)
+                    for method in ("mcp.disconnect", "mcp.delete_custom"):
+                        try:
+                            await self.rpc(self.settings.mgmt_url, method, {"name": candidate})
+                        except Exception:
+                            pass
+                    raise
+                self._server = candidate
                 self._shared_registered = True
-                # Approval levels are per tool name, and the name carries the server's: all of them again.
-                await self._apply_approvals([{"name": name, "approval": level} for name, level in self._approval_levels.items()],
-                                            self._server)
+                self._server_tools[candidate] = set(self.registry.shared)
                 if previous is not None and not self._server_runs.get(previous):
                     await self._retire(previous)
             self._server_runs[self._server] = self._server_runs.get(self._server, 0) + 1
@@ -310,6 +335,7 @@ class AgentRunner:
         self._server_runs.pop(server, None)
         for key in [key for key in self._tool_approvals if key[0] == server]:
             self._tool_approvals.pop(key, None)
+        self._server_tools.pop(server, None)
         for method in ("mcp.disconnect", "mcp.delete_custom"):
             try:
                 await self.rpc(self.settings.mgmt_url, method, {"name": server})

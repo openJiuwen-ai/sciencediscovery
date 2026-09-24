@@ -154,6 +154,15 @@ async def test_merging_says_when_jiuwenswarm_must_read_the_list_again():
     assert registry.merge([{"name": "declare_artifact", "description": "d", "inputSchema": {"type": "object"}}]) is True
 
 
+async def test_merging_refreshes_a_changed_property_type():
+    registry = ToolsetRegistry()
+    first = [{"name": "custom_lookup", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}}]
+    changed = [{"name": "custom_lookup", "inputSchema": {"type": "object", "properties": {"value": {"type": "integer"}}}}]
+    assert registry.merge(first) is True
+    assert registry.merge(changed) is True
+    assert registry.shared["custom_lookup"]["inputSchema"]["properties"]["value"]["type"] == "integer"
+
+
 async def test_a_call_goes_to_the_run_its_tag_names_without_the_tag(setup):
     client, tag, calls, registry = setup
     response = await rpc(client, registry, "tools/call", call_of(tag, "run_shell", command="echo hi"))
