@@ -124,6 +124,15 @@ function showPolicies() {
   }
   return 0;
 }
+/**
+ * The directory, under CI_RESULTS_DIR, that one run's plan and evidence go to:
+ * the merge gate's slices by their own name, every other profile's as
+ * `<profile>-<slice>`, and a tag query as `query`. CI uploads read from here.
+ */
+export function resultsLabel(profileName, slice, query=false) {
+  return query?'query':profileName==='pr'?slice:`${profileName}-${slice}`;
+}
+
 export async function main(args=process.argv.slice(2)) {
   const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false;const query={};
   while(args.length){
@@ -151,7 +160,7 @@ export async function main(args=process.argv.slice(2)) {
   if(!['run','list','prepare'].includes(action)||!(slice in slices))throw new Error(`Usage: test:run|test:list|policy [--profile ${Object.keys(profiles).join('|')}] [--slice ut|st|e2e] [--${Object.keys(schema.groups).join(' V] [--')} V] [--output DIR] [--coverage]`);
   // Under CI the layer entry point owns `<CI_RESULTS_DIR>/<layer>/run.log` and
   // its own summary; the frozen plan and its evidence go beside them, not over them.
-  const label=dimensions.length?'query':profileName==='pr'?slice:`${profileName}-${slice}`;
+  const label=resultsLabel(profileName,slice,dimensions.length>0);
   const outputDir=resolve(output??(process.env.CI_RESULTS_DIR?join(process.env.CI_RESULTS_DIR,label,'tagged'):join(root,'.test-runs',label)));
   mkdirSync(outputDir,{recursive:true});
   // Caches and run data are kept inside the workspace; TMPDIR deliberately is

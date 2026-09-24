@@ -96,6 +96,13 @@ jobs:
     name: UT
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # Where the shared runner writes this run's plan and evidence: the merge
+      # gate under the slice's own name, any other profile under
+      # `<profile>-ut` (resultsLabel in test/support/tagged/shared.mjs).
+      # The uploads below read from it; a fixed `ut/` path found nothing
+      # under the Nightly's daily profile.
+      RESULTS: .ci-results/${{ (inputs.profile || 'pr') == 'pr' && 'ut' || format('{0}-ut', inputs.profile) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -147,7 +154,7 @@ jobs:
           name: ut-results
           path: |
             .ci-results
-            !.ci-results/ut/tagged/coverage
+            !${{ env.RESULTS }}/tagged/coverage
           # .ci-results is itself a dot-directory; by default nothing is uploaded.
           include-hidden-files: true
           if-no-files-found: warn
@@ -160,10 +167,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ut-coverage
-          path: .ci-results/ut/tagged/coverage
+          path: ${{ env.RESULTS }}/tagged/coverage
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
-          if-no-files-found: warn
+          # A layer that passed has recorded its coverage: finding none means
+          # the path is wrong, and the job says so here rather than leaving the
+          # Coverage job to fail on an artifact that was never uploaded.
+          if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
 
   coverage:
     name: Coverage
@@ -251,6 +261,13 @@ jobs:
     name: ST
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Where the shared runner writes this run's plan and evidence: the merge
+      # gate under the slice's own name, any other profile under
+      # `<profile>-st` (resultsLabel in test/support/tagged/shared.mjs).
+      # The uploads below read from it; a fixed `st/` path found nothing
+      # under the Nightly's daily profile.
+      RESULTS: .ci-results/${{ (inputs.profile || 'pr') == 'pr' && 'st' || format('{0}-st', inputs.profile) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -288,7 +305,7 @@ jobs:
           name: st-results
           path: |
             .ci-results
-            !.ci-results/st/tagged/coverage
+            !${{ env.RESULTS }}/tagged/coverage
           # .ci-results is itself a dot-directory; by default nothing is uploaded.
           include-hidden-files: true
           if-no-files-found: warn
@@ -298,10 +315,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: st-coverage
-          path: .ci-results/st/tagged/coverage
+          path: ${{ env.RESULTS }}/tagged/coverage
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
-          if-no-files-found: warn
+          # A layer that passed has recorded its coverage: finding none means
+          # the path is wrong, and the job says so here rather than leaving the
+          # Coverage job to fail on an artifact that was never uploaded.
+          if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
 
   e2e:
     name: E2E (mocked)
