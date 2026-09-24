@@ -95,6 +95,14 @@ finish() {
   # already running (a developer's) is left alone.
   if [[ "$jiuwenswarm_started" -eq 1 ]]; then
     "$repository_root/scripts/jiuwenswarm.sh" stop >> "$stack_log" 2>&1 || true
+    # Transport diagnostics already omit URLs, credentials, arguments and
+    # response bodies. Preserve them per fixture before the next Swarm start
+    # truncates its shared log; stack.log only contains the adapter's side.
+    local swarm_log="${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}/jiuwenswarm.log"
+    if [[ -f "$swarm_log" ]]; then
+      grep -E 'platform_mcp_(request_failed|transport_failed|transport_open|transport_close|connect_ready|disconnect_requested|request_cancel)' \
+        "$swarm_log" > "$results_root/platform-mcp-transport.log" || true
+    fi
   fi
   if [[ "$test_started" -eq 1 ]]; then
     mkdir -p "$results_root/playwright-report" "$results_root/test-results"
