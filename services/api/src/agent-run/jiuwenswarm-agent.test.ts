@@ -406,11 +406,17 @@ test("the run timeout aborts a stuck run and says it timed out, as the built-in 
   }
 });
 
-test("a run with no progress for its idle timeout stops with the idle timeout's message", async () => {
+test("a run with no progress for its idle timeout stops with the idle timeout's message", async (context) => {
   const adapter = await fakeAdapter((_request, response) => { response.writeHead(200); response.write(""); });
+  const diagnostics: string[] = [];
+  context.mock.method(console, "info", (line: string) => { if (line.startsWith("[gateway-progress]")) diagnostics.push(line); });
   try {
     const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ runIdleTimeoutMs: 60 } as never));
     await assert.rejects(agent.execute("go"), /Agent run stalled: no gateway progress for 60 ms/);
+    const expired = diagnostics.map((line) => JSON.parse(line.slice("[gateway-progress] ".length)))
+      .find((entry) => entry.phase === "idle_deadline_expired");
+    assert.equal(expired?.lastProgressSource, "run_started");
+    assert.deepEqual(expired?.activeModelRequests, []);
   } finally {
     await adapter.close();
   }
@@ -969,6 +975,8 @@ test("subagents can be switched back to our task, and then JiuwenSwarm's sub-age
   try {
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, subagents: "task" })(withRunSubagent()).execute("go");
     assert.ok(sent.tools.some((tool: { name: string }) => tool.name === "task"));
+    assert.match(sent.tools.find((tool: { name: string }) => tool.name === "task")?.description ?? "",
+      /Do not also request the complete report or source package/);
     assert.equal("nativeTools" in sent, false);
     // Hidden, not merely unlisted: all of JiuwenSwarm's other tools are offered, and these would delegate around task.
     assert.ok(["subagent_spawn", "subagent_wait"].every((name) => sent.hiddenJiuwenSwarmTools.includes(name)));

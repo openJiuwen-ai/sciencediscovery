@@ -53,6 +53,55 @@ const post = (g: { url: string; token: string }, body: unknown, token = g.token)
 const events = async (response: Response) => (await response.text()).split("\n\n").filter((part) => part.startsWith("data: ") && !part.includes("[DONE]"))
   .map((part) => JSON.parse(part.slice(6)));
 
+test("gateway diagnostics report an active model request without logging its payload", async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  const streamer = (async (_e: unknown, _s: unknown, _h: unknown, _t: unknown, _p: unknown,
+    _signal: AbortSignal, callbacks: { onProgress?: () => void }) => {
+    callbacks.onProgress?.();
+    started();
+    await waiting;
+    return answer();
+  }) as unknown as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const pending = post(g, { stream: true, messages: [{ role: "user", content: "private prompt" }],
+      tools: [{ type: "function", function: { name: "echo", parameters: { type: "object" } } }] });
+    await entered;
+    const active = g.diagnostics();
+    assert.equal(active.length, 1);
+    assert.equal(active[0]?.purpose, "task");
+    assert.equal(active[0]?.phase, "receiving");
+    assert.equal(active[0]?.upstreamChunks, 1);
+    assert.equal(JSON.stringify(active).includes("private prompt"), false);
+    release();
+    await pending;
+    assert.deepEqual(g.diagnostics(), []);
+  } finally { release(); await g.close(); }
+});
+
+test("invalid truncated tool arguments fail before a tool call is forwarded", async (context) => {
+  const warnings: string[] = [];
+  context.mock.method(console, "warn", (line: string) => warnings.push(line));
+  const raw = '{"secret":"private-payload"';
+  const { streamer } = fakeStreamer(answer({ truncated: true,
+    toolCalls: [{ id: "bad-call", name: "run_shell", args: {}, argsParseError: "Unexpected private-payload" }],
+    assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad-call", type: "function",
+      function: { name: "run_shell", arguments: raw } }] },
+  }));
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: true, messages: [{ role: "user", content: "go" }],
+      tools: [{ type: "function", function: { name: "run_shell", parameters: { type: "object" } } }] });
+    assert.match(await response.text(), /invalid tool arguments after reaching max_tokens/);
+    assert.equal(g.lastFailure()?.truncated, true);
+    assert.deepEqual(g.lastFailure()?.tools, ["run_shell"]);
+    assert.equal(warnings.some((line) => line.includes("private-payload")), false);
+  } finally { await g.close(); }
+});
+
 test("a chat-completions request is served in the model's own protocol, with the endpoint the run configured", async () => {
   const { calls, streamer } = fakeStreamer(answer());
   const g = await gateway(streamer);

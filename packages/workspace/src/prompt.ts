@@ -109,6 +109,7 @@ DO NOT USE SUBAGENTS WHEN:
 SUBAGENT PROMPTS:
 - Give each task a specific description and a self-contained prompt.
 - Include relevant input paths, constraints, expected output format, and what evidence to report.
+- For a long report or source package, ask the subagent to save and declare the deliverable as an Artifact, then return only its artifact ID/version, coverage, key findings, and limitations. Do not ask it to repeat the complete Markdown or source package in its final reply unless the end user explicitly needs that inline; read the Artifact with read_artifact when you need its contents.
 - Ask subagents to state failures, missing data, and uncertainty instead of guessing.
 - Use specialistId only when the user selected or named a relevant specialist.
 </subagent_system>`;

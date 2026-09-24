@@ -1978,7 +1978,8 @@ async function executeAgentRun(
           };
         }
         } catch (error) {
-          rememberTimeout(timeoutFailure(error));
+          // Child failures belong to the subagent record and timeline, not the
+          // lead Agent's assistant-message stream.
           const failure = classifySubagentFailure(error, {
             maxTurns: subagent.maxTurns,
             maxTurnsExceeded,

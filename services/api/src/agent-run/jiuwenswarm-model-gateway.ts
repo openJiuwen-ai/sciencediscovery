@@ -48,6 +48,10 @@ export interface ModelGateway {
   restore<T extends Record<string, unknown>>(message: T): T;
   /** The last model turn served, for what the run's end has to say about it. */
   lastTurn(): { text: string; toolCalls: number; truncated: boolean } | undefined;
+  lastFailure(): { requestId: string; truncated: boolean; tools: string[] } | undefined;
+  /** Payload-free snapshot for diagnosing runs that stop making gateway progress. */
+  diagnostics(): Array<{ id: string; purpose: "task" | "auxiliary"; phase: string; elapsedMs: number;
+    upstreamChunks: number; downstreamChunks: number; upstreamIdleMs: number; downstreamIdleMs: number }>;
   close(): Promise<void>;
 }
 
@@ -125,15 +129,23 @@ export interface ModelCallObserver {
   completed(turn: ModelTurn, history: unknown[]): Promise<void>;
 }
 
+export interface ModelGatewayLifecycle {
+  progress(): void;
+}
+
 export async function startModelGateway(
   endpoint: ModelEndpoint,
   policy: ModelClientPolicy,
   signal: AbortSignal,
   streamer: Streamer = streamModelTurn,
   observer?: ModelCallObserver,
+  lifecycle?: ModelGatewayLifecycle,
 ): Promise<ModelGateway> {
   const token = randomUUID();
   const produced = new Map<string, Record<string, unknown>>();
+  let lastFailure: ReturnType<ModelGateway["lastFailure"]>;
+  const active = new Map<string, { purpose: "task" | "auxiliary"; phase: string; startedAt: number;
+    upstreamChunks: number; downstreamChunks: number; lastUpstreamAt: number; lastDownstreamAt: number }>();
   let last: ReturnType<ModelGateway["lastTurn"]>;
   const remember = (turn: ModelTurn) => {
     produced.set(turnKey(turn.assistantMessage), turn.assistantMessage);
@@ -172,6 +184,28 @@ export async function startModelGateway(
     signal.addEventListener("abort", abort, { once: true });
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
     const id = `chatcmpl-${randomUUID()}`;
+    if (tools.length) lastFailure = undefined;
+    const startedAt = Date.now();
+    const diagnostic = { purpose: (tools.length ? "task" : "auxiliary") as "task" | "auxiliary",
+      phase: "preparing", startedAt, upstreamChunks: 0, downstreamChunks: 0,
+      lastUpstreamAt: startedAt, lastDownstreamAt: startedAt };
+    active.set(id, diagnostic);
+    const upstream = () => { diagnostic.phase = "receiving"; diagnostic.upstreamChunks += 1;
+      diagnostic.lastUpstreamAt = Date.now(); if (tools.length) lifecycle?.progress(); };
+    const downstream = () => { diagnostic.downstreamChunks += 1; diagnostic.lastDownstreamAt = Date.now();
+      if (tools.length) lifecycle?.progress(); };
+    const rejectInvalidArguments = (turn: ModelTurn) => {
+      const invalid = turn.toolCalls.filter((call) => call.argsParseError);
+      if (!invalid.length) return;
+      if (tools.length) lastFailure = { requestId: id, truncated: turn.truncated === true,
+        tools: invalid.map((call) => call.name).slice(0, 20) };
+      console.warn(`[model-arguments] ${JSON.stringify({ event: "model.invalid_tool_arguments", requestId: id,
+        truncated: turn.truncated === true, usage: turn.usage,
+        tools: invalid.map((call) => call.name).slice(0, 20), invalidCount: invalid.length })}`);
+      throw new Error(turn.truncated
+        ? `Model returned invalid tool arguments after reaching max_tokens (${policy.maxTokens})`
+        : "Model returned invalid tool arguments");
+    };
     const chunk = (delta: Record<string, unknown>, finish: string | null = null, extra: Record<string, unknown> = {}) =>
       `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: endpoint.model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
     try {
@@ -186,9 +220,11 @@ export async function startModelGateway(
         };
         await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
         const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
-          onTextDelta: (delta) => { start(); response.write(chunk({ content: delta })); },
-          onThinkingDelta: (delta) => { start(); response.write(chunk({ reasoning_content: delta })); },
+          onProgress: upstream,
+          onTextDelta: (delta) => { downstream(); start(); response.write(chunk({ content: delta })); },
+          onThinkingDelta: (delta) => { downstream(); start(); response.write(chunk({ reasoning_content: delta })); },
         });
+        rejectInvalidArguments(turn);
         start();
         remember(turn);
         await record(turn);
@@ -199,7 +235,8 @@ export async function startModelGateway(
         return;
       }
       await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
-      const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal);
+      const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, { onProgress: upstream });
+      rejectInvalidArguments(turn);
       remember(turn);
       await record(turn);
       const content = typeof turn.assistantMessage.content === "string" ? turn.assistantMessage.content : textOf(turn.assistantMessage.content);
@@ -221,6 +258,7 @@ export async function startModelGateway(
         fail(status, message);
       }
     } finally {
+      active.delete(id);
       signal.removeEventListener("abort", abort);
     }
   });
@@ -231,6 +269,12 @@ export async function startModelGateway(
     token,
     restore,
     lastTurn: () => last,
+    lastFailure: () => lastFailure,
+    diagnostics: () => [...active.entries()].map(([id, item]) => ({ id, purpose: item.purpose,
+      phase: item.phase, elapsedMs: Date.now() - item.startedAt,
+      upstreamChunks: item.upstreamChunks, downstreamChunks: item.downstreamChunks,
+      upstreamIdleMs: Date.now() - item.lastUpstreamAt,
+      downstreamIdleMs: Date.now() - item.lastDownstreamAt })),
     close: () => new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); }),
   };
 }

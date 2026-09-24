@@ -14,7 +14,7 @@ Only the **agent executor** is swapped: the legacy `createAgent` seam
 (`AgentRunBindings.createAgent`) is filled by `createJiuwenSwarmAgentFactory`
 (`services/api/src/agent-run/jiuwenswarm-agent.ts`), which calls this adapter.
 
-```
+```text
 browser ──▶ adapter :4310 ──proxy──▶ legacy API :4410 ──createAgent──┐
                 │  ▲                                                  │ POST /agent/runs
                 │  └──── tool calls (loopback bridge, per run) ◀──────┤ (NDJSON events)
@@ -37,6 +37,18 @@ A run, end to end:
    Model calls go through the proxy to the real endpoint.
 4. The adapter maps JiuwenSwarm's frames to run events (`events.py`) and streams them
    back as NDJSON; the legacy API turns them into the events the UI already renders.
+
+To investigate a four-minute gateway idle timeout, set
+`SCIENCE_AGENT_TRACE_GATEWAY_PROGRESS=1` on the Node API process before startup.
+Its `[gateway-progress]` log records a payload-free snapshot every 30 seconds:
+the session and Agent IDs, last progress type and age, and each active model
+request's purpose, elapsed time, and upstream/downstream chunk counts. A run
+deadline records the same snapshot even when the flag is off. An empty active
+request list points toward adapter or Swarm round preparation; an active request
+with no upstream chunks points toward the model transport. `[model-arguments]`
+records a request ID, tool names and truncation/usage metadata when a model
+returns malformed tool arguments. These logs omit prompts, responses, argument
+contents and credentials.
 
 Why a model proxy: JiuwenSwarm names MCP tools `mcp_<server>_<tool>`, offers the model
 dozens of tools of its own and wraps the prompt in its persona. The proxy restores the

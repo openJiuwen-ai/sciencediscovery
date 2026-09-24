@@ -178,6 +178,7 @@ test("system prompt supports custom lead subagent orchestration limits", () => {
 
   assert.match(prompt, /Maximum 2 task calls in a single model response/);
   assert.match(prompt, /Maximum 8 task calls for the current user request\/run/);
+  assert.match(prompt, /Do not ask it to repeat the complete Markdown or source package in its final reply/);
 });
 
 test("system prompt lists enabled built-in specialists by name and description", () => {
