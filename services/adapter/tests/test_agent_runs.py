@@ -148,6 +148,51 @@ async def test_new_tools_never_disconnect_the_server_a_running_run_is_calling_th
     assert runner.registry.shared.keys() == {"task", "run_shell"}, "the newest generation serves every tool"
 
 
+async def test_new_mcp_generation_retries_after_a_failed_connect(harness):
+    from sciencediscovery_adapter.gateway import GatewayError
+
+    _, runner, rpcs = harness
+    first_tools = [{"name": "first", "inputSchema": {"type": "object"}}]
+    wider = [*first_tools, {"name": "second", "inputSchema": {"type": "object"}}]
+    first = await runner.ensure_shared_tools(first_tools, 60)
+    await runner.release_shared_tools(first)
+    original_rpc = runner.rpc
+    failed = False
+
+    async def fail_once(url, method, params=None, **kwargs):
+        nonlocal failed
+        if method == "mcp.connect" and params["name"] != first and not failed:
+            failed = True
+            raise GatewayError("one-time connect failure")
+        return await original_rpc(url, method, params, **kwargs)
+
+    runner.rpc = fail_once
+    with pytest.raises(GatewayError, match="one-time connect failure"):
+        await runner.ensure_shared_tools(wider, 60)
+    assert runner._server == first
+    assert set(runner.registry.shared) == {"first"}
+
+    rpcs.clear()
+    recovered = await runner.ensure_shared_tools(wider, 60)
+    assert recovered != first
+    assert ("mcp.connect", recovered) in [(method, params["name"]) for _, method, params in rpcs
+                                           if method.startswith("mcp.")]
+    await runner.release_shared_tools(recovered)
+
+
+async def test_new_generations_discard_tools_from_finished_runs(harness):
+    _, runner, rpcs = harness
+    for index in range(20):
+        tools = [{"name": f"custom_{index}", "inputSchema": {"type": "object"}}]
+        server = await runner.ensure_shared_tools(tools, 60)
+        await runner.release_shared_tools(server)
+
+    assert set(runner.registry.shared) == {"custom_19"}
+    assert set(runner._approval_levels) == {"custom_19"}
+    approvals = [method for _, method, _ in rpcs if method == "permissions.tools.update"]
+    assert len(approvals) == 20
+
+
 async def test_tools_without_a_bridge_fail_the_run_cleanly(harness):
     app, _, rpcs = harness
     _, lines = await post(app, {"sessionId": "s1", "prompt": "go", "tools": [{"name": "x"}]})

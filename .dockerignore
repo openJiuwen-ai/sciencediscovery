@@ -21,6 +21,7 @@
 # cannot re-enter the build context. Unlike .gitignore, Docker patterns are
 # anchored at the context root, so it needs `**`.
 .sciencediscovery-data/
+.e2e-data/
 data/
 **/.deer-flow/
 **/.env

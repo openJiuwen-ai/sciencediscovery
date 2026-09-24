@@ -61,3 +61,9 @@ test("every workspace project in the lockfile still has its manifest", () => {
   assert.ok(importers.length > 1, "the lockfile should record the workspace projects");
   assert.deepEqual(importersMissingManifests(read("pnpm-lock.yaml"), onDisk), []);
 });
+test("local runtime and browser-test data never enter the image context", () => {
+  const ignored = new Set(read(".dockerignore").split(/\r?\n/u).map((line) => line.trim()));
+  assert.ok(ignored.has(".sciencediscovery-data/"));
+  assert.ok(ignored.has(".e2e-data/"));
+  assert.ok(ignored.has("data/"));
+});

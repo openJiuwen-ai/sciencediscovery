@@ -15,10 +15,11 @@ import { collectRunnerResources } from "./resources.js";
 test("resources measure the persistent workspace filesystem with user-available blocks", async (t) => {
   const dir = await mkdtemp(resolve(tmpdir(), "runner-resources-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const result = await collectRunnerResources(dir);
+  const fragmentSize = 512;
+  const result = await collectRunnerResources(dir, { filesystemFragmentSize: async () => fragmentSize });
   assert.equal(result.workspaceDisk?.path, resolve(await realpath(dir), "remote-workspaces"));
   const fs = await statfs(result.workspaceDisk!.path);
-  assert.equal(result.workspaceDisk?.totalBytes, fs.blocks * fs.bsize);
+  assert.equal(result.workspaceDisk?.totalBytes, fs.blocks * fragmentSize);
   assert.ok(result.workspaceDisk!.availableBytes >= 0);
   // Available bytes can change concurrently, but cannot include reserved blocks.
   assert.ok(result.workspaceDisk!.availableBytes <= result.workspaceDisk!.totalBytes);

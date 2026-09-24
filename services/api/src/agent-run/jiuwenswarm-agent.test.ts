@@ -950,12 +950,12 @@ function withRunSubagent(extra: Partial<NativeAgentOptions> = {}): NativeAgentOp
   return options({ runSubagent: (async () => ({ id: "sub-1", status: "completed" })) as never, ...extra });
 }
 
-test("by default the model delegates with JiuwenSwarm's subagent_spawn/subagent_wait, not our task", async () => {
+test("by default the model delegates with JiuwenSwarm's native subagent tools, not our task", async () => {
   let sent: any;
   const adapter = await fakeAdapter(async ({ body }, response) => { sent = body; response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
   try {
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(withRunSubagent()).execute("go");
-    assert.deepEqual(sent.nativeTools, ["subagent_spawn", "subagent_wait"]);
+    assert.deepEqual(sent.nativeTools, ["subagent_spawn", "subagent_wait", "task_tool"]);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
     assert.equal(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"), false);
   } finally {
@@ -971,7 +971,7 @@ test("subagents can be switched back to our task, and then JiuwenSwarm's sub-age
     assert.ok(sent.tools.some((tool: { name: string }) => tool.name === "task"));
     assert.equal("nativeTools" in sent, false);
     // Hidden, not merely unlisted: all of JiuwenSwarm's other tools are offered, and these would delegate around task.
-    assert.ok(["subagent_spawn", "subagent_wait"].every((name) => sent.hiddenJiuwenSwarmTools.includes(name)));
+    assert.ok(["subagent_spawn", "subagent_wait", "task_tool"].every((name) => sent.hiddenJiuwenSwarmTools.includes(name)));
   } finally {
     await adapter.close();
   }
@@ -996,7 +996,7 @@ test("a run with no delegation capability offers no delegation tool of either ki
     await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options()).execute("go");
     assert.equal("nativeTools" in sent, false);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
-    assert.ok(["subagent_spawn", "subagent_wait"].every((name) => sent.hiddenJiuwenSwarmTools.includes(name)));
+    assert.ok(["subagent_spawn", "subagent_wait", "task_tool"].every((name) => sent.hiddenJiuwenSwarmTools.includes(name)));
   } finally {
     await adapter.close();
   }
@@ -1141,8 +1141,11 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
     // Commands and file writes stay in ScienceDiscovery's sandbox: JiuwenSwarm's host tools are hidden, and the prompt says so.
     // So are its planning and delegation, which this run (no plan store, no task) does not have.
     assert.deepEqual(sent.hiddenJiuwenSwarmTools, [...["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf"],
-      "todo_create", "todo_modify", "todo_list", "todo_get", "subagent_spawn", "subagent_wait"]);
+      "todo_create", "todo_modify", "todo_list", "todo_get", "subagent_spawn", "subagent_wait", "task_tool"]);
     assert.match(sent.systemPrompt, /run in the sandbox through run_shell/);
+    assert.match(sent.systemPrompt, /skill_index may show absolute host paths[\s\S]*never pass them to read_file/);
+    assert.match(sent.systemPrompt, /skill_tool\(skill_name=<name>, relative_file_path="SKILL\.md"\)/);
+    assert.match(sent.systemPrompt, /If skill_tool fails, load that Skill with read_skill\(skillId=<ScienceDiscovery skill id>\)/);
     const start = events.find((event) => event.type === "tool_execution_start") as any;
     const end = events.find((event) => event.type === "tool_execution_end") as any;
     assert.equal(start.toolName, "memory_search");
@@ -1224,7 +1227,7 @@ const skillOptions = (extra: Record<string, unknown> = {}) => options({
   skills: [skill("evolve-design"), skill("skill-creator")], skillPackagesRoot: "/data/skill-snapshots/abc", ...extra,
 } as never);
 
-test("the run's skills are installed in JiuwenSwarm and loaded its way: no catalog of ours, no read_skill", async () => {
+test("the run's skills are installed in JiuwenSwarm with our read_skill retained as a fallback", async () => {
   const adapter = await fakeAdapter(async ({ body }, response) => {
     if (body.skills) {
       response.writeHead(200, { "content-type": "application/json" });
@@ -1236,15 +1239,22 @@ test("the run's skills are installed in JiuwenSwarm and loaded its way: no catal
   });
   try {
     const created: unknown[] = [];
-    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(skillOptions({ createSkill: async (draft: unknown) => { created.push(draft); return { id: "d1" }; } })).execute("go");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(skillOptions({
+      createSkill: async (draft: unknown) => { created.push(draft); return { id: "d1" }; },
+      skills: [
+        { ...skill("evolve-design"), resources: [{ hash: "hash-reference", kind: "reference", path: "references/custom-script.md", size: 24 }] },
+        skill("skill-creator"),
+      ],
+    })).execute("go");
     const [install, run] = adapter.requests.map((request) => request.body);
     assert.deepEqual(install.skills, [
       { hash: "hash-evolve-design", id: "evolve-design", path: "/data/skill-snapshots/abc/evolve-design" },
       { hash: "hash-skill-creator", id: "skill-creator", path: "/data/skill-snapshots/abc/skill-creator" },
     ]);
     const names = run.tools.map((tool: { name: string }) => tool.name);
-    assert.equal(names.includes("read_skill") || names.includes("read_skill_resource"), false);
-    assert.equal(/<available_skills>|read_skill/.test(run.systemPrompt), false, "JiuwenSwarm's prompt lists the skills, ours does not");
+    assert.ok(names.includes("read_skill") && names.includes("read_skill_resource"));
+    assert.equal(/<available_skills>/.test(run.systemPrompt), false, "JiuwenSwarm's prompt lists the skills, ours does not duplicate them");
+    assert.match(run.systemPrompt, /If skill_tool fails, load that Skill with read_skill/);
     const createSkill = run.tools.find((tool: { name: string }) => tool.name === "create_skill");
     assert.match(createSkill.description, /load the sciencediscovery-skill-creator skill with skill_tool/);
   } finally {

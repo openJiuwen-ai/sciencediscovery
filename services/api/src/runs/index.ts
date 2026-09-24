@@ -29,6 +29,7 @@ import {
   buildWorkspaceSystemPrompt,
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
   DEFAULT_MAX_TOTAL_SUBAGENTS,
+  subagentFinalText,
   type WorkspaceAgentOptions,
   WORKSPACE_SYSTEM_PROMPT_VERSION,
 } from "@sciencediscovery/workspace";
@@ -1948,9 +1949,7 @@ async function executeAgentRun(
         } finally { contextRefs.close(); }
         subagent.contextRef = contextRef;
         childSignal.throwIfAborted();
-        assistantOutput = steps
-          .findLast((step) => step.kind === "assistant" && step.content.trim())
-          ?.content.trim() ?? "";
+        assistantOutput = subagentFinalText({ steps }) ?? "";
         if (!assistantOutput) {
           publishStep({
             content: "Subagent completed without a text response.",
@@ -2178,7 +2177,7 @@ async function executeAgentRun(
     assertRunActive();
     if (continuation) {
       const child = await agentOptions.runSubagent!(continuation.input, requestExecution.abortSignal);
-      const message = await store.appendMessage(sessionId, "assistant", `Subagent ${child.input.description}: ${child.steps.findLast((step) => step.kind === "assistant")?.content ?? child.error ?? child.status}`, selectedModel);
+      const message = await store.appendMessage(sessionId, "assistant", `Subagent ${child.input.description}: ${subagentFinalText(child) ?? child.error ?? child.status}`, selectedModel);
       await store.updateSessionRun(sessionId, runId, { assistantMessageId: message.id });
       await emit({ files: await listWorkspaceFiles(store, sessionId), message, type: "run.completed" });
       const outcome = continuationTurnStatus ?? child.status;

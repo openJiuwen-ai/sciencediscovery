@@ -245,12 +245,15 @@ export function hydrateTerminalRunTimelines(
       next[run.id] = existing;
       continue;
     }
-    next[run.id] = ordered.reduce<SessionRunTimeline>((timeline, record) => ({
+    const pending = existing
+      ? ordered.filter((record) => record.sequence > existing.lastSequence)
+      : ordered;
+    next[run.id] = pending.reduce<SessionRunTimeline>((timeline, record) => ({
       entries: reduceRunTimeline(timeline.entries, record.event),
       lastSequence: Math.max(timeline.lastSequence, record.sequence),
       ...timelineModelNameSnapshot(record.event, timeline.modelName),
       runId: run.id,
-    }), { entries: [], lastSequence: 0, runId: run.id });
+    }), existing ?? { entries: [], lastSequence: 0, runId: run.id });
   }
   return next;
 }

@@ -235,6 +235,7 @@ class AgentRunner:
         self._generation = 0
         self._server = SERVER_NAME
         self._server_runs: dict[str, int] = {}
+        self._server_tools: dict[str, set[str]] = {}
         self._approval_levels: dict[str, str] = {}
         self._permissions_on = False
         # Runs paused on one of JiuwenSwarm's approval questions, by the question's id.
@@ -260,34 +261,70 @@ class AgentRunner:
         once the last of them has ended.
         """
         async with self._shared_lock:
+            previous = self._server if self._shared_registered else None
+            old_shared = self.registry.shared.copy()
+            old_approvals = self._approval_levels.copy()
+            old_timeout = self._shared_timeout_s
+            old_permissions_on = self._permissions_on
+            names = {tool["name"] for tool in tools}
+            # Only running generations need their historical tools. A finished
+            # generation can be replaced without carrying its catalog forward.
+            active = set().union(*(self._server_tools.get(server, set())
+                                   for server, count in self._server_runs.items() if count > 0))
+            retained = names | active
+            self.registry.shared = {name: tool for name, tool in self.registry.shared.items() if name in retained}
+            self._approval_levels = {name: level for name, level in self._approval_levels.items() if name in retained}
+            new = [tool for tool in tools if tool["name"] not in self.registry.shared]
             for tool in tools:
                 self._approval_levels.setdefault(tool["name"], tool.get("approval") or "allow")
-            new = [tool for tool in tools if tool["name"] not in self.registry.shared]
-            changed = self.registry.merge(tools)
+            changed = self.registry.merge(tools) or set(old_shared) != set(self.registry.shared)
             longer = timeout_s > self._shared_timeout_s
             if self._shared_registered and not changed and not longer:
-                await self._apply_approvals(new, self._server)
+                try:
+                    await self._apply_approvals(new, self._server)
+                except Exception:
+                    self.registry.shared = old_shared
+                    self._approval_levels = old_approvals
+                    self._permissions_on = old_permissions_on
+                    raise
+                self._server_tools.setdefault(self._server, set()).update(names)
             else:
-                self._shared_timeout_s = max(timeout_s, self._shared_timeout_s)
-                previous = self._server if self._shared_registered else None
+                candidate_timeout = max(timeout_s, self._shared_timeout_s)
                 if previous is not None:
                     self._generation += 1
-                    self._server = f"{SERVER_NAME}{self._generation:010d}"
-                # An earlier adapter may have left this name registered with another URL (its token changed).
-                for method in ("mcp.disconnect", "mcp.delete_custom"):
-                    try:
-                        await self.rpc(self.settings.mgmt_url, method, {"name": self._server})
-                    except Exception:
-                        pass
-                await self.rpc(self.settings.mgmt_url, "mcp.register_custom", {
-                    "name": self._server, "transport": "streamable-http",
-                    "url": f"{self.settings.public_url}/mcp/{self.registry.token}", "timeout_s": self._shared_timeout_s,
-                })
-                await self.rpc(self.settings.mgmt_url, "mcp.connect", {"name": self._server})
+                    candidate = f"{SERVER_NAME}{self._generation:010d}"
+                else:
+                    candidate = self._server
+                try:
+                    # An earlier adapter may have left this name registered with another URL (its token changed).
+                    for method in ("mcp.disconnect", "mcp.delete_custom"):
+                        try:
+                            await self.rpc(self.settings.mgmt_url, method, {"name": candidate})
+                        except Exception:
+                            pass
+                    await self.rpc(self.settings.mgmt_url, "mcp.register_custom", {
+                        "name": candidate, "transport": "streamable-http",
+                        "url": f"{self.settings.public_url}/mcp/{self.registry.token}", "timeout_s": candidate_timeout,
+                    })
+                    await self.rpc(self.settings.mgmt_url, "mcp.connect", {"name": candidate})
+                    # Approval levels are per tool name, and the name carries the server's: all of them again.
+                    await self._apply_approvals([{"name": name, "approval": level} for name, level in self._approval_levels.items()],
+                                                candidate)
+                except Exception:
+                    self.registry.shared = old_shared
+                    self._approval_levels = old_approvals
+                    self._shared_timeout_s = old_timeout
+                    self._permissions_on = old_permissions_on
+                    for method in ("mcp.disconnect", "mcp.delete_custom"):
+                        try:
+                            await self.rpc(self.settings.mgmt_url, method, {"name": candidate})
+                        except Exception:
+                            pass
+                    raise
+                self._server = candidate
+                self._shared_timeout_s = candidate_timeout
                 self._shared_registered = True
-                # Approval levels are per tool name, and the name carries the server's: all of them again.
-                await self._apply_approvals([{"name": name, "approval": level} for name, level in self._approval_levels.items()],
-                                            self._server)
+                self._server_tools[candidate] = set(self.registry.shared)
                 if previous is not None and not self._server_runs.get(previous):
                     await self._retire(previous)
             self._server_runs[self._server] = self._server_runs.get(self._server, 0) + 1
@@ -302,6 +339,7 @@ class AgentRunner:
 
     async def _retire(self, server: str) -> None:
         self._server_runs.pop(server, None)
+        self._server_tools.pop(server, None)
         for method in ("mcp.disconnect", "mcp.delete_custom"):
             try:
                 await self.rpc(self.settings.mgmt_url, method, {"name": server})

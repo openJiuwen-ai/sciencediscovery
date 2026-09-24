@@ -49,6 +49,7 @@ test("excludes test files and preserves Python line and branch counts", () => {
   assert.equal(summary.files, 1);
   assert.deepEqual(summary.totals.lines, { covered: 6, percentage: 75, total: 8 });
   assert.deepEqual(summary.totals.branches, { covered: 3, percentage: 75, total: 4 });
+  assert.deepEqual(summary.sources, [{ path: "services/example/src/example.py", totals: summary.totals }]);
 });
 
 test("aggregates services by counts instead of averaging percentages", () => {
@@ -73,6 +74,12 @@ test("aggregates services by counts instead of averaging percentages", () => {
   assert.deepEqual(aggregate.totals.lines, { covered: 9, percentage: 75, total: 12 });
   assert.equal(aggregate.authoritative, true);
   assert.equal(aggregate.groups.length, 2);
+  assert.deepEqual(aggregate.sources, []);
+  const withFiles = aggregatePythonCoverage([
+    { files: 1, group: "services/two", sources: [{ path: "services/two/b.py", totals: {} }], totals: { branches: { covered: 0, total: 0 }, lines: { covered: 0, total: 0 } } },
+    { files: 1, group: "services/one", sources: [{ path: "services/one/a.py", totals: {} }], totals: { branches: { covered: 0, total: 0 }, lines: { covered: 0, total: 0 } } },
+  ]);
+  assert.deepEqual(withFiles.sources.map((source) => source.path), ["services/one/a.py", "services/two/b.py"]);
 });
 
 test("writes a schema-versioned Python group summary", async () => {

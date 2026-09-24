@@ -42,6 +42,14 @@ export function summarizePythonCoverage(document) {
   const branchTotal = measured.reduce((sum, [, value]) => sum + (value.summary?.num_branches || 0), 0);
   return {
     files: measured.length,
+    // Each measured file's own totals, so a reader can go from a directory down to a file.
+    sources: measured.map(([file, value]) => ({
+      path: file,
+      totals: {
+        branches: metric(value.summary?.covered_branches || 0, value.summary?.num_branches || 0),
+        lines: metric(value.summary?.covered_lines || 0, value.summary?.num_statements || 0),
+      },
+    })).sort((left, right) => left.path.localeCompare(right.path)),
     totals: {
       branches: metric(branchCovered, branchTotal),
       lines: metric(lineCovered, lineTotal),
@@ -57,6 +65,7 @@ export function pythonSummaryDocument(report, metadata = {}) {
     language: "python",
     ...metadata,
     files: summary.files,
+    sources: summary.sources,
     scope,
     totals: summary.totals,
   };
@@ -85,6 +94,7 @@ export function aggregatePythonCoverage(groups, metadata = {}) {
       name: group,
       totals: groupTotals,
     })),
+    sources: groups.flatMap((group) => group.sources ?? []).sort((left, right) => left.path.localeCompare(right.path)),
     scope,
     totals,
   };

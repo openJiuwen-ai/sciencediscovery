@@ -175,7 +175,10 @@ jobs:
           path: .ci-results/ut/tagged/coverage
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
-          if-no-files-found: warn
+          # A layer that passed has recorded its coverage: finding none means
+          # the path is wrong, and the job says so here rather than leaving the
+          # Coverage job to fail on an artifact that was never uploaded.
+          if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
 
   coverage:
     name: Coverage
@@ -313,7 +316,10 @@ jobs:
           path: .ci-results/st/tagged/coverage
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
-          if-no-files-found: warn
+          # A layer that passed has recorded its coverage: finding none means
+          # the path is wrong, and the job says so here rather than leaving the
+          # Coverage job to fail on an artifact that was never uploaded.
+          if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
 
   e2e:
     name: E2E (mocked, JiuwenSwarm)

@@ -15,7 +15,7 @@
 """One MCP server (streamable HTTP, JSON-RPC) for the tools of every run.
 
 A run's toolset is the tools the legacy API would have given its native agent for that run. JiuwenSwarm knows
-one server, `sci`, whose tool list is every tool any run has brought; so a tool has the same name in every run
+one server, `sci`, whose tool list covers current runs and their active server generations; so a tool has the same name in every run
 (`mcp_sci_<name>`), which JiuwenSwarm's permission policy can name. JiuwenSwarm's MCP client says nothing about
 the session a call comes from, so the adapter's model proxy, which is per run, puts the run's tag in each call
 (`RUN_ARG`); a call goes to that run's toolset and its callback, which executes the legacy closure. Stateless on
@@ -62,7 +62,7 @@ class ToolsetRegistry:
 
     _sets: dict[str, Toolset] = field(default_factory=dict)
     token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
-    # Every tool a run has brought, as JiuwenSwarm is given it: one entry per name. Runs can give one tool different
+    # Tools needed by the current and active generations, as JiuwenSwarm is given them: one entry per name. Runs can give one tool different
     # schemas (an enum of this session's skills or Runners), so what JiuwenSwarm holds is open: the properties seen so
     # far, with no enum and nothing required. The model gets the run's own schema (the proxy), and the run's tool
     # checks the arguments itself.
@@ -90,7 +90,7 @@ class ToolsetRegistry:
             properties[RUN_ARG] = {"type": "string", "description": "Set by the runtime."}
             merged = {"name": name, "description": (known or tool).get("description", ""),
                       "inputSchema": {**schema, "type": "object", "properties": properties}}
-            if known is None or set(properties) != set(known["inputSchema"]["properties"]):
+            if known is None or merged["inputSchema"] != known["inputSchema"]:
                 self.shared[name] = merged
                 changed = True
         return changed

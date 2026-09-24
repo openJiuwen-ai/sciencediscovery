@@ -31,6 +31,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -202,6 +203,7 @@ interface ServerSession {
 
 export class McpNodeClient {
   private readonly sessions = new Map<string, ServerSession>();
+  private readonly connecting = new Map<string, Promise<Client>>();
   private proxies: Record<string, ResolvedProxy> = {};
 
   constructor(
@@ -219,6 +221,7 @@ export class McpNodeClient {
   }
 
   private async closeAll(reason: string): Promise<void> {
+    await Promise.allSettled([...this.connecting.values()]);
     await Promise.allSettled([...this.sessions.keys()].map((serverId) => this.closeSession(serverId, reason)));
   }
 
@@ -240,8 +243,22 @@ export class McpNodeClient {
   }
 
   private async session(serverId: string, server: McpServerEntry): Promise<Client> {
+    const pending = this.connecting.get(serverId);
+    if (pending) {
+      await pending;
+      return this.session(serverId, server);
+    }
+    const existing = this.sessions.get(serverId);
     const proxySignature = this.proxySignature(serverId);
     const configSignature = JSON.stringify(server);
+    if (existing && existing.proxySignature === proxySignature && existing.configSignature === configSignature) return existing.client;
+    const connection = this.connectSession(serverId, server, proxySignature, configSignature);
+    this.connecting.set(serverId, connection);
+    try { return await connection; }
+    finally { this.connecting.delete(serverId); }
+  }
+
+  private async connectSession(serverId: string, server: McpServerEntry, proxySignature: string, configSignature: string): Promise<Client> {
     const existing = this.sessions.get(serverId);
     if (existing && existing.proxySignature === proxySignature && existing.configSignature === configSignature) return existing.client;
     const reason = !existing
@@ -449,6 +466,7 @@ export class McpNodeClient {
     let finalStatus: McpAttemptStatus = "semantic-error";
 
     for (let attemptNumber = 1; attemptNumber <= policy.maxAttempts; attemptNumber += 1) {
+      signal?.throwIfAborted();
       const attemptStartedAt = new Date().toISOString();
       const attemptStarted = Date.now();
       const remaining = deadline - attemptStarted;
@@ -467,15 +485,14 @@ export class McpNodeClient {
             undefined,
             { ...(signal ? { signal } : {}), timeout },
           ) as Record<string, unknown>;
-          if (result.isError) {
-            const { blocks } = contentBlocks(result);
-            const text = blocks.map((block) => (block.type === "text" ? block.text : "")).filter(Boolean).join("\n");
-            throw new Error(text || "MCP tool reported an error");
-          }
           const { blocks, structured } = contentBlocks(result);
           const responseBytes = Buffer.byteLength(JSON.stringify({ content: blocks, structuredContent: structured ?? null }), "utf8");
           if (responseBytes > maxResponseBytes) {
             throw new Error(`RESPONSE_TOO_LARGE: MCP response used ${responseBytes} bytes; limit is ${maxResponseBytes}`);
+          }
+          if (result.isError) {
+            const text = blocks.map((block) => (block.type === "text" ? block.text : "")).filter(Boolean).join("\n");
+            throw new Error(text || "MCP tool reported an error");
           }
           attempts.push({
             attempt: attemptNumber,
@@ -495,6 +512,7 @@ export class McpNodeClient {
             toolName: request.toolName,
           };
         } catch (error) {
+          signal?.throwIfAborted();
           finalError = error instanceof Error ? error.message : String(error);
           const classified = classifyError(finalError);
           finalStatus = classified.status;
@@ -543,7 +561,8 @@ export class McpNodeClient {
         status: finalStatus,
         toolName: request.toolName,
       });
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+      try { await sleep(delayMs, undefined, { signal }); }
+      catch (error) { signal?.throwIfAborted(); throw error; }
     }
 
     return {
