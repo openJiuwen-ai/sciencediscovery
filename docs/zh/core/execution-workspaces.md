@@ -18,7 +18,7 @@
 
 前台 `wait_ms` 是等待响应的预算，默认 10 秒、最多 30 秒，不是杀进程的超时。到期返回仍在运行的 Execution ID；`background: true` 在接受任务后立即返回。`execution_status`、`execution_logs`、`execution_cancel` 不另起 Shell、不取 Workspace 写锁。只有显式取消才停止作业，终态必须等进程清理和文件版本提交。
 
-Session 文件面板的 **Executions & reminders** 展示执行、日志、复制和提醒。`unknown` 表示结果尚未确认，例如响应丢失或 API 重启，并不证明命令没运行；先检查，再决定是否主动重试。
+Session 文件面板的 **Executions & reminders** 展示执行、日志、复制和提醒。Runner 已接受命令后，API 查询状态时遇到短暂的连接错误会继续用原 Execution ID 查询，不重新提交命令；连续两分钟仍无法确认才记录为 `unknown`。`unknown` 表示结果尚未确认，例如提交响应丢失、持续断连或 API 重启，并不证明命令没运行；先检查，再决定是否主动重试。
 
 ## 文件归因
 

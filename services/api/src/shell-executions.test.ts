@@ -74,6 +74,49 @@ test("accepted background work outlives waiting and publishes a notice only afte
   assert.equal("result" in f.service.snapshot(owner.sessionId)[0]!, false, "result/log bytes live in State Pool, not catalog JSON");
 });
 
+test("a transient Runner status transport failure does not turn accepted work unknown or replay it", async (context) => {
+  const f = await fixture(context);
+  let id = ""; let submitted = 0; let observations = 0;
+  const runner = {
+    startShellExecution: async (r: ShellExecutionRequest) => {
+      submitted++; id = r.executionId;
+      return { ...owner, id, state: "running", queuedAt: "now" };
+    },
+    getShellExecution: async () => {
+      observations++;
+      if (observations === 1) throw new TypeError("fetch failed");
+      return { ...owner, id, state: "completed", queuedAt: "now", result: f.result, version: f.ref };
+    },
+  } as unknown as RunnerClient;
+  const job = await f.service.start(owner, identity, () => runner, (executionId, dispatch) => dispatch(request(executionId)));
+  const result = await f.service.wait(job.id, owner, 3_000);
+  assert.equal(result.state, "completed");
+  assert.equal(result.provenance, "committed");
+  assert.equal(result.result?.stdout, "done");
+  assert.equal(submitted, 1);
+  assert.equal(observations, 2);
+});
+
+test("a persistently unavailable Runner remains unconfirmed without replaying accepted work", async (context) => {
+  const f = await fixture(context);
+  const service = new ShellExecutions(f.db, f.versions, f.notices, 1, 5);
+  let submitted = 0;
+  const runner = {
+    startShellExecution: async (r: ShellExecutionRequest) => {
+      submitted++;
+      return { ...owner, id: r.executionId, state: "running", queuedAt: "now" };
+    },
+    getShellExecution: async () => { throw new TypeError("fetch failed", { cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }) }); },
+  } as unknown as RunnerClient;
+  const job = await service.start(owner, identity, () => runner, (executionId, dispatch) => dispatch(request(executionId)));
+  const result = await service.wait(job.id, owner, 1_000);
+  assert.equal(result.state, "unknown");
+  assert.equal(result.provenance, "unconfirmed");
+  assert.match(result.error!, /Runner status remained unavailable/);
+  assert.match(result.error!, /ECONNRESET/);
+  assert.equal(submitted, 1);
+});
+
 test("explicit cancellation retains committed result and stopped Agent inbox without waking it", async (context) => {
   const f = await fixture(context); const finish = deferred<void>(); let id = ""; let reported = "";
   const runner = {
