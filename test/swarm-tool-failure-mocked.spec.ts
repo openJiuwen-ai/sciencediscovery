@@ -1,8 +1,8 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
-import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { blockNonLocalRequests, test } from "./helpers/e2e.ts";
+import { apiBaseUrl, authorizationHeader, browserStorageState } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel,
   sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
@@ -25,10 +25,10 @@ const expectedError = fault === "disconnect" ? /read|connection|transport|unknow
  * Credentials: E2E_API_TOKEN only; model uses a local fixture token.
  * CostSideEffects: No paid calls; temporary project/model removed in finally.
  */
-test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is visible after recovery`, { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ page, journey }, info) => {
+test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is visible after recovery`, { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ browser, page, journey }, info) => {
   expect(process.env.E2E_SWARM_TASK !== "1", "Requires isolated Swarm stack with platform task delegation").toBe(false);
   expect(transportFault && process.env.E2E_MCP_FAULT_PROXY !== "1", "Requires isolated loopback MCP fault proxy").toBe(false);
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   journey.scenario({ goal: "Show pre-bridge tool errors without losing the recovered child result",
     preconditions: ["Swarm stack", "platform task delegation", "local sandbox"] });
   const stub = await scriptedModel([[
@@ -44,6 +44,7 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
   let sibling: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
   let siblingModel: Awaited<ReturnType<typeof scriptedModel>> | undefined;
+  let siblingContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
   let siblingPage: typeof page | undefined;
   let siblingRun: { id: string } | undefined;
   try {
@@ -56,17 +57,19 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
       // first child's HTTP request fails on their shared MCP connection.
       siblingModel = await scriptedModel([
         { tool: "task", arguments: { description: "Unrelated long-running child", subagent_type: "general-purpose",
-          prompt: "Complete the healthy local probe.", max_turns: 4, timeout_seconds: 90 } },
+          prompt: "Complete the healthy local probe.", max_turns: 4, timeout_seconds: 120 } },
         { text: "Healthy parent received child." },
       ], [
-        { tool: "run_shell", arguments: { command: "sleep 20; printf 'HEALTHY-SIBLING-COMPLETED\\n'", wait_ms: 30_000 } },
-        { text: "Healthy sibling completed." },
+        { tool: "run_shell", arguments: { command: "sleep 60; printf 'HEALTHY-SIBLING-COMPLETED\\n'", wait_ms: 30_000 } },
+        { text: "Healthy sibling completed.", delayMs: 45_000 },
       ], { captureContext: true });
       sibling = await createProjectAndSession(page, { approvalMode: "always_allow",
         model: { apiToken: siblingModel.apiToken, baseUrl: siblingModel.baseUrl,
           model: siblingModel.model, name: `Healthy sibling ${Date.now()}` },
         projectName: `Healthy sibling ${Date.now()}`, sessionTitle: "Unaffected concurrent child" });
-      siblingPage = await page.context().newPage();
+      siblingContext = await browser.newContext({ baseURL: apiBaseUrl(), storageState: browserStorageState() });
+      await blockNonLocalRequests(siblingContext);
+      siblingPage = await siblingContext.newPage();
       await openProjectSession(siblingPage, sibling);
       siblingRun = await sendUserMessage(siblingPage, sibling.session.id, "Delegate the healthy local probe.");
       await expect.poll(async () => {
@@ -74,14 +77,12 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
         const children = await response.json();
         return children.some((child: { steps: Array<{ toolName?: string; status?: string }> }) =>
           child.steps.some(step => step.toolName === "run_shell" && step.status === "running"));
-      }, { timeout: 30_000 }).toBe(true);
+      }, { timeout: 90_000 }).toBe(true);
     }
     const run = await sendUserMessage(page, fixture.session.id, "Delegate the local validation/recovery probe.");
     if (sibling) {
       await expect.poll(() => stub.calls.some(c => c.route === "subagent"
-        && c.toolResults?.some(r => expectedError.test(r))), { timeout: 15_000 }).toBe(true);
-      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${sibling.session.id}/subagents`, { headers: authorizationHeader() });
-      expect((await response.json())[0].status, "Healthy child must still be active when the other request fails").toBe("running");
+        && c.toolResults?.some(r => expectedError.test(r))), { timeout: 45_000 }).toBe(true);
     }
     const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 120_000);
     expect(terminal.status, terminal.error).toBe("completed");
@@ -112,9 +113,28 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
     // Match the actual tool error, not "validation" in the task heading/prompt.
     await expect.soft(conversation).toContainText(errorText);
     if (sibling && siblingPage && siblingRun && siblingModel) {
-      expect((await waitForRunTerminal(siblingPage, sibling.session.id, siblingRun.id, 90_000)).status).toBe("completed");
-      expect(siblingModel.calls.some(c => c.route === "subagent"
-        && c.toolResults?.some(r => r.includes("HEALTHY-SIBLING-COMPLETED")))).toBe(true);
+      expect((await waitForRunTerminal(siblingPage, sibling.session.id, siblingRun.id, 150_000)).status).toBe("completed");
+      await expect.poll(async () => {
+        const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${sibling.session.id}/subagents`, { headers: authorizationHeader() });
+        expect(response.ok()).toBe(true);
+        const children = await response.json();
+        return children[0]?.status;
+      }, { message: "Healthy child status should be persisted after its parent completes", timeout: 20_000 }).toBe("completed");
+      const siblingChildrenResponse = await page.request.get(`${apiBaseUrl()}/api/sessions/${sibling.session.id}/subagents`, { headers: authorizationHeader() });
+      expect(siblingChildrenResponse.ok()).toBe(true);
+      const siblingChildren = await siblingChildrenResponse.json();
+      expect(siblingChildren).toHaveLength(1);
+      expect(siblingChildren[0].status).toBe("completed");
+      const executionsResponse = await page.request.get(`${apiBaseUrl()}/api/sessions/${sibling.session.id}/execution-runs`, { headers: authorizationHeader() });
+      expect(executionsResponse.ok()).toBe(true);
+      const executions = await executionsResponse.json() as Array<{ tool: string; status: string; startedAt: string; finishedAt: string }>;
+      const healthyExecution = executions.find(execution => execution.tool === "run_shell" && execution.status === "succeeded");
+      expect(healthyExecution, "Healthy sibling shell must finish successfully").toBeDefined();
+      const faultStep = children[0].steps.find((step: { toolName?: string; status?: string }) =>
+        step.toolName === "run_shell" && step.status === "failed");
+      expect(faultStep, "The injected fault must be persisted in the child trace").toBeDefined();
+      expect(Date.parse(healthyExecution!.startedAt)).toBeLessThan(Date.parse(faultStep.createdAt));
+      expect(Date.parse(faultStep.createdAt)).toBeLessThan(Date.parse(healthyExecution!.finishedAt));
       expect(siblingModel.calls.some(c => c.route === "main"
         && c.toolResults?.some(r => r.includes("Healthy sibling completed")))).toBe(true);
       await expect(siblingPage.locator(".message.assistant").last()).toContainText("Healthy parent received child");
@@ -125,7 +145,7 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
     } finally {
       try { if (sibling) await cleanupJourney(page, sibling); }
       finally {
-        await siblingPage?.close();
+        await siblingContext?.close();
         await siblingModel?.stop();
         await stub.stop();
       }
