@@ -342,9 +342,11 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
     for (const path of [reportPath, csvPath, cif.path]) assert.ok(transferred.has(path), `No completed transfer for ${path}`);
     const session = await get(sessionPath);
     const finalAnswer = session.messages?.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
-    assert.ok([runName, basename(reportPath), basename(csvPath), basename(cif.path)]
-      .every((item) => finalAnswer.includes(item)),
-    "The Agent's final answer must identify the run and all three delivered results");
+    // Exact filenames are checked through transferred and declared Artifacts above.
+    // The user asked the Agent to explain the results, not to repeat long paths verbatim.
+    assert.ok(finalAnswer.includes(runName) && /screening report|筛选报告/iu.test(finalAnswer)
+      && /\bCSV\b/iu.test(finalAnswer) && /\bCIF\b/iu.test(finalAnswer),
+    "The Agent's final answer must identify the run, screening report, CSV, and CIF");
     steps.push(`4. PASS — all four model stages produced files; report, CSV and ${cif.path} are nonempty remotely and locally, transferred, declared and explained to the user.`);
   } catch (error) {
     verdict = phase.startsWith("1.") ? "BLOCKED" : "FAIL";
