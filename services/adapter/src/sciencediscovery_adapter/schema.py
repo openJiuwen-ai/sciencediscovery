@@ -61,7 +61,23 @@ def open_schema(schema: Any) -> Any:
             return [strip(item) for item in node]
         if not isinstance(node, dict):
             return node
-        return {key: strip(value) for key, value in node.items() if key not in ("enum", "const", "required")}
+        opened = {key: strip(value) for key, value in node.items() if key not in ("enum", "const", "required")}
+        if isinstance(opened.get("anyOf"), list):
+            alternatives = []
+            for alternative in opened["anyOf"]:
+                if alternative not in alternatives:
+                    alternatives.append(alternative)
+            opened["anyOf"] = alternatives
+            # Literal unions (e.g. this agent's skill IDs) become repeated
+            # string schemas once const is removed. Canonicalize them so a
+            # child with fewer skills reuses the same MCP server generation.
+            # Keep sibling constraints when flattening an equivalent union.
+            if len(alternatives) == 1 and isinstance(alternatives[0], dict):
+                rest = {key: value for key, value in opened.items() if key != "anyOf"}
+                only = alternatives[0]
+                if all(key not in only or only[key] == value for key, value in rest.items()):
+                    return {**only, **rest}
+        return opened
 
     return strip(relaxed)
 

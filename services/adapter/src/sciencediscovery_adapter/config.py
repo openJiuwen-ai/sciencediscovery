@@ -34,8 +34,8 @@ class Settings:
     # Bearer token the legacy API presents on /agent/*; empty leaves them open
     # (the adapter listens on loopback by default).
     agent_token: str = ""
-    # How long JiuwenSwarm waits for one tool call over MCP. Its default is 30 s, which cuts off
-    # a subagent (minutes) or a long shell command; the run's own timeout is what should end them.
+    # Default per-run tool deadline enforced by the adapter. The shared Swarm
+    # transport must not impose a shorter execution deadline on child runs.
     tool_timeout_s: int = 3600
     # Which executor the API runs agent turns on (SCIENCE_AGENT_EXECUTOR): "jiuwenswarm" or "native".
     executor: str = "native"

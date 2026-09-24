@@ -22,7 +22,7 @@ zlib, lzma or bz2. Score is how much smaller the compressed form is.
 Typing `/evolve-design` brings up the algorithm picker. Take **PUCT**, the default: one starting
 point refined repeatedly is exactly the tree's case.
 
-![Picking the search algorithm](../../images/evolve/choose-algorithm.png)
+![Picking the search algorithm](../../images/evolve/choose-algorithm-en.png)
 
 This task is chosen because it fails and succeeds visibly: a compressor either round-trips or it
 does not, and the ratio is a single honest number.
@@ -75,7 +75,7 @@ budget and the rejection says what to fix.
 
 ## 6. Watch it
 
-![The live panel during a run](../../images/evolve/live-panel.png)
+![The live panel during a run](../../images/evolve/live-panel-en.png)
 
 Open the evolution panel and watch three things:
 
@@ -91,11 +91,10 @@ working.
 
 ## 7. Read the result
 
-![Starting point and winner as two versions of one artifact](../../images/evolve/result-diff.png)
+![Example comparison of the starting point and best candidate](../../images/evolve/result-diff-en.png)
 
-When it finishes, the starting point and the winner are two versions of the same artifact. Open
-the diff and read what actually changed — this is the part worth your time, because it tells you
-*how* the score was won.
+When it finishes, open the comparison of the starting point and best candidate to see what
+actually changed. This is the part worth your time, because it tells you *how* the score was won.
 
 Then find the **held-out test score**. In that real run it was **0.9682**, against a best gate
 score of 0.9674 — close together, which is what you want. A test score far below the best gate

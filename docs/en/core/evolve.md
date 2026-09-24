@@ -8,7 +8,7 @@ scores higher, and hands back the best version alongside the one it started from
 > see [Run an evolution search](../domains/run-an-evolution-search.md); for a first search you can
 > complete end to end, see the [tutorial](../domains/evolve-a-solution.md). Engine internals
 > and standalone deployment of the sidecar are in
-> [the evolution sidecar note](../../zh/developer-docs/evolve-standalone.md) (Chinese).
+> [the evolution sidecar note](../developer-docs/evolve-standalone.md).
 
 ## What a search actually is
 
@@ -21,7 +21,7 @@ bad one.** Scoring that cannot does not raise an error — it produces a flat ru
 expansions that all land on the same number, and a budget spent for no signal. Most of the design
 below exists to catch that before it costs you a run.
 
-![Starting a search from a sentence in the composer](../../images/evolve/start-a-search.png)
+![Starting a search from a sentence in the composer](../../images/evolve/start-a-search-en.png)
 
 You start one by saying what you want in the conversation — "write a compress/decompress pair,
 lossless, highest ratio wins". The `evolve-design` skill turns that into a search proposal
@@ -49,7 +49,7 @@ Both engines share the same Domain seam — the starting point, the way a candid
 prompt that rewrites one, and the name of the number being reported — and swap only the algorithm
 core.
 
-![Choosing between PUCT and OpenEvolve when the search is proposed](../../images/evolve/choose-algorithm.png)
+![Choosing between PUCT and OpenEvolve when the search is proposed](../../images/evolve/choose-algorithm-en.png)
 
 **PUCT** (`puct`) keeps a tree. Every candidate is a node with a parent, the tree is append-only,
 and selection uses `rank + c_puct · P · √visits_total / (1 + visits)`. It suits continuous
@@ -96,7 +96,7 @@ measuring it.*
 
 ## Watching one run
 
-![The live panel: score chart, search tree, and candidate stream](../../images/evolve/live-panel.png)
+![The live panel: score chart, search tree, and candidate stream](../../images/evolve/live-panel-en.png)
 
 The score chart plots one point per candidate with a step line tracking the best so far, a dashed
 baseline for the starting point, and the held-out `test` figure once the run ends. Candidates that
@@ -107,27 +107,27 @@ For OpenEvolve runs two further views open up. The graph lays candidates out alo
 axis with one horizontal band per island and dashed edges to the inspiration program, so a jump in
 the search is explainable:
 
-![OpenEvolve graph view: islands as bands, inspiration edges dashed](../../images/evolve/search-graph.png)
+![OpenEvolve graph view: islands as bands, inspiration edges dashed](../../images/evolve/search-graph-en.png)
 
 The grid is the archive itself — one column per island, the global best marked ★, migrated
 candidates marked ↔, and each cell's complexity/diversity coordinates:
 
-![The MAP-Elites archive as island columns](../../images/evolve/archive-grid.png)
+![The MAP-Elites archive as island columns](../../images/evolve/archive-grid-en.png)
 
 ## What you get back
 
-![Start and best version saved as two versions of one artifact](../../images/evolve/result-versions.png)
+![Start and best version saved as two versions of one artifact](../../images/evolve/result-versions-en.png)
 
 The starting point and the winner are saved as two versions of the same artifact, so the result
 is a diff rather than a loose file, and a further search can be started from either version.
 
-![Diffing the starting point against the winning candidate](../../images/evolve/result-diff.png)
+![Example comparison of the starting point and best candidate](../../images/evolve/result-diff-en.png)
 
 The run is also mirrored into [ScienceMemory](../developer-docs/science-memory.md) when that is enabled: the search
 node links to its starting point through an `input` edge and to its result through `produces`, and
 the node detail carries the baseline and held-out numbers.
 
-![A finished search in the memory graph, with its input and produces edges](../../images/evolve/memory-graph.png)
+![A finished search in the memory graph, with its input and produces edges](../../images/evolve/memory-graph-en.png)
 
 ## Where it runs
 

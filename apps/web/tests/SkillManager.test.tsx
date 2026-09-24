@@ -278,6 +278,38 @@ test("renders skill library cards with pinned head version metadata", async () =
   await act(async () => renderer!.unmount());
 });
 
+test("library summary counts pending proposals across libraries", async () => {
+  const client = {
+    listSkillLibraries: async () => [
+      { createdAt: "2026-01-01", id: "first", name: "First", updatedAt: "2026-01-01" },
+      { createdAt: "2026-01-01", id: "second", name: "Second", updatedAt: "2026-01-01" },
+    ],
+    listSkillLibraryVersions: async () => [],
+    listSkillLibraryProposals: async (): Promise<SkillLibraryUpdateProposal[]> => [{
+      createdAt: "2026-01-03", id: "proposal-second", libraryId: "second", rationale: "Pending",
+      request: { author: { kind: "self-evolution" }, dryRun: true, operations: [] },
+      result: { conflicts: [], diagnostics: [], diff: { added: [], deleted: [], modified: [] }, dryRun: true },
+      sourceRefs: [], status: "pending", updatedAt: "2026-01-03",
+    }],
+  } as Partial<ApiClient> as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SkillManager, {
+      client, initialView: "libraries", onCatalogChange: () => undefined,
+      onError: (reason) => assert.fail(String(reason)), skills: [skill],
+    }));
+  });
+  await act(async () => undefined);
+
+  const summary = renderer!.root.findByProps({ "aria-label": "Skill library summary" });
+  const proposalStat = summary.findAllByType("span").find((span) =>
+    span.findAllByType("small").some((small) => small.children.join("") === "Proposals"));
+  assert.ok(proposalStat);
+  assert.equal(proposalStat.findByType("strong").children.join(""), "1");
+  assert.equal(renderer!.root.findAllByProps({ className: "skill-library-proposal" }).length, 0);
+  await act(async () => renderer!.unmount());
+});
+
 test("with the JiuwenSwarm backend a tab lists its skills, ours and its own, each with an on/off switch", async () => {
   const toggled: Array<[string, boolean]> = [];
   const client = {

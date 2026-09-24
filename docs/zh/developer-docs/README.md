@@ -5,6 +5,9 @@
 - [整体运行时架构](architecture.md) — 常驻进程、模块边界和跨进程时序。
 - [控制面](control-plane.md) — `services/api` 的职责、存储与运行生命周期。
 - [Agent 后端](agent-backend.md) — Node 原生 agent loop 的模块结构、模型传输、延迟工具与历史压缩。
+- [Runtime Core 边界](runtime-core.md) — 与领域无关的运行时职责和已注册端口。
+- [动态上下文组装](context-assembly.md) — 上下文模式、contributor、预算、trace 和校验。
+- [上下文组装示例](context-assembly-examples.md) — 由生产组装路径生成的模型输入。
 - [组件与插件机制](plugins.md) — 能力归属、单向依赖、公开插件入口、API/Web 扩展点、固定 StateView 与受控候选应用。
 - [Session 轨迹与模型上下文](session-trajectory.md) — 真实时间多 Agent 导航、固定状态与上下文来源、只读导出。
 - [沙箱执行](sandbox-execution.md) — bubblewrap/seccomp、科学环境和持久内核机制。

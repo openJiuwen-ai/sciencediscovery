@@ -79,7 +79,7 @@ OpenEvolve 运行还多两个视图。图视图按迭代号排列候选，每个
 
 起点和最优版本存为同一产物的两个版本，所以结果是一份 diff 而不是一个孤立文件，并且可以从任一版本再次发起搜索。
 
-![起点与最优候选的对比](../../images/evolve/result-diff.png)
+![起点与最优候选的对比视图示例](../../images/evolve/result-diff.png)
 
 开启[科学记忆](../developer-docs/science-memory.md)时运行也会写入图谱：搜索节点通过 `input` 边关联起点、`produces` 边关联结果，节点详情带基线分与留出测试分。
 

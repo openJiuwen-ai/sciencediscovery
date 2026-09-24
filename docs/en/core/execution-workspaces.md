@@ -1,18 +1,18 @@
 # Shell, environments and workspaces
 
-An execution names a Runner and an environment ID. The Runner supplies the sandbox; the environment
-supplies Python, R and other installed tools. An environment is not a machine, and a Workspace is not an
-environment. This page covers user-visible execution behavior. For Runner internals and sandbox design,
-see [Sandbox execution](../developer-docs/sandbox-execution.md).
+When you run a command, it runs on a managed endpoint called a Runner. The selected software environment
+provides Python, R, and other tools. Files created by the run live in a Workspace, which is separate from
+the software environment. This page covers user-visible execution behavior. For Runner internals and
+sandbox design, see [Sandbox execution](../developer-docs/sandbox-execution.md).
 
 | Object | Identity and lifetime |
 |---|---|
-| Runner | A registered local, SSH-tunnel or direct endpoint; executes only through the Runner sandbox |
-| Workspace | One persistent directory per Agent instance × Runner; the main Agent belongs to its Session, and every child has a separate root |
-| Environment | A Runner-local ID resolving to the latest managed prefix; Python and R may coexist |
-| Environment Revision | An audit record of package state and provenance, not a selectable runnable historical copy |
-| Execution | A durable command record, independent of the requesting model turn |
-| Transfer | Explicit file mappings from a committed source snapshot into a target Workspace |
+| Runner | A registered managed local, SSH-tunnel, or direct endpoint; commands always use the Runner sandbox |
+| Workspace | A persistent folder for one Agent instance on one Runner; the Session's main Agent and every child have separate roots |
+| Environment | A managed Runner-local environment selected by ID and resolved to its latest version; it can contain both Python and R |
+| Environment Revision | A record of package state and source, not a selectable historical environment copy |
+| Execution | A record of one command that persists independently of the model turn that requested it |
+| Transfer | An explicitly started file-copy operation that maps files from a committed source snapshot to a target Workspace |
 
 ## Run and observe
 
@@ -24,7 +24,11 @@ The Session file panel's **Executions & reminders** section shows jobs, logs, tr
 
 ## Files and attribution
 
-One Workspace admits one writer at a time, including Shell, edits, uploads, transfers and lifecycle changes. Parallel writes use independent Workspaces. Readers and transfers use committed snapshots rather than a running command's half-written files. A successful receipt follows process cleanup and CAS/ref commit. Workspace bytes use the data pool; logs and Agent state use the agent-state pool. Late provenance retains its history without moving the latest file pointer backwards.
+One Workspace admits one writer at a time, including Shell, edits, uploads, transfers and
+lifecycle changes. Parallel writes use independent Workspaces. Readers and transfers use committed
+snapshots rather than a running command's half-written files. A command reports success only after
+cleanup and file-snapshot commit finish. Files, logs, and execution records are retained separately
+for later tracing; late record updates do not replace the latest saved file.
 
 `workspace_transfer` discovers permitted Workspace IDs and explicitly starts, lists, queries or cancels transfers. Copies retain their source snapshot and per-file outcomes. Cancellation or partial failure keeps successfully committed files; byte progress alone does not prove publication. Local↔remote and parent↔child copies share this mechanism. No automatic mirror or implicit handoff replay occurs. Only files present in the local owned Workspace may be declared as Artifacts; remote output must first be copied back. Copying alone does not declare an Artifact.
 

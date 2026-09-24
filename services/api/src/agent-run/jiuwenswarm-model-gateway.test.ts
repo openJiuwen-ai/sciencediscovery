@@ -15,12 +15,82 @@
 import assert from "node:assert/strict";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { ModelRequestError, type ModelTurn, type streamModelTurn } from "@sciencediscovery/model";
 
-import { startModelGateway, toModelRequest } from "./jiuwenswarm-model-gateway.js";
+import { isSwarmCompaction, startModelGateway, toModelRequest } from "./jiuwenswarm-model-gateway.js";
 
 const POLICY = { maxRetries: 0, maxTokens: 1000, requestTimeoutMs: 1000 };
+
+test("task admission counts plain replies and rejects excess calls before upstream; auxiliary calls do not consume turns", async () => {
+  const controller = new AbortController();
+  let turns = 0;
+  let progress = 0;
+  const { calls, streamer } = fakeStreamer(answer(), [["text", "working"]]);
+  const g = await startModelGateway(ENDPOINT, POLICY, controller.signal, streamer, undefined, {
+    progress() { progress++; }, beforeTurn() { if (++turns > 1) controller.abort(); },
+  });
+  const compaction = { messages: [{ role: "user", content: "## NON-NEGOTIABLE OUTPUT RULES\nDo NOT call any tools.\nYou are an Execution State Compression Assistant.\n<coverage_check>\n<state_snapshot>" }],
+    tools: [{ type: "function", function: { name: "task" } }] };
+  try {
+    assert.equal(isSwarmCompaction(compaction), true);
+    assert.equal(isSwarmCompaction({ messages: [{ role: "user", content: "Summarize <state_snapshot>" }] }), false);
+    assert.equal((await post(g, compaction)).status, 200);
+    assert.equal(turns, 0);
+    assert.equal(progress, 1, "run-scoped compaction is real progress, including non-streaming HTTP responses");
+    assert.equal(g.lastTurn(), undefined, "compaction must not overwrite task output/truncation state");
+    const title = await fetch(`${g.url}/chat/completions`, { method: "POST", headers: {
+      authorization: `Bearer ${g.token}`, "x-sciencediscovery-model-purpose": "housekeeping",
+    }, body: JSON.stringify({ messages: [] }) });
+    assert.equal(title.status, 200);
+    assert.equal(turns, 0);
+    assert.equal(progress, 1, "default-route housekeeping must not renew an unrelated latest run");
+    assert.equal((await post(g, { messages: [{ role: "user", content: "hello" }] })).status, 200);
+    assert.equal(turns, 1, "a task with no tools is still a model turn");
+    assert.equal((await post(g, { stream: true, messages: [] })).status, 502);
+    assert.equal(calls.length, 3, "the over-budget request must never reach the model");
+  } finally { await g.close(); }
+});
+
+test("invalid arguments retain private diagnostics without leaking payload into ordinary logs", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "model-arguments-"));
+  const file = join(dir, "invalid.jsonl");
+  const previous = process.env.SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE;
+  process.env.SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE = file;
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (message: string) => warnings.push(message));
+  const raw = '{"secret":"private-payload"';
+  const { streamer } = fakeStreamer(answer({
+    truncated: true,
+    assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad-call", type: "function", function: { name: "task", arguments: raw } }] },
+    toolCalls: [{ id: "bad-call", name: "task", args: {}, argsParseError: "Unexpected private-payload" }],
+  }));
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: true, messages: [] });
+    assert.match(await response.text(), /Model returned invalid tool arguments/);
+    const entry = JSON.parse(await readFile(file, "utf8"));
+    assert.equal(entry.calls[0].rawArguments, raw);
+    assert.equal(entry.calls[0].error, "Unexpected private-payload");
+    assert.equal(entry.truncated, true);
+    assert.equal(entry.calls[0].toolCallId, "bad-call");
+    assert.match(entry.requestId, /^chatcmpl-/);
+    assert.equal((await stat(file)).mode & 0o777, 0o600);
+    assert.ok(!warnings.join("").includes("private-payload"));
+    // A logging failure must preserve the original model error.
+    process.env.SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE = join(dir, "absent", "invalid.jsonl");
+    assert.match(await (await post(g, { stream: true, messages: [] })).text(), /Model returned invalid tool arguments/);
+    assert.ok(warnings.some((line) => line.includes("diagnostic file write failed")));
+  } finally {
+    await g.close();
+    if (previous === undefined) delete process.env.SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE;
+    else process.env.SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 const ENDPOINT = { baseUrl: "http://provider.test", model: "claude-x", apiProtocol: "anthropic-messages" as const };
 
 type Call = { history: unknown[]; systemPrompt: string; tools: unknown[]; endpoint: unknown };
@@ -151,6 +221,74 @@ test("a truncated turn finishes with length, so the reader is told why the answe
   } finally {
     await g.close();
   }
+});
+
+test("tool argument fragments reach Swarm before the model finishes, with parallel identity and no final replay", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const g = await gateway(async (_e, _p, _h, _t, _policy, _signal, callbacks) => {
+    callbacks!.onToolCallDelta!({ index: 0, id: "c1", name: "write", arguments: '{"text":' });
+    callbacks!.onToolCallDelta!({ index: 1, id: "c2", name: "search", arguments: '{"q":"birds"}' });
+    await gate;
+    callbacks!.onToolCallDelta!({ index: 0, arguments: '"report"}' });
+    return answer({ toolCalls: [{ id: "c1", name: "write", args: { text: "report" } }, { id: "c2", name: "search", args: { q: "birds" } }] });
+  });
+  try {
+    const response = await fetch(`${g.url}/chat/completions`, { method: "POST", signal: AbortSignal.timeout(2_000),
+      headers: { authorization: `Bearer ${g.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ stream: true, messages: [] }) });
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    let wire = new TextDecoder().decode(first.value);
+    assert.match(wire, /tool_calls/); // Model is still blocked on gate here.
+    finish();
+    for (;;) { const next = await reader.read(); if (next.done) break; wire += new TextDecoder().decode(next.value); }
+    const chunks = wire.split("\n\n").filter((s) => s.startsWith("data: {")).map((s) => JSON.parse(s.slice(6)));
+    const calls = chunks.flatMap((c) => c.choices[0].delta.tool_calls ?? []);
+    assert.equal(calls.filter((c) => c.index === 0).map((c) => c.function.arguments).join(""), '{"text":"report"}');
+    assert.equal(calls.filter((c) => c.index === 1).map((c) => c.function.arguments).join(""), '{"q":"birds"}');
+    assert.deepEqual(calls.filter((c) => c.id).map((c) => c.id), ["c1", "c2"]);
+    assert.equal(chunks.at(-1).choices[0].finish_reason, "tool_calls");
+  } finally { finish(); await g.close(); }
+});
+
+test("upstream transport progress does not manufacture downstream model content", async () => {
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const g = await gateway(async (_e, _p, _h, _t, _policy, _signal, callbacks) => {
+    callbacks!.onTextDelta!("start");
+    callbacks!.onProgress!();
+    await gate;
+    return answer();
+  });
+  try {
+    const reader = (await post(g, { stream: true, messages: [] })).body!.getReader();
+    await reader.read();
+    const next = reader.read();
+    assert.equal(await Promise.race([next.then(() => "data"), new Promise((r) => setTimeout(() => r("silent"), 40))]), "silent");
+    finish();
+    await next;
+  } finally { finish(); await g.close(); }
+});
+
+test("cancelling during tool argument streaming aborts the upstream request", async () => {
+  let observedAbort!: () => void;
+  const aborted = new Promise<void>((resolve) => { observedAbort = resolve; });
+  const g = await gateway(async (_e, _p, _h, _t, _policy, signal, callbacks) => {
+    callbacks!.onToolCallDelta!({ index: 0, id: "c1", name: "write", arguments: '{"text":' });
+    await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => {
+      observedAbort(); reject(new Error("upstream cancelled"));
+    }, { once: true }));
+    return answer();
+  });
+  try {
+    const reader = (await post(g, { stream: true, messages: [] })).body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    await Promise.race([aborted, new Promise((_r, reject) => {
+      const timer = setTimeout(() => reject(new Error("upstream was not cancelled")), 2_000); timer.unref();
+    })]);
+  } finally { await g.close(); }
 });
 
 test("the provider's HTTP status reaches JiuwenSwarm as that status, so a 429 is a 429", async () => {

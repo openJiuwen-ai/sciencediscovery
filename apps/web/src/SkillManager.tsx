@@ -661,25 +661,26 @@ function SkillLibraryManager({
   }, [client, onError]);
 
   useEffect(() => {
+    let active = true;
+    void client.listSkillLibraryProposals().then((items) => {
+      if (active) setProposals(items);
+    }).catch((reason: Error) => {
+      if (active) onError(reason);
+    });
+    return () => { active = false; };
+  }, [client, onError]);
+
+  useEffect(() => {
     if (!selectedId) {
       setVersions([]);
       setSelectedVersionId(undefined);
-      setProposals([]);
       setSelectedProposalIds(new Set());
       return;
     }
     let active = true;
-    void Promise.all([
-      client.listSkillLibraryVersions(selectedId),
-      client.listSkillLibraryProposals(selectedId),
-    ]).then(([items, nextProposals]) => {
+    void client.listSkillLibraryVersions(selectedId).then((items) => {
       if (!active) return;
       setVersions(items);
-      setProposals(nextProposals);
-      setSelectedProposalIds((current) => {
-        const pendingIds = new Set(nextProposals.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id));
-        return new Set(Array.from(current).filter((proposalId) => pendingIds.has(proposalId)));
-      });
       const head = libraries.find((library) => library.id === selectedId)?.headVersionId;
       setSelectedVersionId((current) => current && items.some((item) => item.id === current) ? current : head ?? items.at(-1)?.id);
       setFromVersionId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id ?? "");
@@ -700,7 +701,12 @@ function SkillLibraryManager({
     setSelectedId(selectId);
     const nextVersions = await client.listSkillLibraryVersions(selectId);
     setVersions(nextVersions);
-    setProposals(await client.listSkillLibraryProposals(selectId));
+    const nextProposals = await client.listSkillLibraryProposals();
+    setProposals(nextProposals);
+    setSelectedProposalIds((current) => {
+      const pendingIds = new Set(nextProposals.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id));
+      return new Set(Array.from(current).filter((proposalId) => pendingIds.has(proposalId)));
+    });
     const head = nextLibraries.find((library) => library.id === selectId)?.headVersionId;
     setSelectedVersionId(head ?? nextVersions.at(-1)?.id);
     setFromVersionId(nextVersions[0]?.id ?? "");
@@ -875,7 +881,7 @@ function SkillLibraryManager({
         <div aria-label={t("skillLibrary.statsAria")} className="skill-manager-stats">
           <span><strong>{libraries.length}</strong><small>{t("skillLibrary.statLibraries")}</small></span>
           <span><strong>{versions.length}</strong><small>{t("skillLibrary.statVersions")}</small></span>
-          <span className={selectedLibraryProposals.length ? "has-pending" : undefined}><strong>{selectedLibraryProposals.length}</strong><small>{t("skillLibrary.statProposals")}</small></span>
+          <span className={proposals.some((proposal) => proposal.status === "pending") ? "has-pending" : undefined}><strong>{proposals.filter((proposal) => proposal.status === "pending").length}</strong><small>{t("skillLibrary.statProposals")}</small></span>
         </div>
       </div>
     </section>

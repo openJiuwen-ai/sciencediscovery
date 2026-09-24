@@ -1371,8 +1371,8 @@ def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
 
     # goal → first SubTask (head of the chain). OPTIONAL MATCH so a session
     # whose first-message hook hasn't run (no ResearchGoal yet) still gets
-    # the SubTask→SubTask chain below — the goal→head link is added later by
-    # the next upsert once the goal exists. A child never qualifies as head —
+    # the SubTask→SubTask chain below — a late goal upsert runs this linker
+    # again to add goal→head. A child never qualifies as head —
     # the WHERE clause excludes ``subtask:subagent:...:exec:...`` ids so the
     # main chain's head is always a session-main node (scope / main exec / main
     # mcp). seq orders the chain; finished_at is only a legacy tiebreaker.
@@ -1450,8 +1450,9 @@ def upsert_session_first_message(
     project. After MERGEing the goal it attaches every still-dangling
     SourceFile of the session with a ``feeds`` edge — files uploaded before
     the first message have a node but no goal to feed yet (the upload path
-    must not create a placeholder goal). Returns ``goal_id`` on success,
-    ``None`` when skipped.
+    must not create a placeholder goal). It also reconnects executions that
+    landed before the goal. Returns ``goal_id`` on success, ``None`` when
+    skipped.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -1482,6 +1483,10 @@ def upsert_session_first_message(
                 domain=domain,
                 topic_scope=topic_scope,
             ).consume()
+            # Executions can already exist when the user enables ScienceMemory
+            # mid-session. Reattach the temporal head immediately, even if no
+            # further execution is mirrored after this goal arrives.
+            _link_subtasks_by_finish_time(session, session_id)
         log.info("upsert_session_first_message done: session=%s goal=%s", session_id, goal_id)
         return goal_id
     except Exception as exc:

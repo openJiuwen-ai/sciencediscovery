@@ -13,17 +13,59 @@
 # limitations under the License.
 
 import json
+from dataclasses import replace
 
 import httpx
 from fastapi import FastAPI
 
-from sciencediscovery_adapter.llm_proxy import LlmRoute, LlmRoutes, llm_router, rewrite_request, rewrite_response
+from sciencediscovery_adapter.llm_proxy import LlmRoute, LlmRoutes, StreamingToolRewriter, llm_router, rewrite_request, rewrite_response
 import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 
 ROUTE = LlmRoute(base_url="http://llm.test/v1", api_key="sk-real", model="gpt-real", tool_prefix="mcp_sci_",
                  tool_names=frozenset({"run_shell", "declare_artifact"}), system_prompt="You are the science agent.")
+
+
+def test_streamed_run_tag_handles_empty_header_parallel_calls_and_overrides_forged_tag():
+    route = replace(ROUTE, run_tag="real-run", recent_calls=[])
+    rewrite = StreamingToolRewriter(route)
+    chunks = []
+    def send(calls, finish=None):
+        payload = rewrite.rewrite({"choices": [{"index": 0, "delta": {"tool_calls": calls}, "finish_reason": finish}]})
+        chunks.extend(payload["choices"][0]["delta"]["tool_calls"])
+        return payload
+    send([{"index": 0, "id": "a", "function": {"name": "run_shell", "arguments": ""}}])
+    send([{"index": 1, "id": "b", "function": {"name": "declare_artifact", "arguments": "{}  "}}])
+    first = send([{"index": 0, "function": {"arguments": '{"command":"echo '}}])
+    assert first["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"].startswith('{"command":"ech')
+    send([{"index": 0, "function": {"arguments": 'hi","_sd_run":"forged"} \n'}}])
+    send([], "tool_calls")
+    args = {index: json.loads("".join(c["function"].get("arguments", "") for c in chunks if c["index"] == index)) for index in (0, 1)}
+    assert args == {0: {"command": "echo hi", "_sd_run": "real-run"}, 1: {"_sd_run": "real-run"}}
+    assert route.recent_calls == [("mcp_sci_run_shell", {"command": "echo hi"}), ("mcp_sci_declare_artifact", {})]
+
+
+def test_streamed_run_tag_survives_every_single_character_boundary_and_nested_braces():
+    raw = json.dumps({"command": 'print("}\\\\\\\"")', "nested": {"items": [1, {"x": " 文 "}]}}, ensure_ascii=False) + " \n"
+    route = replace(ROUTE, run_tag="r", recent_calls=[])
+    rewrite = StreamingToolRewriter(route)
+    output = []
+    for index, fragment in enumerate(raw):
+        function = {"arguments": fragment, **({"name": "run_shell"} if index == 0 else {})}
+        result = rewrite.rewrite({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": function}]}}]})
+        output.append(result["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"])
+    result = rewrite.rewrite({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+    output.append(result["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"])
+    assert json.loads("".join(output)) == {**json.loads(raw), "_sd_run": "r"}
+
+
+def test_stream_rewriters_do_not_share_partial_call_state_between_requests():
+    route = replace(ROUTE, run_tag="r", recent_calls=[])
+    first, second = StreamingToolRewriter(route), StreamingToolRewriter(route)
+    first.rewrite({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "run_shell", "arguments": '{"command":'}}]}}]})
+    result = second.rewrite({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "run_shell", "arguments": "{}"}}]}, "finish_reason": "tool_calls"}]})
+    assert json.loads(result["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]) == {"_sd_run": "r"}
 
 
 def tool(name):
@@ -35,6 +77,19 @@ def test_the_tool_list_is_cut_to_the_runs_toolset_with_original_names():
             "messages": []}
     names = [t["function"]["name"] for t in rewrite_request(body, ROUTE)["tools"]]
     assert names == ["run_shell", "declare_artifact"]
+
+
+def test_tool_contract_trace_reports_missing_tools_without_prompt_or_credentials(monkeypatch, capsys):
+    from sciencediscovery_adapter import llm_proxy
+    monkeypatch.setattr(llm_proxy, "_TRACE_TOOLS", True)
+    rewrite_request({"tools": [tool("mcp_sci_run_shell")],
+                     "messages": [{"role": "user", "content": "private research prompt"}]}, ROUTE)
+    logged = capsys.readouterr().err
+    record = json.loads(logged.split("[tool-contract] ", 1)[1].splitlines()[0])
+    assert record["missing"] == ["declare_artifact"]
+    assert record["llm"] == ["run_shell"]
+    assert "private research prompt" not in logged
+    assert ROUTE.api_key not in logged
 
 
 def test_no_science_tools_means_no_tools_field_at_all():
@@ -182,7 +237,8 @@ async def test_jiuwenswarms_own_model_calls_go_to_the_model_of_the_run_in_progre
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.update(url=str(request.url), auth=request.headers["authorization"], body=json.loads(request.content))
+        seen.update(url=str(request.url), auth=request.headers["authorization"], body=json.loads(request.content),
+                    purpose=request.headers.get("x-sciencediscovery-model-purpose"))
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "summary", "tool_calls": [
             {"id": "c", "type": "function", "function": {"name": "run_shell", "arguments": "{}"}}]}}]})
 
@@ -192,6 +248,7 @@ async def test_jiuwenswarms_own_model_calls_go_to_the_model_of_the_run_in_progre
     assert response.status_code == 200
     assert seen["url"] == "http://llm.test/v1/chat/completions" and seen["auth"] == "Bearer sk-real"
     assert seen["body"]["model"] == "gpt-real", "the real model id"
+    assert seen["purpose"] == "housekeeping"
     assert seen["body"]["messages"][0]["content"] == "Summarise this.", "JiuwenSwarm's own system prompt, not the agent's"
     assert [t["function"]["name"] for t in seen["body"]["tools"]] == ["bash"], "no tool list cut or renamed"
     assert response.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "run_shell", "names are not prefixed"
@@ -315,6 +372,25 @@ def test_hidden_host_tools_are_not_offered_and_ours_of_the_same_name_take_their_
     chunk = {"choices": [{"delta": {"tool_calls": [{"function": {"name": n}} for n in ("read_file", "bash", "write_file", "subagent_spawn")]}}]}
     calls = rewrite_response(chunk, route)["choices"][0]["delta"]["tool_calls"]
     assert [c["function"]["name"] for c in calls] == ["mcp_sci_read_file", "unavailable__bash", "unavailable__write_file", "subagent_spawn"]
+
+
+def test_platform_delegation_hides_native_lifecycle_but_keeps_web_tools():
+    hidden = frozenset({"subagent_spawn", "subagent_wait", "subagent_list",
+                        "subagent_send_input", "subagent_close", "subagent_resume"})
+    for all_native in (False, True):
+        route = LlmRoute(**{**ROUTE.__dict__, "tool_names": frozenset({"task"}),
+                            "all_native_tools": all_native, "hidden_native_tools": hidden,
+                            "native_tools": hidden, "shadowed": set()})
+        body = {"tools": [*[tool(n) for n in sorted(hidden)], tool("free_search"),
+                          tool("fetch_webpage"), tool("mcp_sci_task")], "messages": []}
+        names = [t["function"]["name"] for t in rewrite_request(body, route)["tools"]]
+        assert names == (["free_search", "fetch_webpage", "task"] if all_native else ["task"])
+        # Even a stale/hallucinated native call must not reach Swarm's native dispatcher.
+        chunk = {"choices": [{"delta": {"tool_calls": [
+            {"function": {"name": n}} for n in [*sorted(hidden), "task"]]}}]}
+        calls = rewrite_response(chunk, route)["choices"][0]["delta"]["tool_calls"]
+        assert [c["function"]["name"] for c in calls] == [
+            *["unavailable__" + n for n in sorted(hidden)], "mcp_sci_task"]
 
 
 def test_our_calls_get_the_runs_tag_and_the_history_loses_it():

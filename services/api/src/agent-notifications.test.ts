@@ -204,7 +204,7 @@ test("SessionStore archive closes the gate; restoring the Session retains record
   store.notifications.resume(session.id);
   assert.equal(store.notifications.prepareDelivery(owner)!.notifications.length, 1);
   const versions = new VersionStore(root);
-  const ref = await versions.putRecord("NotificationAuthorityTest", await versioningAuthorities(store, session.id, "request")());
+  const ref = await versions.putRecord("NotificationAuthorityTest", await versioningAuthorities(store, { sessionId: session.id, executionId: "request" })());
   await versions.validateClosure(ref);
   const captured = (await versions.readRecord<{ notifications: { notifications: unknown[]; timers: { state: string }[] } }>(ref, "NotificationAuthorityTest")).value;
   assert.equal(captured.notifications.notifications.length, 1);

@@ -4146,7 +4146,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const footerSubagents = group.subagents.filter((subagent) => !timelineSubagentIds.has(subagent.id));
     return (
       <div className="run-activity-group" key={group.runId ?? "unattributed"}>
-        <SubagentCards onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
+        <SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
         <GovernedDownloadCards
@@ -4501,6 +4501,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
                       <RunTimeline
+                        subagentDisclosure={{ expandedCards: activityCardExpansion, onToggleCard: toggleActivityCard }}
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
                         ideaResearchClient={client}
@@ -4540,6 +4541,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     </Fragment>
                   ))}
                   <RunTimeline
+                    subagentDisclosure={{ expandedCards: activityCardExpansion, onToggleCard: toggleActivityCard }}
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
                     ideaResearchClient={client}
@@ -4893,10 +4895,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             setMessage(`/evolve-design make the artifact ${seed.label} better: `);
           }}
           onMissing={closeMissingArtifact}
-          onNavigateArtifact={(name) => {
-            // Navigating to a different artifact via a parent link: that
-            // artifact's version was not pinned by the original chip.
-            setArtifactModalVersion(undefined);
+          onNavigateArtifact={(name, version) => {
+            // Provenance links can target an older version of the artifact
+            // already open. Preserve that pin even when the name is unchanged.
+            setArtifactModalVersion(version);
             setArtifactModalSessionId(undefined);
             setArtifactModalName(name);
           }}

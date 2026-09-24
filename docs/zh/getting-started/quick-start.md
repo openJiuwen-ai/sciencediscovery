@@ -1,4 +1,4 @@
-# 01 快速开始
+# 快速开始
 
 本教程使用预编译 Linux 可执行文件，说明如何启动服务、配置模型并创建第一次 Agent 任务。
 若你使用 macOS（本地源码模式）、需要 Docker，或想为 Linux 从源码构建二进制，请先按
@@ -13,7 +13,8 @@
 - Linux x86_64 或 aarch64；
 - bubblewrap；
 - 与你的 Linux 架构匹配的 ScienceDiscovery 可执行文件，可在
-  [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases)下载；
+  [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases)下载。下载后将文件重命名为
+  `ScienceDiscovery`；
 - 至少一个外部模型 API Key。
 
 bubblewrap 需已安装在本机：
@@ -30,7 +31,7 @@ sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 
 ## 2. 启动 ScienceDiscovery
 
-以下命令假设 `ScienceDiscovery` 可执行文件位于当前目录：
+在终端中切换到 `ScienceDiscovery` 所在目录，再执行：
 
 ```bash
 chmod +x ./ScienceDiscovery
@@ -83,3 +84,4 @@ curl -fsS http://127.0.0.1:4310/health
 - 工具参数：[内置工具参考](../reference/builtin-tools.md)
 - 系统原理：[整体运行时架构](../developer-docs/architecture.md)
 - 可选的端到端实践：[演进出一个更优解](../domains/evolve-a-solution.md)
+- 跨数据库调研案例：[文献调研](../domains/literature-research.md)

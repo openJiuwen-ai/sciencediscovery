@@ -417,6 +417,12 @@ mkdir -p "$output/jiuwenswarm/site-packages"
 uv pip install --target "$output/jiuwenswarm/site-packages" \
   --python-platform "$python_platform" --python 3.12 \
   "workswarm==$jiuwenswarm_pypi_version"
+swarm_wheels="$(mktemp -d)"
+bash "$repository_root/scripts/build-swarm-wheel.sh" "$swarm_wheels" "$jiuwenswarm_tag"
+uv pip install --target "$output/jiuwenswarm/site-packages" --no-deps --reinstall \
+  --python-platform "$python_platform" --python 3.12 "$swarm_wheels"/*.whl
+python3 "$repository_root/scripts/swarm-patches.py" apply "$output/jiuwenswarm/site-packages" "$jiuwenswarm_tag"
+python3 "$repository_root/scripts/swarm-patches.py" verify "$output/jiuwenswarm/site-packages" "$jiuwenswarm_tag"
 find "$output/jiuwenswarm/site-packages" -maxdepth 1 -name bin -type d -exec rm -rf -- {} +
 find "$output/jiuwenswarm/site-packages" -name '__pycache__' -type d -exec rm -rf -- {} + 2>/dev/null || true
 

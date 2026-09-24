@@ -617,6 +617,18 @@ export class GovernedDownloadManager {
       );
     }
     await this.updateProgress(job.sessionId, job.id, downloaded, totalBytes, stagingPath, "verifying");
+    // A successful HTTP transfer can still be a login/challenge HTML page.
+    // Only inspect a bounded prefix; full PDF parsing belongs to extraction.
+    if (candidate.format?.toLowerCase() === "pdf" || candidate.mimeType?.split(";")[0]?.trim().toLowerCase() === "application/pdf") {
+      const probe = await open(stagingPath, "r");
+      try {
+        const prefix = Buffer.alloc(1024);
+        const { bytesRead } = await probe.read(prefix, 0, prefix.length, 0);
+        if (!/%PDF-\d\.\d/.test(prefix.subarray(0, bytesRead).toString("latin1"))) {
+          throw new ArtifactValidationError("NORMALIZATION_FAILED", "Expected a PDF but the downloaded content has no PDF header (possibly an HTML login or error page)");
+        }
+      } finally { await probe.close(); }
+    }
     const algorithm = candidate.checksum?.algorithm ?? "sha256";
     const hash = createHash(algorithm);
     for await (const chunk of createReadStream(stagingPath)) hash.update(chunk);

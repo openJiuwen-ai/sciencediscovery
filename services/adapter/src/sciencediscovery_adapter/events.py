@@ -119,6 +119,7 @@ class RunEventMapper:
     # Whether the current model call has produced a response yet. The native agent announces a
     # response for every model call, even one that only ends in a tool call or an error.
     _turn_has_response: bool = False
+    _awaiting_response: bool = False
     _permissions: dict[str, list[str]] = field(default_factory=dict)
     _pending_requests: dict[str, dict[str, Any]] = field(default_factory=dict)
     _denied: set[str] = field(default_factory=set)
@@ -150,13 +151,18 @@ class RunEventMapper:
     def _open_response(self) -> list[dict[str, Any]]:
         if self._response_id is not None:
             return []
+        if self.turn == 0:
+            self.turn = 1
+        elif self._awaiting_response:
+            self.turn += 1
+        self._awaiting_response = False
         self._response_id = str(uuid.uuid4())  # the same shape the native agent uses
         self._turn_has_response = True
         return [{"type": "assistant.response.started", "responseId": self._response_id, "turn": self.turn}]
 
     def _empty_response(self) -> list[dict[str, Any]]:
         """The started/settled pair of a model call that produced no text."""
-        if self._turn_has_response or self.turn == 0:
+        if self._turn_has_response:
             return []
         return [*self._open_response(), *self._settle_response()]
 
@@ -169,7 +175,7 @@ class RunEventMapper:
 
     def _fail(self, message: str) -> list[dict[str, Any]]:
         self.finished = True
-        events = [*self._empty_response(), *self._settle_response()]
+        events = [*(self._empty_response() if self.turn else []), *self._settle_response()]
         events.append({"type": "run.failed", "error": message, "errorCode": classify_failure(message)})
         return events
 
@@ -283,7 +289,7 @@ class RunEventMapper:
             # is announced) only after the user answers.
             return []
         trace.update({"status": "completed" if ok else "failed", "output": text, "outputChars": len(text)})
-        self.turn += 1
+        self._awaiting_response = True
         self._turn_has_response = False  # the next model call is a new turn
         return [
             {"type": "tool.output", "toolCallId": tool_id, "chunk": text},
@@ -361,7 +367,13 @@ class RunEventMapper:
         return {"selected_options": [label], "custom_input": label}, {"type": "permission.resolved", "request": resolved}
 
     def _on_chat_error(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        return self._fail(str(payload.get("error") or "unknown error"))
+        return self._fail(str(payload.get("error") or payload.get("message") or "unknown error"))
+
+    # Harness execution failures are not always wrapped as chat.error. They
+    # are terminal failures, not unknown events to wait out until idle timeout.
+    _on_execution_error = _on_chat_error
+    _on_runtime_error = _on_chat_error
+    _on_error = _on_chat_error
 
     def _on_chat_interrupt_result(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         self.finished = True

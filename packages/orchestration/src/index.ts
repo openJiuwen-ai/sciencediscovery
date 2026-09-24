@@ -4,3 +4,4 @@
 export type { Agent, AgentEvent, AssistantMessageEvent } from "./agent.js";
 export * from "./run-profile.js";
 export * from "./subagents.js";
+export * from "./subagent-pool.js";

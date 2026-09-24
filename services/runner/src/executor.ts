@@ -384,6 +384,21 @@ function safeIdentityName(value: string): string {
 }
 
 /**
+ * Compose may run the image as a host uid which has no entry in the image's
+ * /etc/passwd. Node's userInfo() throws UV_ENOENT in that case, even though
+ * getuid()/getgid() still provide everything the sandbox identity needs.
+ */
+export function sandboxIdentityName(
+  lookup: () => { username: string } = () => userInfo({ encoding: "utf8" }),
+): string {
+  try {
+    return safeIdentityName(lookup().username);
+  } catch {
+    return "sciencediscovery";
+  }
+}
+
+/**
  * Basic MindSpore operators tolerate a missing passwd entry, but CANN GE/TBE
  * initialization treats getpwuid failure as fatal. Stage only the Runner's
  * current identity rather than exposing the host account database.
@@ -392,7 +407,7 @@ export async function sandboxIdentityBindArguments(dataDir: string): Promise<str
   if (typeof process.getuid !== "function" || typeof process.getgid !== "function") return [];
   const uid = process.getuid();
   const gid = process.getgid();
-  const username = safeIdentityName(userInfo().username);
+  const username = sandboxIdentityName();
   const identityRoot = resolve(dataDir, "runtime", "sandbox-identity");
   const passwd = resolve(identityRoot, "passwd");
   const group = resolve(identityRoot, "group");

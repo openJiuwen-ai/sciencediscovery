@@ -68,7 +68,11 @@ describe("jiuwenswarmServiceDefinition", () => {
     const service = jiuwenswarmServiceDefinition(paths, {});
     assert.equal(service.command, "/cache/payload/abc/python/bin/python3");
     assert.ok(service.args[0] === "-c" && service.args[1]?.includes("jiuwenswarm.start_services"));
-    assert.equal(service.env.PYTHONPATH, "/cache/payload/abc/jiuwenswarm/site-packages");
+    assert.equal(
+      service.env.PYTHONPATH,
+      "/cache/payload/abc/adapter/site-packages/sciencediscovery_adapter:/cache/payload/abc/jiuwenswarm/site-packages",
+    );
+    assert.equal(service.env.SCIENCE_AGENT_JIUWENSWARM_BOOTSTRAP, "1");
     assert.equal(service.env.HOME, "/data/jiuwenswarm-home");
     assert.equal(service.env.JIUWENSWARM_DATA_DIR, "/data/jiuwenswarm-data");
     assert.equal(service.healthUrl, undefined, "its ports are not known until it reports them");

@@ -204,8 +204,19 @@ export function offlineCitationPrecheck(content: Buffer, versionId: string): {
     }
     return true;
   });
-  const prose = proseLines.join("\n");
+  // Numbers in code and data tables are not literature references. In
+  // particular, `y_values [1, 4, 9, 16, 25]` is a result vector, not five
+  // citations. Keep ordinary prose markers such as "validated [2, 3]".
+  const prose = proseLines.join("\n")
+    .replace(/```[^\n]*\n[\s\S]*?```/gu, " ")
+    .replace(/`[^`\n]*`/gu, " ");
   const numericMarkers = [...prose.matchAll(/(?:\[|【)(\d+(?:\s*[-,，]\s*\d+)*)(?:\]|】)/gu)]
+    .filter((match) => {
+      const numbers = match[1]!.split(/\s*[-,，]\s*/u);
+      if (numbers.length < 2) return true;
+      const prefix = prose.slice(prose.lastIndexOf("\n", match.index) + 1, match.index);
+      return !/(?:[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+|[=:])\s*(?:\|\s*)?$/u.test(prefix);
+    })
     .flatMap((match) => match[1]!.split(/\s*[-,，]\s*/u));
   const footnoteMarkers = [...prose.matchAll(/\[\^([^\]]+)\]/gu)].map((match) => match[1]!);
   const hasAuthorYearMarker = /\([^()\n]*(?:19|20)\d{2}[a-z]?[^()\n]*\)|\bet al\.,?\s*(?:\(|,)?\s*(?:19|20)\d{2}\b/iu.test(prose);

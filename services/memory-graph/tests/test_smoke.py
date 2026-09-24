@@ -17,17 +17,18 @@
 These exercise the FastAPI routes without a real Neo4j (the ``Neo4jHandle``
 reports no-password → degraded, exactly the lazy-degrade contract). A real
 end-to-end round-trip is covered manually by the success screen in the plan.
-Tests that need a live Neo4j (idempotency / orphan-chain linking) are guarded
-by ``needs_neo4j`` and skipped unless the operator points the suite at a
-running Neo4j via ``SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J=http://...`` plus a
-password.
+Tests that need a live Neo4j (idempotency / orphan-chain linking) are marked
+external unless the operator points the suite at a running Neo4j via
+``SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J=http://...`` plus a password. The
+late-goal provenance regression also runs against an isolated local backend
+in the reviewed PR gate.
 """
 
 from __future__ import annotations
 
 import importlib
 import os
-from typing import Any
+from pathlib import Path
 
 import pytest
 
@@ -75,15 +76,28 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     if cfg is None:
         pytest.fail("needs a live Neo4j")
     http_uri, password = cfg
+    return _configured_graph_client(monkeypatch, http_uri, password)
+
+
+@pytest.fixture()
+def local_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
+    """A reviewed graph client with one disposable JSONL store per test."""
+    monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_TEST_BACKEND", "local")
+    monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR", str(tmp_path / "graph"))
+    return _configured_graph_client(monkeypatch, "local", "")
+
+
+def _configured_graph_client(monkeypatch: pytest.MonkeyPatch, http_uri: str, password: str) -> TestClient:
     if http_uri == "local":
         monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_BACKEND", "local")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_ENABLED", "1")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN", "test-token")
     monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_HTTP", http_uri)
-    from sciencediscovery_memory_graph import neo4j_driver, persistence, query, server
+    from sciencediscovery_memory_graph import backend, neo4j_driver, persistence, query, server
     from sciencediscovery_memory_graph.constraints import ensure_schema
 
     importlib.reload(neo4j_driver)
+    monkeypatch.setattr(backend, "_router", None)
     importlib.reload(persistence)
     importlib.reload(query)
     importlib.reload(server)
@@ -1024,6 +1038,77 @@ def test_goal_id_deterministic_dedup(live_client: TestClient) -> None:
                           headers={"authorization": "Bearer test-token"}).json()
     goals = [n for n in sub["nodes"] if n["label"] == "ResearchGoal"]
     assert len(goals) == 1
+
+
+def _assert_goal_added_after_execution_reconnects_provenance(live_client: TestClient) -> None:
+    """Enabling ScienceMemory mid-session repairs an already-landed artifact chain."""
+    headers = {"authorization": "Bearer test-token"}
+    sid = "sess-late-goal"
+    _wipe_session(sid)
+    execution = live_client.post("/observe/execution", json={
+        "execution_id": "exec-late-goal",
+        "session_id": sid,
+        "turn_id": "turn-late-goal",
+        "tool": "run_shell",
+        "language": "shell",
+        "code_hash": "hash-late-goal",
+        "exit_code": 0,
+        "status": "succeeded",
+        "started_at": "2026-07-27T00:00:00Z",
+        "finished_at": "2026-07-27T00:00:01Z",
+        "produced_artifacts": [{
+            "artifact_id": "art-late-goal",
+            "path": "report.md",
+            "logical_name": "report.md",
+            "version": 1,
+            "media_type": "text/markdown",
+        }],
+    }, headers=headers)
+    assert execution.status_code == 200
+    before = live_client.post("/trace/provenance", json={
+        "node_id": "art-late-goal", "session_id": sid,
+    }, headers=headers)
+    assert before.status_code == 200
+    assert before.json()["broken"] is True
+
+    goal = live_client.post("/observe/session-first-message", json={
+        "session_id": sid,
+        "goal_id": f"goal:session:{sid}",
+        "core_objective": "Research the original question",
+        "domain": "General",
+        "topic_scope": [],
+        "created_at": "2026-07-27T00:00:00Z",
+    }, headers=headers)
+    assert goal.status_code == 200
+    after = live_client.post("/trace/provenance", json={
+        "node_id": "art-late-goal", "session_id": sid,
+    }, headers=headers)
+    assert after.status_code == 200
+    assert after.json()["broken"] is False
+    assert any(step["node"]["label"] == "ResearchGoal" for step in after.json()["chain"])
+    assert live_client.post("/observe/session-first-message", json={
+        "session_id": sid,
+        "goal_id": f"goal:session:{sid}",
+        "core_objective": "Research the original question",
+        "domain": "General",
+        "topic_scope": [],
+        "created_at": "2026-07-27T00:00:00Z",
+    }, headers=headers).status_code == 200
+    subgraph = live_client.get("/subgraph", params={"session_id": sid}, headers=headers).json()
+    assert len([node for node in subgraph["nodes"] if node["label"] == "ResearchGoal"]) == 1
+    assert len([edge for edge in subgraph["edges"] if edge["type"] == "next"]) == 1
+    _wipe_session(sid)
+
+
+@needs_neo4j
+def test_goal_added_after_execution_reconnects_provenance(live_client: TestClient) -> None:
+    _assert_goal_added_after_execution_reconnects_provenance(live_client)
+
+
+@pytest.mark.science_tags(status="reviewed")
+def test_goal_added_after_execution_reconnects_provenance_local(local_client: TestClient) -> None:
+    """PR gate: the same late-goal chain repair works without Neo4j."""
+    _assert_goal_added_after_execution_reconnects_provenance(local_client)
 
 
 @needs_neo4j

@@ -203,4 +203,3 @@ def sandbox_skill_paths(command: str, directories: dict[str, str]) -> str:
         out.append(char)
         index += 1
     return "".join(out)
-

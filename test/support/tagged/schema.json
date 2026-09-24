@@ -1,6 +1,11 @@
 {
   "version": 1,
   "groups": {
+    "fixture": {
+      "multiple": false,
+      "values": ["standard", "research", "literature"],
+      "default": "standard"
+    },
     "category": {
       "multiple": false,
       "values": [

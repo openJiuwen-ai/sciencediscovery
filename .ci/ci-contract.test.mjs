@@ -29,6 +29,7 @@ import {
   workspaceProjects,
 } from "./ci-contract.mjs";
 import * as catalog from "./test-catalog.mjs";
+import { resultsLabel } from "../test/support/tagged/shared.mjs";
 
 // Repository-local, like the other script tests, so a fixture never lands
 // outside the checkout CI cleans up.
@@ -165,8 +166,8 @@ test("an entry point's arguments reach the shared runner, also behind the Jiuwen
 
 /**
  * The actions/upload-artifact steps of a workflow: each step's name, the paths
- * it uploads (exclusions dropped) and whether it asks for hidden files. Read as
- * text, since the steps are regular and nothing here parses YAML.
+ * it uploads and excludes, and whether it asks for hidden files. Read as text,
+ * since the steps are regular and nothing here parses YAML.
  */
 function artifactUploads(workflow) {
   return workflow.split(/\n(?= *- )/).filter((step) => /uses: actions\/upload-artifact@/.test(step)).map((step) => {
@@ -178,12 +179,20 @@ function artifactUploads(workflow) {
       if (!line.trim() || line.search(/\S/) <= lines[at].search(/\S/)) break;
       block.push(line.trim());
     }
+    const listed = inline === "|" ? block : [inline];
     return {
       name: step.match(/- name:\s*(.+)/)?.[1] ?? "(unnamed)",
-      paths: (inline === "|" ? block : [inline]).filter((path) => !path.startsWith("!")),
+      paths: listed.filter((path) => !path.startsWith("!")),
+      excluded: listed.filter((path) => path.startsWith("!")).map((path) => path.slice(1)),
       hidden: /^\s*include-hidden-files:\s*true\s*$/m.test(step),
     };
   });
+}
+
+/** The text of each job of a workflow, by job id. */
+function workflowJobs(workflow) {
+  const body = workflow.slice(workflow.search(/^jobs:\s*$/m));
+  return Object.fromEntries(body.split(/\n(?= {2}[\w-]+:\s*$)/m).slice(1).map((job) => [job.match(/^ {2}([\w-]+):/)[1], job]));
 }
 
 const throughDotDirectory = (upload) =>
@@ -208,4 +217,25 @@ test("every artifact upload from a dot-directory includes hidden files", async (
     "      - name: Upload E2E results\n        uses: actions/upload-artifact@v4\n        with:\n          name: e2e-results\n          path: .ci-results\n          if-no-files-found: warn\n",
   );
   assert.ok(throughDotDirectory(before) && !before.hidden);
+});
+
+test("each layer uploads the coverage its run wrote, whichever profile ran it", async () => {
+  // Nightly runs the gate with `profile: daily`. The runner used to put that
+  // run under `daily-ut/`, the fixed `ut/` upload found nothing, and the
+  // Coverage job failed on artifacts that were never uploaded. Every profile
+  // now writes to the slice's own directory and records itself in plan.json.
+  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const jobs = workflowJobs(ci);
+  for (const layer of ["ut", "st"]) {
+    const uploads = artifactUploads(jobs[layer]);
+    const coverage = uploads.find((upload) => upload.name === `Upload ${layer.toUpperCase()} coverage data`);
+    const results = uploads.find((upload) => upload.name === `Upload ${layer.toUpperCase()} results`);
+    assert.ok(coverage && results, `${layer}: upload steps not found`);
+    const written = `.ci-results/${resultsLabel(layer)}/tagged/coverage`;
+    assert.deepEqual(coverage.paths, [written]);
+    // The results artifact leaves out the same directory, which the coverage artifact carries.
+    assert.deepEqual(results.excluded, [written]);
+  }
+  // The directory does not depend on the profile: the runner takes none.
+  assert.equal(resultsLabel.length, 1);
 });

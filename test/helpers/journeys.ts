@@ -18,6 +18,7 @@ import type { AddressInfo } from "node:net";
 import { expect, request, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
+import { RunPollRecovery } from "./run-poll-recovery.js";
 
 export interface JourneyModel {
   id: string;
@@ -72,6 +73,7 @@ export interface ScriptedToolStep {
   reasoning?: string;
   arguments: Record<string, unknown>;
   delayMs?: number;
+  waitFor?: Promise<void>;
   tool: string;
 }
 
@@ -84,6 +86,8 @@ export interface ScriptedTextStep {
 export type ScriptedModelStep = ScriptedTextStep | ScriptedToolStep;
 
 export interface ScriptedModelCall {
+  systemPrompt?: string;
+  toolResults?: string[];
   offeredTools?: string[];
   arguments?: Record<string, unknown>;
   route: "main" | "subagent";
@@ -187,10 +191,14 @@ function userText(content: unknown): unknown {
  * Each nested mainSteps array is one user turn. Within a turn, every tool
  * result advances to the next step. Subagent requests are routed only by the
  * product's general-purpose preset marker, keeping orchestration under test.
+ * waitForShellCompletion opts dependent workflows into execution_status
+ * polling and requires exit code zero before advancing past run_shell.
+ * Leave it off for scripts that deliberately inspect errors or overlap work.
  */
 export function scriptedModel(
   mainSteps: ScriptedTurns,
   subagentSteps?: ScriptedTurns,
+  options: { captureContext?: boolean; waitForShellCompletion?: boolean } = {},
 ): Promise<ScriptedModel> {
   const calls: ScriptedModelCall[] = [];
   const model = "journey-scripted-model";
@@ -200,6 +208,7 @@ export function scriptedModel(
   let mainTurn = 0;
   let subagentStepIndex = 0;
   const lastAnswer: Partial<Record<"main" | "subagent", string>> = {};
+  const waitingForShell: Partial<Record<"main" | "subagent", boolean>> = {};
   const server: Server = createServer((request, response) => {
     const bodyChunks: Buffer[] = [];
     request.on("data", (chunk) => bodyChunks.push(Buffer.from(chunk)));
@@ -251,12 +260,37 @@ export function scriptedModel(
         if (!scripts) throw new Error("The product made an unexpected subagent model request");
         const steps = scriptedTurn(scripts, turn);
         const stepIndex = isSubagent ? subagentStepIndex : mainStepIndex;
-        const step: ScriptedModelStep = steps[stepIndex]!;
+        let step: ScriptedModelStep = steps[stepIndex]!;
         if (!step) throw new Error(`No ${route} scripted step ${stepIndex + 1} for turn ${turn + 1}`);
+        let pollingShell = false;
+        if (waitingForShell[route]) {
+          // Swarm wraps tool JSON in a Python repr ({'result': '...'}).
+          // Read only the execution's scalar fields, without evaluating that
+          // wrapper or treating a foreground wait deadline as completion.
+          const result = String([...messages].reverse().find(message => message.role === "tool")?.content ?? "");
+          const executionId = result.match(/"id"\s*:\s*"([^"]+)"/)?.[1];
+          const state = result.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
+          if (!executionId || !state) throw new Error("Scripted shell returned no execution id/state");
+          if (state === "queued" || state === "running") {
+            step = { tool: "execution_status", arguments: { execution_id: executionId, wait_ms: 30_000 } };
+            pollingShell = true;
+          } else {
+            const exitCode = result.match(/"exitCode"\s*:\s*(-?\d+)/)?.[1];
+            if (state !== "completed" || exitCode !== "0") {
+              throw new Error(`Scripted shell did not succeed: state=${state}, exitCode=${exitCode ?? "missing"}`);
+            }
+            waitingForShell[route] = false;
+          }
+        }
 
         sequence += 1;
         const id = `chatcmpl-journey-${sequence}`;
         calls.push({
+          ...(options.captureContext ? {
+            systemPrompt,
+            toolResults: messages.filter((message) => message.role === "tool").map((message) =>
+              typeof message.content === "string" ? message.content : JSON.stringify(message.content)),
+          } : {}),
           offeredTools: body.tools?.map((tool) => tool.function?.name ?? ""),
           ...("tool" in step ? { arguments: step.arguments, tool: step.tool } : {}),
           route,
@@ -268,6 +302,7 @@ export function scriptedModel(
           role: "assistant", reasoning_content: step.reasoning,
         }, null))}\n\n`);
         if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
+        if ("tool" in step && step.waitFor) await step.waitFor;
         if ("tool" in step) {
           response.write(`data: ${JSON.stringify(completionChunk(id, model, {
             ...(step.text ? { content: step.text } : {}),
@@ -294,6 +329,10 @@ export function scriptedModel(
           })}\n\n`);
         }
         response.end("data: [DONE]\n\n");
+        if (pollingShell) return;
+        if (options.waitForShellCompletion && "tool" in step && step.tool === "run_shell") {
+          waitingForShell[route] = true;
+        }
         if (!("tool" in step)) lastAnswer[route] = step.text;
         if (isSubagent) {
           if ("tool" in step) subagentStepIndex += 1;
@@ -423,8 +462,8 @@ export async function openProjectSession(
   );
   await page.goto("/");
   await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
-  await page.locator("button.nav-item").filter({ hasText: fixture.project.name }).click();
-  await page.locator("button.nav-item").filter({ hasText: currentSession.title }).click();
+  await page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture.project.name }).click();
+  await page.locator("#sessions-panel-content button.nav-item").filter({ hasText: currentSession.title }).click();
   await expect(page.getByRole("heading", { exact: true, name: currentSession.title })).toBeVisible();
 }
 
@@ -455,9 +494,19 @@ export async function waitForRunTerminal(
   timeout = 420_000,
 ): Promise<JourneyRun> {
   let current: JourneyRun | undefined;
+  const recovery = new RunPollRecovery();
   await expect.poll(async () => {
-    current = (await apiJson<JourneyRun[]>(page, `/api/sessions/${encodeURIComponent(sessionId)}/runs`))
-      .find((run) => run.id === runId);
+    try {
+      current = (await apiJson<JourneyRun[]>(page, `/api/sessions/${encodeURIComponent(sessionId)}/runs`))
+        .find((run) => run.id === runId);
+      recovery.succeeded();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Only this read-only poll is retried. Never replay task creation or writes.
+      const failures = recovery.failed(error);
+      console.warn(`[run-poll] run=${runId} transient failure ${failures}/3: ${message}`);
+      return "poll_unavailable";
+    }
     return current?.status;
   }, { message: `Run ${runId} should reach a terminal state`, timeout }).toMatch(/^(cancelled|completed|failed|interrupted)$/);
   return current!;

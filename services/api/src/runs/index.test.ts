@@ -26,9 +26,19 @@ import {
   buildSubagentToolStep,
   cloneRunEventDetails,
   computeSettingsSnapshot,
+  firstUserAuthoredMessage,
   skillAuthoringCommandPrompt,
   splitArtifactVersionSuffix,
 } from "./index.js";
+
+test("a later run backfills the first real user goal, not a wake notice", () => {
+  const first = { id: "first", role: "user", kind: "message", content: "Research the initial question", createdAt: "2026-07-01T00:00:00Z" } as const;
+  const wake = { id: "wake", role: "user", kind: "wake_notice", content: "", createdAt: "2026-07-01T00:01:00Z" } as const;
+  const later = { id: "later", role: "user", kind: "message", content: "Write a report", createdAt: "2026-07-01T00:02:00Z" } as const;
+  assert.equal(firstUserAuthoredMessage([wake, first], later)?.id, "first");
+  assert.equal(firstUserAuthoredMessage([], wake), undefined);
+  assert.equal(firstUserAuthoredMessage([wake], later)?.id, "later");
+});
 
 // Regression for the artifact-chip failure: some models collapse the
 // artifact_id and version into one string ("uuid#v1") inside

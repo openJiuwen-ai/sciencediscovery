@@ -40,7 +40,7 @@ test('a group with a default is materialised on the identity, never on inheritan
   const declared = ['category:ut', 'os:linux', 'arch:amd64'];
   const complete = normalizeTags(declared);
   // The plan still carries a concrete value for every group.
-  assert.deepEqual(complete, ['arch:amd64', 'category:ut', 'judge:none', 'model:none',
+  assert.deepEqual(complete, ['arch:amd64', 'category:ut', 'fixture:standard', 'judge:none', 'model:none',
     'npu:none', 'os:linux', 'sandbox:none', 'status:reviewed']);
   // An explicit value wins over the default, and only that group changes.
   assert.ok(normalizeTags([...declared, 'status:external']).includes('status:external'));
@@ -154,4 +154,14 @@ test('the plan ignores the host platform while the compatibility shim honours it
   // Registering would make this file fail: the body throws if it ever runs.
   assert.equal(inert.test('never registered on this host', () => { throw new Error('must not run'); }), undefined);
   assert.equal(createTest(import.meta.url, { tags: [...base, `os:${here}`] }).test, test);
+});
+
+test('a plan frozen from a CI profile records the profile inside its digest', () => {
+  const daily = plan([item()], { profile: 'daily' });
+  assert.equal(daily.profile, 'daily');
+  assert.deepEqual(validatePlan(JSON.parse(JSON.stringify(daily))), daily);
+  assert.notEqual(daily.digest, plan([item()]).digest);
+  assert.equal('profile' in plan([item()]), false);
+  assert.throws(() => validatePlan({ ...daily, profile: 'pr' }), /PLAN_CHANGED/);
+  assert.throws(() => plan([item()], { profile: 'Daily run' }), /profile is a policy name/);
 });

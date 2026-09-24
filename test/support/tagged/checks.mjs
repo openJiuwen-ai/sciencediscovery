@@ -17,6 +17,8 @@
 // other case instead of living in a separate list of CI steps.
 const host = ['category:ut', 'os:linux', 'arch:amd64'];
 export const checks = [
+  { id: 'check:research-python-ut', command: ['bash', '.ci/run-research-python.sh', 'unit'], tags: host },
+  { id: 'check:swarm-sdk-contract', command: ['bash', '.ci/run-research-python.sh', 'contract'], tags: ['category:st', 'os:linux', 'arch:amd64'] },
   { id: 'check:architecture', command: ['node', 'scripts/check-architecture.mjs'], tags: host },
   { id: 'check:typecheck', command: ['pnpm', 'typecheck'], tags: host },
   // Markdown lint and every relative link in the documentation.

@@ -60,3 +60,11 @@ Shared state and re-nesting would add orchestration power but require a shared c
 - `services/api/src/runs/index.ts`
 - `services/api/src/native-agent/index.ts`, `compaction.ts`
 - `services/runner/src/executor.ts`
+
+## 10. Agent-scoped audit snapshots
+
+Native task dispatch owns the task catalog whether the executor is the native loop or JiuwenSwarm. Snapshot collection receives the session ID, the current request execution ID, and the child task ID when applicable. A child captures its own task record, execution provenance, notification inbox, timers, shell executions, and transfers. It does not capture the sibling task catalog. The main Agent captures the task directory and its own execution authorities; shared permissions, artifacts and environment records remain session resources.
+
+Task directory entries contain immutable `SubagentAuthority` references rather than inline transcripts. Each reference preserves the complete task record at capture time, including its continuation context reference. Unchanged catalog objects reuse their reference; updating a task or its Brief creates a new revision. UI and native task APIs continue to read full records from the catalog. Existing snapshots remain readable; no persisted catalog migration is required.
+
+This isolates snapshot contents, not model prompts or authorization policy. State Pool closure validation still checks referenced objects, including continuation history. Historical closure traversal and duplication of other shared resource snapshots remain separate performance work; this change alone does not establish an end-to-end timeout fix.

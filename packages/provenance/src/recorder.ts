@@ -13,8 +13,9 @@
 // limitations under the License.
 
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { constants } from "node:fs";
+import { open, readFile, realpath, stat } from "node:fs/promises";
+import { resolve, sep } from "node:path";
 
 import {
   ArtifactManager as ArtifactRegistry,
@@ -62,6 +63,38 @@ import {
   hostSandboxKind,
   systemShellEnvironmentRevisionId,
 } from "@sciencediscovery/executor";
+
+/** Keep a tool revision's mtime aligned with the published file only when its
+ * bytes still match the immutable execution snapshot. A concurrent writer may
+ * have replaced the path after publication; in that case the completion time
+ * remains the conservative fallback and the workspace scan can mark it unknown. */
+export async function recordedWorkspaceModifiedAt(
+  workspaceRoot: string,
+  path: string,
+  contentHash: string,
+  size: number,
+  fallback: string,
+): Promise<string> {
+  const target = resolveWorkspaceFile(workspaceRoot, path);
+  try {
+    const root = await realpath(workspaceRoot);
+    const actual = await realpath(target);
+    if (!actual.startsWith(`${root}${sep}`) || actual !== resolve(root, path)) return fallback;
+    const file = await open(actual, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const before = await file.stat();
+      if (!before.isFile() || before.size !== size) return fallback;
+      const hash = createHash("sha256");
+      for await (const chunk of file.createReadStream({ autoClose: false })) hash.update(chunk);
+      const after = await file.stat();
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs
+        || after.dev !== before.dev || after.ino !== before.ino) return fallback;
+      return hash.digest("hex") === contentHash ? after.mtime.toISOString() : fallback;
+    } finally { await file.close(); }
+  } catch {
+    return fallback;
+  }
+}
 
 /** Persistence boundary consumed by provenance recording. */
 export interface ProvenanceStore {
@@ -369,7 +402,7 @@ export class ProvenanceRecorder {
       kind,
       logicalName: options.name,
       origin: "llm_declared",
-      originMeta: { declaredPath: options.sourcePath },
+      originMeta: { declaredPath: options.sourcePath, ...(options.parentSubagentId ? { subagentId: options.parentSubagentId } : {}) },
       parentSubagentId: options.parentSubagentId,
       path: options.path,
       sessionId: options.sessionId,
@@ -562,7 +595,7 @@ export class ProvenanceRecorder {
         contentHash: content.hash,
         executionRunId: options.executionId,
         mode: "write",
-        modifiedAt: options.finishedAt,
+        modifiedAt: await recordedWorkspaceModifiedAt(options.workspaceRoot, path, content.hash, content.size, options.finishedAt),
         origin: options.parentSubagentId ? "subagent" : "tool",
         path: logicalPath,
         runId: options.turnId,

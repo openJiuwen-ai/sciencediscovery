@@ -756,6 +756,7 @@ export function RunTimeline({
   onListSkillDrafts,
   onPermissionDecision,
   onOpenSubagent,
+  subagentDisclosure,
   onToggle,
   references,
   onChipClick,
@@ -779,6 +780,7 @@ export function RunTimeline({
   onListSkillDrafts?: () => Promise<SkillReviewDraftSummary[]>;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   onOpenSubagent?: (subagent: Subagent) => void;
+  subagentDisclosure?: import("../session/run-activity.js").ActivityCardDisclosure;
   onToggle: (id: string, expanded: boolean) => void;
   /** Chip references (alias → graph node) for the session's latest report
    * artifact version, so [evidence1]/[artifact1] tokens in assistant report messages
@@ -908,6 +910,7 @@ export function RunTimeline({
         if (entry.type === "subagents") {
           return (
             <SubagentCards
+              {...subagentDisclosure}
               className="timeline-subagents"
               hideHeading
               key={entry.id}

@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import json
+from copy import deepcopy
+from unittest.mock import AsyncMock
 
 import pytest
 import websockets
@@ -23,6 +26,175 @@ pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 
 
 
 DONE = {"type": "event", "event": "chat.processing_status", "payload": {"is_processing": False, "is_complete": True}}
+
+
+@pytest.mark.parametrize("approved", [True, False])
+@pytest.mark.parametrize("mcp", [["sci"], []])
+async def test_approval_preserves_run_context_without_replaying_input(approved, mcp):
+    context = {
+        "mode": "deep", "agent_ref": "researcher", "model_name": "private-route",
+        "run_model": {"endpoint_id": "test-route", "config": {"model": "test-model"}},
+        "cwd": "/workspace/research", "project_dir": "/workspace/research",
+        "trusted_dirs": ["/workspace/research"], "mcp": mcp,
+        "agent_template_name": "research", "plugin_names": [],
+    }
+    expected = deepcopy(context)
+    params = {**context, "session_id": "parent", "query": "original task",
+              "attachments": [{"name": "input.csv"}], "sci_persistent_output": True}
+    run = ChatRun("ws://unused", params)
+    run._connection = AsyncMock()
+    # Callers may mutate their configuration after constructing this run.
+    params["mcp"].append("unrelated")
+    params["run_model"]["config"]["model"] = "changed"
+    for question in ("shell-approval", "artifact-approval"):
+        await run.answer(question, "permission_interrupt", {"approved": approved})
+    for call in run._connection.send.call_args_list:
+        payload = json.loads(call.args[0])["params"]
+        assert {key: payload[key] for key in expected} == expected
+        assert payload["query"] == ""
+        assert "attachments" not in payload
+        assert payload["answers"] == [{"approved": approved}]
+        assert payload["sci_persistent_output"] is True
+
+
+async def test_parallel_parent_and_child_approval_contexts_are_isolated():
+    runs = []
+    for session, connector in (("parent", "sci"), ("child", "custom-scoped")):
+        run = ChatRun("ws://unused", {"session_id": session, "mcp": [connector],
+                                     "cwd": f"/workspace/{session}", "model_name": session})
+        run._connection = AsyncMock()
+        runs.append(run)
+    await asyncio.gather(*(run.answer("permission", "permission_interrupt", {"approved": True})
+                           for run in runs))
+    for run, session, connector in zip(runs, ("parent", "child"), ("sci", "custom-scoped")):
+        payload = json.loads(run._connection.send.call_args.args[0])["params"]
+        assert payload["mcp"] == [connector]
+        assert payload["cwd"] == f"/workspace/{session}"
+        assert payload["model_name"] == session
+
+
+async def test_approval_does_not_turn_omitted_equipment_into_explicit_clear():
+    run = ChatRun("ws://unused", {"session_id": "legacy-client"})
+    run._connection = AsyncMock()
+    await run.answer("question", "permission_interrupt", {"approved": True})
+    payload = json.loads(run._connection.send.call_args.args[0])["params"]
+    assert not {"mcp", "plugin_names", "agent_template_name", "run_model"} & payload.keys()
+
+
+@pytest.mark.parametrize("event", ["chat.error", "chat.final"])
+async def test_startup_failure_without_output_owner_terminates_immediately(event):
+    async def handler(connection):
+        await connection.send(json.dumps({"event": "connection.ack"}))
+        request = json.loads(await connection.recv())
+        await connection.send(json.dumps({"type": "event", "event": event,
+            "stream_request_id": request["id"], "payload": {"error": "model binding rejected"}}))
+        await connection.wait_closed()
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with ChatRun(f"ws://127.0.0.1:{port}", {"session_id": "s", "sci_persistent_output": True}, idle_timeout=1) as run:
+            frames = [frame async for frame in run]
+    assert len(frames) == 1
+    assert frames[0]["event"] == "chat.error"
+
+
+
+async def test_persistent_output_owner_survives_two_control_request_completions():
+    seen = []
+    async def handler(connection):
+        await connection.send(json.dumps({"event": "connection.ack"}))
+        initial = json.loads(await connection.recv())
+        owner = initial["id"]
+        await connection.send(json.dumps({"type": "event", "event": "runtime.output_owner", "stream_request_id": owner}))
+        for question in ("q1", "q2"):
+            await connection.send(json.dumps({"type": "event", "event": "chat.ask_user_question",
+                "stream_request_id": owner, "payload": {"request_id": question}}))
+        for _ in range(2):
+            answer = json.loads(await connection.recv())
+            assert answer["params"]["sci_persistent_output"] is True
+            await connection.send(json.dumps({"type": "event", "event": "runtime.accepted", "stream_request_id": answer["id"]}))
+            await connection.send(json.dumps({**DONE, "stream_request_id": answer["id"]}))
+            await connection.send(json.dumps({"type": "event", "event": "chat.final", "stream_request_id": answer["id"],
+                                             "payload": {"content": "not the task result"}}))
+        await connection.send(json.dumps({"type": "event", "event": "chat.final", "stream_request_id": owner,
+                                         "payload": {"content": "complete research"}}))
+        await connection.send(json.dumps({**DONE, "stream_request_id": owner}))
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with ChatRun(f"ws://127.0.0.1:{port}", {"session_id": "s1", "sci_persistent_output": True}, idle_timeout=3) as run:
+            async for frame in run:
+                seen.append(frame)
+                if frame.get("event") == "chat.ask_user_question":
+                    await run.answer(frame["payload"]["request_id"], "permission_interrupt", {})
+    assert [f["event"] for f in seen] == ["chat.ask_user_question", "chat.ask_user_question", "chat.final", "chat.processing_status"]
+    assert seen[-2]["payload"]["content"] == "complete research"
+
+
+async def test_late_completion_from_previous_approval_stream_cannot_end_resumed_run():
+    from sciencediscovery_adapter.events import RunEventMapper
+
+    mapper = RunEventMapper()
+    seen = []
+
+    async def handler(connection):
+        await connection.send(json.dumps({"type": "event", "event": "connection.ack", "payload": {}}))
+        request = json.loads(await connection.recv())
+        for index in range(2):
+            previous = request["id"]
+            await connection.send(json.dumps({"type": "event", "event": "chat.ask_user_question",
+                "stream_request_id": previous, "payload": {"request_id": f"permission-{index}"}}))
+            request = json.loads(await connection.recv())
+            # The resumed request has already progressed when the old request's
+            # final bookkeeping arrives (the ordering from the failed DRB run).
+            await connection.send(json.dumps({"type": "event", "event": "chat.delta",
+                "stream_request_id": request["id"], "payload": {"content": "working"}}))
+            await connection.send(json.dumps({**DONE, "stream_request_id": previous}))
+            await connection.send(json.dumps({"type": "event", "event": "chat.final",
+                "stream_request_id": previous, "payload": {"content": "stale answer"}}))
+            await connection.send(json.dumps({"type": "event", "event": "chat.usage_metadata",
+                "stream_request_id": previous, "payload": {}}))
+        await connection.send(json.dumps({"type": "event", "event": "chat.final",
+            "stream_request_id": request["id"], "payload": {"content": "finished after both approvals"}}))
+        await connection.send(json.dumps({**DONE, "stream_request_id": request["id"]}))
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/tui"
+        async with ChatRun(url, {"session_id": "s1"}, reconnects=0) as run:
+            async for frame in run:
+                seen.append(frame)
+                if frame.get("event") == "chat.ask_user_question":
+                    await run.answer(frame["payload"]["request_id"], "permission_interrupt", {"selected_options": ["once"]})
+                else:
+                    mapper.feed(frame)
+                    if frame.get("event") != "chat.processing_status":
+                        assert not mapper.finished
+    assert mapper.final_text == "finished after both approvals"
+    assert mapper.finished
+    assert len([f for f in seen if f.get("event") == "chat.processing_status"]) == 1
+    assert len([f for f in seen if f.get("event") == "chat.usage_metadata"]) == 2
+
+
+@pytest.mark.parametrize("event", ["chat.error", "execution.error", "runtime.error", "error"])
+async def test_runtime_failure_ends_stream_without_waiting_for_processing_status(event):
+    from sciencediscovery_adapter.events import RunEventMapper
+
+    release = asyncio.Event()
+    async def handler(connection):
+        await connection.send(json.dumps({"type": "event", "event": "connection.ack", "payload": {}}))
+        request = json.loads(await connection.recv())
+        await connection.send(json.dumps({"type": "event", "event": event,
+            "stream_request_id": request["id"], "payload": {"message": "model client closed", "code": "round_execution_error"}}))
+        await release.wait()  # No terminal status follows this failure.
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        try:
+            frames = await asyncio.wait_for(collect(f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/tui", {}), 1)
+            mapper = RunEventMapper()
+            events = [e for f in frames for e in mapper.feed(f)]
+            assert mapper.finished
+            assert events[-1]["type"] == "run.failed"
+            assert events[-1]["error"] == "model client closed"
+        finally:
+            release.set()
 
 
 def serve(script):
@@ -106,8 +278,8 @@ async def test_a_connection_lost_mid_run_is_taken_up_again_with_chat_resume():
         lambda request: [DELTA("a")],
         lambda request: [*RESUMED, DELTA("b"), DONE],
     )
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with server as running_server:
+        port = running_server.sockets[0].getsockname()[1]
         frames, run = await drain(f"ws://127.0.0.1:{port}/tui", {"session_id": "s1", "mode": "m"})
     assert [r["method"] for r in requests] == ["chat.send", "chat.resume"]
     assert requests[1]["params"]["session_id"] == "s1"
@@ -122,16 +294,16 @@ async def test_a_run_that_ended_while_the_connection_was_down_is_an_error_not_a_
         lambda request: [DELTA("a")],
         lambda request: [{"type": "event", "event": "chat.interrupt_result", "payload": {"message": "任务已完成"}}],
     )
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with server as running_server:
+        port = running_server.sockets[0].getsockname()[1]
         with pytest.raises(GatewayError, match="ended while"):
             await drain(f"ws://127.0.0.1:{port}/tui", {"session_id": "s1"})
 
 
 async def test_a_gateway_that_never_comes_back_is_a_gateway_error_after_the_retries():
     server, requests = serve_connections(lambda request: [DELTA("a")])
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with server as running_server:
+        port = running_server.sockets[0].getsockname()[1]
         # Every later connection is accepted and then ignored: no answer to chat.resume, then the drop again.
         with pytest.raises(GatewayError, match="closed"):
             await drain(f"ws://127.0.0.1:{port}/tui", {"session_id": "s1"}, reconnects=2)
@@ -208,9 +380,9 @@ async def test_an_is_complete_status_right_after_an_unanswered_question_does_not
                 if frame.get("event") == "chat.ask_user_question" and not answered:
                     answered = True
                     await run.answer("call_1", "permission_interrupt", {"selected_options": ["once"]})
-    # Both `chat.processing_status` frames are seen (the premature one and the real one), but only the second
-    # ends the iterator: the tool result and the real final text that followed the premature one were not lost.
-    assert seen == ["chat.ask_user_question", "chat.processing_status", "tool.completed", "chat.final",
+    # The premature marker must not reach the mapper, where it would mark the
+    # still-active logical run finished and disable disconnect cancellation.
+    assert seen == ["chat.ask_user_question", "tool.completed", "chat.final",
                      "chat.processing_status"]
 
 
@@ -246,7 +418,7 @@ async def test_bookkeeping_frames_around_the_premature_status_do_not_confuse_it_
                     answered = True
                     await run.answer("call_1", "permission_interrupt", {"selected_options": ["once"]})
     assert seen == ["chat.tool_result", "chat.ask_user_question", "chat.final", "chat.usage_summary",
-                     "chat.processing_status", "chat.final", "chat.processing_status"]
+                     "chat.final", "chat.processing_status"]
 
 
 async def test_cancel_sends_chat_interrupt_with_the_cancel_intent():

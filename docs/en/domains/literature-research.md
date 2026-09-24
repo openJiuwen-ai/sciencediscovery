@@ -1,17 +1,28 @@
 # ScienceDiscovery User Guide: Literature Research Case
 
-This guide follows a cross-database literature research task to demonstrate the full workflow: starting the service, configuring the system, dispatching a task, granting approvals, and reviewing results.
+This guide follows a cross-database literature research task to demonstrate the full workflow:
+starting the service, configuring the system, dispatching a task, granting approvals, and
+reviewing results.
 
 ## 1. Case overview
 
-This case is a typical cross-database literature research task: the agent must search PubMed and bioRxiv for papers published 2023–2025 that compare gene expression in adult versus pediatric liver parenchymal cells, focus on immune-related pathways, and generate a bar chart of gene-count comparison for the top 14 enriched pathways, while flagging contradictory findings across studies.
+This cross-database literature research case compares gene expression in adult versus pediatric
+liver parenchymal cells, with a focus on immune-related pathways. It searches PubMed for papers
+published in 2023–2025 and bioRxiv for recent preprints available in its rolling search window, then
+generates a bar chart of gene counts for the top 14 enriched pathways and flags contradictory
+findings across studies.
 
-A task like this normally takes researchers days of manual reading and data extraction, with low efficiency and a high risk of omissions. ScienceDiscovery orchestrates multiple tools to automate it end to end:
+A task like this normally takes researchers days of manual reading and data extraction, with low
+efficiency and a high risk of omissions. ScienceDiscovery orchestrates multiple intelligent tools
+to automate the workflow end to end:
 
 - **Retrieval**: the literature-search MCP tool builds a search strategy and queries both databases in parallel.
 - **Understanding and analysis**: a large model understands the literature, and a code tool performs pathway enrichment analysis and plotting.
-- **Traceability**: the whole execution is structured into a memory graph, forming a traceable task chain.
-- **Report writing**: the agent actively queries the real execution chain in the graph so that every statement is backed by evidence and nothing is fabricated.
+- **Traceability**: the full execution is structured in ScienceMemory as a graph, forming a
+  traceable task chain.
+- **Report writing**: when writing the final report, the Agent queries the graph's recorded
+  execution chain so that each statement is associated with supporting evidence, avoiding
+  unsupported results.
 
 ---
 
@@ -26,7 +37,7 @@ Go to **System configuration → Model registry** and add a model:
 | Model ID | `gpt-5` |
 | API token | The model's key. Encrypted at rest; the UI hides the plaintext |
 
-![Model registry](../../images/model.png)
+![Model registry](../../images/model-en.png)
 
 ---
 
@@ -43,7 +54,7 @@ For this case, enable the following two under **System configuration → Connect
 
 Other connectors (arXiv, UniProt, Reactome, etc.) can stay off.
 
-![Connector settings](../../images/connector.png)
+![Connector settings](../../images/connector-en.png)
 
 ### 3.2 Timeouts (optional)
 
@@ -59,7 +70,7 @@ Under **System configuration → Timeouts** you can configure these five items:
 | Permission wait | Maximum time the Agent waits for the user to approve a permission card |
 | Kernel idle | Survival time of a persistent Python/R kernel with no activity |
 
-![Timeout settings](../../images/timeout.png)
+![Timeout settings](../../images/timeout-en.png)
 
 ### 3.3 Quotas (optional)
 
@@ -74,14 +85,14 @@ Under **System configuration → Quotas** or the corresponding environment varia
 | Workspace total | Total file capacity accumulated in the Runner workspace |
 | Execution output | Retention limit for stdout + stderr of a single execution; truncated automatically when exceeded |
 
-![Quota settings](../../images/quotas.png)
+![Quota settings](../../images/quotas-en.png)
 
 ### 3.4 Prepare the Python/R environment
 
 This module hosts the Python and R runtimes the Agent uses through `run_shell` inside the sandbox (`python -m`, Python files, or `Rscript`). After the Runner starts, it pulls the managed micromamba in the background and prepares a read-only base; users can create named environments from the base and install packages as needed. Later updates happen in place without cloning; each change records a Revision for traceability. The Agent selects an environment ID, and execution uses its latest state.
 
 Go to **System configuration → Environments**. On first start the Runner downloads and verifies micromamba in the background, with status changing from `provisioning` to `ready`; this takes a few minutes. On failure the page shows the reason and offers a retry.
-![Environment settings](../../images/python.png)
+![Environment settings](../../images/python-en.png)
 
 ### 3.5 Skills (optional)
 
@@ -98,7 +109,7 @@ To create a skill, use any of the following under **System configuration → Ski
 | Local import | Import a local skill folder, `SKILL.md` file, or ZIP package; folder selection preserves relative paths and packages them before import, while ZIPs are checked for path traversal, symlinks, encryption, duplicates, and size/file-count limits |
 | Git repository import | Import from an HTTPS or SSH repository URL (a ref or subdirectory may be specified); credentials are read only from the local credential helper or SSH config and never appear in the repository URL or model context |
 
-![Skill settings](../../images/skill.png)
+![Skill settings](../../images/skill-en.png)
 
 ### 3.6 Specialists (optional)
 
@@ -110,24 +121,32 @@ To create a specialist under **System configuration → Specialists**:
 2. Fill in the basic information: a display name and a task description that describes the Agent's role and applicable scenarios.
 3. Bind the resources the run needs: a task model, an optional skill whitelist, an optional connector whitelist, an optional environment, and a review model.
 4. After saving, the specialist appears in the "Specialist" dropdown on the Session creation page and can be selected by name when creating or running a session.
-![Specialist settings](../../images/specialist.png)
+![Specialist settings](../../images/specialist-en.png)
 
 This case does not need a custom specialist; the system built-in default is sufficient.
 
 ### 3.7 ScienceMemory (optional)
 
-The ScienceMemory module stores the session's execution and argumentation as a graph: the research goal, each task step, the code that runs, the output files, down to each cited claim in the final report and its evidence source, all persisted as nodes and edges so that "how this conclusion came to be" is click-traceable.
+ScienceMemory is optional. It stores a session's execution and argumentation as a graph: research
+goals, task steps, code, output files, and every cited claim in the final report with its evidence
+source are persisted as nodes and edges. This makes the path from a conclusion to its recorded
+evidence clickable and traceable.
 
 Enable and use it as follows:
 
-1. **Prepare Neo4j**: the memory graph requires an external Neo4j service (not packaged in the image). Under **System configuration → Memory graph**, fill in the HTTP address (default `http://127.0.0.1:7474`), username, and password.
-2. **Enable the service**: turn on the memory-graph feature in system settings. Once enabled, the Python sidecar `services/memory-graph` (loopback `:17674` only) is started and self-checks its health with the Runner on startup.
-3. **Agent-side auto-mirroring**: once enabled, execution events (MCP search, `run_shell`) are mirrored automatically into the graph to form a "task chain"; the Agent builds a "citation chain" through `declare_evidence` and `declare_claim` (plus the Node-internal `declare_artifact`) when writing the final report.
-4. **Query and view**: the Agent can call the `query_graph` tool for a case-insensitive substring search; the frontend renders `[alias]` in the report as a clickable chip that jumps to the corresponding evidence or artifact.
+1. Open **System configuration → Memory** and turn on **Enable ScienceMemory**.
+2. The default **Local files** backend needs no extra service. Choose **Neo4j server** only when a
+   Neo4j-backed graph is required, then enter its HTTP address, username, and password.
+3. Once enabled, execution events such as literature retrieval and code runs are automatically
+   mirrored into the graph as a task chain. The Agent records the citation chain that connects
+   report claims to their evidence and source literature.
+4. In the report, click a citation tag to open the corresponding evidence or artifact and follow
+   its graph relationships.
 
-When Neo4j is unreachable, this module degrades silently and does not affect the web or conversation main path.
+For Neo4j setup, storage choices, and connection status, see
+[Set up ScienceMemory](../advanced-setup/science-memory-setup.md).
 
-![ScienceMemory settings](../../images/memory.png)
+![ScienceMemory settings](../../images/memory-en.png)
 
 ---
 
@@ -140,7 +159,7 @@ On the left, **New Project**:
 
 New Session: open the Project → **Add session**.
 
-![New Project](../../images/project.png)
+![New Project](../../images/project-en.png)
 
 ---
 
@@ -149,15 +168,17 @@ New Session: open the Project → **Add session**.
 Enter the following task description in the dialog:
 
 ```text
-Search PubMed and bioRxiv for papers published 2023-2025 comparing gene
+Search PubMed for papers published 2023-2025 and bioRxiv for recent preprints in its available
+search window. Compare gene
 expression in adult vs pediatric liver parenchymal cells. Focus on immune-related
 pathways. Generate a pathway enrichment bar chart showing gene count comparison
 between the two populations for the top 14 enriched pathways. Flag any
-contradictory findings across studies.
+contradictory findings across studies. In the report, state the number of records returned by each
+source and the publication years represented in the bioRxiv results.
 ```
 
 Click **Run analysis**.
-![Dispatch task](../../images/task.png)
+![Dispatch task](../../images/task-en.png)
 
 ---
 
@@ -174,16 +195,21 @@ While a task runs, the Agent pauses before high-risk operations and pops a permi
 | scientific-environments | The Agent calls `environment_install` and other managed-environment change tools |
 | web | The Agent calls `web_search` or `web_fetch` to make a public-network request |
 
-Authorization applies to the current Session by default. To persist it at the Project or Global scope, go to **System configuration → Permissions** to adjust or revoke it.
+The card offers **Allow once**, **Allow same type**, and **Deny**. **Allow same type** creates a
+revocable grant for matching requests with the same action and normalized resource category in the
+current Session. Review or revoke it under **System configuration → Permissions**.
 
-If you do not want to confirm manually each time a card appears, click **Always allow** on that card to grant long-term authorization for that operation category.
-![Permission approval card](../../images/permission.png)
+![Permission approval card illustration](../../images/permission-en.png)
 
 ---
 
 ## 7. Review the results
 
-The agent finally outputs a report with clickable citation tags. Each tag corresponds to specific cited content, its source literature, and the execution chain, so it can be verified by clicking. Every statement in the report is linked to execution evidence in the memory graph, making conclusions traceable and re-checkable and compressing a literature survey that would normally take days into minutes.
+The Agent outputs a report with clickable citation tags. Each tag leads to its cited content,
+source literature, and execution chain, so the report's statements can be checked through their
+recorded evidence. The graph makes the result traceable and reviewable, shortening literature
+research that would normally take days to minutes while avoiding an opaque, unconstrained
+report-generation path.
 
 ### 7.1 View artifacts
 

@@ -1,16 +1,17 @@
 # Shell、环境与 Workspace
 
-一次执行选择 Runner 和环境 ID：Runner 提供沙箱，环境提供 Python、R 等工具。环境不是机器，Workspace
-也不是环境。本文讲用户可见的执行行为；Runner 内部与沙箱设计见[沙箱执行](../developer-docs/sandbox-execution.md)。
+运行命令时，命令会在一个受管的运行端（Runner）中执行；所选的软件环境（Environment）提供 Python、R
+等工具。运行中创建和保存的文件位于工作区（Workspace），工作区与软件环境不是同一对象。本文讲用户可见
+的执行行为；Runner 内部与沙箱设计见[沙箱执行](../developer-docs/sandbox-execution.md)。
 
 | 对象 | 身份与生命周期 |
 |---|---|
-| Runner | 本地、SSH 隧道或直连的受管执行端；命令必须经过 Runner 沙箱 |
-| Workspace | Agent 实例 × Runner 对应的持久目录；Session 主 Agent 和每个子 Agent 各有独立根目录 |
-| Environment | Runner 内按 ID 选择的最新版受管前缀，可同时安装 Python、R |
-| Revision | 包状态与来源的追溯记录，不是可选择执行的历史环境副本 |
-| Execution | 独立于模型回合的持久命令记录 |
-| Transfer | 从已提交源快照到目标 Workspace 的显式文件映射 |
+| Runner | 已注册的本地、经 SSH 隧道或直接连接的受管执行端；命令始终经过 Runner 沙箱 |
+| Workspace | 一个 Agent 实例在一个 Runner 上使用的持久文件夹；Session 主 Agent 和每个子 Agent 各有独立根目录 |
+| Environment | 在 Runner 内按 ID 选择、解析为最新版本的受管环境，可同时安装 Python 和 R |
+| Revision | 记录包状态与来源，不是可选择执行的历史环境副本 |
+| Execution | 一条可持久保存、且独立于请求它的模型回合的命令记录 |
+| Transfer | 显式发起的文件复制操作，将已提交源快照中的文件映射到目标 Workspace |
 
 ## 执行与观察
 
@@ -22,7 +23,7 @@ Session 文件面板的 **Executions & reminders** 展示执行、日志、复�
 
 ## 文件归因
 
-同一 Workspace 同时只允许一个写入者，Shell、编辑、上传、复制、删除与恢复共用边界。并行写入使用独立 Workspace。读取与复制使用已提交快照，不把后台命令的半成品作为输入。进程清理及 CAS/ref 提交后才返回成功回执；文件走 data 池，日志与 Agent 状态走 agent-state 池。迟到的 provenance 保留历史，但不得倒退文件最新版本指针。
+同一 Workspace 同时只允许一个写入者，Shell、编辑、上传、复制、删除与恢复共用边界。并行写入使用独立 Workspace。读取与复制使用已提交快照，不把后台命令的半成品作为输入。命令完成清理并提交文件快照后才会报告成功。文件、日志和执行记录会分别保留，便于之后追溯；迟到的记录更新不会替换最新保存的文件。
 
 `workspace_transfer` 可发现有权访问的 Workspace，显式启动、查询、列出和取消复制。记录源快照和逐文件结果；部分失败或取消保留已提交文件，传输字节数不等于发布成功。本地↔远端、主↔子交接使用同一机制，不自动镜像、不重放交接。仅本地所属 Workspace 中的文件可以声明 Artifact；远端产物必须先显式复制回本地，复制本身也不会自动声明 Artifact。
 

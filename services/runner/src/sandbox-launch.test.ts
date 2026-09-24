@@ -27,6 +27,7 @@ import {
   hostInterpreterMaskArguments,
   resolveHostRuntimeSupport,
   sandboxIdentityBindArguments,
+  sandboxIdentityName,
   sandboxLaunchProfile,
   type HostRuntimeSupport,
 } from "./executor.js";
@@ -169,6 +170,14 @@ describe("host CA trust inside the sandbox", () => {
 });
 
 describe("sandbox process identity", () => {
+  test("uses a stable synthetic name when the container uid has no passwd entry", () => {
+    assert.equal(sandboxIdentityName(() => {
+      throw Object.assign(new Error("uv_os_get_passwd returned ENOENT"), { code: "ENOENT" });
+    }), "sciencediscovery");
+    assert.equal(sandboxIdentityName(() => ({ username: "host-user" })), "host-user");
+    assert.equal(sandboxIdentityName(() => ({ username: "unsafe:name" })), "sciencediscovery");
+  });
+
   test("stages only the current uid and gid for CANN GE/TBE lookups", async (t) => {
     if (typeof process.getuid !== "function" || typeof process.getgid !== "function") {
       assert.fail("POSIX identity files are only used by the Linux bubblewrap runner");

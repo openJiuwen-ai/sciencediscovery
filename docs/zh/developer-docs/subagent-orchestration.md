@@ -170,3 +170,11 @@ subagents/<subagentId>/
 - `services/api/src/native-agent/compaction.ts` — summary checkpoint 与历史压缩
 - `services/api/src/subagents/index.ts`、`workspace-copy.ts` — 独立 Workspace 输入交接和文件复制
 - `services/runner/src/executor.ts` — 执行 Workspace 的沙箱边界
+
+## 10. 按 Agent 隔离审计快照
+
+无论执行器是 native loop 还是 JiuwenSwarm，任务目录均由 native task 分发层管理。采集快照时显式传入会话 ID、当前请求的执行 ID，以及子任务 ID（如有）。子 Agent 只采集自身任务记录、执行溯源、通知收件箱、定时器、shell 执行和文件传输，不采集兄弟任务目录。主 Agent 采集任务目录及自身执行状态；权限、artifact 和环境记录仍属于会话共享资源。
+
+任务目录条目通过不可变的 `SubagentAuthority` 引用关联完整记录，不再内嵌轨迹。引用保留采集时的完整任务记录及继续执行所需的上下文引用。未变化的目录对象复用引用，任务或 Brief 更新后生成新版本。UI 和 native task API 仍从目录读取完整记录。历史快照继续可读，无需迁移持久化目录。
+
+本次隔离的是快照内容，不改变模型提示词或授权策略。State Pool 闭包校验仍检查引用对象，包括继续执行的历史。历史闭包遍历和其他共享资源快照的重复保存属于后续性能优化，不能仅凭此改动认定真实 E2E 超时已经修复。

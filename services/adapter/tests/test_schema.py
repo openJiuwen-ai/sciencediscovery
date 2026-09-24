@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from sciencediscovery_adapter.llm_proxy import LlmRoute, rewrite_request
-from sciencediscovery_adapter.schema import relax_schema, restore_dropped_empties
+from sciencediscovery_adapter.schema import open_schema, relax_schema, restore_dropped_empties
 import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
@@ -46,6 +46,15 @@ def test_what_a_call_is_made_of_is_kept():
 def test_relaxing_copies_and_does_not_touch_the_original():
     relax_schema(TASK)
     assert TASK["properties"]["timeout_seconds"]["minimum"] == 7200
+
+
+def test_open_union_keeps_distinct_types_and_conflicting_sibling_constraints():
+    nullable = {"anyOf": [{"type": "string", "const": "a"},
+                           {"type": "string", "const": "b"}, {"type": "null"}]}
+    assert open_schema(nullable) == {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    constrained = {"type": "object", "anyOf": [{"type": "string", "const": "a"}]}
+    assert open_schema(constrained) == {"type": "object", "anyOf": [{"type": "string"}]}
+    assert nullable["anyOf"][0]["const"] == "a"
 
 
 def test_additional_properties_that_carry_a_schema_are_kept():

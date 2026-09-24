@@ -70,6 +70,11 @@ deleted, and each still has a way to run.
 | `services/runner/workloads/npu-smoke-test.py` | 1 | `npu:required` | Needs an Ascend device, driver and MindSpore runtime. `CI_ALLOW_NPU=1 pnpm ci:st:npu`. |
 | `services/runner/src/macos-seatbelt.test.ts` | 5 | `os:macos` | Assert the macOS Seatbelt sandbox. They are planned on a macOS/arm64 target, never on this one. |
 | `services/api/src/environment.test.ts` (macOS package spec case) | 1 | `os:macos` | Same: the case asserts macOS executable paths. |
+
+The external memory-graph cases remain Neo4j-specific. The late-goal
+provenance regression also has a separate `status:reviewed` local-backend
+variant with a pytest-owned temporary data directory, so the PR UT plan
+executes that behavior without requiring a Neo4j service.
 | `services/adapter/tests/test_gateway_live.py` | 6 | `status:external` | Talks to a live JiuwenSwarm gateway whose model is the scripted stub, one scenario per stub start. Previously `skipif(not JIUWENSWARM_GATEWAY_URL)` and a `skipif` per scenario; a selected case now fails with what to set, and scenarios are chosen with `-k`. |
 | `services/adapter/tests/test_real_llm.py` | 2 | `model:real`, `status:external` | A real model behind `/agent/runs` and a real gateway. Previously `skipif` on `REAL_LLM_*` and `JIUWENSWARM_*`. |
 | `services/api/src/server.test.ts` (the subagent cases that delegate through the scripted `task` call) | 17 | `status:unreviewed` | On JiuwenSwarm, ScienceDiscovery's task-delegation bridge is off by default, and with it on, the nested run stalls the parent in the 0.2.6 gateway (gaps 1a and 10 of the JiuwenSwarm migration status). Previously `{ skip: onJiuwenSwarm && … }`, which the collector rejects as environment-dependent. They pass on the built-in loop (`SCIENCE_AGENT_EXECUTOR` unset), which no gated run on this branch uses, and return with the `executor` dimension. |
@@ -157,7 +162,8 @@ Every run writes its plan and its accounting next to its results:
 `.test-runs/<slice>/` locally, `<CI_RESULTS_DIR>/<layer>/tagged/` in CI.
 
 - `catalog.json` — everything collected, before selection.
-- `plan.json` — the frozen plan: identity, source hash, tags, target, digest.
+- `plan.json` — the frozen plan: identity, source hash, tags, target, digest, and the
+  CI profile that froze it (every profile writes to the same `<slice>/`).
 - `preflight.json` — what the host was asked for and what it had.
 - `summary.json` — `planned`, `executed`, `passed`, `failed`, `skipped` and
   every problem, by identity.

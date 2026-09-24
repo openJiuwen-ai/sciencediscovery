@@ -41,8 +41,10 @@ export class ShellExecutions {
     return JSON.parse(String(row.record)) as Record;
   }
 
-  snapshot(sessionId: string): Record[] {
-    return this.db.prepare("SELECT record FROM shell_executions WHERE session = ? ORDER BY rowid").all(sessionId)
+  snapshot(sessionId: string, agentId?: string): Record[] {
+    const where = agentId === undefined ? "session = ?" : "session = ? AND agent = ?";
+    const args = agentId === undefined ? [sessionId] : [sessionId, agentId];
+    return this.db.prepare(`SELECT record FROM shell_executions WHERE ${where} ORDER BY rowid`).all(...args)
       .map((row) => JSON.parse(String(row.record)) as Record);
   }
 

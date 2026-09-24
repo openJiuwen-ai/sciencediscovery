@@ -110,7 +110,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         // own sleep, so waiting longer still observes the state this step is about.
         await expect(thinking).toContainText("先生成一个可核对的本地报告", { timeout: 30_000 });
         await expect(thinking).not.toHaveClass(/process-record/);
-        expect(await thinking.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(thinking).not.toHaveCSS("border-top-width", "0px");
         const identity = page.locator(".run-timeline > .run-identity");
         await expect(identity).toHaveCount(1);
         await expect(page.locator(".run-timeline .message-body")).toHaveCount(0);
@@ -129,7 +129,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(page.locator(".permission-card")).toHaveCount(0);
         const tool = page.locator(".timeline-disclosure.tool.running").first();
         await expect(tool).toBeVisible();
-        expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(tool).not.toHaveCSS("border-top-width", "0px");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const authorization = (await tool.locator(".tool-authorization").boundingBox())!;
         const status = (await tool.locator(".timeline-status").boundingBox())!;
@@ -142,7 +142,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
         await expect(tool).toHaveClass(/process-record/);
         await expect(tool).not.toHaveAttribute("open", "");
-        expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(tool).toHaveCSS("border-top-width", "0px");
         const timeline = tool.locator("xpath=..");
         await expect(timeline.locator(".message.assistant .avatar")).toHaveCount(1);
         await expect(timeline.locator(".message.assistant .message-role")).toHaveCount(1);
@@ -174,14 +174,14 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await page.keyboard.press("Enter");
         await expect(tool).not.toHaveAttribute("open", "");
         await tool.locator(":scope > summary").click();
-        expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(tool).not.toHaveCSS("border-top-width", "0px");
         const stdout = tool.locator(".tool-io-section").filter({ hasText: "stdout" });
         await stdout.locator(":scope > summary").click();
         await expect(stdout.locator("pre")).toContainText("CARD_OK");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const artifact = page.getByRole("region", { name: "本轮产物", exact: true });
         await expect(artifact).toBeVisible();
-        expect(await artifact.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(artifact).not.toHaveCSS("border-top-width", "0px");
         await artifact.getByRole("button", { name: /report.md/ }).click();
         await expect(page.getByRole("dialog")).toContainText("CARD_OK");
         await page.getByRole("dialog").getByRole("button", { name: /关闭|Close/ }).first().click();
@@ -191,7 +191,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
       await tool.locator(":scope > summary").click();
       await expect(tool).not.toHaveAttribute("open", "");
-      expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+      await expect(tool).toHaveCSS("border-top-width", "0px");
       await page.mouse.move(0, 0);
     });
     await journey.step("展开后在数量左侧显示多选图标", "收起只显示总数；展开后多选图标出现在数量左边，切换多选不收起面板。", async () => {
@@ -233,11 +233,11 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         const failed = page.locator(".timeline-disclosure.tool.failed");
         await expect(failed).toHaveClass(/process-record/);
         await expect(failed.locator(":scope > summary")).toContainText("失败");
-        expect(await failed.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(failed).toHaveCSS("border-top-width", "0px");
         await expect(failed.locator(":scope > summary svg:visible")).toHaveCount(0);
         expect(await failed.locator(":scope > summary").evaluate((el) => getComputedStyle(el, "::after").width)).toBe("6px");
         await failed.locator(":scope > summary").click();
-        expect(await failed.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(failed).not.toHaveCSS("border-top-width", "0px");
         const error = failed.locator(".tool-io-section").filter({ hasText: "CARD_ERROR" }).last();
         await error.locator(":scope > summary").click();
         await expect(error.locator("pre")).toContainText("CARD_ERROR");
@@ -385,7 +385,7 @@ test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, 
         const record = page.locator("details.process-record").filter({ has: page.locator(".skill-evolution-card") });
         await expect(record).toBeVisible({ timeout: 30_000 });
         await expect(record.locator(":scope > summary")).toContainText("已完成");
-        expect(await record.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(record).toHaveCSS("border-top-width", "0px");
       });
     await journey.step("创建真实待审草稿并打开再关闭审核", "草稿仍待审，关闭审核界面不会变成已处理记录。",
       async () => {

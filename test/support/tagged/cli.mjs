@@ -69,7 +69,7 @@ export async function main(args = process.argv.slice(2)) {
     const catalog = collect({ root, files, outputDir, python: options.python, nodeImports: options.nodeImports });
     const revision = options.revision ?? spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout?.trim();
     plan = createPlan(catalog, { revision, selector: profile?.selector ?? options.selector,
-      targets: profile?.targets ?? [{ os: options.os, arch: options.arch }] });
+      targets: profile?.targets ?? [{ os: options.os, arch: options.arch }], ...(profile ? { profile: options.profile } : {}) });
   }
   writeFileSync(join(outputDir, 'plan.json'), JSON.stringify(plan, null, 2) + '\n');
   if (options.action === 'list') { console.log(JSON.stringify(plan, null, 2)); return 0; }

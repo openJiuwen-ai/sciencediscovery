@@ -17,7 +17,7 @@
     "check": "pnpm architecture:check && pnpm typecheck && pnpm ci:selftest && pnpm paper:test && pnpm gateway:test && pnpm test",
     "ci:e2e": "node test/support/tagged/shared.mjs run --slice e2e",
     "ci:e2e:legacy": "bash .ci/run-e2e.sh legacy",
-    "ci:e2e:real": "bash .ci/run-e2e.sh real",
+    "ci:e2e:real": "node test/support/tagged/shared.mjs run --profile daily --slice e2e-real",
     "ci:catalog:check": "node .ci/test-selector.mjs check",
     "ci:list": "node .ci/test-selector.mjs list",
     "ci:run": "node .ci/test-selector.mjs run",

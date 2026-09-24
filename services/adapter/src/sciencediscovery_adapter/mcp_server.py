@@ -15,7 +15,7 @@
 """One MCP server (streamable HTTP, JSON-RPC) for the tools of every run.
 
 A run's toolset is the tools the legacy API would have given its native agent for that run. JiuwenSwarm knows
-one server, `sci`, whose tool list is every tool any run has brought; so a tool has the same name in every run
+one server, `sci`, whose tool list covers current runs and their active server generations; so a tool has the same name in every run
 (`mcp_sci_<name>`), which JiuwenSwarm's permission policy can name. JiuwenSwarm's MCP client says nothing about
 the session a call comes from, so the adapter's model proxy, which is per run, puts the run's tag in each call
 (`RUN_ARG`); a call goes to that run's toolset and its callback, which executes the legacy closure. Stateless on
@@ -24,7 +24,9 @@ purpose: no session ids, no server-sent stream.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -34,6 +36,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
 from .schema import open_schema, restore_dropped_empties
+from .diagnostics import emit as trace_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,8 @@ ToolCall = Callable[[str, dict[str, Any]], Awaitable[tuple[str, bool]]]
 class Toolset:
     tools: list[dict[str, Any]]  # {name, description, inputSchema}
     call: ToolCall
+    timeout_s: float | None = None
+    trace_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,7 +67,7 @@ class ToolsetRegistry:
 
     _sets: dict[str, Toolset] = field(default_factory=dict)
     token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
-    # Every tool a run has brought, as JiuwenSwarm is given it: one entry per name. Runs can give one tool different
+    # Tools needed by the current and active generations, as JiuwenSwarm is given them: one entry per name. Runs can give one tool different
     # schemas (an enum of this session's skills or Runners), so what JiuwenSwarm holds is open: the properties seen so
     # far, with no enum and nothing required. The model gets the run's own schema (the proxy), and the run's tool
     # checks the arguments itself.
@@ -90,7 +95,7 @@ class ToolsetRegistry:
             properties[RUN_ARG] = {"type": "string", "description": "Set by the runtime."}
             merged = {"name": name, "description": (known or tool).get("description", ""),
                       "inputSchema": {**schema, "type": "object", "properties": properties}}
-            if known is None or set(properties) != set(known["inputSchema"]["properties"]):
+            if known is None or merged["inputSchema"] != known["inputSchema"]:
                 self.shared[name] = merged
                 changed = True
         return changed
@@ -104,7 +109,7 @@ def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
-async def handle_rpc(registry: ToolsetRegistry, message: dict[str, Any]) -> dict[str, Any] | None:
+async def handle_rpc(registry: ToolsetRegistry, message: dict[str, Any], *, connection: str | None = None) -> dict[str, Any] | None:
     """Answer one JSON-RPC message; `None` for a notification."""
     method = message.get("method")
     request_id = message.get("id")
@@ -138,30 +143,103 @@ async def handle_rpc(registry: ToolsetRegistry, message: dict[str, Any]) -> dict
             )
             return _result(request_id, {"content": [{"type": "text", "text": f"{name} is not one of this run's tools"}], "isError": True})
         arguments = restore_dropped_empties(tool.get("inputSchema") or {}, arguments)
+        started = time.monotonic()
+        trace = {**toolset.trace_context, "request_id": request_id, "run_tag": tag,
+                 "connection": connection, "tool": name}
+        trace_boundary("mcp.request.started", **trace)
+        logger.info("tool bridge start: tool=%s request=%s run=%s", name, request_id, tag)
         try:
-            text, is_error = await toolset.call(str(name), arguments)
+            async with asyncio.timeout(toolset.timeout_s):
+                text, is_error = await toolset.call(str(name), arguments)
+        except TimeoutError:
+            trace_boundary("mcp.request.timeout", **trace, elapsed_ms=round((time.monotonic() - started) * 1000))
+            text, is_error = (f"Tool execution timed out after {toolset.timeout_s}s; "
+                              "execution outcome may be incomplete; inspect state before retrying"), True
         except Exception as error:  # the callback is another process; surface, don't crash the run
+            trace_boundary("mcp.request.error", **trace, error_type=type(error).__name__)
             logger.exception("tools/call %r (run %r) failed", name, tag)
             text, is_error = f"tool bridge failed: {type(error).__name__}: {error}", True
+        except asyncio.CancelledError:
+            trace_boundary("mcp.request.cancelled", **trace, elapsed_ms=round((time.monotonic() - started) * 1000))
+            raise
+        trace_boundary("mcp.request.completed", **trace, status="failed" if is_error else "completed",
+                       result_chars=len(text), elapsed_ms=round((time.monotonic() - started) * 1000))
         if is_error:
             logger.warning("tools/call %r (run %r) returned isError: %s", name, tag, text[:500])
+        logger.info("tool bridge return: tool=%s request=%s run=%s error=%s elapsed=%.3fs",
+                    name, request_id, tag, is_error, time.monotonic() - started)
         return _result(request_id, {"content": [{"type": "text", "text": text}], "isError": is_error})
     return _error(request_id, -32601, f"method not found: {method}")
 
 
 def mcp_router(registry: ToolsetRegistry) -> APIRouter:
     router = APIRouter()
+    # Request ids are unique only within one client connection. Never use a
+    # bare JSON-RPC id to cancel work belonging to another connection.
+    active: dict[tuple[str, str | int], asyncio.Task] = {}
 
     @router.post("/mcp/{token}")
     async def post(token: str, request: Request) -> Response:
         if not secrets.compare_digest(token, registry.token):
             return JSONResponse({"error": "unknown toolset"}, status_code=404)
         body = await request.json()
-        if isinstance(body, list):  # a JSON-RPC batch
-            replies = [r for r in [await handle_rpc(registry, m) for m in body] if r is not None]
-            return JSONResponse(replies) if replies else Response(status_code=202)
-        reply = await handle_rpc(registry, body)
-        return JSONResponse(reply) if reply is not None else Response(status_code=202)
+        connection = request.headers.get("x-sci-mcp-connection")
+
+        async def dispatch(message):
+            if message.get("method") == "notifications/cancelled":
+                request_id = (message.get("params") or {}).get("requestId")
+                if connection and isinstance(request_id, (str, int)):
+                    pending = active.get((connection, request_id))
+                    if pending:
+                        pending.cancel()
+                return None
+            request_id = message.get("id")
+            key = (connection, request_id) if connection and isinstance(request_id, (str, int)) else None
+            if key and key in active:
+                return _error(request_id, -32600, "Duplicate active request id")
+            operation = asyncio.create_task(handle_rpc(registry, message, connection=connection))
+            if key:
+                active[key] = operation
+            try:
+                return await operation
+            except asyncio.CancelledError:
+                # Explicit remote cancellation is a terminal result, not a
+                # successful tool result. Parent cancellation must propagate.
+                if asyncio.current_task().cancelling():
+                    raise
+                return _error(request_id, -32800, "Tool request cancelled; inspect state before retrying")
+            finally:
+                if key and active.get(key) is operation:
+                    active.pop(key, None)
+
+        async def execute():
+            if isinstance(body, list):
+                replies = [reply for message in body if (reply := await dispatch(message)) is not None]
+                return JSONResponse(replies) if replies else Response(status_code=202)
+            reply = await dispatch(body)
+            return JSONResponse(reply) if reply is not None else Response(status_code=202)
+
+        async def disconnected():
+            # Body has already been consumed. Wait for ASGI's disconnect event
+            # instead of polling every active long-running task.
+            while (await request.receive()).get("type") != "http.disconnect":
+                pass
+
+        operation = asyncio.create_task(execute())
+        watcher = asyncio.create_task(disconnected())
+        try:
+            done, _ = await asyncio.wait({operation, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            if operation in done:
+                return await operation
+            # Cancelling bridge_caller closes its httpx request. Node observes
+            # the response disconnect and aborts only that tool/child task.
+            logger.info("MCP client disconnected; cancelling pending request")
+            return Response(status_code=499)
+        finally:
+            for task in (operation, watcher):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(operation, watcher, return_exceptions=True)
 
     @router.get("/mcp/{token}")
     async def get(token: str) -> Response:

@@ -4,14 +4,16 @@
 
 ## 1. 案例概述
 
-本案例是一项典型的跨数据库文献调研任务：智能体需同时检索 PubMed 和 bioRxiv 中 2023–2025 年间发表的论文，比较成人与儿童肝实质细胞的基因表达差异，重点关注免疫相关通路，并生成前 14 条富集通路的基因计数对比柱状图，同时标记不同文献间的矛盾结论。
+本案例演示一项跨数据库文献调研，聚焦成人与儿童肝实质细胞的基因表达，重点关注免疫相关通路。
+它检索 PubMed 中 2023–2025 年发表的论文，以及 bioRxiv 当前滚动检索范围内的近期预印本，随后生成前 14 条富集通路的
+基因计数对比柱状图，并标记不同文献间的矛盾结论。
 
 此类任务通常需要研究人员花费数天时间人工阅读与数据提取，效率低且容易遗漏。ScienceDiscovery 通过编排多种智能工具，可实现端到端自动化：
 
 - **检索阶段**：调用文献搜索 MCP 工具，自动构建检索策略，并行查询两个数据库。
 - **理解与分析阶段**：利用大模型理解文献内容，并调用代码工具完成通路富集分析与绘图。
-- **追溯阶段**：整个执行过程被结构化记录于记忆图谱，形成可追溯的任务链。
-- **撰写报告阶段**：智能体会主动查询图谱中的真实执行链路，确保每处论述均有据可查，避免凭空生成。
+- **追溯阶段**：整个执行过程被结构化记录于科学记忆图谱，形成可追溯的任务链。
+- **撰写报告阶段**：智能体在撰写最终报告时查询图谱中已记录的真实执行链路，使每处论述都关联到支持它的证据，避免生成没有依据的结果。
 
 ---
 
@@ -115,16 +117,16 @@
 
 ### 3.7 科学记忆（可选）
 
-科学记忆模块把会话的执行过程与论证过程存成图谱：研究目标、每一步任务、运行的代码、产出的文件，到最终报告里每一条带引用的断言及其证据来源，都以节点与边的形式持久化，使"这个结论是怎么来的"可被点击回溯。
+科学记忆是可选功能。它把会话的执行过程与论证过程存成图谱：研究目标、每一步任务、运行的代码、产出的文件，以及最终报告中每一条带引用的断言及其证据来源，都以节点与边的形式持久化。这样可以点击回溯一个结论与其已记录证据之间的关系。
 
 启用与使用方式：
 
-1. **准备 Neo4j**：记忆图谱需要外部 Neo4j 服务（不在镜像中打包）。在 **系统配置 → Memory graph** 中填写 HTTP 地址（默认 `http://127.0.0.1:7474`）、用户名与密码。
-2. **启用服务**：在系统设置中开启记忆图谱功能。启用后，Python 侧车 `services/memory-graph`（仅回环 `:17674`）会被启动，并随 Runner 启动而自检健康状态。
-3. **Agent 侧自动镜像**：启用后，执行事件（MCP 检索、`run_shell`）会被自动镜像到图中，形成"任务链"；Agent 在写最终报告时通过 `declare_evidence`、`declare_claim`（外加 Node 内部的 `declare_artifact`）建立"引用链"。
-4. **查询与查看**：Agent 可调用 `query_graph` 工具对图做大小写不敏感子串检索；前端会在报告里把 `[alias]` 渲染为可点击 chip，点击后跳转到对应证据或产物。
+1. 打开 **系统配置 → 记忆**，开启 **启用科学记忆**。
+2. 默认的 **本地文件** 后端无需额外服务。只有需要 Neo4j 图后端时，才选择 **Neo4j 服务**，并填写 HTTP 地址、用户名和密码。
+3. 启用后，文献检索、代码运行等执行事件会自动镜像到图中，形成任务链。智能体会记录报告观点与证据、来源文献之间的引用链。
+4. 在报告中点击引用标签，可打开对应证据或产物，并继续查看它在图谱中的关系。
 
-Neo4j 不可达时该模块静默降级，不影响 Web 与对话主路径。
+Neo4j 的安装、存储选择和连接状态见[安装 Neo4j 与配置科学记忆](../advanced-setup/science-memory-setup.md)。
 
 ![科学记忆设置](../../images/memory.png)
 
@@ -148,11 +150,13 @@ Neo4j 不可达时该模块静默降级，不影响 Web 与对话主路径。
 在对话框中输入以下任务描述：
 
 ```text
-Search PubMed and bioRxiv for papers published 2023-2025 comparing gene
+Search PubMed for papers published 2023-2025 and bioRxiv for recent preprints in its available
+search window. Compare gene
 expression in adult vs pediatric liver parenchymal cells. Focus on immune-related
 pathways. Generate a pathway enrichment bar chart showing gene count comparison
 between the two populations for the top 14 enriched pathways. Flag any
-contradictory findings across studies.
+contradictory findings across studies. In the report, state the number of records returned by each
+source and the publication years represented in the bioRxiv results.
 ```
 
 点击 **运行分析**。
@@ -172,16 +176,16 @@ contradictory findings across studies.
 | scientific-environments | Agent 调用 `environment_install` 等托管环境变更工具 |
 | web | Agent 调用 `web_search` 或 `web_fetch` 发起公网请求 |
 
-授权默认仅作用于当前 Session。如需在 Project 或 Global 范围内持久化，可前往 **系统配置 → Permissions** 进行调整或撤销。
+权限卡片提供 **仅允许一次**、**允许同类操作**和 **拒绝**。选择“允许同类操作”会为当前 Session
+中相同操作和标准化资源类别的后续请求创建可撤销授权，可在系统配置的权限面板中查看或撤销。
 
-如果不希望在每次出现审批卡时手动确认，可在对应卡片中点击 **始终允许（Always allow）**，授予该操作类别的长期授权。
 ![权限审批卡片](../../images/permission.png)
 
 ---
 
 ## 7. 查看结果
 
-最终智能体输出一份带有可点击引用标签的报告。每个标签对应具体的引用内容、来源文献与执行链路，点击即可核验。报告中的每条论述都关联到记忆图谱中的执行证据，使结论可追溯、可复核，将原本需要数天的文献调研缩短到分钟级。
+智能体输出一份带有可点击引用标签的报告。每个标签对应其引用内容、来源文献与执行链路，因此可沿已记录证据检查报告中的论述。图谱让结果可追溯、可复核，将原本需要数天的文献调研缩短到分钟级，避免报告生成过程成为不可查看依据的黑箱。
 
 ### 7.1 查看产物
 

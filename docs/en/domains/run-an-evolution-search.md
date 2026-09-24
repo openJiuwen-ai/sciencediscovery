@@ -25,7 +25,7 @@ required, stdlib only, no zlib/lzma/bz2. Score is the compression ratio.
 `/evolve-design` is optional — describing the goal in plain language reaches the same skill — but
 typing it brings up the algorithm picker.
 
-![Choosing PUCT or OpenEvolve before the proposal is written](../../images/evolve/choose-algorithm.png)
+![Choosing PUCT or OpenEvolve before the proposal is written](../../images/evolve/choose-algorithm-en.png)
 
 | Algorithm | Keeps | Choose it for |
 |---|---|---|
@@ -79,7 +79,7 @@ Zero leaves nothing to build on, and a solved task leaves nothing to climb.
 
 ## 3. Watch it
 
-![Score chart, search tree and candidate stream during a run](../../images/evolve/live-panel.png)
+![Score chart, search tree and candidate stream during a run](../../images/evolve/live-panel-en.png)
 
 - **Score chart** — one point per candidate, a step line for the best so far, a dashed baseline at
   the starting point, and the held-out `test` figure once the run finishes. Candidates that failed
@@ -95,12 +95,12 @@ with other work while it runs.
 
 ## 4. Read the result
 
-![The starting point and the winner as two versions of one artifact](../../images/evolve/result-versions.png)
+![The starting point and the winner as two versions of one artifact](../../images/evolve/result-versions-en.png)
 
 The starting point and the winner are two versions of the same artifact, so the result is a diff.
 A further search can be started from either version.
 
-![Diffing the starting point against the winner](../../images/evolve/result-diff.png)
+![Diffing the starting point against the winner](../../images/evolve/result-diff-en.png)
 
 **Read the held-out `test` number, not the best `gate` number.** The gate figure steered the
 search and is optimistic by construction; the test shard never took part. A large gap between the

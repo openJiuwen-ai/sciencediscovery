@@ -123,12 +123,14 @@ export class AgentNotifications {
   }
 
   /** Complete authority records for the existing turn-level State Pool, not a second version store. */
-  snapshot(sessionId: string): unknown {
+  snapshot(sessionId: string, agentId?: string): unknown {
+    const where = agentId === undefined ? "session = ?" : "session = ? AND agent = ?";
+    const args = agentId === undefined ? [sessionId] : [sessionId, agentId];
     return {
       gate: this.gate(sessionId),
-      agents: this.db.prepare("SELECT agent, stopped, epoch FROM agent_instance_wake_gates WHERE session = ? ORDER BY agent").all(sessionId),
-      notifications: this.db.prepare("SELECT * FROM agent_notifications WHERE session = ? ORDER BY created, id").all(sessionId),
-      timers: this.db.prepare("SELECT * FROM agent_timers WHERE session = ? ORDER BY due, id").all(sessionId),
+      agents: this.db.prepare(`SELECT agent, stopped, epoch FROM agent_instance_wake_gates WHERE ${where} ORDER BY agent`).all(...args),
+      notifications: this.db.prepare(`SELECT * FROM agent_notifications WHERE ${where} ORDER BY created, id`).all(...args),
+      timers: this.db.prepare(`SELECT * FROM agent_timers WHERE ${where} ORDER BY due, id`).all(...args),
     };
   }
 

@@ -90,16 +90,9 @@ curl --silent --fail "http://127.0.0.1:$adapter_port/agent/info" | grep -q '"rea
 export SCIENCE_AGENT_EXECUTOR=jiuwenswarm
 export SCIENCE_AGENT_ADAPTER_URL="http://127.0.0.1:$adapter_port"
 unset SCIENCE_AGENT_ADAPTER_TOKEN
-# Deliberately left at the default (SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS unset, i.e. "jiuwenswarm"):
-# every real deployment gets that default too, and ScienceDiscovery's own task-delegation bridge
-# (SUBAGENTS=task, or TOOLS=ours) is an opt-in a caller reaches for deliberately, trading JiuwenSwarm's
-# native subagent_spawn for full sandbox/approval/provenance parity. Routing a task's own nested turn
-# through that bridge means a second, independent POST /agent/runs to the adapter, and JiuwenSwarm
-# 0.2.6's gateway does not reliably resume the parent run afterward — see
-# docs/{en,zh}/reference/jiuwenswarm-migration-status.md gap 10. UT's own scripted model stubs
-# (server.test.ts's startSubagentModel and friends) call a tool literally named "task" and cannot
-# adapt if that name is substituted away, so the tests that use them are skipped under this executor
-# (JIUWENSWARM_NESTED_TASK_STALL_SKIP in server.test.ts) rather than opting into the bridge here —
-# that keeps this script matching what a real deployment actually runs by default.
+# API fixtures exercise ScienceDiscovery's task lifecycle while Swarm executes
+# the agent turns. Keep this test choice explicit; production still supports
+# both routes. Callers can select the native route with SUBAGENTS=jiuwenswarm.
+export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS="${SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS:-task}"
 echo "Agent turns run on JiuwenSwarm (instance $JIUWENSWARM_INSTANCE) through the adapter at $SCIENCE_AGENT_ADAPTER_URL." >&2
 "$@"

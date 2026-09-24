@@ -55,7 +55,11 @@ export function escapeRegExp(value: string): string {
 
 export function mentionsWorkspacePath(text: string, path: string): boolean {
   const boundary = "[^A-Za-z0-9._/-]";
-  return new RegExp(`(^|${boundary})(?:\\./)?${escapeRegExp(path)}($|${boundary})`).test(text);
+  return new RegExp(`(^|${boundary})(?:(?:/workspace/)|(?:\\./))?${escapeRegExp(path)}($|${boundary})`).test(text);
+}
+
+export function normalizeSubagentInputPath(path: string): string {
+  return path.trim().replace(/^\/workspace\/+/, "").replace(/^\.\/+/, "");
 }
 
 export function selectSubagentHandoffInputs(parentInputFiles: WorkspaceFile[], input: SubagentInput | undefined): {
@@ -63,7 +67,7 @@ export function selectSubagentHandoffInputs(parentInputFiles: WorkspaceFile[], i
   skippedInputPaths: NonNullable<NonNullable<Subagent["handoff"]>["skippedInputPaths"]>;
 } {
   const available = new Map(parentInputFiles.map((file) => [file.path, file]));
-  const explicitPaths = [...new Set((input?.inputPaths ?? []).map((path) => path.trim().replace(/^\.\/+/, "")).filter(Boolean))];
+  const explicitPaths = [...new Set((input?.inputPaths ?? []).map(normalizeSubagentInputPath).filter(Boolean))];
   const skippedInputPaths: NonNullable<NonNullable<Subagent["handoff"]>["skippedInputPaths"]> = [];
   if (explicitPaths.length) {
     const files = explicitPaths.flatMap((path) => {
@@ -77,7 +81,16 @@ export function selectSubagentHandoffInputs(parentInputFiles: WorkspaceFile[], i
     return { files, skippedInputPaths };
   }
   const referenceText = subagentInputReferenceText(input);
-  const referencedFiles = parentInputFiles.filter((file) => mentionsWorkspacePath(referenceText, file.path));
+  const basenameCounts = new Map<string, number>();
+  for (const file of parentInputFiles) {
+    const basename = file.path.split("/").at(-1)!;
+    basenameCounts.set(basename, (basenameCounts.get(basename) ?? 0) + 1);
+  }
+  const referencedFiles = parentInputFiles.filter((file) => {
+    if (mentionsWorkspacePath(referenceText, file.path)) return true;
+    const basename = file.path.split("/").at(-1)!;
+    return basenameCounts.get(basename) === 1 && mentionsWorkspacePath(referenceText, basename);
+  });
   return {
     files: referencedFiles,
     skippedInputPaths,

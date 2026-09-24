@@ -14,7 +14,8 @@ For the shortest Linux path, prepare:
 - Linux on `x86_64` or `aarch64`.
 - `bwrap` (Bubblewrap) for sandboxed command execution.
 - A ScienceDiscovery executable for your Linux architecture, available from the
-  [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases).
+  [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases). After downloading it,
+  rename the file to `ScienceDiscovery`.
 - At least one external model API Key.
 
 Bubblewrap must be available on your system:
@@ -32,7 +33,7 @@ After its service is running, continue with [Configure a task model](#3-configur
 
 ## 2. Start ScienceDiscovery
 
-The following commands assume the `ScienceDiscovery` executable is in the current directory:
+In a terminal, change to the directory containing `ScienceDiscovery`, then run:
 
 ```bash
 chmod +x ./ScienceDiscovery
@@ -90,3 +91,4 @@ connectors, and supplied material; they are not fixed-output promises.
 - Tool parameters: [Built-in tools reference](../reference/builtin-tools.md)
 - System principles: [Overall runtime architecture](../developer-docs/architecture.md)
 - Optional end-to-end practice: [Evolve a solution](../domains/evolve-a-solution.md)
+- Cross-database research case: [Literature research](../domains/literature-research.md)

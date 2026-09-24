@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -26,6 +27,12 @@ import websockets
 
 class GatewayError(RuntimeError):
     """The gateway could not be reached or broke the protocol."""
+
+
+_FAILURE_EVENTS = frozenset({"chat.error", "execution.error", "runtime.error", "error"})
+_RETIRED_EVENTS = frozenset({
+    "chat.processing_status", "chat.final",
+}) | _FAILURE_EVENTS
 
 
 def _ends_run(frame: dict[str, Any]) -> bool:
@@ -49,7 +56,7 @@ def _ends_run(frame: dict[str, Any]) -> bool:
     event = frame.get("event")
     if event == "chat.processing_status":
         return bool(payload.get("is_complete")) and not payload.get("is_processing")
-    return event == "chat.interrupt_result"
+    return event == "chat.interrupt_result" or event in _FAILURE_EVENTS
 
 
 def _asked_question_id(frame: dict[str, Any]) -> str | None:
@@ -94,7 +101,7 @@ class ChatRun:
     def __init__(self, url: str, params: dict[str, Any], *, idle_timeout: float | None = None,
                  reconnects: int = 3, reconnect_delay: float = 0.5) -> None:
         self._url = url
-        self._params = params
+        self._params = deepcopy(params)
         self._idle_timeout = idle_timeout
         self._connection: Any = None
         self._reconnects = reconnects
@@ -108,6 +115,14 @@ class ChatRun:
         # own premature completion already in flight over the same connection (see `_ends_run`). While
         # true, an `is_complete` `chat.processing_status` is that premature one, not the run ending.
         self._question_pending = False
+        # Approval answers start a new transport request for the same logical
+        # run. Old terminal frames can arrive AFTER new model/tool progress.
+        # Correlate them before yielding to the mapper or releasing resources.
+        self._active_request_id: str | None = None
+        self._retired_request_ids: set[str] = set()
+        self._persistent_output = bool(params.get("sci_persistent_output"))
+        self._output_owner: str | None = None
+        self._pending_questions: set[str] = set()
 
     async def _connect(self) -> None:
         try:
@@ -152,18 +167,33 @@ class ChatRun:
             await self._connection.close()
 
     async def _send(self, prefix: str, method: str, params: dict[str, Any]) -> None:
+        request_id = f"{prefix}-{uuid.uuid4().hex[:12]}"
+        if method == "chat.send" and (not self._persistent_output or self._active_request_id is None):
+            if self._active_request_id:
+                self._retired_request_ids.add(self._active_request_id)
+            self._active_request_id = request_id
         await self._connection.send(json.dumps({
-            "type": "req", "id": f"{prefix}-{uuid.uuid4().hex[:12]}", "method": method,
+            "type": "req", "id": request_id, "method": method,
             "is_stream": True, "params": params,
         }, ensure_ascii=False))
 
     async def answer(self, request_id: str, source: str, answer: dict[str, Any]) -> None:
         """Resume a run paused on `chat.ask_user_question`."""
+        # Approval continues this run; it must not replace its tools, workspace
+        # or private model route with session/global defaults. Do not replay the
+        # original query, attachments or other one-shot input fields.
+        context = {key: deepcopy(self._params[key]) for key in (
+            "mode", "agent_ref", "model_name", "run_model", "cwd", "project_dir",
+            "trusted_dirs", "mcp", "agent_template_name", "plugin_names",
+        ) if key in self._params}
         await self._send("answer", "chat.send", {
+            **context,
             "session_id": self._params["session_id"], "query": "", "request_id": request_id,
             "answers": [answer], "source": source, "mode": self._params.get("mode"),
             "supports_user_interaction": True,
+            **({"sci_persistent_output": True} if self._persistent_output else {}),
         })
+        self._pending_questions.discard(request_id)
 
     async def cancel(self) -> None:
         """Ask the gateway to stop the run. It answers with a `res` and then ends
@@ -186,6 +216,18 @@ class ChatRun:
                     raise GatewayError("gateway closed the connection mid-run") from error
                 continue
             frame = json.loads(raw)
+            # Older Swarm converters mislabeled unary startup failures as chat.final.
+            # Normalize before output-owner filtering; no lease exists at startup.
+            owner = frame.get("stream_request_id")
+            if (frame.get("event") == "chat.final"
+                    and (frame.get("payload") or {}).get("error")
+                    and owner in {self._active_request_id, self._output_owner}
+                    and owner is not None):
+                frame["event"] = "chat.error"
+            if (frame.get("event") in _FAILURE_EVENTS
+                    and owner in self._retired_request_ids
+                    and owner != self._output_owner):
+                continue
             if self.resumed:
                 if _no_run_to_resume(frame):
                     # The run ended while we were away: what it said in the gap is gone.
@@ -193,14 +235,43 @@ class ChatRun:
                 if _resume_answer(frame):
                     continue
             self._misses = 0
+            if self._persistent_output:
+                event = frame.get("event")
+                owner = frame.get("stream_request_id")
+                if event == "runtime.output_owner":
+                    self._output_owner = owner or (frame.get("payload") or {}).get("request_id")
+                    continue
+                question = _asked_question_id(frame)
+                if question:
+                    if question in self._pending_questions:
+                        continue
+                    self._pending_questions.add(question)
+                # Control requests may finish while the execution continues.
+                # Only the stream that actually owns the SDK output lease can
+                # close this logical run. An acknowledgement is not progress.
+                if event == "runtime.accepted":
+                    continue
+                if event in {"chat.processing_status", "chat.final"}:
+                    if not self._output_owner or owner != self._output_owner:
+                        continue
+                yield frame
+                if _ends_run(frame):
+                    return
+                continue
+            if (frame.get("stream_request_id") in self._retired_request_ids
+                    and frame.get("event") in _RETIRED_EVENTS):
+                continue
             if _asked_question_id(frame):
                 self._question_pending = True
             elif _advances_run(frame):
                 self._question_pending = False
+            if (frame.get("event") == "chat.processing_status" and _ends_run(frame)
+                    and self._question_pending):
+                # Even for older gateways without correlation metadata, do not
+                # leak a pause's terminal marker to RunEventMapper.finished.
+                continue
             yield frame
             if _ends_run(frame):
-                if self._question_pending:
-                    continue
                 return
 
 

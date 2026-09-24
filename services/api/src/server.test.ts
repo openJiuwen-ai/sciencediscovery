@@ -134,7 +134,10 @@ const execFileAsync = promisify(execFile);
 const onJiuwenSwarm = process.env.SCIENCE_AGENT_EXECUTOR?.trim() === "jiuwenswarm";
 
 /**
- * scripts/with-jiuwenswarm.sh deliberately leaves subagent delegation at its real-deployment default:
+ * Historical background for the unreviewed cases below (not the current wrapper policy).
+ * The wrapper now defaults to SUBAGENTS=task, with an explicit jiuwenswarm override;
+ * this does not automatically reclassify previously unreviewed cases.
+ * Previously, scripts/with-jiuwenswarm.sh left subagent delegation at its real-deployment default:
  * JiuwenSwarm's own native subagent_spawn/subagent_wait, not ScienceDiscovery's task-delegation bridge
  * (SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task, an opt-in a caller reaches for on purpose, trading native
  * subagent_spawn for full sandbox/approval/provenance parity — see gap 1a in
@@ -1026,9 +1029,9 @@ async function startSkillCreatorModel(context: TestContext): Promise<{
     toolNames.push(body.tools?.map((tool) => tool.function?.name ?? "") ?? []);
     const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
     const completionId = `chatcmpl-skill-creator-${toolResultCount}`;
-    // With the JiuwenSwarm backend our own read_skill is not offered (see the skill-selection note above):
-    // skill-creator is imported into JiuwenSwarm, as "sciencediscovery-skill-creator" since it has one of its
-    // own, and loaded with JiuwenSwarm's skill_tool instead.
+    // With the JiuwenSwarm backend skill-creator is imported there as
+    // "sciencediscovery-skill-creator" (to avoid its built-in name clash) and normally loaded
+    // with skill_tool; our read_skill remains available as a fallback.
     const delta = toolResultCount === 0
       ? onJiuwenSwarm
         ? {
@@ -1113,6 +1116,7 @@ async function startSubagentModel(
     structuredSubagentOutput?: string;
     structuredSubagentResult?: boolean;
     subagentPythonCode?: string;
+    taskTimeoutSeconds?: number;
     subagentUsesPython?: boolean;
     subagentType?: string;
     taskCount?: number;
@@ -1250,6 +1254,7 @@ async function startSubagentModel(
                       prompt: `Inspect workspace partition ${index + 1} and summarize what is available.`,
                       ...(specialistId ? { specialistId } : {}),
                       subagent_type: options.subagentType ?? "general-purpose",
+                      ...(options.taskTimeoutSeconds === undefined ? {} : { timeout_seconds: options.taskTimeoutSeconds }),
                     }),
                     name: "task",
                   },
@@ -2890,8 +2895,16 @@ test("running sessions accept queued runs and start them after the active run co
   assert.equal(second.body.status, "queued");
   assert.ok(first.body.queueOrder < second.body.queueOrder);
 
-  const duringFirst = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers: authorization });
-  assert.deepEqual(duringFirst.body.messages.map((message) => message.content), ["Hold the first response."]);
+  let duringFirst: SessionDetail | undefined;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const current = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers: authorization });
+    if (current.body.messages.some((message) => message.content === "Hold the first response.")) {
+      duringFirst = current.body;
+      break;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  assert.deepEqual(duringFirst?.messages.map((message) => message.content), ["Hold the first response."]);
 
   modelServer.release();
   await waitForRunStatus(origin, session.body.id, first.body.id, "completed");
@@ -4254,6 +4267,59 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.doesNotMatch(taskResultContent, /"steps"|"prompt"/);
 });
 
+test("task timeout_seconds is a hard wall-clock budget while a subagent waits on its model", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-wall-clock-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  const fixture = await startSubagentModel(context, { pauseSubagent: true, taskTimeoutSeconds: 10 });
+  context.after(() => fixture.releaseSubagent());
+  const model = await createTestModel(origin, {
+    baseUrl: fixture.baseUrl,
+    model: "subagent-wall-clock-model",
+    name: "Subagent wall-clock model",
+  });
+  const project = await jsonRequest<Project>(`${origin}/api/projects`, {
+    body: JSON.stringify({ name: "Subagent wall-clock project" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {
+    body: JSON.stringify({ approvalMode: "always_allow", modelId: model.id, title: "Subagent wall-clock session" }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+
+  const startedAt = Date.now();
+  const run = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {
+    body: JSON.stringify({ content: "Delegate a bounded workspace inspection." }),
+    headers: { ...authorization, "content-type": "application/json" },
+    method: "POST",
+  });
+  assert.equal(run.status, 200);
+  const stream = await run.text();
+  // The outer request includes gateway startup and the parent's final model turn.
+  // Measure the child's own persisted interval below for the hard deadline.
+  assert.ok(Date.now() - startedAt < 45_000, "the task should not remain blocked on the paused model");
+  assert.match(stream, /"type":"run.completed"/);
+  const subagents = await jsonRequest<Subagent[]>(
+    `${origin}/api/sessions/${session.body.id}/subagents`,
+    { headers: authorization },
+  );
+  assert.equal(subagents.body[0]?.status, "timed_out");
+  assert.equal(subagents.body[0]?.timeoutSeconds, 10);
+  assert.match(subagents.body[0]?.error ?? "", /wall-clock timeout after 10 seconds/);
+  assert.ok(fixture.requests.some((request) => request.messages?.some((message) =>
+    message.role === "system" && message.content?.includes("Applied subagent preset general-purpose"))),
+  "the subagent must have reached the paused model");
+  const childStartedAt = Date.parse(subagents.body[0]?.createdAt ?? "");
+  const childFinishedAt = Date.parse(subagents.body[0]?.finishedAt ?? "");
+  assert.ok(Number.isFinite(childStartedAt) && Number.isFinite(childFinishedAt));
+  assert.ok(childFinishedAt - childStartedAt < 15_000,
+    "the ten-second task deadline should end the paused child promptly");
+  fixture.releaseSubagent();
+});
+
 test("API does not auto-select a specialist by description for a subagent type", { tags: ["status:unreviewed"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-specialist-no-match-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
@@ -4415,8 +4481,8 @@ test("subagent handoff copies only declared or referenced parent files", async (
   await writeFile(resolve(workspaceRoot, "unmentioned.csv"), "value\n2\n");
 
   const handoff = await prepareSubagentHandoff(store, session.id, "subagent-selective-test", {
-    description: "Inspect needed.csv",
-    prompt: "Read needed.csv and summarize it.",
+    description: "Inspect the requested workspace input",
+    prompt: "Read /workspace/needed.csv and summarize it.",
   });
 
   assert.deepEqual(handoff.inputPaths, ["inputs/needed.csv"]);
@@ -4443,6 +4509,52 @@ test("subagent handoff copies only declared or referenced parent files", async (
   };
   assert.deepEqual(manifest.parentInputPaths, ["needed.csv"]);
   assert.equal(manifest.availableParentInputPaths, undefined);
+});
+
+test("subagent handoff accepts /workspace paths in explicit inputPaths", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-absolute-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Absolute handoff path");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+  await writeFile(resolve(store.workspacePath(session.id), "input.txt"), "delivered");
+
+  const handoff = await prepareSubagentHandoff(store, session.id, "absolute-child", {
+    description: "Read the explicit input",
+    inputPaths: ["/workspace/input.txt"],
+    prompt: "Inspect the delivered input.",
+  });
+
+  assert.deepEqual(handoff.inputPaths, ["inputs/input.txt"]);
+  assert.equal(await readFile(resolve(store.agentWorkspacePath(session.id, "absolute-child"), "input.txt"), "utf8"), "delivered");
+});
+
+test("subagent handoff resolves a unique nested file named in the prompt", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-subagent-handoff-basename-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Nested handoff path");
+  const session = await store.createSession(project.id, "Session", {}, {}, { allowUnconfiguredModel: true });
+  const parent = store.workspacePath(session.id);
+  await mkdir(resolve(parent, "analysis"), { recursive: true });
+  await mkdir(resolve(parent, "archive"), { recursive: true });
+  await writeFile(resolve(parent, "analysis", "results.csv"), "x,y\n1,2\n");
+  await writeFile(resolve(parent, "archive", "ambiguous.csv"), "old");
+  await mkdir(resolve(parent, "analysis", "older"), { recursive: true });
+  await writeFile(resolve(parent, "analysis", "older", "ambiguous.csv"), "new");
+
+  const handoff = await prepareSubagentHandoff(store, session.id, "basename-child", {
+    description: "Evaluate results.csv and ambiguous.csv",
+    prompt: "Independently inspect results.csv and ambiguous.csv.",
+  });
+
+  assert.deepEqual(handoff.inputPaths, ["inputs/analysis/results.csv"]);
+  assert.equal(await readFile(resolve(store.agentWorkspacePath(session.id, "basename-child"), "analysis", "results.csv"), "utf8"), "x,y\n1,2\n");
+  await assert.rejects(readFile(resolve(store.agentWorkspacePath(session.id, "basename-child"), "archive", "ambiguous.csv")));
 });
 
 test("subagent handoff keeps both aliases on one committed source despite parent changes", async (context) => {
@@ -5769,9 +5881,15 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
   const { origin } = await startTestApi(context, tempRoot);
-  const taskCount = DEFAULT_MAX_CONCURRENT_SUBAGENTS + 1;
+  const quotaResponse = await jsonRequest<Record<string, unknown>>(`${origin}/api/quota-settings`, { headers: authorization });
+  const savedQuota = await jsonRequest<Record<string, unknown>>(`${origin}/api/quota-settings`, {
+    method: "PUT", headers: { ...authorization, "content-type": "application/json" },
+    body: JSON.stringify({ ...quotaResponse.body, maxConcurrentSubagents: 2 }),
+  });
+  assert.equal(savedQuota.body.maxConcurrentSubagents, 2);
+  const taskCount = 3;
   const fixture = await startSubagentModel(context, {
-    concurrentSubagentTarget: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+    concurrentSubagentTarget: 2,
     requireConcurrentSubagents: true,
     taskCount,
   });
@@ -5801,7 +5919,7 @@ test("API rolls surplus task calls through the bounded per-run concurrency pool"
   assert.match(stream, /"type":"run.completed"/);
   assert.equal(fixture.concurrencyBarrierTimedOut(), false,
     `Subagent startup did not reach the concurrency barrier within ${CONCURRENCY_BARRIER_TIMEOUT_MS}ms`);
-  assert.equal(fixture.getMaxConcurrentSubagents(), DEFAULT_MAX_CONCURRENT_SUBAGENTS);
+  assert.equal(fixture.getMaxConcurrentSubagents(), 2);
 
   const subagents = await jsonRequest<Subagent[]>(
     `${origin}/api/sessions/${session.body.id}/subagents`,

@@ -95,11 +95,13 @@ export function subagentStatusLabel(t: Translate, status: string): string {
 
 export function SubagentCards({
   className,
+  expandedCards,
+  onToggleCard,
   hideHeading = false,
   heading,
   onOpenSubagent,
   subagents,
-}: {
+}: Partial<ActivityCardDisclosure> & {
   className?: string;
   hideHeading?: boolean;
   heading?: string;
@@ -115,6 +117,8 @@ export function SubagentCards({
       const summary = subagentSummary(subagent, t);
       const statusLabel = subagentStatusLabel(t, subagent.status);
       return <ProcessRecord active={subagent.status === "running"} className={`process-agent-record ${subagent.status}`}
+        expanded={expandedCards ? expandedCards[activityCardId("subagent", subagent.id)] ?? false : undefined}
+        onExpandedChange={onToggleCard ? (expanded) => onToggleCard(activityCardId("subagent", subagent.id), expanded) : undefined}
         failed={subagent.status === "failed" || subagent.status === "timed_out"}
         key={subagent.id} label={`${subagent.input.description} · ${statusLabel}`}>
         <article className={`subagent-card ${subagent.status}`}>

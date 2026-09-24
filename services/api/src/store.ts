@@ -19,7 +19,7 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { mergePluginSettings } from "@sciencediscovery/plugin-sdk";
 import { PluginControl } from "./plugins/control.js";
-import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
+import { type AgentStateRef, VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation, withWorkspaceAdmission, withWorkspaceRetirement } from "@sciencediscovery/cas";
 import { dirname, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
@@ -416,6 +416,9 @@ export class SessionStoreHttpError extends Error {
 
 export class SessionStore {
   readonly dataDir: string;
+  // Catalog mutations replace Subagent objects. Cache by object identity so an
+  // unchanged record is serialized once, without retaining superseded revisions.
+  private readonly subagentAuthorityRefs = new WeakMap<Subagent, Promise<AgentStateRef>>();
 
   /** File publishers share the Runner's cross-process admission and commit boundary. */
   async mutateWorkspace<T>(root: string, kind: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -2891,6 +2894,25 @@ export class SessionStore {
     if (!this.getSession(sessionId)) throw new Error("Session not found");
     return structuredClone(this.catalog.subagents.filter((subagent) => subagent.sessionId === sessionId))
       .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  /** Immutable audit references; filter before copying or serializing trajectories. */
+  async captureSubagentAuthorities(sessionId: string, subagentId?: string) {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    const records = this.catalog.subagents.filter((child) => child.sessionId === sessionId
+      && (subagentId === undefined || child.id === subagentId))
+      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+    if (subagentId !== undefined && records.length !== 1) throw new Error("Subagent not found in Session");
+    const versions = new VersionStore(this.dataDir);
+    return Promise.all(records.map(async (child) => {
+      let record = this.subagentAuthorityRefs.get(child);
+      if (!record) {
+        record = versions.putRecord("SubagentAuthority", JSON.parse(JSON.stringify(child)));
+        this.subagentAuthorityRefs.set(child, record);
+        void record.catch(() => this.subagentAuthorityRefs.delete(child));
+      }
+      return { id: child.id, parentTurnId: child.parentTurnId, status: child.status, record: await record };
+    }));
   }
 
   async createSubagent(
