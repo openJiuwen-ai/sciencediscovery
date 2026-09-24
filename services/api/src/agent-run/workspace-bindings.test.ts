@@ -652,6 +652,23 @@ test("cards ticked for a Runner reach the Runner request of every execution kind
   for (const payload of payloads) assert.deepEqual(payload.npuDevices, [4]);
 });
 
+test("mock NPU managed invocation retains card selection and requires a committed zero-exit receipt", async () => {
+  const { bindings, cleanup, payloads } = await npuChain([5]);
+  try {
+    const accepted = await bindings.shellExecutions!.start("echo MOCK_NPU_CALL_OK", {});
+    assert.equal(accepted.accepted, true);
+    const completed = await bindings.shellExecutions!.wait(accepted.id, 5_000);
+    assert.equal(payloads.length, 1, "a managed NPU call is submitted exactly once");
+    assert.deepEqual(payloads[0]?.npuDevices, [5], "Runner receives the physical card selection");
+    assert.equal(completed.state, "completed");
+    assert.equal(completed.provenance, "committed");
+    assert.equal(completed.result?.exitCode, 0);
+    assert.ok(completed.runnerVersionId, "Runner's committed workspace receipt is retained");
+  } finally {
+    await cleanup();
+  }
+});
+
 test("an unticked Runner sends no NPU field at all, leaving the sandbox unchanged", async () => {
   const { bindings, cleanup, payloads } = await npuChain(undefined);
   try {

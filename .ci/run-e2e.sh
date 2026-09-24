@@ -265,9 +265,13 @@ if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
 # journeys reach whoever already owns the address, and the run reports a wall of
 # 401s that reads like a broken token. Say it here instead, while the port is
 # still the answer.
-for busy_port in "$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT"; do
+ports_to_check=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
+if [[ "${SCIENCE_AGENT_ADAPTER:-0}" == "1" ]]; then
+  ports_to_check+=("${SCIENCE_AGENT_LEGACY_PORT:-$((SCIENCE_AGENT_PORT + 100))}")
+fi
+for busy_port in "${ports_to_check[@]}"; do
   if ss -ltn "sport = :$busy_port" 2>/dev/null | grep -q LISTEN; then
-    printf 'BLOCKED: port %s is already in use; another stack owns it. Set SCIENCE_AGENT_PORT / SCIENCE_AGENT_RUNNER_PORT / SCIENCE_AGENT_EVOLVE_PORT / SCIENCE_AGENT_MEMORY_GRAPH_PORT to a free block.\n' \
+    printf 'BLOCKED: port %s is already in use; another stack owns it. Set SCIENCE_AGENT_PORT / SCIENCE_AGENT_LEGACY_PORT / SCIENCE_AGENT_RUNNER_PORT / SCIENCE_AGENT_EVOLVE_PORT / SCIENCE_AGENT_MEMORY_GRAPH_PORT to a free block.\n' \
       "$busy_port" | tee -a "$test_log" >&2
     exit 2
   fi
@@ -295,7 +299,11 @@ fi
 
 node test/check-e2e-meta.mjs 2>&1 | tee -a "$test_log" || exit $?
 test_started=1
-npm --prefix .e2e run "test:$group" 2>&1 | tee -a "$test_log"
+# Local diagnosis may name one spec. CI leaves this unset and still runs the
+# frozen full plan; a partial run cannot satisfy the shared-plan accounting.
+e2e_spec_args=()
+if [[ -n "${CI_E2E_SPEC:-}" ]]; then e2e_spec_args+=(-- "$CI_E2E_SPEC"); fi
+npm --prefix .e2e run "test:$group" "${e2e_spec_args[@]}" 2>&1 | tee -a "$test_log"
 journeys_status=${PIPESTATUS[0]}
 
 # What only the JiuwenSwarm backend does, checked against the same stack: the
