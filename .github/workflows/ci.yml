@@ -200,7 +200,7 @@ jobs:
           path: |
             .sciencediscovery-data/jiuwenswarm/src
             ~/.local/share/uv/python
-          key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh') }}
+          key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
 
       # The `category:ut` slice, including the tests that drive the real
       # bubblewrap sandbox provisioned above. `--coverage` records coverage in
@@ -428,7 +428,7 @@ jobs:
 
       # Agent turns run on JiuwenSwarm (Python 3.12, about 1.5 GB with its
       # virtualenv), which run-e2e.sh installs when missing. Keyed on the script
-      # that pins the release tag, so a new pin installs afresh; uv's managed
+      # and compatibility patches, so a new pin or patch set installs afresh; uv's managed
       # Python is kept too, since the virtualenv points into it.
       - name: Cache the JiuwenSwarm install
         uses: actions/cache@v4
@@ -436,7 +436,7 @@ jobs:
           path: |
             .sciencediscovery-data/jiuwenswarm/src
             ~/.local/share/uv/python
-          key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh') }}
+          key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
 
       # The `category:e2e` slice. The layer still drives run-e2e.sh, which owns
       # the whole lifecycle: it generates an ephemeral token, starts and stops
