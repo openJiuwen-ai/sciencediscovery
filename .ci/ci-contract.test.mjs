@@ -144,13 +144,9 @@ test("an entry point that drifts off the shared runner is rejected", async (t) =
 /**
  * The actions/upload-artifact steps of a workflow: each step's name, the paths
  * it uploads and excludes, and whether it asks for hidden files. Read as text,
- * since the steps are regular and nothing here parses YAML. A `${{ env.X }}`
- * in a path is replaced by the value the workflow gives X, so a path built from
- * a job's variable is still seen for what it is.
+ * since the steps are regular and nothing here parses YAML.
  */
 function artifactUploads(workflow) {
-  const env = (name) => workflow.match(new RegExp(`^\\s*${name}:\\s*(.+?)\\s*$`, "m"))?.[1];
-  const expand = (path) => path.replace(/\$\{\{\s*env\.(\w+)\s*\}\}/g, (whole, name) => env(name) ?? whole);
   return workflow.split(/\n(?= *- )/).filter((step) => /uses: actions\/upload-artifact@/.test(step)).map((step) => {
     const lines = step.split("\n");
     const at = lines.findIndex((line) => /^\s*path:/.test(line));
@@ -160,7 +156,7 @@ function artifactUploads(workflow) {
       if (!line.trim() || line.search(/\S/) <= lines[at].search(/\S/)) break;
       block.push(line.trim());
     }
-    const listed = (inline === "|" ? block : [inline]).map(expand);
+    const listed = inline === "|" ? block : [inline];
     return {
       name: step.match(/- name:\s*(.+)/)?.[1] ?? "(unnamed)",
       paths: listed.filter((path) => !path.startsWith("!")),
@@ -174,19 +170,6 @@ function artifactUploads(workflow) {
 function workflowJobs(workflow) {
   const body = workflow.slice(workflow.search(/^jobs:\s*$/m));
   return Object.fromEntries(body.split(/\n(?= {2}[\w-]+:\s*$)/m).slice(1).map((job) => [job.match(/^ {2}([\w-]+):/)[1], job]));
-}
-
-/**
- * Resolves the `${{ … }}` parts of a path for one set of inputs. Only the small
- * part of GitHub's expression syntax these paths use is accepted: literals,
- * `inputs.*`, `==`, `&&`, `||` and `format()`.
- */
-function resolveExpressions(path, inputs) {
-  const format = (template, ...args) => template.replace(/\{(\d+)\}/g, (_, index) => String(args[Number(index)]));
-  return path.replace(/\$\{\{(.+?)\}\}/g, (_, expression) => {
-    assert.match(expression, /^[\s\w.'(){}|&=,-]+$/, `unsupported expression: ${expression}`);
-    return String(new Function("inputs", "format", `return (${expression.replace(/==/g, "===")});`)(inputs, format));
-  });
 }
 
 const throughDotDirectory = (upload) =>
@@ -213,36 +196,23 @@ test("every artifact upload from a dot-directory includes hidden files", async (
   assert.ok(throughDotDirectory(before) && !before.hidden);
 });
 
-test("each layer uploads the coverage its own profile's run wrote", async () => {
-  // Nightly runs the gate with `profile: daily`, and the shared runner writes
-  // that run under `daily-ut/`, not `ut/`: a fixed `ut/` upload path found
-  // nothing, uploaded nothing, and left the Coverage job to fail on artifacts
-  // that did not exist.
-  const directory = join(defaultRepositoryRoot, ".github", "workflows");
-  const workflows = Object.fromEntries(await Promise.all((await readdir(directory)).filter((name) => name.endsWith(".yml"))
-    .map(async (name) => [name, await readFile(join(directory, name), "utf8")])));
-  // Every profile a caller passes, and none at all: CI's own triggers.
-  const profiles = new Set([""]);
-  for (const text of Object.values(workflows).filter((text) => /uses:\s*\.\/\.github\/workflows\/ci\.yml/.test(text))) {
-    for (const [, profile] of text.matchAll(/^\s*profile:\s*([\w-]+)\s*$/gm)) profiles.add(profile);
-  }
-  assert.ok(profiles.has("daily") && profiles.has("release"), `callers' profiles: ${[...profiles].join(", ")}`);
-  const jobs = workflowJobs(workflows["ci.yml"]);
+test("each layer uploads the coverage its run wrote, whichever profile ran it", async () => {
+  // Nightly runs the gate with `profile: daily`. The runner used to put that
+  // run under `daily-ut/`, the fixed `ut/` upload found nothing, and the
+  // Coverage job failed on artifacts that were never uploaded. Every profile
+  // now writes to the slice's own directory and records itself in plan.json.
+  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const jobs = workflowJobs(ci);
   for (const layer of ["ut", "st"]) {
     const uploads = artifactUploads(jobs[layer]);
     const coverage = uploads.find((upload) => upload.name === `Upload ${layer.toUpperCase()} coverage data`);
     const results = uploads.find((upload) => upload.name === `Upload ${layer.toUpperCase()} results`);
     assert.ok(coverage && results, `${layer}: upload steps not found`);
-    for (const profile of profiles) {
-      const expected = `.ci-results/${resultsLabel(profile || "pr", layer)}/tagged/coverage`;
-      assert.deepEqual(coverage.paths.map((path) => resolveExpressions(path, { profile })), [expected], `${layer} coverage under "${profile || "(none)"}"`);
-      // The results artifact leaves out the same directory, which the coverage artifact carries.
-      assert.deepEqual(results.excluded.map((path) => resolveExpressions(path, { profile })), [expected], `${layer} results under "${profile || "(none)"}"`);
-    }
+    const written = `.ci-results/${resultsLabel(layer)}/tagged/coverage`;
+    assert.deepEqual(coverage.paths, [written]);
+    // The results artifact leaves out the same directory, which the coverage artifact carries.
+    assert.deepEqual(results.excluded, [written]);
   }
-  // And it catches the step as it was.
-  const [before] = artifactUploads(
-    "      - name: Upload UT coverage data\n        uses: actions/upload-artifact@v4\n        with:\n          name: ut-coverage\n          path: .ci-results/ut/tagged/coverage\n",
-  );
-  assert.notEqual(resolveExpressions(before.paths[0], { profile: "daily" }), `.ci-results/${resultsLabel("daily", "ut")}/tagged/coverage`);
+  // The directory does not depend on the profile: the runner takes none.
+  assert.equal(resultsLabel.length, 1);
 });

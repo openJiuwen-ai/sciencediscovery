@@ -225,7 +225,7 @@ CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:st
 
 Beside that, each slice writes its frozen plan and its accounting to
 `<CI_RESULTS_DIR>/<layer>/tagged/` — `plan.json` (every selected identity, its
-source hash, tags and target), `preflight.json` (what the host was asked for
+source hash, tags and target, and the profile that selected them), `preflight.json` (what the host was asked for
 and what it had) and `summary.json` (`planned`, `executed`, `passed`, `failed`,
 `skipped`, and each problem by identity). `pnpm test:shared` leaves the same
 files in `.test-runs/<slice>/`. `CI_RESULTS_DIR=.test-runs node

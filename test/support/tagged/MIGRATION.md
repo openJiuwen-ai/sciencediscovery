@@ -130,7 +130,8 @@ Every run writes its plan and its accounting next to its results:
 `.test-runs/<slice>/` locally, `<CI_RESULTS_DIR>/<layer>/tagged/` in CI.
 
 - `catalog.json` — everything collected, before selection.
-- `plan.json` — the frozen plan: identity, source hash, tags, target, digest.
+- `plan.json` — the frozen plan: identity, source hash, tags, target, digest, and the
+  CI profile that froze it (every profile writes to the same `<slice>/`).
 - `preflight.json` — what the host was asked for and what it had.
 - `summary.json` — `planned`, `executed`, `passed`, `failed`, `skipped` and
   every problem, by identity.

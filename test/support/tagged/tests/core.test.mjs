@@ -155,3 +155,13 @@ test('the plan ignores the host platform while the compatibility shim honours it
   assert.equal(inert.test('never registered on this host', () => { throw new Error('must not run'); }), undefined);
   assert.equal(createTest(import.meta.url, { tags: [...base, `os:${here}`] }).test, test);
 });
+
+test('a plan frozen from a CI profile records the profile inside its digest', () => {
+  const daily = plan([item()], { profile: 'daily' });
+  assert.equal(daily.profile, 'daily');
+  assert.deepEqual(validatePlan(JSON.parse(JSON.stringify(daily))), daily);
+  assert.notEqual(daily.digest, plan([item()]).digest);
+  assert.equal('profile' in plan([item()]), false);
+  assert.throws(() => validatePlan({ ...daily, profile: 'pr' }), /PLAN_CHANGED/);
+  assert.throws(() => plan([item()], { profile: 'Daily run' }), /profile is a policy name/);
+});

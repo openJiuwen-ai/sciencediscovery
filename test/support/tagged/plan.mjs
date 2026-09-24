@@ -55,7 +55,7 @@ export function subplan(plan, entries) {
 }
 
 /** Pure: NEVER reads process.env, the host OS, credentials, devices or services. */
-export function createPlan(catalog, { revision, selector = '', targets } = {}) {
+export function createPlan(catalog, { revision, selector = '', targets, profile } = {}) {
   if (typeof revision !== 'string' || !revision) throw new Error('A revision is required');
   if (!Array.isArray(targets) || !targets.length) throw new Error('An explicit target matrix is required');
   const matrix = targets.map(validateTarget);
@@ -83,8 +83,11 @@ export function createPlan(catalog, { revision, selector = '', targets } = {}) {
     }
   }
   if (!entries.size) throw new Error('EMPTY_SELECTION: no test instances selected');
+  if (profile !== undefined && (typeof profile !== 'string' || !/^[a-z][a-z0-9-]*$/.test(profile))) throw new Error('A profile is a policy name');
+  // A plan frozen from a CI profile says so itself: every profile writes to
+  // the same `<slice>/` directory, so the name cannot come from where it lies.
   const data = {
-    version: 1, revision, selector,
+    version: 1, revision, selector, ...(profile === undefined ? {} : { profile }),
     targets: [...new Map(matrix.map(t => [canonical(t), t])).values()].sort((a,b) => (canonical(a) < canonical(b) ? -1 : canonical(a) > canonical(b) ? 1 : 0)),
     catalogDigest: digest([...byId.values()].sort((a,b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))),
     entries: [...entries.values()].sort((a,b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),

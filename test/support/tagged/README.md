@@ -231,7 +231,9 @@ Both are identical to `pr` until there are live-model and `judge:llm` cases to
 put in the rows `pr` does not have — and from the moment there are, a nightly
 or a tag needs those rows' credentials or the plan fails its preflight.
 
-CI passes the profile explicitly: `pnpm ci:ut -- --profile release`. It is an
+CI passes the profile explicitly: `pnpm ci:ut -- --profile release`. Every
+profile writes to the same `<slice>/` directory, and the frozen `plan.json`
+records which profile it came from as `profile`. The profile is an
 argument and not an environment variable on purpose — the same commit and the
 same command have to mean the same plan, so reproducing a tagged run's failure
 is a matter of copying the command out of the log.
