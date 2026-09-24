@@ -18,7 +18,7 @@
  * Steps:
  *   1. Create a Project/Session, select the live model and Ascend Runner, and upload the user's two PDBs.
  *   2. Submit a scientific goal without prescribing an environment, script, tool calls, or prepared model assets.
- *   3. Observe the Agent's Skill load, input sync, environment selection, preparation, validation, and one managed NPU pipeline across any automatic wake Runs.
+ *   3. Observe the Agent's Skill load, input sync, environment selection, preparation, validation, and managed NPU pipeline across any automatic wake Runs; permit a retry only after a confirmed failed receipt.
  *   4. Verify committed zero-exit executions, all model stages, remote-to-local transfer, declared report/CSV/CIF, and the Agent's final answer.
  * Environment: Explicit opt-in, running JiuwenSwarm product stack, connected selected Ascend Runner, sandbox domain allowlist, live model, two operator-provided PDBs. The test creates a fresh Session and does not preseed model assets or select a Python environment.
  * Type: real hardware; collected but deselected by shared CI (npu:required, model:real, status:external).
@@ -234,8 +234,14 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
       const callList = [...calls.values()];
       const pipelineCalls = callList.filter((call) => pipelineScript(call)
         && !callText(call).includes("--prepare-only") && !callText(call).includes("--validate-only"));
-      assert.ok(pipelineCalls.length <= 1, `The Agent submitted the NPU pipeline ${pipelineCalls.length} times`);
-      const pipelineCall = pipelineCalls[0];
+      for (const earlier of pipelineCalls.slice(0, -1)) {
+        const receipt = executionRuns.find((entry) => entry.toolCallId === earlier.id);
+        const execution = receipt && activity.executions.find((entry) => entry.id === receipt.id);
+        assert.ok(receipt?.status === "failed" && execution?.state === "failed"
+          && execution?.provenance === "committed",
+        "A new NPU pipeline may follow only a confirmed, committed failure—not a running or unknown execution");
+      }
+      const pipelineCall = pipelineCalls.at(-1);
       const pipelineReceipt = pipelineCall && executionRuns.find((entry) => entry.toolCallId === pipelineCall.id);
       const pipeline = pipelineReceipt && activity.executions.find((entry) => entry.id === pipelineReceipt.id);
       if (pipeline) pipelineId = pipeline.id;
@@ -278,14 +284,21 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
       && !callText(call).includes("--prepare-only") && !callText(call).includes("--validate-only"));
     assert.equal(prepare.length, 1, "The Agent must prepare fresh Session model assets exactly once");
     assert.ok(validate.length, "The Agent must run the Skill's preflight validation");
-    assert.equal(pipelineCalls.length, 1, "The Agent must submit the complete Skill pipeline exactly once");
+    assert.ok(pipelineCalls.length >= 1, "The Agent must submit the complete Skill pipeline");
     assert.ok(matching("sync_remote_workspace", (call) => callText(call).includes('"pull"')).length,
       "The Agent must pull outputs into the Session");
     assert.ok(matching("declare_artifact").length >= 3, "The Agent must declare report, CSV and CIF artifacts");
     const receiptFor = (call) => executionRuns.find((entry) => entry.toolCallId === call.id);
     const prepareReceipt = receiptFor(prepare[0]);
     const validateReceipt = validate.map(receiptFor).find((entry) => entry?.exitCode === 0);
-    const pipelineReceipt = receiptFor(pipelineCalls[0]);
+    for (const earlier of pipelineCalls.slice(0, -1)) {
+      const receipt = receiptFor(earlier);
+      const execution = receipt && activity.executions.find((entry) => entry.id === receipt.id);
+      assert.ok(receipt?.status === "failed" && execution?.state === "failed"
+        && execution?.provenance === "committed",
+      "A pipeline retry requires a confirmed, committed failure of the preceding attempt");
+    }
+    const pipelineReceipt = receiptFor(pipelineCalls.at(-1));
     assert.equal(prepareReceipt?.exitCode, 0, "Managed first-use preparation must exit 0");
     assert.ok(validateReceipt, "Managed preflight validation must exit 0");
     assert.equal(pipelineReceipt?.exitCode, 0, "The complete NPU pipeline must exit 0");
@@ -295,7 +308,7 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
     assert.equal(pipeline?.state, "completed", "The same managed NPU Execution must complete");
     assert.equal(pipeline?.provenance, "committed", "The Runner receipt must have committed provenance");
     assert.ok(runs.every((run) => run.status === "completed"), "All Agent Runs, including automatic wakes, must complete");
-    steps.push(`3. PASS — Agent loaded the Skill, chose a managed environment, pushed inputs, prepared model assets (Execution ${prepareReceipt.id}), validated, and completed one NPU pipeline (Execution ${pipelineReceipt.id}) across ${runs.length} Agent Run(s).`);
+    steps.push(`3. PASS — Agent loaded the Skill, chose a managed environment, pushed inputs, prepared model assets (Execution ${prepareReceipt.id}), validated, and completed the NPU pipeline (Execution ${pipelineReceipt.id}) in ${pipelineCalls.length} confirmed attempt(s) across ${runs.length} Agent Run(s).`);
 
     phase = "4. Verify scientific results and the Agent's delivery";
     const remote = await get(`/api/runners/${encodeURIComponent(runnerId)}/workspaces/${encodeURIComponent(sessionId)}/files`);
