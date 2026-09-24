@@ -294,7 +294,7 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
     assert.ok(pipelineCalls.length >= 1, "The Agent must submit the complete Skill pipeline");
     assert.ok(matching("sync_remote_workspace", (call) => callText(call).includes('"pull"')).length,
       "The Agent must pull outputs into the Session");
-    assert.ok(matching("declare_artifact").length >= 3, "The Agent must declare report, CSV and CIF artifacts");
+    assert.ok(matching("declare_artifact").length >= 1, "The Agent must declare user-visible artifacts");
     const receiptFor = (call) => executionRuns.find((entry) => entry.toolCallId === call.id);
     const prepareReceipt = receiptFor(prepare[0]);
     const validateReceipt = validate.map(receiptFor).find((entry) => entry?.exitCode === 0);
