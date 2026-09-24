@@ -61,8 +61,10 @@ import {
 import type {
   ArtifactCandidate,
   AnalyzePaperVisionRequest,
+  BulkPublishGitSkillReviewDraftsRequest,
   CancelRunResult,
   ChatMessage,
+  CommitSkillLibraryVersionRequest,
   ConfirmSkillReviewDraftRequest,
   ComposerReference,
   MemoryGraphEdgeType,
@@ -1500,6 +1502,74 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, await skillCatalog.mergeReviewDrafts(
           await readJson<MergeSkillReviewDraftsRequest>(request),
         ));
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/skill-review-drafts/bulk-publish-git") {
+        const body = await readJson<BulkPublishGitSkillReviewDraftsRequest>(request);
+        const requestedLibraryId = body.libraryId?.trim();
+        const libraryId = requestedLibraryId || DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
+        if (libraryId === BUILT_IN_SKILL_LIBRARY_ID) {
+          throw new SkillLibraryCatalogError("SKILL_LIBRARY_VALIDATION", "Built-in Skill Library is read-only");
+        }
+        const onConflict = body.onConflict === "filter" ? "filter" : "fail";
+        const { result: commit, skipped } = await skillCatalog.publishReviewDraftsAtomically(
+          body.draftIds ?? [],
+          {
+            onConflict,
+            provenanceMetadata: {
+              autoImportedAt: new Date().toISOString(),
+              ...(body.presetId ? { autoImportPresetId: body.presetId } : {}),
+            },
+            prepare: async (prepared) => {
+              let library = skillLibraryCatalog.get(libraryId);
+              if (!library) {
+                if (requestedLibraryId && libraryId !== DEFAULT_WRITABLE_SKILL_LIBRARY_ID) {
+                  throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library not found: ${libraryId}`);
+                }
+                library = await skillLibraryCatalog.create({ id: libraryId, name: "Project Skills" });
+              }
+              const gitProvenance = prepared[0]?.provenance.git;
+              const importedAt = new Date().toISOString();
+              const commitRequest: CommitSkillLibraryVersionRequest = {
+                author: { kind: "system", name: "Quick Git import" },
+                baseVersionId: library.headVersionId,
+                evaluation: {
+                  autoImport: {
+                    commit: gitProvenance?.commit,
+                    count: prepared.length,
+                    importedAt,
+                    ...(body.presetId ? { presetId: body.presetId } : {}),
+                    repositoryUrl: gitProvenance?.repositoryUrl,
+                  },
+                },
+                operations: prepared.map((item) => ({
+                  package: {
+                    files: [...item.files].map(([path, bytes]) => ({
+                      content: bytes.toString("base64"),
+                      encoding: "base64" as const,
+                      path,
+                    })),
+                  },
+                  type: "upsert" as const,
+                })),
+              };
+              const committed = await skillLibraryCatalog.commitVersion(libraryId, commitRequest);
+              if (onConflict === "fail" && committed.conflicts.length) {
+                throw new SkillLibraryCatalogError(
+                  "SKILL_LIBRARY_CONFLICT",
+                  committed.conflicts.map((conflict) => conflict.message).join(" ") || "Skill Library version was not created",
+                );
+              }
+              return committed;
+            },
+          },
+        );
+        sendJson(response, 201, {
+          conflicts: commit.conflicts,
+          diagnostics: commit.diagnostics,
+          skipped,
+          ...(commit.version ? { version: commit.version } : {}),
+        });
         return;
       }
       const skillReviewConfirmMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)\/confirm$/);
@@ -3506,6 +3576,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "UNSUPPORTED_MEDIA_TYPE") sendError(response, 415, message);
       else if (code === "SKILL_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_CONFLICT" || code === "SKILL_READ_ONLY") sendError(response, 409, message);
+      else if (code === "SKILL_VALIDATION") sendError(response, 400, message);
       else if (code === "SKILL_LIBRARY_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_LIBRARY_CONFLICT") sendError(response, 409, message);
       else if (code === "SKILL_LIBRARY_VALIDATION") sendError(response, 400, message);

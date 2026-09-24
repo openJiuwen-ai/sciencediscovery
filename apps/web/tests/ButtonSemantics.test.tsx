@@ -31,7 +31,9 @@ test("mixed action rows assign semantic button classes", () => {
   // Workflow description and Session distillation now reuse the chat composer,
   // so only the Git panel uses the shared dialog-actions row. Blank-Skill
   // authoring has a dedicated sticky footer for its details/resources tabs.
-  assert.equal(skillManager.match(/className="dialog-actions"><button className="secondary-button"/g)?.length, 1);
+  // The quick-import confirmation modal reuses the same shared dialog-actions
+  // row, so the Git panel now contributes two instances.
+  assert.equal(skillManager.match(/className="dialog-actions"><button className="secondary-button"/g)?.length, 2);
   assert.match(skillManager, /<footer><span>.*?<button className="secondary-button".*?<button className="primary-button"/s);
 
   assert.match(source("Orchestration.tsx"), /className="specialist-actions"><button className="primary-button"/);

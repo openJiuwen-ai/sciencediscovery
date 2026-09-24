@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import type {
+  BulkPublishGitSkillReviewDraftsRequest,
+  BulkPublishGitSkillReviewDraftsResponse,
   ConfirmSkillReviewDraftRequest,
   ConfirmSkillReviewDraftResult,
   CreateGitSkillReviewDraftsRequest,
@@ -201,6 +203,15 @@ export class SkillsApiClient extends SettingsApiClient {
 
   createGitSkillReviewDrafts(body: CreateGitSkillReviewDraftsRequest): Promise<CreateGitSkillReviewDraftsResponse> {
     return this.request("/api/skills/import-git/review", { body: JSON.stringify(body), method: "POST" });
+  }
+
+  bulkPublishGitSkillReviewDrafts(
+    body: BulkPublishGitSkillReviewDraftsRequest,
+  ): Promise<BulkPublishGitSkillReviewDraftsResponse> {
+    return this.request("/api/skill-review-drafts/bulk-publish-git", {
+      body: JSON.stringify(body),
+      method: "POST",
+    });
   }
 
   createSkillDialogueDraft(body: CreateSkillDialogueDraftRequest): Promise<SkillDraft> {
