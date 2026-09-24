@@ -73,6 +73,7 @@ export interface ScriptedToolStep {
   reasoning?: string;
   arguments: Record<string, unknown>;
   delayMs?: number;
+  waitFor?: Promise<void>;
   tool: string;
 }
 
@@ -277,6 +278,7 @@ export function scriptedModel(
           role: "assistant", reasoning_content: step.reasoning,
         }, null))}\n\n`);
         if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
+        if ("tool" in step && step.waitFor) await step.waitFor;
         if ("tool" in step) {
           response.write(`data: ${JSON.stringify(completionChunk(id, model, {
             ...(step.text ? { content: step.text } : {}),

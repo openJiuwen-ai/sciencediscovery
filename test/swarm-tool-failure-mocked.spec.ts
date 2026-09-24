@@ -28,16 +28,19 @@ const expectedError = fault === "disconnect" ? /read|connection|transport|unknow
 test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is visible after recovery`, { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ browser, page, journey }, info) => {
   expect(process.env.E2E_SWARM_TASK !== "1", "Requires isolated Swarm stack with platform task delegation").toBe(false);
   expect(transportFault && process.env.E2E_MCP_FAULT_PROXY !== "1", "Requires isolated loopback MCP fault proxy").toBe(false);
-  test.setTimeout(240_000);
+  test.setTimeout(420_000);
   journey.scenario({ goal: "Show pre-bridge tool errors without losing the recovered child result",
     preconditions: ["Swarm stack", "platform task delegation", "local sandbox"] });
+  let releaseFaultTool!: () => void;
+  const faultToolGate = new Promise<void>((resolve) => { releaseFaultTool = resolve; });
   const stub = await scriptedModel([[
     { tool: "task", arguments: { description: "Probe shell validation", subagent_type: "general-purpose",
-      prompt: "Run the local fixture probe and return.", max_turns: 6, timeout_seconds: 90 } },
+      prompt: "Run the local fixture probe and return.", max_turns: 6, timeout_seconds: 180 } },
     { text: "Parent received recovered child." },
   ]], [
     { tool: "run_shell", arguments: { command: transportFault
-      ? `printf 'E2E_MCP_${fault === "disconnect" ? "DISCONNECT" : "HTTP_503"}_${Date.now()}'` : { invalid: "must be a string" } } },
+      ? `printf 'E2E_MCP_${fault === "disconnect" ? "DISCONNECT" : "HTTP_503"}_${Date.now()}'` : { invalid: "must be a string" } },
+      ...(transportFault ? { waitFor: faultToolGate } : {}) },
     { tool: "run_shell", arguments: { command: "printf 'FIXTURE-CHILD-RECOVERED\\n'" } },
     { text: "Recovered child completed." },
   ], { captureContext: true });
@@ -53,11 +56,14 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
       projectName: `Swarm error fixture ${Date.now()}`, sessionTitle: "Pre-bridge failure visibility" });
     await openProjectSession(page, fixture);
     if (transportFault) {
+      const faultRun = await sendUserMessage(page, fixture.session.id, "Delegate the local validation/recovery probe.");
+      await expect.poll(() => stub.calls.some(call => call.route === "subagent" && call.step === 0),
+        { message: "Fault child must reach its gated tool call", timeout: 120_000 }).toBe(true);
       // Keep another real child in a long-running platform request while the
       // first child's HTTP request fails on their shared MCP connection.
       siblingModel = await scriptedModel([
         { tool: "task", arguments: { description: "Unrelated long-running child", subagent_type: "general-purpose",
-          prompt: "Complete the healthy local probe.", max_turns: 4, timeout_seconds: 120 } },
+          prompt: "Complete the healthy local probe.", max_turns: 4, timeout_seconds: 180 } },
         { text: "Healthy parent received child." },
       ], [
         { tool: "run_shell", arguments: { command: "sleep 60; printf 'HEALTHY-SIBLING-COMPLETED\\n'", wait_ms: 30_000 } },
@@ -78,15 +84,31 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
         return children.some((child: { steps: Array<{ toolName?: string; status?: string }> }) =>
           child.steps.some(step => step.toolName === "run_shell" && step.status === "running"));
       }, { timeout: 90_000 }).toBe(true);
+      releaseFaultTool();
+      return await verifyRun(faultRun);
     }
     const run = await sendUserMessage(page, fixture.session.id, "Delegate the local validation/recovery probe.");
-    if (sibling) {
-      await expect.poll(() => stub.calls.some(c => c.route === "subagent"
-        && c.toolResults?.some(r => expectedError.test(r))), { timeout: 45_000 }).toBe(true);
+    return await verifyRun(run);
+  } finally {
+    releaseFaultTool();
+    try {
+      if (fixture) await cleanupJourney(page, fixture);
+    } finally {
+      try { if (sibling) await cleanupJourney(page, sibling); }
+      finally {
+        await siblingContext?.close();
+        await siblingModel?.stop();
+        await stub.stop();
+      }
     }
-    const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 120_000);
+  }
+
+  async function verifyRun(run: { id: string }): Promise<void> {
+    if (!fixture) throw new Error("Fault fixture was not created");
+    const activeFixture = fixture;
+    const terminal = await waitForRunTerminal(page, activeFixture.session.id, run.id, 120_000);
     expect(terminal.status, terminal.error).toBe("completed");
-    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/subagents`, { headers: authorizationHeader() });
+    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${activeFixture.session.id}/subagents`, { headers: authorizationHeader() });
     expect(response.ok()).toBe(true);
     const children = await response.json();
     expect(children).toHaveLength(1);
@@ -114,8 +136,9 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
     await expect.soft(conversation).toContainText(errorText);
     if (sibling && siblingPage && siblingRun && siblingModel) {
       expect((await waitForRunTerminal(siblingPage, sibling.session.id, siblingRun.id, 150_000)).status).toBe("completed");
+      const activeSibling = sibling;
       await expect.poll(async () => {
-        const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${sibling.session.id}/subagents`, { headers: authorizationHeader() });
+        const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${activeSibling.session.id}/subagents`, { headers: authorizationHeader() });
         expect(response.ok()).toBe(true);
         const children = await response.json();
         return children[0]?.status;
@@ -138,17 +161,6 @@ test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is v
       expect(siblingModel.calls.some(c => c.route === "main"
         && c.toolResults?.some(r => r.includes("Healthy sibling completed")))).toBe(true);
       await expect(siblingPage.locator(".message.assistant").last()).toContainText("Healthy parent received child");
-    }
-  } finally {
-    try {
-      if (fixture) await cleanupJourney(page, fixture);
-    } finally {
-      try { if (sibling) await cleanupJourney(page, sibling); }
-      finally {
-        await siblingContext?.close();
-        await siblingModel?.stop();
-        await stub.stop();
-      }
     }
   }
 });

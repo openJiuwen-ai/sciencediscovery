@@ -2895,8 +2895,16 @@ test("running sessions accept queued runs and start them after the active run co
   assert.equal(second.body.status, "queued");
   assert.ok(first.body.queueOrder < second.body.queueOrder);
 
-  const duringFirst = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers: authorization });
-  assert.deepEqual(duringFirst.body.messages.map((message) => message.content), ["Hold the first response."]);
+  let duringFirst: SessionDetail | undefined;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const current = await jsonRequest<SessionDetail>(`${origin}/api/sessions/${session.body.id}`, { headers: authorization });
+    if (current.body.messages.some((message) => message.content === "Hold the first response.")) {
+      duringFirst = current.body;
+      break;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  assert.deepEqual(duringFirst?.messages.map((message) => message.content), ["Hold the first response."]);
 
   modelServer.release();
   await waitForRunStatus(origin, session.body.id, first.body.id, "completed");
