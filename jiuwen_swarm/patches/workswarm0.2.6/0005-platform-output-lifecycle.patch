@@ -23,13 +23,15 @@ index b2548b5..6bf6e13 100644
          context_assemble_rail = ContextAssembleRail()
          logger.info("[JiuWenSwarmDeepAdapter] ContextAssembleRail create success")
      except Exception as exc:
-@@ -13238,6 +13240,10 @@ class JiuWenSwarmDeepAdapter:
+@@ -13238,6 +13240,12 @@ class JiuWenSwarmDeepAdapter:
                      is_complete=True,
                  )
  
 +            if request.params.get("sci_persistent_output"):
 +                from jiuwenswarm.server.runtime.mcp.platform_interaction import retain_output_across_approvals
 +                retain_output_across_approvals(self._instance)
++                from jiuwenswarm.server.runtime.mcp.output_recovery import enable_output_recovery
++                enable_output_recovery(self._instance)
 +
              if pending_goal_op is not None:
                  # dispatch 前采样：之后 active_round 可能已切到 goal

@@ -1,0 +1,79 @@
+--- /dev/null
++++ b/jiuwenswarm/server/runtime/mcp/output_recovery.py
+@@ -0,0 +1,76 @@
++# Copyright (C) 2026 Huawei Technologies Co., Ltd
++# SPDX-License-Identifier: Apache-2.0
++"""Bounded output-limit recovery for platform-owned ReAct instances only.
++
++The gateway quarantines tool deltas until a non-truncated finish. This second
++boundary also rejects native truncated tool calls before argument repair.
++"""
++import json
++import logging
++
++from openjiuwen.core.foundation.llm import AssistantMessage, UserMessage
++
++logger = logging.getLogger(__name__)
++MAX_RECOVERIES = 2
++WITHHELD_TOOLS = "[output_limit:tool_calls_withheld]"
++
++
++class OutputRecoveryExhausted(RuntimeError):
++    def __init__(self, kind, attempts):
++        self.details = {
++            "code": "output_recovery_exhausted", "kind": kind,
++            "recoveryAttempts": attempts, "currentTurnToolsExecuted": False,
++            "priorArtifactsPreserved": True,
++        }
++        super().__init__(json.dumps(self.details, sort_keys=True))
++
++
++def enable_output_recovery(agent):
++    """Wrap this harness's model boundary, never global SDK classes.
++
++    Retry calls still pass through the original rails, context engine, gateway
++    admission counter and the enclosing run cancellation/deadline. No tool or
++    successful model call is replayed. A fresh model boundary resets the budget.
++    """
++    react = getattr(agent, "_react_agent", None)
++    if react is None:
++        raise RuntimeError("output recovery requires an initialized ReAct agent")
++    if getattr(react, "_sci_output_recovery", False):
++        return
++    original = react._call_model
++
++    async def call(ctx, context, tools):
++        for attempt in range(MAX_RECOVERIES + 1):
++            message = await original(ctx, context, tools)
++            if not isinstance(message, AssistantMessage) or str(message.finish_reason).lower() not in {"length", "max_tokens"}:
++                return message
++            content = message.content if isinstance(message.content, str) else ""
++            kind = "tool_arguments" if message.tool_calls or WITHHELD_TOOLS in content else (
++                "partial_answer" if content.strip() else "reasoning_only")
++            diagnostic = {"kind": kind, "recoveryAttempt": attempt,
++                          "maxRecoveries": MAX_RECOVERIES, "currentTurnToolsExecuted": False}
++            logger.warning("[output-recovery] %s", json.dumps(diagnostic, sort_keys=True))
++            if attempt == MAX_RECOVERIES:
++                raise OutputRecoveryExhausted(kind, attempt)
++            # Do not insert unfinished tool calls or provider reasoning into the
++            # replay history. There are no orphan tool IDs to pair or execute.
++            # Original responses/usage remain in the gateway's trajectory log.
++            partial = content.replace(WITHHELD_TOOLS, "").strip()
++            feedback = (
++                f"[Output limit recovery {attempt + 1}/{MAX_RECOVERIES}; {kind}] "
++                "The previous response hit its output token limit; it was not a completed answer. "
++                "NO tools from that response were executed. Earlier successful operations and artifacts remain valid: "
++                "do not replay them. Stop expanding the plan and perform ONE small useful action now. "
++                "For long files, save a short draft or append one small section per call (aim below 2000 characters). "
++                "Prefer existing artifact/file transfer tools over retyping full documents. "
++                "If the task is already done, return a brief handoff with artifact references."
++            )
++            if partial:
++                # A bounded excerpt is explicitly untrusted partial output, not
++                # an assistant completion or an instruction to execute.
++                feedback += "\nPrevious unfinished text excerpt (not a completed result):\n" + partial[:2000]
++            await context.add_messages(UserMessage(content=feedback))
++        raise AssertionError("unreachable")
++
++    react._call_model = call
++    react._sci_output_recovery = True

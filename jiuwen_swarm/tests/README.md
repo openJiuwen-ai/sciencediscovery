@@ -248,3 +248,26 @@ Remaining limits, not claimed as covered by a passing local test suite:
   then attribute that initiating fault to a specific network/server/SDK cause.
 - Rerun paid research only after deterministic checks pass. Preserve failed
   reports and unknown-outcome actions; never silently retry side effects.
+
+## Output limit recovery
+
+Platform runs install a per-instance model-boundary wrapper. The gateway holds
+all tool arguments until the response finishes; `length` withholds every call,
+including syntactically valid ones. SSE comments maintain transport activity
+while arguments are buffered. Text/thinking can still stream for observability.
+The original response and usage remain in the private trajectory.
+
+The wrapper never returns a truncated response to the ReAct execution loop. It
+adds bounded recovery guidance and allows at most two additional model calls.
+Retries use the same context, model, turn admission, cancellation and deadline;
+there is no automatic token-budget increase. No incomplete tool-call messages
+are replayed. Ordinary transport/provider errors do not enter this retry path.
+Unrecovered partial answers fail rather than appear completed. Existing
+artifacts remain available to the parent; failure diagnostics identify the
+truncation kind, attempts and that current-turn tools were not executed.
+
+`test_output_recovery.py` covers this boundary and drives the real ReAct loop
+with controlled model responses to verify that only the recovered tool call
+executes. Gateway tests separately cover streaming/unary withholding and usage.
+Look for `[output-recovery]` in the Swarm log and `output_recovery_exhausted` in
+the task error. This is a bounded recovery attempt, not a completion guarantee.

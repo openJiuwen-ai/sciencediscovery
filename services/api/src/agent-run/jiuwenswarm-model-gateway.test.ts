@@ -64,7 +64,7 @@ test("invalid arguments retain private diagnostics without leaking payload into 
   t.mock.method(console, "warn", (message: string) => warnings.push(message));
   const raw = '{"secret":"private-payload"';
   const { streamer } = fakeStreamer(answer({
-    truncated: true,
+    truncated: false,
     assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad-call", type: "function", function: { name: "task", arguments: raw } }] },
     toolCalls: [{ id: "bad-call", name: "task", args: {}, argsParseError: "Unexpected private-payload" }],
   }));
@@ -75,7 +75,7 @@ test("invalid arguments retain private diagnostics without leaking payload into 
     const entry = JSON.parse(await readFile(file, "utf8"));
     assert.equal(entry.calls[0].rawArguments, raw);
     assert.equal(entry.calls[0].error, "Unexpected private-payload");
-    assert.equal(entry.truncated, true);
+    assert.equal(entry.truncated, false);
     assert.equal(entry.calls[0].toolCallId, "bad-call");
     assert.match(entry.requestId, /^chatcmpl-/);
     assert.equal((await stat(file)).mode & 0o777, 0o600);
@@ -152,7 +152,7 @@ test("gateway diagnostics report an active model request without logging its pay
   } finally { release(); await g.close(); }
 });
 
-test("invalid truncated tool arguments fail before a tool call is forwarded", async (context) => {
+test("invalid truncated tool arguments are withheld for recovery without a terminal failure", async (context) => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (line: string) => warnings.push(line));
   const raw = '{"secret":"private-payload"';
@@ -165,9 +165,12 @@ test("invalid truncated tool arguments fail before a tool call is forwarded", as
   try {
     const response = await post(g, { stream: true, messages: [{ role: "user", content: "go" }],
       tools: [{ type: "function", function: { name: "run_shell", parameters: { type: "object" } } }] });
-    assert.match(await response.text(), /invalid tool arguments after reaching max_tokens/);
-    assert.equal(g.lastFailure()?.truncated, true);
-    assert.deepEqual(g.lastFailure()?.tools, ["run_shell"]);
+    const wire = await response.text();
+    assert.match(wire, /output_limit:tool_calls_withheld/);
+    assert.doesNotMatch(wire, /"tool_calls"/);
+    assert.equal(g.lastFailure(), undefined);
+    assert.equal(g.lastTurn()?.truncated, true);
+    assert.equal(g.lastTurn()?.toolCalls, 1);
     assert.equal(warnings.some((line) => line.includes("private-payload")), false);
   } finally { await g.close(); }
 });
@@ -223,7 +226,7 @@ test("a truncated turn finishes with length, so the reader is told why the answe
   }
 });
 
-test("tool argument fragments reach Swarm before the model finishes, with parallel identity and no final replay", async () => {
+test("tool arguments wait for a complete response, with parallel identity and no replay", async () => {
   let finish!: () => void;
   const gate = new Promise<void>((resolve) => { finish = resolve; });
   const g = await gateway(async (_e, _p, _h, _t, _policy, _signal, callbacks) => {
@@ -240,7 +243,7 @@ test("tool argument fragments reach Swarm before the model finishes, with parall
     const reader = response.body!.getReader();
     const first = await reader.read();
     let wire = new TextDecoder().decode(first.value);
-    assert.match(wire, /tool_calls/); // Model is still blocked on gate here.
+    assert.doesNotMatch(wire, /tool_calls/); // Tool deltas are quarantined until finish.
     finish();
     for (;;) { const next = await reader.read(); if (next.done) break; wire += new TextDecoder().decode(next.value); }
     const chunks = wire.split("\n\n").filter((s) => s.startsWith("data: {")).map((s) => JSON.parse(s.slice(6)));
@@ -403,4 +406,55 @@ test("restore also serves the run's final messages, and leaves other messages an
   } finally {
     await g.close();
   }
+});
+
+
+test("truncated responses withhold ALL tools in streaming and unary modes, preserving usage and diagnostics", async () => {
+  for (const stream of [false, true]) {
+    let calls = 0;
+    const raw = '{"text":"unfinished';
+    const turn = answer({ truncated: true, assistantMessage: { role: "assistant", content: "", tool_calls: [
+      { id: "bad", type: "function", function: { name: "write", arguments: raw } },
+    ] }, toolCalls: [
+      { id: "valid", name: "write", args: { text: "syntactically valid but withheld" } },
+      { id: "bad", name: "write", args: {}, argsParseError: "unfinished string" },
+    ] });
+    const g = await gateway(async (_e, _p, _h, _t, _policy, _signal, callbacks) => {
+      calls++;
+      callbacks?.onToolCallDelta?.({ index: 0, id: "valid", name: "write", arguments: '{"text":"partial"}' });
+      callbacks?.onToolCallDelta?.({ index: 1, id: "bad", name: "write", arguments: raw });
+      return turn;
+    });
+    try {
+      const response = await post(g, { stream, messages: [] });
+      assert.equal(response.status, 200);
+      const wire = await response.text();
+      const payloads = stream ? wire.split("\n\n").filter(s => s.startsWith("data: {")).map(s => JSON.parse(s.slice(6))) : [JSON.parse(wire)];
+      for (const p of payloads) {
+        assert.equal(p.error, undefined);
+        assert.equal((p.choices[0].delta ?? p.choices[0].message).tool_calls, undefined);
+      }
+      assert.equal(payloads.at(-1).choices[0].finish_reason, "length");
+      assert.match(wire, /output_limit:tool_calls_withheld/);
+      assert.doesNotMatch(wire, /unfinished|string|syntactically valid/);
+      assert.equal(calls, 1, "gateway must not retry the model itself");
+      assert.equal(g.lastTurn()?.truncated, true);
+      assert.ok(payloads.at(-1).usage);
+    } finally { await g.close(); }
+  }
+});
+
+test("recovery diagnostics count feedback but do not mask a later provider error", async () => {
+  let count = 0;
+  const g = await gateway(async () => {
+    if (++count === 2) throw new ModelRequestError("Insufficient Balance", 402);
+    return answer({ truncated: true, toolCalls: [], assistantMessage: { role: "assistant", content: "" } });
+  });
+  try {
+    const request = { messages: [{ role: "user", content: "[Output limit recovery 2/2; reasoning_only] Try one small action." }] };
+    assert.equal((await post(g, request)).status, 200);
+    assert.equal(g.lastTurn()?.recoveryAttempts, 2);
+    assert.equal((await post(g, request)).status, 402);
+    assert.equal(g.lastTurn(), undefined, "previous truncation must not mask a new provider failure");
+  } finally { await g.close(); }
 });
