@@ -4893,10 +4893,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             setMessage(`/evolve-design make the artifact ${seed.label} better: `);
           }}
           onMissing={closeMissingArtifact}
-          onNavigateArtifact={(name) => {
-            // Navigating to a different artifact via a parent link: that
-            // artifact's version was not pinned by the original chip.
-            setArtifactModalVersion(undefined);
+          onNavigateArtifact={(name, version) => {
+            // Provenance links can target an older version of the artifact
+            // already open. Preserve that pin even when the name is unchanged.
+            setArtifactModalVersion(version);
             setArtifactModalSessionId(undefined);
             setArtifactModalName(name);
           }}

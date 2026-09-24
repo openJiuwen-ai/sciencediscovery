@@ -1029,9 +1029,9 @@ async function startSkillCreatorModel(context: TestContext): Promise<{
     toolNames.push(body.tools?.map((tool) => tool.function?.name ?? "") ?? []);
     const toolResultCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
     const completionId = `chatcmpl-skill-creator-${toolResultCount}`;
-    // With the JiuwenSwarm backend our own read_skill is not offered (see the skill-selection note above):
-    // skill-creator is imported into JiuwenSwarm, as "sciencediscovery-skill-creator" since it has one of its
-    // own, and loaded with JiuwenSwarm's skill_tool instead.
+    // With the JiuwenSwarm backend skill-creator is imported there as
+    // "sciencediscovery-skill-creator" (to avoid its built-in name clash) and normally loaded
+    // with skill_tool; our read_skill remains available as a fallback.
     const delta = toolResultCount === 0
       ? onJiuwenSwarm
         ? {

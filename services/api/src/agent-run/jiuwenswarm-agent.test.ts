@@ -1534,6 +1534,9 @@ test("by default the model gets JiuwenSwarm's own tools but not those acting on 
       "todo_create", "todo_modify", "todo_list", "todo_get",
       "subagent_spawn", "subagent_wait", "task_tool", "subagent_list", "subagent_send_input", "subagent_close", "subagent_resume"]);
     assert.match(sent.systemPrompt, /run in the sandbox through run_shell/);
+    assert.match(sent.systemPrompt, /skill_index may show absolute host paths[\s\S]*never pass them to read_file/);
+    assert.match(sent.systemPrompt, /skill_tool\(skill_name=<name>, relative_file_path="SKILL\.md"\)/);
+    assert.match(sent.systemPrompt, /If skill_tool fails, load that Skill with read_skill\(skillId=<ScienceDiscovery skill id>\)/);
     const start = events.find((event) => event.type === "tool_execution_start") as any;
     const end = events.find((event) => event.type === "tool_execution_end") as any;
     assert.equal(start.toolName, "memory_search");
@@ -1615,7 +1618,7 @@ const skillOptions = (extra: Record<string, unknown> = {}) => options({
   skills: [skill("evolve-design"), skill("skill-creator")], skillPackagesRoot: "/data/skill-snapshots/abc", ...extra,
 } as never);
 
-test("the run's skills are installed in JiuwenSwarm and loaded its way: no catalog of ours, no read_skill", async () => {
+test("the run's skills are installed in JiuwenSwarm with our read_skill retained as a fallback", async () => {
   const adapter = await fakeAdapter(async ({ body }, response) => {
     if (body.skills) {
       response.writeHead(200, { "content-type": "application/json" });
@@ -1627,15 +1630,22 @@ test("the run's skills are installed in JiuwenSwarm and loaded its way: no catal
   });
   try {
     const created: unknown[] = [];
-    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(skillOptions({ createSkill: async (draft: unknown) => { created.push(draft); return { id: "d1" }; } })).execute("go");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(skillOptions({
+      createSkill: async (draft: unknown) => { created.push(draft); return { id: "d1" }; },
+      skills: [
+        { ...skill("evolve-design"), resources: [{ hash: "hash-reference", kind: "reference", path: "references/custom-script.md", size: 24 }] },
+        skill("skill-creator"),
+      ],
+    })).execute("go");
     const [install, run] = adapter.requests.map((request) => request.body);
     assert.deepEqual(install.skills, [
       { hash: "hash-evolve-design", id: "evolve-design", path: "/data/skill-snapshots/abc/evolve-design" },
       { hash: "hash-skill-creator", id: "skill-creator", path: "/data/skill-snapshots/abc/skill-creator" },
     ]);
     const names = run.tools.map((tool: { name: string }) => tool.name);
-    assert.equal(names.includes("read_skill") || names.includes("read_skill_resource"), false);
-    assert.equal(/<available_skills>|read_skill/.test(run.systemPrompt), false, "JiuwenSwarm's prompt lists the skills, ours does not");
+    assert.ok(names.includes("read_skill") && names.includes("read_skill_resource"));
+    assert.equal(/<available_skills>/.test(run.systemPrompt), false, "JiuwenSwarm's prompt lists the skills, ours does not duplicate them");
+    assert.match(run.systemPrompt, /If skill_tool fails, load that Skill with read_skill/);
     const createSkill = run.tools.find((tool: { name: string }) => tool.name === "create_skill");
     assert.match(createSkill.description, /load the sciencediscovery-skill-creator skill with skill_tool/);
   } finally {

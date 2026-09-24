@@ -259,7 +259,8 @@ const checks = {
 
   /**
    * The session's skills are JiuwenSwarm skills: imported into it (skill-creator as sciencediscovery-skill-creator, since
-   * JiuwenSwarm has its own), loaded with its skill_tool, and neither our catalog nor read_skill is offered. JiuwenSwarm
+   * JiuwenSwarm has its own), loaded with its skill_tool. Our read_skill and read_skill_resource remain available
+   * as fallbacks for JiuwenSwarm skill_tool failures, while our catalog is not duplicated. JiuwenSwarm
    * lists every skill in its prompt while they fit its budget and otherwise has the model search them (skill_index), so
    * the check loads them by name rather than looking for them in the prompt.
    */
@@ -286,8 +287,10 @@ const checks = {
       if (!outputs.some((output) => /create_evolve_run/.test(output))) throw new Error(`skill_tool did not return evolve-design's SKILL.md: ${outputs.join(" ").slice(0, 300)}`);
       if (!outputs.some((output) => /create_skill|reviewable reusable Agent Skill/.test(output))) throw new Error(`skill_tool did not return our skill-creator: ${outputs.join(" ").slice(0, 300)}`);
       const names = new Set(stub.requests.flatMap((request) => request.toolNames ?? []));
-      if ([...names].some((name) => /(^|_)read_skill(_resource)?$/.test(name))) throw new Error("read_skill is still offered");
-      console.log(`skills: ok (evolve-design and sciencediscovery-skill-creator loaded with skill_tool; no catalog or read_skill of ours; JiuwenSwarm prompt ${system.includes("newly_installed_skills") ? "in search mode" : "lists the skills"})`);
+      for (const reader of ["read_skill", "read_skill_resource"]) {
+        if (!names.has(reader)) throw new Error(`${reader} fallback is missing`);
+      }
+      console.log(`skills: ok (evolve-design and sciencediscovery-skill-creator loaded with skill_tool; fallback readers offered without a duplicate catalog; JiuwenSwarm prompt ${system.includes("newly_installed_skills") ? "in search mode" : "lists the skills"})`);
     } finally {
       await cleanup();
     }

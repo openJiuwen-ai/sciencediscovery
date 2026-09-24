@@ -82,7 +82,8 @@ export interface JiuwenSwarmAgentConfig {
   /**
    * Whose skill mechanism the model uses. `jiuwenswarm` (default, with the `prepend` prompt and JiuwenSwarm's
    * tools): the run's skills are installed in JiuwenSwarm, listed by its prompt and loaded with its `skill_tool`;
-   * ScienceDiscovery's skill catalog and `read_skill` are left out. `ours`: ScienceDiscovery's catalog and tools.
+   * ScienceDiscovery's skill catalog is left out; `read_skill` and, when resources exist,
+   * `read_skill_resource` remain as fallbacks. `ours`: ScienceDiscovery's catalog and tools.
    */
   skills?: "jiuwenswarm" | "ours";
   /**
@@ -127,7 +128,7 @@ export const JIUWENSWARM_WEB_TOOLS: Record<string, string> = { web_search: "free
 export const JIUWENSWARM_HOST_TOOLS = ["bash", "read_file", "write_file", "edit_file", "glob", "list_files", "grep", "read_pdf"] as const;
 
 /** What the model is told instead: JiuwenSwarm's own prompt still names those tools. */
-export const HOST_TOOLS_SECTION = "Commands, scripts and file writes run in the sandbox through run_shell; read workspace files with read_file and list_files. Use workspace-relative paths in run_shell (for example, report.md): the host working directory shown by JiuwenSwarm is not accessible at the same absolute path inside the sandbox. JiuwenSwarm's bash, write_file, edit_file, glob, grep and read_pdf are not available here.";
+export const HOST_TOOLS_SECTION = "Commands, scripts and file writes run in the sandbox through run_shell; read workspace files with read_file and list_files. Use workspace-relative paths in run_shell (for example, report.md): the host working directory shown by JiuwenSwarm is not accessible at the same absolute path inside the sandbox. JiuwenSwarm's bash, write_file, edit_file, glob, grep and read_pdf are not available here. skill_index may show absolute host paths for Skills, but those paths are not workspace paths: never pass them to read_file. Load an indexed Skill with skill_tool(skill_name=<name>, relative_file_path=\"SKILL.md\"), and use skill_tool for its referenced package files. If skill_tool fails, load that Skill with read_skill(skillId=<ScienceDiscovery skill id>) instead; use read_skill_resource for its referenced package files.";
 
 /**
  * ScienceDiscovery's tools JiuwenSwarm's permission engine asks the user about: those that needed approval before
@@ -354,8 +355,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
 
   /**
    * With JiuwenSwarm's skill mechanism, the run's skills are installed there and the model loads them with its
-   * `skill_tool`; ScienceDiscovery's skill tools go. A skill that could not be installed stays ours: `read_skill`
-   * and the catalog in the product prompt then offer that one.
+   * `skill_tool`; retain ScienceDiscovery's skill readers as a fallback when JiuwenSwarm's loader fails.
+   * The product prompt catalogs only skills that could not be installed, avoiding duplicate listings.
    */
   private async installSkills(tools: Map<string, AgentTool>, allJiuwenSwarmTools: boolean): Promise<void> {
     const skills = this.options.skills ?? [];
@@ -367,10 +368,6 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     for (const [id, name] of imported) {
       this.skillNames.set(id, name);
       this.skillIds.set(name, id);
-    }
-    if (skills.every((skill) => imported.has(skill.id))) {
-      tools.delete("read_skill");
-      tools.delete("read_skill_resource");
     }
   }
 
