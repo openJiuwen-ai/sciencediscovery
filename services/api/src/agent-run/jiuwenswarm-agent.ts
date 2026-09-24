@@ -362,7 +362,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       if (this.controller.signal.aborted) throw new Error("Agent run cancelled");
       const modelFailure = modelGateway.lastFailure();
       if (modelFailure) throw new Error(
-        `Model returned invalid ${modelFailure.tools.join(", ") || "tool"} arguments${modelFailure.truncated
+        `Model returned invalid tool arguments (tools: ${modelFailure.tools.join(", ") || "unknown"})${modelFailure.truncated
           ? ` after reaching max_tokens (${policy.maxTokens})` : ""}; gateway request ${modelFailure.requestId}`,
         { cause: error },
       );

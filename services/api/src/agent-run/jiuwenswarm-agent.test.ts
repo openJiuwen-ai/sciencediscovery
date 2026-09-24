@@ -1265,6 +1265,33 @@ function askTheModel(turn: unknown) {
   return { adapter, streamer };
 }
 
+for (const truncated of [false, true]) {
+  test(`invalid model arguments retain their diagnostic category (truncated=${truncated})`, async () => {
+    const adapter = await fakeAdapter(async ({ body }, response) => {
+      response.writeHead(200);
+      await fetch(`${body.model.baseUrl}/chat/completions`, {
+        method: "POST", headers: { authorization: `Bearer ${body.model.apiKey}` },
+        body: JSON.stringify({ stream: true, messages: [{ role: "user", content: "go" }] }),
+      }).then(reply => reply.text());
+      response.end(line({ done: { finalText: "", status: "failed" } }));
+    });
+    try {
+      const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, modelStreamer: async () => ({
+        assistantMessage: { role: "assistant", content: "" }, truncated,
+        toolCalls: [{ id: "bad-call", name: "run_shell", args: {}, argsParseError: "private-payload" }],
+      }) })(options());
+      await assert.rejects(agent.execute("go"), (error: Error) => {
+        assert.match(error.message, /invalid tool arguments/);
+        assert.match(error.message, /tools: run_shell/);
+        assert.match(error.message, /gateway request chatcmpl-[\w-]+/);
+        assert.equal(error.message.includes("max_tokens"), truncated);
+        assert.equal(error.message.includes("private-payload"), false);
+        return true;
+      });
+    } finally { await adapter.close(); }
+  });
+}
+
 // Regression boundary: real run -> HTTP model gateway -> fake upstream model.
 // The adapter deliberately emits NO progress events while awaiting the model.
 // These are not browser/Python Swarm E2E tests. Keep the healthy-run assertions
