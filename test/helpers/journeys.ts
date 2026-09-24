@@ -70,7 +70,8 @@ export interface ToolProcess {
 export interface ScriptedToolStep {
   text?: string;
   reasoning?: string;
-  arguments: Record<string, unknown>;
+  /** Resolve IDs returned by earlier tool calls without predicting generated IDs. */
+  arguments: Record<string, unknown> | (() => Record<string, unknown>);
   delayMs?: number;
   tool: string;
 }
@@ -256,9 +257,12 @@ export function scriptedModel(
 
         sequence += 1;
         const id = `chatcmpl-journey-${sequence}`;
+        const toolArguments = "tool" in step
+          ? typeof step.arguments === "function" ? step.arguments() : step.arguments
+          : undefined;
         calls.push({
           offeredTools: body.tools?.map((tool) => tool.function?.name ?? ""),
-          ...("tool" in step ? { arguments: step.arguments, tool: step.tool } : {}),
+          ...("tool" in step ? { arguments: toolArguments, tool: step.tool } : {}),
           route,
           step: stepIndex,
           turn,
@@ -273,7 +277,7 @@ export function scriptedModel(
             ...(step.text ? { content: step.text } : {}),
             role: "assistant",
             tool_calls: [{
-              function: { arguments: JSON.stringify(step.arguments), name: step.tool },
+              function: { arguments: JSON.stringify(toolArguments), name: step.tool },
               id: `call-journey-${sequence}`,
               index: 0,
               type: "function",
