@@ -341,9 +341,10 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
       .flatMap((entry) => entry.files?.map((file) => file.targetPath) ?? []));
     for (const path of [reportPath, csvPath, cif.path]) assert.ok(transferred.has(path), `No completed transfer for ${path}`);
     const session = await get(sessionPath);
-    assert.ok(session.messages?.some((message) => message.role === "assistant"
-      && (message.content?.includes(runName) || message.content?.includes("screening"))),
-    "The Agent did not explain the delivered scientific result to the user");
+    const finalAnswer = session.messages?.filter((message) => message.role === "assistant").at(-1)?.content ?? "";
+    assert.ok([runName, basename(reportPath), basename(csvPath), basename(cif.path)]
+      .every((item) => finalAnswer.includes(item)),
+    "The Agent's final answer must identify the run and all three delivered results");
     steps.push(`4. PASS — all four model stages produced files; report, CSV and ${cif.path} are nonempty remotely and locally, transferred, declared and explained to the user.`);
   } catch (error) {
     verdict = phase.startsWith("1.") ? "BLOCKED" : "FAIL";
