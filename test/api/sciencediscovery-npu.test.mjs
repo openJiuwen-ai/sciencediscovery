@@ -29,7 +29,7 @@
  * OtherExternal: Remote Ascend Runner, pinned model downloads, package sources, and NPU inference.
  * Credentials: SCIENCEDISCOVERY_NPU_E2E_TOKEN; never printed.
  * CostSideEffects: billable model tokens, downloads and package installs, one unique remote NPU run; Project, Session and results are retained for inspection.
- * Run: SCIENCEDISCOVERY_NPU_E2E_ENABLE=1 SCIENCEDISCOVERY_NPU_E2E_API=... SCIENCEDISCOVERY_NPU_E2E_TOKEN=... SCIENCEDISCOVERY_NPU_E2E_MODEL_ID=... SCIENCEDISCOVERY_NPU_E2E_RUNNER=... SCIENCEDISCOVERY_NPU_E2E_ANTIGEN_PDB=... SCIENCEDISCOVERY_NPU_E2E_FRAMEWORK_PDB=... SCIENCEDISCOVERY_NPU_E2E_HOTSPOTS='[A45,A46,A49]' SCIENCEDISCOVERY_NPU_E2E_SHA=... node --test test/api/sciencediscovery-npu.test.mjs
+ * Run: SCIENCEDISCOVERY_NPU_E2E_ENABLE=1 SCIENCEDISCOVERY_NPU_E2E_API=... SCIENCEDISCOVERY_NPU_E2E_TOKEN=... SCIENCEDISCOVERY_NPU_E2E_MODEL_ID=... SCIENCEDISCOVERY_NPU_E2E_RUNNER=... SCIENCEDISCOVERY_NPU_E2E_ANTIGEN_PDB=... SCIENCEDISCOVERY_NPU_E2E_FRAMEWORK_PDB=... SCIENCEDISCOVERY_NPU_E2E_HOTSPOTS='[A45,A46,A49]' SCIENCEDISCOVERY_NPU_E2E_SHA=... SCIENCEDISCOVERY_NPU_E2E_PRODUCT_SHA=... node --test test/api/sciencediscovery-npu.test.mjs
  * Resume: Set SCIENCEDISCOVERY_NPU_E2E_SESSION and SCIENCEDISCOVERY_NPU_E2E_RUN_ID together to observe an accepted run without submitting another one.
  */
 import assert from "node:assert/strict";
@@ -80,6 +80,8 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
   let runName = reportName;
   let observedCalls = [];
   let observedRuns = [];
+  let observedExecutions = [];
+  let observedArtifacts = [];
   try {
     assert.equal(env.SCIENCEDISCOVERY_NPU_E2E_ENABLE, "1", "Real NPU E2E requires explicit opt-in");
     for (const name of ["API", "TOKEN", "MODEL_ID", "RUNNER", "SHA"]) {
@@ -212,6 +214,11 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
         get(`${sessionPath}/artifacts`),
         get(`${sessionPath}/files`),
       ]);
+      observedExecutions = activity.executions.map(({ id, state, runnerId, provenance, error }) => (
+        { id, state, runnerId, provenance, error: error ?? null }
+      ));
+      observedArtifacts = artifacts.filter((artifact) => artifact.originMeta?.declaredPath?.includes(runName))
+        .map((artifact) => ({ path: artifact.originMeta.declaredPath, version: artifact.currentVersion }));
       assert.ok(runs.some((run) => run.id === initialRunId), "The original user Run must remain queryable");
       assert.ok(!runs.some((run) => ["failed", "cancelled", "interrupted"].includes(run.status)),
         `Agent Run failed: ${redact(JSON.stringify(runs.map(({ id, status, error }) => ({ id, status, error }))))}`);
@@ -349,7 +356,8 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
       "",
       `- Started: ${startedAt}`,
       `- Ended: ${new Date().toISOString()}`,
-      `- Target SHA (operator supplied): ${env.SCIENCEDISCOVERY_NPU_E2E_SHA ?? "missing"}`,
+      `- Test candidate SHA (operator supplied): ${env.SCIENCEDISCOVERY_NPU_E2E_SHA ?? "missing"}`,
+      `- Product source SHA (operator supplied): ${env.SCIENCEDISCOVERY_NPU_E2E_PRODUCT_SHA ?? "not supplied"}`,
       `- Interface: user Session Runs API → real JiuwenSwarm Agent → loaded antibody-design Skill → managed remote Ascend Runner → local Artifacts`,
       `- Project: ${projectId}`,
       `- Session: ${sessionId}`,
@@ -357,6 +365,8 @@ test("a real Agent autonomously completes the antibody-design Skill on an Ascend
       `- Pipeline Execution: ${pipelineId}`,
       `- Agent Runs: ${JSON.stringify(observedRuns)}`,
       `- Agent tools: ${JSON.stringify(observedCalls.map(({ name, status }) => ({ name, status })))}`,
+      `- Managed Executions: ${JSON.stringify(observedExecutions)}`,
+      `- Declared run Artifacts: ${JSON.stringify(observedArtifacts)}`,
       `- Result: ${failure === "none" ? "all assertions passed" : failure}`,
       `- Count: ${verdict === "PASS" ? "1 passed / 0 failed / 0 blocked / 0 skipped" : verdict === "BLOCKED" ? "0 passed / 0 failed / 1 blocked / 0 skipped" : "0 passed / 1 failed / 0 blocked / 0 skipped"}`,
       "",
