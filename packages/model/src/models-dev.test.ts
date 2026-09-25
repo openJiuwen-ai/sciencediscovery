@@ -326,7 +326,7 @@ test("every aggregator mapping sits after every vendor mapping", () => {
   // Capability facts are first-publish-wins, so this ordering is the whole
   // mechanism behind "the vendor describes its own model". A future insert in
   // the wrong place would silently hand the facts back to a rehoster.
-  const aggregators = new Set(["openrouter", "siliconflow-cn"]);
+  const aggregators = new Set(["openrouter", "requesty", "siliconflow-cn"]);
   const firstAggregator = MODELS_DEV_PROVIDER_MAPPINGS
     .findIndex((mapping) => aggregators.has(mapping.id));
   const lastVendor = MODELS_DEV_PROVIDER_MAPPINGS
