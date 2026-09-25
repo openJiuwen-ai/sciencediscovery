@@ -54,6 +54,29 @@ test("subagent disclosure survives live-to-history remount before native toggle 
   } finally { await act(async () => view!.unmount()); }
 });
 
+test("tool and thinking clicks persist before asynchronous native toggle or remount", async () => {
+  for (const entry of [
+    { type: "tool", id: "tool-one", expanded: false, trace: { id: "one", name: "run_shell", status: "completed" } },
+    { type: "thinking", id: "thinking-1", expanded: false, status: "completed", content: "reasoning", turn: 1 },
+  ] as RunTimelineEntry[]) {
+    function Conversation({ history }: { history: boolean }) {
+      const [entries, setEntries] = useState([entry]);
+      return createElement(RunTimeline, { key: history ? "history" : "live", isRunning: false, entries,
+        onToggle: (id, expanded) => setEntries(current => setTimelineEntryExpanded(current, id, expanded)) });
+    }
+    let view: ReturnType<typeof create>;
+    await act(async () => { view = create(createElement(Conversation, { history: false })); });
+    try {
+      await act(async () => { view!.root.findAllByType("summary")[0]!.props.onClick({ preventDefault() {} }); });
+      // No native toggle event is dispatched before the old DOM disappears.
+      await act(async () => { view!.update(createElement(Conversation, { history: true })); });
+      assert.equal(view!.root.findAllByType("details")[0]!.props.open, true);
+      await act(async () => { view!.root.findAllByType("summary")[0]!.props.onClick({ preventDefault() {} }); });
+      assert.equal(view!.root.findAllByType("details")[0]!.props.open, false);
+    } finally { await act(async () => view!.unmount()); }
+  }
+});
+
 test("only terminal processes use borderless disclosures; top-level folders default open", () => {
   const child = createElement("article", { className: "original-card" }, "output");
   const live = renderToStaticMarkup(createElement(ProcessRecord, { active: true, label: "task", children: child }));

@@ -1111,6 +1111,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // Timelines are buffered per Session so a run that keeps streaming while the
   // user is elsewhere still has its steps to show when they switch back.
   const [runTimelines, setRunTimelines] = useState<SessionRunTimelines>({});
+  // refreshSession awaits network data; read disclosure choices at application
+  // time, including clicks made while that refresh was in flight.
+  const runTimelinesRef = useRef(runTimelines);
+  runTimelinesRef.current = runTimelines;
   // Activity card expansion lives here, not inside the cards: a card group
   // moves between a conversation block and the tail of the flow as runs start
   // and finish, and component-local state would reset on every such move.
@@ -2063,8 +2067,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setClaims(claimItems);
     setEvidenceLinks(linkItems);
 
+    const liveTimeline = runTimelinesRef.current[sessionId];
     setReplayTimelines((current) => {
-      const hydrated = hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun);
+      const hydrated = hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun, liveTimeline);
       for (const [runId, timeline] of Object.entries(hydrated)) {
         hydrated[runId] = hydrateTimelineSubagents(
           timeline,
