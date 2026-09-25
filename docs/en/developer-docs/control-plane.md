@@ -1,65 +1,161 @@
-# Control Plane: `services/api`
+# Control Plane: services/api
 
-The Node control API is the core process: browser requests, run orchestration, tool execution, permission, review, and storage all pass through it. Route registration in `services/api/src/http/index.ts` is authoritative.
+`services/api` is ScienceDiscovery's **authoritative product control plane**. It owns Project / Session / Run lifecycle, effective configuration, permissions, tool bindings, Artifact/provenance orchestration, product persistence, and Agent-executor selection.
 
-## 1. Source structure
+It is not synonymous with the native Agent loop. Native and JiuwenSwarm both attach through the same Run seam.
 
-| File/directory | Responsibility |
-|---|---|
-| `server.ts`, `http/` | Entry barrel and HTTP shell: routes, auth, bodies, responses, static assets, tool callback |
-| `runs/` | Lifecycle, SSE, serialization, workspace-event filtering |
-| `store.ts`, `store/` | `SessionStore` facade and SQLite catalog/permission/secret/settings/subagent/stream domains |
-| `native-agent/`, `agent-run/` | **The Node-native agent loop** (`index.ts` state machine, `model-client.ts` streaming transport, `deferred-tools.ts`, `compaction.ts`) plus main/subagent orchestration, permission state machine, bindings. See [agent-backend.md](agent-backend.md) |
-| `mcp/` | Broker, Source catalog, Artifact jobs, rate limiter, and result cache |
-| `runner-client.ts` | Bearer plus HMAC-signed runner client |
-| `provenance.ts`, `prompt-manifest.ts`, `reviewer-specialist/` | Provenance and Artifact review |
-| `papers.ts`, `skills.ts`, `remote-compute.ts`, `environment.ts` | Domain logic |
-| `memory-graph.ts` | Experimental sidecar client |
+## 1. Process entry and composition root
 
-## 2. HTTP surface
+| Path | Responsibility |
+| --- | --- |
+| `src/server.ts` | Node process entry; starts/closes the HTTP server |
+| `src/http/index.ts` | HTTP composition root: routes, platform services, static Web, run entry |
+| `src/store.ts`, `src/store/` | authoritative Project / Session / Run / settings / secret catalog state |
+| `src/runs/` | Session Run state, SSE streams, event persistence/recovery |
+| `src/agent-run/` | executor seam, main/subagent orchestration, workspace bindings, deadlines |
+| `src/native-agent/` | native executor, only one of two executors |
+| `src/plugins/` | host composition/control for capability plugins |
+| `src/evolution/` | control-plane routes and model proxy for evolve |
+| `src/reviewer-specialist/` | API-level Reviewer orchestration and evidence gateways |
+| `src/artifacts/`, `src/subagents/`, `src/permissions/` | product-level orchestration; lower capability ownership still prefers packages |
 
-Representative groups, not an exhaustive route list:
+Use `src/http/index.ts` and its route handlers as the route authority.
 
-| Prefix | Content |
-|---|---|
-| `GET /health`, `/api/health` | Aggregated runner/memory-graph health |
-| `/api/projects…`, `/api/sessions…` | CRUD, archive/restore, overrides, deletion preview |
-| Session message/run SSE routes | Start or subscribe to a run and replay main/tool/subagent streams with cursors |
-| Run cancel | Propagate abort to the native loop and runner |
-| Session plans/subagents/remote-jobs/papers/evidence | Run-associated records |
-| Session MCP and `/api/mcp/sources…` | Invocation, Artifact jobs, Source catalog/status |
-| `/api/{models,specialists,skills,remote-hosts,environments}` | Global resources |
-| `/api/settings`, `/api/timeout-settings`, `/api/quota-settings`, `/api/sandbox-network-settings`, `/api/runtime-status` | Global controls, timeouts, quotas, sandbox network access, and live state |
+## 2. Executor seam
 
-SSE uses fetch-stream `data: <json>\n\n` frames; see [Web frontend](web-frontend.md).
+Shared path:
 
-## 3. Storage
+```text
+runMainRequestExecution / runSubagentTask
+             │
+             ▼
+createAgentRun(profile, bindings, input)
+             │
+      defaultAgentFactory()
+        ┌────┴──────────────┐
+        ▼                   ▼
+createNativeAgent   createJiuwenSwarmAgentFactory
+```
 
-- SQLite `.sciencediscovery-data/catalog.sqlite` stores catalog entities: projects, sessions, runs, messages, Artifact versions, permission requests/grants/epochs/authorizations, plans, subagents, specialists, and model configuration.
-- Files under `.sciencediscovery-data/` store execution records, prompt manifests, claims/evidence, MCP/derivation/model-usage audit, and dual-pool CAS/state objects under `versioning/`. The previous `cas/sha256/` layout remains readable; see [CAS](cas.md).
-- See [Storage layout](../reference/configuration.md#storage-layout).
+`create-agent-run.ts` selects the executor from `jiuwenSwarmConfigFromEnv()`.
 
-## 4. Run lifecycle
+- local source defaults to native;
+- local `--jiuwenswarm` selects JiuwenSwarm;
+- Docker/release defaults to JiuwenSwarm;
+- tests may inject a double with `bindings.createAgent`.
 
-The state machine is `queued → running ⇄ blocked → completed|failed|cancelled|interrupted`. `blocked` waits for permission; `interrupted` marks a historical run recovered after process failure.
+`createAgentRun` should remain executor-neutral. It maps `AgentProfile`, Workspace bindings, tool policy, budgets, context contributors, versioning authority, and abort lifecycle into one `AgentRunHandle`.
 
-A main run validates Session/model, resolves composer references and environments, builds the workspace prompt, creates an execution context with permission runtime and abort signal, runs the native agent loop in-process, records Prompt Manifest/provenance, optionally executes independent review checkpoints, emits a terminal event, and clears callbacks/pending permission. Subagents use private workspaces and restricted tools; handoff files are bounded and Brief v1 can validate structured output.
+## 3. Authoritative Run lifecycle
 
-## 5. Permission system
+Product state machine:
 
-Action types include `code`, `connector`, `artifact_download`, `directory`, `host`, and `remote_job`; grants can be once, Session, Project, or global. Resolution checks unrevoked grants, otherwise persists a pending request, emits `permission.required`, marks the run blocked, and pauses its timeout. `allow_once`, `allow_matching`, or `deny` produces a `PermissionAuthorization` audit row. Approval-mode change or environment reset rotates `permissionEpoch`; persistent kernels are recreated and ExecutionRun records the epoch.
+```text
+queued → running ⇄ blocked → completed | failed | cancelled | interrupted
+```
 
-## 6. Tool callback and runner channel
+Typical main run:
 
-Tools are invoked in-process by the loop through `AgentTool.execute`; there is no cross-process callback and no per-run callback token. The permission gate, provenance, and rate limiting still apply inside the handlers. Runner `/execute` and `/execute-shell` calls include an HMAC-SHA256 signature over token, timestamp, and body hash. Kernel/environment/setup endpoints are described in [Sandbox execution](sandbox-execution.md).
+1. HTTP validates Session/model/request.
+2. Resolve effective Project/Session settings and resources.
+3. Create RequestExecutionContext with execution id, permission runtime, abort signal, versioning authorities.
+4. Build Workspace/plugin/tool bindings.
+5. Call `createAgentRun()`.
+6. Executor emits Agent events and tool calls.
+7. Tools execute through ScienceDiscovery bindings, preserving permission, Runner, MCP, Artifact, and provenance behavior.
+8. Persist Run events and expose them through SSE.
+9. Persist terminal state and clean pending permissions/resources.
 
-## 7. Model calls made directly by API
+`blocked` waits for external approval. `interrupted` marks historical runs recovered after abnormal process termination.
 
-The agent loop itself (`native-agent/model-client.ts`) streams directly to the configured model endpoint in either the OpenAI-compatible or Anthropic Messages dialect. Paper vision analysis in `papers.ts` calls an OpenAI-compatible endpoint directly. See [PDF worker](paper-worker.md).
+## 4. Control plane remains authoritative in JiuwenSwarm mode
+
+The adapter is not a replacement backend:
+
+- adapter is public front door and protocol adapter;
+- API still owns Project / Session / Run / permission / Artifact state;
+- API builds the run tool table and runtime bindings;
+- `createJiuwenSwarmAgentFactory` sends the run to adapter;
+- adapter exposes tools through a per-run MCP server;
+- JiuwenSwarm tool calls return through adapter to the API loopback tool bridge;
+- model calls pass through adapter/API model proxy so ScienceDiscovery provider semantics remain;
+- adapter frames map back to ScienceDiscovery Run events.
+
+When adding behavior, decide whether it belongs to:
+- executor-independent control plane;
+- native executor;
+- JiuwenSwarm adapter;
+- capability package.
+
+Do not duplicate Session/Artifact/permission persistence in the adapter.
+
+## 5. HTTP and events
+
+The HTTP surface covers Project/Session/settings, Session messages and Runs, SSE and replay, cancel, models/specialists/skills/libraries/environments, MCP/Connectors/Artifact jobs, permission/quota/timeout/sandbox network, Reviewer/evidence/papers, evolution/Idea Tree/memory and related resources.
+
+Run events are a stable observable product interface. Event-shape changes must align schema, API producers, adapter mapping when applicable, Web consumers, and tests/E2E.
+
+## 6. Capability composition
+
+API should not become the implementation home for every capability.
+
+Current direction:
+
+```text
+packages/* capability
+       │ public contracts / plugins / ports
+       ▼
+services/api composition
+       │
+       ├─ native executor
+       └─ JiuwenSwarm bridge
+```
+
+Typical owners include `tools`, `workspace`, `governance`, `executor`, `skill`, `specialist`, `mcp`, `mcp-sources`, `data-source`, `artifact-manager`, `artifact-json`, `provenance`, `memory`, `evolve`, and `idea-tree`.
+
+`scripts/check-architecture.mjs` explicitly prevents several migrated service-domain sources from reappearing.
+
+## 7. Runner channel
+
+Runner is a separate execution boundary. API/executors use Runner clients from `packages/executor` for shell/language execution, managed environments, status/log/cancel, remote Runner/SSH provisioning, and optional NPU workloads.
+
+See [Sandbox execution](sandbox-execution.md) for protocol/auth/sandbox details.
+
+## 8. Storage
+
+Authority spans several stores:
+
+- SQLite catalog: Project, Session, Run, messages, settings, models, permissions;
+- Workspace files;
+- CAS/versioning;
+- append-only/file audit: run events, execution runs, Prompt Manifest, usage, connector/MCP/provenance records;
+- sidecars for specialized/derived state such as the memory graph.
+
+See [Storage layout](../reference/configuration.md#storage-layout).
+
+## 9. Change checklist
+
+Check:
+
+- Is capability policy being put back into API incorrectly?
+- Do native and JiuwenSwarm executors preserve the same semantics?
+- Are Run-event and Artifact semantics stable?
+- Does permission external-wait / timeout behavior change?
+- Are recovery, cancel, or serialization affected?
+- Is a new package dependency edge introduced?
+- Are adapter contract tests or E2E required?
+
+Run:
+
+```bash
+pnpm architecture:check
+pnpm --filter @sciencediscovery/api test
+```
 
 ## Related documentation
 
 - [Runtime architecture](architecture.md)
-- [Agent backend](agent-backend.md)
+- [Native Agent backend](agent-backend.md)
+- [Repository layout](repository-layout.md)
+- [Plugin architecture](plugins.md)
 - [Sandbox execution](sandbox-execution.md)
-- [Review and provenance](review-provenance.md)
