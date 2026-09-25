@@ -643,7 +643,7 @@ test("the executor is chosen by SCIENCE_AGENT_EXECUTOR and needs the adapter URL
     jiuwenSwarmConfigFromEnv({
       SCIENCE_AGENT_EXECUTOR: "jiuwenswarm", SCIENCE_AGENT_ADAPTER_URL: "http://127.0.0.1:4310/", SCIENCE_AGENT_ADAPTER_TOKEN: "t",
     }),
-    { adapterUrl: "http://127.0.0.1:4310", adapterToken: "t" },
+    { adapterUrl: "http://127.0.0.1:4310", adapterToken: "t", subagents: "task" },
   );
 });
 
@@ -1161,11 +1161,11 @@ function withRunSubagent(extra: Partial<NativeAgentOptions> = {}): NativeAgentOp
   return options({ runSubagent: (async () => ({ id: "sub-1", status: "completed" })) as never, ...extra });
 }
 
-test("by default the model delegates with JiuwenSwarm's native subagent tools, not our task", async () => {
+test("explicit jiuwenswarm mode delegates with native subagent tools, not our task", async () => {
   let sent: any;
   const adapter = await fakeAdapter(async ({ body }, response) => { sent = body; response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
   try {
-    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(withRunSubagent()).execute("go");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, subagents: "jiuwenswarm" })(withRunSubagent()).execute("go");
     assert.deepEqual(sent.nativeTools, ["subagent_spawn", "subagent_wait", "task_tool"]);
     assert.equal(sent.tools.some((tool: { name: string }) => tool.name === "task"), false);
     assert.equal(sent.hiddenJiuwenSwarmTools.includes("subagent_spawn"), false);
@@ -1174,11 +1174,11 @@ test("by default the model delegates with JiuwenSwarm's native subagent tools, n
   }
 });
 
-test("subagents can be switched back to our task, and then JiuwenSwarm's sub-agent tools are not offered", async () => {
+test("default delegation uses platform task and hides the Swarm-native lifecycle", async () => {
   let sent: any;
   const adapter = await fakeAdapter(async ({ body }, response) => { sent = body; response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
   try {
-    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, subagents: "task" })(withRunSubagent()).execute("go");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(withRunSubagent()).execute("go");
     assert.ok(sent.tools.some((tool: { name: string }) => tool.name === "task"));
     assert.match(sent.tools.find((tool: { name: string }) => tool.name === "task")?.description ?? "",
       /Do not also request the complete report or source package/);
@@ -1194,11 +1194,11 @@ test("subagents can be switched back to our task, and then JiuwenSwarm's sub-age
   }
 });
 
-test("with ScienceDiscovery's own tools, task stays even though subagents defaults to jiuwenswarm", async () => {
+test("with ScienceDiscovery's own tools, task stays even with explicit jiuwenswarm delegation", async () => {
   let sent: any;
   const adapter = await fakeAdapter(async ({ body }, response) => { sent = body; response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
   try {
-    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, tools: "ours" })(withRunSubagent()).execute("go");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, tools: "ours", subagents: "jiuwenswarm" })(withRunSubagent()).execute("go");
     assert.ok(sent.tools.some((tool: { name: string }) => tool.name === "task"));
     assert.equal("nativeTools" in sent, false);
   } finally {
@@ -1229,7 +1229,7 @@ test("a subagent_spawn call is reported as a native tool call, not run through t
     response.end(line({ done: { finalText: "ok" } }));
   });
   try {
-    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(withRunSubagent());
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, subagents: "jiuwenswarm" })(withRunSubagent());
     const events = collect(agent);
     const result = await agent.execute("delegate it");
     const start = events.find((event) => event.type === "tool_execution_start") as any;
@@ -1244,11 +1244,14 @@ test("a subagent_spawn call is reported as a native tool call, not run through t
   }
 });
 
-test("delegation is JiuwenSwarm's subagent_spawn/wait unless SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task", () => {
+test("delegation defaults to platform task and accepts only an explicit Swarm-native override", () => {
   const env = { SCIENCE_AGENT_EXECUTOR: "jiuwenswarm", SCIENCE_AGENT_ADAPTER_URL: "http://a" };
-  assert.equal(jiuwenSwarmConfigFromEnv(env)?.subagents, undefined, "unset means jiuwenswarm");
-  assert.equal(jiuwenSwarmConfigFromEnv({ ...env, SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS: "jiuwenswarm" })?.subagents, undefined);
-  assert.equal(jiuwenSwarmConfigFromEnv({ ...env, SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS: "task" })?.subagents, "task");
+  for (const value of [undefined, "", "   ", "task", " task "]) {
+    assert.equal(jiuwenSwarmConfigFromEnv({ ...env, SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS: value })?.subagents, "task");
+  }
+  assert.equal(jiuwenSwarmConfigFromEnv({ ...env, SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS: " jiuwenswarm " })?.subagents, "jiuwenswarm");
+  assert.throws(() => jiuwenSwarmConfigFromEnv({ ...env, SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS: "native" }), /must be task or jiuwenswarm/);
+  assert.equal(jiuwenSwarmConfigFromEnv({ SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS: "bad" }), undefined);
 });
 
 /** The adapter side of a run that asks the model once, through the run's gateway, as JiuwenSwarm does. */
@@ -1539,8 +1542,8 @@ test("JiuwenSwarm's own prompt is kept with ours before it by default, and repla
   const adapter = await fakeAdapter(async ({ body }, response) => { sent.push(body); response.writeHead(200); response.end(line({ done: { finalText: "ok" } })); });
   try {
     const { store } = planRecorder();
-    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(withRunSubagent({ planStore: store as never })).execute("a");
-    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, prompt: "replace" })(withRunSubagent({ planStore: store as never })).execute("b");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, subagents: "jiuwenswarm" })(withRunSubagent({ planStore: store as never })).execute("a");
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url, subagents: "jiuwenswarm", prompt: "replace" })(withRunSubagent({ planStore: store as never })).execute("b");
     assert.equal(sent[0].systemPromptMode, "prepend");
     assert.equal(sent[1].systemPromptMode, "replace");
     assert.equal(sent[0].systemPrompt.includes("## Planning"), false, "JiuwenSwarm's own todo section does the teaching");

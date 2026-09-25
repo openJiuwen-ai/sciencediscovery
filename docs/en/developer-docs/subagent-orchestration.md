@@ -2,12 +2,29 @@
 
 ## 1. Overall model
 
-ScienceDiscovery runs **one native loop per AgentRun**: the main agent and each child are separate `NativeAgent.execute()` calls inside the same Node control-plane process.
+ScienceDiscovery defaults to platform `task` dispatch: each child receives an independent
+AgentRun. Dispatch and execution are separate choices. With the JiuwenSwarm executor,
+both the main and platform-dispatched children execute through Swarm; the built-in
+executor instead uses the Node agent loop.
 
 ```text
-main AgentRun (native loop) → task handler in API → child AgentRun (native loop)
-                            ← finalMessages + result summary ← child
+main (Swarm) → platform task / child AgentRun → child (Swarm)
+             ← finalMessages + result summary ← child
 ```
+
+With `SCIENCE_AGENT_EXECUTOR=jiuwenswarm`, set
+`SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` and restart the service:
+
+| Value | Behavior |
+| --- | --- |
+| Unset, empty or `task` | Default: platform dispatch with Swarm execution, platform sandbox/permissions/artifact handoff/audit |
+| `jiuwenswarm` | Swarm-native `subagent_spawn` / `subagent_wait`, outside the platform task lifecycle |
+
+Unknown values are rejected at startup. Direct API startup and launcher scripts share
+the same default. Swarm-native mode also requires its native tools to remain enabled
+(`SCIENCE_AGENT_JIUWENSWARM_TOOLS` must not be `ours`). Native children use Swarm's own
+tools and lifecycle, without platform task workspace/approval/provenance parity.
+This setting does not switch the executor back to the Node loop.
 
 Main and child share **no mutable state**: each AgentRun owns its history, tool table, and time budget, and the handoff points are an explicit `finalMessages` plus the structured `task` result. Node retains authoritative history, permissions, workspace, tools, and audit. A child cannot call `task` again, and cross-run handoff relies on the previous run's `finalMessages` plus Node state.
 
