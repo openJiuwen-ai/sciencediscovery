@@ -134,21 +134,28 @@ per-source 配置在 source manifest 的 `governance` 字段（`packages/schema/
 
 审计：每次 `McpInvocation` 记录 `queueWaitMs`（排队时长）；429/重试明细在 `attempts[]`；均可经 `GET /api/sessions/:sessionId/mcp/invocations` 查询。不记录 query 全文之外的新增敏感信息。
 
-## 6. LLM API 边界（当前结论：预留，不排队）
+## 6. LLM API 边界（独立于数据源 admission）
 
-LLM 出站与数据源出站不在同一进程：
+LLM 请求不经过本文的数据源队列。当前模型 transport 位于 `packages/model`，使用 Node/undici 实现请求和 pre-stream 重试。
 
-- 主 Agent 循环的模型请求由 Python Gateway 发出（`services/gateway/src/sciencediscovery_gateway/server.py` 的 `_build_model` 是唯一构造点），HTTP 由 openai/anthropic SDK 负责，SDK 自带 429 指数退避与 `Retry-After` 尊重。
-- Node 侧另有少量辅助模型调用（会话命名、语义评审、论文视觉），与底座同进程，后续可按 `llm:<host>` 键直接接入。
+Native executor 直接使用产品 model layer；JiuwenSwarm executor 的模型请求通过 adapter 的 per-run LLM proxy 回到 ScienceDiscovery model gateway，因此仍复用产品 provider、proxy、retry 和 usage 语义。
 
-当前不把 LLM 请求纳入排队：provider 配额语义是 TPM/RPM（token 维度），请求级排队收益有限且直接推高首 token 延迟。本期提供最小配置面（经 Gateway 环境变量，默认与 SDK 一致）：
+当前 `packages/model/src/client.ts` 支持：
+
+- 请求 header timeout；
+- connect / 429 / 5xx 的 bounded pre-stream retry；
+- 解析数字形式的 `Retry-After`；
+- 未提供 Retry-After 时做指数 backoff；
+- stream 开始之后的错误直接交给调用方，不再透明重试。
+
+相关配置：
 
 | 环境变量 | 默认 | 说明 |
-|---|---|---|
-| `SCIENCE_AGENT_LLM_TIMEOUT_SECONDS` | 600（SDK 默认） | 单次模型请求超时 |
-| `SCIENCE_AGENT_LLM_MAX_RETRIES` | 2（SDK 默认） | SDK 内置 429/5xx 重试次数 |
+| --- | --- | --- |
+| `SCIENCE_AGENT_LLM_TIMEOUT_SECONDS` | 600 | 请求 header timeout |
+| `SCIENCE_AGENT_LLM_MAX_RETRIES` | 2 | pre-stream connect/429/5xx 最大重试次数 |
 
-后续如需真正的 LLM 限流：Gateway 内按 `base_url` host 建 asyncio 信号量 + 最小间隔即可覆盖主循环（无需跨进程共享）；跨会话全局并发上限属于 Node run 调度层的独立议题。
+LLM provider 的 TPM/RPM admission 目前没有接入 `ResourceRateLimiter`。若新增全局模型限流，应放在 model/control-plane 语义中，而不是恢复旧 Python Gateway 限流路径。
 
 ## 7. 覆盖面与已知缺口
 
@@ -157,7 +164,7 @@ LLM 出站与数据源出站不在同一进程：
 
 ## 8. 测试
 
-- `services/api/src/rate-limit/resource-rate-limiter.test.ts`：并发上限、间隔 pacing、FIFO、队列满、排队超时、取消出队、释放幂等、冷却，以及四个维度省略时的无限语义。
-- `services/api/src/mcp/broker.test.ts`：governance 缺失状态透传、队列错误映射、`queueWaitMs` 审计、429 反馈冷却。
+- `packages/data-source/src/resource-rate-limiter.test.ts`：并发上限、间隔 pacing、FIFO、队列满、排队超时、取消出队、释放幂等、冷却，以及四个维度省略时的无限语义。
+- `packages/data-source/src/broker.test.ts`：governance 缺失状态透传、队列错误映射、`queueWaitMs` 审计、429 反馈冷却。
 - `packages/mcp-sources/src/public-biomed.test.ts`：arXiv 治理参数对齐条款、全部内建源显式队列与 pacing 保护。
 - `services/gateway/tests/test_mcp_api.py`、`test_public_biomed_mcp.py`：Retry-After 传播与解析。
