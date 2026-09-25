@@ -12,6 +12,7 @@ import { cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, sessionExecutionRuns, waitForRunTerminal } from "./helpers/journeys.ts";
 import { drbApi, drbArticle, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { analysisPrompt, cases } from "./benchmarks/biomnibench-da/cases.ts";
 
 const execute = promisify(execFile);
@@ -52,17 +53,16 @@ for (const sample of cases) {
     if (modelId) allowRealEnvException(testInfo, "Live model is already registered on the isolated stack.");
     const real = modelId ? undefined : requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
     const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT");
-    const mode = process.env.E2E_BIOMNI_EVALUATION ?? "off";
+    const mode = process.env.E2E_BIOMNI_EVALUATION ?? "rubric";
     if (!["off", "rubric"].includes(mode)) throw new Error("E2E_BIOMNI_EVALUATION must be off or rubric");
     const python = process.env.BIOMNI_PYTHON ?? "python3";
-    const task = join(env.BIOMNI_DATA_ROOT, sample.id);
+    const task = join(env.BIOMNI_DATA_ROOT!, sample.id);
     const dataPath = join(task, "environment/data", sample.file);
     const rubricPath = join(task, "tests/rubric.txt");
     const [data, instruction] = await Promise.all([
       verifiedFile(dataPath, sample.dataOid), verifiedFile(join(task, "instruction.md"), sample.instructionOid),
       verifiedFile(rubricPath, sample.rubricOid),
     ]);
-    if (mode === "rubric") requireRealEnv(testInfo, "BIOMNI_JUDGE_BASE_URL", "BIOMNI_JUDGE_MODEL", "BIOMNI_JUDGE_API_KEY");
     await requireRealStack(testInfo);
     journey.scenario({ goal: `Execute ${sample.id} with real data and a real LLM.`, preconditions: ["isolated Swarm", "pinned input data", "Python scientific stack"] });
     const metrics: Record<string, any> = { schema_version: 1, case_id: sample.id, backend: "jiuwenswarm",
@@ -75,8 +75,8 @@ for (const sample of cases) {
     let start: number | undefined;
     try {
       fixture = await createProjectAndSession(page, { approvalMode: "always_allow",
-        ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN, baseUrl: real!.E2E_LLM_BASE_URL,
-          model: real!.E2E_LLM_MODEL, name: `BiomniBench ${sample.id} ${Date.now()}` } }),
+        ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!, baseUrl: real!.E2E_LLM_BASE_URL!,
+          model: real!.E2E_LLM_MODEL!, name: `BiomniBench ${sample.id} ${Date.now()}` } }),
         projectName: `BiomniBench ${sample.id} ${Date.now()}`, sessionTitle: sample.title });
       const prefix = `/api/sessions/${fixture.session.id}`;
       metrics.session_id = fixture.session.id;
@@ -111,46 +111,47 @@ for (const sample of cases) {
       await writeFile(testInfo.outputPath("execution-runs.json"), JSON.stringify(executions, null, 2));
       metrics.execution_count = executions?.length ?? null;
       metrics.children = await drbApi<any[]>(page, `${prefix}/subagents`).catch(() => null);
-      for (const name of outputs) {
-        const content = await drbArticle(page, fixture.session.id, name);
-        expect(content.article.trim().length, `Empty ${name}`).toBeGreaterThan(0);
-        await writeFile(testInfo.outputPath(name), content.article);
-      }
-      // Optional legacy exports are diagnostic only, never a condition for rubric scoring.
-      for (const name of diagnosticOutputs) {
-        const content = await drbArticle(page, fixture.session.id, name).catch(() => null);
-        if (content) await writeFile(testInfo.outputPath(name), content.article);
-      }
-      metrics.numerical_validation = { status: "not_run", gating: false, reason: "Optional analysis.json was not delivered" };
-      const numericExport = await readFile(testInfo.outputPath("analysis.json")).catch(() => null);
-      if (numericExport) {
-        try {
-          const verified = await execute(python, [join(scripts, "verify.py"), "--case", sample.id, "--data", dataPath,
-            "--result", testInfo.outputPath("analysis.json")], { timeout: 60_000, env: { ...process.env, OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1" } });
-          metrics.numerical_validation = { ...JSON.parse(verified.stdout), gating: false };
-        } catch (error) {
-          metrics.numerical_validation = { status: "error", gating: false, error: error instanceof Error ? error.message : String(error) };
+      const delivery = await collectFinalDelivery(page, fixture.session.id, runId);
+      metrics.delivery = delivery;
+      metrics.integration_status = delivery.status;
+      expect(delivery.status, "Main run must complete and reference a readable nonempty final artifact").toBe("passed");
+      try {
+        // Official rubric consumes trace and answer; nesting does not change their meaning.
+        const scoringInputs: Record<string, string> = {};
+        const catalog = await drbApi<any[]>(page, `${prefix}/artifacts`);
+        for (const name of outputs) {
+          const delivered = delivery.artifacts.filter(a => a.logicalName === name || a.logicalName.endsWith(`/${name}`));
+          const named = catalog.filter(a => a.logicalName === name || a.logicalName.endsWith(`/${name}`));
+          const content = delivered.length === 1 ? delivered[0]!.text : named.length === 1
+            ? (await drbArticle(page, fixture.session.id, named[0].logicalName).catch(() => null))?.article : undefined;
+          if (content?.trim()) {
+            scoringInputs[name] = content;
+            await writeFile(testInfo.outputPath(name), content);
+          }
         }
-      }
-      metrics.integration_status = "passed";
-      if (mode === "rubric") {
-        metrics.evaluation = { status: "running" };
-        const judgeStart = Date.now();
-        try {
-          await execute(python, [join(scripts, "judge.py"), "--rubric", rubricPath,
-            "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
-            "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: 200_000 });
-          metrics.evaluation = JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8"));
-          metrics.evaluation.duration_ms = Date.now() - judgeStart;
-          metrics.evaluation.gating = false;
-        } catch (error) {
-          metrics.evaluation = { status: "error", gating: false, duration_ms: Date.now() - judgeStart,
-            error: error instanceof Error ? error.message : String(error) };
+        if (mode === "rubric") {
+          metrics.evaluation = { status: "running" };
+          const judgeStart = Date.now();
+          try {
+            if (outputs.some(name => !scoringInputs[name])) throw new Error("Official rubric input missing: trace.md or answer.txt; delivery remains passed");
+            await execute(python, [join(scripts, "judge.py"), "--rubric", rubricPath,
+              "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
+              "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: 200_000 });
+            metrics.evaluation = JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8"));
+            metrics.evaluation.duration_ms = Date.now() - judgeStart;
+            metrics.evaluation.gating = false;
+          } catch (error) {
+            metrics.evaluation = { status: "error", gating: false, duration_ms: Date.now() - judgeStart,
+              error: error instanceof Error ? error.message : String(error) };
+          }
         }
+      } catch (error) {
+        metrics.evaluation = { status: "error", gating: false, error: error instanceof Error ? error.message : String(error) };
       }
+
     } catch (error) {
       metrics.error = error instanceof Error ? error.message : String(error);
-      if (metrics.integration_status !== "passed") metrics.integration_status = "failed";
+      if (!["passed", "partial"].includes(metrics.integration_status)) metrics.integration_status = "failed";
       if (metrics.evaluation.status === "running") metrics.evaluation = { status: "error" };
       throw error;
     } finally {
@@ -166,7 +167,7 @@ for (const sample of cases) {
         // Retain partial deliverables even when required deliverables are missing.
         for (const name of [...outputs, ...diagnosticOutputs]) {
           const content = await drbArticle(page, fixture.session.id, name).catch(() => null);
-          if (content) await writeFile(testInfo.outputPath(name), content.article);
+          if (content && metrics.integration_status !== "passed") await writeFile(testInfo.outputPath(name), content.article);
         }
         await writeFile(testInfo.outputPath("assistant-messages.json"), JSON.stringify(await page.locator(".message.assistant").allTextContents().catch(() => []), null, 2));
       }

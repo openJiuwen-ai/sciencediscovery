@@ -58,7 +58,7 @@ export function evaluationConfig() {
   if (mode !== "off" && !upstream) throw new Error("DRB_UPSTREAM_DIR is required for quality evaluation");
   const script = fileURLToPath(new URL("../benchmarks/deepresearchbench/evaluate.py", import.meta.url));
   const args = [script, "--upstream", upstream ?? "", "--mode", mode];
-  for (const [env, flag] of [["E2E_DRB_MIN_RACE", "--min-race"], ["E2E_DRB_MIN_FACT", "--min-fact"], ["E2E_DRB_MIN_COVERAGE", "--min-coverage"]]) {
+  for (const [env, flag] of [["E2E_DRB_MIN_RACE", "--min-race"], ["E2E_DRB_MIN_FACT", "--min-fact"], ["E2E_DRB_MIN_COVERAGE", "--min-coverage"]] as const) {
     if (process.env[env] !== undefined) args.push(flag, process.env[env]!);
   }
   return { mode, python, args };

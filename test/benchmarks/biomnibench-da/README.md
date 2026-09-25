@@ -70,21 +70,20 @@ appendix only maps `/app` paths to the actual workspace and asks for declaration
 of the two originally required artifacts, `trace.md` and `answer.txt`. It adds
 no analysis method, ranking convention, JSON schema or delegation restriction.
 
-- Require only nonempty declared `trace.md` and `answer.txt` artifacts. Terminal
-  status, execution records and children are diagnostics, not pass conditions.
-  At the generation deadline, cancel the run and assess the available outputs.
-  This benchmark does not gate browser preview or persistence after reload.
+- Require a completed main run and at least one readable, nonempty persisted
+  artifact referenced in its final response. Fixed names are not completion
+  assertions. Failed/cancelled runs with outputs are partial deliveries.
 - Scientific correctness and completeness are evaluated by the unchanged upstream
-  rubric. No local numerical assertion blocks rubric scoring or determines E2E success.
-- `analysis.py` and `analysis.json` are optional diagnostic artifacts, not requested
-  by the platform prompt. When an Agent happens to supply the legacy JSON schema,
-  the numerical verifier records its result or error with `gating: false`.
-  Missing exports, incompatible schemas and verifier errors cannot bypass scoring.
+  rubric. The scorer still consumes the officially required `trace.md` and
+  `answer.txt`; unavailable scoring inputs record an evaluation error without
+  changing delivery success. No local numerical assertion blocks scoring.
+- Retain raw artifacts and trajectories for investigation when needed. The legacy
+  numerical verifier is available offline and is not automatically run.
 - Do not execute Agent-generated scripts on the host verifier.
 - Delivery success does not imply scientific correctness. Read the rubric score
   separately; a low score remains a low score even when delivery passes.
 
-## Optional quality scoring
+## Independent quality scoring (enabled by default)
 
 ```bash
 export E2E_BIOMNI_EVALUATION=rubric
@@ -111,7 +110,7 @@ RACE/FACT are not used for these data-analysis tasks.
 
 Playwright output retains `benchmark-metrics.json`, submitted prompt, partial or
 complete deliverables, execution records, assistant messages and failure traces.
-Metrics separate integration/numerical status, rubric score and Judge usage from
+Metrics separate delivery status, rubric score and Judge usage from
 session generator usage; include input hash/size, wall time, model ID and children.
 Missing usage is null, not zero; no currency conversion is invented.
 

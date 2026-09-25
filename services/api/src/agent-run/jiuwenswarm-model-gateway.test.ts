@@ -508,3 +508,50 @@ test("cancellation stops waiting for completion recording and tolerates its late
     await new Promise(resolve => setImmediate(resolve));
   } finally { reject(new Error("cleanup")); await g.close(); }
 });
+
+for (const truncated of [false, true]) {
+  test(`buffered tool arguments emit decoded progress without exposing a partial call (truncated=${truncated})`, { timeout: 5000 }, async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const tool = { id: "call-buffered", name: "run_shell", args: { command: "private-command" } };
+    const streamer = (async (_e, _s, _h, _t, _p, _signal, callbacks) => {
+      callbacks?.onProgress?.();
+      callbacks?.onToolCallDelta?.({ index: 0, id: tool.id, name: tool.name, arguments: '{"command":"private-' });
+      await blocked;
+      return answer({ truncated, toolCalls: [tool], assistantMessage: { role: "assistant", content: "", tool_calls: [
+        { id: tool.id, type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.args) } },
+      ] } });
+    }) as typeof streamModelTurn;
+    const g = await gateway(streamer);
+    try {
+      const response = await post(g, { stream: true, messages: [] });
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let prefix = "";
+      while (!prefix.includes('"delta":{}')) {
+        const next = await reader.read();
+        assert.equal(next.done, false, "a progress data event must arrive before the model finishes");
+        prefix += decoder.decode(next.value, { stream: true });
+      }
+      const progress = prefix.split("\n\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
+      assert.ok(progress.some(event => Object.keys(event.choices[0].delta).length === 0 && event.choices[0].finish_reason === null));
+      assert.doesNotMatch(prefix, /private-|run_shell|tool_calls|\[DONE\]/);
+      assert.equal(g.diagnostics()[0]?.downstreamChunks, 1);
+      release();
+      let suffix = "";
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        suffix += decoder.decode(next.value, { stream: true });
+      }
+      assert.match(suffix, /\[DONE\]/);
+      const finalEvents = suffix.split("\n\n").filter(line => line.startsWith("data: ") && !line.includes("[DONE]"))
+        .map(line => JSON.parse(line.slice(6)));
+      const calls = finalEvents.flatMap(event => event.choices[0].delta.tool_calls ?? []);
+      assert.equal(calls.length, truncated ? 0 : 1);
+      if (!truncated) assert.deepEqual(JSON.parse(calls[0].function.arguments), tool.args);
+      else assert.match(suffix, /output_limit:tool_calls_withheld/);
+      assert.equal(finalEvents.at(-1).choices[0].finish_reason, truncated ? "length" : "tool_calls");
+    } finally { release(); await g.close(); }
+  });
+}

@@ -66,6 +66,28 @@ class EvaluationTests(unittest.TestCase):
         result["race"]["overall_score"] = .2
         self.assertEqual(gate(result, thresholds), "failed")
 
+    def test_failed_phase_is_error_and_configured_skip_is_not_error(self):
+        from evaluate import main
+        for mode, phase in (("race", "race"), ("full", "fact")):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "evaluation"
+                def fail(args, result):
+                    result["race"] = {"status": "running"} if phase == "race" else {"status": "completed", "overall_score": .5}
+                    result["fact"] = {"status": "running"} if phase == "fact" else {"status": "skipped", "reason": "race-only configuration"}
+                    raise ValueError("fixture invalid response")
+                mask = os.umask(0o077)
+                try:
+                    with patch("sys.argv", ["evaluate", "--upstream", tmp, "--input", tmp+"/input.json", "--output", str(output), "--mode", mode]), patch("evaluate.evaluate", side_effect=fail):
+                        self.assertEqual(main(), 1)
+                finally:
+                    os.umask(mask)
+                result = json.loads((output / "scorecard.json").read_text())
+                self.assertEqual(result[phase]["status"], "error")
+                self.assertNotIn("not_run", json.dumps(result))
+                if phase == "fact": self.assertEqual(result["race"]["overall_score"], .5)
+                else: self.assertEqual(result["fact"]["status"], "skipped")
+                self.assertIn("fixture invalid response", (output / "evaluation-error.json").read_text())
+
     def test_missing_credentials_block_preflight(self):
         from evaluate import UPSTREAM_COMMIT
         with patch.dict("os.environ", {}, clear=True), patch("subprocess.check_output", side_effect=[UPSTREAM_COMMIT, ""]):
@@ -79,7 +101,7 @@ class EvaluationTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("DRB_UPSTREAM_DIR"), "Pinned evaluator checkout required for offline pipeline integration")
 class UpstreamPipelineTests(unittest.TestCase):
-    def test_full_pipeline_with_mock_judge_and_fetch(self):
+    def test_full_pipeline_with_one_contract_correction_and_mock_fetch(self):
         # Actual upstream cleaner/scorer/extractor/deduplicator/validator, no paid calls.
         from evaluate import evaluate
         upstream = Path(os.environ["DRB_UPSTREAM_DIR"]).resolve()
@@ -87,10 +109,12 @@ class UpstreamPipelineTests(unittest.TestCase):
             return next(json.loads(l) for l in (upstream/path).read_text().splitlines() if json.loads(l)["id"] == 59)
         task = row("data/prompt_data/query.jsonl")
         criteria = row("data/criteria_data/criteria.jsonl")
-        scores = {d: [{"criterion": c["criterion"], "analysis": "fixture", "article_1_score": 8,
-                       "article_2_score": 8} for c in criteria["criterions"][d]] for d in DIMS}
+        scores = {d: [{"criterion_id": f"{d}_{i:02d}", "criterion": c["criterion"], "analysis": "fixture", "article_1_score": 8,
+                       "article_2_score": 8} for i, c in enumerate(criteria["criterions"][d], 1)] for d in DIMS}
         article = "# Bird navigation\n" + "Birds integrate multiple cues. " * 30
-        replies = iter([article, json.dumps(scores), json.dumps([
+        missing_id = copy.deepcopy(scores)
+        del missing_id["readability"][0]["criterion_id"]
+        replies = iter([article, json.dumps(missing_id), json.dumps(scores), json.dumps([
             {"fact": "Magnetic cues guide direction", "url": "https://example.org/source"},
             {"fact": "Stars guide direction", "url": "https://example.org/source"}]),
             "[1,2]", '[{"idx":1,"result":"supported"},{"idx":2,"result":"unsupported"}]'])
@@ -109,7 +133,9 @@ class UpstreamPipelineTests(unittest.TestCase):
             self.assertAlmostEqual(result["race"]["overall_score"], .5)
             self.assertEqual(result["fact"]["citation_accuracy"], 50)
             self.assertEqual(result["fact"]["verification_coverage"], 100)
-            self.assertEqual(len(result["judge_calls"]), 5)
+            self.assertEqual(len(result["judge_calls"]), 6)
+            self.assertTrue((root / "race-contract-error-1.json").exists())
+            self.assertTrue((root / "judge-response-3.json").exists())
 
 
 if __name__ == "__main__":
