@@ -6,38 +6,15 @@ ScienceDiscovery 一方面通过 MCP 接入科研数据与工具，另一方面�
 
 可以用一句话区分三类扩展：**MCP 是工具，Skill 是方法，Specialist 是角色。** MCP 回答“Agent 能调用什么”，Skill 回答“这类工作应该怎么做”，Specialist 则把职责、Skill 和可用工具组织成一个可以被主 Agent 调用的专业角色。
 
-## 已经接入哪些科研资源
+## 产品已经提供哪些能力
 
-产品提供以下内置科研连接器，按研究需要启用即可，无需自行编写适配程序。
+ScienceDiscovery 预置了常见科研连接器和可组合的 Skill。例如，文献研究可以使用 PubMed、Europe PMC、arXiv 等来源，结构研究可以使用 UniProt、PDB；对应的 Skill 可以负责检索、证据提取、计算、报告撰写和结果核查。
 
-| 研究需求 | 预置来源 | 可以从哪里起步 |
-| --- | --- | --- |
-| 检索论文与预印本 | PubMed、Europe PMC、arXiv、bioRxiv、medRxiv | 查找相关研究，保留标识与来源链接，获取接口支持的记录或下载入口 |
-| 蛋白功能与结构 | UniProt、PDB | 查询蛋白注释、结构条目及可用结构文件 |
-| 基因与变异 | Ensembl、ClinVar | 查询基因、转录本、变异及相关注释 |
-| 通路与实验数据 | Reactome、GEO | 检索通路信息和公共表达研究记录 |
-| 化合物与活性 | ChEMBL | 查询化合物、靶点与活性记录 |
+这些预置项是帮助用户快速开始的默认能力，不是 Core 概念本身。完整且可能随版本变化的清单见[预置科研能力参考](../reference/builtin-research-capabilities.md)。
 
-此外，LLM Wiki 连接器可在配置可用时提供知识页面的检索与读取。预置代表产品提供了接入能力，不代表外部服务永远在线、所有内容都能免费下载，或返回记录等于已读全文。实际工具范围与连接状态应以当前会话为准。
+预置接入不代表外部服务永远在线、所有内容都能免费下载，或返回记录等于已读全文。安装了 Skill 也不等于模型本次已经读取或执行它；实际使用情况应以当前 Session 的工具范围、执行记录和产物为准。
 
 ![科研连接器](../../images/connector.png)
-
-## 已经准备哪些研究方法
-
-产品随附 17 个 Skill，既有完整工作流，也有可组合的小步骤：
-
-| 工作方向 | 预置 Skill | 用途 |
-| --- | --- | --- |
-| 研究组织与证据简报 | `science-research-team`、`life-science-evidence-brief` | 组织文献与数据研究，形成可追溯的证据摘要 |
-| 检索、阅读与成文 | `literature-searcher`、`evidence-extractor`、`report-writer` | 从来源发现到证据提取，再到报告综合 |
-| 计算与结果评价 | `code-engineer`、`result-evaluator` | 编写可复现分析，检查方法和结果质量 |
-| 引用与计算核查 | `citation-reviewer`、`computation-reviewer` | 检查引用支撑及数值与证据的一致性 |
-| 材料方案探索 | `creative-material-design`、`assessment-screening`、`insight-aggregator` | 生成材料候选、分视角评价并整理反馈 |
-| 自主研究与产物改进 | `idea-tree-team`、`evolve-design` | 准备 Idea Tree 输入与解读结果，设计并发起产物演进搜索 |
-| 结构与抗体工作流 | `structure-pocket-inspection`、`antibody-design` | 检查本地 PDB 与口袋，组织抗体设计计算流程 |
-| 方法沉淀 | `skill-creator` | 根据明确需求起草可审核的技能包 |
-
-这些方法有各自前提。结构检查需要输入文件，抗体流程需要相应计算环境和硬件，Reviewer 技能需要待核查证据。安装了 Skill 不等于模型已经读取或执行它，模型遵循情况也需要通过实际产物检查。
 
 ## 让实验室自己的资源加入工作流
 
