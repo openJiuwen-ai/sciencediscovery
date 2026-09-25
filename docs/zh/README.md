@@ -12,14 +12,21 @@
 
 ## 核心能力
 
-从把代码跑起来，到探索方向、改进产物与核查依据，这六项能力组成了可检查、可迭代的科研工作方式。
+ScienceDiscovery 的核心能力可以从三层理解：
 
-- [科研沙箱](core/execution-workspaces.md) — 在隔离空间编写、调试和运行代码，让分析可以复核。
-- [Idea Tree 自主研究](core/idea-tree.md) — 提出候选、设计方案、分别评估，让反馈引导下一轮探索。
-- [科研产物的 RSI](core/evolve.md) — 通过变体搜索与留出评价，逐步改进可评价的产物。
+**研究执行**
+- [科研 Agent](core/research-agent.md) — 从研究目标出发，调用工具、方法与专业角色，并把结果组织成可检查的研究过程。
+- [科研产物](core/artifacts.md) — 将报告、代码、表格和图像登记为可查看、版本化和继续使用的交付物。
+- [科研执行环境与工作区](core/execution-workspaces.md) — 在隔离环境中运行 Python、R 与 Shell，并保存研究文件。
+- [科研 MCP 与 Skill](core/mcp-skills.md) — MCP 提供工具和数据接口，Skill 提供可复用的研究方法。
+- [专业 Specialist](core/specialists.md) — 将职责、Skill 和工具范围组织成可复用的专业角色。
+
+**探索与优化**
+- [Idea Tree 自主研究](core/idea-tree.md) — 展开候选方向、设计方案并根据反馈继续探索。
+- [科研产物的 RSI](core/evolve.md) — 通过候选搜索与留出评价，逐步改进可评价的产物。
+
+**可信与复核**
 - [记忆图谱与 Reviewer](core/science-memory-reviewer.md) — 连接任务、证据与结论，发现值得复核的问题。
-- [专业 Specialist](core/specialists.md) — 将职责、技能和工具整理成可复用的研究角色。
-- [科研 MCP 与 Skill](core/mcp-skills.md) — 将真实科研接口与可复用的工作方法组合起来。
 
 ## 领域指南
 
