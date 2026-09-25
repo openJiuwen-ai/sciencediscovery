@@ -34,6 +34,8 @@ decompress(bytes) -> str。往返必须完全无损。只用标准库 —— 不
 
 你也可以在命令中明确指定算法：`/evolve-design --algorithm puct …`。
 
+选择器还提供基于种群搜索的 OpenEvolve。本教程全程使用 PUCT；两种引擎的区别见[程序演进](../core/evolve.md)。
+
 ## 确定要求
 
 Agent 会加载演进设计技能，并准备起点程序、评测方式和搜索规模。阅读它给出的方案时，重点确认以下内容：
@@ -118,6 +120,5 @@ Agent 告知搜索已经启动后，打开会话中的演进任务面板。搜�
 ## 相关文档
 
 - [快速开始](../getting-started/quick-start.md)：启动服务、配置模型和创建会话。
-- [运行一次演进搜索](run-an-evolution-search.md)：搜索规模、OpenEvolve 与常见问题。
 - [程序演进](../core/evolve.md)：搜索引擎、数据分片和冻结评测器的原理。
 - [沙箱执行](../developer-docs/sandbox-execution.md)：候选代码的执行环境。

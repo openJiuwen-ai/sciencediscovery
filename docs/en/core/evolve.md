@@ -4,9 +4,8 @@
 "better" means as a number; the product writes dozens of variants, scores each one, keeps what
 scores higher, and hands back the best version alongside the one it started from.
 
-> This page explains what a search is, when it works, and why it is built this way. To run one,
-> see [Run an evolution search](../domains/run-an-evolution-search.md); for a first search you can
-> complete end to end, see the [tutorial](../domains/evolve-a-solution.md). Engine internals
+> This page explains what a search is, when it works, and why it is built this way. For a first search you can complete end to end,
+> see [Use PUCT to optimize a text compression algorithm](../domains/evolve-a-solution.md). Engine internals
 > and standalone deployment of the sidecar are in
 > [the evolution sidecar note](../developer-docs/evolve-standalone.md).
 
@@ -157,7 +156,6 @@ would have liked the candidates to take.
 
 ## Related
 
-- [Run an evolution search](../domains/run-an-evolution-search.md) — the operational path.
-- [Evolve a solution](../domains/evolve-a-solution.md) — a first run, end to end.
+- [Use PUCT to optimize a text compression algorithm](../domains/evolve-a-solution.md) — a first run, end to end.
 - [ScienceMemory](../developer-docs/science-memory.md) — where a finished search is recorded.
 - [Sandbox execution](../developer-docs/sandbox-execution.md) — how candidates are isolated while they are scored.
