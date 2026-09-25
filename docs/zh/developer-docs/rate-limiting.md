@@ -14,8 +14,8 @@
 
 限流在 Node 控制面统一实现，不在各 Python MCP 源内部：
 
-- `McpGovernanceBroker`（`services/api/src/mcp/broker.ts`）是所有 MCP 工具调用的唯一治理入口，串起权限、缓存、限流、Gateway 调用与 CAS 审计。
-- `ResourceRateLimiter`（`services/api/src/rate-limit/resource-rate-limiter.ts`）是底座，按资源键做并发上限、最小间隔、FIFO 排队、排队超时与 429 冷却。单机、进程内内存态，不做跨机器分布式配额，进程重启即清零。
+- `McpGovernanceBroker`（`packages/data-source/src/broker.ts`）是所有 MCP 工具调用的唯一治理入口，串起权限、缓存、限流、Gateway 调用与 CAS 审计。
+- `ResourceRateLimiter`（`packages/data-source/src/resource-rate-limiter.ts`）是底座，按资源键做并发上限、最小间隔、FIFO 排队、排队超时与 429 冷却。单机、进程内内存态，不做跨机器分布式配额，进程重启即清零。
 - Python MCP server 只负责单次查询、provider 参数/响应校验、瞬时错误重试（`retryPolicy`）和标准结果组装，不做跨请求的排队或并发控制。
 
 各源通过 manifest 的 `governance` 字段向底座提供参数（schema 见 `packages/schema/src/mcp-source.ts`；内建源构造见 `packages/mcp-sources/src/public-biomed.ts` 的 `manifest()`）：
@@ -34,11 +34,11 @@
 
 ```text
 Agent 工具 mcp__<source>__<tool>
-  → createMcpWorkspaceTools.execute            services/api/src/mcp/workspace-tools.ts
-  → McpGovernanceBroker.invoke                 services/api/src/mcp/broker.ts
+  → createMcpWorkspaceTools.execute            packages/artifact-manager/src/mcp-workspace-tools.ts
+  → McpGovernanceBroker.invoke                 packages/data-source/src/broker.ts
       会话可写检查 → 启用过滤 → 输入校验 → 权限 authorize
       → 结果缓存：命中则直接返回规范化结果（不再 acquire、不再出站）
-      → ResourceRateLimiter.acquire(rateLimitGroup, …)   services/api/src/rate-limit/resource-rate-limiter.ts
+      → ResourceRateLimiter.acquire(rateLimitGroup, …)   packages/data-source/src/resource-rate-limiter.ts
           队列满   → RATE_LIMIT_QUEUE_FULL
           排队超时 → RATE_LIMIT_QUEUE_TIMEOUT
       → McpNodeClient.invoke → MCP server → 上游 provider
@@ -53,10 +53,10 @@ Agent 工具 mcp__<source>__<tool>
 
 | 模块 | 路径 | 职责 |
 |---|---|---|
-| 限流底座 | `services/api/src/rate-limit/resource-rate-limiter.ts` | `acquire` / `release` / `reportUpstreamRateLimit`：进程内并发、间隔、队列、冷却 |
-| 治理挂接 | `services/api/src/mcp/broker.ts` | `McpGovernanceBroker.invoke`：权限 → 缓存 → acquire → Gateway → 429 反馈 → release |
+| 限流底座 | `packages/data-source/src/resource-rate-limiter.ts` | `acquire` / `release` / `reportUpstreamRateLimit`：进程内并发、间隔、队列、冷却 |
+| 治理挂接 | `packages/data-source/src/broker.ts` | `McpGovernanceBroker.invoke`：权限 → 缓存 → acquire → Gateway → 429 反馈 → release |
 | 治理参数 | `packages/mcp-sources/src/public-biomed.ts` | `manifest()` 构造 `governance`（`rateLimitGroup`、并发、间隔/QPS、队列等） |
-| 工具注入 | `services/api/src/mcp/workspace-tools.ts` | `createMcpWorkspaceTools` 把 MCP 工具包成 `mcp__<source>__<tool>`，`execute` 调 `broker.invoke` |
+| 工具注入 | `packages/artifact-manager/src/mcp-workspace-tools.ts` | `createMcpWorkspaceTools` 把 MCP 工具包成 `mcp__<source>__<tool>`，`execute` 调 `broker.invoke` |
 
 ### 2.4 Broker 逻辑要点
 
