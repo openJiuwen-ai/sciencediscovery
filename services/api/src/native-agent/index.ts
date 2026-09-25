@@ -837,6 +837,7 @@ export function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.executeScientific ? { executeScientific: options.executeScientific } : {}),
     ...(options.npuBroker ? { npuBroker: options.npuBroker } : {}),
     ...(options.artifactDownload ? { artifactDownload: options.artifactDownload } : {}),
+    ...(options.materializeArtifact ? { materializeArtifact: options.materializeArtifact } : {}),
     ...(options.declareArtifact ? { declareArtifact: options.declareArtifact } : {}),
     ...(options.getFileProvenance ? { getFileProvenance: options.getFileProvenance } : {}),
     ...(options.listArtifacts ? { listArtifacts: options.listArtifacts } : {}),

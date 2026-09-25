@@ -13,6 +13,10 @@ import {
 } from "@sciencediscovery/schema";
 
 export interface ArtifactVersionInput {
+  artifactId?: string;
+  baseVersionId?: string;
+  publicationId?: string;
+
   content: CasObjectRef;
   description?: string;
   executionRunIds?: string[];
@@ -41,6 +45,10 @@ export interface ArtifactContentPort {
 }
 
 export interface RegisterWorkspaceArtifactInput {
+  artifactId?: string;
+  baseVersionId?: string;
+  publicationId?: string;
+
   description?: string;
   executionRunIds?: string[];
   inputArtifactVersionIds?: string[];
@@ -93,6 +101,7 @@ export class ArtifactManager {
     const content = await this.content.putWorkspaceFile(input.workspaceRoot, input.path);
     return await this.catalog.createVersion({
       content,
+      artifactId: input.artifactId, baseVersionId: input.baseVersionId, publicationId: input.publicationId,
       ...(input.description ? { description: input.description } : {}),
       executionRunIds: input.executionRunIds,
       inputArtifactVersionIds: input.inputArtifactVersionIds,

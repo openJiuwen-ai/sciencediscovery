@@ -43,6 +43,9 @@ export interface ScientificArtifact {
 }
 
 export interface ScientificArtifactVersion {
+  /** Explicit edit ancestry and durable tool-call deduplication. */
+  baseVersionId?: string;
+  publicationId?: string;
   artifactId: string;
   content: CasObjectRef;
   createdAt: string;

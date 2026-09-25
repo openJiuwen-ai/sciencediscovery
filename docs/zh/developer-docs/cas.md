@@ -53,3 +53,21 @@ CAS 只追加，没有修改、删除、清理或列举接口。删除 Session �
 垃圾回收尚未实现。未来收集器必须先标记 Artifact 版本、derivation、执行与 Prompt Manifest、MCP/Web 审计、Paper 记录和环境镜像中的全部活引用，再清除未标记对象；不能只按年龄删除，因为长期 Project Artifact 可能比来源 Session 工作区存活更久。
 
 中断写入可能留下 `.tmp`，但不会留下半截正式对象。仅在没有写入方运行时才可清理过期临时文件。`verify` 失败表示内容与地址不符，应报告损坏，不应原地覆盖不可变地址。
+
+## Agent 编辑已有 Artifact
+
+`materialize_artifact({artifact_id, version, path})` 从当前 Project 的固定版本流式复制原始字节到调用 agent 自己的本地工作区。主 agent 和 native task 分发的 Swarm 子 agent 使用同一接口；工作区仍然隔离。返回 `artifact_id`、`version_id`、版本号、路径、SHA-256 和大小，不返回文件正文。
+
+复制复用工作区写入锁、临时文件、哈希/大小校验和原子发布。同路径同内容可重试；不同内容、路径越界、符号链接、跨 Project 或源内容损坏会失败，不覆盖本地编辑。
+
+agent 随后用适合格式的工具修改文件，或重新运行生成工具（例如修改数据后重新生成 PDF），再调用：
+
+```json
+{"artifact_id":"original-id","base_version_id":"materialized-version-id","path":"edited-report.md"}
+```
+
+以上参数传给 `declare_artifact`。显式修订沿用原 Artifact ID 和名称，新增不可变版本，并将基准版本记录为输入依赖。现有引用 chip 映射随版本保留，新声明的同名映射覆盖旧映射；这不替代对引用正确性的审核。文件内容不会被通用文本转换，二进制和特殊格式仍由相应工具负责编辑；已有 Artifact 的 kind 不允许跨版本改变。
+
+发布要求基准版本仍为最新；否则返回 `ARTIFACT_VERSION_CONFLICT`，本地编辑保留。agent 应获取最新版本到另一条路径并显式合并，不能静默覆盖。相同工具调用的重放复用已发布版本（持久化 publication ID），不同内容的重放报冲突。比较与目录更新在当前单进程 SessionStore 内同步完成，沿用现有目录持久化机制，不提供多 API 写进程之间的分布式锁。
+
+旧的 `declare_artifact(path/name/paths)` 调用保持兼容。显式修订只接受单文件 path，不接受 name 或 paths。本接口不共享父子目录，不自动分发依赖，不限制工具生成文件；远端 Runner 的文件应先通过已有 workspace transfer 流程转入本地工作区。

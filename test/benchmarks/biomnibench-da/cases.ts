@@ -16,12 +16,6 @@ export function selectedCases(value = process.env.E2E_BIOMNI_CASE_IDS) {
   return cases.filter(c => ids.includes(c.id));
 }
 
-export function outputContract(id: string) {
-  return id === "da-13-3"
-    ? 'analysis.json: {"phenotypes":{"Percent_Fat":{"significant_count":N,"top":[{"protein_id":"...","estimate":0.1,"adjusted_p":0.01}]},"Breast_Volume":{"significant_count":N,"top":[...]}}}. Export up to 10 strongest significant associations per phenotype, preserving identifiers and numeric precision.'
-    : 'analysis.json: {"columns":["score_name",...],"method":"spearman" or "pearson","missing":"pairwise" or "complete","correlation":[[1,...],...],"distance":"1-correlation","linkage_method":"average" or "complete" or "single" or "ward","linkage":[[left,right,distance,count],...]}. Use selected score columns only (not clinical covariates), export the unreordered correlation matrix and scipy-format linkage indexed by columns; explain feature selection and methods in trace.md. Do not round exported numeric values.';
-}
-
-export function analysisPrompt(id: string, instruction: string, file: string) {
-  return `${instruction}\n\n<platform_delivery>\nThe original task above defines the scientific scope. The provided data file is in this session workspace: ${file}. Resolve paths using the actual workspace; /app/data in the original instruction maps to the workspace input and /app outputs map to workspace-relative outputs. Do not replace data with synthetic examples or search for the source paper/its answers. Prefer completing this small task yourself; do not create subagents. Do not load the full CSV into LLM context. Execute reproducible Python analysis using the available execution tools. Save and declare these artifacts with exact logical names: trace.md, answer.txt, analysis.py, analysis.json. trace.md must include actual executed code and intermediate results. analysis.py is the reproducible analysis script, not a prose description.\nAdditional platform evaluation export (not part of the original benchmark): ${outputContract(id)}\nMention the delivered artifacts in your final answer.\n</platform_delivery>`;
+export function analysisPrompt(_id: string, instruction: string, file: string) {
+  return `${instruction}\n\n<platform_delivery>\nThe original task above defines the scientific scope and required outputs. The provided data file is in this session workspace: ${file}. Resolve paths using the actual workspace; /app/data in the original instruction maps to the workspace input and /app outputs map to workspace-relative outputs. Save and declare the required trace.md and answer.txt artifacts with those exact logical names.\n</platform_delivery>`;
 }

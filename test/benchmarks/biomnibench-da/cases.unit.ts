@@ -17,9 +17,8 @@ test("delivery appendices preserve upstream instruction without leaking rubric a
     const prompt = analysisPrompt(item.id, instruction, item.file);
     assert.ok(prompt.startsWith(instruction + "\n\n"));
     assert.ok(prompt.includes(item.file));
-    assert.match(prompt, /do not create subagents/);
-    assert.match(prompt, /not part of the original benchmark/);
-    assert.match(prompt, /analysis\.py, analysis\.json/);
+    assert.match(prompt, /trace\.md and answer\.txt/);
+    assert.doesNotMatch(prompt, /analysis\.json|analysis\.py|strongest|do not create subagents|Execute reproducible Python/);
     assert.doesNotMatch(prompt, /LEP|rubric_target_scores|Criterion 1/);
   }
 });

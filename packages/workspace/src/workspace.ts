@@ -240,7 +240,9 @@ export interface WorkspaceToolOptions {
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   /** Run-scoped capabilities supplied by the API composition layer. */
   extraTools?: AgentTool[];
+  materializeArtifact?: (input: { artifactId: string; version: number; path: string }, signal?: AbortSignal) => Promise<{ artifact_id: string; version: number; version_id: string; path: string; sha256: string; size: number }>;
   declareArtifact?: (input: {
+    artifactId?: string; baseVersionId?: string; toolCallId?: string;
     description?: string;
     name?: string;
     path: string;
@@ -862,8 +864,24 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     artifactTools.push(readArtifact);
   }
+  if (options.materializeArtifact) {
+    const parameters = Type.Object({
+      artifact_id: Type.String({ minLength: 1 }), version: Type.Integer({ minimum: 1 }),
+      path: Type.String({ minLength: 1, maxLength: 2_000 }),
+    });
+    const materialize: AgentTool<typeof parameters> = { name: "materialize_artifact", label: "Copy artifact to workspace", parameters,
+      description: "Copy an exact Artifact version into your current workspace as original bytes, including binary files. Use before editing or processing another agent's deliverable; do not reconstruct its text. No overwrite of different content. Edit or regenerate with suitable tools, then declare_artifact with artifact_id and the returned version_id as base_version_id. Returns metadata only.",
+      execute: async (_id, params, signal) => {
+        const details = await options.materializeArtifact!({ artifactId: params.artifact_id, version: params.version, path: params.path }, signal);
+        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      },
+    };
+    artifactTools.push(materialize);
+  }
   if (options.declareArtifact) {
     const parameters = Type.Object({
+      artifact_id: Type.Optional(Type.String({ minLength: 1 })),
+      base_version_id: Type.Optional(Type.String({ minLength: 1 })),
       description: Type.Optional(Type.String({ maxLength: 2_000 })),
       name: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
       path: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
@@ -873,8 +891,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       })),
     });
     const declareArtifact: AgentTool<typeof parameters> = {
-      description: "Declare existing files in your writable workspace as user-visible Project artifacts. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: when declaring a markdown/text artifact whose body carries [alias] citation tokens, call declare_artifact(output) AFTER all declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
+      description: "Declare existing files in your writable workspace as user-visible Project artifacts. To publish an edit of an existing Artifact, supply artifact_id and base_version_id together with one path (not paths/name). A stale base fails with ARTIFACT_VERSION_CONFLICT and preserves your local file. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: when declaring a markdown/text artifact whose body carries [alias] citation tokens, call declare_artifact(output) AFTER all declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
       execute: async (_toolCallId, params) => {
+        if (!!params.artifact_id !== !!params.base_version_id) throw new Error("artifact_id and base_version_id are required together");
+        if (params.artifact_id && (params.paths !== undefined || params.name !== undefined)) throw new Error("Artifact revision requires one path and cannot rename or batch");
         if (params.paths !== undefined) {
           if (params.paths.length === 0) throw new Error("paths must contain at least one path");
           if (params.paths.length > MAX_DECLARE_ARTIFACT_PATHS) {
@@ -909,6 +929,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }
         if (!params.path) throw new Error("path or paths is required");
         const result = await options.declareArtifact!({
+          ...(params.artifact_id ? { artifactId: params.artifact_id, baseVersionId: params.base_version_id, toolCallId: _toolCallId } : {}),
           ...(params.description ? { description: params.description } : {}),
           ...(params.name ? { name: params.name } : {}),
           path: params.path,

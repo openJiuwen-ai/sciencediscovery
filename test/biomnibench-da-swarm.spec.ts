@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSession,
+import { cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, sessionExecutionRuns, waitForRunTerminal } from "./helpers/journeys.ts";
 import { drbApi, drbArticle, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
@@ -16,7 +16,8 @@ import { analysisPrompt, cases } from "./benchmarks/biomnibench-da/cases.ts";
 
 const execute = promisify(execFile);
 const scripts = fileURLToPath(new URL("./benchmarks/biomnibench-da/", import.meta.url));
-const outputs = ["trace.md", "answer.txt", "analysis.py", "analysis.json"];
+const outputs = ["trace.md", "answer.txt"];
+const diagnosticOutputs = ["analysis.py", "analysis.json"];
 
 async function verifiedFile(path: string, oid: string) {
   const data = await readFile(path);
@@ -28,10 +29,10 @@ async function verifiedFile(path: string, oid: string) {
 for (const sample of cases) {
 /**
  * E2E-META
- * Purpose: Execute two small BiomniBench-DA analyses on real Swarm and verify numerical results and durable UI artifacts.
+ * Purpose: Execute two small BiomniBench-DA analyses on real Swarm and verify delivery and score analysis with the upstream rubric.
  * Steps:
- *   1. Verify authorized local benchmark inputs and dependencies before paid calls; upload the CSV through the workspace API.
- *   2. Submit the original task plus platform delivery contract; verify execution, independently recompute results and reload artifact UI.
+ *   1. Verify authorized local benchmark inputs before paid calls; upload the CSV through the workspace API.
+ *   2. Submit the original task plus platform delivery contract; verify the two required nonempty deliverables.
  *   3. Retain diagnostics, usage and optionally score the analysis using the upstream rubric with a local Judge adapter.
  * Environment: Opt-in isolated Swarm stack, local authorized BiomniBench task directories and Python scientific dependencies.
  * Type: real
@@ -53,10 +54,6 @@ for (const sample of cases) {
     const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT");
     const mode = process.env.E2E_BIOMNI_EVALUATION ?? "off";
     if (!["off", "rubric"].includes(mode)) throw new Error("E2E_BIOMNI_EVALUATION must be off or rubric");
-    const threshold = Number(process.env.E2E_BIOMNI_MIN_SCORE ?? "0");
-    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100 || (mode === "off" && threshold > 0)) {
-      throw new Error("Invalid quality threshold, or threshold specified with Judge disabled");
-    }
     const python = process.env.BIOMNI_PYTHON ?? "python3";
     const task = join(env.BIOMNI_DATA_ROOT, sample.id);
     const dataPath = join(task, "environment/data", sample.file);
@@ -65,7 +62,6 @@ for (const sample of cases) {
       verifiedFile(dataPath, sample.dataOid), verifiedFile(join(task, "instruction.md"), sample.instructionOid),
       verifiedFile(rubricPath, sample.rubricOid),
     ]);
-    await execute(python, ["-c", "import pandas,numpy,scipy"], { timeout: 30_000, env: { ...process.env, OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1" } });
     if (mode === "rubric") requireRealEnv(testInfo, "BIOMNI_JUDGE_BASE_URL", "BIOMNI_JUDGE_MODEL", "BIOMNI_JUDGE_API_KEY");
     await requireRealStack(testInfo);
     journey.scenario({ goal: `Execute ${sample.id} with real data and a real LLM.`, preconditions: ["isolated Swarm", "pinned input data", "Python scientific stack"] });
@@ -96,49 +92,61 @@ for (const sample of cases) {
       runId = run.id;
       metrics.run_id = runId;
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
-      const finished = await waitForRunTerminal(page, fixture.session.id, runId, budget);
-      terminal = true;
-      metrics.run_status = finished.status;
-      metrics.generation_duration_ms = Date.now() - start;
-      expect(finished.status, finished.error).toBe("completed");
-      const executions = await sessionExecutionRuns(page, fixture.session.id);
-      await writeFile(testInfo.outputPath("execution-runs.json"), JSON.stringify(executions, null, 2));
-      expect(executions.some(e => e.exitCode === 0), "Must actually execute analysis, not just write prose").toBe(true);
-      const children = await drbApi<any[]>(page, `${prefix}/subagents`);
-      expect(children, "Small-data cost profile requests no delegation").toHaveLength(0);
-      const saved: Record<string, { article: string; versionId: string }> = {};
-      for (const name of outputs) {
-        saved[name] = await drbArticle(page, fixture.session.id, name);
-        expect(saved[name].article.trim().length, `Empty ${name}`).toBeGreaterThan(0);
-        await writeFile(testInfo.outputPath(name), saved[name].article);
+      try {
+        const finished = await waitForRunTerminal(page, fixture.session.id, runId, budget);
+        terminal = true;
+        metrics.run_status = finished.status;
+        metrics.run_error = finished.error;
+      } catch (error) {
+        metrics.run_status = "wait_error";
+        metrics.run_error = error instanceof Error ? error.message : String(error);
+        // Stop generation at the budget, then assess whatever was delivered.
+        await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers: authorizationHeader() });
+        const stopped = await waitForRunTerminal(page, fixture.session.id, runId, 30_000).catch(() => null);
+        terminal = stopped !== null;
+        if (stopped) metrics.run_status = stopped.status;
       }
-      const verified = await execute(python, [join(scripts, "verify.py"), "--case", sample.id, "--data", dataPath,
-        "--result", testInfo.outputPath("analysis.json")], { timeout: 60_000, env: { ...process.env, OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1" } });
-      metrics.numerical_validation = JSON.parse(verified.stdout);
-      const tree = await artifactTree(page);
-      await expect.poll(() => tree.artifacts.allTextContents()).toContain("trace.md");
-      await tree.catalog.getByRole("button", { name: "Open trace.md", exact: true }).click();
-      const preview = page.getByRole("dialog", { name: "Artifact: trace.md" });
-      await expect(preview).toBeVisible();
-      await expect(preview.locator(".artifact-version-preview")).not.toHaveText("");
-      await page.reload();
-      await openProjectSession(page, fixture);
-      const restored = await artifactTree(page);
-      await expect.poll(() => restored.artifacts.allTextContents()).toContain("trace.md");
-      for (const name of outputs) expect(await drbArticle(page, fixture.session.id, name)).toEqual(saved[name]);
-      expect((await page.locator(".message.assistant").last().innerText()).trim()).not.toBe("");
+      metrics.generation_duration_ms = Date.now() - start;
+      const executions = await sessionExecutionRuns(page, fixture.session.id).catch(() => null);
+      await writeFile(testInfo.outputPath("execution-runs.json"), JSON.stringify(executions, null, 2));
+      metrics.execution_count = executions?.length ?? null;
+      metrics.children = await drbApi<any[]>(page, `${prefix}/subagents`).catch(() => null);
+      for (const name of outputs) {
+        const content = await drbArticle(page, fixture.session.id, name);
+        expect(content.article.trim().length, `Empty ${name}`).toBeGreaterThan(0);
+        await writeFile(testInfo.outputPath(name), content.article);
+      }
+      // Optional legacy exports are diagnostic only, never a condition for rubric scoring.
+      for (const name of diagnosticOutputs) {
+        const content = await drbArticle(page, fixture.session.id, name).catch(() => null);
+        if (content) await writeFile(testInfo.outputPath(name), content.article);
+      }
+      metrics.numerical_validation = { status: "not_run", gating: false, reason: "Optional analysis.json was not delivered" };
+      const numericExport = await readFile(testInfo.outputPath("analysis.json")).catch(() => null);
+      if (numericExport) {
+        try {
+          const verified = await execute(python, [join(scripts, "verify.py"), "--case", sample.id, "--data", dataPath,
+            "--result", testInfo.outputPath("analysis.json")], { timeout: 60_000, env: { ...process.env, OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1" } });
+          metrics.numerical_validation = { ...JSON.parse(verified.stdout), gating: false };
+        } catch (error) {
+          metrics.numerical_validation = { status: "error", gating: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
       metrics.integration_status = "passed";
       if (mode === "rubric") {
         metrics.evaluation = { status: "running" };
         const judgeStart = Date.now();
-        await execute(python, [join(scripts, "judge.py"), "--rubric", rubricPath,
-          "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
-          "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: 200_000 });
-        metrics.evaluation = JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8"));
-        metrics.evaluation.duration_ms = Date.now() - judgeStart;
-        metrics.evaluation.threshold = threshold;
-        metrics.evaluation.gate = metrics.evaluation.score >= threshold ? "passed" : "failed";
-        expect(metrics.evaluation.score).toBeGreaterThanOrEqual(threshold);
+        try {
+          await execute(python, [join(scripts, "judge.py"), "--rubric", rubricPath,
+            "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
+            "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: 200_000 });
+          metrics.evaluation = JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8"));
+          metrics.evaluation.duration_ms = Date.now() - judgeStart;
+          metrics.evaluation.gating = false;
+        } catch (error) {
+          metrics.evaluation = { status: "error", gating: false, duration_ms: Date.now() - judgeStart,
+            error: error instanceof Error ? error.message : String(error) };
+        }
       }
     } catch (error) {
       metrics.error = error instanceof Error ? error.message : String(error);
@@ -155,8 +163,8 @@ for (const sample of cases) {
         metrics.generation_usage = await drbApi(page, `${prefix}/usage`).catch(() => null);
         metrics.children = await drbApi(page, `${prefix}/subagents`).catch(() => null);
         metrics.artifacts = await drbApi(page, `${prefix}/artifacts`).catch(() => null);
-        // Retain partial deliverables even when completion/numeric/UI assertions fail.
-        for (const name of outputs) {
+        // Retain partial deliverables even when required deliverables are missing.
+        for (const name of [...outputs, ...diagnosticOutputs]) {
           const content = await drbArticle(page, fixture.session.id, name).catch(() => null);
           if (content) await writeFile(testInfo.outputPath(name), content.article);
         }

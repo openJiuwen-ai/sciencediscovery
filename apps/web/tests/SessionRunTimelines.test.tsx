@@ -593,6 +593,16 @@ test("terminal-run hydration rebuilds finished timelines and keeps disclosure st
         entry.type === "tool" ? { ...entry, expanded: true, userExpanded: true } : entry),
     },
   };
+  // First terminal refresh used to rebuild from scratch, discarding a click
+  // made on the live card just before the historical block replaced it.
+  const migrated = hydrateTerminalRunTimelines({}, [finished], { [finished.id]: records }, expanded[finished.id]);
+  const migratedTool = migrated[finished.id]?.entries.find(entry => entry.type === "tool");
+  assert.equal(migratedTool?.type === "tool" && migratedTool.userExpanded, true);
+  assert.equal(migratedTool?.type === "tool" && migratedTool.expanded, true);
+  const otherRun = hydrateTerminalRunTimelines({}, [finished], { [finished.id]: records },
+    { ...expanded[finished.id]!, runId: "different-run" });
+  const otherTool = otherRun[finished.id]?.entries.find(entry => entry.type === "tool");
+  assert.equal(otherTool?.type === "tool" && otherTool.expanded, false);
   const rehydrated = hydrateTerminalRunTimelines(expanded, [finished], { [finished.id]: records });
   assert.equal(rehydrated[finished.id], expanded[finished.id], "an up-to-date replay keeps its objects and disclosure state");
 
