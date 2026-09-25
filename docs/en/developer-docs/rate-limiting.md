@@ -24,8 +24,8 @@ Agent mcp__source__tool → Node broker
 
 ### 2.3 Code anchors
 
-- `services/api/src/rate-limit/resource-rate-limiter.ts`: generic keyed admission.
-- `services/api/src/mcp/broker.ts`: MCP integration and audit mapping.
+- `packages/data-source/src/resource-rate-limiter.ts`: generic keyed admission.
+- `packages/data-source/src/broker.ts`: MCP integration and audit mapping.
 - `packages/schema/src/mcp-source.ts`: governance schema.
 - `packages/mcp-sources`: explicit built-in values.
 - Gateway MCP modules: Retry-After preservation/classification.
