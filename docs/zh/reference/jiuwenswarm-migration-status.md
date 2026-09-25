@@ -1,5 +1,7 @@
 # JiuwenSwarm 迁移：现状与交接
 
+> 历史迁移记录：下文关于原生子 Agent 默认值及旧版限制描述的是当时的基线。当前默认已统一为平台 `task` 分发、Swarm 执行；显式设置 `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=jiuwenswarm` 可切换原生链路。参见[当前编排说明](../developer-docs/subagent-orchestration.md)。
+
 issue 84（复用 JiuwenSwarm 后端）做到哪一步、现在能跑什么、什么还没做，以及如何开始做某个子 issue。源码启动方法见[本地模式](../getting-started/deployment.md#本地模式源码检出)。
 
 ## 这个基线是什么
