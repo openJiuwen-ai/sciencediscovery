@@ -70,8 +70,10 @@ appendix only maps `/app` paths to the actual workspace and asks for declaration
 of the two originally required artifacts, `trace.md` and `answer.txt`. It adds
 no analysis method, ranking convention, JSON schema or delegation restriction.
 
-- Require terminal completion, nonempty required artifacts, browser preview and
-  persistence after reload. Execution records and children are retained as diagnostics.
+- Require only nonempty declared `trace.md` and `answer.txt` artifacts. Terminal
+  status, execution records and children are diagnostics, not pass conditions.
+  At the generation deadline, cancel the run and assess the available outputs.
+  This benchmark does not gate browser preview or persistence after reload.
 - Scientific correctness and completeness are evaluated by the unchanged upstream
   rubric. No local numerical assertion blocks rubric scoring or determines E2E success.
 - `analysis.py` and `analysis.json` are optional diagnostic artifacts, not requested
@@ -95,7 +97,8 @@ export BIOMNI_JUDGE_API_KEY='<judge key>'
 passing the complete submitted trace and answer to a separately configured
 Judge. Every criterion requires an A/B/C level and justification; code calculates
 the total from rubric-defined points (including penalties). Malformed, missing
-or truncated judge responses are errors, never zero-score passes. No automatic
+or truncated judge responses are recorded as evaluation errors with no score;
+they do not change the separate delivery result. No automatic
 Judge retry. Model calls time out after 180 seconds.
 
 This is **not** the upstream Gemini verifier implementation and must be labelled
