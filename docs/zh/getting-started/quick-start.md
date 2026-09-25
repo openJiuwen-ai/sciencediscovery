@@ -9,13 +9,14 @@
 - 让 Agent 实际运行一次 Python 计算；
 - 在工作区看到它交付的 Markdown 产物。
 
-本教程使用 Linux 预编译可执行文件。macOS、Docker、源码构建和其他部署方式见[部署指南](deployment.md)；服务启动后再回到本文的[配置模型](#3-配置模型)。
+## 1. 按你的系统启动 ScienceDiscovery
 
-## 1. 下载并准备 ScienceDiscovery
+### Linux：使用预编译版本
+
+如果你使用 Linux x86_64 或 aarch64，这是最短路径。
 
 你需要：
 
-- Linux x86_64 或 aarch64；
 - 一个可用的模型 API Key；
 - Bubblewrap，用于隔离代码执行。
 
@@ -28,24 +29,57 @@ sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 
 然后从 [Releases 页面](https://github.com/openJiuwen-ai/sciencediscovery/releases)下载与你的架构匹配的 ScienceDiscovery 可执行文件，并将它重命名为 `ScienceDiscovery`。
 
-> 第一次启动需要联网准备部分运行依赖。若你处在离线环境，或这里无法启动，请看[部署指南](deployment.md)。
-
-## 2. 启动并打开界面
-
-在 `ScienceDiscovery` 所在目录执行：
+在文件所在目录执行：
 
 ```bash
 chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-启动完成后，终端会打印一个 `Open to sign in` 链接。用浏览器打开它即可进入 ScienceDiscovery。
+### macOS：使用本地源码模式
 
-先不要关掉这个终端；关闭它或按 Ctrl-C 会停止服务。
+macOS x64 和 arm64 均受支持。当前 macOS 没有预编译单文件版本，使用本地源码模式即可；沙箱使用系统自带的 Seatbelt，不需要安装 Bubblewrap。
 
-如果没有看到登录链接、浏览器无法进入界面，或启动过程报错，请直接查看[首次启动排障](deployment.md#二进制与本地模式的首次启动排障)。
+先确认本机已有：
 
-## 3. 配置模型
+- Node.js 22.19+；
+- pnpm 11.1.2；
+- Python 3；
+- uv 0.9+；
+- Git；
+- curl；
+- 一个可用的模型 API Key。
+
+然后执行：
+
+```bash
+git clone https://github.com/openJiuwen-ai/sciencediscovery.git
+cd sciencediscovery
+git checkout feat/jiuwenswarm
+
+scripts/jiuwenswarm.sh setup
+./scripts/start-stack.sh --mode local
+```
+
+第一次执行会安装和构建所需组件，因此需要联网，耗时也会比后续启动更长。
+
+如果你已经完成过构建，之后可以用：
+
+```bash
+./scripts/start-stack.sh --mode local --no-build
+```
+
+### 启动成功后
+
+无论使用 Linux 还是 macOS，启动完成后终端都会打印一个 `Open to sign in` 链接。用浏览器打开它即可进入 ScienceDiscovery。
+
+先不要关掉启动终端；关闭它或按 Ctrl-C 会停止服务。
+
+如果没有看到登录链接、浏览器无法进入界面，或启动过程报错，请查看[首次启动排障](deployment.md#二进制与本地模式的首次启动排障)。
+
+> Docker、离线环境、Linux 源码构建以及更完整的部署说明见[部署指南](deployment.md)。
+
+## 2. 配置模型
 
 打开 **系统设置 → 模型注册表**：
 
@@ -56,7 +90,7 @@ chmod +x ./ScienceDiscovery
 
 这里填写的是模型服务商的 API Key。若连接失败，优先检查 API Key、服务商 URL、模型 ID 和网络连接。
 
-## 4. 完成第一次科研任务
+## 3. 完成第一次科研任务
 
 新建一个 Project 和 Session，把下面的任务完整粘贴到消息框：
 
@@ -87,7 +121,7 @@ temperature_c,yield_g
 
 这个任务的目的不是得到一个复杂的科研结论，而是确认 ScienceDiscovery 已经完成了一个最小闭环：**理解任务 → 运行工具 → 产生文件 → 交付产物**。
 
-## 5. 确认你已经跑通
+## 4. 确认你已经跑通
 
 满足下面四项，就说明第一次使用成功：
 
@@ -98,8 +132,8 @@ temperature_c,yield_g
 
 不同模型生成的文字可能不同，这是正常的；这里关心的是工具是否实际执行、产物是否真实生成。
 
-## 6. 接下来做什么
+## 5. 接下来做什么
 
 - 想了解 ScienceDiscovery 能做什么：看[核心能力](../README.md#核心能力)。
 - 想照着真实科研案例做一遍：看[领域指南](../README.md#领域指南)。
-- 想换部署方式或解决启动问题：看[部署指南](deployment.md)。
+- 想使用 Docker、源码构建或解决启动问题：看[部署指南](deployment.md)。
