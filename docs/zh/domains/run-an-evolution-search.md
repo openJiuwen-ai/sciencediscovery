@@ -96,5 +96,5 @@ OpenEvolve 运行多一个**网格**视图展示归档 —— 每岛一列，★
 ## 相关文档
 
 - [程序演进](../core/evolve.md) —— 搜索是什么、三分数据、探针、冻结。
-- [演进出一个更优解](evolve-a-solution.md) —— 走一遍第一次运行。
+- [使用PUCT优化一个文本压缩算法](evolve-a-solution.md) —— 走一遍第一次运行。
 - [沙箱执行](../developer-docs/sandbox-execution.md) —— 候选在哪里评测。

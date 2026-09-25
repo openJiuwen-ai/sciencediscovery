@@ -102,7 +102,7 @@ OpenEvolve 运行还多两个视图。图视图按迭代号排列候选，每个
 ## 相关文档
 
 - [运行一次演进搜索](../domains/run-an-evolution-search.md) —— 操作路径。
-- [演进出一个更优解](../domains/evolve-a-solution.md) —— 完整跑完的第一次搜索。
+- [使用PUCT优化一个文本压缩算法](../domains/evolve-a-solution.md) —— 完整跑完的第一次搜索。
 - [演进侧车：架构、引擎与独立部署](../developer-docs/evolve-standalone.md) —— 引擎内部与独立部署。
 - [科学记忆](../developer-docs/science-memory.md) —— 完成的搜索记录在哪里。
 - [沙箱执行](../developer-docs/sandbox-execution.md) —— 候选打分期间如何隔离。
