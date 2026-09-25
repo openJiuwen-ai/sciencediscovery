@@ -277,9 +277,10 @@ export async function startModelGateway(
             // can be semantically incomplete when the response hits its cap.
             controller.signal.throwIfAborted();
             toolArgumentChars += delta.arguments.length;
-            progress();
-            start();
-            response.write(": model-progress\n\n");
+            // SSE comments are discarded by OpenAI SDKs and never reach Swarm's
+            // decoded-chunk idle watchdog. An empty delta carries real upstream
+            // progress without exposing partial arguments or adding model text.
+            writeDelta({});
           },
         });
         controller.signal.throwIfAborted();
