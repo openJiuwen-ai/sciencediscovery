@@ -85,3 +85,4 @@ curl -fsS http://127.0.0.1:4310/health
 - 系统原理：[整体运行时架构](../developer-docs/architecture.md)
 - 可选的端到端实践：[演进出一个更优解](../domains/evolve-a-solution.md)
 - [调研鸟类迁徙如何定位与导航](../domains/literature-research.md)
+- [分析脓毒症分型评分的相关性与聚类](../domains/analyze-sepsis-endotypes.md) — 使用 BiomniBench 真实数据，从上传 CSV 到分析、交付和质量评价。
