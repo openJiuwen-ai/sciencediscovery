@@ -41,6 +41,7 @@ From running code to exploring directions, improving artifacts, and checking evi
 
 - [Execution and workspaces](reference/execution-workspaces.md) — execution states, file handoff, environment revisions, and stopping.
 
+- [CLI](reference/cli.md) — command and behavior reference for `serve`, `run`, `extract`, and `version`.
 - [Configuration](reference/configuration.md) — environment variables, default ports, upload/workspace/output quotas, and data layout.
 - [REST API](reference/rest-api.md) — internal HTTP API used by the UI: authentication, request/response, and error semantics.
 - [Runtime behavior and limits](reference/runtime-behavior.md) — models, settings inheritance, skills, permissions, timeouts, and execution limits.
