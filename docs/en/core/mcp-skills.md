@@ -2,7 +2,9 @@
 
 Research needs concrete evidence: a protein annotation, a paper's experimental conditions, or atom positions in a structure file. Model knowledge alone cannot reliably keep that information current and inspectable. Without suitable procedures, even good data can lead to results that are difficult to reproduce.
 
-ScienceDiscovery connects scientific data and tools through MCP and supplies reusable methods through bundled Skills. Connectors obtain actual records; Skills guide retrieval, organization, computation, and delivery, so each investigation need not start from scratch.
+ScienceDiscovery connects scientific data and tools through MCP and supplies reusable methods through Skills. Connectors obtain actual records; Skills guide retrieval, organization, computation, and delivery, so each investigation need not start from scratch.
+
+A useful shorthand separates the three extension concepts: **MCP is a tool, Skill is a method, and Specialist is a role.** MCP answers what the Agent can call, Skill answers how a kind of work should be done, and Specialist packages responsibility, Skills, and available tools into a role the main Agent can invoke.
 
 ## Scientific resources already connected
 
