@@ -130,11 +130,14 @@ Then run target package/service tests.
 
 For user-observable changes, add or run the matching user journey; unit tests alone are not completion.
 
-Repository-wide check:
+Repository-wide and documentation checks:
 
 ```bash
 pnpm check
+pnpm docs:check
 ```
+
+`docs:check` runs Markdown lint and repository documentation-link validation.
 
 ## 6. Documentation authority
 
