@@ -49,6 +49,7 @@ ScienceDiscovery 的核心能力可以从三层理解：
 
 - [执行与工作区](reference/execution-workspaces.md) — 执行状态、文件交接、环境版本与停止行为。
 
+- [预置科研能力](reference/builtin-research-capabilities.md) — 当前版本随附的 Connector、Skill 和 Specialist 清单。
 - [配置、端口与存储](reference/configuration.md) — 环境变量、默认端口、上传/工作区/输出配额和数据布局。
 - [REST API](reference/rest-api.md) — 当前 UI 使用的内部 HTTP 接口、认证、请求/响应与错误语义。
 - [运行时行为](reference/runtime-behavior.md) — 模型、设置继承、技能、权限、超时和执行限制。
