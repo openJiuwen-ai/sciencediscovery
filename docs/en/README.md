@@ -49,6 +49,7 @@ ScienceDiscovery's core capabilities can be understood in three layers:
 
 - [Execution and workspaces](reference/execution-workspaces.md) — execution states, file handoff, environment revisions, and stopping.
 
+- [Built-in research capabilities](reference/builtin-research-capabilities.md) — current bundled Connector, Skill, and Specialist inventory.
 - [Configuration](reference/configuration.md) — environment variables, default ports, upload/workspace/output quotas, and data layout.
 - [REST API](reference/rest-api.md) — internal HTTP API used by the UI: authentication, request/response, and error semantics.
 - [Runtime behavior and limits](reference/runtime-behavior.md) — models, settings inheritance, skills, permissions, timeouts, and execution limits.
