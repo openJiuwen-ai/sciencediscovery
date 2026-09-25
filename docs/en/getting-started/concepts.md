@@ -11,9 +11,9 @@ Research question
       ↓
 Research Agent
       ↓
-Plan steps and select capabilities
+Understand goal, plan steps, select capabilities
       ↓
-Execute tools and code
+Call tools, execute code, collaborate with roles
       ↓
 Create research Artifacts
       ↓
@@ -50,7 +50,7 @@ For example:
 - a Skill can guide a literature-review workflow;
 - a Specialist can define a dedicated research role.
 
-## Workspace and Artifacts
+## Workspace, Artifacts, and research delivery
 
 Files created during research have different purposes.
 
@@ -90,6 +90,5 @@ The execution environment determines where work happens; Artifacts determine wha
 
 After understanding these foundations, continue with:
 
-- [Core capabilities](../README.md#core-capabilities): why ScienceDiscovery is designed for research workflows.
-- [Research Agent](../core/research-agent.md): how the Agent organizes complex research.
-- [Research Artifacts](../core/artifacts.md): how results become inspectable and reusable.
+- [Core capabilities](../core/README.md): why ScienceDiscovery is designed for research workflows.
+- [Domain guides](../domains/literature-research.md): see complete workflows through real tasks.
