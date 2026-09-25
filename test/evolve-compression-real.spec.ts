@@ -100,7 +100,7 @@ test("PUCT-COMPRESS documented text compression search", {
       await new Promise(resolve => setTimeout(resolve, 10_000));
     }
     expect(complete, "Main run and background search must finish within the run budget").toBe(true);
-    const search = searches.at(-1)!;
+    const search = [...searches].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1)!;
     metrics.search = search;
     const events = await api<any[]>(`/api/evolve/runs/${search.id}/events`);
     await save("evolve-events.json", events);
