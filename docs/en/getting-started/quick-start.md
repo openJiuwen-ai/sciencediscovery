@@ -1,95 +1,105 @@
 # Quick Start
 
-This tutorial uses a prepackaged Linux executable, then configures a model and submits a first task.
-If you use macOS (local source mode), need Docker, or want to build a Linux binary from source, follow
-the [deployment guide](deployment.md) first and return here at
-[Configure a task model](#3-configure-a-task-model) once the service is running.
+This path has one goal: get you to a first inspectable ScienceDiscovery task as quickly as possible.
 
-> See the root [README](../../../README.md) for product scope and risk boundaries, the [deployment guide](deployment.md) for complete deployment procedures, and the [configuration reference](../reference/configuration.md) for parameters and quotas.
+When you finish, you should be able to:
 
-## 1. Install a prepackaged binary
+- open ScienceDiscovery;
+- configure a working task model;
+- make the Agent actually run a Python calculation;
+- inspect the Markdown artifact it delivers in the workspace.
 
-For the shortest Linux path, prepare:
+This tutorial uses a prepackaged Linux executable. For macOS, Docker, source builds, or other deployment paths, use the [deployment guide](deployment.md) first, then return to [Configure a model](#3-configure-a-model) once the service is running.
 
-- Linux on `x86_64` or `aarch64`.
-- `bwrap` (Bubblewrap) for sandboxed command execution.
-- A ScienceDiscovery executable for your Linux architecture, available from the
-  [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases). After downloading it,
-  rename the file to `ScienceDiscovery`.
-- At least one external model API Key.
+## 1. Download and prepare ScienceDiscovery
 
-Bubblewrap must be available on your system:
+You need:
+
+- Linux on x86_64 or aarch64;
+- an API key for a supported model provider;
+- Bubblewrap for isolated code execution.
+
+Install Bubblewrap first:
 
 ```bash
 sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 # Or: sudo dnf install -y bubblewrap # Fedora / RHEL / openEuler
 ```
 
-By default, the first `serve` also needs network access to install gateway dependencies. For air-gapped
-preparation, see [Dependencies installed on first launch](deployment.md#dependencies-installed-on-first-launch).
+Then download the ScienceDiscovery executable for your architecture from the [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases) and rename it to `ScienceDiscovery`.
 
-For another operating system or deployment method, use the [deployment guide](deployment.md) instead.
-After its service is running, continue with [Configure a task model](#3-configure-a-task-model).
+> The first launch needs network access to prepare some runtime dependencies. If you are offline or startup fails here, go directly to the [deployment guide](deployment.md).
 
-## 2. Start ScienceDiscovery
+## 2. Start ScienceDiscovery and open the UI
 
-In a terminal, change to the directory containing `ScienceDiscovery`, then run:
+From the directory containing `ScienceDiscovery`, run:
 
 ```bash
 chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-`serve` starts the gateway, runner, and API/Web UI and binds them to the local machine by default. Once startup completes, `serve` prints the `Open to sign in` URL and the local service access token; open that sign-in URL in a browser to authenticate and save the local service access token automatically. (If opening <http://127.0.0.1:4310> directly, the Web UI presents a clear Connection onboarding guide where you can paste the token from the startup output and save.) Keep the sign-in URL private. The Web UI opens its Connection settings automatically whenever the token it holds is rejected. Ctrl-C stops all child services.
+When startup completes, the terminal prints an `Open to sign in` URL. Open that URL in your browser to enter ScienceDiscovery.
 
-In a second terminal, verify the API:
+Keep this terminal running. Closing it or pressing Ctrl-C stops the service.
 
-```bash
-curl --fail http://127.0.0.1:4310/api/health
+If no sign-in URL appears, the browser cannot connect, or startup reports an error, go directly to [first-run troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode).
+
+## 3. Configure a model
+
+Open **System settings → Model registry**:
+
+1. choose a preset provider or add one manually;
+2. enter the provider details and API key;
+3. select **Save & connect**;
+4. confirm the connection test passes and choose a **Global default task model**.
+
+The key here is your model provider API key. If the connection test fails, first check the API key, provider URL, model ID, and network connection.
+
+## 4. Run your first scientific task
+
+Create a Project and Session, then paste the complete task below into the message box:
+
+```text
+Complete a minimal data-analysis task and deliver the result as an inspectable scientific artifact.
+
+Data:
+temperature_c,yield_g
+20,41
+22,45
+24,49
+26,52
+28,54
+30,53
+32,49
+34,43
+
+Requirements:
+1. Save the data as temperature_yield.csv.
+2. You must actually run Python for the calculations; do not estimate the numbers only in the reply.
+3. Calculate the mean yield, the temperature with the highest yield, and the Pearson correlation between temperature_c and yield_g.
+4. Briefly interpret the result and note that this small dataset alone cannot establish causality.
+5. Write the complete analysis to first-analysis.md and declare it as an artifact.
+6. In the final reply, explicitly name the artifact file.
 ```
 
-The top-level `status` is `ok` after a normal startup and `degraded` when the Runner is unavailable. See [REST API reference](../reference/rest-api.md#health) for field details.
+If the first code execution asks for permission, review and approve the action, then let the task continue.
 
-Binary packaging, source mode, and Docker are separate deployment paths. Their
-prerequisites and complete commands are in the [deployment guide](deployment.md). For a
-rejected local service access token, a `degraded` health status, Bubblewrap, or logs in
-binary and local mode, use its [first-run troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode).
+The goal is not a sophisticated scientific conclusion. It is to verify the smallest useful ScienceDiscovery loop: **understand the task → run a tool → create files → deliver an artifact**.
 
-## 3. Configure a task model
+## 5. Confirm that it worked
 
-Open **System configuration → Model registry**. Select a preset provider or add one manually, enter
-its details and API key, then select **Save & connect**. It registers the provider's models and tests
-the first one. When this is the first model in the system, it also becomes the default task model. If
-you already have models, select one from **Global default task model** at the top of Model registry.
+Your first run is successful when all four are true:
 
-This configuration uses the external model API key, not the local service access token. If the
-connection test fails, correct the API key, provider URL or model ID, or network and proxy settings
-before trying again. See [Configuration reference](../reference/configuration.md) for supported
-environment variables and files.
+- [ ] the task has finished and no longer appears as running;
+- [ ] the timeline shows an actual code execution;
+- [ ] `first-analysis.md` appears in the workspace;
+- [ ] opening the artifact shows values produced by the calculation and a short interpretation.
 
-## 4. Run a first scientific task
+Different models may phrase the report differently. That is expected; what matters here is that the tool actually ran and the artifact was created.
 
-1. Create a Project and Session.
-2. Enter a focused scientific question, such as “I am planning an experiment on how temperature
-   affects yield. Propose the data to collect, two quality checks, and a first analysis plan.”
-3. To analyze local material, upload a CSV or PDF that you are authorized to use and describe the
-   analysis objective.
-4. Review and approve the permission card shown for the first code execution or external-data access.
-5. After handling any requested approval, a first task is complete when the assistant reply finishes
-   and the task no longer appears as running. An unfinished streaming reply or pending permission card
-   is not a completed task. When it uses a tool, inspect that tool's result in the timeline; inspect
-   generated files under **Artifacts** in the workspace when the task declares them as artifacts.
+## 6. Where to go next
 
-The response wording, tool calls, and generated artifacts depend on the configured model, enabled
-connectors, and supplied material; they are not fixed-output promises.
-
-## 5. Next steps
-
-- Deployment and process operations: [Deployment guide](deployment.md)
-- Environment variables, ports, quotas, and storage paths: [Configuration reference](../reference/configuration.md)
-- Day-to-day runtime behavior: [Runtime behavior reference](../reference/runtime-behavior.md)
-- Tool parameters: [Built-in tools reference](../reference/builtin-tools.md)
-- System principles: [Overall runtime architecture](../developer-docs/architecture.md)
-- Optional end-to-end practice: [Evolve a solution](../domains/evolve-a-solution.md)
-- [Research how migrating birds determine location and direction](../domains/literature-research.md)
-- [Analyze correlations and clusters of sepsis endotype scores](../domains/analyze-sepsis-endotypes.md) — Use real BiomniBench data, from CSV upload to analysis, delivery, and quality review.
+- To understand what ScienceDiscovery can do, see [Core capabilities](../README.md#core-capabilities).
+- To follow complete real research examples, see [Domain guides](../README.md#domain-guides).
+- To use another deployment path or troubleshoot startup, see the [deployment guide](deployment.md).
