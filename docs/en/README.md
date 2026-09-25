@@ -22,7 +22,7 @@ This is the complete English documentation set.
 - [Evolve a solution](domains/evolve-a-solution.md) — run a program-evolution search end to end and judge whether the improvement is real.
 - [Run an evolution search](domains/run-an-evolution-search.md) — size a search, choose a scoring mode, watch it run, and read the held-out result.
 - [Analyze correlations and clusters of sepsis endotype scores](domains/analyze-sepsis-endotypes.md) — Use real BiomniBench data, from CSV upload to analysis, delivery, and quality review.
-- [Literature research](domains/literature-research.md) — run an end-to-end cross-database literature survey, from service startup to approvals and results.
+- [Research how migrating birds determine location and direction](domains/literature-research.md) — Use DRB-59 to configure retrieval, synthesize evidence, and inspect a cited report.
 
 ## Advanced setup
 
