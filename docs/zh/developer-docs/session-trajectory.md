@@ -68,3 +68,32 @@ API 不提供任意 CAS 地址读取，必须先解析当前 Session 的主子 A
 - 这是基础观测组件，不是新的模型工具或插件启停项。导出/查看不会执行模型、工具、恢复、发布或演进操作。
 
 参见：[组件与插件机制](plugins.md)、[Agent 后端](agent-backend.md)、[内容寻址存储](cas.md)。
+
+### 记录阶段卡顿与取消诊断
+
+Swarm 模型网关等待输入或输出轨迹记录时，会响应运行取消和客户端断连。
+取消仅结束调用方的等待；已开始的记录仍在原有串行队列中完成，随后关闭 recorder，
+避免在写入中途关闭存储。取消后不会因迟到的记录结果继续发起模型调用。
+
+API 进程的 stderr 会自动输出 `[recording-progress]` JSON 日志：记录阶段超过
+30 秒后，每 30 秒输出 `pending`，并记录最终的 `completed` 或 `failed`。
+有取消信号的阶段还会输出 `abort_requested`。`operationId` 关联同一次操作，
+`elapsedMs` 使用单调时钟；关联字段按层级包含 requestId、sessionId、trajectoryId、
+agentId 和 turn。日志不记录提示词、工具参数、研究产物或密钥。
+
+阶段包括 `recording_input` / `recording_completion`、`*.queue`、
+`before_turn`、`capture_state`、`workspace_snapshot`、`authority_capture`、
+`context_ref_commit`、`step_commit` 和 `finish.*`。排查时结合时间和关联 ID，
+区分排队等待与实际读取、快照或提交。若需正常请求的完整阶段起止，启动 API 前设置
+`SCIENCE_AGENT_TRACE_GATEWAY_PROGRESS=1`；设置 `SCIENCE_AGENT_TRACE_MODEL_STREAM=1`
+还可记录 `upstream_dispatched`，表示网关即将调用模型客户端，不代表网络数据已发出。
+空闲超时的 activeModelRequests 也会区分记录、上游调用和接收响应阶段。
+
+例如，在保存了 API stdout/stderr 的日志文件中查看：
+
+```bash
+rg '\[recording-progress\]|\[gateway-progress\]|\[model-stream\]' /path/to/api.log
+```
+
+这些日志用于定位下一次异常等待，并不说明历史上的慢记录根因已经确定。
+如果事件循环本身被同步工作阻塞，定时日志也会延迟；需要结合外部 CPU、内存和 I/O 监控判断。

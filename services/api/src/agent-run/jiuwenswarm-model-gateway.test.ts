@@ -459,6 +459,56 @@ test("recovery diagnostics count feedback but do not mask a later provider error
   } finally { await g.close(); }
 });
 
+for (const stream of [false, true]) {
+  test(`cancellation stops a blocked input recorder before upstream dispatch (stream=${stream})`, { timeout: 3000 }, async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const controller = new AbortController();
+    const { calls, streamer } = fakeStreamer(answer());
+    const g = await startModelGateway(ENDPOINT, POLICY, controller.signal, streamer, {
+      async request() { enter(); await blocked; }, async completed() {},
+    });
+    try {
+      const pending = post(g, { stream, messages: [] });
+      await entered;
+      assert.equal(g.diagnostics()[0]?.phase, "recording_input");
+      controller.abort(new Error("test cancellation"));
+      const response = await pending;
+      assert.equal(response.status, 502);
+      assert.match(await response.text(), /aborted/);
+      assert.equal(calls.length, 0);
+      release();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(calls.length, 0, "late recording completion must not dispatch an aborted model call");
+    } finally { release(); await g.close(); }
+  });
+}
+
+test("cancellation stops waiting for completion recording and tolerates its late rejection", { timeout: 3000 }, async (t) => {
+  t.mock.method(console, "warn", () => {});
+  let enter!: () => void;
+  let reject!: (error: Error) => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const blocked = new Promise<void>((_resolve, fail) => { reject = fail; });
+  const controller = new AbortController();
+  const { calls, streamer } = fakeStreamer(answer());
+  const g = await startModelGateway(ENDPOINT, POLICY, controller.signal, streamer, {
+    async request() {}, async completed() { enter(); await blocked; },
+  });
+  try {
+    const pending = post(g, { messages: [] });
+    await entered;
+    assert.equal(g.diagnostics()[0]?.phase, "recording_completion");
+    controller.abort();
+    assert.equal((await pending).status, 502);
+    assert.equal(calls.length, 1);
+    reject(new Error("late storage failure"));
+    await new Promise(resolve => setImmediate(resolve));
+  } finally { reject(new Error("cleanup")); await g.close(); }
+});
+
 for (const truncated of [false, true]) {
   test(`buffered tool arguments emit decoded progress without exposing a partial call (truncated=${truncated})`, { timeout: 5000 }, async () => {
     let release!: () => void;

@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { recordingStage, waitForRecording } from "./recording-wait.js";
 import { recordInvalidArguments } from "./model-argument-diagnostics.js";
 
 import {
@@ -209,10 +210,10 @@ export async function startModelGateway(
     // necessarily the owner of its housekeeping work. It cannot renew a run.
     const progress = () => { if (!housekeeping) lifecycle?.progress(); };
     const observed = auxiliary ? undefined : observer;
-    const record = async (turn: ModelTurn) => { await observed?.completed(turn, history).catch(warnTrajectory); };
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
     const id = `chatcmpl-${randomUUID()}`;
     if (!auxiliary) lastFailure = undefined;
@@ -243,8 +244,24 @@ export async function startModelGateway(
     };
     const chunk = (delta: Record<string, unknown>, finish: string | null = null, extra: Record<string, unknown> = {}) =>
       `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: endpoint.model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`;
+    const observe = async (stage: "input" | "completion", operation: () => Promise<void>) => {
+      controller.signal.throwIfAborted();
+      phase = `recording_${stage}`;
+      const work = recordingStage(phase, { requestId: id }, operation, controller.signal).catch(warnTrajectory);
+      await waitForRecording(work, controller.signal);
+      controller.signal.throwIfAborted();
+    };
+    const prepare = async () => {
+      if (observed) await observe("input", () => observed.request({ history, systemPrompt, tools }));
+      controller.signal.throwIfAborted();
+      phase = "upstream_dispatched";
+      trace("upstream_dispatched", true);
+    };
+    const record = async (turn: ModelTurn) => {
+      if (observed) await observe("completion", () => observed.completed(turn, history));
+    };
     try {
-      signal.throwIfAborted();
+      controller.signal.throwIfAborted();
       if (!auxiliary) { last = undefined; lifecycle?.beforeTurn?.(); }
       // Admission listeners can abort the run when its turn budget is spent.
       signal.throwIfAborted();
@@ -267,7 +284,8 @@ export async function startModelGateway(
           trace("forward");
         };
         trace("start", true);
-        await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
+        await prepare();
+        controller.signal.throwIfAborted();
         const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
           onProgress: () => { upstream(); trace("receive"); },
           onTextDelta: (delta) => writeDelta({ content: delta }),
@@ -300,13 +318,15 @@ export async function startModelGateway(
         trace("complete", true);
         return;
       }
-      await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
+      await prepare();
+      controller.signal.throwIfAborted();
       const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
         onProgress: upstream,
         onTextDelta: progress,
         onThinkingDelta: progress,
         onToolCallDelta: progress,
       });
+      controller.signal.throwIfAborted();
       await recordInvalidArguments(turn, id);
       rejectInvalidArguments(turn);
       if (!auxiliary) remember(turn, body);
