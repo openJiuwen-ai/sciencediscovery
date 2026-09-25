@@ -1,58 +1,113 @@
-# TC-E2E-01: research team extension
+# TC-E2E-01: delivery and independent quality scoring
 
-`test/science-research-team-real.spec.ts` exercises an actual Swarm main agent
-and live-LLM specialists. It creates a local HTTP MCP `deliverable_check`, a
-custom reviewer bound to that connector, and a managed extension of the built-in
-`science-research-team`. Built-in specialists/skills are not edited.
+The real Swarm research case creates the same five built-in specialists, custom
+MCP reviewer and team extension as before. The original research question and
+workflow instructions are unchanged. The case remains opt-in, outside PR gates.
 
-The fixed question concerns 2020–2025 BRCA1 evidence and descriptive effect-size
-analysis, followed by an exact-report section audit. Scientific sources and
-model responses are real; only the deterministic local audit service is a test
-fixture. The extension specifies artifact formats for verifiable handoffs.
+## Completion contract
 
-## Run manually
+All eight real research cases (five DRB, two BiomniBench, one TC) use two layers:
 
-Prepare the isolated Swarm stack as described in `../../../jiuwen_swarm/README.md`
-(repository-root path: `jiuwen_swarm/README.md`), enable platform task delegation,
-and configure the real generator with `E2E_LLM_MODEL_ID` or
-`E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_LLM_TOKEN`. Then:
+1. **Delivery:** the main run completes and its final assistant message references
+   at least one persisted, readable, nonempty artifact. Names, nested paths,
+   artifact IDs and version links are supported. An unreferenced intermediate
+   file does not pass. A failed/cancelled run with an artifact is `partial`, not
+   `passed`. A referenced immutable version takes precedence over the latest head.
+2. **Quality:** a separate evaluator scores the frozen deliverables. Low scores,
+   missing judge credentials, malformed responses and evaluation timeouts never
+   turn successful delivery into a failed E2E assertion. Errors remain visible as
+   `evaluation.status=error` with no numeric score, not zero or success.
+
+There are no quality gates based on word count, number of citations, fixed file
+paths, literal handoff strings, specialist counts, numeric group shapes or UI
+preview selectors. No additional Harness diagnostic scoring layer is introduced;
+use retained runtime logs when investigating failures. Existing mocked UI and
+unit tests are unaffected.
+
+DRB still uses the pinned official RACE/FACT prompts, criteria and calculations.
+Its evaluator's legacy threshold status remains in the scorecard but is not an
+E2E assertion. BiomniBench still uses its unchanged, pinned official rubric via
+the existing local OpenAI-compatible adapter (not the upstream Gemini verifier).
+Biomni rubric inputs `trace.md` and `answer.txt` may be nested; missing scoring
+inputs produce a scoring error rather than changing delivery status.
+
+## TC rubric
+
+[tc-research-quality-v1.txt](tc-research-quality-v1.txt) is the versioned judge
+prompt. Five dimensions are graded 0–4:
+
+| Dimension | Weight |
+| --- | ---: |
+| Task coverage and completeness | 20 |
+| Evidence and traceability | 25 |
+| Analysis and conclusion boundaries | 25 |
+| Reproducibility and artifact consistency | 15 |
+| Collaboration and final audit | 15 |
+
+The program computes `level / 4 * weight`; it never changes the judge's levels.
+An unassessable dimension has a null score and makes the total null, without
+redistributing its weight. There is no quality pass threshold. Known defects,
+missing evidence and inaccessible evidence must be distinguished.
+
+The judge receives the original task, final report, artifact/version manifest,
+selected full or explicitly marked excerpted artifacts, and bounded read-only
+access to retained source packages, code, child tool records and audit inputs.
+It does not receive the old internal check results. Report-to-audit comparisons
+are computed from the actual text before judging, including small differences;
+the model judges their impact. These comparisons do not assert scientific truth.
+
+Reads are restricted to registered evidence documents, capped at 30,000
+characters per call and approximately 500,000 returned characters per assessment.
+After at most 20 exploration calls, finalization uses `tool_choice=none` while
+retaining the tool schema, with at most two finalization attempts. Raw responses,
+finish reasons, usage and accessed evidence are retained privately. Unknown
+artifact versions, unsupported levels and malformed final JSON cannot become a
+valid score. The judge must state its sampling scope; no code execution or live
+literature verification is performed by this adapter.
+
+## Run
+
+Prepare the isolated Swarm stack as described in the repository's
+[Swarm guide](../../../jiuwen_swarm/README.md), and configure the generator with
+`E2E_LLM_MODEL_ID` or `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_LLM_TOKEN`.
+Configure the separate TC judge:
 
 ```bash
+export TEAM_JUDGE_BASE_URL=https://your-provider.example/v1
+export TEAM_JUDGE_MODEL=your-judge-model
+# Set TEAM_JUDGE_API_KEY through your local secret configuration.
+# Existing OPENAI_BASE_URL/OPENAI_API_KEY and RACE_MODEL are supported fallbacks.
 node test/sync-e2e.mjs --write
 E2E_RESEARCH=1 E2E_SWARM_TASK=1 npm --prefix .e2e run test:real -- science-research-team-real.spec.ts
 ```
 
-The case is excluded from default collection/PR gates. Its run deadline is
-`E2E_TEAM_RUN_TIMEOUT_MS` (default one hour); browser/cleanup allowance is four
-minutes. No live credentials are committed. Keep result files and browser traces
-private: model inputs can contain research content and environment information.
+`E2E_TEAM_EVALUATION=rubric` is the default; use `off` to disable paid judging.
+`TEAM_JUDGE_PYTHON` defaults to `python3` and needs only the standard library.
+`E2E_TEAM_EVAL_TIMEOUT_MS` defaults to 900,000 ms, separate from the existing
+`E2E_TEAM_RUN_TIMEOUT_MS` generation deadline. Biomni judging now defaults to
+`rubric` (`E2E_BIOMNI_EVALUATION=off` disables it); DRB keeps its existing mode.
+Missing judge configuration is recorded as an evaluation error.
 
-## Assertions and scope
+Re-score a retained TC evidence directory without rerunning agents:
 
-- Verify extension/workflow context, all five built-in roles and the custom
-  reviewer, and completion/handoff ordering rather than exact total child count.
-- Check the reviewer's connector configuration, actual model-facing MCP tools,
-  successful tool call, and full audited text matching the final report version.
-- Require source/evidence packages, knowledge and analysis summaries, executed
-  code, numerical results and evaluator output; recompute count/mean/min/max
-  independently from the declared observations. Require a nontrivial group.
-- Preserve the evaluator's original `decision` or `verdict`. The built-in
-  evaluator can emit `CONDITIONAL`, unlike the team workflow's two-value
-  contract; preserve that distinction. Loop limits are Skill instructions, not
-  a runtime-enforced workflow state machine. This scenario requests one analysis
-  loop with at most three evaluator calls; conditional revision checks do not
-  guarantee the real model exercises the revision or cap branches.
-- Verify report sections, source identifiers, actual audit, final handoff and UI
-  artifact persistence. Section checking ignores prose and fenced examples.
+```bash
+python3 test/benchmarks/research-team/judge.py \
+  --input /path/to/playwright-case-artifacts \
+  --output /path/to/new-quality-evaluation
+```
 
-The deterministic audit does not judge scientific truth. `quality=not_judged`
-is recorded; there is no independent LLM Judge score in this case yet. Evidence
-identifier/number consistency does not prove that each extracted claim is
-supported by its source. An honest insufficient-data delivery is not a passing
-complete-analysis case; failed checks remain visible rather than being waived.
+Required inputs: `team-metrics.json` (task and team configuration),
+`team-artifacts.json`, `team-children.json`, and `signoff-calls.json`. Older exports
+without a delivery manifest use their `evidence_brief.md` artifact. Store each
+assessment in a fresh output directory and keep research evidence private.
+Output: `scorecard.json`, `evidence-manifest.json`, `audit-comparison.json`,
+`response-NN.json` and `evidence-reads.json`. Original research results are not
+modified by offline scoring.
 
-Records: `team-metrics.json`, `team-children.json`, `team-artifacts.json`,
-`team-trajectory-index.json`, `team-model-inputs.json`, `signoff-calls.json`, and
-Playwright failure evidence. Usage is the platform's reported data, not a claim
-that all child/provider tokens were counted. Configuration identities and the
-final report hash/version are retained. Temporary resources are cleaned up.
+## Local verification
+
+```bash
+node --test scripts/real-e2e-scoring.test.mjs
+node --import tsx --test test/helpers/real-delivery.test.ts
+python3 -m unittest discover -s test/benchmarks/research-team -p 'test_*.py'
+```

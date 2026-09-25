@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import urllib.request
+import sys
 
 
 def levels(rubric):
@@ -52,13 +53,25 @@ def main():
                                      data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + os.environ["BIOMNI_JUDGE_API_KEY"], "Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=180) as response:
         raw = json.load(response)
+    # Persist finish_reason/usage and the raw answer before any parsing can fail.
+    raw_path = Path(args.output).with_name("judge-response.json")
+    with raw_path.open("w") as stream:
+        os.chmod(raw_path, 0o600)
+        json.dump(raw, stream, ensure_ascii=False, indent=2)
     choice = raw["choices"][0]
     if choice.get("finish_reason") != "stop":
-        raise ValueError("Judge response incomplete")
+        raise ValueError(f"Judge response incomplete: finish_reason={choice.get('finish_reason')}; inspect judge-response.json")
     result = score_response(json.loads(choice["message"]["content"]), rubric)
     result.update(model=body["model"], usage=raw.get("usage"), adapter="local-openai-compatible-rubric-v1")
     Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        if "--output" in sys.argv:
+            output = Path(sys.argv[sys.argv.index("--output") + 1])
+            output.write_text(json.dumps({"status": "error", "score": None, "gating": False,
+                                          "error_type": type(exc).__name__, "error": str(exc)}, indent=2))
+        raise

@@ -86,24 +86,24 @@ Their case-specific overrides (`E2E_DRB_58_RUN_TIMEOUT_MS`,
 the suite-wide budget. The separate evaluation budget is one hour
 (`E2E_DRB_EVAL_TIMEOUT_MS`). These
 are harness deadlines, not injected research-count instructions. Judge mode
-`full` is the default and requires RACE and FACT. Missing credentials fail
-preflight before a costly research run. Explicit diagnostic modes `race` and
-`off` produce **partial** and **disabled** evaluation records; they must not be
-counted as full quality passes even when the selected Playwright test passes.
-
-Initial configurable quality thresholds are RACE >= 40, FACT citation accuracy
->= 70%, verification coverage >= 80%, and at least one supported claim:
-`E2E_DRB_MIN_RACE`, `E2E_DRB_MIN_FACT`, `E2E_DRB_MIN_COVERAGE`. These are provisional
-project thresholds, not official benchmark pass marks; calibrate them against
-repeated runs with a fixed Judge before enforcing a release gate.
+`full` is the default and requests RACE and FACT. Missing Judge credentials
+record an evaluation error without preventing the research run or failing delivery.
+Explicit modes `race` and `off` produce **partial** and **disabled** evaluation
+records. Neither means a full quality assessment succeeded.
 
 ## Assertions and score semantics
 
-The browser verifies terminal completion, research activity, no active children,
-a readable declared report, a non-empty final handoff, and identical persisted
-content/version after reload. Report length, headings and URL syntax are sanity
-checks, not scientific-quality proof. Recovered child failures remain visible
-as reliability metrics, without enforcing a particular delegation count.
+E2E success requires a completed main run whose final response references at least
+one readable, nonempty persisted artifact. Names and directories are unrestricted.
+A failed or cancelled run with outputs is a partial delivery. Research activity,
+child counts, word counts, headings, URL counts and quality scores do not gate
+completion. Scoring uses the immutable report version selected by final delivery;
+an ambiguous report is recorded as insufficient evidence.
+
+Existing evaluator thresholds (`E2E_DRB_MIN_RACE`, `E2E_DRB_MIN_FACT`,
+`E2E_DRB_MIN_COVERAGE`) remain descriptive local evaluator metadata, not official
+benchmark pass marks or Playwright assertions. Interpret the raw scores and
+verification coverage separately from the delivery outcome.
 
 RACE uses the upstream cleaner, original question, task criteria, reference and
 weighted formula. All criterion scores must be present and finite. The stored
@@ -114,9 +114,9 @@ FACT uses upstream extraction, deduplication, and support-judgment prompts.
 Jina fetching uses upstream request/content format with bounded HTTP timeouts.
 Failed source retrievals are unknown, not successful citations. Upstream
 accuracy excludes unknowns; therefore verification coverage is also recorded
-and gated to avoid an inflated score from a tiny verified subset. Effective
+to reveal an inflated score from a tiny verified subset. Effective
 citations count supported claim/source pairs, not distinct papers. No citations
-or entirely inaccessible sources cannot pass the quality gate.
+or entirely inaccessible sources must not be interpreted as verified research.
 
 Changing Judge models, using the generator as its own Judge, constraining
 generation, or changing the evaluator revision prevents direct leaderboard

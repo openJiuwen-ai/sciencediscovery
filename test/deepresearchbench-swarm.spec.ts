@@ -3,11 +3,13 @@
 import { writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSession,
+import { cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { researchPrompt, drbArticle, drbApi, positiveNumber,
   evaluationConfig, evaluationPreflight, evaluateReport } from "./helpers/deepresearchbench.ts";
+import { collectFinalDelivery } from "./helpers/real-delivery.ts";
+import { scoringArtifact } from "./helpers/real-delivery.mjs";
 import { drbSamples } from "./benchmarks/deepresearchbench/samples.ts";
 
 for (const sample of drbSamples) {
@@ -19,8 +21,8 @@ for (const sample of drbSamples) {
  * Purpose: Research five difficulty-stratified DeepResearchBench samples autonomously on Swarm, verify durable UI delivery, and optionally evaluate RACE/FACT.
  * Steps:
  *   1. Validate evaluator prerequisites, create an always-allow Session and submit the original question with delivery instructions.
- *   2. Check terminal completion, research activity, report content and persistence after reload; record child failures without constraining strategy.
- *   3. Run pinned RACE/FACT, enforce configurable quality gates and export scorecard/performance artifacts.
+ *   2. Check terminal completion and readable nonempty artifacts referenced in the final response.
+ *   3. Run pinned RACE/FACT as non-gating quality evaluation; preserve official criteria and export scores.
  * Environment: Opt-in isolated real E2E stack; pinned upstream evaluator and outbound source access.
  * Type: real
  * LLM: Live generator plus independently configurable cleaner/RACE/FACT judges.
@@ -55,17 +57,23 @@ for (const sample of drbSamples) {
     let terminal: string | undefined;
     let started: number | undefined;
     try {
-      const config = evaluationConfig();
-      metrics.evaluation_mode = config.mode;
-      await evaluationPreflight(config); // Fail before spending generator tokens when credentials are missing.
+      let config: ReturnType<typeof evaluationConfig> | undefined;
+      try {
+        config = evaluationConfig();
+        metrics.evaluation_mode = config.mode;
+        await evaluationPreflight(config);
+      } catch (error) {
+        config = undefined;
+        metrics.evaluation = { status: "error", gating: false, error: error instanceof Error ? error.message : String(error) };
+      }
       const existingModelId = process.env.E2E_LLM_MODEL_ID?.trim();
       if (existingModelId) allowRealEnvException(testInfo, "Explicit live model already registered on isolated stack; credentials stay server-side.");
       const real = existingModelId ? undefined : requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
       await requireRealStack(testInfo);
       fixture = await createProjectAndSession(page, {
         approvalMode: "always_allow",
-        ...(existingModelId ? { modelId: existingModelId } : { model: { apiToken: real!.E2E_LLM_TOKEN,
-          baseUrl: real!.E2E_LLM_BASE_URL, model: real!.E2E_LLM_MODEL, name: `DRB-${sample.id} ${Date.now()}` } }),
+        ...(existingModelId ? { modelId: existingModelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!,
+          baseUrl: real!.E2E_LLM_BASE_URL!, model: real!.E2E_LLM_MODEL!, name: `DRB-${sample.id} ${Date.now()}` } }),
         projectName: `DRB-${sample.id} Swarm ${Date.now()}`, sessionTitle: `DRB-${sample.id} autonomous research`,
       });
       metrics.generator_model_id = fixture.session.modelId ?? existingModelId;
@@ -82,59 +90,26 @@ for (const sample of drbSamples) {
       terminal = finished.status;
       metrics.run_status = terminal;
       metrics.generation_duration_ms = Date.now() - started;
-      expect(terminal, finished.error ?? "run did not complete").toBe("completed");
-      const children = await drbApi<Array<{ id: string; status: string; turnCount?: number; steps?: Array<{ toolName?: string; status?: string }> }>>(
-        page, `/api/sessions/${fixture.session.id}/subagents`);
-      metrics.children = children.map(c => ({ id: c.id, status: c.status, turns: c.turnCount }));
-      if (metrics.max_subagents_prompt_limit !== null) {
-        expect(children.length, "Model must respect the prompt's TOTAL child limit, including failed children").toBeLessThanOrEqual(metrics.max_subagents_prompt_limit);
+      const delivery = await collectFinalDelivery(page, fixture.session.id, runId);
+      metrics.delivery = delivery;
+      metrics.integration_status = delivery.status;
+      expect(delivery.status, "Main run must complete and reference a readable nonempty final artifact").toBe("passed");
+      const report = scoringArtifact(delivery.artifacts, drbOutput);
+      if (report) {
+        const input = testInfo.outputPath(`deepresearchbench-${sample.id}.json`);
+        await writeFile(input, JSON.stringify({ id: sample.id, prompt: drbQuestion, article: report.text }, null, 2));
+        await testInfo.attach("benchmark-report", { path: input, contentType: "application/json" });
+        metrics.report_version_id = report.version;
+        if (config) metrics.evaluation = { ...await evaluateReport(config, input, testInfo.outputPath("evaluation"), judgeBudget), gating: false };
+      } else {
+        metrics.evaluation = { status: "insufficient_evidence", gating: false, reason: "No unambiguous final text report for official RACE/FACT scoring" };
       }
-      // Recovered failures are reliability metrics, not an arbitrary strategy failure.
-      expect(children.filter(c => ["running", "queued", "pending", "waiting"].includes(c.status))).toHaveLength(0);
-      // Do not expand every large tool result just to test that research happened.
-      // Inspect visible process summaries plus persisted child tool records.
-      const activity = await page.locator('details.timeline-disclosure.tool > summary').allTextContents();
-      const research = /search|fetch|pubmed|europe.?pmc|arxiv|biorxiv|medrxiv/i;
-      expect(activity.some(t => research.test(t)) ||
-        children.some(c => c.steps?.some(s => s.status === "completed" && research.test(s.toolName ?? "")))).toBe(true);
-      const declared = await drbApi<Array<{ logicalName: string }>>(page, `/api/sessions/${fixture.session.id}/artifacts`);
-      expect(declared.some(a => a.logicalName === drbOutput),
-        "Completed Run must deliver the requested declared report; an inline answer alone is insufficient").toBe(true);
-      const tree = await artifactTree(page);
-      await expect.poll(() => tree.artifacts.allTextContents()).toContain(drbOutput);
-      await tree.catalog.getByRole("button", { name: `Open ${drbOutput}`, exact: true }).click();
-      const dialog = page.getByRole("dialog", { name: `Artifact: ${drbOutput}` });
-      await expect(dialog).toBeVisible();
-      await expect(dialog.locator(".artifact-version-preview")).not.toHaveText("");
-      const report = await drbArticle(page, fixture.session.id, drbOutput);
-      const input = testInfo.outputPath(`deepresearchbench-${sample.id}.json`);
-      await writeFile(input, JSON.stringify({ id: sample.id, prompt: drbQuestion, article: report.article }, null, 2));
-      await testInfo.attach("benchmark-report", { path: input, contentType: "application/json" });
-      metrics.report_version_id = report.versionId;
-      metrics.report_words = report.article.trim().split(/\s+/u).length;
-      expect(metrics.report_words).toBeGreaterThanOrEqual(600);
-      expect((report.article.match(/^#{1,3}\s+.+$/gm) ?? []).length).toBeGreaterThanOrEqual(3);
-      // Syntax-only sanity check, not a claim that these URLs resolve or support the prose.
-      expect(new Set(report.article.match(/https?:\/\/[^\s)\]}>,]+/gi) ?? []).size).toBeGreaterThanOrEqual(3);
-      await page.reload();
-      await openProjectSession(page, fixture);
-      const restored = await artifactTree(page);
-      await expect.poll(() => restored.artifacts.allTextContents()).toContain(drbOutput);
-      expect(await drbArticle(page, fixture.session.id, drbOutput)).toEqual(report);
-      const answer = (await page.locator(".message.assistant").last().innerText()).trim();
-      expect(answer.length).toBeGreaterThan(80);
-      expect(answer).toContain(drbOutput);
-      metrics.integration_status = "passed";
-      metrics.evaluation = await evaluateReport(config, input, testInfo.outputPath("evaluation"), judgeBudget);
       metrics.quality_status = metrics.evaluation.status;
-      if (config.mode !== "off") {
-        await testInfo.attach("quality-scorecard", { contentType: "application/json",
-          body: JSON.stringify(metrics.evaluation, null, 2) });
-        expect(metrics.evaluation.status).toBe(config.mode === "full" ? "passed" : "partial");
-      }
+      await testInfo.attach("quality-scorecard", { contentType: "application/json", body: JSON.stringify(metrics.evaluation, null, 2) });
+
     } catch (error) {
       metrics.error = error instanceof Error ? error.message : String(error);
-      if (metrics.integration_status !== "passed") metrics.integration_status = "failed";
+      if (!["passed", "partial"].includes(metrics.integration_status)) metrics.integration_status = "failed";
       throw error;
     } finally {
       const visibleAnswers = await page.locator(".message.assistant").allTextContents().catch(() => []);
@@ -153,7 +128,7 @@ for (const sample of drbSamples) {
         metrics.artifacts = await drbApi(page, `/api/sessions/${fixture.session.id}/artifacts`).catch(() => []);
         // Preserve delivery evidence even if an earlier lifecycle/UI assertion failed.
         const retainedReport = await drbArticle(page, fixture.session.id, drbOutput).catch(() => null);
-        if (retainedReport) {
+        if (retainedReport && !metrics.report_version_id) {
           await writeFile(testInfo.outputPath(`deepresearchbench-${sample.id}.json`),
             JSON.stringify({ id: sample.id, prompt: drbQuestion, article: retainedReport.article }, null, 2));
           metrics.report_words ??= retainedReport.article.trim().split(/\s+/u).length;

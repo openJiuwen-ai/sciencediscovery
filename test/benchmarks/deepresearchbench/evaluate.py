@@ -213,7 +213,16 @@ def main():
         result["status"] = gate(result, thresholds)
     except Exception as error:
         result.update(status="error", error_type=type(error).__name__)
-        # Upstream exceptions can contain provider bodies/URLs; do not echo them.
+        # Keep detailed failures in a private local artifact, not the public scorecard.
+        detail = str(error)
+        for name, secret in os.environ.items():
+            if any(word in name for word in ("KEY", "TOKEN", "SECRET")) and len(secret) >= 8:
+                detail = detail.replace(secret, "[redacted]")
+        diagnostic = args.output / "evaluation-error.json"
+        with diagnostic.open("w") as stream:
+            os.chmod(diagnostic, 0o600)
+            json.dump({"error_type": type(error).__name__, "error": detail}, stream, indent=2)
+        result["error_artifact"] = diagnostic.name
     finally:
         result["duration_seconds"] = time.monotonic() - started
         write(args.output / "scorecard.json", result)
