@@ -20,7 +20,7 @@ Use `run_shell` with either `command` or `scriptPath`, optionally `runner_id` an
 
 Foreground `wait_ms` is a response-wait budget (default 10 seconds, maximum 30 seconds), not a process timeout. When it expires, the tool returns the still-running Execution ID. `background: true` returns after acceptance. `execution_status`, `execution_logs` and `execution_cancel` query or manage that ID without starting another Shell or taking the Workspace write lock. Only explicit cancellation stops the job; cancellation waits for process cleanup and committed file state before publishing a terminal result.
 
-The Session file panel's **Executions & reminders** section shows jobs, logs, transfers and timers. After the Runner accepts a command, a transient connection error while the API queries its status causes the API to keep querying the original Execution ID without resubmitting the command. Only five consecutive retryable status-query failures record `unknown`; a successful query resets the count.
+The Session file panel's **Executions & reminders** section shows jobs, logs, transfers and timers. `unknown` means the final outcome could not be confirmed, for example after a lost response or API restart. It does not mean the command failed to run: inspect the Runner state before deciding whether to retry explicitly. After the Runner accepts a command, the API retries transient status-query failures against the original Execution ID without resubmitting it. Five consecutive retryable query failures also leave the outcome `unknown`; a successful query resets that count.
 
 ## Files and attribution
 
