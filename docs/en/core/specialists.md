@@ -6,28 +6,17 @@ Specialists separate these responsibilities and supply role instructions, Skills
 
 The relationship to MCP and Skills is simple: **MCP is a tool, Skill is a method, and Specialist is a role.** A Specialist is not a new execution environment; it packages who owns a kind of work, which methods they can use, and which tools they can call.
 
-## Research roles already provided
+## Preset roles are a starting point
 
-ScienceDiscovery includes the following eight Specialists. Combine them as needed; every investigation does not require the full team.
+ScienceDiscovery provides preset Specialists for literature retrieval, evidence extraction, code analysis, result evaluation, report writing, and selected material-design work. Combine them as needed; every investigation does not require a full team.
 
-| Built-in role | Suitable work | Main delivery |
-| --- | --- | --- |
-| `literature-searcher` | Search available academic sources, deduplicate, and record coverage gaps | Source lists and retrieval notes |
-| `evidence-extractor` | Extract findings, methods, statistics, and limits from supplied sources | Structured evidence with source anchors |
-| `code-engineer` | Write, execute, and debug Python/R analyses; document methods and environments | Scripts, results, and reproduction notes |
-| `result-evaluator` | Assess accuracy, completeness, robustness, and methodological quality | Revision decisions and concrete feedback |
-| `report-writer` | Synthesize existing research summaries while preserving disagreements and source relationships | A report in the requested format |
-| `creative-material-design` | Propose water-treatment material structures, properties, and feasibility | Candidate material designs |
-| `assessment-screener` | Assess material candidates from specified perspectives and rubrics | Dimension scores, strengths, weaknesses, and verification notes |
-| `insight-aggregator` | Compare assessments and expose agreement and disagreement | Insights for further improvement |
+For a bird-migration review, retrieval can prepare sources, evidence extraction can preserve species and experimental conditions, and writing can synthesize the findings. Data analysis may benefit more from separating code implementation and result evaluation.
 
-The first five cover common literature and data-research stages; the remaining three support material design and assessment. These material roles are callable presets, not a claim that current Idea Tree dispatches them to perform real experiments. [Idea Tree](idea-tree.md) has its own research loop and limits.
-
-For a bird-migration review, retrieval can prepare sources, extraction can preserve species and experimental conditions, and writing can synthesize the findings. Data analysis may benefit more from code engineering and result evaluation. Actual delegation depends on the task; inspect execution records to see which roles were used.
+The complete preset inventory changes with releases; see [Built-in research capabilities reference](../reference/builtin-research-capabilities.md).
 
 ![Built-in and custom Specialists](../../images/specialist-en.png)
 
-Built-in responsibilities are fixed, with enable/disable controls. Role names do not confer professional qualifications, and several roles may share model biases. Clear assignments support inspection rather than replace validation. The workflow's `result-evaluator` is also distinct from the artifact-focused [Reviewer mechanism](science-memory-reviewer.md).
+Preset responsibilities can be enabled or disabled. Role names do not confer professional qualifications, and several roles may share model biases. Clear assignments support inspection rather than replace validation. The workflow's `result-evaluator` is also distinct from the artifact-focused [Reviewer mechanism](science-memory-reviewer.md).
 
 ## Bring in your domain's experience
 
