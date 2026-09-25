@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { recordingStage } from "./recording-wait.js";
 import { createHash } from "node:crypto";
 
 import { canonicalState, captureStateView, type StateProvider, type StateView } from "@sciencediscovery/context";
@@ -86,9 +87,11 @@ export class JiuwenSwarmTrajectory {
   private readonly readRuntime: () => unknown;
   private readonly readAuthorities: () => Promise<unknown>;
   private readonly trajectoryId: string;
+  private readonly sessionId: string;
   private stateCapture?: { providers: readonly StateProvider[]; scope: string; signal: AbortSignal };
 
   constructor(options: NativeAgentOptions, readRuntime: () => unknown = () => ({ executor: "jiuwenswarm" })) {
+    this.sessionId = options.sessionId;
     this.readRuntime = readRuntime;
     // The same fallback the recorder's own assembler uses, so a view reports what a viewless
     // capture would have read.
@@ -153,37 +156,43 @@ export class JiuwenSwarmTrajectory {
   }
 
   /** Serialized: JiuwenSwarm can overlap requests (a title while the turn runs); the recorder takes one at a time. */
-  private run(step: () => Promise<void>): Promise<void> {
-    this.queue = this.queue.then(step, step);
+  private stage<T>(name: string, operation: () => Promise<T>): Promise<T> {
+    return recordingStage(name, { sessionId: this.sessionId, trajectoryId: this.trajectoryId, turn: this.turn },
+      operation, this.stateCapture?.signal);
+  }
+
+  private run(name: string, step: () => Promise<void>): Promise<void> {
+    const ready = this.stage(`${name}.queue`, () => this.queue.catch(() => undefined));
+    this.queue = ready.then(step, step);
     return this.queue;
   }
 
   /** A model call is about to be made: the turn before it is over, and this one begins with its exact input. */
   modelRequest(input: ModelCallInput): Promise<void> {
     if (!this.recorder) return Promise.resolve();
-    return this.run(async () => {
-      await this.commitPending();
+    return this.run("model_request", async () => {
+      await this.stage("commit_pending", () => this.commitPending());
       this.turn += 1;
       const history = input.history as never[];
-      await this.recorder!.beforeTurn({ turn: this.turn, history });
+      await this.stage("before_turn", () => this.recorder!.beforeTurn({ turn: this.turn, history }));
       // Same order as the built-in loop: the turn opens, then its context assembler captures the
       // input state and hands the view to the recorder, which is what puts a checkpoint in the
       // snapshot `beforeTurn` just took without one.
-      const view = await this.captureState(this.turn);
-      if (view) await this.recorder!.captureInputState(view, this.turn, history);
+      const view = await this.stage("capture_state", () => this.captureState(this.turn));
+      if (view) await this.stage("capture_input_state", () => this.recorder!.captureInputState(view, this.turn, history));
       // The trace is a separate entry point, not part of the assembly argument: `afterAssembly`
       // reads only `modelInput` and folds in whatever `trace()` last recorded. The built-in loop
       // calls them in this order too (its assembler's onTrace runs before the turn is assembled).
       this.recorder!.trace(assemblyTrace(input));
-      await this.recorder!.afterAssembly({ turn: this.turn, assembly: { history, modelInput: input } });
+      await this.stage("after_assembly", () => this.recorder!.afterAssembly({ turn: this.turn, assembly: { history, modelInput: input } }));
     });
   }
 
   /** The model answered the current call. */
   modelCompleted(turn: ModelTurn, history: unknown[]): Promise<void> {
     if (!this.recorder) return Promise.resolve();
-    return this.run(async () => {
-      await this.recorder!.modelCompleted(turn);
+    return this.run("model_completed", async () => {
+      await this.stage("model_completed", () => this.recorder!.modelCompleted(turn));
       this.pending = { history: [...history, turn.assistantMessage], modelTurn: turn, turn: this.turn };
     });
   }
@@ -213,10 +222,10 @@ export class JiuwenSwarmTrajectory {
   /** The run ended: commit the last turn and let the records reach the run's stream. */
   finish(): Promise<void> {
     if (!this.recorder) return Promise.resolve();
-    return this.run(async () => {
+    return this.run("finish", async () => {
       try {
-        await this.commitPending();
-        await this.recorder!.flushEvents();
+        await this.stage("finish.commit_pending", () => this.commitPending());
+        await this.stage("finish.flush_events", () => this.recorder!.flushEvents());
       } finally {
         this.recorder!.close();
       }

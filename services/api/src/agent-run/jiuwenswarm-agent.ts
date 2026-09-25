@@ -24,6 +24,7 @@ import { DurableContextStore } from "@sciencediscovery/context";
 import { startModelGateway, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
 import { importSkillsToJiuwenSwarm, skillLoadedBy } from "./jiuwenswarm-skills.js";
 import { JiuwenSwarmTrajectory, stateProvider } from "./jiuwenswarm-trajectory.js";
+import { waitForRecording } from "./recording-wait.js";
 import { RunDeadlines } from "./run-deadlines.js";
 import { jiuwenSwarmWebResult } from "./jiuwenswarm-web-settings.js";
 
@@ -381,7 +382,9 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       deadlines.stop();
       await bridge.close();
       await modelGateway.close();
-      await trajectory.finish().catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not committed: ${error instanceof Error ? error.message : String(error)}`));
+      // The recorder drains/closes in its own queue. Cancellation must not wait for that queue.
+      const draining = trajectory.finish().catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not committed: ${error instanceof Error ? error.message : String(error)}`));
+      await waitForRecording(draining, this.controller.signal).catch(() => undefined);
       await plugins.dispose();
     }
   }

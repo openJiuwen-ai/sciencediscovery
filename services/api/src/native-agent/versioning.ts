@@ -1,6 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { recordingStage, type RecordingIdentity } from "../agent-run/recording-wait.js";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
@@ -102,7 +103,8 @@ export function agentHeadName(agentId: string): string { return `agents/${encode
 
 export class AgentStateAssembler {
   constructor(private readonly store: VersionStore, private readonly workspaceRoot: string,
-    private readonly readRuntime: () => unknown, private readonly readAuthorities: () => Promise<unknown>) {
+    private readonly readRuntime: () => unknown, private readonly readAuthorities: () => Promise<unknown>,
+    private readonly identity: RecordingIdentity = {}) {
     const rel = relative(resolve(workspaceRoot), resolve(store.dataDir, "versioning"));
     if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !rel.startsWith(sep))) {
       throw new Error("Version store must be outside the Agent workspace");
@@ -110,11 +112,11 @@ export class AgentStateAssembler {
   }
 
   captureWorkspace(): Promise<AgentStateRef> {
-    return committedWorkspaceSnapshot(this.store, this.workspaceRoot);
+    return recordingStage("workspace_snapshot", this.identity, () => committedWorkspaceSnapshot(this.store, this.workspaceRoot));
   }
 
   async assemble(input: Omit<AgentStateSnapshot, "workspace" | "runtime" | "authorities" | "forkFidelity">, view?: StateView): Promise<AgentStateRef> {
-    const authorities = view ? view.read("authorities") : await this.readAuthorities();
+    const authorities = view ? view.read("authorities") : await recordingStage("authority_capture", this.identity, () => this.readAuthorities());
     const workspace = view ? view.read<AgentStateRef>("workspace") : await this.captureWorkspace();
     return this.store.putRecord("AgentStateSnapshot", jsonValue({
       ...input, workspace, runtime: view ? view.read("runtime") : this.readRuntime(), authorities,
@@ -153,7 +155,7 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
 
   constructor(dataDir: string, workspaceRoot: string, readonly options: AgentVersioningOptions, readRuntime: () => unknown) {
     this.store = new VersionStore(dataDir);
-    this.assembler = new AgentStateAssembler(this.store, workspaceRoot, readRuntime, options.readAuthorities ?? (async () => ({})));
+    this.assembler = new AgentStateAssembler(this.store, workspaceRoot, readRuntime, options.readAuthorities ?? (async () => ({})), { agentId: options.agentId, trajectoryId: options.trajectoryId });
   }
 
   async initialize(behavior: unknown, history: M[]): Promise<void> {
@@ -219,7 +221,8 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     // Input-overflow recovery assembles again within the same turn. History
     // keeps both attempts while the live audit ref tracks the latest input.
     const name = `attempts/${encodeURIComponent(this.options.trajectoryId)}/${turn}`;
-    await this.refs.commit(this.store, name, this.refs.head(name), this.context);
+    await recordingStage("context_ref_commit", { agentId: this.options.agentId, trajectoryId: this.options.trajectoryId, turn },
+      () => this.refs.commit(this.store, name, this.refs.head(name), this.context));
     this.activeContext = this.context;
     await this.record("context.captured", undefined, this.before);
   }
@@ -262,11 +265,11 @@ export class AgentVersionRecorder<M extends RuntimeMessage, I, U> implements Tur
     }
     const eventSegments: TrajectoryStep["eventSegments"] = [];
     const after = await this.state(turn, "after", history);
-    this.head = await this.coordinator.commit({
+    this.head = await recordingStage("step_commit", { agentId: this.options.agentId, trajectoryId: this.options.trajectoryId, turn }, () => this.coordinator.commit({
       agentId: this.options.agentId, trajectoryId: this.options.trajectoryId, turn,
       parent: this.head, revision: this.revision, before: this.before, after,
       context: this.context, modelContext: this.modelContext, actions, childTrajectories: this.children, eventSegments,
-    });
+    }));
     await this.record("state.committed", undefined, after);
   }
 

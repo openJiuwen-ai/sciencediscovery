@@ -1892,3 +1892,17 @@ test("the run's trajectory is recorded from the model calls JiuwenSwarm makes, a
     await remove(workspaceRoot, { recursive: true, force: true });
   }
 });
+
+
+test("idle cancellation does not wait for the trajectory finish queue", { timeout: 3000 }, async (t) => {
+  const { JiuwenSwarmTrajectory } = await import("./jiuwenswarm-trajectory.js");
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const finish = t.mock.method(JiuwenSwarmTrajectory.prototype, "finish", () => blocked);
+  const adapter = await fakeAdapter((_request, response) => { response.writeHead(200); response.write(""); });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ runIdleTimeoutMs: 60 }));
+    await assert.rejects(agent.execute("go"), /Agent run stalled/);
+    assert.equal(finish.mock.callCount(), 1);
+  } finally { release(); await adapter.close(); }
+});
