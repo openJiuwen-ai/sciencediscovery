@@ -1,83 +1,194 @@
 # 控制面：services/api
 
-Node 控制 API 是系统的核心进程：所有浏览器请求、Agent 运行编排、工具执行、权限、评审与存储都经过它。本文描述其内部结构与主要机制；HTTP 端点以 `services/api/src/http/index.ts` 中的路由注册为准。
+`services/api` 是 ScienceDiscovery 的**业务权威控制面**。它负责 Project / Session / Run 生命周期、有效配置解析、权限、工具绑定、Artifact / provenance、产品级存储，以及选择当前 Agent executor。
 
-## 1. 源码结构
+它不等于“native Agent loop”。Native 和 JiuwenSwarm 都通过控制面的同一 Run seam 接入。
 
-| 文件 / 目录 | 作用 |
-|---|---|
-| `server.ts` | 兼容入口 barrel（re-export `http/`），进程启动点 |
-| `http/` | HTTP 壳：路由装配、鉴权、请求体、响应、静态资源 |
-| `runs/` | 运行生命周期、SSE 运行流、会话运行编排与并发串行化、workspace 事件过滤 |
-| `store.ts` / `store/` | `SessionStore` 门面 + SQLite 目录库；实体职责由 catalog/permissions/secrets/settings/subagents/run-streams 域模块承担 |
-| `native-agent/` | **Node 原生 agent loop**：`index.ts`（循环状态机）、`model-client.ts`（流式模型传输）、`deferred-tools.ts`、`compaction.ts`；见 [agent-backend.md](agent-backend.md) |
-| `agent-run/` | 运行编排：`create-agent-run.ts`（主/子 Agent）、`permission-runtime.ts`（权限状态机）、`workspace-bindings.ts`（工具与 runner 绑定）、`orchestrators.ts` |
-| `mcp/` | MCP 治理与传输：`broker.ts`（调用治理）、`node-client.ts`（**进程内 MCP 客户端**）、`extensions-config.ts`、`source-catalog.ts`、`artifact-manager.ts`（下载/抽取任务）、`rate-limiter.ts`、`result-cache.ts` |
-| `runner-client.ts` | Runner HTTP 客户端（Bearer + HMAC 签名） |
-| `provenance.ts` / `prompt-manifest.ts` / `reviewer-specialist/` | 溯源与 Artifact Reviewer，见 [review-provenance.md](review-provenance.md) |
-| `papers.ts` / `skills.ts` / `remote-compute.ts` / `environment.ts` | 论文、技能、实验性远程作业卡片和科学环境的领域逻辑；远程作业不是当前支持主线 |
-| `memory-graph.ts` | 实验性 memory-graph 侧车客户端 |
+## 1. 进程入口与 composition root
 
-## 2. HTTP 面
+| 路径 | 责任 |
+| --- | --- |
+| `src/server.ts` | Node 进程入口，启动/关闭 HTTP server |
+| `src/http/index.ts` | HTTP composition root：路由、平台服务装配、静态 Web、运行入口 |
+| `src/store.ts`, `src/store/` | Project / Session / Run / settings / secrets 等权威目录状态 |
+| `src/runs/` | Session Run 状态、SSE 流、事件持久化与恢复 |
+| `src/agent-run/` | executor seam、主/子 Agent 编排、workspace bindings、run deadlines |
+| `src/native-agent/` | native executor，仅是两个 executor 之一 |
+| `src/plugins/` | capability plugin 的宿主装配和控制入口 |
+| `src/evolution/` | evolve sidecar 的控制面路由与模型代理 |
+| `src/reviewer-specialist/` | Reviewer 的 API 级编排和外部 evidence gateway |
+| `src/artifacts/`, `src/subagents/`, `src/permissions/` | 产品级领域编排；底层 capability 仍优先由 packages 拥有 |
 
-按前缀分组（代表性端点，非穷举）：
+精确路由以 `src/http/index.ts` 和被它调用的 route handler 为准。
 
-| 前缀 | 内容 |
-|---|---|
-| `GET /health`、`/api/health` | 聚合健康：runner、memory-graph 状态 |
-| `/api/projects…` | 项目 CRUD、设置覆盖、删除影响预览 |
-| `/api/sessions…` | 会话 CRUD、归档/恢复、设置、删除影响预览 |
-| `POST /api/sessions/:id/messages` | **SSE**：发起一次运行并流式返回 `RunStreamEvent` |
-| `GET /api/sessions/:id/runs/:runId/stream` | **SSE**：订阅已存在运行的事件 |
-| `GET /api/sessions/:id/runs/:runId/streams/:streamId/events` | 读取已持久化子流（`main`/`tool-<id>`/`subagent-<id>`）事件，支持 `after` 游标增量回放 |
-| `POST /api/sessions/:id/runs/:runId/cancel` | 取消运行（abort 贯通到原生 loop 与 runner） |
-| `/api/sessions/:id/{plans,subagents,remote-jobs,papers,evidence-items}` | 计划、子 Agent、远程作业、论文、证据 |
-| `/api/sessions/:id/mcp/…` | MCP 调用记录、artifact plan/job/extraction-job |
-| `/api/mcp/sources…` | MCP Source 目录与状态 |
-| `/api/{models,specialists,skills,remote-hosts,environments}` | 全局资源管理 |
-| `/api/settings`、`/api/timeout-settings`、`/api/quota-settings`、`/api/sandbox-network-settings`、`/api/runtime-status` | 全局设置、超时、配额、沙箱网络访问、运行状态页 |
+## 2. Executor seam
 
-SSE 传输为 fetch 流（`data: <json>\n\n` 帧），前端消费方式见[Web 前端参考](web-frontend.md)。
+共同入口：
 
-## 3. 存储
+```text
+runMainRequestExecution / runSubagentTask
+             │
+             ▼
+createAgentRun(profile, bindings, input)
+             │
+      defaultAgentFactory()
+        ┌────┴──────────────┐
+        ▼                   ▼
+createNativeAgent   createJiuwenSwarmAgentFactory
+```
 
-- **SQLite**（`node:sqlite`，`.sciencediscovery-data/catalog.sqlite`）：项目、会话、运行、消息、artifact 与版本、权限（请求/授权/epoch）、计划、子 Agent、specialists、模型配置、`permission_authorizations` 审计表等目录实体。
-- **文件**（`.sciencediscovery-data/` 下）：execution-runs、prompt-manifests、claims、evidence-items/links、mcp-invocations、artifact-derivations、model-usage 等审计记录，以及 versioning/ 下双池 CAS/Agent 状态对象；旧 cas/sha256/ 保留兼容读取，详见 [CAS](cas.md)。
-- 完整落点见[配置参考](../reference/configuration.md#存储布局)。
+`create-agent-run.ts` 根据 `jiuwenSwarmConfigFromEnv()` 选择 executor。
 
-## 4. 运行生命周期
+- 本地源码默认 native；
+- 本地 `--jiuwenswarm` 使用 JiuwenSwarm；
+- Docker / 发行包默认 JiuwenSwarm；
+- 测试也可以通过 `bindings.createAgent` 注入替身。
 
-状态机：`queued → running ⇄ blocked →（completed | failed | cancelled | interrupted）`。`blocked` 表示等待权限决策；`interrupted` 是进程崩溃后启动恢复（`recoverSessionRuns`）标记的历史运行。
+`createAgentRun` 本身不应拥有 executor-specific loop policy。它负责把 `AgentProfile`、Workspace bindings、tool policy、budget、context contributors、versioning authority 和 abort 生命周期映射成统一 `AgentRunHandle`。
 
-一次主运行（`agent-run/create-agent-run.ts`）：
+## 3. Run 的权威生命周期
 
-1. **准备**：校验会话与模型、解析 composer 引用、同步科学环境、构建工作区系统提示。
-2. **执行**：创建 `RequestExecutionContext`（executionId、权限运行时、abort signal），由 `createNativeAgent` 在本进程内跑 agent loop。
-3. **记录**：写 Prompt Manifest 与执行、Artifact 溯源记录；显式触发的 Reviewer Specialist 通过独立 checkpoint 审核 Artifact，不阻塞主 Agent。
-4. **收尾**：发 `run.completed`/`run.failed`/`run.cancelled`，清理挂起的权限请求。
+产品状态机：
 
-子 Agent（`task` 工具）在私有工作区中运行受限工具集，交接文件有大小上限，结束时按 Brief 的 `outputJsonSchema` 校验结构化输出（契约见 [subagent-orchestration.md](subagent-orchestration.md#41-subagent-brief-v1-契约)）。
+```text
+queued → running ⇄ blocked → completed | failed | cancelled | interrupted
+```
 
-## 5. 权限系统
+典型主运行：
 
-- **动作类型**：`code`、`connector`、`artifact_download`、`directory`、`host`、`remote_job`。
-- **授权范围**：`once`（单次，用后作废）/ `session` / `project` / `global`。
-- **流程**（`store.requestPermission` → `decidePermissionRequest`）：先查未撤销的常驻授权与 once 授权；未命中则产生 pending 的 `PermissionRequest`，经 SSE 发 `permission.required` 卡片，运行转 `blocked` 并暂停超时计时（`beginExternalWait`）；用户选择 allow_once / allow_matching / deny，决策落 `PermissionAuthorization` 审计行。
-- **Epoch**：审批模式变化或环境重置时 `rotatePermissionEpoch`，持久内核随 epoch 失效重建；每条 ExecutionRun 记录当时的 `permissionEpochId`。
+1. HTTP 层校验 Session / model / request。
+2. 解析 Project/Session 生效设置与资源。
+3. 创建 RequestExecutionContext：execution id、权限 runtime、abort signal、versioning authorities。
+4. 构造 Workspace / plugin / tool bindings。
+5. 调用 `createAgentRun()`。
+6. executor 发出 AgentEvent / tool call。
+7. Tool 仍通过 ScienceDiscovery binding 执行，因此权限、Runner、MCP、Artifact 和 provenance 由产品控制面保持一致。
+8. Run events 持久化并经 SSE 暴露给 UI。
+9. 终态落盘并清理待处理权限/资源。
 
-## 6. 工具执行与 Runner 通道
+`blocked` 用于等待外部批准；`interrupted` 用于进程恢复时标记未正常结束的历史运行。
 
-- 工具由原生 loop **在本进程内直接调用**（`AgentTool.execute`），不再有跨进程回调，也不再有 per-run callback token。权限门、溯源和限流仍在工具处理器内生效。
-- Runner 调用（`runner-client.ts`）：`/execute`、`/execute-shell` 附加 HMAC-SHA256 签名头（token + 时间戳 + body 哈希）；另有 kernels、environments、setup 等管理端点，见 [sandbox-execution.md](sandbox-execution.md)。
+## 4. JiuwenSwarm 模式下控制面没有消失
 
-## 7. 由本进程直接发出的模型调用
+JiuwenSwarm 模式常见误解是“adapter 成了新的后端”。实际不是：
 
-- **Agent 主循环**（`native-agent/model-client.ts`）直接向用户配置的模型 endpoint 发流式请求，支持 OpenAI 兼容与 Anthropic Messages 两种方言。
-- **论文视觉分析**（`papers.ts`）直接 `fetch` OpenAI 兼容端点；细节见 [PDF worker 参考](paper-worker.md)。
+- adapter 是 public front door 和协议适配层；
+- API 仍持有 Project / Session / Run / permission / Artifact 权威状态；
+- API 构造本次 run 的工具表和 runtime bindings；
+- `createJiuwenSwarmAgentFactory` 把 run 发给 adapter；
+- adapter 把工具暴露成 per-run MCP server；
+- JiuwenSwarm tool call 经 adapter 回到 API loopback bridge；
+- 模型调用经 adapter 的 per-run proxy / API model gateway 保留 ScienceDiscovery provider 行为；
+- adapter frame 被映射回 ScienceDiscovery Run events。
+
+因此新增产品行为时，优先判断它属于：
+- executor-independent control plane；
+- native executor；
+- JiuwenSwarm adapter；
+- 或 capability package。
+
+不要在 adapter 中复制 Session/Artifact/permission 存储。
+
+## 5. HTTP 与事件
+
+HTTP 面主要包括：
+
+- Project / Session CRUD 和 settings；
+- Session message → Run；
+- Run SSE 订阅、历史事件回放、cancel；
+- models / specialists / skills / skill libraries / environments；
+- MCP source、Connector、Artifact jobs；
+- permissions / quotas / timeout / sandbox network；
+- Reviewer / evidence / paper；
+- evolution / Idea Tree / memory 等能力入口。
+
+Run 事件是 UI 和自动化观察执行过程的稳定产品接口之一。修改事件 shape 时必须同步：
+
+- schema；
+- API producer；
+- adapter mapper（如 JiuwenSwarm 路径涉及）；
+- Web consumer；
+- tests / E2E。
+
+## 6. Tool 与 capability 组合
+
+API 不应成为所有 capability 的实现仓库。
+
+当前方向：
+
+```text
+packages/* capability
+       │ public contracts / plugins / ports
+       ▼
+services/api composition
+       │
+       ├─ native executor
+       └─ JiuwenSwarm bridge
+```
+
+典型 owning packages：
+
+- `tools`：Tool 合同；
+- `workspace`：Workspace tools / prompt；
+- `governance`：权限治理；
+- `executor`：Runner client / 远端 provision；
+- `skill` / `specialist`；
+- `mcp` / `mcp-sources`；
+- `data-source`；
+- `artifact-manager` / `artifact-json`；
+- `provenance`；
+- `memory`；
+- `evolve` / `idea-tree`。
+
+`scripts/check-architecture.mjs` 明确禁止多类已迁移 service-domain 源文件重新出现。
+
+## 7. Runner 通道
+
+Runner 是独立执行边界。API / executor 通过 `packages/executor` 的 Runner client 使用：
+
+- shell / language execution；
+- managed scientific environments；
+- execution status/log/cancel；
+- remote Runner / SSH provision；
+- NPU workload（启用时）。
+
+执行请求有认证和签名要求。具体协议和沙箱见 [sandbox-execution.md](sandbox-execution.md)。
+
+## 8. 存储
+
+权威状态不是单一数据库：
+
+- SQLite catalog：Project、Session、Run、messages、settings、model、permission 等目录实体；
+- Workspace：用户输入和执行文件；
+- CAS/versioning：内容与版本；
+- append-only / 文件审计：run events、execution runs、Prompt Manifest、model usage、connector/MCP/provenance 等；
+- sidecar：Memory graph 等派生/专用存储。
+
+完整数据布局见[配置参考](../reference/configuration.md#存储布局)。
+
+## 9. 修改控制面时的检查
+
+至少确认：
+
+- 是否把 capability policy 错放回 API？
+- 是否同时兼容 native / JiuwenSwarm executor？
+- Run event 和 Artifact 语义是否保持一致？
+- 是否改变权限外部等待 / timeout 行为？
+- 是否影响恢复、取消或并发串行化？
+- 是否新增 package dependency edge？
+- 是否需要 adapter contract test 或 E2E？
+
+先运行：
+
+```bash
+pnpm architecture:check
+pnpm --filter @sciencediscovery/api test
+```
 
 ## 相关文档
 
-- [architecture.md](architecture.md) — 全局架构与进程模型
-- [agent-backend.md](agent-backend.md) — gateway 协议与 Agent 循环
-- [sandbox-execution.md](sandbox-execution.md) — Runner 沙箱与科学环境
-- [review-provenance.md](review-provenance.md) — Artifact Reviewer、执行溯源与 CAS
+- [整体运行时架构](architecture.md)
+- [Native Agent 后端](agent-backend.md)
+- [仓库布局](repository-layout.md)
+- [组件与插件机制](plugins.md)
+- [沙箱执行](sandbox-execution.md)
