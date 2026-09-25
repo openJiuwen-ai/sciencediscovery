@@ -9,13 +9,14 @@ When you finish, you should be able to:
 - make the Agent actually run a Python calculation;
 - inspect the Markdown artifact it delivers in the workspace.
 
-This tutorial uses a prepackaged Linux executable. For macOS, Docker, source builds, or other deployment paths, use the [deployment guide](deployment.md) first, then return to [Configure a model](#3-configure-a-model) once the service is running.
+## 1. Start ScienceDiscovery on your system
 
-## 1. Download and prepare ScienceDiscovery
+### Linux: use the prepackaged binary
+
+For Linux on x86_64 or aarch64, this is the shortest path.
 
 You need:
 
-- Linux on x86_64 or aarch64;
 - an API key for a supported model provider;
 - Bubblewrap for isolated code execution.
 
@@ -28,24 +29,57 @@ sudo apt-get install -y bubblewrap   # Debian / Ubuntu
 
 Then download the ScienceDiscovery executable for your architecture from the [Releases page](https://github.com/openJiuwen-ai/sciencediscovery/releases) and rename it to `ScienceDiscovery`.
 
-> The first launch needs network access to prepare some runtime dependencies. If you are offline or startup fails here, go directly to the [deployment guide](deployment.md).
-
-## 2. Start ScienceDiscovery and open the UI
-
-From the directory containing `ScienceDiscovery`, run:
+From the directory containing the file, run:
 
 ```bash
 chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-When startup completes, the terminal prints an `Open to sign in` URL. Open that URL in your browser to enter ScienceDiscovery.
+### macOS: use local source mode
 
-Keep this terminal running. Closing it or pressing Ctrl-C stops the service.
+Both macOS x64 and arm64 are supported. There is currently no prepackaged single-file macOS binary, so use local source mode. The sandbox uses the built-in Seatbelt mechanism; Bubblewrap is not required.
 
-If no sign-in URL appears, the browser cannot connect, or startup reports an error, go directly to [first-run troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode).
+Make sure the machine has:
 
-## 3. Configure a model
+- Node.js 22.19+;
+- pnpm 11.1.2;
+- Python 3;
+- uv 0.9+;
+- Git;
+- curl;
+- an API key for a supported model provider.
+
+Then run:
+
+```bash
+git clone https://github.com/openJiuwen-ai/sciencediscovery.git
+cd sciencediscovery
+git checkout feat/jiuwenswarm
+
+scripts/jiuwenswarm.sh setup
+./scripts/start-stack.sh --mode local
+```
+
+The first run installs and builds the required components, so it needs network access and takes longer than later starts.
+
+After the project has already been built, later starts can use:
+
+```bash
+./scripts/start-stack.sh --mode local --no-build
+```
+
+### After startup
+
+On both Linux and macOS, a successful startup prints an `Open to sign in` URL in the terminal. Open it in your browser to enter ScienceDiscovery.
+
+Keep the startup terminal running. Closing it or pressing Ctrl-C stops the service.
+
+If no sign-in URL appears, the browser cannot connect, or startup reports an error, see [first-run troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode).
+
+> For Docker, air-gapped environments, Linux source builds, and complete deployment details, see the [deployment guide](deployment.md).
+
+## 2. Configure a model
 
 Open **System settings → Model registry**:
 
@@ -56,7 +90,7 @@ Open **System settings → Model registry**:
 
 The key here is your model provider API key. If the connection test fails, first check the API key, provider URL, model ID, and network connection.
 
-## 4. Run your first scientific task
+## 3. Run your first scientific task
 
 Create a Project and Session, then paste the complete task below into the message box:
 
@@ -87,7 +121,7 @@ If the first code execution asks for permission, review and approve the action, 
 
 The goal is not a sophisticated scientific conclusion. It is to verify the smallest useful ScienceDiscovery loop: **understand the task → run a tool → create files → deliver an artifact**.
 
-## 5. Confirm that it worked
+## 4. Confirm that it worked
 
 Your first run is successful when all four are true:
 
@@ -98,8 +132,8 @@ Your first run is successful when all four are true:
 
 Different models may phrase the report differently. That is expected; what matters here is that the tool actually ran and the artifact was created.
 
-## 6. Where to go next
+## 5. Where to go next
 
 - To understand what ScienceDiscovery can do, see [Core capabilities](../README.md#core-capabilities).
 - To follow complete real research examples, see [Domain guides](../README.md#domain-guides).
-- To use another deployment path or troubleshoot startup, see the [deployment guide](deployment.md).
+- To use Docker, build from source, or troubleshoot startup, see the [deployment guide](deployment.md).
