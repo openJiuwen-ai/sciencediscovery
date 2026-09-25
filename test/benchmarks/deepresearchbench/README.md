@@ -170,3 +170,26 @@ The upstream pipeline test exercises the real cleaner, scorer, extractor,
 deduplicator and validator with mocked HTTP responses. It makes no paid calls.
 Without the pinned upstream checkout, that integration test is explicitly
 skipped; pure score-validation and gate tests still run.
+
+## RACE response contract
+
+The local adapter adds `race-criterion-id-v1`: an ID registry derived from the
+pinned rubric's dimension and item order (`readability_05`, for example). Original
+criterion descriptions, weights, article order and upstream score calculation are
+unchanged. The output-format appendix requires exact IDs; display names may be
+abbreviated. After validating every ID exactly once and finite 0–10 scores, the
+adapter restores canonical names before invoking the upstream calculator. There
+is no fuzzy matching or silent omission of criteria.
+
+One structure-correction call is allowed. It includes the exact validation error
+and prior response, asks to retain valid scores and analyses, and rejects changes
+to existing identified judgements. If correction fails, no RACE total is emitted.
+The upstream outer retry is limited to one attempt so retries do not multiply.
+Retain original responses, contract errors and the normalized record separately;
+the scorecard records the adapter version. This output-format change must be
+reported when comparing runs even though the official rubric is unchanged.
+
+Executed failing phases are `error`; FACT disabled by race-only configuration is
+`skipped` with a reason. A completed RACE score remains available if FACT later
+fails. Skipped checks are not zero scores and weights are never redistributed.
+Historical results are not overwritten by this change.

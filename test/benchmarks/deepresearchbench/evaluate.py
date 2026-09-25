@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 
+from race_contract import ContractClient, VERSION as CONTRACT_VERSION
+
 UPSTREAM_COMMIT = "852f4022d1f98fb707222e395405136e8f0e8d52"
 DIMS = ("comprehensiveness", "insight", "instruction_following", "readability")
 
@@ -91,6 +93,9 @@ def preflight(upstream, mode):
 
 
 def evaluate(args, result):
+    result["race"] = {"status": "running"}
+    result["fact"] = {"status": "pending"} if args.mode == "full" else {"status": "skipped", "reason": "FACT disabled by race-only configuration"}
+    result["scoring_contract"] = CONTRACT_VERSION
     api = preflight(args.upstream, args.mode)
     from utils.clean_article import ArticleCleaner
     from utils.json_extractor import extract_json_from_markdown
@@ -117,6 +122,7 @@ def evaluate(args, result):
     class RecordedClient(original_client):
         def _post(self, payload):
             response = super()._post(payload)
+            write(args.output / f"judge-response-{len(calls)+1}.json", response)
             self.last_usage = response.get("usage")
             return response
         def generate(self, user_prompt, system_prompt="", **kwargs):
@@ -139,15 +145,17 @@ def evaluate(args, result):
         raise ValueError("RACE cleaning failed")
     write(args.output / "cleaned.json", clean)
     race = process_single_item(task, {task["prompt"]: clean}, {task["prompt"]: reference},
-                               {task["prompt"]: criteria}, RecordedClient(model=api.Model),
-                               threading.Lock(), tqdm(total=1), 2, task["language"])
+                               {task["prompt"]: criteria}, ContractClient(RecordedClient(model=api.Model), criteria,
+                                   extract_json_from_markdown, lambda name, value: write(args.output / name, value)),
+                               threading.Lock(), tqdm(total=1), 1, task["language"])
     if race.get("error"):
         raise ValueError("RACE evaluation failed; inspect judge artifacts")
-    validate_race(json.loads(extract_json_from_markdown(calls[-1]["answer"])), criteria)
+    validate_race(json.loads((args.output / "race-normalized.json").read_text()), criteria)
     result["race"] = {**race, "status": "completed"}
     write(args.output / "scorecard.json", result)
     if args.mode != "full":
         return
+    result["fact"] = {"status": "running"}
     from utils import extract, deduplicate, validate
     lang = {task["id"]: task["language"]}
     extract.run([source], str(args.output / "extracted.jsonl"), lang)
@@ -213,6 +221,11 @@ def main():
         result["status"] = gate(result, thresholds)
     except Exception as error:
         result.update(status="error", error_type=type(error).__name__)
+        for phase in ("race", "fact"):
+            if result[phase]["status"] == "running":
+                result[phase] = {"status": "error", "error_type": type(error).__name__}
+            elif result[phase]["status"] in ("pending", "not_run"):
+                result[phase] = {"status": "skipped", "reason": "Prerequisite evaluation failed"}
         # Keep detailed failures in a private local artifact, not the public scorecard.
         detail = str(error)
         for name, secret in os.environ.items():
