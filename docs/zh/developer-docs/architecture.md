@@ -1,107 +1,168 @@
 # 整体运行时架构
 
-## 1. 产品定位
+本文只描述**当前代码路径**。历史迁移方案不作为实现依据；遇到冲突时，以 `scripts/start-stack.sh`、`services/api/src/agent-run/create-agent-run.ts`、`services/adapter/`、`services/runner/` 和架构检查脚本为准。
 
-ScienceDiscovery 是面向 **Linux 本地、单用户** 的科学分析 Agent：浏览器 UI 连接 Node 控制 API，**agent 循环就跑在这个 Node 控制面进程内**；工作区工具、沙箱执行、数据连接器、PDF 抽取、权限、溯源与评审同样在 Node 控制面完成。
+## 1. 两种 Agent executor，共用一个控制面
 
-它不是多租户云服务。API 默认只监听回环地址；认证仅为静态 bearer token 且无 TLS。只有在更换 token、并确保网络可信且受保护后，才应显式监听其他网卡。
+ScienceDiscovery 的 Project、Session、权限、工具实现、Artifact、溯源和运行事件仍由 Node 控制面 `services/api` 持有。Agent executor 有两条实现：
 
-## 2. 运行时架构（逻辑视图）
+| Executor | 选择方式 | Agent loop 在哪里 | 公共入口 |
+| --- | --- | --- | --- |
+| Native | 本地源码模式默认；或 `SCIENCE_AGENT_EXECUTOR=native` | `services/api/src/native-agent/` | API 直接监听 `:4310` |
+| JiuwenSwarm | Docker/发行包默认；本地用 `--jiuwenswarm` | JiuwenSwarm；ScienceDiscovery adapter 负责协议适配 | adapter `:4310`，API 退到 `:4410` |
 
-### 2.1 有几个常驻进程？
+关键点：**切换 executor 不会把业务权威状态迁出 API。** `createAgentRun()` 通过 `defaultAgentFactory()` 在 `createNativeAgent` 和 `createJiuwenSwarmAgentFactory` 之间选择。
 
-本地用 `./scripts/start-stack.sh --mode local` 启动时，**产品本身常驻 2 个进程**（脚本后台拉起 Runner，前台跑 API；Ctrl-C 会一并清理后台）。原有 `./scripts/run-local.sh` 仍是转调该模式的兼容入口：
+## 2. 当前进程拓扑
 
-| # | 进程 | 启动方式 | 默认监听 | 协议角色 |
-|---|------|----------|----------|----------|
-| — | ~~Gateway~~ | 已删除 | — | web provider 原生化后该服务不再存在；`services/gateway` 仅作为随包 Python MCP server 的解释器环境保留 |
-| 2 | **Runner** | `node services/runner/dist/server.js` | `127.0.0.1:4311` | 接收 API 的执行请求，在 bubblewrap 里跑 Python/R/shell；启用时管理白名单 Host NPU job |
-| 3 | **API** | `pnpm api` → `node services/api/dist/server.js` | `127.0.0.1:4310` | 浏览器入口：REST + SSE + 静态 UI；**agent 循环、模型调用、工具执行、MCP 客户端都在这个进程内** |
+### 2.1 Native 模式
 
 ```text
-                    浏览器（不是本仓库起的服务进程）
-                              │  HTTP :4310
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  进程 ②  services/api                     127.0.0.1:4310        │
-│  控制面 · 会话存储 · 权限/溯源 · 连接器 · 静态 Web                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Node 原生 agent loop（native-agent/）                     │  │
-│  │  模型流式传输 · 工具调度 · 延迟工具 · 历史压缩              │  │
-│  │  进程内 MCP 客户端（mcp/node-client.ts）                    │  │
-│  │  原生 web provider（web-providers/native/）                 │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└──────┬───────────────────────┬──────────────────────┬───────────┘
-       │ 出站 HTTPS            │ 出站 HTTPS           │ 执行请求 :4311
-       │ 模型 API              │ 搜索/抓取厂商 API    │
-       ▼                       ▼                      ▼
-用户配置的模型 API      tavily / exa / brave   ┌──────────────────────────┐
-(OpenAI 兼容 /          bing / duckduckgo      │  进程 ①  services/runner │
- Anthropic)             jina                   │  127.0.0.1:4311          │
-                                               │  bubblewrap 沙箱执行     │
-                                               └────────────┬─────────────┘
-                                                            │ 子进程 bwrap/python/R
-                                                            ▼
-                                                 会话工作区里的用户代码
+Browser
+   │ REST / SSE :4310
+   ▼
+services/api
+   ├─ Agent run orchestration
+   ├─ native-agent loop
+   ├─ tools / permissions / provenance / artifacts
+   ├─ MCP clients / data sources
+   └──────────────▶ services/runner :4311 ──▶ sandbox processes
 
-  services/gateway 不再是进程：它的 venv 只为随包的 Python MCP server
-  （biomed、UniProt）提供解释器，由 API 以 stdio 子进程按需拉起。
+optional sidecars:
+services/memory-graph :17674
+services/evolve        :4313
+services/paper         on-demand worker
+Python MCP servers     on-demand stdio children
 ```
 
-**要点：**
+### 2.2 JiuwenSwarm 模式
 
-- **3 个常驻 HTTP 服务进程** = api + runner + gateway。浏览器只是客户端。
-- **模型对话由 API 进程直接发起**，不再有「API 把一轮对话转交给 gateway」这一跳，也不再有 gateway 回调 API 的 `/internal/tool-exec`。
-- Runner **始终只绑回环**，API 也默认只绑回环；对外暴露 API 必须显式配置。
-- 一轮聊天时：浏览器只跟 **API:4310** 说话；API 直接调模型 API、web provider 和 runner，没有 gateway 这一跳。
+```text
+Browser
+   │ REST / SSE :4310
+   ▼
+services/adapter
+   ├─ migrated /agent/* routes
+   ├─ per-run MCP bridge
+   ├─ per-run model proxy
+   └─ reverse proxy for remaining routes
+            │
+            ▼
+services/api :4410
+   ├─ authoritative Project / Session / Run state
+   ├─ tool construction, permission, Artifact, provenance
+   ├─ createAgentRun()
+   └─ JiuwenSwarm agent factory
+            │ POST /agent/runs
+            ▼
+services/adapter
+            │ WebSocket
+            ▼
+JiuwenSwarm gateway
+   ├─ model calls ──▶ adapter /llm/<token>/v1 ──▶ API model gateway ──▶ provider
+   └─ tool calls  ──▶ adapter /mcp/<token> ──▶ API loopback tool bridge
+                                              └─▶ Runner / MCP / workspace / etc.
+```
 
-### 2.2 哪些「模块」不是常驻进程？
+Adapter 的真实协议与已验证行为见 `services/adapter/README.md`。未迁移的 HTTP 路由仍反向代理给 TypeScript API。
 
-架构图里的 **paper**、**deer-flow** 容易被理解成独立服务，实际不是（deer-flow 已整体移除）：
+## 3. 启动模式矩阵
 
-| 名称 | 是否常驻进程 | 实际形态 |
-|------|--------------|----------|
-| **services/paper** | 否 | PDF 需要时，API 用 `execFile` **按次拉起** `paper_worker.py` 子进程，跑完退出 |
-| **deer-flow** | 已移除 | agent 循环与 web provider 都在 Node 进程内实现，gateway 的 venv 不再安装 `deerflow-harness`，对应 submodule 也已删除 |
-| **apps/web** | 否（生产路径） | 构建为静态资源，由 **API 进程** 从 `apps/web/dist` 托管；开发时可用 Vite 另起 `:5173`（可选） |
-| **services/memory-graph** | 是（默认开启；Docker 中关闭） | 实验性可选侧车（Python，仅回环 `:17674`）；由启动脚本拉起，默认以本地文件存储，也可在 System Settings 中改用 Neo4j；关闭时 API 写入为静默 no-op |
-| **持久内核 / bwrap 任务** | 否（按需） | Runner 在执行代码时派生子进程；空闲超时后回收 |
-| **Host NPU Broker job** | 否（按需） | 仅当 `SCIENCE_AGENT_NPU_BROKER=1` 时由 Runner 启动白名单宿主 workload；不是独立 daemon，不开放任意命令 |
-| **外部模型 / PubMed 等** | 远端 | 出站 HTTPS，不是本机进程 |
+`scripts/start-stack.sh` 是源码/Docker 栈的事实源：
 
-因此：逻辑上可以画多个「模块」，**运行时默认同机常驻只有 2 个进程**（启用 ScienceMemory 时 +1；Host NPU Broker job 只是 Runner 按需派生的子进程）。
+| 模式 | 默认 executor | Adapter | API 端口 |
+| --- | --- | --- | --- |
+| `--mode local` | native | 不启动 | 4310 |
+| `--mode local --jiuwenswarm` | JiuwenSwarm | 4310 | 4410 |
+| `--mode docker` | JiuwenSwarm | 4310 | 4410 |
+| `--mode docker --no-jiuwenswarm` | native | 不启动 | 4310 |
 
-### 2.3 agent 循环跑在哪个进程？
+发行单文件的默认行为与 Docker 一致：JiuwenSwarm 是默认 executor。
 
-**跑在 API 进程（`services/api`）内。**
+无论 executor 如何选择，Runner 默认只监听回环 `:4311`。
 
-- 循环实现是本仓库自己的 TypeScript：`services/api/src/native-agent/`，入口 `createNativeAgent`。**不使用 LangChain / LangGraph**。
-- 模型调用由 API 进程用 `undici` 直接发出，支持 OpenAI 兼容与 Anthropic Messages 两种方言。
-- 模型要调工具时，循环**直接在进程内 `await` 工具处理器**；`packages/workspace` 构建工作区工具，`packages/tools` 负责注册与调度，API 注入具体基础设施适配器，不存在跨进程回调。
-- MCP 由 API 进程用官方 TypeScript SDK 直连（stdio 子进程 / SSE / streamable-HTTP）。随包的 Python MCP server（biomed、UniProt）以 stdio 子进程启动，**解释器来自 gateway venv**——这是 gateway 环境仍需存在的第二个原因。
+## 4. 服务与 sidecar 职责
 
-模块级说明见 [agent-backend.md](agent-backend.md)。
+| 组件 | 形态 | 当前职责 |
+| --- | --- | --- |
+| `apps/web` | 静态 Web / dev server | UI、SSE 展示、权限卡片、设置 |
+| `services/api` | 常驻 Node | 控制面、运行编排、权威状态、工具/权限/Artifact/溯源 |
+| `services/adapter` | JiuwenSwarm 模式常驻 Python | 公共 front door、JiuwenSwarm run bridge、LLM/MCP 适配、旧 API 反代 |
+| `services/runner` | 常驻 Node | Bubblewrap/Seatbelt 执行、科学环境、可选 NPU broker |
+| `services/memory-graph` | 可选常驻 Python | ScienceMemory 图服务；存储可为本地文件或 Neo4j |
+| `services/evolve` | 常驻 sidecar（栈启动时） | 演进搜索；业务事件和持久化权威仍在 API |
+| `services/paper` | 按需 Python worker | 有界 PDF 抽取 |
+| `services/gateway` | **不是 HTTP 服务** | 随包 Python MCP server 代码与解释器环境 |
+| JiuwenSwarm | 外部/随包运行时 | JiuwenSwarm executor 的会话与循环实现 |
 
-### 2.4 一轮用户消息的时序（跨进程）
+不要再把 `services/gateway` 当成 Agent gateway 服务；也不要把 `deer-flow` 当成当前依赖。
 
-1. 浏览器 → **API:4310**（SSE/REST）提交用户消息。
-2. API 组装 `AgentProfile` + 工作区选项，`createAgentRun` 建出 `NativeAgent`：系统提示 + 本会话工具表 + 模型 endpoint。
-3. API 进程内循环：流式调用**外部模型 API**（出站 HTTPS），文本/推理增量实时经 SSE 推给浏览器。
-4. 模型返回 tool call 时，API **在本进程内**执行真实工具（可能再 → **Runner:4311** 跑 Python，或连接器出站，或读工作区文件，或经进程内 MCP 客户端调 MCP server）。
-5. 工具结果追加回历史，继续下一轮，直到某轮不再产生 tool call。
-6. 循环返回 `finalMessages`；API 落盘历史。
+## 5. 一次 Run 的共同控制面路径
 
-`web_search` / `web_fetch` 的 provider 调用同样从 API 进程直接出站，不再有额外的进程跳转。
+两种 executor 在 `createAgentRun()` 之前和工具执行之后共享同一控制面：
 
-### 2.5 职责切分（核心原则）
+1. HTTP 层接收 Session message。
+2. API 解析生效设置、模型、Skill、Specialist、Connector、Workspace 和权限状态。
+3. `runMainRequestExecution` / `runSubagentTask` 构造运行上下文。
+4. `createAgentRun(profile, bindings, input)` 选择 executor。
+5. executor 产生模型事件和 tool call。
+6. Tool 最终回到 ScienceDiscovery 提供的真实处理器，因此权限、Runner、Artifact、MCP、审计语义保持一致。
+7. API 持久化 RunStreamEvent、消息、Prompt Manifest、Artifact 与 provenance。
 
-能力归属统一在 `packages/`，以公开插件入口接入产品；`services/` 负责进程入口与装配，`apps/web` 负责浏览器外壳，不再维护顶层 `plugins/` 功能副本。目标依赖方向是宿主到组件、组件到公共合同，运行时注入回调不构成反向 import。当前保留的 executor → Runner 遗留耦合、架构检查边界、StateView 和新增方式见 [插件化机制](plugins.md)。本次未替换 AgentLoop，也未把独立进程等同于插件。
+因此修改 executor 时，不应复制 Project/Session/permission/artifact 存储逻辑。
 
-| 层 | 是否常驻 | 职责 | 不负责 |
-|----|----------|------|--------|
-| **Web** | 静态资源 / 可选 dev server | UI、流式展示、权限卡片、配置 | 业务权威状态 |
-| **API (Node)** | 是（:4310） | **agent 循环与模型调用**、会话状态、工具真实执行、进程内 MCP 客户端与治理、权限/溯源/评审、存储 | 沙箱进程隔离本身 |
-| **Gateway (Python)** | 否（仅环境） | 为随包 Python MCP server 提供解释器环境 | 不再是服务：agent 循环、web provider、沙箱、治理都不在这里 |
-| **Runner** | 是（:4311） | bubblewrap 代码执行；启用时管理白名单 Host NPU Broker job | 业务语义、任意宿主 shell |
-| **Paper** | 否（按次子进程） | 有界 PDF 抽取 | 联网检索 |
-| **deer-flow** | 已移除 | — | 全部：agent 循环与 web provider 都是本仓自有代码 |
+## 6. 包与服务的所有权边界
+
+架构的核心约束不是“目录看起来像什么”，而是 `scripts/check-architecture.mjs` 强制的依赖规则：
+
+- **能力实现归 `packages/` 所有。**
+- `services/` 负责进程入口、HTTP/协议适配和组合装配，不应复制 capability policy。
+- `apps/web` 只负责浏览器体验，不是权威业务状态。
+- `packages/` 不得 import `services/` 或 `apps/`。
+- 生产 services 不得依赖旧的 `@sciencediscovery/agent-runtime` compatibility facade。
+- `packages/runtime-core` 只能使用相对 import，是最底层运行时合同。
+- `packages/context` 只能依赖 `model` 和 `runtime-core`，避免 contributor 扩展形成依赖环。
+- executor → runner 是当前唯一显式冻结的遗留 package 耦合；不要扩大这个例外。
+
+`check-architecture.mjs` 还显式禁止一批已经迁移到 package 的旧 `services/api/src/*` 源文件重新出现。新增功能前先运行：
+
+```bash
+pnpm architecture:check
+```
+
+## 7. 重要 composition seam
+
+深度开发最需要先找到这些入口：
+
+| 目的 | 代码入口 |
+| --- | --- |
+| API 进程 | `services/api/src/server.ts` → `http/index.ts` |
+| Agent Run | `services/api/src/agent-run/create-agent-run.ts` |
+| Native executor | `services/api/src/native-agent/` |
+| JiuwenSwarm executor | `services/api/src/agent-run/jiuwenswarm-agent.ts` |
+| JiuwenSwarm front door | `services/adapter/src/sciencediscovery_adapter/` |
+| Tool/runtime capability | `packages/tools`, `packages/workspace`, capability packages |
+| Sandbox execution | `services/runner/src/server.ts` + `packages/executor` |
+| Plugin contracts | `packages/plugin-sdk` |
+| Context contributors | `packages/context` |
+| Stack lifecycle | `scripts/start-stack.sh` |
+| Architecture enforcement | `scripts/check-architecture.mjs` |
+
+## 8. 修改架构时的检查清单
+
+- 这是 capability policy，还是进程/协议装配？
+- 是否已经有 owning package？
+- native 与 JiuwenSwarm 两个 executor 是否都需要适配？
+- 是否改变公共端口、内部端口或 sidecar 生命周期？
+- 是否改变 Run/Tool/Artifact/Permission 的权威状态归属？
+- 是否增加 package dependency edge？能否通过 `pnpm architecture:check`？
+- 用户可观察行为是否需要 E2E，而不仅是单元测试？
+
+## 相关文档
+
+- [深度开发指南](developer-guide.md)
+- [控制面](control-plane.md)
+- [Agent 后端](agent-backend.md)
+- [组件与插件机制](plugins.md)
+- [沙箱执行](sandbox-execution.md)
+- [仓库布局](repository-layout.md)
