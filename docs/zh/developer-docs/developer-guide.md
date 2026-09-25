@@ -134,11 +134,14 @@ pnpm typecheck
 
 用户可观察行为发生变化时，应补或运行对应用户旅程；不要只以“单元测试通过”作为完成标准。
 
-全仓默认检查入口：
+全仓默认检查与文档检查入口：
 
 ```bash
 pnpm check
+pnpm docs:check
 ```
+
+`docs:check` 会执行 Markdown lint 和仓内文档链接检查。
 
 ## 6. 如何判断文档是否还能信
 
