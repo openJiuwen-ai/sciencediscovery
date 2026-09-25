@@ -1,29 +1,38 @@
-# Specialists: turn research experience into reusable roles
+# Specialists: give research tasks focused expertise
 
-Finding sources, analyzing data, and questioning conclusions require different priorities. Repeating the same working standards for each task takes effort and invites omissions. A Specialist packages a role's responsibilities, instructions, skills, and connectors into a reusable configuration.
+A research report often requires several kinds of work: finding papers, extracting evidence, writing code, evaluating results, and developing an argument. Each needs different judgment. Retrieval should fill source gaps; writing should avoid adding unsupported findings. Someone implementing an analysis also benefits from a separate examination of methodology and reliability.
 
-It might focus on source quality or inspect missingness and sample scope before analysis. A name identifies the role; explicit instructions and available resources determine how it works.
+Specialists separate these responsibilities and supply role instructions, skills, and tool scope. The main Agent can choose roles suited to the task while retaining responsibility for the research objective and synthesis. Researchers spend less time repeating working requirements and gain clearer assignments and deliveries.
 
-## Make expertise concrete
+## Research roles already provided
 
-A useful Specialist defines its input, the judgments it owns, and its output. A literature-retrieval role might deliver deduplicated sources and coverage gaps without also designing experiments or writing the final report.
+ScienceDiscovery includes the following eight Specialists. Combine them as needed; every investigation does not require the full team.
 
-Skills provide reusable methods; connectors expose data and tools. Combining them with role instructions reduces repeated preparation and clarifies assignments. Models and execution environments still depend on actual runtime configuration. A role name does not create independent computing resources.
+| Built-in role | Suitable work | Main delivery |
+| --- | --- | --- |
+| `literature-searcher` | Search available academic sources, deduplicate, and record coverage gaps | Source lists and retrieval notes |
+| `evidence-extractor` | Extract findings, methods, statistics, and limits from supplied sources | Structured evidence with source anchors |
+| `code-engineer` | Write, execute, and debug Python/R analyses; document methods and environments | Scripts, results, and reproduction notes |
+| `result-evaluator` | Assess accuracy, completeness, robustness, and methodological quality | Revision decisions and concrete feedback |
+| `report-writer` | Synthesize existing research summaries while preserving disagreements and source relationships | A report in the requested format |
+| `creative-material-design` | Propose water-treatment material structures, properties, and feasibility | Candidate material designs |
+| `assessment-screener` | Assess material candidates from specified perspectives and rubrics | Dimension scores, strengths, weaknesses, and verification notes |
+| `insight-aggregator` | Compare assessments and expose agreement and disagreement | Insights for further improvement |
 
-## Specialized work still needs coordination
+The first five cover common literature and data-research stages; the remaining three support material design and assessment. These material roles are callable presets, not a claim that current Idea Tree dispatches them to perform real experiments. [Idea Tree](idea-tree.md) has its own research loop and limits.
 
-The main Agent can select a Specialist when dispatching a task and use its result in the wider investigation. Roles do not guarantee parallel execution or correct conclusions. The main Agent still needs to inspect deliveries, consolidate overlap, and address disagreement.
+For a bird-migration review, retrieval can prepare sources, extraction can preserve species and experimental conditions, and writing can synthesize the findings. Data analysis may benefit more from code engineering and result evaluation. Actual delegation depends on the task; inspect execution records to see which roles were used.
 
-A useful handoff includes files or artifacts, a short conclusion, and unresolved questions. Later roles can build on that work without repeating every search or copying large intermediate texts into conversation.
+![Built-in and custom Specialists](../../images/specialist-en.png)
 
-## Begin with work you repeat most
+Built-in responsibilities are fixed, with enable/disable controls. Role names do not confer professional qualifications, and several roles may share model biases. Clear assignments support inspection rather than replace validation. The workflow's `result-evaluator` is also distinct from the artifact-focused [Reviewer mechanism](science-memory-reviewer.md).
 
-In **System settings → Specialists**, inspect built-in roles or create your own. Supply a name, description, instructions, and the required skills and connectors. Start with defaults, then define a dedicated role when a pattern of repeated work becomes clear.
+## Bring in your domain's experience
 
-![Specialist configuration](../../images/specialist-en.png)
+Presets cannot cover every laboratory's process. Create a Specialist that captures your research scope, decision rules, delivery requirements, and available connectors. A cohort-selection assistant, for example, could require inclusion/exclusion counts at each step and reproducible scripts.
 
-The benefit comes from consistent methods and clear responsibilities. Calling a role an expert does not grant professional qualifications or replace experimental validation. Specific delivery requirements often help more than adding extra roles.
+Custom roles use the existing runtime and permission system; adding one does not require redeploying the application. If a role needs specialized tools or methods, connect MCP services or import Skills and incorporate them into the appropriate workflow.
 
-- [Scientific MCP and Skills](mcp-skills.md): combine tool interfaces with working methods.
-- [Literature-research tutorial](../domains/literature-research.md): retrieval, synthesis, and verification.
-- [Runtime behavior](../reference/runtime-behavior.md): resource selection and permissions.
+- [Create and use custom Specialists](../advanced-setup/configure-specialists.md): define responsibilities, configure resources, and verify a task.
+- [Scientific MCP and Skills](mcp-skills.md): existing tools, methods, and extension options.
+- [Literature-research tutorial](../domains/literature-research.md): from a question to an inspectable report.

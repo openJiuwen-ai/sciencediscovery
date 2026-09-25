@@ -1,33 +1,50 @@
-# Scientific MCP and Skills: access data and use it methodically
+# Scientific MCP and Skills: connect resources and reuse research methods
 
-A research Agent needs access to real databases and computing tools, as well as a method for using them coherently. MCP connectors and Skills provide these complementary capabilities, helping turn a verbal request into concrete work.
+Research needs concrete evidence: a protein annotation, a paper's experimental conditions, or atom positions in a structure file. Model knowledge alone cannot reliably keep that information current and inspectable. Without suitable procedures, even good data can lead to results that are difficult to reproduce.
 
-## Bring external capabilities into the investigation
+ScienceDiscovery connects scientific data and tools through MCP and supplies reusable methods through bundled Skills. Connectors obtain actual records; Skills guide retrieval, organization, computation, and delivery, so each investigation need not start from scratch.
 
-Through MCP, the Agent can call configured scientific interfaces to search papers, query database records, or retrieve tool-generated files. Each interface has its own parameters and results. The Agent should choose from capabilities actually available in the current session rather than assume every database is online.
+## Scientific resources already connected
 
-A connector also helps preserve source identity. Titles, DOIs, database records, and the scope of accessible content determine what can reasonably be inferred next. An abstract is not a full paper, and a database match does not validate a conclusion.
+The product provides these built-in scientific connectors. Enable them for the task without writing your own adapter.
+
+| Research need | Included sources | Starting points |
+| --- | --- | --- |
+| Papers and preprints | PubMed, Europe PMC, arXiv, bioRxiv, medRxiv | Discover studies, retain identifiers and links, and obtain supported records or download entry points |
+| Protein function and structure | UniProt, PDB | Query annotations, structure entries, and available structure files |
+| Genes and variants | Ensembl, ClinVar | Look up genes, transcripts, variants, and associated annotations |
+| Pathways and experimental data | Reactome, GEO | Find pathway information and public expression-study records |
+| Compounds and activity | ChEMBL | Query compounds, targets, and activity records |
+
+An LLM Wiki connector also supports knowledge-page search and reading when configured and available. Included integration does not guarantee service availability, unrestricted downloads, or full-text access. Check the current session's actual tools and connection status.
 
 ![Scientific connectors](../../images/connector-en.png)
 
-## Preserve a way of working
+## Research methods already prepared
 
-A Skill contains readable working instructions and supporting resources. A literature skill can guide query design, deduplication, coverage notes, and incremental saving. An analysis skill can prompt input inspection, justified method selection, and reproducible code delivery.
+The product bundles 17 Skills, covering complete workflows and composable steps:
 
-Skills may contain scripts and reference material. Selecting one does not execute its scripts or install dependencies automatically. The Agent reads relevant instructions and uses actual tools to perform the work. Recorded skill versions help establish which procedure a run used.
+| Work area | Bundled Skills | Purpose |
+| --- | --- | --- |
+| Research organization and evidence briefs | `science-research-team`, `life-science-evidence-brief` | Organize literature/data research and produce source-grounded summaries |
+| Retrieval, extraction, and writing | `literature-searcher`, `evidence-extractor`, `report-writer` | Move from source discovery to evidence and report synthesis |
+| Computation and assessment | `code-engineer`, `result-evaluator` | Produce reproducible analysis and assess methods and results |
+| Citation and numerical checks | `citation-reviewer`, `computation-reviewer` | Examine source support and agreement between numeric claims and evidence |
+| Material-design exploration | `creative-material-design`, `assessment-screening`, `insight-aggregator` | Propose candidates, assess perspectives, and summarize feedback |
+| Autonomous research and artifact improvement | `idea-tree-team`, `evolve-design` | Prepare Idea Tree inputs and explain results; design and launch evolution searches |
+| Structures and antibody workflows | `structure-pocket-inspection`, `antibody-design` | Inspect local PDB structures and pockets; organize antibody-design computation |
+| Reusable methods | `skill-creator` | Draft reviewable skill packages from explicit requests |
 
-## Combine tools and methods into reusable steps
+Each method has prerequisites. Structure inspection needs files; antibody workflows need the relevant software and hardware; reviewer skills need evidence to inspect. Installation does not prove that a model read or executed a Skill, and actual outputs still need checking.
 
-In literature research, a Skill guides retrieval and organization, MCP supplies actual sources, and the Agent reads evidence, synthesizes findings, and delivers a report. A Skill cannot manufacture data when a connector is unavailable. Many interfaces without a clear method can also lead to duplicate searches and missed evidence.
+## Bring your laboratory's resources into the workflow
 
-Begin with an available connector and a suitable Skill, then add capabilities as needed. Project and Session choices determine actual availability. Registration in the global library does not guarantee access in a restricted session.
+Connect a private database, an existing MCP service, or a specialized computing interface. Package recurring SOPs, analysis scripts, and delivery standards as Skills. Tools and methods can evolve separately: changing a data interface need not rewrite the whole procedure, and improving a procedure need not add a service.
 
-## Keep improvements reviewable
+User extension paths include local STDIO and remote HTTP/SSE MCP servers, plus skill imports from files, folders, ZIPs, and Git. An Agent can draft a Skill for human confirmation. Manage credentials in settings rather than public skill instructions.
 
-Settings support connector management and imports of local or Git skill packages. The Agent can also draft a Skill. User confirmation is required before an Agent-generated draft is installed, allowing useful experience to become reusable while retaining an opportunity to review changes.
+The advanced guides provide the actual setup steps:
 
-External results and imported material still need to be handled according to their sources and permissions. MCP access and Skill selection do not bypass runtime permissions or guarantee complete research coverage.
-
-- [Configure custom MCP servers](../advanced-setup/configure-custom-mcp.md): connections, credentials, and tool selection.
-- [Skill management](../developer-docs/skill-library-management.md): packages, versions, and review.
-- [Specialists](specialists.md): organize tools and methods into reusable roles.
+- [Connect custom MCP servers](../advanced-setup/configure-custom-mcp.md): services, authentication, connection tests, and tool selection.
+- [Import and manage Skills](../advanced-setup/configure-skills.md): packages, import, availability, and verification.
+- [Create Specialists](../advanced-setup/configure-specialists.md): organize resources and responsibilities into research roles.

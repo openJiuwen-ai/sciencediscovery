@@ -31,6 +31,9 @@
 
 ## 进阶设置
 
+- [创建与使用自定义 Specialist](advanced-setup/configure-specialists.md) — 配置专业职责、资源并验证任务。
+- [导入与管理科研 Skill](advanced-setup/configure-skills.md) — 本地/Git 导入、运行端启用与草稿审核。
+
 - [配置自定义 MCP](advanced-setup/configure-custom-mcp.md) — 本地/远程连接、秘密值编辑、OAuth、Inspector 与会话工具选择。
 - [配置网络代理](advanced-setup/configure-network-proxy.md) — 在设置页添加代理并为 LLM、Web 和 MCP 选择策略。
 - [安装 Neo4j 与配置科学记忆](advanced-setup/science-memory-setup.md) — 安装外部 Neo4j、在系统设置里开启科学记忆，并在前端图谱里查看链路。

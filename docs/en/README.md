@@ -31,6 +31,9 @@ From running code to exploring directions, improving artifacts, and checking evi
 
 ## Advanced setup
 
+- [Create and use custom Specialists](advanced-setup/configure-specialists.md) — define responsibilities, configure resources, and verify a task.
+- [Import and manage research Skills](advanced-setup/configure-skills.md) — local/Git import, runtime availability, and draft review.
+
 - [Configure custom MCP servers](advanced-setup/configure-custom-mcp.md) — local/remote connections, secret editing, OAuth, Inspector and Session tool selection.
 - [Configure the network proxy](advanced-setup/configure-network-proxy.md) — add a proxy on the settings page and choose a policy for LLM, web, and MCP traffic.
 - [Install Neo4j and configure ScienceMemory](advanced-setup/science-memory-setup.md) — install an external Neo4j, enable ScienceMemory in system settings, and explore chains in the frontend graph.
