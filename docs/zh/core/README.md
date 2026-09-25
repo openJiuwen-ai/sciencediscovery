@@ -42,9 +42,9 @@ ScienceMemory 记录研究过程中的关系，Reviewer 帮助发现产物中的
 
 ---
 
-## 3. 研究执行基础
+## 3. 支撑科研 Agent 的基础能力
 
-以下能力属于 Agent 工作的基础组成，在基本概念中介绍其作用，在这里提供 ScienceDiscovery 中的具体实现方式：
+理解 Agent 基础概念后，以下能力帮助 ScienceDiscovery 将研究过程真正执行起来：
 
 ### [科研执行环境与工作区](execution-workspaces.md)
 
