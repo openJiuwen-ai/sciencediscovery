@@ -12,9 +12,14 @@ This is the complete English documentation set.
 
 ## Core capabilities
 
-- [Program evolution](core/evolve.md) — understand searches, scoring modes, engines, data splits, and result trustworthiness.
-- [Shell, environments, and workspaces](core/execution-workspaces.md) — understand execution, files, environments, completion, and stopping.
-- [Idea Tree](core/idea-tree.md) — understand the autonomous-research engine, its use, state, and boundaries.
+From running code to exploring directions, improving artifacts, and checking evidence, these six capabilities support research you can inspect and iterate on.
+
+- [Scientific sandbox](core/execution-workspaces.md) — Write, debug, and run code in an isolated workspace, with results you can inspect.
+- [Idea Tree](core/idea-tree.md) — Propose, design, and assess candidates, then use feedback to guide another round.
+- [RSI for scientific artifacts](core/evolve.md) — Improve evaluable artifacts through variant search and held-out assessment.
+- [ScienceMemory and Reviewer](core/science-memory-reviewer.md) — Connect tasks, evidence, and conclusions, and identify issues worth reviewing.
+- [Specialists](core/specialists.md) — Package responsibilities, skills, and tools into reusable research roles.
+- [Scientific MCP and Skills](core/mcp-skills.md) — Combine scientific interfaces with reusable working methods.
 
 ## Domain guides
 
@@ -26,11 +31,16 @@ This is the complete English documentation set.
 
 ## Advanced setup
 
+- [Create and use custom Specialists](advanced-setup/configure-specialists.md) — define responsibilities, configure resources, and verify a task.
+- [Import and manage research Skills](advanced-setup/configure-skills.md) — local/Git import, runtime availability, and draft review.
+
 - [Configure custom MCP servers](advanced-setup/configure-custom-mcp.md) — local/remote connections, secret editing, OAuth, Inspector and Session tool selection.
 - [Configure the network proxy](advanced-setup/configure-network-proxy.md) — add a proxy on the settings page and choose a policy for LLM, web, and MCP traffic.
 - [Install Neo4j and configure ScienceMemory](advanced-setup/science-memory-setup.md) — install an external Neo4j, enable ScienceMemory in system settings, and explore chains in the frontend graph.
 
 ## Reference
+
+- [Execution and workspaces](reference/execution-workspaces.md) — execution states, file handoff, environment revisions, and stopping.
 
 - [Configuration](reference/configuration.md) — environment variables, default ports, upload/workspace/output quotas, and data layout.
 - [REST API](reference/rest-api.md) — internal HTTP API used by the UI: authentication, request/response, and error semantics.
@@ -39,5 +49,7 @@ This is the complete English documentation set.
 - [Web tools](reference/web-tools.md) — web search/fetch providers, configuration, permissions, caching, and audit.
 
 ## Developer documentation
+
+- [Idea Tree implementation](developer-docs/idea-tree.md) — research loops, persisted state, budgets, and recovery limits.
 
 See the [developer documentation index](developer-docs/README.md) for architecture, module boundaries, protocols, and current feature designs.
