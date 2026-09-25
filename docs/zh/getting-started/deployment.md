@@ -319,7 +319,10 @@ docker compose logs --tail=200
 
 ## 进一步阅读
 
+- CLI 命令与精确行为：[CLI 参考](../reference/cli.md)
 - 精确环境变量、端口和数据目录：[配置参考](../reference/configuration.md)
+- 单文件发行包如何构建：[开发者文档：二进制打包与发行](../developer-docs/binary-packaging.md)
+- 本地/Docker/远端 Runner 的内部部署机制：[开发者文档：部署运行机制](../developer-docs/deployment-runtime.md)
 - 沙箱隔离和执行机制：[开发者文档：沙箱执行](../developer-docs/sandbox-execution.md)
 - 系统内部进程与模块边界：[开发者文档：整体架构](../developer-docs/architecture.md)
 - 仓库布局和源码入口：[开发者文档：仓库布局](../developer-docs/repository-layout.md)
