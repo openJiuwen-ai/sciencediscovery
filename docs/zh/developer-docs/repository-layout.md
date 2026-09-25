@@ -1,167 +1,196 @@
 # 仓库布局参考
 
-本文列出目录、模块、默认端口及数据落点。组件为何这样分工见[整体运行时架构](architecture.md)。
+本文是给深度开发者和 Code Agent 的代码导航。目录存在不等于拥有业务能力；**能力所有权以 package、公开接口和架构检查规则为准**。
 
-## 1. 代码仓目录排布
-
-Monorepo（pnpm workspace + 若干 Python 子项目）：
+## 1. 顶层结构
 
 ```text
 sciencediscovery/
-├── apps/web/                 # React 浏览器 UI（Vite）
+├── apps/
+│   └── web/                  # React/Vite 浏览器工作台
 ├── services/
-│   ├── api/                  # Node 控制 API（主业务）
-│   ├── gateway/              # 随包 Python MCP server 及其 venv
-│   ├── runner/               # bubblewrap 执行器
-│   ├── paper/                # PDF worker（uv 项目）
-│   └── memory-graph/         # 实验性 ScienceMemory 侧车（默认开启，Docker 中关闭；本地文件或 Neo4j）
-├── packages/
-│   ├── agent-runtime/        # 系统提示、工作区工具定义、Agent 事件类型
-│   ├── schema/               # 共享 TypeScript 类型与 schema
-│   └── mcp-sources/          # 科研 MCP Source/Tool manifest 与信任边界
-├── skills/                   # 内置 Agent Skills 包
-├── scripts/
-│   ├── start-stack.sh        # 本地与 Docker 共用的三进程启动入口
-│   ├── run-local.sh          # 本地模式兼容包装
-│   └── docker-entrypoint.sh  # Docker 模式兼容包装
-├── test/                     # 集成检查与用户视角 E2E（不在 pnpm check 内）
-│   ├── *.spec.ts             # Playwright 用例
-│   ├── api/                  # 现有适配器 smoke；新增 API/CLI 用户旅程驱动的放置目录
-│   ├── gateway/              # gateway mock / real smoke
-│   └── e2e.package*.json     # Playwright 本地环境引导文件
-├── docs/                     # 本目录：中文技术文档
-├── data/                     # 运行时状态（gitignored）
-├── .e2e/                     # 本地 Playwright 环境（gitignored，由 test/ 引导文件重建）
-├── README.md / README_zh.md
-└── LICENSE                   # Apache-2.0
+│   ├── api/                  # Node 控制面与 composition root
+│   ├── adapter/              # JiuwenSwarm front door / 协议适配
+│   ├── runner/               # 沙箱执行 daemon
+│   ├── evolve/               # 演进搜索 sidecar
+│   ├── memory-graph/         # ScienceMemory 图 sidecar
+│   ├── paper/                # PDF 抽取 worker
+│   ├── gateway/              # Python MCP server 代码与解释器环境
+│   └── launcher/             # 单文件发行启动器
+├── packages/                 # 共享能力与领域实现的主要所有者
+├── skills/                   # 内置 Skill 包
+├── scripts/                  # 启动、打包、架构检查、CI 辅助
+├── test/                     # 集成、ST、E2E 与真实环境测试
+├── docs/
+└── package.json
 ```
 
-### 1.1 进程与默认端口
+`pnpm-workspace.yaml` 注册 `apps/*`、`services/*`、`packages/*`。Python sidecar 则各自以 uv/pyproject 管理。
 
-由 `./scripts/start-stack.sh --mode local` 启动（也可继续使用 `./scripts/run-local.sh`）：
+## 2. Services：进程与协议装配
 
-| 进程 | 默认地址 | 说明 |
-|------|----------|------|
-| `services/gateway` | 无端口 | 不再是服务：仅为随包 Python MCP server 提供解释器环境 |
-| `services/runner` | `127.0.0.1:4311` | 沙箱执行；仅回环 |
-| `services/api` | `127.0.0.1:4310` | 控制 API + 静态 UI；默认仅本机 |
+### `services/api`
 
-首次启动会在 `.sciencediscovery-data/envs/gateway`、`.sciencediscovery-data/envs/paper` 下用 uv 准备 Python 环境。本仓已无 submodule。
+Node 控制面。它负责把 capability package 组合成产品：
 
-## 2. 模块划分与主要功能
+- HTTP / SSE / 静态 Web；
+- Project / Session / Run 生命周期；
+- executor 选择；
+- 权限和运行上下文；
+- Artifact / provenance / store 的产品级编排；
+- sidecar 和 Runner 客户端；
+- plugin runtime 装配。
 
-### 2.1 `apps/web` — 前端工作台
+最重要入口：
 
-- 项目 / 会话导航，归档与删除
-- 聊天与工具轨迹、工作区文件、Domain loop（连接器开关）
-- **System configuration**（侧栏唯一全局设置入口）：全局默认、模型注册表、科学环境、技能、specialists、权限和本地服务连接
-- 分层运行时设置：Project / Session 菜单中的 Settings（可 Inherit 全局）；与系统配置不是同一对话框
-- 权限卡片、审批策略、语义评审结果展示
+| 路径 | 作用 |
+| --- | --- |
+| `src/server.ts` | 进程入口 |
+| `src/http/index.ts` | HTTP composition root / 路由主装配 |
+| `src/agent-run/create-agent-run.ts` | native / JiuwenSwarm executor seam |
+| `src/agent-run/orchestrators.ts` | 主/子 Agent run 编排 |
+| `src/native-agent/` | native executor 实现 |
+| `src/plugins/` | plugin 与宿主装配 |
+| `src/store.ts`, `src/store/` | 产品目录与权威状态 |
 
-### 2.2 `services/api` — 控制面（核心）
+不要因为 API 使用某 capability，就把对应 policy 重新写回 `services/api/src`；已有多类旧 service-domain 文件被架构检查禁止重新出现。
 
-| 源码区域 | 功能 |
-|----------|------|
-| `server.ts` | 兼容入口 barrel（re-export `http/`），进程启动点 |
-| `http/` | HTTP 壳：路由装配、鉴权、请求体、响应、静态资源 |
-| `runs/` | 运行生命周期、SSE 运行流、会话运行编排与并发串行化、workspace 事件过滤 |
-| `store.ts` / `store/` | `SessionStore` 门面 + SQLite 目录库；catalog/permissions/secrets/settings/subagents/run-streams 域模块 |
-| `subagents/` | subagent handoff、inputs 与私有 workspace |
-| `artifacts/` | 产物版本 diff 等 artifact 域 |
-| `web-providers/` | Web provider broker、通用 Gateway client 与 workspace 工具 |
-| `native-agent/` | **Node 原生 agent loop**：`index.ts`（循环状态机）、`model-client.ts`（流式模型传输）、`deferred-tools.ts`、`compaction.ts` |
-| `mcp/` | MCP 治理与进程内客户端：`broker.ts`、`node-client.ts`、`extensions-config.ts`、`source-catalog.ts` |
-| `connectors/` | 科学连接器 broker 与 manifest |
-| `papers.ts` | 论文搜索下载与 PDF 抽取编排 |
-| `runner-client.ts` | 调用 runner 执行 Python / R / shell |
-| `provenance.ts` / `reviewer-specialist/` | 执行溯源与 Artifact Reviewer |
-| `skills.ts` | 技能库导入、修订、资源读取 |
-| `remote-compute.ts` | 实验性远程作业卡（非当前支持主线） |
-| `prompt-manifest.ts` | 运行时快照（模型、技能 revision 等） |
+### `services/adapter`
 
-主要对外能力：项目管理、Agent 运行、连接器与论文、托管科学环境、技能与 specialist、权限与评审。
+JiuwenSwarm 模式的 Python front door：
 
-### 2.3 `services/gateway` — 随包 Python MCP server
+- 占公共 `:4310`；
+- 反代未迁移路由到 API `:4410`；
+- 将 ScienceDiscovery run 映射到 JiuwenSwarm；
+- 为每个 run 提供 MCP tool bridge 和 LLM proxy；
+- 将 JiuwenSwarm frame 映射回 ScienceDiscovery run events。
 
-- **不再跑 agent 循环**：agent loop 已原生化到 `services/api` 的 `native-agent/`（见 [Agent 后端](agent-backend.md)）
-- 无 HTTP 服务：web provider 已原生化到 `services/api/src/web-providers/native/`
-- 该 venv 同时为随包的 Python MCP server（biomed、UniProt）提供解释器，由 Node 以 stdio 子进程拉起
-- `_engine/`、FastAPI 应用、`deerflow-harness` 依赖及其 submodule 已整体删除；包内依赖收敛为 `mcp` + `httpx`
+入口和协议说明：
 
-### 2.4 `services/runner` — 隔离执行
+- `src/sciencediscovery_adapter/agent_runs.py`
+- `gateway.py`
+- `mcp_server.py`
+- `llm_proxy.py`
+- `events.py`
+- `services/adapter/README.md`
 
-- bubblewrap 命名空间 + seccomp，默认无网络
-- Python / R / shell；可选托管科学环境与持久内核
-- 墙钟超时、工作区总量与执行输出配额；**无**独立单文件执行配额，也**无** CPU/内存 cgroup 配额
-- 全局单 worker：同一时刻只跑一个沙箱任务
+### `services/runner`
 
-### 2.5 `services/paper` — PDF 抽取
+隔离执行 daemon。主要负责：
 
-- 独立 Python worker，有界抽取：Markdown、表格、插图、页面预览
-- 限制：50 MiB、200 页、文本/表/图/预览上限；无 OCR
+- Linux Bubblewrap / macOS Seatbelt；
+- Python/R/Shell 执行；
+- managed scientific environments；
+- shell/background execution 生命周期；
+- sandbox network gateway；
+- 可选 Ascend NPU broker；
+- 本地 HTTP 或远端 Unix socket Runner。
 
-### 2.6 `packages/*` — 共享库
+入口是 `src/server.ts`。业务语义不应下沉到 Runner。
 
-- **`schema`**：跨包类型（会话、MCP、Artifact、执行结果、权限等）
-- **`agent-runtime`**：工作区系统提示、工具列表（包括按需 MCP、显式下载与抽取）、事件类型
-- **`mcp-sources`**：科研 MCP manifest、输入校验和 Node 信任边界复核
+### Python sidecar / worker
 
-### 2.7 `skills/` — 内置技能
+| 服务 | 生命周期 | 说明 |
+| --- | --- | --- |
+| `services/evolve` | 栈启动时 sidecar | 搜索/候选执行服务 |
+| `services/memory-graph` | 可配置 sidecar | 图存储 API |
+| `services/paper` | 按需 worker | PDF 抽取 |
+| `services/gateway` | 非 HTTP daemon | 随包 Python MCP server 与 Python 环境 |
 
-| 技能 | 用途 |
-|------|------|
-| `life-science-evidence-brief` | 基于连接器做生命科学证据简报（claim ↔ 引用） |
-| `structure-pocket-inspection` | 本地 PDB 结构 / 口袋初检（工作区内 Python） |
+## 3. Packages：能力所有权
 
-技能默认全部可用，可在 Project / Session 中收窄为白名单；运行时冻结 revision 并记入 Prompt Manifest。
+当前架构刻意把可复用能力从 `services/api` 下沉到 package。主要分组如下。
 
-### 2.8 `test/` — 集成检查与用户视角 E2E
+### 最底层合同
 
-- E2E 是从用户目标到可观察结果的真实使用旅程，不限于 Web。浏览器旅程使用固定 Playwright，环境在 `.e2e/`，`pnpm ci:e2e` 仅运行 mocked 浏览器子集。
-- API/CLI/本机栈旅程通过 `start-stack.sh` 或文档中的等价产品入口启动，从公开接口验证 Run、产物、权限等用户结果；可复用驱动放 `test/api/` 并写明运行命令。这些旅程不自动归入浏览器 CI 层。
-- `test/api/run_m1_smoke.sh` 与 `run_real_smoke.sh` 是现有适配器 smoke，直接在进程内构造 Agent，不因目录位置而成为 E2E。当前没有统一的非浏览器 E2E 运行器，需按具体旅程检查或新增驱动。
-- 改动用户可观察行为时，实施者随功能新增或完善旅程，已有覆盖需指出并重跑；只有不影响任何用户产品路径的改动才可写“不适用”，不能以“纯后端无 UI”为由跳过。
+| Package | 作用 |
+| --- | --- |
+| `runtime-core` | 与产品领域无关的 runtime message/tool/context 基础合同；仅允许相对 import |
+| `schema` | 跨进程/跨模块数据结构与产品 schema |
+| `model` | 模型 endpoint、transport、provider 行为 |
+| `tools` | Tool 类型、注册和执行合同 |
+| `context` | context contributor 机制；只允许依赖 model/runtime-core |
+| `plugin-sdk` | plugin manifest/runtime/web 契约 |
 
-这些测试不并入默认 `pnpm check`；定义、启动隔离、浏览器装配及 API/栈旅程要求见 [CONTRIBUTING.md](../../../CONTRIBUTING.md#user-perspective-e2e)。
+### Agent 与执行
 
-## 3. 数据与配置落点
+| Package | 作用 |
+| --- | --- |
+| `orchestration` | AgentProfile、主/子 Agent 运行合同 |
+| `workspace` | workspace prompt、workspace tools 与运行绑定 |
+| `executor` | 本地/远端 Runner 客户端、SSH provision |
+| `governance` | 权限与执行治理 |
+| `plan` | 计划状态 |
+| `trajectory` | trajectory / run context 记录 |
 
-| 位置 | 内容 |
-|------|------|
-| `.sciencediscovery-data/catalog.sqlite` | 项目、会话、设置、模型元数据、权限、specialists |
-| `.sciencediscovery-data/model-secrets.key` | 提供方 token 加密密钥（AES-256-GCM） |
-| `.sciencediscovery-data/projects/.../workspace/` | 每会话工作区与 `papers/` 抽取结果 |
-| `.sciencediscovery-data/cas/` 等 | 内容寻址 blob、执行记录、评审、消息 |
-| `.sciencediscovery-data/claims/`、`evidence-links/`、`mcp-invocations/` | 证据与 MCP 审计 |
-| `.sciencediscovery-data/artifact-jobs/`、`artifact-extraction-jobs/` | 文件下载与 PDF 抽取任务 |
-| `.sciencediscovery-data/scientific-envs/` | 托管 Python/R 前缀 |
-| `.sciencediscovery-data/envs/gateway`、`paper` | 服务用 Python 环境（可重建） |
+### 科研与产品能力
 
-环境变量与完整存储布局见[配置参考](../reference/configuration.md)。
+仓库中还包括 `skill`、`specialist`、`mcp`、`mcp-sources`、`data-source`、`artifact-manager`、`artifact-json`、`provenance`、`memory`、`idea-tree`、`evolve`、`cas`、`scheduler` 等 owning packages。
 
-## 4. 模块数量小结
+新增行为前，应先寻找是否已经存在对应 owning package，而不是默认放进 API。
 
-按 **可独立部署/构建的服务与库** 计数：
+## 4. 强制依赖规则
 
-| 类别 | 数量 | 成员 |
-|------|------|------|
-| 前端应用 | 1 | `apps/web` |
-| 后端服务 | 5 | `api`、`gateway`、`runner`、`paper`、`memory-graph`（ScienceMemory；实验性，默认开启） |
-| 共享 TS 包 | 3 | `agent-runtime`、`schema`、`mcp-sources`（科研 MCP manifest 与治理校验） |
-| 内置技能包 | 2 | life-science / structure-pocket |
+`scripts/check-architecture.mjs` 是仓库边界的机器可执行定义：
 
-**合计约 11 个一等模块**（不含 `test/`、`scripts/`、`docs/`）。
+1. `packages/` 不得 import `services/` 或 `apps/`。
+2. package/service/test 不应依赖旧 `@sciencediscovery/agent-runtime` compatibility facade。
+3. `runtime-core` 只允许相对 import。
+4. `context` 只能依赖 `model` 与 `runtime-core`。
+5. 已迁移到 packages 的 service-domain 源文件不能重新创建。
+6. executor → runner 是冻结的遗留耦合，不是通用豁免。
+7. API HTTP entry 必须使用 platform composition root。
 
-业务能力上还可概括为：**工作台 · Agent 循环 · 沙箱执行 · 科学连接器 · 论文阅读 · 技能/评审/权限 · 托管科学环境** 等功能面；详细科学数据源见[科研连接器](science-connectors.md)。
+执行：
 
-## 5. 相关文档
+```bash
+pnpm architecture:check
+```
 
-- [控制面](control-plane.md) — `services/api` 内部结构
-- [Agent 后端](agent-backend.md) — Node 原生 Agent 循环的实现细节
-- [内置工具](../reference/builtin-tools.md) — 模型可见的内置工具清单
-- [沙箱执行](sandbox-execution.md) — Runner 沙箱与科学环境
-- [评审与溯源](review-provenance.md) — 评审与溯源机制
-- [科研连接器](science-connectors.md) — 连接器与外部库
-- [paper-worker.md](paper-worker.md) — PDF 抽取 worker
-- [web-frontend.md](web-frontend.md) — 前端结构
-- [README_zh.md](../../../README_zh.md) — 安装、运行与快速开始
+## 5. 运行入口
+
+| 场景 | 入口 |
+| --- | --- |
+| 本地 native | `scripts/start-stack.sh --mode local` |
+| 本地 JiuwenSwarm | `scripts/start-stack.sh --mode local --jiuwenswarm` |
+| Docker | `scripts/start-stack.sh --mode docker` |
+| API dev | `pnpm dev` |
+| 全仓 build | `pnpm build` |
+| 架构检查 | `pnpm architecture:check` |
+| 默认检查 | `pnpm check` |
+| E2E | `pnpm ci:e2e` / tagged test runners |
+
+## 6. 数据与运行状态
+
+默认运行时根目录为 `.sciencediscovery-data/`。主要类别：
+
+- `catalog.sqlite`：Project、Session、Run、settings、model、permission 等目录实体；
+- `projects/.../workspace/`：Session workspace；
+- `versioning/` / CAS / artifact records：版本与内容地址对象；
+- `execution-runs/`、`run-events/`、`prompt-manifests/`：运行审计与事件；
+- `scientific-envs/`：托管科学环境；
+- `envs/`：服务 Python 环境；
+- `skill-libraries/`：技能库 catalog、版本与内容地址包；
+- `logs/`：分服务日志。
+
+精确布局以[配置参考](../reference/configuration.md#存储布局)为准。
+
+## 7. 找代码的推荐顺序
+
+当你要修改某个行为：
+
+1. 从用户可观察入口找到 HTTP / tool / plugin manifest。
+2. 确认 owning package。
+3. 找 API composition/binding，而不是先改 API policy。
+4. 若涉及 executor，分别检查 native 和 JiuwenSwarm adapter。
+5. 找同目录或 package 下测试。
+6. 运行 architecture check，再运行目标 package test。
+7. 用户行为变化补 E2E。
+
+## 相关文档
+
+- [整体运行时架构](architecture.md)
+- [深度开发指南](developer-guide.md)
+- [控制面](control-plane.md)
+- [组件与插件机制](plugins.md)
+- [Agent 后端](agent-backend.md)
