@@ -9,6 +9,8 @@ This work produces evaluation and performance records only. The version-wide
 dashboard, storage ingestion, scheduled aggregation and UI are owned by a
 separate workstream. That implementation can consume the records below.
 
+The DRB-59 user tutorial is available in [English](../../../docs/en/domains/literature-research.md) and [中文](../../../docs/zh/domains/literature-research.md). Its task block matches the default unconstrained `researchPrompt`; historical report examples are not part of the Agent input.
+
 ## Setup and execution
 
 The original five workload-stratified questions are preserved in `samples.ts`:

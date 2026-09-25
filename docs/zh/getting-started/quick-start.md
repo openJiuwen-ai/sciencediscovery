@@ -84,4 +84,4 @@ curl -fsS http://127.0.0.1:4310/health
 - 工具参数：[内置工具参考](../reference/builtin-tools.md)
 - 系统原理：[整体运行时架构](../developer-docs/architecture.md)
 - 可选的端到端实践：[演进出一个更优解](../domains/evolve-a-solution.md)
-- 跨数据库调研案例：[文献调研](../domains/literature-research.md)
+- [调研鸟类迁徙如何定位与导航](../domains/literature-research.md)

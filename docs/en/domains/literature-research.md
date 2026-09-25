@@ -1,238 +1,123 @@
-# ScienceDiscovery User Guide: Literature Research Case
+# Research how migrating birds determine location and direction
 
-This guide follows a cross-database literature research task to demonstrate the full workflow:
-starting the service, configuring the system, dispatching a task, granting approvals, and
-reviewing results.
+## Background
 
-## 1. Case overview
+Migratory birds travel long distances, but “which direction should I fly?” and “where am I?” are different questions. What information can the sun, stars, magnetic field, odors, and landmarks provide? Does evidence agree across species, ages, and experimental conditions? How do light pollution and other disturbances affect navigation?
 
-This cross-database literature research case compares gene expression in adult versus pediatric
-liver parenchymal cells, with a focus on immune-related pathways. It searches PubMed for papers
-published in 2023–2025 and bioRxiv for recent preprints available in its rolling search window, then
-generates a bar chart of gene counts for the top 14 enriched pathways and flags contradictory
-findings across studies.
+This tutorial uses DeepResearchBench task DRB-59 to walk through a scientific literature review: configure retrieval resources, submit the question, follow the investigation, and inspect a cited report. No experimental data upload, gene expression analysis, or pathway enrichment is required.
 
-A task like this normally takes researchers days of manual reading and data extraction, with low
-efficiency and a high risk of omissions. ScienceDiscovery orchestrates multiple intelligent tools
-to automate the workflow end to end:
+The original question comes from [DeepResearchBench](https://github.com/Ayanami0730/deep_research_bench). The repository's real E2E preserves it and adds report and Artifact delivery requirements. Historical examples below come from actual execution records; they are neither official reference answers nor leaderboard results.
 
-- **Retrieval**: the literature-search MCP tool builds a search strategy and queries both databases in parallel.
-- **Understanding and analysis**: a large model understands the literature, and a code tool performs pathway enrichment analysis and plotting.
-- **Traceability**: the full execution is structured in ScienceMemory as a graph, forming a
-  traceable task chain.
-- **Report writing**: when writing the final report, the Agent queries the graph's recorded
-  execution chain so that each statement is associated with supporting evidence, avoiding
-  unsupported results.
+## Preparation
 
----
+Complete the [quick start](../getting-started/quick-start.md), start the service, and open the interface. This section retains configuration needed for a first review; see [Runtime behavior](../reference/runtime-behavior.md) for details.
 
-## 2. Model configuration
+### Model
 
-Go to **System configuration → Model registry** and add a model:
+In **System settings → Model registry**, add an available model with its provider's Base URL, model ID, and API key, then select it for your Project or Session. Enter credentials only in settings, not in task messages. Historical examples used DeepSeek Flash. Other tool-capable models may have different costs, runtimes, and results.
 
-| Field | What to enter |
-|---|---|
-| Display name | `task-gpt5` (user-defined) |
-| Base URL | `https://api.openai.com/v1` |
-| Model ID | `gpt-5` |
-| API token | The model's key. Encrypted at rest; the UI hides the plaintext |
+![Model registry](../../images/model.png)
 
-![Model registry](../../images/model-en.png)
+### Connectors and retrieval
 
----
+Configure and check literature connectors in **System settings → Connectors**, then confirm that the current Session can use them. PubMed can provide relevant biological research; bioRxiv can supplement it with preprints. Web search and accessible journal pages can broaden ecological coverage. Available sources depend on your installation and configuration; the task is not restricted to two databases.
 
-## 3. System settings
+Check Session overrides: an explicitly empty connector list disables inherited connectors. Search snippets are not full papers. If a source is unavailable, the Agent should try available alternatives and disclose coverage gaps; “not retrieved” does not mean “no research exists.” See [Configure custom MCP servers](../advanced-setup/configure-custom-mcp.md).
 
-### 3.1 Connectors
+![Connector settings](../../images/connector.png)
 
-Connectors are the Agent's entry points to external research databases. If a connector is not enabled, the Agent has no corresponding tool.
+### Skills
 
-For this case, enable the following two under **System configuration → Connectors** (or the connector panel in session settings):
+Inspect installed skills in **System settings → Skills**. `literature-searcher` retrieves, deduplicates, and organizes sources; it does not coordinate the whole investigation or write the final report. The default Project / Session `all` mode makes installed skills available. If using a `selected` allowlist, include the skills you need.
 
-- **PubMed**: covers published biomedical literature.
-- **bioRxiv**: covers preprints from the same period.
+Availability does not prove that a skill was loaded. You can request suitable skills, but check execution records to confirm actual use. Start with existing skills; consider importing or creating one when you need to reuse your own retrieval workflow.
 
-Other connectors (arXiv, UniProt, Reactome, etc.) can stay off.
+![Skill settings](../../images/skill.png)
 
-![Connector settings](../../images/connector-en.png)
+### Specialists and scientific memory
 
-### 3.2 Timeouts (optional)
+**System settings → Specialists** packages instructions, models, skills, and connectors into reusable experts. Defaults are sufficient for a first attempt. If selecting an existing literature specialist, check whether it restricts tools needed by this task.
 
-Timeouts constrain the Agent's maximum wait or run time across five scenarios—model no response, single turn, Runner sandbox, permission wait, and kernel idle—to keep one stalled point from dragging down the whole session.
+Scientific memory is optional and can remain off to simplify setup. When enabling it in **System settings → Memory**, the default local-file backend needs no additional service; configure Neo4j only if choosing that backend. Memory helps inspect recorded relationships. It does not guarantee complete evidence for every conclusion or replace source checking. See [ScienceMemory setup](../advanced-setup/science-memory-setup.md).
 
-Under **System configuration → Timeouts** you can configure these five items:
+### Execution environment and time
 
-| Field | What it controls |
-|---|---|
-| Agent no response | Stop this turn automatically when the model produces no streaming output or progress within the time |
-| Agent single turn | Total time limit for one full round (model reasoning + tool calls + streaming output) |
-| Runner execution | Wall-clock limit for a single sandbox code execution |
-| Permission wait | Maximum time the Agent waits for the user to approve a permission card |
-| Kernel idle | Survival time of a persistent Python/R kernel with no activity |
+Confirm sandbox availability. If the task needs scripts, wait for the scientific environment to become ready. Handle code, connector, and download approvals according to the requested action; do not disable all approvals merely to avoid waiting.
 
-![Timeout settings](../../images/timeout-en.png)
+Allow one to two hours and a model usage budget for a first full review. The DRB-59 real E2E allows two hours of research by default. This is a local test budget, not an official DRB rule, and does not automatically change ordinary Session timeouts. Model inactivity, tool timeouts, and total task deadlines are separate limits; see [Configuration reference](../reference/configuration.md).
 
-### 3.3 Quotas (optional)
+## Start the task
 
-Quotas constrain the resource caps the Agent may occupy in the sandbox and upload paths, covering single-file size, single-request size, workspace total capacity, and single-execution output, to keep large files or large outputs from dragging down the session.
-
-Under **System configuration → Quotas** or the corresponding environment variables, you can configure these four items:
-
-| Field | What it controls |
-|---|---|
-| Upload per file | Maximum size of a single uploaded file |
-| Upload per request | Total body-size limit for a single multipart upload request |
-| Workspace total | Total file capacity accumulated in the Runner workspace |
-| Execution output | Retention limit for stdout + stderr of a single execution; truncated automatically when exceeded |
-
-![Quota settings](../../images/quotas-en.png)
-
-### 3.4 Prepare the Python/R environment
-
-This module hosts the Python and R runtimes the Agent uses through `run_shell` inside the sandbox (`python -m`, Python files, or `Rscript`). After the Runner starts, it pulls the managed micromamba in the background and prepares a read-only base; users can create named environments from the base and install packages as needed. Later updates happen in place without cloning; each change records a Revision for traceability. The Agent selects an environment ID, and execution uses its latest state.
-
-Go to **System configuration → Environments**. On first start the Runner downloads and verifies micromamba in the background, with status changing from `provisioning` to `ready`; this takes a few minutes. On failure the page shows the reason and offers a retry.
-![Environment settings](../../images/python-en.png)
-
-### 3.5 Skills (optional)
-
-The Skill module hosts the skill packages the Agent can call during a run.
-
-To create a skill, use any of the following under **System configuration → Skills**:
-
-| Method | Operation |
-|---|---|
-| Manual | Add a skill-package directory directly in the manager and fill in `SKILL.md` and the required fields (`name` must be lowercase-hyphenated and match the directory name; `description` must be non-empty) |
-| Agent-created | Explicitly describe the Skill in chat. The Agent loads `skill-creator` and submits a complete inactive draft with `create_skill`; review files and the previous-revision diff in Settings > Skills, then confirm it. Selected mode must explicitly enable the confirmed Skill |
-| Natural-language draft | Describe the workflow in natural language; the manager generates a reviewable draft that is then landed as a skill package |
-| Distill from the current session | Distill a skill draft from the session history and add it to the skill library after review |
-| Local import | Import a local skill folder, `SKILL.md` file, or ZIP package; folder selection preserves relative paths and packages them before import, while ZIPs are checked for path traversal, symlinks, encryption, duplicates, and size/file-count limits |
-| Git repository import | Import from an HTTPS or SSH repository URL (a ref or subdirectory may be specified); credentials are read only from the local credential helper or SSH config and never appear in the repository URL or model context |
-
-![Skill settings](../../images/skill-en.png)
-
-### 3.6 Specialists (optional)
-
-The Specialist module packages a fixed set of instructions, model, skills, and connectors into a reusable Agent configuration.
-
-To create a specialist under **System configuration → Specialists**:
-
-1. Open **System configuration → Specialists** and click **New specialist**.
-2. Fill in the basic information: a display name and a task description that describes the Agent's role and applicable scenarios.
-3. Bind the resources the run needs: a task model, an optional skill whitelist, an optional connector whitelist, an optional environment, and a review model.
-4. After saving, the specialist appears in the "Specialist" dropdown on the Session creation page and can be selected by name when creating or running a session.
-![Specialist settings](../../images/specialist-en.png)
-
-This case does not need a custom specialist; the system built-in default is sufficient.
-
-### 3.7 ScienceMemory (optional)
-
-ScienceMemory is optional. It stores a session's execution and argumentation as a graph: research
-goals, task steps, code, output files, and every cited claim in the final report with its evidence
-source are persisted as nodes and edges. This makes the path from a conclusion to its recorded
-evidence clickable and traceable.
-
-Enable and use it as follows:
-
-1. Open **System configuration → Memory** and turn on **Enable ScienceMemory**.
-2. The default **Local files** backend needs no extra service. Choose **Neo4j server** only when a
-   Neo4j-backed graph is required, then enter its HTTP address, username, and password.
-3. Once enabled, execution events such as literature retrieval and code runs are automatically
-   mirrored into the graph as a task chain. The Agent records the citation chain that connects
-   report claims to their evidence and source literature.
-4. In the report, click a citation tag to open the corresponding evidence or artifact and follow
-   its graph relationships.
-
-For Neo4j setup, storage choices, and connection status, see
-[Set up ScienceMemory](../advanced-setup/science-memory-setup.md).
-
-![ScienceMemory settings](../../images/memory-en.png)
-
----
-
-## 4. Create a Project and Session
-
-On the left, **New Project**:
-
-- Name: `adult-pediatric-liver-immunity`
-- Description: one sentence stating the goal
-
-New Session: open the Project → **Add session**.
-
-![New Project](../../images/project-en.png)
-
----
-
-## 5. Dispatch the task
-
-Enter the following task description in the dialog:
+Create a Project such as `bird-migration-review` and a Session. No input file is needed. Paste and send the complete prompt below. It matches the existing real E2E prompt when no child-task count constraint is configured:
 
 ```text
-Search PubMed for papers published 2023-2025 and bioRxiv for recent preprints in its available
-search window. Compare gene
-expression in adult vs pediatric liver parenchymal cells. Focus on immune-related
-pathways. Generate a pathway enrichment bar chart showing gene count comparison
-between the two populations for the top 14 enriched pathways. Flag any
-contradictory findings across studies. In the report, state the number of records returned by each
-source and the publication years represented in the bioRxiv results.
+Complete the following DeepResearchBench task as a scientific literature review.
+The original question defines the research scope. Choose your own research strategy, delegation and search depth.
+Use credible sources, synthesize the evidence, and distinguish established findings, contested claims and limitations.
+Support substantive claims with inline citations linked to source URLs in the references.
+Deliver the full report as a declared Markdown Artifact named deepresearchbench-59.md; mention it in your final answer.
+<task>
+In ecology, how do birds achieve precise location and direction navigation during migration? What cues and disturbances influence this process?
+</task>
 ```
 
-Click **Run analysis**.
-![Dispatch task](../../images/task-en.png)
+The original English question supports comparison with existing experiments. For everyday use you can request another report language, but record that as a prompt change. Markdown and tables are suitable; extra figures or a prescribed literature count are not required.
 
----
+## Confirm requirements
 
-## 6. Approvals and permissions
+Read the research plan to see whether it addresses the question rather than merely listing general facts about migration:
 
-While a task runs, the Agent pauses before high-risk operations and pops a permission card, waiting for the user to approve. The table below lists the common approval types and what they mean:
+| Area | Questions to ask when reading the plan |
+| --- | --- |
+| Location and direction | Does it distinguish locating oneself from choosing a heading? |
+| Navigation cues | Does it compare their roles, conditions, and interactions? |
+| Disturbances | Does it explain which cues are affected and provide evidence? |
+| Evidence boundaries | Does it distinguish species, field observations, behavioral experiments, and mechanistic hypotheses? |
+| Synthesis | Does it address conflicting studies instead of only summarizing papers individually? |
+| Delivery | Will it produce an accessible, complete report with source links? |
 
-| Approval type | Meaning |
-|---|---|
-| code | The Agent calls `run_shell` to execute code in the sandbox |
-| connector | The Agent calls an MCP tool (e.g. `mcp__pubmed__search`, `mcp__biorxiv__search`) to access an external research database |
-| download | The Agent calls `artifact_download` to download candidate files into the workspace |
-| extraction | The Agent calls `paper_extract_pdf` to extract text and tables from a downloaded PDF |
-| scientific-environments | The Agent calls `environment_install` and other managed-environment change tools |
-| web | The Agent calls `web_search` or `web_fetch` to make a public-network request |
+This table helps you assess direction; it is not a fixed answer. The Agent may proceed autonomously or ask questions. Do not assume it pauses at a particular checkpoint. In everyday use, you can request confirmation before extensive retrieval, but that changes the original prompt.
 
-The card offers **Allow once**, **Allow same type**, and **Deny**. **Allow same type** creates a
-revocable grant for matching requests with the same action and normalized resource category in the
-current Session. Review or revoke it under **System configuration → Permissions**.
+## Research process
 
-![Permission approval card illustration](../../images/permission-en.png)
+First, watch whether retrieval covers different parts of the question. Position, heading, calibration between cues, and disturbances usually call for different queries. One failed tool call does not establish research failure. Look for query adjustments, alternative sources, or explicit coverage notes afterward.
 
----
+If child tasks appear, inspect their assignments and execution records. Delegation might separate navigation cues or disturbances. Child count is not a quality measure: the main Agent still needs to synthesize evidence, resolve duplication and disagreement, and deliver a coherent report.
 
-## 7. Review the results
+Look for usable intermediate artifacts. During everyday collaboration, you can request that existing findings be saved and the same artifact revised later. A chat update saying “retrieval complete” does not establish task completion. If the run repeatedly encounters the same error or repeats queries, inspect recent tool errors and artifacts before narrowing or stopping the task.
 
-The Agent outputs a report with clickable citation tags. Each tag leads to its cited content,
-source literature, and execution chain, so the report's statements can be checked through their
-recorded evidence. The graph makes the result traceable and reviewable, shortening literature
-research that would normally take days to minutes while avoiding an opaque, unconstrained
-report-generation path.
+Finally, open `deepresearchbench-59.md` in the artifacts area. Confirm it can be previewed and downloaded, and that the final reply points to it. Writing a workspace file and registering an Artifact are separate steps; “the report is written” alone does not confirm delivery.
 
-### 7.1 View artifacts
+## Analyze results
 
-Open the artifact (Markdown report) in the right-hand artifact panel. The Evidence citations in the report body are clickable chips.
-![View the artifact and its evidence](../../images/evidence1.jpg)
+Read the abstract and conclusions, then sample their supporting evidence. One historical report organized magnetic sensing, celestial cues, position finding, environmental disturbances, and evidence limits into separate sections. This is a useful structure, not a required table of contents.
 
-### 7.2 View Evidence
+Open citations for several important claims. Check whether the source's species, experimental conditions, and conclusions support the report's wording. Reading an abstract does not justify claiming full-text verification; distinguish preprints from published studies. If scientific memory is enabled, recorded links can assist inspection, but still read the sources.
 
-Click any Evidence chip to open the Evidence card. The card offers three entries:
+The following table summarizes a historical three-run experiment. The scoring Judge used DeepSeek Flash; research durations exclude independent evaluation:
 
-| Entry | Use |
-|---|---|
-| **Preview** | View the content of the Evidence |
-| **Provenance** | View the provenance of the Evidence, including the code, execution environment, and execution logs that generated it |
-| **View this evidence in ScienceMemory** | View the ScienceMemory graph information related to this Evidence |
+| Run | Research duration | Delivery | RACE overall score, displayed out of 100 |
+| --- | --- | --- | --- |
+| 1 | About 55 minutes 33 seconds | Completed | 56.18 |
+| 2 | About 22 minutes 20 seconds | Completed | 55.71 |
+| 3 | About 28 minutes 34 seconds | Completed | Unavailable: evaluation errored on that attempt |
 
-![Preview](../../images/evidence2.jpg)
-![Provenance](../../images/evidence3.jpg)
+**A RACE score of 50 means parity with the reference report, not 50% factual accuracy.** RACE assesses comprehensiveness, insight, instruction following, and readability. This experiment enabled RACE only; FACT was skipped by configuration. These scores do not establish that all citations were verified. Run 3 should be counted neither as zero nor as successful scoring.
 
-### 7.3 View the generation chain and citation chain
+Real E2E completion requires a completed main run whose final reply references at least one readable, nonempty Artifact. Quality is evaluated separately; word count, citation count, child count, and a minimum score do not gate delivery. Ordinary interface sessions do not automatically run this independent evaluator. See the testing documentation below to reproduce the experiment.
 
-Click **View this evidence in ScienceMemory** to inspect the two chains of this Evidence:
+## Caveats
 
-- **Generation chain**: from the research goal, follow the task nodes to the code and execution records that generated the Evidence.
-- **Citation chain**: from the Evidence up to its source literature, and to the Artifact / report claim that declared this Evidence.
-![ScienceMemory view](../../images/evidence4.jpg)
+- **A report is not a final scientific verdict.** Evidence across species, conditions, and measurement methods may not generalize. State uncertainty, especially for mechanisms.
+- **Record retrieval gaps.** Rate limits, inaccessible sources, and incomplete abstracts affect coverage; they are not negative scientific evidence.
+- **More references do not guarantee stronger support.** Check individual claim-to-source relationships and avoid treating repeated citations as independent evidence.
+- **Skills and memory assist the work.** Configuration alone does not establish that tools ran, sources were read, or artifacts were delivered.
+- **Runtime and scores vary.** Three historical completions do not guarantee future success. Compare runs with their models, prompts, retrieval resources, and evaluation modes recorded together.
+
+## Related documentation
+
+- [Quick start](../getting-started/quick-start.md): start the service and create a Session.
+- [Runtime behavior](../reference/runtime-behavior.md): skills, configuration inheritance, and permissions.
+- [Shell, environments, and workspaces](../core/execution-workspaces.md): execution and file delivery.
+- [DeepResearchBench real E2E](../../../test/benchmarks/deepresearchbench/README.md): selecting DRB-59, runtime budgets, and RACE/FACT configuration and interpretation.
+- [中文版](../../zh/domains/literature-research.md).

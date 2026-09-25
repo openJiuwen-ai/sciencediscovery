@@ -21,7 +21,7 @@
 - [演进出一个更优解](domains/evolve-a-solution.md) — 完整跑一次程序演进搜索，并判断改进是不是真的。
 - [运行一次演进搜索](domains/run-an-evolution-search.md) — 定搜索规模、选择打分模式、看过程，并读留出结果。
 - [在 Ascend NPU 上设计抗体](domains/antibody-design.md) — 使用 RFdiffusion、ProteinMPNN 和 Protenix 完成一次可追溯的抗体设计与筛选。
-- [文献调研](domains/literature-research.md) — 以跨数据库文献调研为例，演示从启动服务、配置系统到审批与查看结果的全流程。
+- [调研鸟类迁徙如何定位与导航](domains/literature-research.md) — 以 DRB-59 为例，配置检索资源、综合文献证据并检查报告。
 
 ## 进阶设置
 
