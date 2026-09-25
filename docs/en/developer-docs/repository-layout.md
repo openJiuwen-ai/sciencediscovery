@@ -1,151 +1,196 @@
 # Repository Layout Reference
 
-This page maps directories, modules, default ports, and data locations. See [Runtime architecture](architecture.md) for the responsibility split.
+This is code navigation for deep developers and code agents. Directory presence does not imply capability ownership; **ownership is defined by packages, public contracts, and enforced architecture rules**.
 
-## 1. Repository tree
-
-The repository is a pnpm monorepo with several Python subprojects:
+## 1. Top-level structure
 
 ```text
 sciencediscovery/
-├── apps/web/                 # React/Vite browser UI
+├── apps/
+│   └── web/                  # React/Vite workbench
 ├── services/
-│   ├── api/                  # Node control API
-│   ├── gateway/              # bundled Python MCP servers + their venv
-│   ├── runner/               # Bubblewrap executor
-│   ├── paper/                # uv PDF worker
-│   └── memory-graph/         # experimental ScienceMemory sidecar, on by default (off in Docker)
-├── packages/
-│   ├── agent-runtime/        # prompts, tools, agent event types
-│   ├── schema/               # shared TypeScript types and schemas
-│   └── mcp-sources/          # scientific MCP manifests and trust boundary
-├── skills/                   # built-in Agent Skills
-├── scripts/                  # shared launcher and mode wrappers
-├── test/                     # integration checks and user-perspective E2E outside pnpm check
-├── docs/                     # complete English and Chinese documentation
-├── data/                     # gitignored runtime state
-├── .e2e/                     # gitignored local Playwright environment
-├── README.md / README_zh.md
-└── LICENSE                   # Apache-2.0
+│   ├── api/                  # Node control plane and composition root
+│   ├── adapter/              # JiuwenSwarm front door / protocol adapter
+│   ├── runner/               # sandbox execution daemon
+│   ├── evolve/               # evolution-search sidecar
+│   ├── memory-graph/         # ScienceMemory graph sidecar
+│   ├── paper/                # PDF extraction worker
+│   ├── gateway/              # Python MCP server code/interpreter environment
+│   └── launcher/             # single-file release launcher
+├── packages/                 # primary owners of shared/domain capabilities
+├── skills/                   # bundled Skill packages
+├── scripts/                  # startup, packaging, architecture checks, CI helpers
+├── test/                     # integration, ST, E2E, real-environment tests
+├── docs/
+└── package.json
 ```
 
-### 1.1 Processes and default ports
+`pnpm-workspace.yaml` registers `apps/*`, `services/*`, and `packages/*`. Python sidecars are managed by their own uv/pyproject projects.
 
-`./scripts/start-stack.sh --mode local` (or compatibility wrapper `run-local.sh`) starts:
+## 2. Services: processes and protocol composition
 
-| Process | Default address | Purpose |
-|---|---|---|
-| `services/gateway` | no port | Not a service: interpreter environment for the bundled Python MCP servers |
-| `services/runner` | `127.0.0.1:4311` | Sandbox execution, loopback only |
-| `services/api` | `127.0.0.1:4310` | Control API and static UI, local-only by default |
+### `services/api`
 
-First startup prepares uv environments under `.sciencediscovery-data/envs/gateway` and `.sciencediscovery-data/envs/paper`. The repository has no submodules.
+The Node control plane composes capability packages into the product:
 
-## 2. Modules and responsibilities
+- HTTP / SSE / static Web;
+- Project / Session / Run lifecycle;
+- executor selection;
+- permission and execution context;
+- product-level Artifact/provenance/store orchestration;
+- sidecar and Runner clients;
+- plugin runtime composition.
 
-### 2.1 `apps/web` — workbench
+Important entry points:
 
-Project/Session navigation and lifecycle, chat/tool traces, workspace files, connector controls, settings, models, environments, skills, specialists, permissions, local service connection, layered Project/Session overrides, approval cards, and review results.
+| Path | Responsibility |
+| --- | --- |
+| `src/server.ts` | process entry |
+| `src/http/index.ts` | HTTP composition root / main route assembly |
+| `src/agent-run/create-agent-run.ts` | native / JiuwenSwarm executor seam |
+| `src/agent-run/orchestrators.ts` | main/subagent run orchestration |
+| `src/native-agent/` | native executor |
+| `src/plugins/` | plugin/host composition |
+| `src/store.ts`, `src/store/` | product catalog and authoritative state |
 
-### 2.2 `services/api` — control plane
+Do not move capability policy back into `services/api/src` merely because the API consumes it; the architecture checker explicitly prevents several removed service-domain sources from reappearing.
 
-| Area | Purpose |
-|---|---|
-| `server.ts`, `http/` | Process/barrel and HTTP shell: routes, auth, bodies, responses, static assets, tool callback |
-| `runs/` | Run lifecycle, SSE, orchestration, concurrency, workspace-event filtering |
-| `store.ts`, `store/` | `SessionStore` facade and SQLite domain storage |
-| `subagents/`, `artifacts/` | Handoff/private workspaces and versioned Artifact behavior |
-| `web-providers/`, `connectors/` | Web broker and scientific connector manifests/broker |
-| `native-agent/` | **The Node-native agent loop**: `index.ts` (state machine), `model-client.ts` (streaming transport), `deferred-tools.ts`, `compaction.ts` |
-| `mcp/` | MCP governance and the in-process client: `broker.ts`, `node-client.ts`, `extensions-config.ts`, `source-catalog.ts` |
-| `papers.ts`, `runner-client.ts` | Paper download/extraction and runner calls |
-| `provenance.ts`, `reviewer-specialist/` | Execution provenance and Artifact review |
-| `skills.ts`, `prompt-manifest.ts` | Skill revisions/resources and frozen run metadata |
-| `remote-compute.ts` | Experimental remote-job cards, not a supported primary workflow |
+### `services/adapter`
 
-Its external capabilities cover Project management, agent runs, connectors/papers, managed environments, skills/specialists, permissions, and review.
+Python front door for JiuwenSwarm mode:
 
-### 2.3 `services/gateway` — web-provider sidecar
+- owns public `:4310`;
+- proxies unmigrated routes to API `:4410`;
+- maps ScienceDiscovery runs to JiuwenSwarm;
+- provides per-run MCP tool bridge and LLM proxy;
+- maps JiuwenSwarm frames back to ScienceDiscovery run events.
 
-It **is no longer a service**. The agent loop moved into `services/api`'s `native-agent/` and the web providers into `web-providers/native/` (see [Agent backend](agent-backend.md)), so the FastAPI app, the web router, and the `_engine/` adapter are all deleted, along with the vendor harness dependency and the submodule it came from. What remains is the bundled Python MCP servers (biomed, UniProt), which Node spawns as stdio subprocesses using this venv's interpreter.
+See:
 
-### 2.4 `services/runner` — isolated execution
+- `agent_runs.py`
+- `gateway.py`
+- `mcp_server.py`
+- `llm_proxy.py`
+- `events.py`
+- `services/adapter/README.md`
 
-Bubblewrap namespaces and seccomp run Python, R, or shell with no network by default, with optional managed environments/persistent kernels. Guards include wall-clock timeout, workspace total, execution-output quota, and one global worker. There is no independent execution-file or CPU/memory cgroup quota.
+### `services/runner`
 
-### 2.5 `services/paper` — PDF extraction
+Isolation daemon owning:
 
-An isolated bounded worker produces Markdown, tables, figures, and page previews. Limits include 50 MiB, 200 pages, and text/table/figure/preview caps; OCR is absent.
+- Linux Bubblewrap / macOS Seatbelt;
+- Python/R/Shell execution;
+- managed scientific environments;
+- background/shell execution lifecycle;
+- sandbox network gateway;
+- optional Ascend NPU broker;
+- local HTTP or remote Unix-socket Runner mode.
 
-### 2.6 `packages/*`
+Entry: `src/server.ts`. Product semantics should not move into Runner.
 
-- `schema`: shared Session, MCP, Artifact, execution, and permission types.
-- `agent-runtime`: workspace prompts, tool list, deferred MCP/download/extraction tools, and events.
-- `mcp-sources`: scientific manifests, input validation, and Node trust-boundary checks.
+### Python sidecars / workers
 
-### 2.7 `skills/`
+| Service | Lifetime | Responsibility |
+| --- | --- | --- |
+| `services/evolve` | stack sidecar | search/candidate execution |
+| `services/memory-graph` | configurable sidecar | graph-storage API |
+| `services/paper` | on-demand worker | PDF extraction |
+| `services/gateway` | not an HTTP daemon | bundled Python MCP servers and interpreter environment |
 
-| Skill | Purpose |
-|---|---|
-| `life-science-evidence-brief` | Connector-backed life-science claim/citation briefs |
-| `structure-pocket-inspection` | Local PDB structure/pocket inspection in workspace Python |
+## 3. Packages: capability ownership
 
-All skills are available by default and may be narrowed at Project/Session scope. Runs freeze revisions in Prompt Manifest.
+The architecture intentionally moved reusable behavior out of `services/api` into packages.
 
-### 2.8 `test/`
+### Lowest-level contracts
 
-E2E is a real-use journey from a user's goal to an observable outcome, not a
-synonym for browser automation. Browser journeys use the pinned Playwright
-environment in `.e2e/`; `pnpm ci:e2e` runs only their mocked subset.
+| Package | Responsibility |
+| --- | --- |
+| `runtime-core` | domain-neutral runtime message/tool/context contracts; relative imports only |
+| `schema` | cross-module/process product schemas |
+| `model` | model endpoints, transport, provider behavior |
+| `tools` | Tool types, registry, execution contracts |
+| `context` | context contributors; may depend only on model/runtime-core |
+| `plugin-sdk` | plugin manifest/runtime/web contracts |
 
-Public API, CLI and local-stack journeys start the product with
-`start-stack.sh` or a documented equivalent and verify user-facing Run,
-artifact, permission or other outcomes. Reusable non-browser drivers belong
-in `test/api/` with exact invocation instructions; they are not automatically
-part of browser CI. The existing `run_m1_smoke.sh` and `run_real_smoke.sh`
-instantiate the adapter in-process and remain integration smokes, not E2E.
-There is no universal non-browser journey runner today; inspect or add the
-specific driver rather than assuming the directory supplies one.
+### Agent and execution
 
-Implementers add or improve journeys with user-observable behavior changes,
-or identify and rerun existing coverage. Only changes with no affected user
-product path may report E2E as not applicable; backend-only/no UI is not an
-exemption. These tests are outside `pnpm check`. See
-[CONTRIBUTING](../../../CONTRIBUTING.md#user-perspective-e2e) for the definition,
-stack isolation, browser setup and API/stack journey contract.
+| Package | Responsibility |
+| --- | --- |
+| `orchestration` | AgentProfile and main/subagent run contracts |
+| `workspace` | workspace prompt, tools, runtime bindings |
+| `executor` | local/remote Runner clients and SSH provisioning |
+| `governance` | permission/execution governance |
+| `plan` | plan state |
+| `trajectory` | trajectory/run-context records |
 
-## 3. Data and configuration
+### Scientific/product capabilities
 
-| Location | Contents |
-|---|---|
-| `.sciencediscovery-data/catalog.sqlite`, `model-secrets.key` | Metadata/settings/permissions and token-encryption key |
-| `.sciencediscovery-data/projects/.../workspace/` | Per-Session files and paper extraction |
-| `.sciencediscovery-data/cas/`, claims/evidence/MCP paths | Immutable content and provenance/audit |
-| `.sciencediscovery-data/artifact-jobs/`, `artifact-extraction-jobs/` | Download and extraction state |
-| `.sciencediscovery-data/scientific-envs/` | Managed Python/R prefixes |
-| `.sciencediscovery-data/envs/gateway`, `.sciencediscovery-data/envs/paper` | Rebuildable service environments |
+Other owning packages include `skill`, `specialist`, `mcp`, `mcp-sources`, `data-source`, `artifact-manager`, `artifact-json`, `provenance`, `memory`, `idea-tree`, `evolve`, `cas`, and `scheduler`.
 
-See [Configuration reference](../reference/configuration.md) for the full layout.
+Before adding behavior, look for an existing owning package instead of defaulting to API code.
 
-## 4. Module count
+## 4. Enforced dependency rules
 
-| Category | Count | Members |
-|---|---:|---|
-| Frontend | 1 | `apps/web` |
-| Backend services | 5 | API, gateway, runner, paper, experimental ScienceMemory |
-| Shared TS packages | 3 | agent-runtime, schema, mcp-sources |
-| Built-in skill packages | 2 | life-science and structure-pocket |
+`scripts/check-architecture.mjs` is the executable definition of repository boundaries:
 
-That is about 11 first-class deployable/buildable modules, excluding tests, scripts, and docs.
+1. `packages/` may not import `services/` or `apps/`.
+2. package/service/test code must not depend on the old `@sciencediscovery/agent-runtime` compatibility facade.
+3. `runtime-core` uses relative imports only.
+4. `context` may depend only on `model` and `runtime-core`.
+5. service-domain source files already moved into packages may not reappear.
+6. executor → runner is a frozen legacy coupling, not a general exemption.
+7. the API HTTP entry must use the platform composition root.
 
-## 5. Related documentation
+Run:
 
+```bash
+pnpm architecture:check
+```
+
+## 5. Runtime entry points
+
+| Scenario | Entry |
+| --- | --- |
+| local native | `scripts/start-stack.sh --mode local` |
+| local JiuwenSwarm | `scripts/start-stack.sh --mode local --jiuwenswarm` |
+| Docker | `scripts/start-stack.sh --mode docker` |
+| API dev | `pnpm dev` |
+| repository build | `pnpm build` |
+| architecture check | `pnpm architecture:check` |
+| default checks | `pnpm check` |
+| E2E | `pnpm ci:e2e` / tagged test runners |
+
+## 6. Data and runtime state
+
+The default runtime root is `.sciencediscovery-data/`. Important groups:
+
+- `catalog.sqlite`: Project, Session, Run, settings, model, permission catalog;
+- `projects/.../workspace/`: Session Workspace;
+- `versioning/` / CAS / artifact records: versioned/content-addressed objects;
+- `execution-runs/`, `run-events/`, `prompt-manifests/`: run audit/events;
+- `scientific-envs/`: managed scientific environments;
+- `envs/`: service Python environments;
+- `skill-libraries/`: library catalog, versions, content-addressed packages;
+- `logs/`: service logs.
+
+See [Configuration reference](../reference/configuration.md#storage-layout) for exact layout.
+
+## 7. Recommended code-navigation workflow
+
+When modifying behavior:
+
+1. Start from the user-visible HTTP/tool/plugin manifest.
+2. Identify the owning package.
+3. Find API composition/bindings instead of changing policy in API first.
+4. If executor-related, inspect both native and JiuwenSwarm adapter paths.
+5. Locate tests beside the package/service.
+6. Run architecture check and target package tests.
+7. Add E2E for user-observable behavior.
+
+## Related documentation
+
+- [Runtime architecture](architecture.md)
+- [Deep developer guide](developer-guide.md)
 - [Control plane](control-plane.md)
+- [Plugin architecture](plugins.md)
 - [Agent backend](agent-backend.md)
-- [Built-in tools](../reference/builtin-tools.md)
-- [Sandbox execution](sandbox-execution.md)
-- [Review and provenance](review-provenance.md)
-- [Science connectors](science-connectors.md)
-- [PDF worker](paper-worker.md)
-- [Web frontend](web-frontend.md)
-- [README](../../../README.md)
