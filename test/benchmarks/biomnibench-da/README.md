@@ -38,13 +38,12 @@ instructions; general background references remain allowed.
 ## Run
 
 Use an isolated API/Runner/Swarm stack with an execution environment containing
-Python, pandas, NumPy and SciPy (optionally matplotlib for plots). Install matching
-verifier dependencies in a separate test-host virtualenv:
+the dependencies needed by the analysis. `BIOMNI_PYTHON` selects the test-host
+Python for rubric judging and optional numeric diagnostics. The latter need
+pandas, NumPy and SciPy; missing diagnostic dependencies do not block scoring.
 
 ```bash
-python3 -m venv /tmp/biomni-verifier
-/tmp/biomni-verifier/bin/pip install pandas==2.3.3 numpy==2.2.6 scipy==1.15.3
-export BIOMNI_PYTHON=/tmp/biomni-verifier/bin/python
+export BIOMNI_PYTHON=python3
 export BIOMNI_DATA_ROOT=/absolute/path/to/authorized/biomnibench-da
 export E2E_API_URL=http://127.0.0.1:4680
 export E2E_API_TOKEN='<isolated-stack access token>'
@@ -66,26 +65,22 @@ The runner cancels timed-out tasks; there is no automatic retry or monetary cap.
 
 ## Assertions and benchmark fidelity
 
-The original instructions are preserved, with an explicit platform delivery
-appendix mapping `/app` paths to the actual workspace. The appendix requests no
-subagents, executed Python code, declared `trace.md`, `answer.txt`, `analysis.py`
-and a machine-readable `analysis.json` (its schema is in `cases.ts`). This is a
-low-cost platform E2E profile, not an unmodified official leaderboard run.
+The pinned original instruction text is preserved verbatim. A platform delivery
+appendix only maps `/app` paths to the actual workspace and asks for declaration
+of the two originally required artifacts, `trace.md` and `answer.txt`. It adds
+no analysis method, ranking convention, JSON schema or delegation restriction.
 
-- Require terminal completion, successful execution records, no child agents,
-  readable artifacts, browser preview and persistence after reload.
-- Independently recompute association counts, top absolute-effect rankings and
-  numeric values; find headers by their content, not a fixed skiprows constant.
-- Recompute correlation and linkage from the input CSV. Compare cophenetic
-  distances rather than raw cluster IDs or left/right branch ordering.
-- Clustering permits documented Pearson/Spearman and pairwise/complete missing
-  handling. Whether score selection and methods meet scientific expectations is
-  a separate rubric judgement: the upstream rubric targets **21 scores**, not
-  the 38 mentioned in an earlier demonstration. Numeric consistency alone does
-  not imply benchmark quality or correct feature selection.
-- Do not execute Agent-generated scripts on the host verifier. Successful
-  execution records plus recomputed output are useful evidence, not a proof that
-  every line of the delivered script ran. No exact chart-pixel assertions.
+- Require terminal completion, nonempty required artifacts, browser preview and
+  persistence after reload. Execution records and children are retained as diagnostics.
+- Scientific correctness and completeness are evaluated by the unchanged upstream
+  rubric. No local numerical assertion blocks rubric scoring or determines E2E success.
+- `analysis.py` and `analysis.json` are optional diagnostic artifacts, not requested
+  by the platform prompt. When an Agent happens to supply the legacy JSON schema,
+  the numerical verifier records its result or error with `gating: false`.
+  Missing exports, incompatible schemas and verifier errors cannot bypass scoring.
+- Do not execute Agent-generated scripts on the host verifier.
+- Delivery success does not imply scientific correctness. Read the rubric score
+  separately; a low score remains a low score even when delivery passes.
 
 ## Optional quality scoring
 
@@ -94,7 +89,6 @@ export E2E_BIOMNI_EVALUATION=rubric
 export BIOMNI_JUDGE_BASE_URL=https://your-provider.example/v1
 export BIOMNI_JUDGE_MODEL='<judge model>'
 export BIOMNI_JUDGE_API_KEY='<judge key>'
-export E2E_BIOMNI_MIN_SCORE=60
 ```
 
 `judge.py` uses the original expert rubric with an OpenAI-compatible adapter,
@@ -106,8 +100,8 @@ Judge retry. Model calls time out after 180 seconds.
 
 This is **not** the upstream Gemini verifier implementation and must be labelled
 as a local rubric-adapter score. Changing Judge models changes comparability.
-The threshold defaults to zero (score recording only); select a quality gate
-after calibration. With evaluation off, quality is `disabled`, not passed.
+Scores are recorded without a pass threshold; `E2E_BIOMNI_MIN_SCORE` is no longer
+used. With evaluation off, quality is `disabled`, not passed.
 RACE/FACT are not used for these data-analysis tasks.
 
 ## Diagnostics and resources
