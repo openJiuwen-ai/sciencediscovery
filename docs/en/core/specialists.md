@@ -2,7 +2,9 @@
 
 A research report often requires several kinds of work: finding papers, extracting evidence, writing code, evaluating results, and developing an argument. Each needs different judgment. Retrieval should fill source gaps; writing should avoid adding unsupported findings. Someone implementing an analysis also benefits from a separate examination of methodology and reliability.
 
-Specialists separate these responsibilities and supply role instructions, skills, and tool scope. The main Agent can choose roles suited to the task while retaining responsibility for the research objective and synthesis. Researchers spend less time repeating working requirements and gain clearer assignments and deliveries.
+Specialists separate these responsibilities and supply role instructions, Skills, and tool scope. The main Agent can choose roles suited to the task while retaining responsibility for the research objective and synthesis. Researchers spend less time repeating working requirements and gain clearer assignments and deliveries.
+
+The relationship to MCP and Skills is simple: **MCP is a tool, Skill is a method, and Specialist is a role.** A Specialist is not a new execution environment; it packages who owns a kind of work, which methods they can use, and which tools they can call.
 
 ## Research roles already provided
 
