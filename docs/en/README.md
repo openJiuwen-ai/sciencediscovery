@@ -6,9 +6,8 @@ This is the complete English documentation set.
 
 ## Getting started
 
-- [Quick start](getting-started/quick-start.md) — install a prepackaged binary, start the service, configure
-  a model, and complete a first task.
-- [Deployment](getting-started/deployment.md) — other ways to install and run ScienceDiscovery when the prebuilt binary does not suit your host or workflow: a source-built single-file binary, local source mode, or Docker.
+- [Quick start](getting-started/quick-start.md) — follow the shortest Linux or macOS path, configure a model, and complete a first inspectable Agent task.
+- [Deployment](getting-started/deployment.md) — choose a prepackaged single file, local source mode, or Docker, with long-running operation and first-run troubleshooting.
 
 ## Core capabilities
 
