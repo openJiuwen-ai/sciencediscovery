@@ -155,6 +155,7 @@ export const MODELS_DEV_PROVIDER_MAPPINGS: readonly ModelsDevProviderMapping[] =
   // prices, not its capability facts. ---
   { id: "siliconflow-cn", presetId: "siliconflow", pricing: true },
   { id: "openrouter", presetId: "openrouter", pricing: true },
+  { id: "requesty", presetId: "requesty", pricing: true },
 ];
 
 /**
