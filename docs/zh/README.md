@@ -6,27 +6,13 @@
 
 ## 快速开始
 
-- [快速开始](getting-started/quick-start.md) — 安装预编译二进制、启动服务、配置模型，并完成第一次
-  Agent 任务。
+- [快速开始](getting-started/quick-start.md) — 安装预编译二进制、启动服务、配置模型，并完成第一次 Agent 任务。
+- [基本概念](getting-started/concepts.md) — 了解 Agent Loop、Tool、Skill、Specialist、Workspace 和 Artifact 等基础概念。
 - [部署](getting-started/deployment.md) — 预编译二进制不适合你的主机或工作流时，用其他方式安装与运行：源码构建的单文件二进制、本地源码模式，或 Docker。
 
 ## 核心能力
 
-ScienceDiscovery 的核心能力可以从三层理解：
-
-**研究执行**
-- [科研 Agent](core/research-agent.md) — 从研究目标出发，调用工具、方法与专业角色，并把结果组织成可检查的研究过程。
-- [科研产物](core/artifacts.md) — 将报告、代码、表格和图像登记为可查看、版本化和继续使用的交付物。
-- [科研执行环境与工作区](core/execution-workspaces.md) — 在隔离环境中运行 Python、R 与 Shell，并保存研究文件。
-- [科研 MCP 与 Skill](core/mcp-skills.md) — MCP 提供工具和数据接口，Skill 提供可复用的研究方法。
-- [专业 Specialist](core/specialists.md) — 将职责、Skill 和工具范围组织成可复用的专业角色。
-
-**探索与优化**
-- [Idea Tree 自主研究](core/idea-tree.md) — 展开候选方向、设计方案并根据反馈继续探索。
-- [科研产物的 RSI](core/evolve.md) — 通过候选搜索与留出评价，逐步改进可评价的产物。
-
-**可信与复核**
-- [记忆图谱与 Reviewer](core/science-memory-reviewer.md) — 连接任务、证据与结论，发现值得复核的问题。
+- [核心能力总览](core/README.md) — ScienceDiscovery 在通用 Agent 基础上增加的科研能力地图。
 
 ## 领域指南
 
@@ -38,27 +24,19 @@ ScienceDiscovery 的核心能力可以从三层理解：
 
 ## 进阶设置
 
-- [创建与使用自定义 Specialist](advanced-setup/configure-specialists.md) — 配置专业职责、资源并验证任务。
-- [导入与管理科研 Skill](advanced-setup/configure-skills.md) — 本地/Git 导入、运行端启用与草稿审核。
-
-- [配置自定义 MCP](advanced-setup/configure-custom-mcp.md) — 本地/远程连接、秘密值编辑、OAuth、Inspector 与会话工具选择。
-- [配置网络代理](advanced-setup/configure-network-proxy.md) — 在设置页添加代理并为 LLM、Web 和 MCP 选择策略。
-- [安装 Neo4j 与配置科学记忆](advanced-setup/science-memory-setup.md) — 安装外部 Neo4j、在系统设置里开启科学记忆，并在前端图谱里查看链路。
+- [创建与使用自定义 Specialist](advanced-setup/configure-specialists.md)
+- [导入与管理科研 Skill](advanced-setup/configure-skills.md)
+- [配置自定义 MCP](advanced-setup/configure-custom-mcp.md)
 
 ## Reference（参考）
 
-- [执行与工作区](reference/execution-workspaces.md) — 执行状态、文件交接、环境版本与停止行为。
-
-- [预置科研能力](reference/builtin-research-capabilities.md) — 当前版本随附的 Connector、Skill 和 Specialist 清单。
-- [配置、端口与存储](reference/configuration.md) — 环境变量、默认端口、上传/工作区/输出配额和数据布局。
-- [REST API](reference/rest-api.md) — 当前 UI 使用的内部 HTTP 接口、认证、请求/响应与错误语义。
-- [运行时行为](reference/runtime-behavior.md) — 模型、设置继承、技能、权限、超时和执行限制。
-- [内置工具](reference/builtin-tools.md) — 模型可见工具的参数、边界和暴露条件。
-- [Web 工具](reference/web-tools.md) — Web Search/Fetch provider、配置、权限、缓存与审计。
+- [执行与工作区](reference/execution-workspaces.md)
+- [预置科研能力](reference/builtin-research-capabilities.md)
+- [配置、端口与存储](reference/configuration.md)
+- [REST API](reference/rest-api.md)
+- [运行时行为](reference/runtime-behavior.md)
 
 ## 开发者文档
-
-- [Idea Tree 实现](developer-docs/idea-tree.md) — 研究循环、状态持久化、预算与恢复边界。
 
 见[开发者文档导航](developer-docs/README.md)，其中包括架构、模块边界、协议和当前有效的特性设计。
 
