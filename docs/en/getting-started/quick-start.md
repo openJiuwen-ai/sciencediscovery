@@ -92,3 +92,4 @@ connectors, and supplied material; they are not fixed-output promises.
 - System principles: [Overall runtime architecture](../developer-docs/architecture.md)
 - Optional end-to-end practice: [Evolve a solution](../domains/evolve-a-solution.md)
 - Cross-database research case: [Literature research](../domains/literature-research.md)
+- [Analyze correlations and clusters of sepsis endotype scores](../domains/analyze-sepsis-endotypes.md) — Use real BiomniBench data, from CSV upload to analysis, delivery, and quality review.

@@ -10,6 +10,8 @@ any currently running six-case research suite.
 | `da-13-3` | Protein associations with changes in body fat and breast volume; precomputed mixed-model estimates | One CSV, 295,386 bytes |
 | `da-14-1` | Sepsis endotype score correlation and hierarchical clustering | One CSV, 2,307,055 bytes |
 
+The `da-14-1` user walkthrough is available in [English](../../../docs/en/domains/analyze-sepsis-endotypes.md) and [中文](../../../docs/zh/domains/analyze-sepsis-endotypes.md). It uses the original instruction and the same platform delivery appendix; the examples are not task inputs.
+
 ## Data and licensing
 
 Acquire authorized copies from [the original dataset](https://huggingface.co/datasets/phylobio/BiomniBench-DA).
