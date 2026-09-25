@@ -12,14 +12,21 @@ This is the complete English documentation set.
 
 ## Core capabilities
 
-From running code to exploring directions, improving artifacts, and checking evidence, these six capabilities support research you can inspect and iterate on.
+ScienceDiscovery's core capabilities can be understood in three layers:
 
-- [Scientific sandbox](core/execution-workspaces.md) — Write, debug, and run code in an isolated workspace, with results you can inspect.
-- [Idea Tree](core/idea-tree.md) — Propose, design, and assess candidates, then use feedback to guide another round.
-- [RSI for scientific artifacts](core/evolve.md) — Improve evaluable artifacts through variant search and held-out assessment.
+**Research execution**
+- [Research Agent](core/research-agent.md) — Work from a research objective, call tools, methods, and specialist roles, and organize an inspectable research process.
+- [Research Artifacts](core/artifacts.md) — Register reports, code, tables, and images as viewable, versioned, reusable deliverables.
+- [Scientific execution environment and workspaces](core/execution-workspaces.md) — Run Python, R, and Shell in an isolated environment while preserving research files.
+- [Scientific MCP and Skills](core/mcp-skills.md) — MCP provides tools and data interfaces; Skills provide reusable research methods.
+- [Specialists](core/specialists.md) — Package responsibilities, Skills, and tool scope into reusable expert roles.
+
+**Exploration and optimization**
+- [Idea Tree](core/idea-tree.md) — Expand candidate directions, design approaches, and use feedback to guide another round.
+- [RSI for scientific artifacts](core/evolve.md) — Improve evaluable artifacts through candidate search and held-out assessment.
+
+**Trust and review**
 - [ScienceMemory and Reviewer](core/science-memory-reviewer.md) — Connect tasks, evidence, and conclusions, and identify issues worth reviewing.
-- [Specialists](core/specialists.md) — Package responsibilities, skills, and tools into reusable research roles.
-- [Scientific MCP and Skills](core/mcp-skills.md) — Combine scientific interfaces with reusable working methods.
 
 ## Domain guides
 
