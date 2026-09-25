@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { materializeArtifact } from "../artifacts/materialize.js";
 import { randomUUID } from "node:crypto";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
@@ -1106,9 +1107,12 @@ async function executeAgentRun(
     turnId: string,
     sourcePathPrefix?: string,
     parentSubagentId?: string,
-  ): Pick<WorkspaceAgentOptions, "declareArtifact" | "getFileProvenance" | "listArtifacts" | "readArtifact"> => ({
+  ): Pick<WorkspaceAgentOptions, "declareArtifact" | "getFileProvenance" | "listArtifacts" | "readArtifact" | "materializeArtifact"> => ({
+    materializeArtifact: (input, signal) => materializeArtifact(store, { ...input, signal, sessionId, workspaceRoot, sourcePathPrefix, subagentId: parentSubagentId }),
     declareArtifact: async (input) => {
-      const defaultName = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
+      const targetArtifact = input.artifactId ? store.getProjectArtifact(session.projectId, input.artifactId) : undefined;
+      if (input.artifactId && (!targetArtifact || targetArtifact.deletedAt)) throw new Error("Artifact not found in this Project");
+      const defaultName = targetArtifact?.logicalName ?? normalizeWorkspaceRelativePath(workspaceRoot, input.path);
       // `sourcePath` must match the artifact-derivation path stored by
       // `recordGeneratedFiles` (which normalises via `assertWorkspacePath`).
       // Passing `input.path` raw breaks that match when the LLM prefixes the
@@ -1122,6 +1126,8 @@ async function executeAgentRun(
       const normalizedInputPath = normalizeWorkspaceRelativePath(workspaceRoot, input.path);
       const sourcePath = sourcePathPrefix ? `${sourcePathPrefix}/${normalizedInputPath}` : normalizedInputPath;
       const result = await provenanceRecorder.declareWorkspaceArtifact({
+        artifactId: input.artifactId, baseVersionId: input.baseVersionId,
+        ...(input.artifactId && input.toolCallId ? { publicationId: `${turnId}:${input.toolCallId}` } : {}),
         ...(input.description ? { description: input.description } : {}),
         name: input.name?.trim() || defaultName,
         path: input.path,

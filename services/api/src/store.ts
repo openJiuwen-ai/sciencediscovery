@@ -3480,6 +3480,9 @@ export class SessionStore {
   }
 
   async createArtifactVersion(input: {
+    artifactId?: string;
+    baseVersionId?: string;
+    publicationId?: string;
     content: CasObjectRef;
     description?: string;
     executionRunIds?: string[];
@@ -3510,12 +3513,33 @@ export class SessionStore {
     if (!/^[a-f0-9]{64}$/.test(input.content.hash) || !Number.isSafeInteger(input.content.size) || input.content.size < 0) {
       throw new Error("Artifact content reference is invalid");
     }
-    const dependencies = [...new Set(input.inputArtifactVersionIds ?? [])];
+    if (!!input.artifactId !== !!input.baseVersionId) throw new Error("artifactId and baseVersionId are required together");
+    const explicit = input.artifactId ? this.catalog.artifacts.find(a =>
+      a.id === input.artifactId && a.projectId === projectId && !a.deletedAt) : undefined;
+    if (input.artifactId && !explicit) throw new Error("Artifact not found in this Project");
+    const base = input.baseVersionId ? this.catalog.artifactVersions.find(v =>
+      v.id === input.baseVersionId && v.artifactId === explicit?.id && v.projectId === projectId) : undefined;
+    if (input.baseVersionId && !base) throw new Error("Artifact base version not found");
+    if (explicit && input.publicationId) {
+      const prior = this.catalog.artifactVersions.find(v => v.artifactId === explicit.id &&
+        v.sessionId === input.sessionId && v.publicationId === input.publicationId);
+      if (prior) {
+        if (prior.baseVersionId !== input.baseVersionId || prior.content.hash !== input.content.hash || prior.content.size !== input.content.size)
+          throw new Error("ARTIFACT_PUBLICATION_CONFLICT: retry changed the published content or base version");
+        await this.saveCatalog();
+        return { artifact: structuredClone(explicit), version: structuredClone(prior) };
+      }
+    }
+    // No await between this compare and catalog mutation: one SessionStore owns
+    // the catalog; saveCatalog serializes its durable SQLite transactions.
+    if (explicit && base?.version !== explicit.currentVersion)
+      throw new Error("ARTIFACT_VERSION_CONFLICT: Artifact changed since the base version; local file preserved");
+    const dependencies = [...new Set([...(input.inputArtifactVersionIds ?? []), ...(base ? [base.id] : [])])];
     if (dependencies.some((id) => !this.catalog.artifactVersions.some((version) => version.id === id && version.projectId === projectId))) {
       throw new Error("Artifact dependency must reference a version in the same Project");
     }
     const now = new Date().toISOString();
-    let artifact = this.catalog.artifacts.find((candidate) =>
+    let artifact = explicit ?? this.catalog.artifacts.find((candidate) =>
       candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt);
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
     if (artifact?.origin === "server_generated" && (input.origin ?? "llm_declared") !== "server_generated") {
@@ -3545,6 +3569,7 @@ export class SessionStore {
       if (input.title?.trim()) artifact.title = input.title.trim();
     }
     const version: ScientificArtifactVersion = {
+      ...(base ? { baseVersionId: base.id, ...(input.publicationId ? { publicationId: input.publicationId } : {}) } : {}),
       artifactId: artifact.id,
       content: structuredClone(input.content),
       createdAt: now,
@@ -3553,7 +3578,7 @@ export class SessionStore {
       inputArtifactVersionIds: dependencies,
       mediaType: input.mediaType,
       projectId,
-      ...(input.references?.length ? { references: structuredClone(input.references) } : {}),
+      ...((input.references ?? base?.references)?.length ? { references: structuredClone(input.references ?? base!.references!) } : {}),
       sessionId: input.sessionId,
       ...(input.sourcePath ? { sourcePath: input.sourcePath } : {}),
       ...(input.turnId ? { turnId: input.turnId } : {}),

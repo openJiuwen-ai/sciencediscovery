@@ -78,6 +78,9 @@ test("domain contributors expose bounded structured runtime observations as data
   store.observe(call("task", { description: "screen papers" }), {
     content: "{\"subagent_status\":\"completed\",\"brief\":\"screened\"}", isError: false,
   }, 4);
+  store.observe(call("materialize_artifact", { artifact_id: "artifact-1", version: 1, path: "edit.md" }), {
+    content: JSON.stringify({ artifact_id: "artifact-1", version_id: "base-v1", path: "edit.md", sha256: "a".repeat(64), size: 200000 }), isError: false,
+  }, 5);
   const registry = new ContextContributorRegistry<RuntimeMessage>();
   for (const contributor of createDurableDomainContributors<RuntimeMessage>(store, ["main"])) {
     registry.register(contributor);
@@ -90,6 +93,10 @@ test("domain contributors expose bounded structured runtime observations as data
   assert.deepEqual(output.messages.map((message) => (
     (message.additional_kwargs as Record<string, unknown>).durable_context_channel
   )).sort(), ["artifacts", "delegations", "memory", "reviews"]);
+  const artifacts = output.messages.find(message =>
+    (message.additional_kwargs as Record<string, unknown>).durable_context_channel === "artifacts");
+  assert.match(String(artifacts?.content), /base-v1/);
+  assert.match(String(artifacts?.content), /edit.md/);
   for (const message of output.messages) {
     assert.match(String(message.content), /authority="data_only"/u);
   }

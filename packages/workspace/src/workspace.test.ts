@@ -930,7 +930,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     properties: Record<string, unknown>;
     required?: string[];
   };
-  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["description", "name", "path", "paths"]);
+  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "base_version_id", "description", "name", "path", "paths"]);
   assert.deepEqual(declareSchema.required ?? [], []);
   assert.deepEqual(
     declareSchema.properties.paths,
@@ -975,6 +975,10 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     declare.execute("declare-too-many", { paths: Array.from({ length: 51 }, (_, index) => `outputs/${index}`) }),
     /at most 50 paths/,
   );
+  await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", path: "edit.dat" }), /required together/);
+  await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", paths: ["edit.dat"] }), /cannot rename or batch/);
+  await declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", path: "edit.dat" });
+  assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", toolCallId: "revision", path: "edit.dat" });
   const listed = await list.execute("list", {});
   assert.match(listed.content[0]?.type === "text" ? listed.content[0].text : "", /llm_declared/);
   const readResult = await read.execute("read", { name: "result" });

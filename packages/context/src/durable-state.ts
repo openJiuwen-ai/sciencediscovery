@@ -169,7 +169,7 @@ export class DurableContextStore {
       return;
     }
     if (call.name === "task") return this.append(this.delegations, record);
-    if (["artifact_download", "declare_artifact", "paper_extract_pdf"].includes(call.name)) {
+    if (["artifact_download", "declare_artifact", "materialize_artifact", "paper_extract_pdf"].includes(call.name)) {
       if (!result.isError) this.append(this.artifacts, record);
       return;
     }

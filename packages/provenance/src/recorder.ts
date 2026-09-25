@@ -272,6 +272,9 @@ export class ProvenanceRecorder {
   }
 
   async registerWorkspaceArtifact(options: {
+    artifactId?: string;
+    baseVersionId?: string;
+    publicationId?: string;
     description?: string;
     executionRunIds?: string[];
     inputArtifactVersionIds?: string[];
@@ -289,6 +292,7 @@ export class ProvenanceRecorder {
     workspaceRoot: string;
   }): Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion }> {
     const registered = await this.artifactRegistry.registerWorkspaceArtifact({
+      artifactId: options.artifactId, baseVersionId: options.baseVersionId, publicationId: options.publicationId,
       ...(options.description ? { description: options.description } : {}),
       executionRunIds: options.executionRunIds,
       inputArtifactVersionIds: options.inputArtifactVersionIds,
@@ -340,6 +344,9 @@ export class ProvenanceRecorder {
   }
 
   async declareWorkspaceArtifact(options: {
+    artifactId?: string;
+    baseVersionId?: string;
+    publicationId?: string;
     description?: string;
     name: string;
     /** When set, this artifact was declared inside a subagent: its upsert
@@ -396,6 +403,7 @@ export class ProvenanceRecorder {
     // execution context (leader run vs. report-writer subagent) drains only
     // the chip references that context's declare_claim calls pushed.
     const { artifact, version } = await this.registerWorkspaceArtifact({
+      artifactId: options.artifactId, baseVersionId: options.baseVersionId, publicationId: options.publicationId,
       ...(options.description ? { description: options.description } : {}),
       ...(run ? { executionRunIds: [run.id] } : {}),
       inputArtifactVersionIds: inputs.versionIds,
@@ -418,8 +426,9 @@ export class ProvenanceRecorder {
       // finds the catalog record by id and persists immediately) AND mirror them
       // onto the cloned snapshot we return + emit via artifact.upserted, so live
       // consumers see the references without re-reading the store.
-      this.store.updateArtifactVersionReferences(options.sessionId, version.id, drained.references);
-      version.references = structuredClone(drained.references);
+      const references = [...new Map([...(version.references ?? []), ...drained.references].map(ref => [ref.label, ref])).values()];
+      this.store.updateArtifactVersionReferences(options.sessionId, version.id, references);
+      version.references = structuredClone(references);
     }
     if (drained.claimIds.length && this.memoryGraphSink) {
       this.memoryGraphSink.linkClaimsToReport(artifact.id, version.version, drained.claimIds, options.sessionId);
