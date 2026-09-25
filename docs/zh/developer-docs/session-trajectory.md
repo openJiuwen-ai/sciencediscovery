@@ -69,7 +69,6 @@ API 不提供任意 CAS 地址读取，必须先解析当前 Session 的主子 A
 
 参见：[组件与插件机制](plugins.md)、[Agent 后端](agent-backend.md)、[内容寻址存储](cas.md)。
 
-
 ### 记录阶段卡顿与取消诊断
 
 Swarm 模型网关等待输入或输出轨迹记录时，会响应运行取消和客户端断连。
