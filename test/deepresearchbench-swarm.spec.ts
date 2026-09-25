@@ -32,7 +32,12 @@ for (const sample of drbSamples) {
  * CostSideEffects: Billable research and Judge calls; temporary application records deleted, local evaluation artifacts retained.
  */
   test(`DRB-${sample.id} ${sample.difficulty} Swarm research integration`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap"] }, async ({ journey, page }, testInfo) => {
-    const runBudget = positiveNumber("E2E_DRB_RUN_TIMEOUT_MS", 3_600_000);
+    // These two evidence-heavy cases have reviewed generation budgets. Keep
+    // their dedicated overrides ahead of the shorter suite-wide CI budget.
+    const caseRunBudget = sample.id === 58 ? 5_400_000 : sample.id === 59 ? 7_200_000 : undefined;
+    const runBudget = caseRunBudget === undefined
+      ? positiveNumber("E2E_DRB_RUN_TIMEOUT_MS", 3_600_000)
+      : positiveNumber(`E2E_DRB_${sample.id}_RUN_TIMEOUT_MS`, caseRunBudget);
     const judgeBudget = positiveNumber("E2E_DRB_EVAL_TIMEOUT_MS", 3_600_000);
     test.setTimeout(runBudget + judgeBudget + 240_000);
     expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires isolated Swarm stack (E2E_SWARM_TASK=1)").toBe(false);

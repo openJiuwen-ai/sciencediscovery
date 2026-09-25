@@ -1992,7 +1992,7 @@ async function executeAgentRun(
           const failureError = wallClockTimeoutSignal.aborted
             ? new Error(`Subagent wall-clock timeout after ${subagentConfig.timeoutSeconds} seconds`)
             : error;
-          rememberTimeout(timeoutFailure(failureError));
+          // Keep child failures in their own record, not the lead assistant stream.
           const failure = classifySubagentFailure(failureError, {
             maxTurns: subagent.maxTurns,
             maxTurnsExceeded,

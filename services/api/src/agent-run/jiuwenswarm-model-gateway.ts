@@ -49,6 +49,10 @@ export interface ModelGateway {
   restore<T extends Record<string, unknown>>(message: T): T;
   /** The last model turn served, for what the run's end has to say about it. */
   lastTurn(): { text: string; toolCalls: number; truncated: boolean; recoveryAttempts?: number } | undefined;
+  lastFailure(): { requestId: string; truncated: boolean; tools: string[] } | undefined;
+  /** Payload-free metadata for active requests; never includes prompts or arguments. */
+  diagnostics(): Array<{ id: string; purpose: "task" | "auxiliary"; phase: string; elapsedMs: number;
+    upstreamChunks: number; downstreamChunks: number; upstreamIdleMs: number; downstreamIdleMs: number }>;
   close(): Promise<void>;
 }
 
@@ -159,6 +163,8 @@ export async function startModelGateway(
   const token = randomUUID();
   const produced = new Map<string, Record<string, unknown>>();
   let last: ReturnType<ModelGateway["lastTurn"]>;
+  let lastFailure: ReturnType<ModelGateway["lastFailure"]>;
+  const active = new Map<string, () => ReturnType<ModelGateway["diagnostics"]>[number]>();
   const remember = (turn: ModelTurn, body: ChatRequest) => {
     produced.set(turnKey(turn.assistantMessage), turn.assistantMessage);
     const latest = body.messages?.at(-1);
@@ -209,14 +215,29 @@ export async function startModelGateway(
     signal.addEventListener("abort", abort, { once: true });
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
     const id = `chatcmpl-${randomUUID()}`;
+    if (!auxiliary) lastFailure = undefined;
+    const rejectInvalidArguments = (turn: ModelTurn) => {
+      // Truncated calls are withheld and returned to Swarm for bounded recovery.
+      if (turn.truncated) return;
+      const invalid = turn.toolCalls.filter(call => call.argsParseError);
+      if (!invalid.length) return;
+      if (!auxiliary) lastFailure = { requestId: id, truncated: false,
+        tools: invalid.map(call => call.name).slice(0, 20) };
+      throw new Error("Model returned invalid tool arguments");
+    };
     const streamStarted = Date.now();
     let upstreamChunks = 0, downstreamChunks = 0, toolArgumentChars = 0;
     let lastUpstreamAt = streamStarted, lastDownstreamAt = streamStarted, lastLogAt = 0;
-    const trace = (phase: string, force = false) => {
+    let phase = "preparing";
+    active.set(id, () => ({ id, purpose: auxiliary ? "auxiliary" : "task", phase,
+      elapsedMs: Date.now() - streamStarted, upstreamChunks, downstreamChunks,
+      upstreamIdleMs: Date.now() - lastUpstreamAt, downstreamIdleMs: Date.now() - lastDownstreamAt }));
+    const upstream = () => { phase = "receiving"; progress(); upstreamChunks++; lastUpstreamAt = Date.now(); };
+    const trace = (event: string, force = false) => {
       const now = Date.now();
       if (process.env.SCIENCE_AGENT_TRACE_MODEL_STREAM !== "1" || (!force && now - lastLogAt < 5_000)) return;
       lastLogAt = now;
-      console.info(`[model-stream] ${JSON.stringify({ id, requestModel: body.model, phase,
+      console.info(`[model-stream] ${JSON.stringify({ id, requestModel: body.model, phase: event,
         elapsedMs: now - streamStarted, upstreamChunks, downstreamChunks, toolArgumentChars,
         upstreamIdleMs: now - lastUpstreamAt, downstreamIdleMs: now - lastDownstreamAt })}`);
     };
@@ -248,7 +269,7 @@ export async function startModelGateway(
         trace("start", true);
         await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
         const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
-          onProgress: () => { progress(); upstreamChunks++; lastUpstreamAt = Date.now(); trace("receive"); },
+          onProgress: () => { upstream(); trace("receive"); },
           onTextDelta: (delta) => writeDelta({ content: delta }),
           onThinkingDelta: (delta) => writeDelta({ reasoning_content: delta }),
           onToolCallDelta: (delta) => {
@@ -263,9 +284,7 @@ export async function startModelGateway(
         });
         controller.signal.throwIfAborted();
         await recordInvalidArguments(turn, id);
-        if (!turn.truncated && turn.toolCalls.some((call) => call.argsParseError)) {
-          throw new Error("Model returned invalid tool arguments");
-        }
+        rejectInvalidArguments(turn);
         start();
         if (!auxiliary) remember(turn, body);
         if (turn.truncated) {
@@ -282,15 +301,13 @@ export async function startModelGateway(
       }
       await observed?.request({ history, systemPrompt, tools }).catch(warnTrajectory);
       const turn = await streamer(endpoint, systemPrompt, history, tools, policy, controller.signal, {
-        onProgress: progress,
+        onProgress: upstream,
         onTextDelta: progress,
         onThinkingDelta: progress,
         onToolCallDelta: progress,
       });
       await recordInvalidArguments(turn, id);
-      if (!turn.truncated && turn.toolCalls.some((call) => call.argsParseError)) {
-        throw new Error("Model returned invalid tool arguments");
-      }
+      rejectInvalidArguments(turn);
       if (!auxiliary) remember(turn, body);
       await record(turn);
       const content = typeof turn.assistantMessage.content === "string" ? turn.assistantMessage.content : textOf(turn.assistantMessage.content);
@@ -313,6 +330,7 @@ export async function startModelGateway(
         fail(status, message);
       }
     } finally {
+      active.delete(id);
       signal.removeEventListener("abort", abort);
     }
   });
@@ -323,6 +341,8 @@ export async function startModelGateway(
     token,
     restore,
     lastTurn: () => last,
+    lastFailure: () => lastFailure,
+    diagnostics: () => [...active.values()].map(snapshot => snapshot()),
     close: () => new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); }),
   };
 }

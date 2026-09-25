@@ -1950,7 +1950,10 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
         maximum: MAX_SUBAGENT_MAX_TURNS,
         minimum: 1,
       })),
-      prompt: Type.String({ maxLength: 20_000, minLength: 1 }),
+      prompt: Type.String({
+        description: "Self-contained instructions. For long deliverables, request an Artifact plus a concise handoff with its ID/version and coverage, not a full copy of the file in the final reply.",
+        maxLength: 20_000, minLength: 1,
+      }),
       specialistId: Type.Optional(specialistIdSchema),
       subagent_type: Type.Optional(Type.String({ maxLength: 80, minLength: 1 })),
       timeout_seconds: Type.Optional(Type.Integer({
@@ -1967,7 +1970,7 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
     const task: AgentTool<typeof taskParameters> = {
       description: [
         "Run one focused task in a subagent. The subagent has an independent workspace: set inputPaths to every parent workspace file it must read, including files named in prompt. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
-        "Subagents have isolated workspaces: their file paths are NOT local files in your workspace. Ask them to declare deliverables with declare_artifact. Read returned artifacts with read_artifact using artifact_id and version; use workspace_transfer only when you need a local copy. An undeclared file mentioned in prose is not an artifact reference.",
+        "Subagents have isolated workspaces: their file paths are NOT local files in your workspace. Ask them to declare deliverables with declare_artifact and return a concise handoff with the artifact ID/version, key findings and gaps. Do not also request the complete report or source package in the subagent's final reply unless the end user explicitly needs it inline; read the returned artifact with read_artifact using artifact_id and version, or use workspace_transfer when you need a local copy. An undeclared file mentioned in prose is not an artifact reference.",
         specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
       ].filter(Boolean).join(" "),
       execute: async (toolCallId, params, signal) => {

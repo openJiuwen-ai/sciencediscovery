@@ -22,10 +22,13 @@ import json
 import os
 import socket
 import socketserver
+import ssl
+import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -33,6 +36,7 @@ import httpx
 from sciencediscovery_gateway.public_biomed_mcp import (
     SERVER,
     _arxiv_search,
+    _get_text,
     _pdb_entry,
     _raise_for_status,
     _europe_pmc_search,
@@ -335,6 +339,57 @@ class PublicBiomedMcpTests(unittest.IsolatedAsyncioTestCase):
             result["records"][0]["primaryCitation"]["markdown"],
             "[Arxiv:2101.00001v1](https://arxiv.org/abs/2101.00001v1)",
         )
+
+    async def test_arxiv_enables_tls_post_handshake_auth_without_changing_other_sources(self) -> None:
+        atom = '<feed xmlns="http://www.w3.org/2005/Atom" />'
+        client_options = []
+        async_client = httpx.AsyncClient
+
+        def make_client(**kwargs):
+            client_options.append(kwargs.copy())
+            return async_client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200, text=atom)),
+                **kwargs,
+            )
+
+        with patch("sciencediscovery_gateway.public_biomed_mcp.httpx.AsyncClient", side_effect=make_client):
+            await _arxiv_search("trapped ion", 5)
+            await _get_text("https://example.org/other-source")
+
+        arxiv_context = client_options[0]["verify"]
+        self.assertIsInstance(arxiv_context, ssl.SSLContext)
+        self.assertTrue(arxiv_context.post_handshake_auth)
+        self.assertTrue(arxiv_context.check_hostname)
+        self.assertEqual(arxiv_context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertNotIn("verify", client_options[1])
+
+    async def test_arxiv_429_diagnostics_keep_headers_without_logging_query(self) -> None:
+        async_client = httpx.AsyncClient
+
+        def make_client(**kwargs):
+            return async_client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(
+                    429, headers={"retry-after": "7", "x-cache": "Error from cloudfront"},
+                )),
+                **kwargs,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "arxiv-http.jsonl"
+            with (
+                patch.dict(os.environ, {"SCIENCE_AGENT_ARXIV_HTTP_LOG": str(path)}),
+                patch("sciencediscovery_gateway.public_biomed_mcp.httpx.AsyncClient", side_effect=make_client),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                    await _arxiv_search("secret cardiology query", 5)
+            raw = path.read_text()
+            event = json.loads(raw)
+            self.assertEqual(event["status"], 429)
+            self.assertEqual(event["retry_after"], "7")
+            self.assertEqual(event["x_cache"], "Error from cloudfront")
+            self.assertEqual(event["error_type"], "RuntimeError")
+            self.assertEqual(len(event["query_sha256"]), 64)
+            self.assertNotIn("secret cardiology query", raw)
 
     async def test_pubmed_empty_search_does_not_make_a_summary_request(self) -> None:
         getter = AsyncMock(return_value={"esearchresult": {"idlist": []}})

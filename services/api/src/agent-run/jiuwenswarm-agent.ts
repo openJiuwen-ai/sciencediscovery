@@ -21,7 +21,7 @@ import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, type AgentTool } from "@sciencedisc
 
 import { DurableContextStore } from "@sciencediscovery/context";
 
-import { startModelGateway } from "./jiuwenswarm-model-gateway.js";
+import { startModelGateway, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
 import { importSkillsToJiuwenSwarm, skillLoadedBy } from "./jiuwenswarm-skills.js";
 import { JiuwenSwarmTrajectory, stateProvider } from "./jiuwenswarm-trajectory.js";
 import { RunDeadlines } from "./run-deadlines.js";
@@ -215,6 +215,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   private trajectory?: JiuwenSwarmTrajectory;
   /** The run's turn and idle deadlines, as the built-in loop keeps them. */
   private deadlines?: RunDeadlines;
+  private lastProgressAt = Date.now();
+  private lastProgressSource = "setup";
   /** Waits begun before the deadlines exist (an approval asked while the run is set up). */
   private pendingWaits = 0;
 
@@ -246,10 +248,22 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
   }
 
   private emit(event: AgentEvent): void {
-    this.deadlines?.progress();
+    this.markProgress(`agent:${event.type}`);
     const evidence = this.trajectory?.evidence(event as { type: string; responseId?: unknown; turn?: unknown });
     const tagged = evidence ? { ...event, evidence } as AgentEvent : event;
     for (const listener of this.listeners) listener(tagged);
+  }
+
+  private markProgress(source: string): void {
+    this.lastProgressAt = Date.now();
+    this.lastProgressSource = source;
+    this.deadlines?.progress();
+  }
+
+  private logGatewayProgress(phase: string, gateway: ModelGateway): void {
+    console.info(`[gateway-progress] ${JSON.stringify({ phase, sessionId: this.options.sessionId,
+      agentId: this.options.versioning?.agentId, idleMs: Date.now() - this.lastProgressAt,
+      lastProgressSource: this.lastProgressSource, activeModelRequests: gateway.diagnostics() })}`);
   }
 
   async execute(text: string): Promise<{ finalMessages: Awaited<ReturnType<NativeAgentHandle["execute"]>>["finalMessages"] }> {
@@ -312,12 +326,19 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
       trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,
-      { progress: () => this.deadlines?.progress(), beforeTurn: () => this.emit({ type: "turn_start" }) });
+      { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }) });
     const deadlines = new RunDeadlines(this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS,
-      this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS, () => this.controller.abort());
+      this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS, () => {
+        this.logGatewayProgress(`${deadlines.expired ?? "unknown"}_deadline_expired`, modelGateway);
+        this.controller.abort();
+      });
     this.deadlines = deadlines;
     for (let wait = 0; wait < this.pendingWaits; wait += 1) deadlines.beginWait();
     deadlines.start();
+    this.markProgress("run_started");
+    const progressTimer = process.env.SCIENCE_AGENT_TRACE_GATEWAY_PROGRESS === "1"
+      ? setInterval(() => this.logGatewayProgress("heartbeat", modelGateway), 30_000) : undefined;
+    progressTimer?.unref();
     try {
       const finalText = await this.stream(text, tools, bridge.url, bridgeToken, announcements, transcript, modelGateway, jiuwenSwarmPlans, jiuwenSwarmSubagents);
       this.controller.signal.throwIfAborted();
@@ -334,6 +355,12 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       if (deadlines.expired) throw deadlines.error();
       if (this.approvalDeliveryError) throw this.approvalDeliveryError;
       if (this.controller.signal.aborted) throw new Error("Agent run cancelled");
+      const modelFailure = modelGateway.lastFailure();
+      if (modelFailure) throw new Error(
+        `Model returned invalid tool arguments (tools: ${modelFailure.tools.join(", ") || "unknown"})${modelFailure.truncated
+          ? ` after reaching max_tokens (${policy.maxTokens})` : ""}; gateway request ${modelFailure.requestId}`,
+        { cause: error },
+      );
       const last = modelGateway.lastTurn();
       if (last?.truncated) {
         const detail = { code: "output_recovery_exhausted", kind: last.toolCalls ? "tool_arguments"
@@ -350,6 +377,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       }
       throw error;
     } finally {
+      if (progressTimer) clearInterval(progressTimer);
       deadlines.stop();
       await bridge.close();
       await modelGateway.close();
@@ -556,7 +584,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     let receivedTerminal = false;
     for await (const line of ndjson(response.body)) {
       if (receivedTerminal) throw new Error("Swarm adapter sent data after its terminal result");
-      this.deadlines?.progress();
+      this.markProgress("event" in line ? `adapter:${line.event.type}` : "adapter:done");
       if ("event" in line && line.event.type === "permission.required") this.answerApproval(line.event.request as ApprovalQuestion);
       if ("done" in line) {
         receivedTerminal = true;
