@@ -11,9 +11,9 @@ ScienceDiscovery 的基本流程可以理解为：
    ↓
 Research Agent
    ↓
-规划步骤、调用能力
+理解目标、规划步骤、选择能力
    ↓
-执行工具与代码
+调用工具、执行代码、协作角色
    ↓
 生成科研产物 Artifact
    ↓
@@ -50,7 +50,7 @@ ScienceDiscovery 中有三类容易混淆的扩展概念：
 - Skill 可以指导 Agent 如何完成文献综述；
 - Specialist 可以定义一个负责文献研究的专业角色。
 
-## Workspace 与 Artifact
+## Workspace、Artifact 与研究交付
 
 Agent 在执行过程中会产生文件，但文件有不同状态。
 
@@ -86,10 +86,9 @@ ScienceDiscovery 提供科研执行环境，让 Agent 可以：
 
 执行环境决定“在哪里做”，Artifact 决定“留下什么结果”。
 
-## 从基础能力到科研能力
+## 从基础概念到科研能力
 
 理解这些基础概念后，可以继续阅读 Core：
 
-- [核心能力](../README.md#核心能力)：ScienceDiscovery 为什么适合科研场景。
-- [科研 Agent](../core/research-agent.md)：Agent 如何组织复杂研究过程。
-- [科研产物](../core/artifacts.md)：如何让结果可检查和复用。
+- [核心能力](../core/README.md)：ScienceDiscovery 为什么适合科研场景。
+- [领域指南](../domains/literature-research.md)：通过真实任务理解完整流程。
