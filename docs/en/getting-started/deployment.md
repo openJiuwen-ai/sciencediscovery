@@ -319,7 +319,10 @@ Once the service is running, stop reading deployment details and return to the [
 
 ## Further reading
 
+- CLI commands and exact behavior: [CLI reference](../reference/cli.md)
 - Exact environment variables, ports, and storage: [Configuration reference](../reference/configuration.md)
+- How single-file releases are built: [Developer docs: Binary packaging and releases](../developer-docs/binary-packaging.md)
+- Local/Docker/remote Runner deployment internals: [Developer docs: Deployment runtime internals](../developer-docs/deployment-runtime.md)
 - Sandbox isolation and execution internals: [Developer docs: Sandbox execution](../developer-docs/sandbox-execution.md)
 - Internal processes and module boundaries: [Developer docs: Architecture](../developer-docs/architecture.md)
 - Repository structure and source entry points: [Developer docs: Repository layout](../developer-docs/repository-layout.md)
