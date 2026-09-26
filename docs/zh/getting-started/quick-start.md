@@ -136,4 +136,5 @@ temperature_c,yield_g
 
 - 想了解 ScienceDiscovery 能做什么：看[核心能力](../README.md#核心能力)。
 - 想照着真实科研案例做一遍：看[领域指南](../README.md#领域指南)。
+- 想跑一个具体的优化案例：看[使用PUCT优化一个文本压缩算法](../domains/evolve-a-solution.md)。
 - 想使用 Docker、源码构建或解决启动问题：看[部署指南](deployment.md)。

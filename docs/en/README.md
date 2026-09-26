@@ -17,8 +17,7 @@ This is the complete English documentation set.
 ## Domain guides
 
 - [Design an antibody on Ascend NPU](domains/antibody-design.md)
-- [Evolve a solution](domains/evolve-a-solution.md)
-- [Run an evolution search](domains/run-an-evolution-search.md)
+- [Use PUCT to optimize a text compression algorithm](domains/evolve-a-solution.md) — run a program-evolution search end to end and judge whether the improvement is real.
 - [Analyze correlations and clusters of sepsis endotype scores](domains/analyze-sepsis-endotypes.md)
 - [Research how migrating birds determine location and direction](domains/literature-research.md)
 

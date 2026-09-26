@@ -2,7 +2,7 @@
 
 > This is an engine-internal and deployment note for maintainers. For what `/evolve-design` is,
 > when to use it, and how to run it, see [Program evolution](../core/evolve.md) and
-> [Run an evolution search](../domains/run-an-evolution-search.md).
+> [Use PUCT to optimize a text compression algorithm](../domains/evolve-a-solution.md).
 
 `services/evolve` is the Python FastAPI process that runs evolution searches. It supports two
 engines:
