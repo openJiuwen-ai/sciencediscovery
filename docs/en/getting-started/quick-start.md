@@ -136,4 +136,5 @@ Different models may phrase the report differently. That is expected; what matte
 
 - To understand what ScienceDiscovery can do, see [Core capabilities](../README.md#core-capabilities).
 - To follow complete real research examples, see [Domain guides](../README.md#domain-guides).
+- For a concrete optimization walkthrough, see [Use PUCT to optimize a text compression algorithm](../domains/evolve-a-solution.md).
 - To use Docker, build from source, or troubleshoot startup, see the [deployment guide](deployment.md).

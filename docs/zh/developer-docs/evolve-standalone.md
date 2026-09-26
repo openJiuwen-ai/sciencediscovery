@@ -1,7 +1,7 @@
 # 演进侧车：架构、引擎与独立部署
 
 > 本文是面向维护者的引擎内部与部署说明。想了解 `/evolve-design` 是什么、什么时候用、怎么跑，
-> 请看[程序演进](../core/evolve.md)与[运行一次演进搜索](../domains/run-an-evolution-search.md)。
+> 请看[程序演进](../core/evolve.md)与[使用PUCT优化一个文本压缩算法](../domains/evolve-a-solution.md)。
 
 `services/evolve` 是一个 Python FastAPI 进程，跑演进搜索。它支持两种搜索引擎：
 
