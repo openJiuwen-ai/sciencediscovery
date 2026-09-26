@@ -6,9 +6,8 @@
 
 ## 快速开始
 
-- [快速开始](getting-started/quick-start.md) — 安装预编译二进制、启动服务、配置模型，并完成第一次
-  Agent 任务。
-- [部署](getting-started/deployment.md) — 预编译二进制不适合你的主机或工作流时，用其他方式安装与运行：源码构建的单文件二进制、本地源码模式，或 Docker。
+- [快速开始](getting-started/quick-start.md) — 按 Linux 或 macOS 的最短路径启动服务、配置模型，并完成第一次可检查的 Agent 任务。
+- [部署](getting-started/deployment.md) — 选择预编译单文件、本地源码模式或 Docker，包含长期运行与首次启动排障。
 
 ## 核心能力
 
@@ -42,6 +41,7 @@
 
 - [执行与工作区](reference/execution-workspaces.md) — 执行状态、文件交接、环境版本与停止行为。
 
+- [CLI](reference/cli.md) — `serve`、`run`、`extract`、`version` 的命令与行为。
 - [配置、端口与存储](reference/configuration.md) — 环境变量、默认端口、上传/工作区/输出配额和数据布局。
 - [REST API](reference/rest-api.md) — 当前 UI 使用的内部 HTTP 接口、认证、请求/响应与错误语义。
 - [运行时行为](reference/runtime-behavior.md) — 模型、设置继承、技能、权限、超时和执行限制。

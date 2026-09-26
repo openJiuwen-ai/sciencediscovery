@@ -6,9 +6,8 @@ This is the complete English documentation set.
 
 ## Getting started
 
-- [Quick start](getting-started/quick-start.md) — install a prepackaged binary, start the service, configure
-  a model, and complete a first task.
-- [Deployment](getting-started/deployment.md) — other ways to install and run ScienceDiscovery when the prebuilt binary does not suit your host or workflow: a source-built single-file binary, local source mode, or Docker.
+- [Quick start](getting-started/quick-start.md) — follow the shortest Linux or macOS path, configure a model, and complete a first inspectable Agent task.
+- [Deployment](getting-started/deployment.md) — choose a prepackaged single file, local source mode, or Docker, with long-running operation and first-run troubleshooting.
 
 ## Core capabilities
 
@@ -42,6 +41,7 @@ From running code to exploring directions, improving artifacts, and checking evi
 
 - [Execution and workspaces](reference/execution-workspaces.md) — execution states, file handoff, environment revisions, and stopping.
 
+- [CLI](reference/cli.md) — command and behavior reference for `serve`, `run`, `extract`, and `version`.
 - [Configuration](reference/configuration.md) — environment variables, default ports, upload/workspace/output quotas, and data layout.
 - [REST API](reference/rest-api.md) — internal HTTP API used by the UI: authentication, request/response, and error semantics.
 - [Runtime behavior and limits](reference/runtime-behavior.md) — models, settings inheritance, skills, permissions, timeouts, and execution limits.

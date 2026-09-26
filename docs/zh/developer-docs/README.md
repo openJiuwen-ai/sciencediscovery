@@ -3,6 +3,8 @@
 这些文档描述架构、模块边界、协议和当前有效的特性设计。面向用户的行为和精确配置见[文档总览](../README.md)。
 
 - [整体运行时架构](architecture.md) — 常驻进程、模块边界和跨进程时序。
+- [单文件二进制打包与发行](binary-packaging.md) — 构建标识、发行包组成、双架构打包与首次启动 bootstrap。
+- [部署运行机制](deployment-runtime.md) — 本地启动链、远端 Runner 自动部署、Docker 内部边界与多实例。
 - [控制面](control-plane.md) — `services/api` 的职责、存储与运行生命周期。
 - [Agent 后端](agent-backend.md) — Node 原生 agent loop 的模块结构、模型传输、延迟工具与历史压缩。
 - [Runtime Core 边界](runtime-core.md) — 与领域无关的运行时职责和已注册端口。
