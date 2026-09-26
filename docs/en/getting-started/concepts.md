@@ -18,7 +18,7 @@ Call tools, execute code, collaborate with roles
 Create research Artifacts
       ↓
 Review, reuse, and continue research
-```text
+```
 
 The Agent does not only generate text. It works toward a goal by understanding the problem, selecting methods, executing actions, and delivering results.
 
@@ -65,7 +65,7 @@ Artifact
   ├── Code
   ├── Tables
   └── Images
-```text
+```
 
 A useful shorthand:
 
