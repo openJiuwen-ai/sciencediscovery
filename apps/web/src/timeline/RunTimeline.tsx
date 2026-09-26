@@ -757,6 +757,7 @@ export function RunTimeline({
   onPermissionDecision,
   onOpenSubagent,
   onToggle,
+  recordedRunId,
   references,
   onChipClick,
   reviewerLevel,
@@ -780,6 +781,14 @@ export function RunTimeline({
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   onOpenSubagent?: (subagent: Subagent) => void;
   onToggle: (id: string, expanded: boolean) => void;
+  /**
+   * Set when this timeline is a finished run rebuilt from its persisted events.
+   * A run is streamed into the live timeline and, once it ends, handed over to
+   * that record, which mounts its cards afresh; the attribute this sets is how
+   * anything outside React can tell the record apart from the live timeline it
+   * replaced, since the two otherwise render identical markup.
+   */
+  recordedRunId?: string;
   /** Chip references (alias → graph node) for the session's latest report
    * artifact version, so [evidence1]/[artifact1] tokens in assistant report messages
    * render as clickable chips inline. Absent on sessions without a report. */
@@ -830,7 +839,7 @@ export function RunTimeline({
     }
   }
   return (
-    <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite">
+    <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite" data-run-record={recordedRunId}>
       <header className="message assistant run-identity">
         <div className="avatar"><BrandIcon size={19} /></div>
         <div><span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span></div>
