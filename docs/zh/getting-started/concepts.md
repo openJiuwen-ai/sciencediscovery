@@ -6,7 +6,7 @@
 
 ScienceDiscovery 的基本流程可以理解为：
 
-```
+```text
 研究问题
    ↓
 Research Agent
@@ -18,7 +18,7 @@ Research Agent
 生成科研产物 Artifact
    ↓
 检查、复用和继续研究
-```
+```text
 
 Agent 不只是生成文字，而是在目标驱动下完成一系列行动：理解问题、选择方法、调用工具、执行分析，并交付结果。
 
@@ -54,7 +54,7 @@ ScienceDiscovery 中有三类容易混淆的扩展概念：
 
 Agent 在执行过程中会产生文件，但文件有不同状态。
 
-```
+```text
 Workspace
   ├── 上传数据
   ├── 临时代码
@@ -65,7 +65,7 @@ Artifact
   ├── 代码
   ├── 数据表
   └── 图像
-```
+```text
 
 可以简单理解为：
 
