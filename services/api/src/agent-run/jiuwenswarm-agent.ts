@@ -89,10 +89,10 @@ export interface JiuwenSwarmAgentConfig {
    */
   skills?: "jiuwenswarm" | "ours";
   /**
-   * How the model delegates. `jiuwenswarm` (default, with JiuwenSwarm's tools): the model spawns and
+   * How the model delegates. `jiuwenswarm` (explicit opt-in, with JiuwenSwarm's tools): the model spawns and
    * collects sub-agents with JiuwenSwarm's own `subagent_spawn`/`subagent_wait`; ScienceDiscovery's `task`
    * is not offered. Those sub-agents run inside JiuwenSwarm itself, with its own built-in tools only: no
-   * ScienceDiscovery tool, sandbox, workspace handoff or provenance reaches them. `task`: ScienceDiscovery's
+   * ScienceDiscovery tool, sandbox, workspace handoff or provenance reaches them. `task` (default): ScienceDiscovery's
    * own tool, as before (a full nested run, with its tools, sandbox, handoff and provenance).
    */
   subagents?: "jiuwenswarm" | "task";
@@ -177,6 +177,10 @@ export function jiuwenSwarmConfigFromEnv(env: NodeJS.ProcessEnv = process.env): 
   if (env.SCIENCE_AGENT_EXECUTOR?.trim() !== "jiuwenswarm") return undefined;
   const adapterUrl = env.SCIENCE_AGENT_ADAPTER_URL?.trim();
   if (!adapterUrl) throw new Error("SCIENCE_AGENT_EXECUTOR=jiuwenswarm requires SCIENCE_AGENT_ADAPTER_URL");
+  const subagents = env.SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS?.trim() || "task";
+  if (subagents !== "task" && subagents !== "jiuwenswarm") {
+    throw new Error("SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS must be task or jiuwenswarm");
+  }
   return {
     adapterUrl: adapterUrl.replace(/\/+$/, ""),
     ...(env.SCIENCE_AGENT_ADAPTER_TOKEN?.trim() ? { adapterToken: env.SCIENCE_AGENT_ADAPTER_TOKEN.trim() } : {}),
@@ -184,7 +188,7 @@ export function jiuwenSwarmConfigFromEnv(env: NodeJS.ProcessEnv = process.env): 
     ...(env.SCIENCE_AGENT_JIUWENSWARM_PROMPT?.trim() === "replace" ? { prompt: "replace" as const } : {}),
     ...(env.SCIENCE_AGENT_JIUWENSWARM_TOOLS?.trim() === "ours" ? { tools: "ours" as const } : {}),
     ...(env.SCIENCE_AGENT_JIUWENSWARM_SKILLS?.trim() === "ours" ? { skills: "ours" as const } : {}),
-    ...(env.SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS?.trim() === "task" ? { subagents: "task" as const } : {}),
+    subagents,
   };
 }
 
@@ -304,7 +308,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     if (allJiuwenSwarmTools) for (const name of Object.keys(JIUWENSWARM_WEB_TOOLS)) tools.delete(name);
     // With JiuwenSwarm's own sub-agent tools the model does not also get ours: those sub-agents run inside
     // JiuwenSwarm, with none of ScienceDiscovery's tools, sandbox, handoff or provenance.
-    const jiuwenSwarmSubagents = allJiuwenSwarmTools && (this.config.subagents ?? "jiuwenswarm") === "jiuwenswarm" && tools.has("task");
+    const jiuwenSwarmSubagents = allJiuwenSwarmTools && (this.config.subagents ?? "task") === "jiuwenswarm" && tools.has("task");
     if (jiuwenSwarmSubagents) tools.delete("task");
     await this.installSkills(tools, allJiuwenSwarmTools);
     this.loadSkill = (id) => {
@@ -323,7 +327,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       executor: "jiuwenswarm",
       model: { model: endpoint.model, apiProtocol: endpoint.apiProtocol, apiVariant: endpoint.apiVariant },
       tools: [...tools.values()].map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
-      config: { planning: this.config.planning ?? "todo", prompt: this.config.prompt ?? "prepend", tools: this.config.tools ?? "jiuwenswarm", skills: this.config.skills ?? "jiuwenswarm", subagents: this.config.subagents ?? "jiuwenswarm" },
+      config: { planning: this.config.planning ?? "todo", prompt: this.config.prompt ?? "prepend", tools: this.config.tools ?? "jiuwenswarm", skills: this.config.skills ?? "jiuwenswarm", subagents: this.config.subagents ?? "task" },
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
       trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,

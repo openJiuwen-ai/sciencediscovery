@@ -91,4 +91,5 @@ connectors, and supplied material; they are not fixed-output promises.
 - Tool parameters: [Built-in tools reference](../reference/builtin-tools.md)
 - System principles: [Overall runtime architecture](../developer-docs/architecture.md)
 - Optional end-to-end practice: [Use PUCT to optimize a text compression algorithm](../domains/evolve-a-solution.md)
-- Cross-database research case: [Literature research](../domains/literature-research.md)
+- [Research how migrating birds determine location and direction](../domains/literature-research.md)
+- [Analyze correlations and clusters of sepsis endotype scores](../domains/analyze-sepsis-endotypes.md) — Use real BiomniBench data, from CSV upload to analysis, delivery, and quality review.

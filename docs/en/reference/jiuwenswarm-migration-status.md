@@ -1,5 +1,7 @@
 # JiuwenSwarm migration: status and hand-over
 
+> Historical migration record: defaults and limitations below describe the baseline at that time. The current default is platform `task` dispatch with Swarm execution; explicitly set `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=jiuwenswarm` for native delegation. See [current orchestration](../developer-docs/subagent-orchestration.md).
+
 Where issue 84 (reuse the JiuwenSwarm backend) stands, what runs today, what does not, and how to start
 working on a sub-issue. To run it from source, see [Local mode](../getting-started/deployment.md#local-mode-source-checkout).
 
