@@ -17,4 +17,5 @@ D. 可复现性与产物一致性，权重15。检查输入数据、代码、执
 E. 协作与审核有效性，权重15。按任务明确要求的角色和审核流程，判断各角色是否实际贡献、下游是否获得所需材料、评审意见是否得到处理。文件交接、artifact引用、批量交接及充分的内嵌摘要均可作为交接证据。局部修订不必重新接收与该修改无关的全部材料。核对最终审核覆盖的产物版本与最终交付是否一致：发现差异时描述差异及影响，不得把近似文本当作严格相同版本，也不要把局部文字差异直接等同于整份报告无效。
 【评分尺度】每个维度评0–4级：4充分满足，有可核查证据，无实质性缺陷；3主要满足，局部缺陷不影响核心结论或交付使用；2部分满足，存在影响可信度、完整性或复核的重要缺陷；1严重不足，少量内容可用，核心结果尚不可信；0基本未完成，或有明确证据证明该维度根本不成立。各维度得分=等级/4×权重。不要设置及格线，不输出E2E pass/fail。
 如果材料证明应交付的必要内容缺失，按缺失评分。如果是评分材料加载失败或关键材料不可访问，标记为无法评分，不得记为0分，也不得重新分配该维度权重。
-【输出】最终仅返回JSON，包含rubric_version（tc-research-quality-v1）、status（scored或insufficient_evidence）、evaluated_artifacts（实际评审artifact及version）、dimensions（A至E各维度的level、score、reason、evidence、defects、uncertainties）、total_score（0–100；存在无法评分维度时null）、critical_findings、verification_scope、summary。理由用中文。不能只输出分数；不能用空泛表扬或批评替代证据。
+【输出】最终仅返回JSON，包含rubric_version（tc-research-quality-v1）、status（scored或insufficient_evidence）、dimensions（A至E各维度的level、reason、evidence、defects、uncertainties）、critical_findings、verification_scope、summary。理由用中文。不能只输出分数；不能用空泛表扬或批评替代证据。
+产物ID、版本及送评清单由程序从冻结证据绑定，无需在输出中重抄。各维度得分和总分由程序计算。evidence 使用可定位的文档名、字段或位置；verification_scope 如实描述实际抽查范围，不代表已阅读全部送评材料。

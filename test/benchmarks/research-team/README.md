@@ -104,6 +104,14 @@ Output: `scorecard.json`, `evidence-manifest.json`, `audit-comparison.json`,
 `response-NN.json` and `evidence-reads.json`. Original research results are not
 modified by offline scoring.
 
+The judge returns dimension levels, reasons, evidence locations, and its actual
+verification scope. Artifact/version binding is owned by the scorer:
+`submitted_artifacts` is derived from the frozen evidence manifest, not from
+model-generated identifiers, and does not claim that every artifact was read.
+Legacy `evaluated_artifacts` output is ignored when normalizing retained responses;
+the raw response remains available for audit. Dimension validation and rubric
+weights are unchanged.
+
 ## Local verification
 
 ```bash

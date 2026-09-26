@@ -30,16 +30,19 @@ def normalize_score(raw, identities):
         raise ValueError("Invalid rubric version/status")
     if set(raw.get("dimensions", {})) != set(WEIGHTS):
         raise ValueError("Exactly dimensions A through E are required")
-    for key in ("evaluated_artifacts", "critical_findings", "verification_scope", "summary"):
+    for key in ("critical_findings", "verification_scope", "summary"):
         if key not in raw:
             raise ValueError(f"Missing {key}")
-    if not raw["evaluated_artifacts"] or not raw["verification_scope"] or not raw["summary"]:
-        raise ValueError("Missing evaluated artifacts or verification scope/summary")
-    allowed = {(v["artifact_id"], v["version_id"]) for v in identities.values()}
-    for artifact in raw["evaluated_artifacts"]:
-        if (artifact.get("artifact_id"), artifact.get("version_id")) not in allowed:
-            raise ValueError("Judge cited an unknown artifact/version")
+    if not raw["verification_scope"] or not raw["summary"]:
+        raise ValueError("Missing verification scope/summary")
     result = json.loads(json.dumps(raw))
+    # Identity binding belongs to the frozen evidence manifest, not model output.
+    # This is the submitted set, not a claim that the judge read every artifact.
+    result.pop("evaluated_artifacts", None)  # Ignore legacy model-generated IDs.
+    result["submitted_artifacts"] = [
+        {"document": name, **identity} for name, identity in identities.items()
+    ]
+    result["artifact_binding"] = "Frozen evidence manifest; actual review scope is recorded separately."
     total, unknown = 0, False
     for key, weight in WEIGHTS.items():
         dim = result["dimensions"][key]
@@ -136,7 +139,7 @@ def evaluate(directory, output, request, rounds=20):
     write(output / "evidence-manifest.json", identities)
     write(output / "audit-comparison.json", payload["audit_comparison"])
     rubric = Path(__file__).with_name(VERSION + ".txt").read_text()
-    messages = [{"role": "system", "content": rubric}, {"role": "user", "content": "独立评审以下冻结证据。可用只读工具抽查源数据、代码、交接和执行记录；不联网、不执行代码。必须说明抽查范围。最终 evaluated_artifacts 使用 artifact_id/version_id；dimensions 使用 A/B/C/D/E 键，level 为0–4整数，未知为null。每项包含 reason/evidence/defects/uncertainties。分数由程序依既定权重计算，不要把自述当作核实。\n" + json.dumps(payload, ensure_ascii=False)}]
+    messages = [{"role": "system", "content": rubric}, {"role": "user", "content": "独立评审以下冻结证据。可用只读工具抽查源数据、代码、交接和执行记录；不联网、不执行代码。必须说明抽查范围。产物身份由程序绑定，不要输出产物ID或版本清单。评分依据使用证据文档名、字段或位置，抽查范围单独说明；dimensions 使用 A/B/C/D/E 键，level 为0–4整数，未知为null。每项包含 reason/evidence/defects/uncertainties。分数由程序依既定权重计算，不要把自述当作核实。\n" + json.dumps(payload, ensure_ascii=False)}]
     reads, read_chars, sequence = [], 0, 0
     def call(final=False):
         nonlocal sequence

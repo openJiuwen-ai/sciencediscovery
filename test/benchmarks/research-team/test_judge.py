@@ -12,7 +12,7 @@ IDENTITIES = {"artifact/report.md": {"artifact_id": "a", "version_id": "v"}}
 
 
 def score():
-    return {"rubric_version": judge.VERSION, "status": "scored", "evaluated_artifacts": [{"artifact_id": "a", "version_id": "v"}],
+    return {"rubric_version": judge.VERSION, "status": "scored",
             "dimensions": {k: {"level": 3, "score": 999, "reason": "reason", "evidence": ["artifact/report.md"], "defects": [], "uncertainties": []} for k in judge.WEIGHTS},
             "total_score": 999, "critical_findings": [], "verification_scope": "sampled offline evidence", "summary": "summary"}
 
@@ -34,16 +34,41 @@ class JudgeTests(unittest.TestCase):
         self.assertIsNone(result["total_score"])
         self.assertIsNone(result["dimensions"]["B"]["score"])
 
-    def test_rejects_invented_version_and_invalid_levels(self):
+    def test_rejects_invalid_levels(self):
         for value in (True, 2.5, -1, 5, "3"):
             raw = score()
             raw["dimensions"]["A"]["level"] = value
             with self.assertRaises(ValueError):
                 judge.normalize_score(raw, IDENTITIES)
+    def test_manifest_binds_artifacts_without_model_ids(self):
+        original = score()
+        result = judge.normalize_score(original, IDENTITIES)
+        self.assertEqual(result["submitted_artifacts"], [
+            {"document": "artifact/report.md", "artifact_id": "a", "version_id": "v"}
+        ])
+        self.assertNotIn("evaluated_artifacts", result)
+        self.assertEqual(result["verification_scope"], original["verification_scope"])
+
+    def test_legacy_child_id_cannot_poison_manifest_or_change_score(self):
+        # Real TC repeat-2 failure: a child record was listed as an artifact.
         raw = score()
-        raw["evaluated_artifacts"][0]["version_id"] = "invented"
-        with self.assertRaises(ValueError):
-            judge.normalize_score(raw, IDENTITIES)
+        raw["evaluated_artifacts"] = [{"artifact_id": "child-task-id", "version_id": "n/a (child record)"}]
+        raw["submitted_artifacts"] = [{"artifact_id": "invented", "version_id": "invented"}]
+        result = judge.normalize_score(raw, IDENTITIES)
+        self.assertEqual(result["total_score"], 75)
+        self.assertEqual(result["submitted_artifacts"][0]["version_id"], "v")
+        self.assertNotIn("evaluated_artifacts", result)
+        self.assertEqual(raw["evaluated_artifacts"][0]["version_id"], "n/a (child record)")
+
+    def test_missing_dimension_or_evidence_still_fails(self):
+        for field in ("dimension", "evidence"):
+            raw = score()
+            if field == "dimension":
+                del raw["dimensions"]["A"]
+            else:
+                raw["dimensions"]["A"]["evidence"] = []
+            with self.assertRaises(ValueError):
+                judge.normalize_score(raw, IDENTITIES)
 
     def test_small_audit_mutation_and_later_reaudit(self):
         report = {"id": "a", "version": "v", "text": "References\nphenotypic features"}
@@ -75,6 +100,22 @@ class JudgeTests(unittest.TestCase):
             self.assertEqual(requests[-1]["tool_choice"], "none")
             self.assertEqual(requests[-1]["tools"], judge.TOOLS)
             self.assertTrue((path / "response-02.json").exists())
+
+    def test_legacy_child_reference_needs_no_model_repair(self):
+        raw = score()
+        raw["evaluated_artifacts"] = [{"artifact_id": "child-task-id", "version_id": "n/a (child record)"}]
+        response = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(raw)}}]}
+        with tempfile.TemporaryDirectory() as directory, patch.object(judge, "load_evidence", return_value=({}, IDENTITIES, {"audit_comparison": {}})):
+            with patch.object(judge, "normalize_score", wraps=judge.normalize_score):
+                calls = []
+                def request(body):
+                    calls.append(body)
+                    return response
+                path = Path(directory)
+                result = judge.evaluate(path, path, request)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(result["total_score"], 75)
+                self.assertEqual(json.loads((path / "response-01.json").read_text()), response)
 
     def test_truncation_is_not_scored_and_raw_response_survives(self):
         def request(_body):
