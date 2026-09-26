@@ -2606,6 +2606,7 @@ export const en = {
   "activity.noReminders": "No reminders yet.",
   "activity.cancelReminder": "Cancel reminder",
   "activity.resumeAgent": "Resume {id}",
+  "activity.resumeAgentScope": "If this Session was stopped, resuming a subagent also reopens it. Main and other subagents that were not stopped individually can continue.",
 
   "reviewer.controlsAria": "Reviewer Specialist controls",
   "reviewer.builtInSpecialist": "Built-in Specialist",
@@ -5343,6 +5344,7 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "activity.noReminders": "尚无提醒。",
   "activity.cancelReminder": "取消提醒",
   "activity.resumeAgent": "恢复 {id}",
+  "activity.resumeAgentScope": "如果该会话已停止，恢复子代理也会重新开启会话；主代理和未被单独停止的其他子代理可继续运行。",
 
   "reviewer.controlsAria": "评审专家控制",
   "reviewer.builtInSpecialist": "内置专家",
