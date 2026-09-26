@@ -14,8 +14,8 @@
 
 限流在 Node 控制面统一实现，不在各 Python MCP 源内部：
 
-- `McpGovernanceBroker`（`services/api/src/mcp/broker.ts`）是所有 MCP 工具调用的唯一治理入口，串起权限、缓存、限流、Gateway 调用与 CAS 审计。
-- `ResourceRateLimiter`（`services/api/src/rate-limit/resource-rate-limiter.ts`）是底座，按资源键做并发上限、最小间隔、FIFO 排队、排队超时与 429 冷却。单机、进程内内存态，不做跨机器分布式配额，进程重启即清零。
+- `McpGovernanceBroker`（`packages/data-source/src/broker.ts`）是所有 MCP 工具调用的唯一治理入口，串起权限、缓存、限流、Gateway 调用与 CAS 审计。
+- `ResourceRateLimiter`（`packages/data-source/src/resource-rate-limiter.ts`）是底座，按资源键做并发上限、最小间隔、FIFO 排队、排队超时与 429 冷却。单机、进程内内存态，不做跨机器分布式配额，进程重启即清零。
 - Python MCP server 只负责单次查询、provider 参数/响应校验、瞬时错误重试（`retryPolicy`）和标准结果组装，不做跨请求的排队或并发控制。
 
 各源通过 manifest 的 `governance` 字段向底座提供参数（schema 见 `packages/schema/src/mcp-source.ts`；内建源构造见 `packages/mcp-sources/src/public-biomed.ts` 的 `manifest()`）：
@@ -34,11 +34,11 @@
 
 ```text
 Agent 工具 mcp__<source>__<tool>
-  → createMcpWorkspaceTools.execute            services/api/src/mcp/workspace-tools.ts
-  → McpGovernanceBroker.invoke                 services/api/src/mcp/broker.ts
+  → createMcpWorkspaceTools.execute            packages/artifact-manager/src/mcp-workspace-tools.ts
+  → McpGovernanceBroker.invoke                 packages/data-source/src/broker.ts
       会话可写检查 → 启用过滤 → 输入校验 → 权限 authorize
       → 结果缓存：命中则直接返回规范化结果（不再 acquire、不再出站）
-      → ResourceRateLimiter.acquire(rateLimitGroup, …)   services/api/src/rate-limit/resource-rate-limiter.ts
+      → ResourceRateLimiter.acquire(rateLimitGroup, …)   packages/data-source/src/resource-rate-limiter.ts
           队列满   → RATE_LIMIT_QUEUE_FULL
           排队超时 → RATE_LIMIT_QUEUE_TIMEOUT
       → McpNodeClient.invoke → MCP server → 上游 provider
@@ -53,10 +53,10 @@ Agent 工具 mcp__<source>__<tool>
 
 | 模块 | 路径 | 职责 |
 |---|---|---|
-| 限流底座 | `services/api/src/rate-limit/resource-rate-limiter.ts` | `acquire` / `release` / `reportUpstreamRateLimit`：进程内并发、间隔、队列、冷却 |
-| 治理挂接 | `services/api/src/mcp/broker.ts` | `McpGovernanceBroker.invoke`：权限 → 缓存 → acquire → Gateway → 429 反馈 → release |
+| 限流底座 | `packages/data-source/src/resource-rate-limiter.ts` | `acquire` / `release` / `reportUpstreamRateLimit`：进程内并发、间隔、队列、冷却 |
+| 治理挂接 | `packages/data-source/src/broker.ts` | `McpGovernanceBroker.invoke`：权限 → 缓存 → acquire → Gateway → 429 反馈 → release |
 | 治理参数 | `packages/mcp-sources/src/public-biomed.ts` | `manifest()` 构造 `governance`（`rateLimitGroup`、并发、间隔/QPS、队列等） |
-| 工具注入 | `services/api/src/mcp/workspace-tools.ts` | `createMcpWorkspaceTools` 把 MCP 工具包成 `mcp__<source>__<tool>`，`execute` 调 `broker.invoke` |
+| 工具注入 | `packages/artifact-manager/src/mcp-workspace-tools.ts` | `createMcpWorkspaceTools` 把 MCP 工具包成 `mcp__<source>__<tool>`，`execute` 调 `broker.invoke` |
 
 ### 2.4 Broker 逻辑要点
 
@@ -134,21 +134,28 @@ per-source 配置在 source manifest 的 `governance` 字段（`packages/schema/
 
 审计：每次 `McpInvocation` 记录 `queueWaitMs`（排队时长）；429/重试明细在 `attempts[]`；均可经 `GET /api/sessions/:sessionId/mcp/invocations` 查询。不记录 query 全文之外的新增敏感信息。
 
-## 6. LLM API 边界（当前结论：预留，不排队）
+## 6. LLM API 边界（独立于数据源 admission）
 
-LLM 出站与数据源出站不在同一进程：
+LLM 请求不经过本文的数据源队列。当前模型 transport 位于 `packages/model`，使用 Node/undici 实现请求和 pre-stream 重试。
 
-- 主 Agent 循环的模型请求由 Python Gateway 发出（`services/gateway/src/sciencediscovery_gateway/server.py` 的 `_build_model` 是唯一构造点），HTTP 由 openai/anthropic SDK 负责，SDK 自带 429 指数退避与 `Retry-After` 尊重。
-- Node 侧另有少量辅助模型调用（会话命名、语义评审、论文视觉），与底座同进程，后续可按 `llm:<host>` 键直接接入。
+Native executor 直接使用产品 model layer；JiuwenSwarm executor 的模型请求通过 adapter 的 per-run LLM proxy 回到 ScienceDiscovery model gateway，因此仍复用产品 provider、proxy、retry 和 usage 语义。
 
-当前不把 LLM 请求纳入排队：provider 配额语义是 TPM/RPM（token 维度），请求级排队收益有限且直接推高首 token 延迟。本期提供最小配置面（经 Gateway 环境变量，默认与 SDK 一致）：
+当前 `packages/model/src/client.ts` 支持：
+
+- 请求 header timeout；
+- connect / 429 / 5xx 的 bounded pre-stream retry；
+- 解析数字形式的 `Retry-After`；
+- 未提供 Retry-After 时做指数 backoff；
+- stream 开始之后的错误直接交给调用方，不再透明重试。
+
+相关配置：
 
 | 环境变量 | 默认 | 说明 |
-|---|---|---|
-| `SCIENCE_AGENT_LLM_TIMEOUT_SECONDS` | 600（SDK 默认） | 单次模型请求超时 |
-| `SCIENCE_AGENT_LLM_MAX_RETRIES` | 2（SDK 默认） | SDK 内置 429/5xx 重试次数 |
+| --- | --- | --- |
+| `SCIENCE_AGENT_LLM_TIMEOUT_SECONDS` | 600 | 请求 header timeout |
+| `SCIENCE_AGENT_LLM_MAX_RETRIES` | 2 | pre-stream connect/429/5xx 最大重试次数 |
 
-后续如需真正的 LLM 限流：Gateway 内按 `base_url` host 建 asyncio 信号量 + 最小间隔即可覆盖主循环（无需跨进程共享）；跨会话全局并发上限属于 Node run 调度层的独立议题。
+LLM provider 的 TPM/RPM admission 目前没有接入 `ResourceRateLimiter`。若新增全局模型限流，应放在 model/control-plane 语义中，而不是恢复旧 Python Gateway 限流路径。
 
 ## 7. 覆盖面与已知缺口
 
@@ -157,7 +164,7 @@ LLM 出站与数据源出站不在同一进程：
 
 ## 8. 测试
 
-- `services/api/src/rate-limit/resource-rate-limiter.test.ts`：并发上限、间隔 pacing、FIFO、队列满、排队超时、取消出队、释放幂等、冷却，以及四个维度省略时的无限语义。
-- `services/api/src/mcp/broker.test.ts`：governance 缺失状态透传、队列错误映射、`queueWaitMs` 审计、429 反馈冷却。
+- `packages/data-source/src/resource-rate-limiter.test.ts`：并发上限、间隔 pacing、FIFO、队列满、排队超时、取消出队、释放幂等、冷却，以及四个维度省略时的无限语义。
+- `packages/data-source/src/broker.test.ts`：governance 缺失状态透传、队列错误映射、`queueWaitMs` 审计、429 反馈冷却。
 - `packages/mcp-sources/src/public-biomed.test.ts`：arXiv 治理参数对齐条款、全部内建源显式队列与 pacing 保护。
 - `services/gateway/tests/test_mcp_api.py`、`test_public_biomed_mcp.py`：Retry-After 传播与解析。

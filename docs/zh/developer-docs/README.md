@@ -1,35 +1,56 @@
 # 开发者文档
 
-这些文档描述架构、模块边界、协议和当前有效的特性设计。面向用户的行为和精确配置见[文档总览](../README.md)。
+这些文档面向需要修改 ScienceDiscovery 核心代码的开发者和 Code Agent。目标是描述**当前实现、模块边界和必须保持的架构约束**。用户操作与精确配置见[文档总览](../README.md)。
 
-- [整体运行时架构](architecture.md) — 常驻进程、模块边界和跨进程时序。
+> 第一次进入仓库请先读[深度开发指南](developer-guide.md)，不要从某个历史功能文档反推当前架构。
+
+## 开始阅读
+
+- [深度开发指南](developer-guide.md) — 阅读顺序、代码导航、当前架构事实和修改检查清单。
+- [整体运行时架构](architecture.md) — native / JiuwenSwarm executor、adapter、API、Runner 和 sidecar 拓扑。
+- [仓库布局](repository-layout.md) — services/packages ownership、依赖边界和代码入口。
+- [控制面](control-plane.md) — `services/api` 的权威状态、Run 生命周期与 executor seam。
+
+## Agent Runtime
+
+- [Native Agent 后端](agent-backend.md) — native executor 的循环、模型、工具、超时和与 JiuwenSwarm 的共同语义。
+- [Runtime Core 边界](runtime-core.md) — 最底层领域无关 runtime 合同。
+- [动态上下文组装](context-assembly.md) — contributor、预算、trace 和依赖边界。
+- [上下文组装示例](context-assembly-examples.md) — 生产组装路径生成的模型输入示例。
+- [Session 轨迹与模型上下文](session-trajectory.md) — trajectory、固定 context/state 和只读投影。
+- [子 Agent 编排](subagent-orchestration.md) — 主/子 Agent 契约、handoff、guardrails 和失败语义。
+
+## 能力与扩展架构
+
+- [组件与插件机制](plugins.md) — capability ownership、plugin manifest/runtime/web 契约和宿主装配。
+- [MCP 工具与协议设计](mcp-tool-protocol.md) — MCP Source、工具协议、权限、审计和控制面接口。
+- [科研连接器](science-connectors.md) — 科研数据源治理、引用和审计。
+- [外部数据源限流](rate-limiting.md) — data-source admission、429 冷却和与 LLM retry 的边界。
+- [Skill Library 当前实现](skill-library-management.md) — 版本、内容地址包、搜索、proposal、publish 和 rollback。
+- [技能渐进式披露](skill-progressive-disclosure.md) — Skill catalog、冻结快照和按需读取。
+- [Skill 自演进当前实现](skill-self-evolution.md) — proposal → 用户授权 → 新 Library version。
+- [评审与溯源](review-provenance.md) — Artifact Reviewer、claims/evidence、Prompt Manifest。
+- [科学记忆](science-memory.md) — task/citation graph、存储和模块边界。
+- [演进侧车](evolve-standalone.md) — PUCT/OpenEvolve sidecar 合同与控制面耦合。
+- [Idea Tree 实现](idea-tree.md) — Idea Tree 运行、持久化和恢复边界。
+
+## 执行、存储与基础设施
+
 - [单文件二进制打包与发行](binary-packaging.md) — 构建标识、发行包组成、双架构打包与首次启动 bootstrap。
 - [部署运行机制](deployment-runtime.md) — 本地启动链、远端 Runner 自动部署、Docker 内部边界与多实例。
-- [控制面](control-plane.md) — `services/api` 的职责、存储与运行生命周期。
-- [Agent 后端](agent-backend.md) — Node 原生 agent loop 的模块结构、模型传输、延迟工具与历史压缩。
-- [Runtime Core 边界](runtime-core.md) — 与领域无关的运行时职责和已注册端口。
-- [动态上下文组装](context-assembly.md) — 上下文模式、contributor、预算、trace 和校验。
-- [上下文组装示例](context-assembly-examples.md) — 由生产组装路径生成的模型输入。
-- [组件与插件机制](plugins.md) — 能力归属、单向依赖、公开插件入口、API/Web 扩展点、固定 StateView 与受控候选应用。
-- [Session 轨迹与模型上下文](session-trajectory.md) — 真实时间多 Agent 导航、固定状态与上下文来源、只读导出。
-- [沙箱执行](sandbox-execution.md) — bubblewrap/seccomp、科学环境和持久内核机制。
-- [Project/Session Runner 继承](runner-inheritance.md) — Project 提供默认值，Session 可独立选机，不是权限子集。
-- [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — 昇腾设备不能稳定直通 bwrap 时的宿主白名单作业方案。
-- [外部数据源限流](rate-limiting.md) — MCP 限流底座、队列、429 冷却和覆盖边界。
-- [科研连接器](science-connectors.md) — 科研 MCP 的治理链、审计和引用。
-- [MCP 工具与协议设计](mcp-tool-protocol.md) — Source Manifest、工具协议、Agent Loop、权限、审计与控制面接口。
-- [网络代理机制](network-proxy.md) — 代理策略解析、出站接入与安全边界。
-- [演进侧车：架构、引擎与独立部署](evolve-standalone.md) — PUCT 与 OpenEvolve 的算法差异，以及把侧车作为独立后端运行的耦合点。
-- [评审与溯源](review-provenance.md) — 完整性检查、语义评审、claims/evidence 和 Prompt Manifest。
-- [科学记忆](science-memory.md) — 任务链、引用链、模块边界和存储。
-- [技能渐进式披露](skill-progressive-disclosure.md) — 技能目录检索与冻结快照读取。
-- [技能库管理初步设计](skill-library-management.md) — 技能库版本、批量提交、目录级召回和自演进写回接口。
-- [Skill 自演进设计](skill-self-evolution.md) — 从任务经验提取候选 Skill、评估、门禁和发布到 Skill 库的闭环。
-- [子 Agent 编排](subagent-orchestration.md) — 主/子 Agent 契约、guardrails 和取舍。
-- [内容寻址存储](cas.md) — CAS 地址、工作区变更检测、写入方与生命周期。
-- [技能库管理 MVP 落地](skill-library-management-mvp.md) — 技能库 MVP 阶段的实现记录。
-- [技能库管理 M1 落地](skill-library-management-m1.md) — 技能库 M1 阶段的实现记录。
-- [技能库管理 M2 落地](skill-library-management-m2.md) — 技能库 M2 阶段的实现记录。
-- [仓库布局](repository-layout.md) — 目录、模块、默认端口和数据位置。
-- [PDF worker](paper-worker.md) — PDF 抽取协议、管线和限制。
-- [Web 前端](web-frontend.md) — 前端技术栈、事件映射、开发与测试入口。
+- [沙箱执行](sandbox-execution.md) — Bubblewrap/Seatbelt、科学环境、网络和 NPU 执行。
+- [Project/Session Runner 继承](runner-inheritance.md) — Runner 选择、远端执行和继承语义。
+- [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — allowlisted host workload。
+- [网络代理机制](network-proxy.md) — 出站代理解析和安全边界。
+- [内容寻址存储](cas.md) — CAS、版本对象和 workspace change detection。
+- [PDF worker](paper-worker.md) — PDF 抽取 worker 协议和限制。
+- [Web 前端](web-frontend.md) — Web host、事件映射和前端开发入口。
+
+## 文档维护规则
+
+Developer Docs 只应保留当前实现或仍有必要的兼容行为说明。
+
+- 阶段性 MVP/M1/M2 交付文档不保留在主文档集；需要追溯时使用 Git 历史。
+- “计划”“建议”“未来可做”不能写成当前实现事实。
+- 代码发生架构变化时，优先更新 `architecture.md`、`repository-layout.md` 和对应 subsystem 文档。
+- 遇到文档冲突，以当前代码、测试、`scripts/start-stack.sh` 和 `scripts/check-architecture.mjs` 为准。

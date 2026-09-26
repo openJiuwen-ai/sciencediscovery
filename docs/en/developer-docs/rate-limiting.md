@@ -24,8 +24,8 @@ Agent mcp__source__tool → Node broker
 
 ### 2.3 Code anchors
 
-- `services/api/src/rate-limit/resource-rate-limiter.ts`: generic keyed admission.
-- `services/api/src/mcp/broker.ts`: MCP integration and audit mapping.
+- `packages/data-source/src/resource-rate-limiter.ts`: generic keyed admission.
+- `packages/data-source/src/broker.ts`: MCP integration and audit mapping.
 - `packages/schema/src/mcp-source.ts`: governance schema.
 - `packages/mcp-sources`: explicit built-in values.
 - Gateway MCP modules: Retry-After preservation/classification.
@@ -81,9 +81,28 @@ Python MCP HTTP wrappers preserve Retry-After in a parseable error instead of lo
 
 These are manifest choices, not broker defaults. Future/custom Sources may omit a dimension. Audit exposes `queueWaitMs` and detailed attempts through the MCP invocation routes.
 
-## 6. LLM API boundary
+## 6. LLM API boundary (separate from data-source admission)
 
-Main model requests originate in gateway and use SDK 429/5xx retry. Node has a few auxiliary model calls. LLM requests are not queued by this admission layer because provider quotas commonly include tokens per minute and request queueing directly increases first-token latency. Gateway exposes `SCIENCE_AGENT_LLM_TIMEOUT_SECONDS` (SDK default 600) and `SCIENCE_AGENT_LLM_MAX_RETRIES` (default 2). A future host-keyed asyncio semaphore/pacing layer belongs in gateway; global run concurrency is a separate Node concern.
+LLM requests do not pass through the data-source queue described here. Current model transport lives in `packages/model` and uses Node/undici for requests and bounded pre-stream retries.
+
+The native executor uses the product model layer directly. JiuwenSwarm model traffic returns through the adapter per-run LLM proxy into the ScienceDiscovery model gateway, preserving product provider, proxy, retry, and usage semantics.
+
+`packages/model/src/client.ts` currently supports:
+
+- request header timeout;
+- bounded pre-stream retry for connect errors, 429, and 5xx;
+- numeric `Retry-After` parsing;
+- exponential backoff when Retry-After is absent;
+- no transparent retry after the response stream has begun.
+
+Configuration:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SCIENCE_AGENT_LLM_TIMEOUT_SECONDS` | 600 | request header timeout |
+| `SCIENCE_AGENT_LLM_MAX_RETRIES` | 2 | max pre-stream connect/429/5xx retries |
+
+Provider TPM/RPM admission is not currently implemented by `ResourceRateLimiter`. Future global model admission belongs in model/control-plane semantics rather than restoring the retired Python Gateway path.
 
 ## 7. Coverage and known gaps
 

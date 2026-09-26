@@ -1,70 +1,168 @@
 # Runtime Architecture
 
-## 1. Product position
+This page describes the **current code paths only**. Historical migration designs are not implementation authority; when documents disagree, prefer `scripts/start-stack.sh`, `services/api/src/agent-run/create-agent-run.ts`, `services/adapter/`, `services/runner/`, and the architecture checker.
 
-ScienceDiscovery is a local, single-user scientific agent for Linux. A browser connects to the Node control API, and **the agent loop runs inside that same Node process**. Workspace tools, sandbox execution, data connectors, PDF extraction, permissions, provenance, and review are all owned by the Node control plane.
+## 1. Two Agent executors, one control plane
 
-It is not a multi-tenant cloud service. The API binds to loopback by default. Authentication is one static bearer token and there is no TLS; explicitly exposing another interface is appropriate only on a trusted, protected network.
+ScienceDiscovery keeps Project, Session, permission, tool implementation, Artifact, provenance, and run-event authority in the Node control plane `services/api`. The Agent executor has two implementations:
 
-## 2. Runtime architecture (logical view)
+| Executor | Selection | Where the loop runs | Public entry |
+| --- | --- | --- | --- |
+| Native | default in local source mode; or `SCIENCE_AGENT_EXECUTOR=native` | `services/api/src/native-agent/` | API directly on `:4310` |
+| JiuwenSwarm | default in Docker/release; local with `--jiuwenswarm` | JiuwenSwarm, bridged by the ScienceDiscovery adapter | adapter `:4310`, API moves to `:4410` |
 
-### 2.1 How many resident processes?
+The important invariant is that **changing executor does not move authoritative product state out of the API**. `createAgentRun()` selects between `createNativeAgent` and `createJiuwenSwarmAgentFactory` through `defaultAgentFactory()`.
 
-`./scripts/start-stack.sh --mode local` keeps two product processes resident; `run-local.sh` is a compatibility wrapper:
+## 2. Current process topology
 
-| # | Process | Startup | Default listener | Role |
-|---|---|---|---|---|
-| — | ~~Gateway~~ | removed | — | With native web providers the service is gone; `services/gateway` survives only as the interpreter environment for the bundled Python MCP servers |
-| 2 | Runner | `node services/runner/dist/server.js` | `127.0.0.1:4311` | Runs Python/R/shell inside Bubblewrap; manages allowlisted Host NPU jobs when enabled |
-| 3 | API | `node services/api/dist/server.js` | `127.0.0.1:4310` | Browser REST, SSE, static UI, **and the agent loop, model calls, tool execution, and the in-process MCP client** |
+### 2.1 Native mode
 
 ```text
-Browser → API :4310 ── agent loop in-process ──→ external model (outbound HTTPS)
-                    ── web providers in-process ─→ tavily / exa / brave / bing / duckduckgo / jina
-                    ↘ Runner :4311 → bwrap/Python/R in Session workspace
+Browser
+   │ REST / SSE :4310
+   ▼
+services/api
+   ├─ Agent run orchestration
+   ├─ native-agent loop
+   ├─ tools / permissions / provenance / artifacts
+   ├─ MCP clients / data sources
+   └──────────────▶ services/runner :4311 ──▶ sandbox processes
 
-services/gateway is not a process: its venv only supplies the interpreter for the
-bundled Python MCP servers (biomed, UniProt), spawned by the API over stdio.
+optional/managed sidecars:
+services/memory-graph :17674
+services/evolve        :4313
+services/paper         on-demand worker
+Python MCP servers     on-demand stdio children
 ```
 
-The browser is a client, not a repository service. Both HTTP services are loopback-only by default. During a chat the browser talks only to API `4310`; the API drives the model, the web providers, and the runner itself. There is no `POST /run` hop, no `/internal/tool-exec` callback, and no `/internal/web/invoke` hop.
+### 2.2 JiuwenSwarm mode
 
-### 2.2 Which modules are not resident processes?
+```text
+Browser
+   │ REST / SSE :4310
+   ▼
+services/adapter
+   ├─ migrated /agent/* routes
+   ├─ per-run MCP bridge
+   ├─ per-run model proxy
+   └─ reverse proxy for remaining routes
+            │
+            ▼
+services/api :4410
+   ├─ authoritative Project / Session / Run state
+   ├─ tool construction, permission, Artifact, provenance
+   ├─ createAgentRun()
+   └─ JiuwenSwarm agent factory
+            │ POST /agent/runs
+            ▼
+services/adapter
+            │ WebSocket
+            ▼
+JiuwenSwarm gateway
+   ├─ model calls ──▶ adapter /llm/<token>/v1 ──▶ API model gateway ──▶ provider
+   └─ tool calls  ──▶ adapter /mcp/<token> ──▶ API loopback tool bridge
+                                              └─▶ Runner / MCP / workspace / etc.
+```
 
-| Name | Resident? | Actual form |
-|---|---|---|
-| `services/paper` | no | API launches `paper_worker.py` per PDF and it exits afterward |
-| deer-flow | removed | Was a Python library installed from a submodule into the gateway environment. Both the agent loop and the web providers now run inside the Node control plane, so the dependency and the submodule are gone |
-| `apps/web` | no in production | Static assets served by API; optional Vite `:5173` in development |
-| `services/memory-graph` | on by default (off in Docker) | Experimental Python sidecar on loopback `:17674`; stores the graph as local files, or in an external Neo4j when selected |
-| persistent kernels/Bubblewrap jobs | on demand | Runner children reclaimed after idle timeout |
-| Host NPU Broker jobs | on demand | Started by Runner only when `SCIENCE_AGENT_NPU_BROKER=1`; allowlisted host workloads, not a separate daemon or arbitrary command surface |
-| models and scientific databases | remote | Outbound HTTPS, not local processes |
+The adapter protocol and measured JiuwenSwarm behavior are documented in `services/adapter/README.md`. HTTP routes not migrated into the adapter are reverse-proxied to the TypeScript API.
 
-The default is two resident processes. Enabling ScienceMemory adds one; Host NPU Broker jobs are only Runner-spawned child processes.
+## 3. Startup-mode matrix
 
-### 2.3 Which process runs the agent loop?
+`scripts/start-stack.sh` is the authority for source/Docker composition:
 
-The API process. The loop is this repository's own TypeScript under `services/api/src/native-agent/`, entered through `createNativeAgent`; it uses **no LangChain or LangGraph**. Model calls go out from the API process directly through `undici`, in either the OpenAI-compatible or the Anthropic Messages dialect. Tool calls are `await`ed in-process against the same `createWorkspaceTools` handlers, so there is no cross-process callback. MCP servers are connected in-process with the official TypeScript SDK (stdio subprocess, SSE, or streamable HTTP); the bundled Python MCP servers (biomed, UniProt) are stdio subprocesses whose interpreter comes from the gateway venv, which is the second reason that environment still exists. See [agent-backend.md](agent-backend.md) for the module-level description.
+| Mode | Default executor | Adapter | API port |
+| --- | --- | --- | --- |
+| `--mode local` | native | not started | 4310 |
+| `--mode local --jiuwenswarm` | JiuwenSwarm | 4310 | 4410 |
+| `--mode docker` | JiuwenSwarm | 4310 | 4410 |
+| `--mode docker --no-jiuwenswarm` | native | not started | 4310 |
 
-### 2.4 One user-message sequence
+The packaged single-file launcher follows the Docker default: JiuwenSwarm is the default executor.
 
-1. Browser submits through API `4310` using REST/SSE.
-2. API builds the `AgentProfile` and workspace options; `createAgentRun` constructs a `NativeAgent` with the prompt, Session tool table, and model endpoint.
-3. The loop streams a model turn over outbound HTTPS; text and reasoning deltas reach the browser over SSE as they arrive.
-4. When the model returns tool calls, the API executes the real tools in-process, possibly calling runner `4311`, an outbound connector, workspace storage, or an MCP server through the in-process client.
-5. Tool results append to history and the loop takes another turn, until a turn produces no tool calls.
-6. The loop returns `finalMessages`; the API persists history.
+Runner remains loopback-only on `:4311` by default in either executor.
 
-`web_search` / `web_fetch` provider calls also go out directly from the API process; there is no extra process hop left.
+## 4. Service and sidecar responsibilities
 
-### 2.5 Responsibility split
+| Component | Shape | Current responsibility |
+| --- | --- | --- |
+| `apps/web` | static Web / dev server | UI, SSE rendering, permission cards, settings |
+| `services/api` | resident Node | control plane, run orchestration, authoritative state, tools/permission/Artifact/provenance |
+| `services/adapter` | resident Python in JiuwenSwarm mode | public front door, JiuwenSwarm run bridge, LLM/MCP adaptation, legacy API proxy |
+| `services/runner` | resident Node | Bubblewrap/Seatbelt execution, scientific environments, optional NPU broker |
+| `services/memory-graph` | optional resident Python | ScienceMemory graph service with local or Neo4j storage |
+| `services/evolve` | resident sidecar when stack starts it | evolution search; business events/state remain API-owned |
+| `services/paper` | on-demand Python worker | bounded PDF extraction |
+| `services/gateway` | **not an HTTP service** | bundled Python MCP server code and interpreter environment |
+| JiuwenSwarm | external/bundled runtime | conversation/loop implementation for the JiuwenSwarm executor |
 
-| Layer | Resident | Owns | Does not own |
-|---|---|---|---|
-| Web | static/optional dev server | UI, streaming, permission cards, settings | authoritative business state |
-| API | yes, `4310` | **agent loop and model calls**, Session state, real tools, in-process MCP client and governance, permission/provenance/review, storage | process-level sandbox isolation |
-| Gateway | no (environment only) | interpreter environment for the bundled Python MCP servers | no longer a service: agent loop, web providers, sandbox, and governance are all elsewhere |
-| Runner | yes, `4311` | Bubblewrap code execution; allowlisted Host NPU Broker jobs when enabled | business semantics or arbitrary host shell |
-| Paper | per invocation | bounded PDF extraction | network retrieval |
-| deer-flow | removed | — | everything: the agent loop and the web providers are the repository's own code |
+Do not treat `services/gateway` as the current Agent gateway service, and do not treat deer-flow as a current runtime dependency.
+
+## 5. Shared control-plane path for a Run
+
+Both executors share the same control plane before `createAgentRun()` and after tool calls:
+
+1. HTTP receives a Session message.
+2. API resolves effective settings, model, Skills, Specialists, Connectors, Workspace, and permission state.
+3. `runMainRequestExecution` / `runSubagentTask` build the execution context.
+4. `createAgentRun(profile, bindings, input)` selects the executor.
+5. The executor produces model events and tool calls.
+6. Tool calls return to ScienceDiscovery-owned handlers, preserving permission, Runner, Artifact, MCP, and audit semantics.
+7. API persists RunStreamEvent, messages, Prompt Manifest, Artifacts, and provenance.
+
+Do not duplicate Project/Session/permission/artifact persistence when changing executors.
+
+## 6. Package and service ownership boundaries
+
+The key architecture rules are enforced by `scripts/check-architecture.mjs`:
+
+- **Capability implementation belongs in `packages/`.**
+- `services/` owns process entry points, HTTP/protocol adapters, and composition; it should not duplicate capability policy.
+- `apps/web` owns browser UX, not authoritative business state.
+- `packages/` may not import `services/` or `apps/`.
+- production services may not depend on the old `@sciencediscovery/agent-runtime` compatibility facade.
+- `packages/runtime-core` may use relative imports only and forms the lowest-level runtime contract.
+- `packages/context` may depend only on `model` and `runtime-core`, preventing contributor extensions from creating cycles.
+- executor → runner is the one explicitly frozen legacy package coupling; do not widen that exception.
+
+The checker also forbids a list of removed `services/api/src/*` domain sources from reappearing after their ownership moved into capability packages.
+
+Run before architectural changes:
+
+```bash
+pnpm architecture:check
+```
+
+## 7. Important composition seams
+
+| Purpose | Code entry |
+| --- | --- |
+| API process | `services/api/src/server.ts` → `http/index.ts` |
+| Agent Run | `services/api/src/agent-run/create-agent-run.ts` |
+| Native executor | `services/api/src/native-agent/` |
+| JiuwenSwarm executor | `services/api/src/agent-run/jiuwenswarm-agent.ts` |
+| JiuwenSwarm front door | `services/adapter/src/sciencediscovery_adapter/` |
+| Tool/runtime capability | `packages/tools`, `packages/workspace`, capability packages |
+| Sandbox execution | `services/runner/src/server.ts` + `packages/executor` |
+| Plugin contracts | `packages/plugin-sdk` |
+| Context contributors | `packages/context` |
+| Stack lifecycle | `scripts/start-stack.sh` |
+| Architecture enforcement | `scripts/check-architecture.mjs` |
+
+## 8. Architecture-change checklist
+
+- Is this capability policy or process/protocol composition?
+- Is there already an owning package?
+- Do both native and JiuwenSwarm executors need adaptation?
+- Does it change public/internal ports or sidecar lifecycle?
+- Does it change authoritative Run/Tool/Artifact/Permission ownership?
+- Does it add a package dependency edge, and does `pnpm architecture:check` pass?
+- Does user-observable behavior require an E2E rather than only a unit test?
+
+## Related documentation
+
+- [Deep developer guide](developer-guide.md)
+- [Control plane](control-plane.md)
+- [Agent backend](agent-backend.md)
+- [Plugin architecture](plugins.md)
+- [Sandbox execution](sandbox-execution.md)
+- [Repository layout](repository-layout.md)

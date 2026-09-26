@@ -1,35 +1,56 @@
 # Developer Documentation
 
-These pages describe architecture, module boundaries, protocols, and current feature designs. For user-facing behavior and precise configuration, use the [documentation index](../README.md).
+These pages are for developers and code agents modifying ScienceDiscovery core code. They document **current implementation, module ownership, and architecture invariants**. For user workflows and precise configuration, use the [documentation index](../README.md).
 
-- [Runtime architecture](architecture.md) — resident processes, module boundaries, and cross-process timing.
+> If this is your first time in the repository, start with the [Deep Developer Guide](developer-guide.md). Do not infer current architecture from a historical feature document.
+
+## Start here
+
+- [Deep Developer Guide](developer-guide.md) — reading order, code navigation, current architecture facts, change checklist.
+- [Runtime architecture](architecture.md) — native/JiuwenSwarm executors, adapter, API, Runner, and sidecars.
+- [Repository layout](repository-layout.md) — service/package ownership, dependency rules, and entry points.
+- [Control plane](control-plane.md) — authoritative API state, Run lifecycle, and executor seam.
+
+## Agent Runtime
+
+- [Native Agent backend](agent-backend.md) — native loop, models, tools, deadlines, and semantics shared with JiuwenSwarm.
+- [Runtime Core boundaries](runtime-core.md) — lowest-level domain-neutral runtime contracts.
+- [Dynamic context assembly](context-assembly.md) — contributors, budgets, traces, dependency boundary.
+- [Context assembly examples](context-assembly-examples.md) — example model inputs from the production assembly path.
+- [Session trajectory and model context](session-trajectory.md) — trajectories, frozen context/state, read-only projections.
+- [Subagent orchestration](subagent-orchestration.md) — parent/child contracts, handoff, guardrails, failure semantics.
+
+## Capability and extension architecture
+
+- [Plugin architecture](plugins.md) — capability ownership, plugin manifest/runtime/web contracts, host composition.
+- [MCP tool and protocol design](mcp-tool-protocol.md) — MCP Sources, tool protocol, permission, audit, control-plane interface.
+- [Science connectors](science-connectors.md) — scientific-source governance, citation, audit.
+- [External-source rate limiting](rate-limiting.md) — data-source admission, 429 cooldown, boundary with LLM retry.
+- [Skill Library current implementation](skill-library-management.md) — versions, content-addressed packages, search, proposal, publish, rollback.
+- [Skill progressive disclosure](skill-progressive-disclosure.md) — Skill catalog, frozen snapshots, on-demand reads.
+- [Skill self-evolution current implementation](skill-self-evolution.md) — proposal → user authorization → new Library version.
+- [Review and provenance](review-provenance.md) — Artifact Reviewer, claims/evidence, Prompt Manifest.
+- [ScienceMemory](science-memory.md) — task/citation graph, storage, module boundaries.
+- [Evolution sidecar](evolve-standalone.md) — PUCT/OpenEvolve sidecar contracts and control-plane coupling.
+- [Idea Tree implementation](idea-tree.md) — Idea Tree runtime, persistence, recovery boundaries.
+
+## Execution, storage, and infrastructure
+
 - [Single-file binary packaging and releases](binary-packaging.md) — build identifiers, package contents, dual-architecture releases, and first-launch bootstrap.
 - [Deployment runtime internals](deployment-runtime.md) — local startup chain, remote Runner deployment, Docker internals, and multi-instance behavior.
-- [Control plane](control-plane.md) — responsibilities, storage, and run lifecycle of `services/api`.
-- [Agent backend](agent-backend.md) — the Node-native agent loop: modules, model transport, deferred tools, compaction.
-- [Component and plugin mechanism](plugins.md) — capability ownership, trusted plugin entries, lifecycle, configuration, and extension boundaries.
-- [Project and Session Runner inheritance](runner-inheritance.md) — Project defaults, independent Session selection, and remote environment boundaries.
-- [Session trajectory and model context](session-trajectory.md) — multi-Agent real-time navigation, frozen state/input provenance, and read-only export.
-- [Sandbox execution](sandbox-execution.md) — bubblewrap/seccomp, scientific environments, and persistent-kernel mechanism.
-- [Ascend NPU Host Broker](ascend-npu-runner.md) — host allowlist job scheme used when Ascend devices cannot reliably pass through to bwrap.
-- [External-source rate limiting](rate-limiting.md) — MCP rate-limit base, queueing, 429 cooldown, and coverage boundaries.
-- [Science connectors](science-connectors.md) — governance chain, audit, and citation for scientific MCP sources.
-- [MCP tool and protocol design](mcp-tool-protocol.md) — Source Manifest, tool protocol, Agent Loop, permissions, audit, and control-plane interface.
-- [Network proxy](network-proxy.md) — proxy policy resolution, outbound access, and security boundary.
-- [Review and provenance](review-provenance.md) — integrity checks, semantic review, claims/evidence, and Prompt Manifest.
-- [ScienceMemory](science-memory.md) — task chain, citation chain, module boundary, and storage.
-- [Skill progressive disclosure](skill-progressive-disclosure.md) — catalog search and frozen-snapshot reads.
-- [Skill Library management design](skill-library-management.md) — library versions, atomic updates, runtime mounts, and retrieval.
-- [Skill Library Management MVP delivery](skill-library-management-mvp.md) — versioned libraries and atomic batch commits.
-- [Skill Library Management M1 delivery](skill-library-management-m1.md) — runtime library mounting and candidate retrieval.
-- [Skill Library Management M2 delivery](skill-library-management-m2.md) — hybrid retrieval, conflict diagnostics, and version-quality views.
-- [Subagent orchestration](subagent-orchestration.md) — parent/child Agent contract, guardrails, and trade-offs.
-- [Content-addressable storage](cas.md) — CAS addressing, workspace change detection, writers, and lifecycle.
-- [Dynamic context assembly](context-assembly.md) — context modes, contributors, budgets, tracing, and validation.
-- [Context assembly examples](context-assembly-examples.md) — model inputs generated through the production assembly path.
-- [Runtime Core boundaries](runtime-core.md) — domain-neutral runtime responsibilities and registered ports.
-- [Skill self-evolution design](skill-self-evolution.md) — reviewed Skill proposals, user-authorized publication, and staged delivery.
-- [Evolution sidecar](evolve-standalone.md) — engine contracts, standalone deployment, and split-service boundaries.
-- [Repository layout](repository-layout.md) — directories, modules, default ports, and data locations.
-- [PDF worker](paper-worker.md) — PDF extraction protocol, pipeline, and limits.
-- [Web frontend](web-frontend.md) — frontend stack, event mapping, and development/test entry points.
+- [Sandbox execution](sandbox-execution.md) — Bubblewrap/Seatbelt, scientific environments, network, NPU execution.
+- [Project/Session Runner inheritance](runner-inheritance.md) — Runner selection, remote execution, inheritance semantics.
+- [Ascend NPU Host Broker](ascend-npu-runner.md) — allowlisted host workloads.
+- [Network proxy](network-proxy.md) — outbound proxy resolution and security boundary.
+- [Content-addressable storage](cas.md) — CAS, version objects, workspace change detection.
+- [PDF worker](paper-worker.md) — PDF extraction protocol and limits.
+- [Web frontend](web-frontend.md) — Web host, event mapping, frontend development entry points.
+
+## Documentation maintenance rules
+
+Developer Docs should describe current implementation or compatibility behavior that still matters.
+
+- Milestone-specific MVP/M1/M2 delivery documents do not stay in the main doc set; use Git history when needed.
+- Do not present plans, proposals, or future work as implemented behavior.
+- Architecture changes should update `architecture.md`, `repository-layout.md`, and the owning subsystem document.
+- When documentation conflicts, prefer current source/tests, `scripts/start-stack.sh`, and `scripts/check-architecture.mjs`.
