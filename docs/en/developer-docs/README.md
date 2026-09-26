@@ -3,6 +3,8 @@
 These pages describe architecture, module boundaries, protocols, and current feature designs. For user-facing behavior and precise configuration, use the [documentation index](../README.md).
 
 - [Runtime architecture](architecture.md) — resident processes, module boundaries, and cross-process timing.
+- [Single-file binary packaging and releases](binary-packaging.md) — build identifiers, package contents, dual-architecture releases, and first-launch bootstrap.
+- [Deployment runtime internals](deployment-runtime.md) — local startup chain, remote Runner deployment, Docker internals, and multi-instance behavior.
 - [Control plane](control-plane.md) — responsibilities, storage, and run lifecycle of `services/api`.
 - [Agent backend](agent-backend.md) — the Node-native agent loop: modules, model transport, deferred tools, compaction.
 - [Component and plugin mechanism](plugins.md) — capability ownership, trusted plugin entries, lifecycle, configuration, and extension boundaries.

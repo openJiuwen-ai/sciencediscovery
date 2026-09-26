@@ -1,4 +1,4 @@
-# Scientific sandbox: turn ideas into runnable experiments
+# Scientific execution environment and workspaces: turn ideas into runnable experiments
 
 An analysis plan becomes useful when its code runs: can the data be loaded, can the method be reproduced, and do the plotted numbers come from actual calculations? The scientific sandbox gives the Agent a place to write, debug, and run Python, R, and Shell, leaving results you can inspect.
 
