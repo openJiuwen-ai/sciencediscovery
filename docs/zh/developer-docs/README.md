@@ -36,6 +36,8 @@
 
 ## 执行、存储与基础设施
 
+- [单文件二进制打包与发行](binary-packaging.md) — 构建标识、发行包组成、双架构打包与首次启动 bootstrap。
+- [部署运行机制](deployment-runtime.md) — 本地启动链、远端 Runner 自动部署、Docker 内部边界与多实例。
 - [沙箱执行](sandbox-execution.md) — Bubblewrap/Seatbelt、科学环境、网络和 NPU 执行。
 - [Project/Session Runner 继承](runner-inheritance.md) — Runner 选择、远端执行和继承语义。
 - [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — allowlisted host workload。

@@ -6,9 +6,9 @@ This is the complete English documentation set.
 
 ## Getting started
 
-- [Quick start](getting-started/quick-start.md) — start ScienceDiscovery, configure a model, and complete a first task.
+- [Quick start](getting-started/quick-start.md) — follow the shortest Linux or macOS path, configure a model, and complete a first inspectable Agent task.
 - [Basic concepts](getting-started/concepts.md) — understand Agent loops, Tools, Skills, Specialists, Workspaces, and Artifacts.
-- [Deployment](getting-started/deployment.md) — choose a deployment path and troubleshoot startup issues.
+- [Deployment](getting-started/deployment.md) — choose a prepackaged single file, local source mode, or Docker, with long-running operation and first-run troubleshooting.
 
 ## Core capabilities
 
@@ -30,6 +30,7 @@ This is the complete English documentation set.
 
 ## Reference
 
+- [CLI](reference/cli.md) — command and behavior reference for `serve`, `run`, `extract`, and `version`.
 - [Built-in research capabilities](reference/builtin-research-capabilities.md)
 - [Configuration](reference/configuration.md)
 - [REST API](reference/rest-api.md)

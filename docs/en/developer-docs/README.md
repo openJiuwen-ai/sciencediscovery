@@ -36,6 +36,8 @@ These pages are for developers and code agents modifying ScienceDiscovery core c
 
 ## Execution, storage, and infrastructure
 
+- [Single-file binary packaging and releases](binary-packaging.md) — build identifiers, package contents, dual-architecture releases, and first-launch bootstrap.
+- [Deployment runtime internals](deployment-runtime.md) — local startup chain, remote Runner deployment, Docker internals, and multi-instance behavior.
 - [Sandbox execution](sandbox-execution.md) — Bubblewrap/Seatbelt, scientific environments, network, NPU execution.
 - [Project/Session Runner inheritance](runner-inheritance.md) — Runner selection, remote execution, inheritance semantics.
 - [Ascend NPU Host Broker](ascend-npu-runner.md) — allowlisted host workloads.

@@ -6080,6 +6080,11 @@ test("hierarchical settings and Project/Session lifecycle APIs preserve and dele
     method: "PATCH",
   });
   assert.equal(archivedRename.status, 409);
+  const archivedChildResume = await fetch(`${origin}/api/sessions/${session.body.id}/subagents/unknown/resume`, {
+    headers: authorization,
+    method: "POST",
+  });
+  assert.equal(archivedChildResume.status, 409, "an archived Session rejects Resume before looking up the child");
   const activeList = await jsonRequest<Session[]>(
     `${origin}/api/projects/${project.body.id}/sessions`,
     { headers: authorization },
