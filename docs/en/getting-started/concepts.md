@@ -6,7 +6,7 @@ Before using ScienceDiscovery, understand a few basic concepts. The Core capabil
 
 A ScienceDiscovery task can be viewed as:
 
-```
+```text
 Research question
       ↓
 Research Agent
@@ -18,7 +18,7 @@ Call tools, execute code, collaborate with roles
 Create research Artifacts
       ↓
 Review, reuse, and continue research
-```
+```text
 
 The Agent does not only generate text. It works toward a goal by understanding the problem, selecting methods, executing actions, and delivering results.
 
@@ -54,7 +54,7 @@ For example:
 
 Files created during research have different purposes.
 
-```
+```text
 Workspace
   ├── Uploaded data
   ├── Temporary code
@@ -65,7 +65,7 @@ Artifact
   ├── Code
   ├── Tables
   └── Images
-```
+```text
 
 A useful shorthand:
 
