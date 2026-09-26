@@ -55,6 +55,117 @@ def test_variable_length_and_aggregation(tmp_path: Path) -> None:
         assert s.run("MATCH (x:Nope) RETURN count(x) AS c").single()["c"] == 0
 
 
+def test_folded_products_visit_rejoined_children_once(monkeypatch: pytest.MonkeyPatch,
+                                                     tmp_path: Path) -> None:
+    """A diamond DAG has exponentially many paths but linearly many children."""
+    from sciencediscovery_memory_graph import query
+    from sciencediscovery_memory_graph._cypher import CypherBudgetExceeded
+    from sciencediscovery_memory_graph.local_graph import Graph
+
+    h = _handle(tmp_path)
+    h._graph = Graph()
+    g = h.graph
+
+    def node(label: str, sid: str, **props):
+        return g.create_node([label], {"session_id": sid, **props})
+
+    scope = node("Task", "affected", task_id="scope", task_type="subagent")
+    first = node("ToolCall", "affected", task_id="first", parent_subtask_id="scope")
+    g.create_rel("contains", scope, first, {})
+    previous = first
+    for i in range(18):
+        left = node("ToolCall", "affected", task_id=f"l{i}", parent_subtask_id="scope")
+        right = node("ToolCall", "affected", task_id=f"r{i}", parent_subtask_id="scope")
+        joined = node("ToolCall", "affected", task_id=f"j{i}", parent_subtask_id="scope")
+        for src, dst in ((previous, left), (previous, right), (left, joined), (right, joined)):
+            g.create_rel("next", src, dst, {"method": "scope_chain"})
+        previous = joined
+    g.create_rel("next", previous, first, {"method": "scope_chain"})  # historical cycle
+    paper = node("Paper", "affected", link="paper:in")
+    g.create_rel("produces", previous, paper, {})
+    code = node("Code", "affected", code_id="code:in")
+    artifact = node("Artifact", "affected", artifact_id="art:in", version=1)
+    g.create_rel("produces", previous, code, {})
+    g.create_rel("produces", code, artifact, {})
+
+    outsider = node("ToolCall", "affected", task_id="outside", parent_subtask_id="other")
+    outside_paper = node("Paper", "affected", link="paper:outside")
+    g.create_rel("next", previous, outsider, {"method": "temporal_chain"})
+    g.create_rel("next", first, outsider, {"method": "scope_chain"})
+    g.create_rel("produces", outsider, outside_paper, {})
+    historical_scope = node("Task", "historical", task_id="old", task_type="subagent")
+    historical_child = node("ToolCall", "historical", task_id="old-child", parent_subtask_id="old")
+    g.create_rel("contains", historical_scope, historical_child, {})
+    g.create_rel("produces", historical_child, node("Paper", "historical", link="paper:old"), {})
+
+    monkeypatch.setattr(query, "handle", lambda: h)
+    folded = query.get_subgraph("affected")
+    surrogates = [e for e in folded["edges"] if e.get("extra", {}).get("surrogate")]
+    assert {(e["target"], e["extra"]["via_child"]) for e in surrogates} == {
+        ("paper:in", "j17"), ("art:in#v1", "j17")}
+    expansion = query.get_group_expansion("_group:scope:Paper", "affected")
+    assert [n["id"] for n in expansion["nodes"]] == ["paper:in"]
+    assert query.get_subgraph("new-session")["nodes"] == []
+    # Generic Cypher retains path semantics, but stops a caller that asks to
+    # materialize all of the exponentially many paths.
+    with pytest.raises(CypherBudgetExceeded):
+        h.session().run("MATCH (:ToolCall {task_id: 'first'})-[:next*0..]->(child) "
+                        "RETURN child.task_id AS id")
+
+
+def test_variable_length_budget_stops_path_explosion_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from sciencediscovery_memory_graph import _cypher
+
+    h = _handle(tmp_path)
+    with h.session() as s:
+        s.run("UNWIND range(0, 20) AS i CREATE (:T {i: i})")
+        s.run("MATCH (a:T), (b:T) WHERE b.i = a.i + 1 CREATE (a)-[:next]->(b)")
+        monkeypatch.setattr(_cypher, "_MAX_QUERY_WORK", 100)
+        with pytest.raises(_cypher.CypherBudgetExceeded):
+            s.run("CREATE (:Doomed {k: 1}) WITH 1 AS one "
+                  "MATCH (a:T)-[:next*0..]->(b:T) RETURN count(b) AS n")
+        assert s.run("MATCH (n:Doomed) RETURN count(n) AS n").single()["n"] == 0
+
+
+def test_query_budget_has_a_user_visible_error(monkeypatch: pytest.MonkeyPatch,
+                                               tmp_path: Path) -> None:
+    from sciencediscovery_memory_graph import _cypher, server
+
+    h = _handle(tmp_path)
+    h.session().run("CREATE (:Task {task_id: 'one', session_id: 's'})")
+    router = backend.BackendRouter(local=h)
+    router.set_backend("local")
+    monkeypatch.setattr(backend, "_router", router)
+    monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN", "test-token")
+    monkeypatch.setattr(_cypher, "_MAX_QUERY_WORK", 0)
+    response = TestClient(server.app).get(
+        "/subgraph", params={"session_id": "s"},
+        headers={"authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "memory_graph_query_limit"
+
+
+def test_scope_rebuild_keeps_other_next_method(tmp_path: Path) -> None:
+    from sciencediscovery_memory_graph.persistence import _link_scope_children
+
+    h = _handle(tmp_path)
+    g = h.graph
+    g.create_node(["Task"], {"task_id": "scope", "session_id": "s"})
+    first = g.create_node(["ToolCall"], {"task_id": "a", "session_id": "s",
+                                               "parent_subtask_id": "scope", "seq": 1})
+    second = g.create_node(["ToolCall"], {"task_id": "b", "session_id": "s",
+                                                "parent_subtask_id": "scope", "seq": 2})
+    g.create_rel("next", first, second, {"method": "temporal_chain"})
+    with h.session() as session:
+        _link_scope_children(session, "s", "scope")
+        _link_scope_children(session, "s", "scope")
+    methods = [rel.props.get("method") for rel in g.rels.values() if rel.type == "next"]
+    assert sorted(methods) == ["scope_chain", "temporal_chain"]
+
+
 def test_failed_transaction_rolls_back(tmp_path: Path) -> None:
     h = _handle(tmp_path)
     with pytest.raises(RuntimeError):

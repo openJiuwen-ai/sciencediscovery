@@ -161,7 +161,8 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         # target). A real produces edge between the same (scope, product) —
         # impossible today (products hang off the child, not the scope) — would
         # win the dedup key over the surrogate.
-        surrogates_result = session.run(
+        folded_products = getattr(session, "folded_products", None)
+        surrogates_result = folded_products(session_id) if folded_products else session.run(
             """
             MATCH (scope:Task)-[:contains]->(first:ToolCall)
             OPTIONAL MATCH (first)-[:next*0..]->(child:ToolCall)
@@ -967,7 +968,9 @@ def get_group_expansion(group_id: str, session_id: str) -> dict[str, Any]:
         # filtered to the one kind this aggregate represents. Same traversal
         # shape get_subgraph's surrogate synthesis uses (contains→first, then
         # next*0.. so the first child matches with zero hops).
-        if kind == "Artifact":
+        if hasattr(session, "folded_products"):
+            members_result = session.folded_products(session_id, scope_id, kind)
+        elif kind == "Artifact":
             members_result = session.run(
                 """
                 MATCH (scope:Task)-[:contains]->(first:ToolCall)

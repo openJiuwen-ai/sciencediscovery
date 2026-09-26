@@ -24,12 +24,14 @@ Neo4j runs on it unchanged. One store holds every session; nodes carry their
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
-from ._cypher import execute
+from ._cypher import CypherBudgetExceeded, QueryStats, execute
 from ._neo4j_http import _HttpResult
 from .local_graph import Graph, Store
 from .logging_config import get_logger
@@ -90,12 +92,109 @@ class LocalSession:
     def _run_statement(self, cypher: str, params: dict[str, Any]) -> _HttpResult:
         # A failing statement leaves no partial writes behind, as on Neo4j.
         mark = self._g.mark()
+        started = time.monotonic()
+        query_id = hashlib.sha256(cypher.encode()).hexdigest()[:12]
+        reason = "ok"
+        stats = QueryStats()
         try:
-            columns, rows = execute(self._g, cypher, params)
-        except BaseException:
+            columns, rows = execute(self._g, cypher, params, stats)
+        except BaseException as exc:
+            reason = type(exc).__name__
             self._g.undo_to(mark)
             raise
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed >= 0.25 or reason != "ok":
+                log.info("local query id=%s duration_ms=%d nodes=%d edges=%d work=%d traversals=%d intermediate_peak=%d reason=%s",
+                         query_id, int(elapsed * 1000), len(self._g.nodes),
+                         len(self._g.rels), stats.work, stats.traversals,
+                         stats.intermediate_peak, reason)
         return _HttpResult(columns, rows)
+
+    def folded_products(self, session_id: str, scope_id: str | None = None,
+                        kind: str | None = None) -> list[dict[str, Any]]:
+        """Reach scope products once per child, without enumerating next paths.
+
+        Called within the subgraph read transaction. The parent marker and edge
+        method keep historical temporal chains and other scopes out of the walk.
+        """
+        graph = self._g
+        started = time.monotonic()
+        work = 0
+        traversals = 0
+        result: list[dict[str, Any]] = []
+        seen_products: set[tuple[str, str, str]] = set()
+
+        def charge() -> None:
+            nonlocal work
+            work += 1
+            if work > 250_000 or time.monotonic() - started > 10:
+                log.warning("local folded query id=folded_products duration_ms=%d nodes=%d edges=%d work=%d traversals=%d intermediate=%d reason=budget_exceeded",
+                            int((time.monotonic() - started) * 1000), len(graph.nodes),
+                            len(graph.rels), work, traversals, len(result))
+                raise CypherBudgetExceeded("local folded query work or time budget exceeded")
+
+        def visible(node, label: str) -> bool:
+            return (label in node.labels and node.props.get("session_id") == session_id
+                    and not node.props.get("deleted_session"))
+
+        for nid in graph.pidx.get("session_id", {}).get(("s", session_id), {}):
+            charge()
+            scope = graph.nodes[nid]
+            scope_tid = scope.props.get("task_id")
+            if (not visible(scope, "Task") or scope.props.get("task_type") != "subagent"
+                    or (scope_id is not None and scope_tid != scope_id)):
+                continue
+            pending: list[str] = []
+            for rid in graph.out.get(nid, {}):
+                charge()
+                rel = graph.rels[rid]
+                if rel.type == "contains":
+                    pending.append(rel.dst)
+            visited: set[str] = set()
+            while pending:
+                charge()
+                traversals += 1
+                child_id = pending.pop()
+                if child_id in visited:
+                    continue
+                visited.add(child_id)
+                child = graph.nodes[child_id]
+                if (not visible(child, "ToolCall")
+                        or child.props.get("parent_subtask_id") != scope_tid):
+                    continue
+                for rid in graph.out.get(child_id, {}):
+                    charge()
+                    rel = graph.rels[rid]
+                    if rel.type == "next" and rel.props.get("method") == "scope_chain":
+                        pending.append(rel.dst)
+                    if rel.type != "produces":
+                        continue
+                    target = graph.nodes[rel.dst]
+                    products = []
+                    if visible(target, "Paper"):
+                        products.append((target, "Paper"))
+                    elif visible(target, "Code"):
+                        for code_rid in graph.out.get(target.id, {}):
+                            charge()
+                            code_rel = graph.rels[code_rid]
+                            artifact = graph.nodes[code_rel.dst]
+                            if code_rel.type == "produces" and visible(artifact, "Artifact"):
+                                products.append((artifact, "Artifact"))
+                    for product, product_kind in products:
+                        if kind is not None and kind != product_kind:
+                            continue
+                        key = (nid, child_id, product.id)
+                        if key in seen_products:
+                            continue
+                        seen_products.add(key)
+                        result.append({"scope_id": scope_tid, "product": dict(product.props),
+                                       "kind": product_kind, "product_label": product_kind,
+                                       "via_child": child.props.get("task_id")})
+        log.info("local folded query id=folded_products duration_ms=%d nodes=%d edges=%d work=%d traversals=%d intermediate=%d reason=ok",
+                 int((time.monotonic() - started) * 1000), len(graph.nodes),
+                 len(graph.rels), work, traversals, len(result))
+        return result
 
     def execute_write(self, fn, *args, **kwargs):
         return fn(self, *args, **kwargs)

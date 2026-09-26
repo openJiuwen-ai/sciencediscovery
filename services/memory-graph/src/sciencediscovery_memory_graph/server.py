@@ -49,10 +49,12 @@ import os
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .auth import require_internal_token
+from ._cypher import CypherBudgetExceeded
 from .constraints import ensure_schema
 from .logging_config import get_logger
 from .backend import handle
@@ -88,6 +90,14 @@ from .query import (
 log = get_logger("server")
 
 app = FastAPI(title="sciencediscovery-memory-graph")
+
+
+@app.exception_handler(CypherBudgetExceeded)
+async def _query_budget_exceeded(_request: Request, _exc: CypherBudgetExceeded) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": {
+        "code": "memory_graph_query_limit",
+        "message": "Memory graph query exceeded its local work or time limit",
+    }})
 
 # Node/edge label vocabularies for request validation, so a bad_request
 # response is returned before any Cypher runs. The union of upstream's set

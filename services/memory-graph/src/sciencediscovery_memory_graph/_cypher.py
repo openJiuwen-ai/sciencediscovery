@@ -38,6 +38,8 @@ depends on lazy evaluation. Schema DDL (``CREATE CONSTRAINT`` / ``INDEX``,
 from __future__ import annotations
 
 import re
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
@@ -46,6 +48,22 @@ from .local_graph import Graph, Node, Rel, index_key
 
 class CypherError(RuntimeError):
     """Syntax or evaluation error, raised the way a server-side error would be."""
+
+
+class CypherBudgetExceeded(CypherError):
+    """The local interpreter stopped a query before unbounded work or memory."""
+
+
+_MAX_QUERY_WORK = 250_000
+_MAX_INTERMEDIATE_ROWS = 50_000
+_MAX_QUERY_SECONDS = 10.0
+
+
+@dataclass
+class QueryStats:
+    work: int = 0
+    intermediate_peak: int = 0
+    traversals: int = 0
 
 
 # --- Lexer -------------------------------------------------------------------
@@ -809,9 +827,22 @@ Row = dict[str, Any]
 
 
 class Executor:
-    def __init__(self, graph: Graph, params: dict[str, Any]) -> None:
+    def __init__(self, graph: Graph, params: dict[str, Any], stats: QueryStats | None = None) -> None:
         self.g = graph
         self.params = params
+        self.stats = stats if stats is not None else QueryStats()
+        self.deadline = time.monotonic() + _MAX_QUERY_SECONDS
+
+    def _charge(self, amount: int = 1) -> None:
+        self.stats.work += amount
+        if self.stats.work > _MAX_QUERY_WORK or time.monotonic() > self.deadline:
+            raise CypherBudgetExceeded("local query work or time budget exceeded")
+
+    def _rows(self, rows: list[Row]) -> list[Row]:
+        self.stats.intermediate_peak = max(self.stats.intermediate_peak, len(rows))
+        if len(rows) > _MAX_INTERMEDIATE_ROWS:
+            raise CypherBudgetExceeded("local query intermediate row budget exceeded")
+        return rows
 
     # -- entry --------------------------------------------------------------
 
@@ -847,7 +878,7 @@ class Executor:
                 out = [[r[n] for n in columns] for r in rows]
                 returned = True
             else:
-                rows = self._clause(c, rows)
+                rows = self._rows(self._clause(c, rows))
         if not returned:
             return [], []
         return columns, out
@@ -1175,15 +1206,18 @@ class Executor:
         for row in rows:
             matched = False
             for m in self._match_parts(parts, 0, row, frozenset()):
+                self._charge()
                 if where is not None and _truth(self.ev(where, m)) is not True:
                     continue
                 matched = True
                 out.append(m)
+                self._rows(out)
             if optional and not matched:
                 nulls = dict(row)
                 for v in new_vars:
                     nulls.setdefault(v, None)
                 out.append(nulls)
+                self._rows(out)
         return out
 
     def _match_parts(self, parts: list[Part], i: int, row: Row,
@@ -1205,6 +1239,7 @@ class Executor:
                 yield row
             return
         for node in self._candidates(np, row):
+            self._charge()
             if self._node_ok(np, node, row):
                 yield {**row, np.var: node}
 
@@ -1290,6 +1325,8 @@ class Executor:
     def _walk(self, rp: RelPat, start: str, row: Row, used: frozenset[str]) -> Iterator[tuple[str, tuple[Rel, ...]]]:
         stack: list[tuple[str, tuple[Rel, ...]]] = [(start, ())]
         while stack:
+            self._charge()
+            self.stats.traversals += 1
             nid, path = stack.pop()
             if len(path) >= rp.lo:
                 yield nid, path
@@ -1298,9 +1335,12 @@ class Executor:
             taken = used | {r.id for r in path}
             nexts = []
             for rel, other_id in self._adjacent(rp, nid):
+                self._charge()
                 if rel.id in taken or not self._rel_ok(rp, rel, row):
                     continue
                 nexts.append((other_id, path + (rel,)))
+                if len(stack) + len(nexts) > _MAX_INTERMEDIATE_ROWS:
+                    raise CypherBudgetExceeded("local query traversal frontier budget exceeded")
             stack.extend(reversed(nexts))
 
     # -- UNWIND / CALL / FOREACH ---------------------------------------------
@@ -1482,7 +1522,8 @@ _DDL_RE = re.compile(r"^\s*(CREATE\s+(CONSTRAINT|INDEX|RANGE\s+INDEX|TEXT\s+INDE
 _PARSE_CACHE: dict[str, tuple[list[list[Any]], bool]] = {}
 
 
-def execute(graph: Graph, cypher: str, params: dict[str, Any]) -> tuple[list[str], list[list[Any]]]:
+def execute(graph: Graph, cypher: str, params: dict[str, Any],
+            stats: QueryStats | None = None) -> tuple[list[str], list[list[Any]]]:
     """Run one statement against ``graph`` and return ``(columns, rows)``."""
     if _DDL_RE.match(cypher):
         return [], []
@@ -1493,4 +1534,4 @@ def execute(graph: Graph, cypher: str, params: dict[str, Any]) -> tuple[list[str
             _PARSE_CACHE.clear()
         _PARSE_CACHE[cypher] = parsed
     branches, union_all = parsed
-    return Executor(graph, params).run(branches, union_all)
+    return Executor(graph, params, stats).run(branches, union_all)
