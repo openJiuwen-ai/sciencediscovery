@@ -102,3 +102,23 @@ test("child dispatch preserves owner and requires a saved idle context", async (
   child.status = "completed"; await dispatcher.tick(); assert.equal(count, 1);
   notifications.stopAgent(owner); await dispatcher.tick(); assert.equal(count, 1);
 });
+
+test("resuming one child after Session Stop admits Main and other unstopped children", async (t) => {
+  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  const notifications = new AgentNotifications(db, () => false);
+  const owners = ["main", "subagent:a", "subagent:b"].map((agentId) => ({ sessionId: "session", agentId }));
+  const children = ["a", "b"].map((id) => ({ id, status: "completed", contextRef: {} }));
+  const admitted: string[] = [];
+  const store = { notifications, getSession: () => ({}), listSubagents: () => children,
+    listSessionRuns: async () => [] } as unknown as SessionStore;
+  const dispatcher = new NotificationDispatcher(store, async (batch) => {
+    admitted.push(batch.agentId); return {} as SessionRun;
+  }, () => {});
+  notifications.stop("session");
+  for (const owner of owners) notifications.complete(owner, `job-${owner.agentId}`, "done");
+  await dispatcher.tick();
+  assert.deepEqual(admitted, []);
+  notifications.resumeAgent(owners[1]!);
+  await dispatcher.tick();
+  assert.deepEqual(admitted.sort(), owners.map((owner) => owner.agentId).sort());
+});

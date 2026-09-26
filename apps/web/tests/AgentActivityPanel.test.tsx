@@ -54,6 +54,19 @@ test("pointing the panel at a record opens its fold and the record itself", asyn
   } finally { await act(async () => view!.unmount()); }
 });
 
+test("subagent Resume explains that a stopped Session also reopens for other agents", async () => {
+  const client = { getAgentActivity: async () => ({ executions: [], transfers: [], timers: [],
+    agents: [{ agentId: "subagent:a", stopped: true }] }) } as unknown as ApiClient;
+  let view: ReactTestRenderer;
+  await act(async () => { view = create(createElement(AgentActivityPanel, { client, sessionId: "session" })); });
+  try {
+    const text = JSON.stringify(view!.toJSON());
+    assert.match(text, /If this Session was stopped/);
+    assert.match(text, /Main and other subagents/);
+    assert.match(text, /Resume subagent:a/);
+  } finally { await act(async () => view!.unmount()); }
+});
+
 test("activity API uses Session-scoped control routes", async (t) => {
   const paths: string[] = [];
   t.mock.method(globalThis, "fetch", async (path: string) => { paths.push(path); return new Response("{}"); });

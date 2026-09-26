@@ -6,9 +6,9 @@
 
 ## 快速开始
 
-- [快速开始](getting-started/quick-start.md) — 安装预编译二进制、启动服务、配置模型，并完成第一次 Agent 任务。
+- [快速开始](getting-started/quick-start.md) — 按 Linux 或 macOS 的最短路径启动服务、配置模型，并完成第一次可检查的 Agent 任务。
 - [基本概念](getting-started/concepts.md) — 了解 Agent Loop、Tool、Skill、Specialist、Workspace 和 Artifact 等基础概念。
-- [部署](getting-started/deployment.md) — 预编译二进制不适合你的主机或工作流时，用其他方式安装与运行：源码构建的单文件二进制、本地源码模式，或 Docker。
+- [部署](getting-started/deployment.md) — 选择预编译单文件、本地源码模式或 Docker，包含长期运行与首次启动排障。
 
 ## 核心能力
 
@@ -30,6 +30,7 @@
 
 ## Reference（参考）
 
+- [CLI](reference/cli.md) — `serve`、`run`、`extract`、`version` 的命令与行为。
 - [执行与工作区](reference/execution-workspaces.md)
 - [预置科研能力](reference/builtin-research-capabilities.md)
 - [配置、端口与存储](reference/configuration.md)
