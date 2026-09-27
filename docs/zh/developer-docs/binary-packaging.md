@@ -96,6 +96,7 @@ Node 与 CPython 运行时按 `scripts/binary-release/runtimes.json` 中固定�
 | Web 静态资源 | 预构建的 `apps/web/dist` |
 | Gateway wheel 与首启清单 | 自有 gateway wheel、带哈希的锁定依赖清单和 uv wheel pin |
 | JiuwenSwarm 与 adapter | 固定版本 JiuwenSwarm 及自有 adapter，连同其第三方依赖在构建时准备 |
+| Memory graph | 自有 wheel 与锁定依赖按架构打包；自动托管回环服务，使用本地持久存储，无需 Neo4j |
 | micromamba | 固定版本；首次启动播种到数据目录并由 Runner 校验 |
 
 发行包**不包含**：

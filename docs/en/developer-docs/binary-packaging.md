@@ -87,6 +87,7 @@ Compression defaults to zstd level 19. `SCIENCE_AGENT_PAYLOAD_ZSTD_LEVEL` can lo
 | Web assets | Prebuilt `apps/web/dist` |
 | Gateway wheel and bootstrap manifest | Product gateway wheel, hash-pinned dependency export, and uv wheel pin |
 | JiuwenSwarm and adapter | Pinned JiuwenSwarm plus the product adapter and their build-time dependency trees |
+| Memory graph | Product wheel and locked dependencies installed per architecture; supervised on loopback with local persistent storage, without Neo4j |
 | micromamba | Pinned version seeded to the data directory on first launch and verified by Runner |
 
 The release intentionally does **not** bundle:

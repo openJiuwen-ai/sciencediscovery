@@ -42,7 +42,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_NPM_REGISTRY` | 空（官方 registry） | 构建步骤的 npm 镜像，仅作用于 `start-stack.sh` 内的 `pnpm install --registry`，不改用户/全局 npm 配置；如华为云 `https://mirrors.huaweicloud.com/repository/npm/` |
 | `SCIENCE_AGENT_PYPI_INDEX` | 空（PyPI 官方） | 构建步骤的 PyPI 镜像，仅作用于 `start-stack.sh` 内 `uv sync` 的 `UV_DEFAULT_INDEX`，不改用户/全局 uv 配置；如华为云 `https://mirrors.huaweicloud.com/repository/pypi/simple`。注意：`uv.lock` 记录 index 来源，设置镜像后 uv 会按镜像重新 resolve（版本仍受 `pyproject.toml` 约束但可能偏离 lock），脚本会自动备份并恢复 lockfile，工作区不会被改动 |
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | memory-graph 监听地址（服务进程使用） |
-| `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE` | 源码/Docker 为 `1`，单文件启动器为 `0` | API 是否在新数据目录开放 ScienceMemory；sidecar 也必须运行。 |
+| `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE` | 自带服务时为 `1`；不含服务的旧单文件 payload 为 `0` | API 是否在新数据目录开放 ScienceMemory；`0` 跳过内置 sidecar，单文件 sidecar 启动失败时本次运行设为 `0`。 |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | memory-graph 监听端口（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | memory-graph 端点（API 客户端） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API→memory-graph token |

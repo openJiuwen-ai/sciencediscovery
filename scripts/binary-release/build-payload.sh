@@ -274,6 +274,10 @@ prepare_shared() {
   (cd services/adapter && uv export --frozen --no-dev --no-emit-project --no-header \
     --format requirements.txt -o "$shared_dir/requirements-adapter.txt")
 
+  uv build --wheel --out-dir "$shared_dir/wheels" services/memory-graph
+  (cd services/memory-graph && uv export --frozen --no-dev --no-emit-project --no-header \
+    --format requirements.txt -o "$shared_dir/requirements-memory-graph.txt")
+
   # JiuwenSwarm itself is installed straight from its PyPI release below, per
   # architecture (its dependency closure includes compiled extensions —
   # onnxruntime, faiss-cpu and friends — so it cannot be resolved once here
@@ -320,6 +324,7 @@ verify_extension_architecture() { # <python prefix> <expected `file` fragment>
 prepare_shared
 assert_requirements_clean "$shared_dir/requirements-gateway.txt"
 assert_requirements_clean "$shared_dir/requirements-adapter.txt"
+assert_requirements_clean "$shared_dir/requirements-memory-graph.txt"
 
 echo "Assembling the $architecture payload in $output" >&2
 rm -rf -- "$output"
@@ -412,6 +417,10 @@ echo "Installing the adapter (target: $python_platform)..." >&2
 install_flat_python "$output/adapter/site-packages" "$shared_dir/requirements-adapter.txt" \
   "$shared_dir"'/wheels/sciencediscovery_adapter-*.whl'
 
+echo "Installing memory-graph (target: $python_platform)..." >&2
+install_flat_python "$output/memory-graph/site-packages" "$shared_dir/requirements-memory-graph.txt" \
+  "$shared_dir"'/wheels/sciencediscovery_memory_graph-*.whl'
+
 echo "Installing JiuwenSwarm $jiuwenswarm_tag from PyPI (target: $python_platform)..." >&2
 mkdir -p "$output/jiuwenswarm/site-packages"
 uv pip install --target "$output/jiuwenswarm/site-packages" \
@@ -473,6 +482,7 @@ cat >"$output/manifest.json" <<EOF
     "requirementsPath": "bootstrap/requirements-gateway.txt",
     "gatewayWheelPath": "bootstrap/wheels/$gateway_wheel_name"
   },
+  "memoryGraph": { "sitePackages": "memory-graph/site-packages" },
   "jiuwenswarm": {
     "tag": "$jiuwenswarm_tag",
     "sitePackages": "jiuwenswarm/site-packages",

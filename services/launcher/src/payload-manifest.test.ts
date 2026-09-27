@@ -41,6 +41,11 @@ const bootstrap = {
 };
 
 describe("payload manifest parsing", () => {
+  test("accepts embedded memory and rejects an incomplete memory descriptor", () => {
+    const memoryGraph = { sitePackages: "memory-graph/site-packages" };
+    assert.deepEqual(parsePayloadManifest(JSON.stringify({ ...base, formatVersion: 1, memoryGraph }), "manifest.json").memoryGraph, memoryGraph);
+    assert.throws(() => parsePayloadManifest(JSON.stringify({ ...base, formatVersion: 1, memoryGraph: {} }), "manifest.json"), /memoryGraph sitePackages/);
+  });
   test("still accepts a version-1 payload with embedded dependencies", () => {
     const manifest = parsePayloadManifest(JSON.stringify({ ...base, formatVersion: 1 }), "manifest.json");
     assert.equal(manifest.formatVersion, 1);
