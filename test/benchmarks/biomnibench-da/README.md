@@ -99,8 +99,18 @@ passing the complete submitted trace and answer to a separately configured
 Judge. Every criterion requires an A/B/C level and justification; code calculates
 the total from rubric-defined points (including penalties). Malformed, missing
 or truncated judge responses are recorded as evaluation errors with no score;
-they do not change the separate delivery result. No automatic
-Judge retry. Model calls time out after 180 seconds.
+they do not change the separate delivery result. Each request allows 65,536 output
+tokens and 900 seconds. Transient transport errors, incomplete responses and
+invalid scores receive at most three retries (four attempts total), using the
+same evidence and rubric. The first valid score wins; retries never select the
+highest score. Permanent HTTP errors such as authentication or insufficient
+balance stop immediately. `E2E_BIOMNI_EVAL_TIMEOUT_MS` defaults to 3,900,000 (65
+minutes), separate from the Agent run budget, to accommodate all attempts.
+
+`quality-scorecard.attempts/` retains the request body (without credentials),
+every returned response and attempt status/usage/timing. Use a new output path
+for an offline rerun to preserve previous attempts. The Judge model must support
+the configured output budget.
 
 This is **not** the upstream Gemini verifier implementation and must be labelled
 as a local rubric-adapter score. Changing Judge models changes comparability.

@@ -35,3 +35,9 @@ test("TC rubric validation and bounded judge recovery pass without model calls",
     cwd: fileURLToPath(new URL("../", import.meta.url)), timeout: 30_000, stdio: "pipe",
   });
 });
+
+test("Biomni and PUCT judge retries preserve evidence and scoring contracts", () => {
+  execFileSync(process.env.SCIENCE_TEST_PYTHON ?? "python3", ["-m", "unittest", "discover", "-s", "test/benchmarks", "-p", "test_judge_retry.py"], {
+    cwd: fileURLToPath(new URL("../", import.meta.url)), timeout: 30_000, stdio: "pipe",
+  });
+});
