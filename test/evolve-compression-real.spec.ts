@@ -1,5 +1,8 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { test, requireRealEnv, requireRealStack, allowRealEnvException } from "./helpers/e2e.ts";
@@ -30,7 +33,9 @@ test("PUCT-COMPRESS documented text compression search", {
   tag: ["@real", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@sandbox:bubblewrap"],
 }, async ({ page, journey }, info) => {
   const budget = positiveNumber("E2E_EVOLVE_RUN_TIMEOUT_MS", 7_200_000);
-  test.setTimeout(budget + 240_000);
+  const llmAudit = process.env.E2E_PUCT_LLM_EVALUATION === "1";
+  const evaluationBudget = positiveNumber("E2E_PUCT_EVAL_TIMEOUT_MS", 3_900_000);
+  test.setTimeout(budget + (llmAudit ? evaluationBudget : 0) + 240_000);
   await requireRealStack(info);
   const modelId = process.env.E2E_LLM_MODEL_ID;
   if (modelId) allowRealEnvException(info, "Use the configured real server-side model.");
@@ -140,6 +145,20 @@ test("PUCT-COMPRESS documented text compression search", {
     await writeFile(info.outputPath("result.py"), code);
     metrics.delivery = { artifact_id: artifact.id, version_id: latest.id, logical_name: artifact.logicalName, versions };
     metrics.integration_status = "passed";
+    if (llmAudit) {
+      await save("evolve-metrics.json", metrics);
+      try {
+        await promisify(execFile)(process.env.PUCT_JUDGE_PYTHON ?? "python3", [
+          fileURLToPath(new URL("./benchmarks/evolve-compression/judge.py", import.meta.url)),
+          "--input", info.outputPath(), "--output", info.outputPath("llm-scorecard.json"),
+        ], { timeout: evaluationBudget });
+        metrics.llm_evaluation = JSON.parse(await readFile(info.outputPath("llm-scorecard.json"), "utf8"));
+      } catch (error) {
+        metrics.llm_evaluation = { status: "error", gating: false, total_score: null,
+          error: error instanceof Error ? error.message : String(error) };
+        await save("llm-scorecard.json", metrics.llm_evaluation);
+      }
+    }
     await page.screenshot({ path: info.outputPath("completed.png"), fullPage: true });
   } catch (error) {
     metrics.integration_status = "failed";

@@ -47,7 +47,8 @@ for (const sample of cases) {
  */
   test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap"] }, async ({ page, journey }, testInfo) => {
     const budget = positiveNumber("E2E_BIOMNI_RUN_TIMEOUT_MS", 1_800_000);
-    test.setTimeout(budget + 360_000);
+    const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
+    test.setTimeout(budget + evaluationBudget + 360_000);
     expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires isolated Swarm stack").toBe(false);
     const modelId = process.env.E2E_LLM_MODEL_ID?.trim();
     if (modelId) allowRealEnvException(testInfo, "Live model is already registered on the isolated stack.");
@@ -136,7 +137,7 @@ for (const sample of cases) {
             if (outputs.some(name => !scoringInputs[name])) throw new Error("Official rubric input missing: trace.md or answer.txt; delivery remains passed");
             await execute(python, [join(scripts, "judge.py"), "--rubric", rubricPath,
               "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
-              "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: 200_000 });
+              "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: evaluationBudget });
             metrics.evaluation = JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8"));
             metrics.evaluation.duration_ms = Date.now() - judgeStart;
             metrics.evaluation.gating = false;
