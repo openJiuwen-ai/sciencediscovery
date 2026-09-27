@@ -9,7 +9,7 @@
 
 两者在 **Claim** 与 **Artifact** 节点交汇：一条 Claim 既被其支撑的 Evidence/Artifact 通过 `supports` 边指向，又被报告 Artifact 通过 `stated_in` 边记录；一个 Artifact 既是任务链里 `ToolCall -produces->` 的产物，又可能是引用链里被 `supports` 指向的对象。
 
-单文件启动器未托管 memory-graph sidecar，默认将 ScienceMemory 标为不可用。
+单文件启动器默认打包并托管 memory-graph sidecar，复用内置 Python，数据保存在 `<数据目录>/memory-graph/`。API 启动前先探活该可选服务，启动失败时关闭科学记忆但不阻断对话。参见[部署选项](../advanced-setup/science-memory-setup.md#单文件发行包)。
 
 ## 1. 主要模块
 

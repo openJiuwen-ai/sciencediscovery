@@ -42,7 +42,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_NPM_REGISTRY` | empty (official registry) | Build-only registry passed to `pnpm install --registry`; does not alter user/global npm configuration |
 | `SCIENCE_AGENT_PYPI_INDEX` | empty (official PyPI) | Build-only `UV_DEFAULT_INDEX` for `uv sync`; the script backs up and restores `uv.lock` if the mirror causes re-resolution |
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | Memory-graph service bind address |
-| `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE` | `1` in local source/Docker, `0` in the single-file launcher | Whether the API exposes ScienceMemory on a new data directory; the sidecar must also be running. |
+| `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE` | `1` with a bundled sidecar; `0` for older single-file payloads without it | Whether the API exposes ScienceMemory on a new data directory; `0` skips the bundled sidecar. Single-file sidecar startup failure sets this to `0` for that run. |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | Memory-graph port |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Memory-graph endpoint used by the API |
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API-to-memory-graph token |

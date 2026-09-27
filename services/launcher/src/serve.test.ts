@@ -23,6 +23,7 @@ import { join } from "node:path";
 
 import type { ServeCredentials } from "./bootstrap-tokens.js";
 import { defaultSettings } from "./cli-options.js";
+import { startMemoryGraph } from "./memory-graph.js";
 import type { PayloadManifest } from "./payload-manifest.js";
 import { mcpProbeRuntime, planServices, seedProvisioner, type ServeContext, type ServicePlanContext } from "./serve.js";
 
@@ -65,6 +66,56 @@ function contextFor(overrides: Partial<ServicePlanContext> = {}): ServicePlanCon
 }
 
 describe("serve topology", () => {
+  test("bundles a loopback memory service with shared credentials in both executors", () => {
+    for (const jiuwenswarm of [false, true]) {
+      const context = contextFor({ manifest: { ...manifest, memoryGraph: { sitePackages: "memory-graph/site-packages" } } });
+      context.settings.jiuwenswarm = jiuwenswarm;
+      const [, api, memory] = planServices(context);
+      assert.equal(memory?.command, "/cache/payload/abc/python/bin/python3");
+      assert.deepEqual(memory?.args, ["-m", "sciencediscovery_memory_graph.server"]);
+      assert.equal(memory?.env.PYTHONPATH, "/cache/payload/abc/memory-graph/site-packages");
+      assert.equal(memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_HOST, "127.0.0.1");
+      assert.equal(memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR, join(context.settings.dataDir, "memory-graph"));
+      assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE, "1");
+      assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_URL, "http://127.0.0.1:17674");
+      assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN, memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN);
+      assert.match(memory!.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN!, /^[a-f0-9]{64}$/);
+    }
+  });
+
+  test("honors disable, external service and local overrides without spawning duplicates", () => {
+    const context = contextFor({ manifest: { ...manifest, memoryGraph: { sitePackages: "memory-graph/site-packages" } } });
+    context.baseEnv = { SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE: "0" };
+    assert.equal(planServices(context).length, 2);
+    context.baseEnv = { SCIENCE_AGENT_MEMORY_GRAPH_URL: "http://127.0.0.1:19999", SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: "external" };
+    const external = planServices(context);
+    assert.equal(external.length, 2);
+    assert.equal(external[1]?.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE, "1");
+    assert.equal(external[1]?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN, "external");
+    context.baseEnv = { SCIENCE_AGENT_MEMORY_GRAPH_PORT: "19999", SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR: "/persist/old-graph", SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: "local" };
+    const [, api, memory] = planServices(context);
+    assert.equal(memory?.healthUrl, "http://127.0.0.1:19999/health");
+    assert.equal(memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR, "/persist/old-graph");
+    assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN, "local");
+    context.baseEnv.SCIENCE_AGENT_MEMORY_GRAPH_PORT = "not-a-port";
+    assert.throws(() => planServices(context), /MEMORY_GRAPH_PORT/);
+  });
+
+  test("optional memory startup failure disables the API feature and cleans the sidecar", async () => {
+    const context = contextFor({ manifest: { ...manifest, memoryGraph: { sitePackages: "memory-graph/site-packages" } } });
+    const [, api, memory] = planServices(context);
+    let stopped = false;
+    const logs: string[] = [];
+    const ready = await startMemoryGraph({
+      start: async () => { throw new Error("port already in use"); },
+      stop: async () => { stopped = true; },
+    }, memory!, api!, (line) => logs.push(line));
+    assert.equal(ready, false);
+    assert.equal(stopped, true);
+    assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE, "0");
+    assert.match(logs.join("\n"), /Continuing without it/);
+  });
+
   test("starts the runner, then the API, each health gated — no Python service", () => {
     const services = planServices(contextFor());
     // The agent loop, the MCP client and the web providers all run inside the

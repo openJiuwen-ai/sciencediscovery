@@ -1,6 +1,16 @@
 # 安装 Neo4j 与配置科学记忆
 
-科学记忆（ScienceMemory）是 ScienceDiscovery 的可选功能，把一个会话的研究目标、每一步任务、运行的代码、产出的文件，到最终报告里每条带引用的断言及其证据，存成一张图谱，让"这个结论是怎么来的"可被点击回溯。本地源码与 Docker 新安装默认开启：Docker 镜像包含记忆图谱服务，默认本地文件后端无需安装 Neo4j。单文件启动器未托管该 sidecar，默认将 ScienceMemory 标为不可用。它对 Web 与对话主路径无任何影响。
+科学记忆（ScienceMemory）是 ScienceDiscovery 的可选功能，把一个会话的研究目标、每一步任务、运行的代码、产出的文件，到最终报告里每条带引用的断言及其证据，存成一张图谱，让"这个结论是怎么来的"可被点击回溯。源码、Docker 与单文件新安装均自动启动 memory-graph 服务，本地文件后端无需 Neo4j。单文件包内置服务及 Python 依赖；如果该可选服务启动失败，启动器报告原因并在关闭科学记忆的情况下继续启动。
+
+## 单文件发行包
+
+照常运行 `ScienceDiscovery serve` 即可。图谱保存在 `<数据目录>/memory-graph/`，不在解包缓存内，升级程序时保留。该服务无需额外安装系统 Python 或 Neo4j。已在系统设置中关闭记忆的用户需要自行开启，启动器不会覆盖已有设置。
+
+- 设置 `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0` 可跳过服务启动。
+- 多实例使用 `SCIENCE_AGENT_MEMORY_GRAPH_PORT`（默认 `17674`）区分端口；已有图谱可用 `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` 指向原目录，不自动迁移数据。
+- 内置服务仅监听 `127.0.0.1`。启动器自动生成与 API 共享的内部令牌，不是浏览器登录令牌。
+- 连接自行部署的服务时，设置 `SCIENCE_AGENT_MEMORY_GRAPH_URL` 和匹配的 `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN`；启动器不会启动或停止外部服务。
+- 服务失败后，修正原因并重启。使用不含该服务的旧 payload 时仍默认不可用，除非配置外部服务地址。
 
 > 本文讲内置的本地文件存储、怎么装 Neo4j 并在系统设置里配置、怎么在前端用。功能本身的架构、节点/边类型、API 接口见[科学记忆说明](../developer-docs/science-memory.md)；环境变量与端口见[配置参考](../reference/configuration.md)。
 

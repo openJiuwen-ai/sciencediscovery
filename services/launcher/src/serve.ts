@@ -29,6 +29,7 @@ import {
   type ServeCredentials,
 } from "./bootstrap-tokens.js";
 import { runBootstrap } from "./bootstrap.js";
+import { planMemoryGraph, startMemoryGraph } from "./memory-graph.js";
 import { adapterServiceDefinition, ensureInstance, jiuwenswarmServiceDefinition, waitForGateway } from "./jiuwenswarm.js";
 import type { PayloadManifest } from "./payload-manifest.js";
 import { runPreflight } from "./preflight.js";
@@ -125,11 +126,9 @@ export function mcpProbeRuntime(context: ServeContext): { cwd: string; env: Node
  * Build the ordered service list. Kept pure so tests can assert the topology,
  * ordering and environment without spawning anything.
  *
- * Two resident processes, matching `scripts/start-stack.sh`: the runner first
- * because the API is gated on its health, then the API. There is no Python
- * service — the agent loop, the MCP client, and the web providers all run
- * inside the API process, and the bundled stdio MCP servers are spawned by it
- * on demand rather than supervised here.
+ * Runner and API first in the plan, followed by the optional memory sidecar.
+ * serve starts the sidecar before the API under a separate supervisor so its
+ * failure cannot take down conversations. Swarm is planned separately.
  */
 export function planServices(context: ServicePlanContext): ServiceDefinition[] {
   const { credentials, manifest, payloadRoot, settings } = context;
@@ -144,6 +143,7 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
   const apiPort = settings.jiuwenswarm ? settings.port + 100 : settings.port;
 
   const runnerBase = runnerUrl(settings, baseEnv);
+  const memory = planMemoryGraph(context);
 
   const runnerEnvironment: NodeJS.ProcessEnv = {
     ...baseEnv,
@@ -169,9 +169,7 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
     // payload has no provisioned venv, so this is the bundled CPython whose
     // own site-packages already carry the gateway package.
     SCIENCE_AGENT_GATEWAY_PYTHON_PATH: pythonBinary,
-    // The single-file launcher supervises Runner/API and, in Swarm mode,
-    // JiuwenSwarm/adapter. It does not start the memory-graph sidecar.
-    SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE: baseEnv.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE?.trim() || "0",
+    ...memory.apiEnv,
     SCIENCE_AGENT_HOST: settings.host,
     SCIENCE_AGENT_PORT: String(apiPort),
     SCIENCE_AGENT_RUNNER_TOKEN: runnerEnvironment.SCIENCE_AGENT_RUNNER_TOKEN,
@@ -202,6 +200,7 @@ export function planServices(context: ServicePlanContext): ServiceDefinition[] {
       env: apiEnvironment,
       healthUrl: `http://${settings.host === "0.0.0.0" ? "127.0.0.1" : settings.host}:${apiPort}/health`,
     },
+    ...(memory.service ? [memory.service] : []),
   ];
 }
 
@@ -274,19 +273,26 @@ export async function serve(context: ServeContext, log: (message: string) => voi
   const services = planServices({ ...context, credentials });
 
   const supervisor = new Supervisor({ log });
+  const memorySupervisor = new Supervisor({ log });
   let stopping = false;
   const shutdown = (signal: NodeJS.Signals): void => {
     if (stopping) return;
     stopping = true;
     log(`\nReceived ${signal}; stopping the ScienceDiscovery stack...`);
-    void supervisor.stop();
+    void supervisor.stop().then(() => memorySupervisor.stop());
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
   try {
-    const [runnerService, apiService] = services;
+    const [runnerService, apiService, memoryService] = services;
     await supervisor.start([runnerService!]);
+
+    if (memoryService && await startMemoryGraph(memorySupervisor, memoryService, apiService!, log)) {
+      void memorySupervisor.waitForFirstExit().then(() => {
+        if (!stopping) log("Memory graph exited; conversations remain available. Restart to restore the graph service.");
+      });
+    }
 
     // Between the runner and the API, matching scripts/start-stack.sh's
     // --jiuwenswarm order: JiuwenSwarm itself, then the adapter that fronts
@@ -319,7 +325,9 @@ export async function serve(context: ServeContext, log: (message: string) => voi
     log(`  ScienceDiscovery is ready at ${uiUrl}`);
     for (const line of accessTokenBanner(settings.dataDir, credentials, uiUrl)) log(line);
     log(`  Data directory: ${settings.dataDir}`);
-    log("  Memory graph is disabled: it needs a Neo4j server, which is not bundled.");
+    log(apiService!.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE === "0"
+      ? "  Memory graph is unavailable or explicitly disabled."
+      : "  Memory graph is enabled; local storage requires no Neo4j installation.");
     log("  Press Ctrl-C to stop.");
     log("");
 
@@ -329,7 +337,9 @@ export async function serve(context: ServeContext, log: (message: string) => voi
     }
     return { exitCode: stopping ? 0 : (first.code ?? 1) };
   } finally {
+    stopping = true;
     await supervisor.stop();
+    await memorySupervisor.stop();
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
   }

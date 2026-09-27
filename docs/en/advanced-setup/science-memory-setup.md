@@ -1,6 +1,16 @@
 # Install Neo4j and configure ScienceMemory
 
-ScienceMemory is an optional ScienceDiscovery feature that stores a session's research goal, each task, the code run, the files produced, and each cited assertion in the final report with its supporting evidence as a graph, making "where did this conclusion come from" traceable and clickable. It is on by default for new local-source and Docker installations: the Docker image includes the memory-graph service, and the local-file backend needs no Neo4j installation. The single-file launcher does not supervise this sidecar and starts with ScienceMemory unavailable. ScienceMemory has no effect on the web or conversation path.
+ScienceMemory is an optional ScienceDiscovery feature that stores a session's research goal, each task, the code run, the files produced, and each cited assertion in the final report with its supporting evidence as a graph, making "where did this conclusion come from" traceable and clickable. New source, Docker, and single-file installations start the memory-graph service automatically; the local-file backend needs no Neo4j installation. The single-file payload includes the service and its Python dependencies. If that optional service fails to start, the launcher reports the error and continues without ScienceMemory.
+
+## Single-file releases
+
+Run `ScienceDiscovery serve` as usual. Memory data is stored in `<data-dir>/memory-graph/`, outside the extracted payload, and survives application upgrades. No host Python or Neo4j installation is required for this sidecar. Existing installations that disabled memory in System Settings must enable it there; saved settings are not overwritten.
+
+- Set `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0` to skip the sidecar.
+- Use `SCIENCE_AGENT_MEMORY_GRAPH_PORT` (default `17674`) for parallel instances and `SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR` to reuse an existing graph directory. No graph data is moved automatically.
+- The bundled service binds only to `127.0.0.1`. The launcher supplies a random internal token shared with the API; it is not the browser login token.
+- To connect an independently managed service, set `SCIENCE_AGENT_MEMORY_GRAPH_URL` and the matching `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN`. The launcher will not start or stop that external service.
+- After a sidecar failure, correct the cause and restart. Older payload overrides without the service retain the unavailable default unless an external URL is configured.
 
 > This guide covers the built-in local store, how to install Neo4j and configure it in system settings, and how to use ScienceMemory in the frontend. For the feature's architecture, node/edge types, and API, see [ScienceMemory](../developer-docs/science-memory.md); for environment variables and ports, see the [configuration reference](../reference/configuration.md).
 

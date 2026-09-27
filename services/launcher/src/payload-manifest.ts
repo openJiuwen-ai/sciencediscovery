@@ -69,6 +69,8 @@ export interface PayloadManifest {
    * these are directories to put on PYTHONPATH, not executables.
    */
   jiuwenswarm?: { tag: string; sitePackages: string; adapterSitePackages: string };
+  /** Optional for compatibility with older payloads; embedded sidecar dependencies. */
+  memoryGraph?: { sitePackages: string };
 }
 
 export function parsePayloadManifest(raw: string, source: string): PayloadManifest {
@@ -101,6 +103,9 @@ export function parsePayloadManifest(raw: string, source: string): PayloadManife
     if (!bootstrap.requirementsPath || !bootstrap.gatewayWheelPath) {
       throw new Error(`${source} is missing a bootstrap artifact path entry.`);
     }
+  }
+  if (manifest.memoryGraph && (typeof manifest.memoryGraph.sitePackages !== "string" || !manifest.memoryGraph.sitePackages)) {
+    throw new Error(`${source} is missing the memoryGraph sitePackages path.`);
   }
   return manifest as PayloadManifest;
 }

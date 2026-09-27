@@ -9,7 +9,7 @@ Two core chains in the graph:
 
 The two intersect at **Claim** and **Artifact** nodes: a Claim both `supports` the Evidence/Artifact backing it and is recorded in the report Artifact via a `stated_in` edge; an Artifact is both a `ToolCall -produces->` product in the task chain and possibly a `supports` target in the citation chain.
 
-The single-file launcher does not supervise the memory-graph sidecar and marks ScienceMemory unavailable by default.
+The single-file launcher embeds and supervises the memory-graph sidecar by default, using the bundled Python and `<data-dir>/memory-graph/` storage. It health-checks the optional sidecar before starting the API; startup failure disables ScienceMemory without blocking conversations. See [deployment options](../advanced-setup/science-memory-setup.md#single-file-releases).
 
 ## 1. Main modules
 
