@@ -173,7 +173,11 @@ assert_no_build_paths() { # <payload root>
   for needle in "${HOME:-}" "${USERPROFILE:-}"; do
     if [[ -n "$needle" ]]; then
       pattern="$(printf '%s' "$needle" | sed 's/[][\\.*^$(){}?+|/]/\\&/g')"
-      leaks+="$(grep -rIlE --exclude-dir=jiuwenswarm --exclude-dir=adapter -- "(^|[^[:alnum:]])$pattern([^[:alnum:]]|\$)" "$root" || true)"$'\n'
+      # Known upstream SBOM references may share GitHub's /home/runner with
+      # this builder. Filter only those reference values, never entire files;
+      # the exact build-root scan above remains unconditional.
+      leaks+="$( { grep -rIlE --exclude-dir=jiuwenswarm --exclude-dir=adapter -- "(^|[^[:alnum:]])$pattern([^[:alnum:]]|\$)" "$root" || true; } \
+        | node "$repository_root/scripts/binary-release/filter-upstream-sbom-paths.mjs" "$root" "$needle")"$'\n'
     fi
   done
   leaks+="$(grep -rIlE --exclude-dir=jiuwenswarm --exclude-dir=adapter '\.missioncrew|MissionCrew|\.worktrees' "$root" || true)"
