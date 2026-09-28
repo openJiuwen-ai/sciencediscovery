@@ -49,9 +49,13 @@ command; no live credentials are required for these verification tests.
 
 Nightly runs at **00:00 Asia/Shanghai (16:00 UTC)**, with a separate real E2E job
 in the reusable CI workflow. GitHub schedules only workflows on the default
-branch: merging into `feat/jiuwenswarm` alone does not activate the schedule.
-The nightly workflow passes secrets to the reusable workflow; PR jobs do not
-receive live credentials. Nothing here dispatches a paid run during development.
+branch. The scheduled `main` workflow therefore starts its own daily gate and,
+in parallel, dispatches an independent `workflow_dispatch` run at
+`releases/v0.3.0.beta`. That second run loads the workflow and source from the
+release ref, so its commit, jobs, logs and artifacts remain separate from
+`main`. Manually dispatched runs do not fan out. The nightly workflow passes
+secrets to the reusable workflow; PR jobs do not receive live credentials.
+Nothing here dispatches a paid run during development.
 
 Configure the GitHub environment `nightly-research`:
 
