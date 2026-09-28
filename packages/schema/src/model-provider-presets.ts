@@ -149,7 +149,7 @@ export const MODEL_PROVIDER_PRESETS: readonly ModelProviderPreset[] = [
     apiProtocol: "openai-chat-completions",
     apiVariant: "openai",
     baseUrl: "https://router.requesty.ai/v1",
-    docsUrl: "https://docs.requesty.ai",
+    docsUrl: "https://docs.requesty.ai/quickstart",
     id: "requesty",
     keyUrl: "https://app.requesty.ai/api-keys",
     modelDiscovery: "openai-models",
