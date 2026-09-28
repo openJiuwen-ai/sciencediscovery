@@ -146,6 +146,7 @@ health_attempts=50
 gateway_python=""
 memory_graph_python=""
 evolve_python=""
+idea_tree_python=""
 adapter_python=""
 runner_url=""
 data_dir=""
@@ -428,6 +429,8 @@ prepare_local() {
   # admits pandas/numpy/scipy/sklearn. Without them every candidate fails with
   # ModuleNotFoundError. Set SCIENCE_AGENT_EVOLVE_STUB_ONLY=1 to skip the ~200MB
   # when only the stub engine will ever run.
+  idea_tree_python="$envs_dir/idea-tree/bin/python"
+  (cd services/idea-tree && UV_PROJECT_ENVIRONMENT="$envs_dir/idea-tree" uv sync --locked)
   evolve_python="$envs_dir/evolve/bin/python"
   if [[ ! -x "$evolve_python" ]]; then
     echo "Provisioning the evolve Python environment..." >&2
@@ -499,6 +502,7 @@ prepare_docker() {
   gateway_python="${SCIENCE_AGENT_GATEWAY_PYTHON_PATH:-$envs_root/gateway/bin/python}"
   memory_graph_python="${SCIENCE_AGENT_MEMORY_GRAPH_PYTHON_PATH:-$envs_root/memory-graph/bin/python}"
   evolve_python="${SCIENCE_AGENT_EVOLVE_PYTHON_PATH:-$envs_root/evolve/bin/python}"
+  idea_tree_python="${SCIENCE_AGENT_IDEA_TREE_PYTHON_PATH:-$envs_root/idea-tree/bin/python}"
 
   data_dir="${SCIENCE_AGENT_DATA_DIR:-/app/data}"
   data_dir="$(absolute_from_repository "$data_dir")"
@@ -644,6 +648,17 @@ start_stack() {
     pids+=("$!")
     wait_healthy "memory-graph" "http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17674}/health"
   fi
+
+  if [[ ! -x "$idea_tree_python" ]]; then
+    echo "The idea-tree Python environment is missing at $idea_tree_python. Rebuild the image." >&2
+    exit 1
+  fi
+  echo "Starting the independent idea-tree service..." >&2
+  SCIENCE_DISCOVERY_DATA_DIR="$data_dir" \
+  SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN="${SCIENCE_AGENT_IDEA_TREE_INTERNAL_TOKEN:-sciencediscovery-idea-tree-local}" \
+  "$idea_tree_python" -m sciencediscovery_idea_tree.server &
+  pids+=("$!")
+  wait_healthy "idea-tree" "http://127.0.0.1:${SCIENCE_AGENT_IDEA_TREE_PORT:-4314}/health"
 
   # Start the evolve search sidecar. It holds no persistent business state and
   # never sees a model key: model calls go back through the API's loopback

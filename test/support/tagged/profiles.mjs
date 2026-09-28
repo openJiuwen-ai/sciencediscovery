@@ -113,7 +113,7 @@ export const nodeSources = Object.freeze([
 export const nodeExtraSources = Object.freeze(['test/api/agent_loop_smoke.ts']);
 
 /** The Python service suites, each collected against its own project virtualenv. */
-export const pythonProjects = Object.freeze(['paper', 'gateway', 'memory-graph', 'evolve', 'adapter']);
+export const pythonProjects = Object.freeze(['paper', 'gateway', 'memory-graph', 'evolve', 'idea-tree', 'adapter']);
 export const pythonSources = project => `services/${project}/tests/test_*.py`;
 
 /**
