@@ -6,9 +6,9 @@ If this is your first time using ScienceDiscovery, start with the [Quick Start](
 
 | Mode | Supported platforms | Best for | Recommendation |
 | --- | --- | --- | --- |
-| Prepackaged single file | Linux x86_64 / aarch64 | Users who want the shortest startup path | **Recommended** |
-| Local source mode | Linux x86_64 / aarch64, macOS x64 / arm64 | macOS users, development, source changes | Recommended |
-| Docker | Linux x86_64 / aarch64 | Existing container environments and operational isolation | As needed |
+| Prepackaged single file | Linux x86_64 / aarch64, Windows x64 (WSL 2) | Users who want the shortest startup path | **Recommended** |
+| Local source mode | Linux x86_64 / aarch64, macOS x64 / arm64, Windows x64 (WSL 2) | macOS users, development, source changes | Recommended |
+| Docker | Linux x86_64 / aarch64, macOS (Docker Desktop or an existing Docker engine), Windows (Docker Desktop) | Existing container environments and operational isolation | As needed |
 
 The three paths are independent. Choose one. Once the service is running, return to the [Quick Start](quick-start.md) for model configuration and the first task.
 
@@ -18,10 +18,12 @@ The three paths are independent. Choose one. Once the service is running, return
 
 ### Prerequisites
 
-- Linux on x86_64 or aarch64;
-- Bubblewrap;
+- Linux on x86_64 or aarch64, including WSL 2 on Windows x64;
+- Bubblewrap and usable unprivileged user namespaces in the Linux environment;
 - network access for first-launch dependency preparation;
 - at least one model provider API key.
+
+On Windows, run the commands in this section inside your WSL 2 Linux distribution.
 
 Install Bubblewrap:
 
@@ -81,12 +83,13 @@ The service binds to the local machine by default. If you must expose it, config
 Use local source mode when:
 
 - you are on macOS;
+- you are on Windows and want to run the Linux source steps inside WSL 2;
 - you need to modify or debug the source;
 - you do not want the prepackaged Linux binary.
 
 ### Prerequisites
 
-Both platforms require:
+All supported local environments require:
 
 - Node.js 22.19+;
 - pnpm 11.1.2;
@@ -97,15 +100,16 @@ Both platforms require:
 
 Sandbox requirements differ:
 
-- Linux: Bubblewrap 0.6+, 0.8+ recommended;
+- Linux, including WSL 2: Bubblewrap 0.6+ and unprivileged user namespaces, 0.8+ recommended;
 - macOS: the built-in Seatbelt sandbox; Bubblewrap is not required.
 
 ### Clone and start
 
+On Windows, run these commands inside your WSL 2 Linux distribution.
+
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
-git checkout feat/jiuwenswarm
 
 scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local
@@ -125,9 +129,7 @@ A successful startup prints the same `Open to sign in` URL.
 
 ### macOS notes
 
-macOS currently supports local source mode only. The Linux single-file binary and the Linux Docker path on this page do not run directly on macOS.
-
-If startup reports that Seatbelt is unavailable, check:
+If local source mode reports that Seatbelt is unavailable, check:
 
 ```bash
 test -x /usr/bin/sandbox-exec
@@ -137,23 +139,33 @@ If this fails, or your terminal is itself inside a stricter sandbox, fix the hos
 
 ---
 
-## Docker deployment (Linux)
+## Docker deployment (Linux containers)
 
 Docker is intended for users who already operate containerized services and want the runtime isolated from the host.
 
 ### Prerequisites
 
-- Linux on x86_64 or aarch64;
-- Docker Engine 24+;
-- Docker Compose v2;
+- Linux on x86_64 or aarch64, macOS with Docker Desktop or an existing Docker engine,
+  or Windows with Docker Desktop;
+- Docker Engine 24+ and Docker Compose v2 for non-Desktop setups;
+- Docker Desktop in Linux container mode when using it on macOS or Windows;
+- support for Bubblewrap and unprivileged user namespaces inside the Linux container;
 - enough disk space for the image, build cache, and scientific environments;
 - build-time access to Docker Hub, npm, PyPI, and other dependency sources.
 
-> macOS and Windows Docker Desktop are not the supported path. Code execution depends on Linux kernel sandbox capabilities.
-
 ### 1. Prepare configuration and storage
 
-From the repository root:
+If you do not have a local checkout yet, clone the repository first:
+
+```bash
+git clone https://github.com/openJiuwen-ai/sciencediscovery.git
+cd sciencediscovery
+```
+
+On Windows, copy `.env.docker.example` to `.env` and create `data/`
+in the repository root before starting the service.
+
+On Linux or macOS, use a Unix shell in the repository root:
 
 ```bash
 cp .env.docker.example .env
@@ -173,18 +185,18 @@ The `data/` directory stores projects, sessions, workspaces, credentials, and ot
 
 ### 2. Build and start
 
-```bash
+```text
 docker compose build
 docker compose up -d
 ```
 
 Check the service:
 
-```bash
+```text
 docker compose ps
-curl -fsS http://127.0.0.1:4310/health
 ```
 
+Open <http://127.0.0.1:4310/health> in a browser.
 A healthy installation reports top-level `status: ok`.
 
 If it reports `degraded`, inspect logs first:
@@ -195,10 +207,10 @@ docker compose logs --tail=200
 
 ### 3. Open the Web UI
 
-Find the sign-in URL in the logs:
+View the logs and find the `Open to sign in` URL:
 
-```bash
-docker compose logs | grep -A 2 'Open to sign in'
+```text
+docker compose logs -f
 ```
 
 Open the printed `Open to sign in` URL in your browser.
@@ -286,7 +298,8 @@ Logs are stored under `logs/` in the data directory by default. See the [configu
 
 ### `data/` is not writable
 
-Make sure the directory exists before `docker compose up` and that uid/gid match the `.env` configuration:
+Make sure `data/` exists before `docker compose up`.
+On Linux or macOS, use a Unix shell to check that uid/gid match the `.env` configuration:
 
 ```bash
 ls -ld data

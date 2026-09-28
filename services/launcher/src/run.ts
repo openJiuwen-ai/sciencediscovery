@@ -18,12 +18,12 @@
  * uses, so behavior stays identical (zero backend customization).
  *
  * Output:
- *  - text mode (default when a TTY is attached): answer text streams to
- *    stdout, status and progress go to stderr. `run "问题" > answer.md`
- *    keeps the answer clean.
- *  - jsonl mode (default when piped): every event is one JSON line on stdout,
- *    including errors (mapped from the backend's `run.failed`). Downstream
- *    `jq` never sees a non-JSON line.
+ *  - text mode (default when stdout is a TTY, or selected with --output text):
+ *    answer text streams to stdout, status and progress go to stderr.
+ *    Redirecting stdout requires --auto-approve because it is non-interactive.
+ *  - jsonl mode (default when stdout is piped or redirected): every event is
+ *    one JSON line on stdout, including errors (mapped from the backend's
+ *    `run.failed`). Downstream `jq` never sees a non-JSON line.
  */
 import { createInterface } from "node:readline/promises";
 

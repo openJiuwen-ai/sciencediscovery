@@ -38,7 +38,10 @@ chmod +x ./ScienceDiscovery
 
 ### macOS: use local source mode
 
-Both macOS x64 and arm64 are supported. There is currently no prepackaged single-file macOS binary, so use local source mode. The sandbox uses the built-in Seatbelt mechanism; Bubblewrap is not required.
+Both macOS x64 and arm64 are supported. There is no prepackaged single-file
+macOS binary, so this first-run path uses local source mode. The sandbox uses
+the built-in Seatbelt mechanism; Bubblewrap is not required. For Docker on
+macOS, see the [deployment guide](deployment.md).
 
 Make sure the machine has:
 
@@ -55,7 +58,6 @@ Then run:
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
-git checkout feat/jiuwenswarm
 
 scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local

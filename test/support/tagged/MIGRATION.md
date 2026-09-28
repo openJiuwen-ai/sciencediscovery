@@ -90,9 +90,10 @@ selected ones, and the difference is exactly this list.
 Everything else that `ci:ut` + `ci:st` + `ci:e2e` reached is in the shared
 plan. No assertion was weakened and no test was deleted to get there.
 
-## On `feat/jiuwenswarm`
+## JiuwenSwarm backend on `main`
 
-This branch runs agent turns on JiuwenSwarm, behind the adapter, and the plan
+The branch formerly named `feat/jiuwenswarm` is now `main`. It runs agent turns
+on JiuwenSwarm, behind the adapter, and the plan
 came to it with that as a fixed part of the layers rather than a choice of the
 machine: `pnpm ci:ut` wraps the shared runner in `scripts/with-jiuwenswarm.sh`,
 and the E2E slice drives `run-e2e.sh`, whose backend is JiuwenSwarm unless

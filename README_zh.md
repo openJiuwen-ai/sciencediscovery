@@ -71,9 +71,9 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 
 | 路径 | 运行环境要求 |
 |---|---|
-| **预打包二进制** | Linux x86_64/aarch64、Bubblewrap |
-| **本地源码模式** | Linux x86_64/aarch64 或 macOS x64/arm64；Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、Git；Linux 用 Bubblewrap，macOS 用系统内置 Seatbelt |
-| **Docker** | Linux x86_64/aarch64、Docker Engine 24+、Compose v2、可用的无特权用户命名空间 |
+| **预打包二进制** | Linux x86_64/aarch64（Windows x64 可通过 WSL 2 运行）、Bubblewrap |
+| **本地源码模式** | Linux（含 WSL 2）或 macOS；Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、Git |
+| **Docker** | Linux、macOS 或 Windows 上的 Linux 容器；容器内需支持 Bubblewrap 和非特权用户命名空间 |
 
 托管科学环境基于固定版本的 micromamba 运行，无需在系统中安装 Python、R 或 conda。
 

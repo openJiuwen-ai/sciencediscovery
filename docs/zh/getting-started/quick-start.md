@@ -38,7 +38,9 @@ chmod +x ./ScienceDiscovery
 
 ### macOS：使用本地源码模式
 
-macOS x64 和 arm64 均受支持。当前 macOS 没有预编译单文件版本，使用本地源码模式即可；沙箱使用系统自带的 Seatbelt，不需要安装 Bubblewrap。
+macOS x64 和 arm64 均受支持。当前没有 macOS 预编译单文件版本，
+本篇首次使用流程采用本地源码模式；沙箱使用系统自带的 Seatbelt，
+不需要安装 Bubblewrap。macOS Docker 路径见[部署指南](deployment.md)。
 
 先确认本机已有：
 
@@ -55,7 +57,6 @@ macOS x64 和 arm64 均受支持。当前 macOS 没有预编译单文件版本�
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
-git checkout feat/jiuwenswarm
 
 scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local

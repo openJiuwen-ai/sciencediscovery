@@ -6,9 +6,9 @@
 
 | 方式 | 支持平台 | 适合谁 | 推荐程度 |
 | --- | --- | --- | --- |
-| 预编译单文件 | Linux x86_64 / aarch64 | 想最快启动的普通用户 | **推荐** |
-| 本地源码模式 | Linux x86_64 / aarch64、macOS x64 / arm64 | macOS 用户、开发调试、需要改源码的用户 | 推荐 |
-| Docker | Linux x86_64 / aarch64 | 已有容器环境、希望隔离运行和方便运维的用户 | 按需 |
+| 预编译单文件 | Linux x86_64 / aarch64、Windows x64（WSL 2） | 想最快启动的普通用户 | **推荐** |
+| 本地源码模式 | Linux x86_64 / aarch64、macOS x64 / arm64、Windows x64（WSL 2） | macOS 用户、开发调试、需要改源码的用户 | 推荐 |
+| Docker | Linux x86_64 / aarch64；macOS（Docker Desktop 或已有 Docker 引擎）；Windows（Docker Desktop） | 已有容器环境、希望隔离运行和方便运维的用户 | 按需 |
 
 三条路径互相独立，选一条即可。服务启动成功后，后续的模型配置和第一次任务都回到[快速开始](quick-start.md)。
 
@@ -18,10 +18,12 @@
 
 ### 前置条件
 
-- Linux x86_64 或 aarch64；
-- Bubblewrap；
+- Linux x86_64 或 aarch64，包括 Windows x64 上的 WSL 2；
+- Linux 环境需能运行 Bubblewrap，并允许非特权用户命名空间；
 - 可访问互联网完成首次启动依赖准备；
 - 至少一个模型服务商 API Key。
+
+Windows 用户请在 WSL 2 Linux 发行版中执行本节命令。
 
 安装 Bubblewrap：
 
@@ -81,12 +83,13 @@ ScienceDiscovery serve [options]
 本地源码模式适用于：
 
 - macOS 用户；
+- 希望在 Windows 的 WSL 2 中运行 Linux 源码步骤的用户；
 - 希望修改源码或调试的用户；
 - 不使用预编译 Linux 单文件的环境。
 
 ### 前置条件
 
-两种平台都需要：
+这些本地环境都需要：
 
 - Node.js 22.19+；
 - pnpm 11.1.2；
@@ -97,15 +100,16 @@ ScienceDiscovery serve [options]
 
 沙箱要求：
 
-- Linux：Bubblewrap 0.6+，推荐 0.8+；
+- Linux（包括 WSL 2）：Bubblewrap 0.6+ 和非特权用户命名空间，推荐 0.8+；
 - macOS：使用系统自带 Seatbelt，不需要 Bubblewrap。
 
 ### 获取源码并启动
 
+Windows 用户请在 WSL 2 Linux 发行版中执行以下命令。
+
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
-git checkout feat/jiuwenswarm
 
 scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local
@@ -125,9 +129,7 @@ scripts/jiuwenswarm.sh setup
 
 ### macOS 注意事项
 
-macOS 当前仅支持本地源码模式，不支持直接运行 Linux 单文件，也不支持本文的 Linux Docker 路径。
-
-如果启动时报 Seatbelt 不可用，先确认：
+如果本地源码模式启动时报 Seatbelt 不可用，先确认：
 
 ```bash
 test -x /usr/bin/sandbox-exec
@@ -137,23 +139,33 @@ test -x /usr/bin/sandbox-exec
 
 ---
 
-## Docker 部署（Linux）
+## Docker 部署（Linux 容器）
 
 Docker 适合已经使用容器运维、希望将运行环境与宿主隔离的用户。
 
 ### 前置条件
 
-- Linux x86_64 或 aarch64；
-- Docker Engine 24+；
-- Docker Compose v2；
+- Linux x86_64 或 aarch64；macOS 使用 Docker Desktop 或已有 Docker 引擎；
+  Windows 使用 Docker Desktop；
+- 非 Desktop 环境需要 Docker Engine 24+ 和 Docker Compose v2；
+- 在 macOS 或 Windows 上使用 Docker Desktop 时，需要 Linux 容器模式；
+- Linux 容器内需支持 Bubblewrap 和非特权用户命名空间；
 - 足够的磁盘空间用于镜像、构建缓存和科学计算环境；
 - 构建阶段可访问 Docker Hub、npm、PyPI 等依赖源。
 
-> macOS / Windows Docker Desktop 不是当前支持路径。代码执行沙箱依赖 Linux 内核能力。
-
 ### 1. 准备配置和数据目录
 
-在仓库根目录执行：
+如果本地还没有仓库，先克隆并进入仓库目录：
+
+```bash
+git clone https://github.com/openJiuwen-ai/sciencediscovery.git
+cd sciencediscovery
+```
+
+Windows 用户在仓库根目录将 `.env.docker.example` 复制为 `.env`，
+并创建 `data/` 目录，然后再启动服务。
+
+Linux 和 macOS 用户在仓库根目录的 Unix Shell 中执行：
 
 ```bash
 cp .env.docker.example .env
@@ -173,18 +185,18 @@ SCIENCE_AGENT_GID=<你的 gid>
 
 ### 2. 构建并启动
 
-```bash
+```text
 docker compose build
 docker compose up -d
 ```
 
 检查状态：
 
-```bash
+```text
 docker compose ps
-curl -fsS http://127.0.0.1:4310/health
 ```
 
+在浏览器中打开 <http://127.0.0.1:4310/health>。
 正常情况下，健康接口的顶层 `status` 应为 `ok`。
 
 如果状态为 `degraded`，先查看日志：
@@ -195,10 +207,10 @@ docker compose logs --tail=200
 
 ### 3. 打开 Web UI
 
-查看启动日志中的登录链接：
+查看日志，找到 `Open to sign in` 链接：
 
-```bash
-docker compose logs | grep -A 2 'Open to sign in'
+```text
+docker compose logs -f
 ```
 
 在浏览器打开打印出的 `Open to sign in` 链接。
@@ -286,7 +298,8 @@ ScienceDiscovery 不会在 Seatbelt 不可用时静默降级为无沙箱执行�
 
 ### `data/` 不可写
 
-确认目录在 `docker compose up` 之前已经创建，并且 uid/gid 与 `.env` 配置一致：
+先确认 `data/` 在 `docker compose up` 前已创建。
+在 Linux 或 macOS 的 Unix Shell 中，还可以检查 uid/gid 是否与 `.env` 配置一致：
 
 ```bash
 ls -ld data

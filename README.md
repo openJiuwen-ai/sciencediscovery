@@ -77,9 +77,9 @@ workspace. For a step-by-step walkthrough, see the [Quick Start](https://science
 
 | Path | System requirements |
 |---|---|
-| **Prepackaged binary** | Linux x86_64/aarch64, Bubblewrap |
-| **Local source mode** | Linux x86_64/aarch64 or macOS x64/arm64; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git; Bubblewrap on Linux, built-in Seatbelt on macOS |
-| **Docker** | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, unprivileged user namespaces |
+| **Prepackaged binary** | Linux x86_64/aarch64 (Windows x64 via WSL 2), Bubblewrap |
+| **Local source mode** | Linux (including WSL 2) or macOS; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git |
+| **Docker** | Linux containers on Linux, macOS, or Windows; Bubblewrap and unprivileged user namespaces |
 
 Managed scientific environments run on a pinned micromamba, so no system Python, R or conda is required.
 
