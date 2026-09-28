@@ -83,9 +83,6 @@ workspace. For a step-by-step walkthrough, see the [Quick Start](https://science
 
 Managed scientific environments run on a pinned micromamba, so no system Python, R or conda is required.
 
-> [!WARNING]
-> ScienceDiscovery is not a multi-user production service. The adapter and the API listen on loopback by default; access uses one bearer token and there is no TLS termination. Exposing either interface elsewhere must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed platform sandbox (Bubblewrap on Linux and Seatbelt in macOS source mode); the control API, the adapter, JiuwenSwarm, the PDF worker, and outbound model/provider calls run outside that sandbox as trusted control-plane operations.
-
 ## Documentation
 
 | Section | Guides |

@@ -77,9 +77,6 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 
 托管科学环境基于固定版本的 micromamba 运行，无需在系统中安装 Python、R 或 conda。
 
-> [!WARNING]
-> ScienceDiscovery 不是多用户生产服务。适配器与 API 默认只监听回环；访问使用一个 bearer token，且不终止 TLS。监听其他网卡必须是可信、受保护网络中的显式部署选择。Python、R 和 shell 命令在 fail-closed 的平台沙箱中运行（Linux 使用 Bubblewrap，macOS 源码模式使用 Seatbelt）；控制 API、适配器、JiuwenSwarm、PDF worker 以及发往已配置模型/数据提供方的请求在沙箱外作为受信任控制面操作执行。
-
 ## 文档
 
 | 分类 | 文档 |
