@@ -93,9 +93,13 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 
 ## 加入社区
 
-欢迎加入 ScienceDiscovery 微信交流群，与社区交流使用体验。
+欢迎加入 ScienceDiscovery 社区，在 Slack 或飞书交流使用体验、分享想法。
 
-<img src="docs/images/wechat.jpg" alt="ScienceDiscovery 微信交流群二维码" width="320">
+| [Slack][slack-invite] | 飞书 |
+| :---: | :---: |
+| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack 社区邀请二维码" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery 飞书交流群二维码" width="320"> |
+
+[slack-invite]: https://join.slack.com/t/sciencediscovery-hq/shared_invite/zt-4avv6fbom-uLrBalsUBR45N9sC2mGO~A
 
 ## 许可证
 

@@ -99,11 +99,13 @@ The complete English and Chinese indexes are in the [documentation site](https:/
 
 ## Join the community
 
-Join the ScienceDiscovery community on [Slack][slack-invite] or scan this QR code:
+Join the ScienceDiscovery community on Slack or Feishu to discuss your work and share feedback.
+
+| [Slack][slack-invite] | Feishu |
+| :---: | :---: |
+| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack community invite QR code" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery Feishu community invite QR code" width="320"> |
 
 [slack-invite]: https://join.slack.com/t/sciencediscovery-hq/shared_invite/zt-4avv6fbom-uLrBalsUBR45N9sC2mGO~A
-
-<img src="docs/images/slack.png" alt="ScienceDiscovery Slack community invite QR code" width="200">
 
 ## License
 
