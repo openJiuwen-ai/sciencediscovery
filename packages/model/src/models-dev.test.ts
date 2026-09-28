@@ -57,6 +57,27 @@ test("mapping keeps only mapped providers and attributes prices to their own pre
   assert.equal(lookupModelCatalog("local-only-model"), undefined);
 });
 
+test("Requesty's listing prices the requesty preset and leaves the facts to the vendor", () => {
+  installTestModelCatalog();
+  const pro = lookupModelCatalog("deepseek-v4-pro", "requesty")!;
+  assert.deepEqual(pro.pricing, {
+    cachedInput: 0.044,
+    currency: "USD",
+    input: 1.32,
+    output: 3.96,
+    source: { retrievedAt: FIXTURE_FETCHED_AT, url: "https://requesty.ai/solution/llm-routing/models" },
+    unit: "per-1m-tokens",
+  });
+  assert.equal(lookupModelCatalog("gpt-5.5", "requesty")!.pricing!.input, 5.5);
+  // Each endpoint keeps its own rate.
+  assert.equal(lookupModelCatalog("deepseek-v4-pro", "deepseek")!.pricing!.input, 0.55);
+  assert.equal(lookupModelCatalog("gpt-5.5", "openai")!.pricing!.input, 1.25);
+  // Vendor facts win over the resale entry for the same model.
+  assert.equal(pro.maxOutputTokens, 384_000, "DeepSeek's own output limit, not Requesty's");
+  assert.deepEqual(pro.thinking?.efforts, ["high", "max"], "and DeepSeek's own effort scale");
+  assert.deepEqual(lookupModelCatalog("gpt-5.5")!.thinking!.efforts, ["low", "medium", "high", "xhigh"]);
+});
+
 test("thinking capability is read from the document and never widened or invented", () => {
   installTestModelCatalog();
   // `none` and `minimal` are not effort levels this product exposes.
