@@ -6,8 +6,8 @@ If this is your first time using ScienceDiscovery, start with the [Quick Start](
 
 | Mode | Supported platforms | Best for | Recommendation |
 | --- | --- | --- | --- |
-| Prepackaged single file | Linux x86_64 / aarch64, Windows x64 (WSL 2) | Users who want the shortest startup path | **Recommended** |
-| Local source mode | Linux x86_64 / aarch64, macOS x64 / arm64, Windows x64 (WSL 2) | macOS users, development, source changes | Recommended |
+| Prepackaged single file | glibc-based Linux x86_64 / aarch64, Windows x64 (WSL 2 with a glibc-based distribution) | Users who want the shortest startup path | **Recommended** |
+| Local source mode | Linux x86_64 / aarch64, macOS 13+ x64 / arm64, Windows x64 (WSL 2) | macOS users, development, source changes | Recommended |
 | Docker | Linux x86_64 / aarch64, macOS (Docker Desktop or an existing Docker engine), Windows (Docker Desktop) | Existing container environments and operational isolation | As needed |
 
 The three paths are independent. Choose one. Once the service is running, return to the [Quick Start](quick-start.md) for model configuration and the first task.
@@ -18,10 +18,14 @@ The three paths are independent. Choose one. Once the service is running, return
 
 ### Prerequisites
 
-- Linux on x86_64 or aarch64, including WSL 2 on Windows x64;
+- glibc-based Linux on x86_64 or aarch64, including a suitable WSL 2
+  distribution on Windows x64. The bundled Node.js runtime requires
+  glibc 2.28+ and a compatible libstdc++;
 - Bubblewrap and usable unprivileged user namespaces in the Linux environment;
 - network access for first-launch dependency preparation;
 - at least one model provider API key.
+
+This release binary does not run directly on musl-based distributions such as Alpine Linux.
 
 On Windows, run the commands in this section inside your WSL 2 Linux distribution.
 Keep the downloaded file in the distribution's Linux filesystem, such as your home directory.
@@ -46,10 +50,12 @@ ScienceDiscovery-<version>-linux-x86_64
 ScienceDiscovery-<version>-linux-aarch64
 ```
 
-You can run the downloaded file directly or rename it first:
+You can run the downloaded file directly or rename it first. In the directory
+containing the download, use the following commands if you have one matching
+binary for your architecture:
 
 ```bash
-mv ScienceDiscovery-<version>-linux-<architecture> ScienceDiscovery
+mv ScienceDiscovery-*-linux-"$(uname -m)" ScienceDiscovery
 chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
@@ -97,7 +103,8 @@ All supported local environments require:
 
 - Node.js 22.19+;
 - pnpm 11.1.2;
-- Python 3;
+- `python3` 3.9+ on `PATH` (used by `scripts/jiuwenswarm.sh` before uv
+  creates its Python 3.12 environment);
 - uv 0.9+;
 - Git;
 - curl.
@@ -106,6 +113,9 @@ Sandbox requirements differ:
 
 - Linux, including WSL 2: Bubblewrap 0.6+ and unprivileged user namespaces, 0.8+ recommended;
 - macOS: the built-in Seatbelt sandbox; Bubblewrap is not required.
+
+On macOS, use version 13 or newer for local source mode, as required by the
+current [uv platform policy](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions).
 
 ### Clone and start
 
@@ -345,6 +355,12 @@ Logs are stored under `logs/` in the data directory by default. See the [configu
 
 Run `docker compose version`. This option requires Compose v2.15+.
 Update the Compose plugin, or update Docker Desktop if it supplies Compose.
+
+### macOS Docker Desktop cannot mount the project directory
+
+If Docker Desktop reports `Mounts denied` or `file is not shared from the host`,
+open **Settings → Resources → File sharing** and add the directory containing
+the checkout. See [Docker's file-sharing settings](https://docs.docker.com/desktop/settings-and-maintenance/settings/#file-sharing).
 
 ### `data/` is not writable
 

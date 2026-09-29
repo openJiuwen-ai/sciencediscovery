@@ -13,7 +13,8 @@
 
 ### Linux：使用预编译版本
 
-如果你使用 Linux x86_64 或 aarch64，这是最短路径。
+如果你使用 glibc 2.28+ 的 Linux x86_64 或 aarch64，这是最短路径。
+此发行包不能直接在 Alpine Linux 等使用 musl 的发行版上运行。
 
 你需要：
 
@@ -38,7 +39,7 @@ chmod +x ./ScienceDiscovery
 
 ### macOS：使用本地源码模式
 
-macOS x64 和 arm64 均受支持。当前没有 macOS 预编译单文件版本，
+macOS 13+ 的 x64 和 arm64 均受支持。当前没有 macOS 预编译单文件版本，
 本篇首次使用流程采用本地源码模式；沙箱使用系统自带的 Seatbelt，
 不需要安装 Bubblewrap。macOS Docker 路径见[部署指南](deployment.md)。
 
@@ -46,7 +47,7 @@ macOS x64 和 arm64 均受支持。当前没有 macOS 预编译单文件版本�
 
 - Node.js 22.19+；
 - pnpm 11.1.2；
-- Python 3；
+- `python3` 需为 3.9+（用 `python3 --version` 检查）；
 - uv 0.9+；
 - Git；
 - curl；

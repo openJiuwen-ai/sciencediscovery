@@ -13,7 +13,9 @@ When you finish, you should be able to:
 
 ### Linux: use the prepackaged binary
 
-For Linux on x86_64 or aarch64, this is the shortest path.
+For glibc-based Linux on x86_64 or aarch64, this is the shortest path.
+The release binary requires glibc 2.28+ and does not run directly on Alpine
+Linux or other musl-based distributions.
 
 You need:
 
@@ -38,16 +40,16 @@ chmod +x ./ScienceDiscovery
 
 ### macOS: use local source mode
 
-Both macOS x64 and arm64 are supported. There is no prepackaged single-file
-macOS binary, so this first-run path uses local source mode. The sandbox uses
-the built-in Seatbelt mechanism; Bubblewrap is not required. For Docker on
-macOS, see the [deployment guide](deployment.md).
+Both macOS x64 and arm64 are supported on macOS 13+. There is no prepackaged
+single-file macOS binary, so this first-run path uses local source mode.
+The sandbox uses the built-in Seatbelt mechanism; Bubblewrap is not required.
+For Docker on macOS, see the [deployment guide](deployment.md).
 
 Make sure the machine has:
 
 - Node.js 22.19+;
 - pnpm 11.1.2;
-- Python 3;
+- `python3` 3.9+ on `PATH`;
 - uv 0.9+;
 - Git;
 - curl;

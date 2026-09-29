@@ -6,8 +6,8 @@
 
 | 方式 | 支持平台 | 适合谁 | 推荐程度 |
 | --- | --- | --- | --- |
-| 预编译单文件 | Linux x86_64 / aarch64、Windows x64（WSL 2） | 想最快启动的普通用户 | **推荐** |
-| 本地源码模式 | Linux x86_64 / aarch64、macOS x64 / arm64、Windows x64（WSL 2） | macOS 用户、开发调试、需要改源码的用户 | 推荐 |
+| 预编译单文件 | 使用 glibc 的 Linux x86_64 / aarch64、Windows x64（使用 glibc 发行版的 WSL 2） | 想最快启动的普通用户 | **推荐** |
+| 本地源码模式 | Linux x86_64 / aarch64、macOS 13+ x64 / arm64、Windows x64（WSL 2） | macOS 用户、开发调试、需要改源码的用户 | 推荐 |
 | Docker | Linux x86_64 / aarch64；macOS（Docker Desktop 或已有 Docker 引擎）；Windows（Docker Desktop） | 已有容器环境、希望隔离运行和方便运维的用户 | 按需 |
 
 三条路径互相独立，选一条即可。服务启动成功后，后续的模型配置和第一次任务都回到[快速开始](quick-start.md)。
@@ -18,10 +18,13 @@
 
 ### 前置条件
 
-- Linux x86_64 或 aarch64，包括 Windows x64 上的 WSL 2；
+- 使用 glibc 的 Linux x86_64 或 aarch64，包括 Windows x64 上符合条件的
+  WSL 2 发行版。内置 Node.js 运行时要求 glibc 2.28+，且需要兼容的 libstdc++；
 - Linux 环境需能运行 Bubblewrap，并允许非特权用户命名空间；
 - 可访问互联网完成首次启动依赖准备；
 - 至少一个模型服务商 API Key。
+
+此发行包不能直接在 Alpine Linux 等使用 musl 的发行版上运行。
 
 Windows 用户请在 WSL 2 Linux 发行版中执行本节命令。
 请将下载的文件放在发行版的 Linux 文件系统中，例如用户主目录。
@@ -46,10 +49,11 @@ ScienceDiscovery-<version>-linux-x86_64
 ScienceDiscovery-<version>-linux-aarch64
 ```
 
-可以直接运行下载文件，也可以先重命名：
+可以直接运行下载文件，也可以先重命名。在下载文件所在目录，
+如果对应架构的文件只有一个，可执行：
 
 ```bash
-mv ScienceDiscovery-<version>-linux-<architecture> ScienceDiscovery
+mv ScienceDiscovery-*-linux-"$(uname -m)" ScienceDiscovery
 chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
@@ -97,7 +101,8 @@ ScienceDiscovery serve [options]
 
 - Node.js 22.19+；
 - pnpm 11.1.2；
-- Python 3；
+- `python3` 需为 3.9+（可运行 `python3 --version` 检查）。
+  安装脚本会在 uv 创建 Python 3.12 环境前调用它；
 - uv 0.9+；
 - Git；
 - curl。
@@ -106,6 +111,9 @@ ScienceDiscovery serve [options]
 
 - Linux（包括 WSL 2）：Bubblewrap 0.6+ 和非特权用户命名空间，推荐 0.8+；
 - macOS：使用系统自带 Seatbelt，不需要 Bubblewrap。
+
+macOS 本地源码模式请使用 13 或更新版本，参见当前的
+[uv 平台支持政策](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions)。
 
 ### 获取源码并启动
 
@@ -142,13 +150,14 @@ scripts/jiuwenswarm.sh setup
 test -x /usr/bin/sandbox-exec
 ```
 
-若该命令失败，或当前终端本身运行在更严格的沙箱中，请先解决宿主环境限制。
+若该命令失败，或当前终端本身运行在更严格的沙箱中，
+请先解决当前运行环境的限制。
 
 ---
 
 ## Docker 部署（Linux 容器）
 
-Docker 适合已经使用容器运维、希望将运行环境与宿主隔离的用户。
+Docker 适合已经使用容器运维、希望通过容器隔离服务运行环境的用户。
 
 ### 前置条件
 
@@ -248,7 +257,7 @@ docker compose logs -f
 | 更新代码后重建 | `docker compose up -d --build` |
 | 进入容器 | `docker compose exec sciencediscovery sh` |
 
-`docker compose down` 不会删除宿主上的 `data/`。
+`docker compose down` 不会删除项目目录中的 `data/`。
 
 ### 5. 远程主机访问
 
@@ -311,8 +320,8 @@ sysctl kernel.apparmor_restrict_unprivileged_userns
 ```
 
 某些内核没有其中一个 sysctl 键，这是正常情况。
-若 `kernel.unprivileged_userns_clone` 存在且为 `0`，说明宿主禁用了非特权用户命名空间。
-请让宿主系统管理员启用后重试。
+若 `kernel.unprivileged_userns_clone` 存在且为 `0`，说明当前 Linux 环境禁用了非特权用户命名空间。
+请检查该系统的设置，无法修改时联系系统管理员，启用后重试。
 若 AppArmor 键为 `1`，且报错为权限不足，先用 `sudo aa-status` 确认 AppArmor 是否启用。
 Ubuntu 24.04 及以后版本仅在该限制实际生效时配置 bwrap profile，
 操作可参考 [Ubuntu 的 AppArmor 说明](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007#define-bwrap-profile)。
@@ -343,6 +352,12 @@ ScienceDiscovery 不会在 Seatbelt 不可用时静默降级为无沙箱执行�
 先运行 `docker compose version`。该选项需要 Compose v2.15+。
 请更新 Compose 插件；若使用 Docker Desktop，则更新 Docker Desktop。
 
+### macOS Docker Desktop 无法挂载项目目录
+
+如果 Docker Desktop 报 `Mounts denied` 或 `file is not shared from the host`，
+请打开 **Settings → Resources → File sharing**，添加仓库所在目录。
+参见 [Docker 文件共享设置](https://docs.docker.com/desktop/settings-and-maintenance/settings/#file-sharing)。
+
 ### `data/` 不可写
 
 先确认 `data/` 在 `docker compose up` 前已创建。
@@ -360,7 +375,7 @@ id -u
 id -g
 ```
 
-Windows 用户先确认当前账户对宿主 `data/` 目录有写权限，
+Windows 用户先确认当前账户对项目目录中的 `data/` 有写权限，
 且 Docker Desktop 可以共享该目录。Windows 账户没有可填入 `.env` 的 Linux uid/gid。
 如果 Windows 目录挂载后仍不可写，可将仓库移到 WSL 2 发行版的 Linux 文件系统，
 开启 Docker Desktop 的 [WSL 集成](https://docs.docker.com/desktop/features/wsl/#enable-docker-in-a-wsl-2-distribution)，
