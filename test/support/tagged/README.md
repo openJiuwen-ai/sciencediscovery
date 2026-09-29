@@ -50,7 +50,7 @@ pytest phases cannot be collapsed into an apparently clean pass.
 | `npu` | `none`, `required` | `none` | `none` means **not required**, not forbidden. |
 | `model` | `none`, `mock`, `real` | `none` | Model used by the system under test. |
 | `judge` | `none`, `llm` | `none` | Whether the test uses an LLM assertion. |
-| `status` | `reviewed`, `external`, `legacy`, `unreviewed` | `reviewed` | Only `reviewed` is in the shared suite. `external` needs a live third-party service, `legacy` is the unaudited quarantine, `unreviewed` is not yet fit to run. |
+| `status` | `reviewed`, `external`, `quarantined`, `legacy`, `unreviewed` | `reviewed` | Only `reviewed` is in the shared PR suite. `external` needs a live third-party service, `quarantined` is a reviewed case temporarily excluded from scheduled gates while a failure is investigated, `legacy` is the unaudited quarantine, and `unreviewed` is not yet fit to run. |
 | `sandbox` | `none`, `bubblewrap`, `seatbelt` | `none` | The execution sandbox the test itself drives. A plan holding `sandbox:bubblewrap` fails preflight on a host where `bwrap` cannot start. |
 
 **A group with a default is declared only where a test deviates from it.** A

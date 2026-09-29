@@ -102,31 +102,26 @@ jobs:
       CI_ALLOW_REAL: "1"
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
+      CI_PREPARE_BIOMNI: "0"
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
       E2E_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
       E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
       E2E_JUDGE_TOKEN: ${{ secrets.E2E_JUDGE_TOKEN }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
       JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       E2E_DRB_EVALUATION: full
-      E2E_BIOMNI_EVALUATION: rubric
       E2E_DRB_MAX_SUBAGENTS: "2"
       E2E_TEAM_CONCURRENCY_HINT: "2"
       E2E_DRB_RUN_TIMEOUT_MS: "3600000"
       E2E_DRB_EVAL_TIMEOUT_MS: "600000"
       E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
-      E2E_BIOMNI_RUN_TIMEOUT_MS: "1200000"
       LLM_BACKEND: openai
       OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
       OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
       RACE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
       CLEAN_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
       FACT_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-      BIOMNI_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
-      BIOMNI_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
-      BIOMNI_JUDGE_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

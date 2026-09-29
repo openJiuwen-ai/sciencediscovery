@@ -22,7 +22,7 @@ test dependencies are supplied only by the checkout mounted at `/src`.
 | PR: `ci:ut` | Tagged package/helper tests and offline benchmark-verifier checks | None |
 | PR: `ci:st` | Mock agent-loop smoke and pinned Swarm SDK/MCP contract checks | None |
 | PR: `ci:e2e` | All reviewed mocked browser journeys, including research lifecycle/source fixtures | None |
-| Daily: `ci:e2e:real` | Every tagged real browser journey: five DRB, research team, two BiomniBench and existing real journeys | `nightly-research` environment only |
+| Daily: `ci:e2e:real` | Eligible tagged real browser journeys: five DRB, research team and existing real journeys; two BiomniBench cases and the seeded literature-review journey are temporarily quarantined | `nightly-research` environment only |
 
 `daily` adds a real-E2E policy row; `release` keeps the credential-free PR policy.
 The three hermetic jobs remain unchanged entry points; daily adds the disjoint
@@ -60,23 +60,35 @@ Nothing here dispatches a paid run during development.
 Configure the GitHub environment `nightly-research`:
 
 - Variables: `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_JUDGE_BASE_URL`, `E2E_JUDGE_MODEL`.
-- Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`.
-- The HF account must have accepted BiomniBench-DA access terms. Setup downloads
-  only the two tasks' CSVs, instructions and rubrics, not the full dataset.
+- Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`.
+- Manual BiomniBench runs additionally require `HF_TOKEN` from an account that
+  accepted the dataset terms. Set `CI_PREPARE_BIOMNI=1` (the preparation script's
+  default) to download only the two tasks' CSVs, instructions and rubrics.
+  Nightly sets `CI_PREPARE_BIOMNI=0` while these cases are quarantined.
 - The DRB evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`;
   BiomniBench inputs are verified against committed blob hashes before model use.
 
 Missing credentials/data/dependencies fail explicitly. No case disappears from
-discovery because an environment variable is absent. Selected skips, missing
-results and assertion failures fail plan accounting. `real-e2e-results` retains
+discovery because an environment variable is absent. The three quarantined
+journeys remain discoverable for explicit local runs but are excluded from the
+daily plan by their `status` tag. Selected skips, missing results and assertion
+failures fail plan accounting. `real-e2e-results` retains
 the plan, per-case metrics, scores and diagnostics even on failure (seven days).
 Treat these artifacts as research data; restrict access appropriately.
 
+The BiomniBench quarantine can be lifted after the agent sandbox has the
+scientific Python packages and its citation search completes within a reviewed
+budget. The literature-review quarantine can be lifted after CI provisions the
+required saved Pro/Flash models, PubMed connector and evidence-brief skill.
+Until then, run either journey explicitly for diagnosis; never report a
+quarantined case as passed by Nightly.
+
 Real tests use one browser worker; the isolated runtime enforces child concurrency
 two. DRB additionally requests at most two total children; the team retains six
-roles. Each DRB gets 20 minutes generation plus 10 minutes evaluation, team gets
-40 minutes and BiomniBench 20 minutes per case. Timeouts are failures, not success
-or a monetary cap. The job has a six-hour ceiling and does not retry failed cases.
+roles. DRB-58/62/75 each get 90 minutes generation, DRB-59/64 each get 120 minutes;
+the team gets 55 minutes. Manual BiomniBench runs default to 30 minutes per case.
+Timeouts are failures, not success or a monetary cap. The job has a six-hour
+ceiling and does not retry failed cases.
 Judge scores and token usage are recorded separately from generator usage.
 
 The three hermetic layers are three slices of one plan, not three suites. Each
@@ -91,8 +103,8 @@ narrowed only by the group that layer schedules:
 | Mock E2E | `pnpm ci:e2e` | `category:e2e and not model:real`, driving `.ci/run-e2e.sh` |
 | Daily real E2E | `pnpm ci:e2e:real` | `category:e2e and model:real`, daily profile only |
 
-The three hermetic slices partition the PR plan; the fourth slice adds real
-journeys for daily CI. The hermetic slices together are `pnpm test:shared`, the command a developer
+The three hermetic slices partition the PR plan; the fourth slice adds eligible
+real journeys for daily CI. The hermetic slices together are `pnpm test:shared`, the command a developer
 runs. Which cases are selected comes from the tags in each test's own source —
 never from the machine, its credentials, its devices or its installed
 services. A missing capability fails the plan's preflight, and a skip is a

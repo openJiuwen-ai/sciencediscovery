@@ -29,7 +29,9 @@ const PR = [
 ];
 
 /**
- * Daily is PR plus real browser journeys. Credentials are checked only after
+ * Daily is PR plus eligible real browser journeys. Quarantined tests remain
+ * discoverable for manual runs but are excluded before the plan is frozen.
+ * Credentials are checked only after
  * this policy has frozen identities; a missing secret never removes a case.
  */
 const DAILY = [...PR,

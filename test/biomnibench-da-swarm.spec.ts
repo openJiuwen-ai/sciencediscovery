@@ -45,7 +45,7 @@ for (const sample of cases) {
  * Credentials: E2E_API_TOKEN; E2E_LLM_MODEL_ID or E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN; optional BIOMNI_JUDGE_API_KEY.
  * CostSideEffects: Billable model calls; temporary projects and sessions; retained test diagnostics and reports. Not a PR gate.
  */
-  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap"] }, async ({ page, journey }, testInfo) => {
+  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap","@status:quarantined"] }, async ({ page, journey }, testInfo) => {
     const budget = positiveNumber("E2E_BIOMNI_RUN_TIMEOUT_MS", 1_800_000);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
     test.setTimeout(budget + evaluationBudget + 360_000);
