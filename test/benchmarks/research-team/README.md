@@ -84,7 +84,8 @@ E2E_RESEARCH=1 E2E_SWARM_TASK=1 npm --prefix .e2e run test:real -- science-resea
 `E2E_TEAM_EVALUATION=rubric` is the default; use `off` to disable paid judging.
 `TEAM_JUDGE_PYTHON` defaults to `python3` and needs only the standard library.
 `E2E_TEAM_EVAL_TIMEOUT_MS` defaults to 900,000 ms, separate from the existing
-`E2E_TEAM_RUN_TIMEOUT_MS` generation deadline. Biomni judging now defaults to
+`E2E_TEAM_RUN_TIMEOUT_MS` generation deadline. Daily CI sets that deadline to
+55 minutes; the test's local default remains one hour. Biomni judging now defaults to
 `rubric` (`E2E_BIOMNI_EVALUATION=off` disables it); DRB keeps its existing mode.
 Missing judge configuration is recorded as an evaluation error.
 
