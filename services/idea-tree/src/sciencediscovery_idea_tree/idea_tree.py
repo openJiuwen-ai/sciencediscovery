@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ...tree import Node, Tree
+from .tree import Node, Tree
 
 
 def now() -> str:

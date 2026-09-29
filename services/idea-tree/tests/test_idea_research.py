@@ -8,9 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine, ResearchStore, node, now, parse_json
-from sciencediscovery_evolve.vendor.idea_tree.research_service import Settings
-from sciencediscovery_evolve.vendor.idea_tree.templates import snapshot
+from sciencediscovery_idea_tree.research import IdeaTreeEngine, ResearchStore, node, now, parse_json
+from sciencediscovery_idea_tree.research_service import Settings
+from sciencediscovery_idea_tree.templates import snapshot
 
 
 class ResearchTests(unittest.IsolatedAsyncioTestCase):
@@ -249,7 +249,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_service_pause_end_and_restart_are_manual(self):
         from unittest.mock import patch
-        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        from sciencediscovery_idea_tree import research_service as service
         from fastapi import HTTPException
         entered, release = asyncio.Event(), asyncio.Event()
         async def ask(engine, role, payload, check=None):
