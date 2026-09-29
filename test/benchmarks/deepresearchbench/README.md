@@ -82,10 +82,10 @@ use an explicit local/manual benchmark run. Real evaluation additionally needs
 the real project and configured generator/Judge credentials.
 
 The default run budget is one hour (`E2E_DRB_RUN_TIMEOUT_MS=3600000`).
-DRB-58 defaults to 90 minutes; DRB-59 and DRB-64 default to 120 minutes.
-Their case-specific overrides (`E2E_DRB_58_RUN_TIMEOUT_MS`,
-`E2E_DRB_59_RUN_TIMEOUT_MS`, `E2E_DRB_64_RUN_TIMEOUT_MS`) take precedence over
-the suite-wide budget. The separate evaluation budget is one hour
+DRB-58, DRB-62, and DRB-75 default to 90 minutes; DRB-59 and DRB-64 default
+to 120 minutes. Their case-specific overrides (`E2E_DRB_<id>_RUN_TIMEOUT_MS`)
+take precedence over the suite-wide budget. The daily CI suite-wide budget is
+one hour, matching the default here. The separate evaluation budget is one hour
 (`E2E_DRB_EVAL_TIMEOUT_MS`). These
 are harness deadlines, not injected research-count instructions. Judge mode
 `full` is the default and requests RACE and FACT. Missing Judge credentials
