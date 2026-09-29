@@ -2,13 +2,9 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
-for name in E2E_LLM_BASE_URL E2E_LLM_MODEL E2E_LLM_TOKEN E2E_JUDGE_BASE_URL E2E_JUDGE_MODEL E2E_JUDGE_TOKEN JINA_API_KEY; do
+for name in E2E_LLM_BASE_URL E2E_LLM_MODEL E2E_LLM_TOKEN E2E_JUDGE_BASE_URL E2E_JUDGE_MODEL E2E_JUDGE_TOKEN JINA_API_KEY HF_TOKEN; do
   if [[ -z "${!name:-}" ]]; then echo "BLOCKED: missing $name" >&2; exit 2; fi
 done
-if [[ "${CI_PREPARE_BIOMNI:-1}" == 1 && -z "${HF_TOKEN:-}" ]]; then
-  echo 'BLOCKED: missing HF_TOKEN for Biomni input preparation' >&2
-  exit 2
-fi
 [[ "${CI_ALLOW_REAL:-}" == 1 ]] || { echo 'BLOCKED: CI_ALLOW_REAL=1 required' >&2; exit 2; }
 runtime="${CI_RUNTIME_DIR:?CI_RUNTIME_DIR required}"
 mkdir -p "$runtime"
@@ -32,9 +28,7 @@ fi
 # Paths, not credentials. The workflow already supplies credentials only to this job.
 {
   echo "DRB_PYTHON=$python"
+  echo "BIOMNI_PYTHON=$python"
   echo "DRB_UPSTREAM_DIR=$upstream"
-  if [[ "${CI_PREPARE_BIOMNI:-1}" == 1 ]]; then
-    echo "BIOMNI_PYTHON=$python"
-    echo "BIOMNI_DATA_ROOT=$runtime/biomnibench-da"
-  fi
+  echo "BIOMNI_DATA_ROOT=$runtime/biomnibench-da"
 } >> "${GITHUB_ENV:?GitHub environment file required}"
