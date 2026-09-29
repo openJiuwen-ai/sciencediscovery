@@ -41,13 +41,13 @@ chmod +x ./ScienceDiscovery
 
 macOS 13+ 的 x64 和 arm64 均受支持。当前没有 macOS 预编译单文件版本，
 本篇首次使用流程采用本地源码模式；沙箱使用系统自带的 Seatbelt，
-不需要安装 Bubblewrap。macOS Docker 路径见[部署指南](deployment.md)。
+不需要安装 Bubblewrap。macOS Docker 为实验性路径，详见[部署指南](deployment.md)。
 
 先确认本机已有：
 
 - Node.js 22.19+；
 - pnpm 11.1.2；
-- `python3` 需为 3.9+（用 `python3 --version` 检查）；
+- `python3` 3.9+；
 - uv 0.9+；
 - Git；
 - curl；
@@ -73,7 +73,9 @@ scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
-### Windows：使用 WSL 2 或 Docker Desktop
+### Windows：使用 WSL 2 或 Docker Desktop（实验性）
+
+所有 Windows 安装路径下的 Agent 运行效果尚未经过全面验证。
 
 可以在 WSL 2 Linux 发行版中运行 [Linux 预编译版](deployment.md#预编译单文件部署linux)
 或[本地源码模式](deployment.md#本地源码模式linux--macos)；

@@ -6,9 +6,12 @@ If this is your first time using ScienceDiscovery, start with the [Quick Start](
 
 | Mode | Supported platforms | Best for | Recommendation |
 | --- | --- | --- | --- |
-| Prepackaged single file | glibc-based Linux x86_64 / aarch64, Windows x64 (WSL 2 with a glibc-based distribution) | Users who want the shortest startup path | **Recommended** |
-| Local source mode | Linux x86_64 / aarch64, macOS 13+ x64 / arm64, Windows x64 (WSL 2) | macOS users, development, source changes | Recommended |
-| Docker | Linux x86_64 / aarch64, macOS (Docker Desktop or an existing Docker engine), Windows (Docker Desktop) | Existing container environments and operational isolation | As needed |
+| Prepackaged single file | glibc-based Linux x86_64 / aarch64, Windows x64 (WSL 2 with a glibc-based distribution, experimental) | Users who want the shortest startup path | **Recommended on native Linux** |
+| Local source mode | Linux x86_64 / aarch64, macOS 13+ x64 / arm64, Windows x64 (WSL 2, experimental) | macOS users, development, source changes | Recommended on macOS |
+| Docker | Linux x86_64 / aarch64, macOS (Docker Desktop or an existing Docker engine, experimental), Windows (Docker Desktop, experimental) | Existing container environments and operational isolation | As needed |
+
+macOS Docker and all Windows installation paths are **experimental** because
+Agent behavior there has not been fully validated.
 
 The three paths are independent. Choose one. Once the service is running, return to the [Quick Start](quick-start.md) for model configuration and the first task.
 
@@ -103,11 +106,12 @@ All supported local environments require:
 
 - Node.js 22.19+;
 - pnpm 11.1.2;
-- `python3` 3.9+ on `PATH` (used by `scripts/jiuwenswarm.sh` before uv
-  creates its Python 3.12 environment);
+- `python3` 3.9+;
 - uv 0.9+;
 - Git;
 - curl.
+
+The setup script calls `python3` before uv creates its Python 3.12 environment.
 
 Sandbox requirements differ:
 

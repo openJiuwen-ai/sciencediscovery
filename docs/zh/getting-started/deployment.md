@@ -6,9 +6,12 @@
 
 | 方式 | 支持平台 | 适合谁 | 推荐程度 |
 | --- | --- | --- | --- |
-| 预编译单文件 | 使用 glibc 的 Linux x86_64 / aarch64、Windows x64（使用 glibc 发行版的 WSL 2） | 想最快启动的普通用户 | **推荐** |
-| 本地源码模式 | Linux x86_64 / aarch64、macOS 13+ x64 / arm64、Windows x64（WSL 2） | macOS 用户、开发调试、需要改源码的用户 | 推荐 |
-| Docker | Linux x86_64 / aarch64；macOS（Docker Desktop 或已有 Docker 引擎）；Windows（Docker Desktop） | 已有容器环境、希望隔离运行和方便运维的用户 | 按需 |
+| 预编译单文件 | 使用 glibc 的 Linux x86_64 / aarch64、Windows x64（使用 glibc 发行版的 WSL 2，实验性） | 想最快启动的普通用户 | **原生 Linux 推荐** |
+| 本地源码模式 | Linux x86_64 / aarch64、macOS 13+ x64 / arm64、Windows x64（WSL 2，实验性） | macOS 用户、开发调试、需要改源码的用户 | macOS 推荐 |
+| Docker | Linux x86_64 / aarch64；macOS（Docker Desktop 或已有 Docker 引擎，实验性）；Windows（Docker Desktop，实验性） | 已有容器环境、希望隔离运行和方便运维的用户 | 按需 |
+
+macOS Docker 和所有 Windows 安装路径目前作为**实验性**方式提供，
+其 Agent 运行效果尚未经过全面验证。
 
 三条路径互相独立，选一条即可。服务启动成功后，后续的模型配置和第一次任务都回到[快速开始](quick-start.md)。
 
@@ -101,11 +104,12 @@ ScienceDiscovery serve [options]
 
 - Node.js 22.19+；
 - pnpm 11.1.2；
-- `python3` 需为 3.9+（可运行 `python3 --version` 检查）。
-  安装脚本会在 uv 创建 Python 3.12 环境前调用它；
+- `python3` 3.9+；
 - uv 0.9+；
 - Git；
 - curl。
+
+安装脚本会在 uv 创建 Python 3.12 环境前调用 `python3`。
 
 沙箱要求：
 

@@ -43,13 +43,13 @@ chmod +x ./ScienceDiscovery
 Both macOS x64 and arm64 are supported on macOS 13+. There is no prepackaged
 single-file macOS binary, so this first-run path uses local source mode.
 The sandbox uses the built-in Seatbelt mechanism; Bubblewrap is not required.
-For Docker on macOS, see the [deployment guide](deployment.md).
+For the experimental Docker path on macOS, see the [deployment guide](deployment.md).
 
 Make sure the machine has:
 
 - Node.js 22.19+;
 - pnpm 11.1.2;
-- `python3` 3.9+ on `PATH`;
+- `python3` 3.9+;
 - uv 0.9+;
 - Git;
 - curl;
@@ -75,7 +75,9 @@ After the project has already been built, later starts can use:
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
-### Windows: use WSL 2 or Docker Desktop
+### Windows: use WSL 2 or Docker Desktop (experimental)
+
+Agent behavior on all Windows installation paths has not been fully validated.
 
 Run the [Linux binary](deployment.md#prepackaged-single-file-deployment-linux)
 or [local source mode](deployment.md#local-source-mode-linux--macos) inside a
