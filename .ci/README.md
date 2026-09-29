@@ -56,10 +56,12 @@ receive live credentials. Nothing here dispatches a paid run during development.
 Configure the GitHub environment `nightly-research`:
 
 - Variables: `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_JUDGE_BASE_URL`, `E2E_JUDGE_MODEL`.
-- Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`.
-- Manual BiomniBench runs additionally require `HF_TOKEN` from an account that
-  accepted the dataset terms. Set `CI_PREPARE_BIOMNI=1` (the preparation script's
-  default) to download only the two tasks' CSVs, instructions and rubrics.
+- Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`.
+- Nightly retains the Biomni evaluation, timeout, judge and `HF_TOKEN` settings
+  for later restoration. Manual BiomniBench runs require `HF_TOKEN` from an
+  account that accepted the dataset terms. Set `CI_PREPARE_BIOMNI=1` (the
+  preparation script's default) to download only the two tasks' CSVs,
+  instructions and rubrics.
   Nightly sets `CI_PREPARE_BIOMNI=0` while these cases are quarantined.
 - The DRB evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`;
   BiomniBench inputs are verified against committed blob hashes before model use.
