@@ -73,7 +73,7 @@ scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
-### Windows：使用 WSL 2 或 Docker Desktop（实验性）
+### Windows：使用 WSL 2 或 Docker（实验性）
 
 所有 Windows 安装路径下的 Agent 运行效果尚未经过全面验证。
 

@@ -165,10 +165,12 @@ Docker 适合已经使用容器运维、希望通过容器隔离服务运行环�
 
 ### 前置条件
 
-- Linux x86_64 或 aarch64；macOS 使用 Docker Desktop 或已有 Docker 引擎；
+- Linux x86_64 或 aarch64；macOS 使用 Docker Desktop 时请核对其
+  [当前系统要求](https://docs.docker.com/desktop/setup/install/mac-install/#system-requirements)，
+  也可以使用已有的 Docker 引擎；
   Windows 使用 Docker Desktop；
 - 非 Desktop 环境需要 Docker Engine 24+ 和 Docker Compose v2.15+；
-- 在 macOS 或 Windows 上使用 Docker Desktop 时，需要 Linux 容器模式；
+- Windows 上的 Docker Desktop 需使用 Linux 容器；
 - Linux 容器内需支持 Bubblewrap 和非特权用户命名空间；
 - 足够的磁盘空间用于镜像、构建缓存和科学计算环境；
 - 构建阶段可访问 Docker Hub、npm、PyPI 等依赖源。

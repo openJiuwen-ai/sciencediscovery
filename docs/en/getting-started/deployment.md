@@ -166,10 +166,12 @@ Docker is intended for users who already operate containerized services and want
 
 ### Prerequisites
 
-- Linux on x86_64 or aarch64, macOS with Docker Desktop or an existing Docker engine,
+- Linux on x86_64 or aarch64, macOS with Docker Desktop (check its
+  [current macOS requirements](https://docs.docker.com/desktop/setup/install/mac-install/#system-requirements))
+  or an existing Docker engine,
   or Windows with Docker Desktop;
 - Docker Engine 24+ and Docker Compose v2.15+ for non-Desktop setups;
-- Docker Desktop in Linux container mode when using it on macOS or Windows;
+- Docker Desktop in Linux container mode on Windows;
 - support for Bubblewrap and unprivileged user namespaces inside the Linux container;
 - enough disk space for the image, build cache, and scientific environments;
 - build-time access to Docker Hub, npm, PyPI, and other dependency sources.

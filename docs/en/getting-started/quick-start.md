@@ -75,14 +75,14 @@ After the project has already been built, later starts can use:
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
-### Windows: use WSL 2 or Docker Desktop (experimental)
+### Windows: use WSL 2 or Docker (experimental)
 
 Agent behavior on all Windows installation paths has not been fully validated.
 
 Run the [Linux binary](deployment.md#prepackaged-single-file-deployment-linux)
 or [local source mode](deployment.md#local-source-mode-linux--macos) inside a
 WSL 2 Linux distribution. Or follow the
-[Docker Desktop steps](deployment.md#docker-deployment-linux-containers)
+[Docker deployment steps](deployment.md#docker-deployment-linux-containers)
 using Linux containers. Once the service starts, continue below.
 
 ### After startup
