@@ -94,7 +94,7 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 
 | [Slack][slack-invite] | 飞书 |
 | :---: | :---: |
-| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack 社区邀请二维码" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery 飞书交流群二维码" width="320"> |
+| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack 社区邀请二维码" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery 飞书交流群二维码" width="200"> |
 
 [slack-invite]: https://join.slack.com/t/sciencediscovery-hq/shared_invite/zt-4avv6fbom-uLrBalsUBR45N9sC2mGO~A
 

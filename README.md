@@ -100,7 +100,7 @@ Join the ScienceDiscovery community on Slack or Feishu to discuss your work and 
 
 | [Slack][slack-invite] | Feishu |
 | :---: | :---: |
-| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack community invite QR code" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery Feishu community invite QR code" width="320"> |
+| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack community invite QR code" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery Feishu community invite QR code" width="200"> |
 
 [slack-invite]: https://join.slack.com/t/sciencediscovery-hq/shared_invite/zt-4avv6fbom-uLrBalsUBR45N9sC2mGO~A
 
