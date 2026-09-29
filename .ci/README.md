@@ -67,6 +67,8 @@ Configure the GitHub environment `nightly-research`:
   preparation script's default) to download only the two tasks' CSVs,
   instructions and rubrics.
   Nightly sets `CI_PREPARE_BIOMNI=0` while these cases are quarantined.
+  The preparation script still requires `HF_TOKEN` and exports the Biomni
+  Python and data paths; only the dataset download is disabled.
 - The DRB evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`;
   BiomniBench inputs are verified against committed blob hashes before model use.
 
