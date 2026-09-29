@@ -118,6 +118,9 @@ Sandbox requirements differ:
 - Linux, including WSL 2: Bubblewrap 0.6+ and unprivileged user namespaces, 0.8+ recommended;
 - macOS: the built-in Seatbelt sandbox; Bubblewrap is not required.
 
+Debian 11's default Bubblewrap package is 0.4.1, below the listed Linux
+requirement. Use a newer package or distribution if it applies to you.
+
 On macOS, use version 13 or newer for local source mode, as required by the
 current [uv platform policy](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions).
 
@@ -174,7 +177,7 @@ Docker is intended for users who already operate containerized services and want
 - Docker Desktop in Linux container mode on Windows;
 - support for Bubblewrap and unprivileged user namespaces inside the Linux container;
 - enough disk space for the image, build cache, and scientific environments;
-- build-time access to Docker Hub, npm, PyPI, and other dependency sources.
+- build-time access to Docker Hub, npm, PyPI, models.dev, and other dependency sources.
 
 ### 1. Prepare configuration and storage
 

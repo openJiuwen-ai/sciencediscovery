@@ -116,6 +116,9 @@ ScienceDiscovery serve [options]
 - Linux（包括 WSL 2）：Bubblewrap 0.6+ 和非特权用户命名空间，推荐 0.8+；
 - macOS：使用系统自带 Seatbelt，不需要 Bubblewrap。
 
+Debian 11 默认提供的 Bubblewrap 为 0.4.1，低于上面的 Linux 版本要求。
+如果使用该系统，请换用较新的软件包或发行版。
+
 macOS 本地源码模式请使用 13 或更新版本，参见当前的
 [uv 平台支持政策](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions)。
 
@@ -173,7 +176,7 @@ Docker 适合已经使用容器运维、希望通过容器隔离服务运行环�
 - Windows 上的 Docker Desktop 需使用 Linux 容器；
 - Linux 容器内需支持 Bubblewrap 和非特权用户命名空间；
 - 足够的磁盘空间用于镜像、构建缓存和科学计算环境；
-- 构建阶段可访问 Docker Hub、npm、PyPI 等依赖源。
+- 构建阶段可访问 Docker Hub、npm、PyPI、models.dev 等依赖源。
 
 ### 1. 准备配置和数据目录
 
