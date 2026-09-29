@@ -24,6 +24,10 @@ The three paths are independent. Choose one. Once the service is running, return
 - at least one model provider API key.
 
 On Windows, run the commands in this section inside your WSL 2 Linux distribution.
+Keep the downloaded file in the distribution's Linux filesystem, such as your home directory.
+If you downloaded it in a Windows browser, open your WSL 2 Linux terminal
+(for example, Ubuntu) and run `cd ~ && explorer.exe .` there. Windows File
+Explorer opens your Linux home directory; copy the download into it.
 
 Install Bubblewrap:
 
@@ -106,6 +110,9 @@ Sandbox requirements differ:
 ### Clone and start
 
 On Windows, run these commands inside your WSL 2 Linux distribution.
+In WSL 2, clone into the distribution's Linux filesystem, such as your home directory,
+rather than under `/mnt/c`. Dependency installation is much faster there, and
+Linux file permissions behave as expected. Run `cd ~` before the commands below.
 
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
@@ -147,7 +154,7 @@ Docker is intended for users who already operate containerized services and want
 
 - Linux on x86_64 or aarch64, macOS with Docker Desktop or an existing Docker engine,
   or Windows with Docker Desktop;
-- Docker Engine 24+ and Docker Compose v2 for non-Desktop setups;
+- Docker Engine 24+ and Docker Compose v2.15+ for non-Desktop setups;
 - Docker Desktop in Linux container mode when using it on macOS or Windows;
 - support for Bubblewrap and unprivileged user namespaces inside the Linux container;
 - enough disk space for the image, build cache, and scientific environments;
@@ -162,8 +169,16 @@ git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
 ```
 
-On Windows, copy `.env.docker.example` to `.env` and create `data/`
-in the repository root before starting the service.
+On Windows, use PowerShell in the repository root:
+
+```powershell
+Copy-Item .env.docker.example .env
+New-Item -ItemType Directory -Force data
+```
+
+On Windows, Docker Desktop must be running Linux containers. Its WSL 2 engine is normally
+enabled by default; check [Docker's WSL 2 settings](https://docs.docker.com/desktop/features/wsl/)
+if Docker reports that it cannot start Linux containers.
 
 On Linux or macOS, use a Unix shell in the repository root:
 
@@ -194,10 +209,14 @@ Check the service:
 
 ```text
 docker compose ps
+docker compose exec sciencediscovery curl -fsS http://127.0.0.1:4310/health
 ```
 
-Open <http://127.0.0.1:4310/health> in a browser.
-A healthy installation reports top-level `status: ok`.
+You can also open <http://127.0.0.1:4310/health> in a browser.
+Top-level `status: ok` confirms that the API can reach the Runner. It does not
+prove that the code-execution sandbox works. After signing in, run the small
+Python calculation in the [Quick Start](quick-start.md#3-run-your-first-scientific-task)
+to check that part of the installation.
 
 If it reports `degraded`, inspect logs first:
 
@@ -264,7 +283,10 @@ Run:
 curl -fsS http://127.0.0.1:4310/health
 ```
 
-A `degraded` status usually means the code-execution side did not start correctly. Check the startup log and confirm the sandbox prerequisites are available.
+A `degraded` status means the API cannot reach the Runner. Check the startup log.
+On Linux or WSL 2, a warning containing `could not build a sandbox` means code
+execution will fail, even when `/health` reports `ok`. Follow the sandbox steps
+below in that case.
 
 ### Linux reports missing `bwrap`
 
@@ -276,7 +298,30 @@ sudo apt-get install -y bubblewrap
 sudo dnf install -y bubblewrap
 ```
 
-If Bubblewrap is installed but still fails, the host may restrict unprivileged user namespaces. See [Sandbox execution](../developer-docs/sandbox-execution.md).
+If Bubblewrap is installed but still fails, follow the sandbox checks below.
+
+### Bubblewrap is installed, but code execution fails
+
+If the startup log says `could not build a sandbox`, check the error before
+changing system settings. On Linux or inside WSL 2, run:
+
+```bash
+bwrap --version
+sysctl kernel.unprivileged_userns_clone
+sysctl kernel.apparmor_restrict_unprivileged_userns
+```
+
+A missing sysctl key is normal on some kernels. If `kernel.unprivileged_userns_clone`
+exists and is `0`, unprivileged user namespaces are disabled on that host.
+Ask the host administrator to enable them before retrying.
+If the AppArmor key is `1` and the error is a permission denial, check whether
+AppArmor is active with `sudo aa-status`. On Ubuntu 24.04+, use a bwrap profile
+only when this restriction is present; see
+[Ubuntu's AppArmor guidance](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007#define-bwrap-profile).
+WSL 2 installations do not all use the same kernel policy. Enable systemd only
+if your chosen profile-loading method needs `systemctl` and it is unavailable;
+see [Microsoft's WSL instructions](https://learn.microsoft.com/en-us/windows/wsl/systemd/).
+See [Sandbox execution](../developer-docs/sandbox-execution.md) for the probe details.
 
 ### macOS reports Seatbelt is unavailable
 
@@ -296,9 +341,20 @@ Logs are stored under `logs/` in the data directory by default. See the [configu
 
 ## Docker FAQ
 
+### Compose rejects `systempaths=unconfined`
+
+Run `docker compose version`. This option requires Compose v2.15+.
+Update the Compose plugin, or update Docker Desktop if it supplies Compose.
+
 ### `data/` is not writable
 
 Make sure `data/` exists before `docker compose up`.
+If the logs show a permission error, test the bind mount from inside a container:
+
+```text
+docker compose run --rm --entrypoint sh sciencediscovery -c 'id; ls -ld /app/data; touch /app/data/.write-test && rm /app/data/.write-test'
+```
+
 On Linux or macOS, use a Unix shell to check that uid/gid match the `.env` configuration:
 
 ```bash
@@ -306,6 +362,14 @@ ls -ld data
 id -u
 id -g
 ```
+
+On Windows, check that your account can write to the host `data/` directory
+and that Docker Desktop can share it. Windows accounts do not have Linux uid/gid
+values to enter in `.env`. If the Windows bind mount remains unwritable, move the
+checkout into a WSL 2 distribution's Linux filesystem, enable Docker Desktop's
+[WSL integration](https://docs.docker.com/desktop/features/wsl/#enable-docker-in-a-wsl-2-distribution),
+and run Compose there. Then use that Linux user's `id -u` and `id -g` values
+in `.env` and create `data/` as that user.
 
 ### The container is running but `/health` is `degraded`
 
@@ -315,7 +379,12 @@ Inspect:
 docker compose logs --tail=200
 ```
 
-A common cause is missing host support for the sandbox capabilities required inside the container.
+Check the Runner startup error and the `data/` mount first. A sandbox failure
+can also occur while `/health` remains `ok`.
+
+If `/health` is `ok` but a code task fails, inspect the logs for
+`could not build a sandbox` and check the Linux-container requirements above.
+On Windows, check Docker Desktop and WSL updates if its sandbox probe fails.
 
 ### The model or external resources are unreachable
 

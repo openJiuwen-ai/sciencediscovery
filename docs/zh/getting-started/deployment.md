@@ -24,6 +24,10 @@
 - 至少一个模型服务商 API Key。
 
 Windows 用户请在 WSL 2 Linux 发行版中执行本节命令。
+请将下载的文件放在发行版的 Linux 文件系统中，例如用户主目录。
+如果文件由 Windows 浏览器下载，先打开 WSL 2 的 Linux 终端（例如 Ubuntu），
+在其中运行 `cd ~ && explorer.exe .`。Windows 文件资源管理器会打开
+Linux 用户主目录，再将下载文件复制进去。
 
 安装 Bubblewrap：
 
@@ -106,6 +110,9 @@ ScienceDiscovery serve [options]
 ### 获取源码并启动
 
 Windows 用户请在 WSL 2 Linux 发行版中执行以下命令。
+在 WSL 2 中，请将仓库克隆到发行版的 Linux 文件系统（如用户主目录），
+不要放在 `/mnt/c` 下。这样安装依赖更快，Linux 文件权限也能按预期工作。
+执行下方命令前，先运行 `cd ~`。
 
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
@@ -147,7 +154,7 @@ Docker 适合已经使用容器运维、希望将运行环境与宿主隔离的�
 
 - Linux x86_64 或 aarch64；macOS 使用 Docker Desktop 或已有 Docker 引擎；
   Windows 使用 Docker Desktop；
-- 非 Desktop 环境需要 Docker Engine 24+ 和 Docker Compose v2；
+- 非 Desktop 环境需要 Docker Engine 24+ 和 Docker Compose v2.15+；
 - 在 macOS 或 Windows 上使用 Docker Desktop 时，需要 Linux 容器模式；
 - Linux 容器内需支持 Bubblewrap 和非特权用户命名空间；
 - 足够的磁盘空间用于镜像、构建缓存和科学计算环境；
@@ -162,8 +169,16 @@ git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
 ```
 
-Windows 用户在仓库根目录将 `.env.docker.example` 复制为 `.env`，
-并创建 `data/` 目录，然后再启动服务。
+Windows 用户在仓库根目录打开 PowerShell，执行：
+
+```powershell
+Copy-Item .env.docker.example .env
+New-Item -ItemType Directory -Force data
+```
+
+Windows 上的 Docker Desktop 需运行 Linux 容器。WSL 2 后端通常默认启用；
+如果 Docker 提示无法启动 Linux 容器，请检查
+[Docker 的 WSL 2 设置](https://docs.docker.com/desktop/features/wsl/)。
 
 Linux 和 macOS 用户在仓库根目录的 Unix Shell 中执行：
 
@@ -194,10 +209,13 @@ docker compose up -d
 
 ```text
 docker compose ps
+docker compose exec sciencediscovery curl -fsS http://127.0.0.1:4310/health
 ```
 
-在浏览器中打开 <http://127.0.0.1:4310/health>。
-正常情况下，健康接口的顶层 `status` 应为 `ok`。
+也可以在浏览器中打开 <http://127.0.0.1:4310/health>。
+顶层 `status: ok` 表示 API 能连接 Runner，但不能证明代码执行沙箱可用。
+登录后，请运行[快速开始](quick-start.md#3-完成第一次科研任务)中的小型 Python 计算，
+确认代码执行也正常。
 
 如果状态为 `degraded`，先查看日志：
 
@@ -264,7 +282,10 @@ ssh -N -L 4310:127.0.0.1:4310 <user>@<remote-host>
 curl -fsS http://127.0.0.1:4310/health
 ```
 
-`degraded` 通常表示代码执行侧没有正常启动。检查启动日志，并确认沙箱依赖满足要求。
+`degraded` 表示 API 无法连接 Runner，请先检查启动日志。
+在 Linux 或 WSL 2 中，即使 `/health` 返回 `ok`，
+若日志含 `could not build a sandbox`，代码执行仍会失败；
+此时按下面的沙箱步骤排查。
 
 ### Linux 提示缺少 `bwrap`
 
@@ -276,7 +297,28 @@ sudo apt-get install -y bubblewrap
 sudo dnf install -y bubblewrap
 ```
 
-如果已经安装但仍失败，可能是宿主禁止无特权用户命名空间。详细机制见[沙箱执行设计](../developer-docs/sandbox-execution.md)。
+如果已安装但仍失败，请按下节检查沙箱。
+
+### Bubblewrap 已安装，但代码执行失败
+
+如果启动日志包含 `could not build a sandbox`，先查看具体错误，
+再决定是否修改系统设置。在 Linux 或 WSL 2 内执行：
+
+```bash
+bwrap --version
+sysctl kernel.unprivileged_userns_clone
+sysctl kernel.apparmor_restrict_unprivileged_userns
+```
+
+某些内核没有其中一个 sysctl 键，这是正常情况。
+若 `kernel.unprivileged_userns_clone` 存在且为 `0`，说明宿主禁用了非特权用户命名空间。
+请让宿主系统管理员启用后重试。
+若 AppArmor 键为 `1`，且报错为权限不足，先用 `sudo aa-status` 确认 AppArmor 是否启用。
+Ubuntu 24.04 及以后版本仅在该限制实际生效时配置 bwrap profile，
+操作可参考 [Ubuntu 的 AppArmor 说明](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007#define-bwrap-profile)。
+不同 WSL 2 环境的内核策略可能不同。只有所选 profile 加载方式需要 `systemctl` 且当前不可用时，
+才需要按[微软的 WSL 说明](https://learn.microsoft.com/zh-cn/windows/wsl/systemd/)启用 systemd。
+探针机制见[沙箱执行设计](../developer-docs/sandbox-execution.md)。
 
 ### macOS 提示 Seatbelt 不可用
 
@@ -296,9 +338,20 @@ ScienceDiscovery 不会在 Seatbelt 不可用时静默降级为无沙箱执行�
 
 ## Docker 常见问题
 
+### Compose 拒绝 `systempaths=unconfined`
+
+先运行 `docker compose version`。该选项需要 Compose v2.15+。
+请更新 Compose 插件；若使用 Docker Desktop，则更新 Docker Desktop。
+
 ### `data/` 不可写
 
 先确认 `data/` 在 `docker compose up` 前已创建。
+如果日志提示权限不足，从容器内测试挂载目录：
+
+```text
+docker compose run --rm --entrypoint sh sciencediscovery -c 'id; ls -ld /app/data; touch /app/data/.write-test && rm /app/data/.write-test'
+```
+
 在 Linux 或 macOS 的 Unix Shell 中，还可以检查 uid/gid 是否与 `.env` 配置一致：
 
 ```bash
@@ -306,6 +359,13 @@ ls -ld data
 id -u
 id -g
 ```
+
+Windows 用户先确认当前账户对宿主 `data/` 目录有写权限，
+且 Docker Desktop 可以共享该目录。Windows 账户没有可填入 `.env` 的 Linux uid/gid。
+如果 Windows 目录挂载后仍不可写，可将仓库移到 WSL 2 发行版的 Linux 文件系统，
+开启 Docker Desktop 的 [WSL 集成](https://docs.docker.com/desktop/features/wsl/#enable-docker-in-a-wsl-2-distribution)，
+在 WSL 中运行 Compose。此时用该 Linux 用户的 `id -u`、`id -g` 值设置 `.env`，
+并由该用户创建 `data/`。
 
 ### 容器启动了，但 `/health` 是 `degraded`
 
@@ -315,7 +375,11 @@ id -g
 docker compose logs --tail=200
 ```
 
-常见原因是宿主不支持容器内的沙箱能力。
+先检查 Runner 的启动错误和 `data/` 挂载。沙箱失败时，`/health` 也可能仍为 `ok`。
+
+如果 `/health` 为 `ok`，但代码任务失败，请检查日志中是否有
+`could not build a sandbox`，并核对前述 Linux 容器要求。
+Windows 用户若发现沙箱探针失败，请检查 Docker Desktop 和 WSL 是否需要更新。
 
 ### 模型或外部资源无法访问
 

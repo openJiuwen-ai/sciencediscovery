@@ -73,13 +73,25 @@ After the project has already been built, later starts can use:
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
+### Windows: use WSL 2 or Docker Desktop
+
+Run the [Linux binary](deployment.md#prepackaged-single-file-deployment-linux)
+or [local source mode](deployment.md#local-source-mode-linux--macos) inside a
+WSL 2 Linux distribution. Or follow the
+[Docker Desktop steps](deployment.md#docker-deployment-linux-containers)
+using Linux containers. Once the service starts, continue below.
+
 ### After startup
 
-On both Linux and macOS, a successful startup prints an `Open to sign in` URL in the terminal. Open it in your browser to enter ScienceDiscovery.
+On all three systems, a successful startup prints an `Open to sign in` URL
+in the terminal or Docker logs. Open it in your browser to enter ScienceDiscovery.
 
-Keep the startup terminal running. Closing it or pressing Ctrl-C stops the service.
+For binary and local source mode, keep the startup terminal running.
+Closing it or pressing Ctrl-C stops the service. Docker runs in the background.
 
-If no sign-in URL appears, the browser cannot connect, or startup reports an error, see [first-run troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode).
+If no sign-in URL appears, the browser cannot connect, or startup reports an error,
+see [binary and source troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode)
+or the [Docker FAQ](deployment.md#docker-faq), as appropriate.
 
 > For Docker, air-gapped environments, Linux source builds, and complete deployment details, see the [deployment guide](deployment.md).
 

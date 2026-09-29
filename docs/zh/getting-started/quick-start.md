@@ -72,13 +72,24 @@ scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
+### Windows：使用 WSL 2 或 Docker Desktop
+
+可以在 WSL 2 Linux 发行版中运行 [Linux 预编译版](deployment.md#预编译单文件部署linux)
+或[本地源码模式](deployment.md#本地源码模式linux--macos)；
+也可以使用 Docker Desktop，按 [Docker 部署步骤](deployment.md#docker-部署linux-容器)
+运行 Linux 容器。服务启动后，继续阅读下文。
+
 ### 启动成功后
 
-无论使用 Linux 还是 macOS，启动完成后终端都会打印一个 `Open to sign in` 链接。用浏览器打开它即可进入 ScienceDiscovery。
+在三个系统上，启动成功后终端或 Docker 日志会显示 `Open to sign in` 链接。
+用浏览器打开它即可进入 ScienceDiscovery。
 
-先不要关掉启动终端；关闭它或按 Ctrl-C 会停止服务。
+使用预编译版或源码模式时，不要关掉启动终端；关闭它或按 Ctrl-C 会停止服务。
+Docker 服务在后台运行。
 
-如果没有看到登录链接、浏览器无法进入界面，或启动过程报错，请查看[首次启动排障](deployment.md#二进制与本地模式的首次启动排障)。
+如果没有看到登录链接、浏览器无法进入界面，或启动过程报错，
+请按部署方式查看[二进制与源码模式排障](deployment.md#二进制与本地模式的首次启动排障)
+或 [Docker 常见问题](deployment.md#docker-常见问题)。
 
 > Docker、离线环境、Linux 源码构建以及更完整的部署说明见[部署指南](deployment.md)。
 
