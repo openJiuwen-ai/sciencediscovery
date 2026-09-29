@@ -61,7 +61,10 @@ Alternatively set `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_LLM_TOKEN` instead o
 registered model ID. Playwright `--grep BiomniBench-da-13-3` selects one task
 locally. CI discovers both from source tags, independent of environment filters.
 `E2E_KEEP_RESEARCH_RECORDS=1` preserves application records. Both real cases
-belong to daily CI, never to the PR gate; daily enables rubric judging.
+are temporarily quarantined from daily CI while their sandbox environment and
+long-running literature searches are investigated. They remain manually
+runnable through the command above and never enter the PR gate; manual runs
+may enable rubric judging.
 Run timeout defaults to 30 minutes; override with `E2E_BIOMNI_RUN_TIMEOUT_MS`.
 The runner cancels timed-out tasks; there is no automatic retry or monetary cap.
 

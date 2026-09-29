@@ -27,7 +27,7 @@ test('Docker and binaries build patched Swarm; service start only verifies it', 
   assert.doesNotMatch(start, /apply_compatibility_patches/);
 });
 
-test('PR gates hermetic UT/ST/mock and daily adds every real E2E; release spends no model tokens', () => {
+test('PR gates hermetic UT/ST/mock and daily adds eligible real E2E; release spends no model tokens', () => {
   for (const category of ['ut','st','e2e']) for (const model of ['none','mock','real']) {
     const tags=normalizeTags([`category:${category}`,`model:${model}`,'os:linux','arch:amd64']);
     assert.equal(compileSelector(profiles.pr.selector)(tags), model !== 'real');
@@ -37,6 +37,12 @@ test('PR gates hermetic UT/ST/mock and daily adds every real E2E; release spends
     const matches = Object.entries(slices).filter(([name,selector])=>name!=='shared'&&compileSelector(selector)(tags));
     if(model !== 'real' || category === 'e2e') assert.deepEqual(matches.map(([name])=>name),[expected]);
   }
+});
+
+test('daily excludes quarantined real journeys before freezing the plan', () => {
+  const quarantined = normalizeTags(['category:e2e', 'model:real', 'judge:llm', 'os:linux', 'arch:amd64', 'status:quarantined']);
+  assert.equal(compileSelector(profiles.daily.selector)(quarantined), false);
+  assert.equal(compileSelector('category:e2e and model:real and status:quarantined')(quarantined), true);
 });
 
 test('OR-ed daily policy cannot leak UT identities into its real E2E slice', () => {

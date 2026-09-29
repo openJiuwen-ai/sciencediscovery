@@ -59,6 +59,7 @@
       "values": [
         "reviewed",
         "external",
+        "quarantined",
         "legacy",
         "unreviewed"
       ],
