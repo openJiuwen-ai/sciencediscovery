@@ -28,6 +28,7 @@ import type {
 import type { ApiClient } from "./api.js";
 import { translate, useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, TrashIcon } from "./icons.js";
+import { addImportPreset, loadImportPresets, type SkillGitImportPreset } from "./skill-import-presets.js";
 import { createSkillFolderArchive } from "./skill-folder-import.js";
 import { SkillWorkspaceDialog } from "./SkillWorkspaceDialog.js";
 
@@ -239,6 +240,12 @@ function SkillCatalogManager({
   const [gitLinkNotice, setGitLinkNotice] = useState<string>();
   const [gitInspection, setGitInspection] = useState<GitSkillRepositoryInspection>();
   const [gitSelected, setGitSelected] = useState<string[]>([]);
+  const [quickImportEnabled, setQuickImportEnabled] = useState(false);
+  const [importPresets, setImportPresets] = useState<SkillGitImportPreset[]>([]);
+  const [quickImportConfirm, setQuickImportConfirm] = useState(false);
+  const [quickImportFailOnConflict, setQuickImportFailOnConflict] = useState(true);
+  const [quickImportSelected, setQuickImportSelected] = useState<string[]>([]);
+  const [localNotice, setLocalNotice] = useState<string>();
   const [draftSourceSummary, setDraftSourceSummary] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string>();
@@ -305,6 +312,97 @@ function SkillCatalogManager({
 
   async function refreshReviewDrafts(): Promise<void> {
     setReviewDrafts(await client.listSkillReviewDrafts());
+  }
+
+  useEffect(() => {
+    try {
+      setImportPresets(loadImportPresets(globalThis.localStorage));
+    } catch {
+      // Presets are a convenience; an unavailable storage is not an error.
+    }
+  }, []);
+
+  function applyImportPreset(preset: SkillGitImportPreset): void {
+    setGitImport({ ref: preset.ref ?? "", repositoryUrl: preset.repositoryUrl, subdirectory: preset.subdirectory ?? "" });
+    setGitInspection(undefined);
+    setGitLinkNotice(undefined);
+  }
+
+  function saveCurrentImportPreset(): void {
+    const repositoryUrl = gitImport.repositoryUrl.trim();
+    if (!repositoryUrl) return;
+    try {
+      setImportPresets(addImportPreset(globalThis.localStorage, {
+        label: repositoryUrl,
+        ref: gitImport.ref.trim() || undefined,
+        repositoryUrl,
+        subdirectory: gitImport.subdirectory.trim() || undefined,
+      }));
+    } catch {
+      // Storage unavailable: keep the in-session preset list as-is.
+    }
+  }
+
+  // Bulk publish only handles fresh Skill packages. Updates to installed
+  // Skills have to go through the single-draft `confirmReviewDraft` flow,
+  // because the bulk rollback path does not restore the previous revision.
+  const quickImportCandidates = useMemo(() => (gitInspection?.candidates ?? []).filter((candidate) => candidate.status === "new"), [gitInspection]);
+
+  function openQuickImportConfirm(): void {
+    if (!gitInspection || !quickImportCandidates.length) return;
+    setQuickImportSelected(quickImportCandidates.map((candidate) => candidate.subdirectory));
+    setQuickImportFailOnConflict(true);
+    setQuickImportConfirm(true);
+  }
+
+  async function submitQuickImport(): Promise<void> {
+    if (!gitInspection || !quickImportSelected.length) return;
+    const repositoryUrl = gitInspection.repositoryUrl;
+    setBusy(true);
+    setLocalError(undefined);
+    try {
+      const created = await client.createGitSkillReviewDrafts({
+        commit: gitInspection.commit,
+        ...(gitInspection.ref ? { ref: gitInspection.ref } : {}),
+        repositoryUrl,
+        subdirectories: quickImportSelected,
+      });
+      const published = await client.bulkPublishGitSkillReviewDrafts({
+        draftIds: created.drafts.map((draft) => draft.draftId),
+        onConflict: quickImportFailOnConflict ? "fail" : "filter",
+        ...(repositoryUrl ? { presetId: repositoryUrl } : {}),
+      });
+      try {
+        setImportPresets(addImportPreset(globalThis.localStorage, {
+          label: repositoryUrl,
+          ref: gitInspection.ref,
+          repositoryUrl,
+          subdirectory: gitImport.subdirectory.trim() || undefined,
+        }));
+      } catch {
+        // Storage unavailable: presets stay a session-only convenience.
+      }
+      const imported = created.drafts.length - published.skipped.length;
+      setQuickImportConfirm(false);
+      setAuthoringMode(undefined);
+      setGitInspection(undefined);
+      setGitSelected([]);
+      setDraftSourceSummary(undefined);
+      setLocalNotice(t("skillManager.quickImportImported", {
+        imported,
+        skipped: published.skipped.length,
+        total: created.drafts.length,
+      }));
+      await refreshReviewDrafts();
+      await refreshCatalog();
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : t("skillManager.error.prepareGitUpdates");
+      setLocalError(message);
+      onError(reason instanceof Error ? reason : message);
+      await refreshReviewDrafts().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function openCreate(): void {
@@ -520,11 +618,20 @@ function SkillCatalogManager({
     {reviewDrafts.length ? <section className="skill-review-queue"><span aria-hidden="true" className="skill-review-queue-icon">!</span><div><strong>{t(reviewDrafts.length === 1 ? "skillManager.pendingReviewOne" : "skillManager.pendingReviewMany", { count: reviewDrafts.length })}</strong><p>{t("skillManager.reviewQueueHint")}</p></div><button disabled={busy} onClick={() => openWorkspace(reviewDrafts[0]?.name)} type="button">{t("skillManager.openReviewWorkspace")} <span>{reviewDrafts.length}</span></button></section> : null}
     {authoringMode === "git" ? <form className="skill-authoring-panel skill-git-import-panel" onSubmit={(event) => void inspectGitRepository(event)}>
       <div className="skill-authoring-heading"><div><span className="eyebrow">{t("skillManager.gitEyebrow")}</span><h4>{t("skillManager.gitHeading")}</h4></div>{gitInspection ? <span className="skill-git-commit" title={gitInspection.commit}>{t("skillManager.gitCommitBadge", { hash: gitInspection.commit.slice(0, 12) })}</span> : null}</div>
+      {importPresets.length ? <div className="skill-git-presets"><label><span>{t("skillManager.quickImportPresetLabel")}</span><select aria-label={t("skillManager.quickImportPresetLabel")} defaultValue="" onChange={(event) => { const preset = importPresets.find((candidate) => candidate.repositoryUrl === event.target.value); if (preset) applyImportPreset(preset); event.currentTarget.selectedIndex = 0; }}>
+        <option disabled value="">{t("skillManager.quickImportPresetPlaceholder")}</option>
+        {importPresets.map((preset) => <option key={preset.repositoryUrl} value={preset.repositoryUrl}>{preset.label}{preset.subdirectory ? ` · ${preset.subdirectory}` : ""}</option>)}
+      </select></label><button className="secondary-button" disabled={busy || !gitImport.repositoryUrl.trim()} onClick={saveCurrentImportPreset} type="button">{t("skillManager.quickImportPresetSave")}</button></div> : <div className="skill-git-presets"><button className="secondary-button" disabled={busy || !gitImport.repositoryUrl.trim()} onClick={saveCurrentImportPreset} type="button">{t("skillManager.quickImportPresetSave")}</button></div>}
       <label><span>{t("skillManager.gitUrlLabel")}</span><input autoFocus onBlur={adaptGitLocation} onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, repositoryUrl: event.target.value })); }} placeholder="https://github.com/org/repo/tree/main/skills" required value={gitImport.repositoryUrl} /></label>
       {gitLinkNotice ? <div className="skill-git-link-notice"><span aria-hidden="true">✓</span><div><strong>{t("skillManager.gitLinkAdapted")}</strong><small>{gitLinkNotice}</small></div></div> : null}
       <div className="skill-editor-columns"><label><span>{t("skillManager.gitRefLabel")}</span><input onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, ref: event.target.value })); }} placeholder={t("skillManager.gitRefPlaceholder")} value={gitImport.ref} /></label><label><span>{t("skillManager.gitPathLabel")}</span><input onChange={(event) => { setGitInspection(undefined); setGitLinkNotice(undefined); setGitImport((current) => ({ ...current, subdirectory: event.target.value })); }} placeholder="skills/my-skill" value={gitImport.subdirectory} /></label></div>
       <p>{t("skillManager.gitHelpBefore")}<code>/tree/ref/path</code>{t("skillManager.gitHelpAfter")}</p>
-      {gitInspection ? <fieldset className="skill-git-candidates"><legend>{t("skillManager.gitSelectLegend")}</legend>{gitInspection.candidates.map((candidate) => {
+      <label className="skill-git-quick-toggle"><input checked={quickImportEnabled} onChange={(event) => setQuickImportEnabled(event.target.checked)} type="checkbox" /><span>{t("skillManager.quickImport")}</span><small>{t("skillManager.quickImportHint")}</small></label>
+      {gitInspection && quickImportEnabled ? <div className="skill-git-quick-summary">
+        <button className="primary-button skill-git-quick-button" disabled={busy || !quickImportCandidates.length} onClick={openQuickImportConfirm} type="button">{t(quickImportCandidates.length === 1 ? "skillManager.quickImportButtonOne" : "skillManager.quickImportButtonMany", { count: quickImportCandidates.length, hash: gitInspection.commit.slice(0, 12), repo: gitInspection.repositoryUrl.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "") })}</button>
+        {!quickImportCandidates.length ? <p className="skill-git-quick-note">{t("skillManager.quickImportUnchangedHint")}</p> : null}
+      </div> : null}
+      {gitInspection && !quickImportEnabled ? <fieldset className="skill-git-candidates"><legend>{t("skillManager.gitSelectLegend")}</legend>{gitInspection.candidates.map((candidate) => {
         const selectable = candidate.status === "new" || candidate.status === "update";
         const selected = gitSelected.includes(candidate.subdirectory);
         return <label className={`skill-git-candidate ${candidate.status}`} key={candidate.subdirectory}>
@@ -533,9 +640,27 @@ function SkillCatalogManager({
           <span className={`skill-git-status ${candidate.status}`}>{candidate.status === "update" ? t("skillManager.gitUpdateBadge", { revision: candidate.currentRevision ?? "" }) : candidate.status}</span>
         </label>;
       })}</fieldset> : null}
-      <div className="dialog-actions"><button className="secondary-button" onClick={() => { setAuthoringMode(undefined); setGitInspection(undefined); }} type="button">{t("common.cancel")}</button>{gitInspection ? <><button className="secondary-button" disabled={busy} type="submit">{t("skillManager.scanAgain")}</button><button className="primary-button" disabled={busy || !gitSelected.length} onClick={() => void createGitReviewDrafts()} type="button">{t(gitSelected.length === 1 ? "skillManager.reviewSelectedOne" : "skillManager.reviewSelectedMany", { count: gitSelected.length })}</button></> : <button className="primary-button" disabled={busy} type="submit">{t("skillManager.scanRepository")}</button>}</div>
+      <div className="dialog-actions"><button className="secondary-button" onClick={() => { setAuthoringMode(undefined); setGitInspection(undefined); }} type="button">{t("common.cancel")}</button>{gitInspection ? <><button className="secondary-button" disabled={busy} type="submit">{t("skillManager.scanAgain")}</button>{!quickImportEnabled ? <button className="primary-button" disabled={busy || !gitSelected.length} onClick={() => void createGitReviewDrafts()} type="button">{t(gitSelected.length === 1 ? "skillManager.reviewSelectedOne" : "skillManager.reviewSelectedMany", { count: gitSelected.length })}</button> : null}</> : <button className="primary-button" disabled={busy} type="submit">{t("skillManager.scanRepository")}</button>}</div>
     </form> : null}
+    {quickImportConfirm && gitInspection ? <div className="skill-merge-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setQuickImportConfirm(false); }}>
+      <section aria-label={t("skillManager.quickImportDialogTitle")} aria-modal="true" className="skill-merge-dialog skill-git-quick-dialog" role="dialog">
+        <header><h3>{t("skillManager.quickImportDialogTitle")}</h3><span className="skill-git-commit" title={gitInspection.commit}>{t("skillManager.gitCommitBadge", { hash: gitInspection.commit.slice(0, 12) })}</span></header>
+        <fieldset className="skill-git-candidates skill-git-quick-candidates"><legend>{t("skillManager.gitSelectLegend")}</legend>{gitInspection.candidates.map((candidate) => {
+          const selectable = candidate.status === "new";
+          const selected = quickImportSelected.includes(candidate.subdirectory);
+          const conflicts = candidate.status === "invalid" && candidate.diagnostics.length;
+          return <label className={`skill-git-candidate ${candidate.status}`} key={candidate.subdirectory}>
+            <input checked={selected} disabled={!selectable || busy} onChange={(event) => setQuickImportSelected((current) => event.target.checked ? [...current, candidate.subdirectory] : current.filter((path) => path !== candidate.subdirectory))} type="checkbox" />
+            <span className="skill-git-candidate-copy"><strong>{candidate.name ?? candidate.subdirectory}</strong><small>{candidate.subdirectory}{candidate.description ? ` · ${candidate.description}` : ""}</small>{conflicts ? <em>{t("skillManager.quickImportConflictHint", { name: candidate.name ?? candidate.subdirectory })}</em> : candidate.diagnostics.length ? <em>{t("skillManager.quickImportValidationHint", { detail: candidate.diagnostics.join(" · ") })}</em> : null}</span>
+            <span className={`skill-git-status ${candidate.status}`}>{candidate.status === "update" ? t("skillManager.gitUpdateBadge", { revision: candidate.currentRevision ?? "" }) : candidate.status}</span>
+          </label>;
+        })}</fieldset>
+        <label className="skill-git-quick-conflict-toggle"><input checked={quickImportFailOnConflict} onChange={(event) => setQuickImportFailOnConflict(event.target.checked)} type="checkbox" /><span>{t("skillManager.quickImportConflictLabel")}</span></label>
+        <div className="dialog-actions"><button className="secondary-button" disabled={busy} onClick={() => setQuickImportConfirm(false)} type="button">{t("common.cancel")}</button><button className="primary-button" disabled={busy || !quickImportSelected.length} onClick={() => void submitQuickImport()} type="button">{t("skillManager.quickImportConfirm", { count: quickImportSelected.length })}</button></div>
+      </section>
+    </div> : null}
     {localError ? <p className="skill-manager-error" role="alert">{localError}</p> : null}
+    {localNotice ? <p className="skill-git-quick-notice" role="status">{localNotice}</p> : null}
     <section aria-label={t("skillManager.catalogAria")} className="skill-library-panel">
       <header className="skill-library-heading"><div><strong>{t("skillManager.libraryTitle")}</strong><small>{query ? t("skillManager.resultsCount", { count: visibleSkills.length }) : t("skillManager.availableCount", { count: skills.length })}</small></div><span>{t("skillManager.selectHint")}</span></header>
       <div className="skill-library-list">

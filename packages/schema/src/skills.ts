@@ -115,6 +115,8 @@ export interface SkillGitProvenance {
 
 export interface SkillVersionProvenance {
   git?: SkillGitProvenance;
+  /** Optional free-form audit payload (e.g. quick-import markers). Consumers must treat unknown keys as opaque. */
+  metadata?: Record<string, unknown>;
   sessionId?: string;
   source: SkillVersionSource;
 }
@@ -284,6 +286,26 @@ export interface CreateGitSkillReviewDraftsRequest {
 export interface CreateGitSkillReviewDraftsResponse {
   commit: string;
   drafts: SkillReviewDraftSummary[];
+}
+
+export interface BulkPublishGitSkillReviewDraftsRequest {
+  draftIds: string[];
+  libraryId?: string;
+  /** "fail" (default) aborts the whole commit when any candidate conflicts; "filter" skips conflicted drafts. */
+  onConflict?: "fail" | "filter";
+  presetId?: string;
+}
+
+export interface BulkPublishGitSkillReviewDraftsSkippedDraft {
+  draftId: string;
+  reason: string;
+}
+
+export interface BulkPublishGitSkillReviewDraftsResponse {
+  conflicts: SkillLibraryConflict[];
+  diagnostics: SkillValidationDiagnostic[];
+  skipped: BulkPublishGitSkillReviewDraftsSkippedDraft[];
+  version?: SkillLibraryVersion;
 }
 
 export interface SkillDeletionReference {

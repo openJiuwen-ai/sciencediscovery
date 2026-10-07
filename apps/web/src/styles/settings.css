@@ -85,6 +85,24 @@
 .skill-git-link-notice strong, .skill-git-link-notice small { display: block; }
 .skill-git-link-notice strong { color: var(--success); font-size: 10px; }
 .skill-git-link-notice small { margin-top: 2px; color: var(--text-secondary); font: 9px var(--font-mono); }
+.skill-git-presets { display: flex; align-items: flex-end; gap: 8px; }
+.skill-git-presets > label { flex: 1; }
+.skill-git-presets select { width: 100%; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 7px 9px; color: var(--text-heading); font-size: 11px; }
+.skill-git-quick-toggle { display: grid; grid-template-columns: 16px minmax(0, 1fr); grid-template-rows: auto auto; gap: 3px 9px; align-items: center; border: 1px solid var(--accent-border-soft); border-radius: 10px; background: var(--surface); padding: 9px 11px; cursor: pointer; }
+.skill-git-quick-toggle > input { grid-row: 1; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.skill-git-quick-toggle > span { color: var(--text-heading); font-size: 12px; font-weight: 700; }
+.skill-git-quick-toggle > small { grid-column: 2; color: var(--muted); font-size: 10px; font-weight: 500; line-height: 1.4; }
+.skill-git-quick-summary { display: grid; gap: 6px; }
+.skill-git-quick-button { min-height: 42px; font-size: 12px; }
+.skill-git-quick-note { margin: 0; color: var(--text-secondary); font-size: 10px; }
+.skill-git-quick-notice { margin: 0 0 12px; border: 1px solid var(--success-border); border-radius: 9px; background: var(--success-soft); padding: 9px 11px; color: var(--success); font-size: 11px; font-weight: 650; }
+.skill-git-quick-dialog { width: min(560px, calc(100vw - 48px)); }
+.skill-git-quick-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.skill-git-quick-dialog > header h3 { margin: 0; color: var(--text-heading); font-size: 14px; }
+.skill-git-quick-candidates { max-height: 320px; }
+.skill-git-quick-conflict-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.skill-git-quick-conflict-toggle > input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.skill-git-quick-conflict-toggle > span { color: var(--text-secondary); font-size: 11px; font-weight: 600; }
 .skill-review-queue { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 11px; margin: 0 0 14px; border: 1px solid var(--border); border-left: 3px solid var(--warning-accent); border-radius: 11px; background: var(--surface); padding: 11px 12px; box-shadow: 0 4px 14px rgba(15, 23, 42, .04); }
 .skill-review-queue-icon { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 9px; background: var(--warning-soft); color: var(--warning); font-size: 12px; font-weight: 850; }
 .skill-review-queue strong { color: var(--text-heading); font-size: 12px; }
