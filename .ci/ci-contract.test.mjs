@@ -16,7 +16,7 @@ import { createTest } from "../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +29,7 @@ import {
   workspaceProjects,
 } from "./ci-contract.mjs";
 import * as catalog from "./test-catalog.mjs";
+import { prepareRealE2EResults } from "./prepare-real-e2e-results.mjs";
 import { resultsLabel } from "../test/support/tagged/shared.mjs";
 
 // Repository-local, like the other script tests, so a fixture never lands
@@ -235,6 +236,10 @@ function artifactUploads(workflow) {
     const listed = inline === "|" ? block : [inline];
     return {
       name: step.match(/- name:\s*(.+)/)?.[1] ?? "(unnamed)",
+      artifact: step.match(/^\s+name:\s*(.+)$/m)?.[1],
+      always: /^\s*if:\s*always\(\)\s*$/m.test(step),
+      retention: Number(step.match(/^\s*retention-days:\s*(\d+)/m)?.[1]),
+      missing: step.match(/^\s*if-no-files-found:\s*(\S+)/m)?.[1],
       paths: listed.filter((path) => !path.startsWith("!")),
       excluded: listed.filter((path) => path.startsWith("!")).map((path) => path.slice(1)),
       hidden: /^\s*include-hidden-files:\s*true\s*$/m.test(step),
@@ -291,4 +296,168 @@ test("each layer uploads the coverage its run wrote, whichever profile ran it", 
   }
   // The directory does not depend on the profile: the runner takes none.
   assert.equal(resultsLabel.length, 1);
+});
+
+const scoreUploadPath = ".tmp/real-e2e-results";
+
+test("real E2E uploads only staged scores and keeps complete evidence separately", async () => {
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  let checked = 0;
+  for (const file of (await readdir(directory)).filter((name) => /\.ya?ml$/.test(name))) {
+    const jobs = workflowJobs(await readFile(join(directory, file), "utf8"));
+    for (const [jobId, job] of Object.entries(jobs)) {
+      const uploads = artifactUploads(job);
+      const scores = uploads.filter((upload) => upload.artifact === "real-e2e-results");
+      const evidence = uploads.filter((upload) => upload.artifact === "real-e2e-evidence");
+      if (!scores.length && !evidence.length) continue;
+      const label = `${file}: ${jobId}`;
+      assert.equal(scores.length, 1, `${label}: one score upload required`);
+      assert.equal(evidence.length, 1, `${label}: one diagnostic upload required`);
+      assert.deepEqual(scores[0].paths, [scoreUploadPath]);
+      assert.deepEqual(evidence[0].paths, [".ci-results"]);
+      for (const upload of [...scores, ...evidence]) {
+        assert.equal(upload.always, true, `${label}: upload even when tests fail`);
+        assert.equal(upload.hidden, true, `${label}: hidden result directories must be included`);
+        assert.equal(upload.retention, 7);
+        assert.equal(upload.missing, "warn");
+        assert.deepEqual(upload.excluded, []);
+      }
+      assert.match(job, /- name: Stage real E2E scores\n\s+if: always\(\)\n\s+run: node \.ci\/prepare-real-e2e-results\.mjs/);
+      assert.ok(job.indexOf("run: node .ci/prepare-real-e2e-results.mjs") < job.indexOf("name: real-e2e-results"));
+      checked++;
+    }
+  }
+  assert.ok(checked > 0, "no real E2E uploads checked");
+});
+
+test("mocked E2E keeps the complete HTML and results upload", async () => {
+  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const upload = artifactUploads(workflowJobs(ci).e2e).find((item) => item.artifact === "e2e-results");
+  assert.ok(upload);
+  assert.deepEqual(upload.paths, [".ci-results"]);
+  assert.deepEqual(upload.excluded, []);
+  assert.equal(upload.hidden, true);
+  assert.equal(upload.always, true);
+  assert.equal(upload.missing, "warn");
+  assert.equal(upload.retention, 14);
+});
+
+async function filesBelow(root, relative = "") {
+  const files = [];
+  for (const entry of await readdir(join(root, relative), { withFileTypes: true })) {
+    const path = relative ? `${relative}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...await filesBelow(root, path));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files.sort();
+}
+
+test("the real E2E packaging fixture excludes diagnostics from scores without removing evidence", async (t) => {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "real-e2e-artifacts-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const allowed = [
+    "benchmark-metrics.json",
+    "real-research/e2e/test-results/benchmark-case/benchmark-metrics.json",
+    "real-team/e2e/.hidden-case/team-metrics.json",
+    "evolve/e2e/test-results/evolve-case/evolve-metrics.json",
+    "e2e-real/tagged/plan.json",
+    "e2e-real/tagged/summary.json",
+    "e2e-real/tagged/preflight.json",
+  ].sort();
+  const diagnostics = [
+    "real-research/e2e/test-results/benchmark-case/trace.zip",
+    "real-research/e2e/playwright-report/data/trace.zip",
+    "real-research/e2e/playwright-report/index.html",
+    "real-research/e2e/test-results/child-trajectories.json",
+    "real-team/e2e/test-results/team-children.json",
+    "real-team/stack.log", "e2e-real/run.log", "e2e-real/.hidden-log",
+    "real-research/prompt.txt", "real-research/model-output.json", "real-research/.env",
+    "real-research/not-benchmark-metrics.json", "real-team/team-metrics.json.backup",
+    "evolve/.evolve-metrics.json", "real-team/Team-metrics.json", "e2e-real/tagged/catalog.json",
+    "e2e-real/tagged/nested/plan.json", "e2e-real/tagged/summary.json.log",
+    "other/tagged/plan.json", "summary.json", "preflight.json",
+    "misnamed-directory/benchmark-metrics.json/trace.zip",
+  ];
+  const privateFields = {prompt: "PRIVATE_FIXTURE prompt", delivery: {artifacts: [{text: "PRIVATE_FIXTURE output"}]},
+    tool_errors: [{content: "PRIVATE_FIXTURE error"}], configuration: {token: "PRIVATE_FIXTURE credential"},
+    turns: [{prompt: "PRIVATE_FIXTURE follow-up"}], run: {messages: ["PRIVATE_FIXTURE message"]}};
+  const metadata = {schema_version: 1, integration_status: "passed", started_at: "2026-10-06T21:00:00Z",
+    finished_at: "2026-10-06T21:01:00Z", generation_duration_ms: 60_000};
+  const projected = new Map([
+    ["benchmark-metrics.json", {...metadata, case_id: 58, evaluation: {status: "partial", gating: false,
+      race: {status: "completed", overall_score: 0.72}, fact: {status: "completed", citation_accuracy: 80,
+        verification_coverage: 75, effective_citations: 4}}}],
+    ["real-research/e2e/test-results/benchmark-case/benchmark-metrics.json", {...metadata, case_id: "da-13-3", evaluation: {status: "passed", score: 87}}],
+    ["real-team/e2e/.hidden-case/team-metrics.json", {...metadata, case: "TC-E2E-01", integration: "passed", evaluation: {status: "completed", total_score: 92, gating: false}}],
+    ["evolve/e2e/test-results/evolve-case/evolve-metrics.json", {...metadata, case: "PUCT-COMPRESS",
+      evaluation: {status: "completed", score: 0.61, baseline_gate_score: 0.55, best_gate_score: 0.63},
+      llm_evaluation: {status: "error", total_score: null, gating: false}}],
+    ["e2e-real/tagged/plan.json", {version: 1, profile: "daily", revision: "a".repeat(40), entries: [{id: "case-a"}]}],
+    ["e2e-real/tagged/summary.json", {status: "FAIL", planDigest: "b".repeat(64), planned: 1, executed: 1, passed: 0, failed: 1, skipped: 0,
+      results: [{key: "case-a@linux/amd64", outcome: "FAIL", actualTarget: {os: "linux", arch: "amd64"}}]}],
+    ["e2e-real/tagged/preflight.json", {ok: true, planDigest: "b".repeat(64), problems: []}],
+  ]);
+  const contents = new Map(diagnostics.map(path => [path,
+    path.endsWith("trace.zip") ? Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]) : Buffer.from(JSON.stringify({fixture: path}))]));
+  for (const [path, publicData] of projected) {
+    const raw = structuredClone(publicData);
+    if (path.endsWith("metrics.json")) {
+      Object.assign(raw, privateFields);
+      raw.evaluation.reason = "PRIVATE_FIXTURE judge output";
+      raw.evaluation.judge_calls = [{response: "PRIVATE_FIXTURE response"}];
+      if (raw.evaluation.race) raw.evaluation.race.report = "PRIVATE_FIXTURE article";
+      if (raw.llm_evaluation) raw.llm_evaluation.error = "PRIVATE_FIXTURE credential in error";
+    } else if (path.endsWith("summary.json")) {
+      raw.problems = ["PRIVATE_FIXTURE runtime error"];
+      raw.results[0].errors = ["PRIVATE_FIXTURE assertion output"];
+    }
+    contents.set(path, Buffer.from(JSON.stringify(raw)));
+  }
+  for (const [path, bytes] of contents) {
+    await mkdir(dirname(join(root, ".ci-results", path)), { recursive: true });
+    await writeFile(join(root, ".ci-results", path), bytes);
+  }
+  // A symlink with an allowed name must not copy a log or credential file.
+  await mkdir(join(root, ".ci-results", "linked"));
+  await symlink("../real-research/.env", join(root, ".ci-results", "linked", "team-metrics.json"));
+  await symlink("../real-research", join(root, ".ci-results", "linked", "directory"));
+  // Reruns cannot retain stale files from a previous staging operation.
+  await mkdir(join(root, scoreUploadPath), { recursive: true });
+  await writeFile(join(root, scoreUploadPath, "trace.zip"), "old diagnostic");
+  const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], { cwd: root, encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Staged 7 real E2E score\/plan files/);
+  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const uploads = artifactUploads(workflowJobs(ci)["real-e2e"]);
+  const scoreDirectory = join(root, uploads.find(upload => upload.artifact === "real-e2e-results").paths[0]);
+  const evidenceDirectory = join(root, uploads.find(upload => upload.artifact === "real-e2e-evidence").paths[0]);
+  assert.deepEqual(await filesBelow(scoreDirectory), allowed);
+  assert.deepEqual(await filesBelow(evidenceDirectory), [...contents.keys()].sort());
+  for (const path of allowed) {
+    const text = await readFile(join(scoreDirectory, path), "utf8");
+    assert.deepEqual(JSON.parse(text), projected.get(path));
+    assert.doesNotMatch(text, /PRIVATE_FIXTURE/);
+  }
+  for (const [path, bytes] of contents) assert.deepEqual(await readFile(join(evidenceDirectory, path)), bytes);
+});
+
+test("missing or diagnostic-only real E2E results leave an empty score directory", async (t) => {
+  await mkdir(testRoot, { recursive: true });
+  const root = await mkdtemp(join(testRoot, "real-e2e-empty-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  assert.deepEqual(await prepareRealE2EResults(root), []);
+  assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), []);
+  await mkdir(join(root, ".ci-results"));
+  await writeFile(join(root, ".ci-results", "trace.zip"), "diagnostic");
+  assert.deepEqual(await prepareRealE2EResults(root), []);
+  assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), []);
+  assert.equal(await readFile(join(root, ".ci-results", "trace.zip"), "utf8"), "diagnostic");
+  // Incomplete writes remain diagnostic evidence, not malformed public scores.
+  await writeFile(join(root, ".ci-results", "team-metrics.json"), "PRIVATE_FIXTURE truncated JSON");
+  const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], {cwd: root, encoding: "utf8"});
+  assert.equal(run.status, 0);
+  assert.match(run.stderr, /Skipping an invalid real E2E score/);
+  assert.doesNotMatch(run.stderr + run.stdout, /PRIVATE_FIXTURE/);
+  assert.deepEqual(await filesBelow(join(root, scoreUploadPath)), []);
 });

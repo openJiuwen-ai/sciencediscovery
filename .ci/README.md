@@ -76,9 +76,38 @@ Missing credentials/data/dependencies fail explicitly. No case disappears from
 discovery because an environment variable is absent. The three quarantined
 journeys remain discoverable for explicit local runs but are excluded from the
 daily plan by their `status` tag. Selected skips, missing results and assertion
-failures fail plan accounting. `real-e2e-results` retains
-the plan, per-case metrics, scores and diagnostics even on failure (seven days).
-Treat these artifacts as research data; restrict access appropriately.
+failures fail plan accounting. Real E2E uploads two separate artifacts even on
+failure, both with seven-day retention and `if-no-files-found: warn`:
+
+- `real-e2e-results` is the small dashboard score artifact. Only files whose
+  basename is exactly `benchmark-metrics.json`, `team-metrics.json` or
+  `evolve-metrics.json`, plus `e2e-real/tagged/plan.json`, `summary.json` and
+  `preflight.json`, are staged from `.ci-results` by
+  `.ci/prepare-real-e2e-results.mjs`. Their relative paths are preserved in
+  `.tmp/real-e2e-results`; symlinks and all other files are excluded. This is
+  an allowlist, not a broad `*.json` match: traces, Playwright reports,
+  `child-trajectories.json`, `team-children.json`, stack/run logs, prompts,
+  model output and credential files do not belong in the score artifact.
+  Metric JSON is projected to case identity, integration status, timestamps,
+  duration and numeric evaluation fields (RACE/FACT, rubric, team total,
+  evolve scores and optional LLM total), retaining the dashboard's field
+  names. Embedded prompts, delivery text, judge explanations, tool errors,
+  model configuration and transcripts stay in evidence only. The tagged
+  summary keeps counts and outcomes, excluding free-form errors/problems;
+  the frozen plan and structured preflight are retained. Incomplete JSON is
+  skipped with a content-free warning; valid files still upload.
+- `real-e2e-evidence` retains the complete `.ci-results` directory, including
+  hidden files and diagnostic traces. Download it for failure investigation;
+  do not add this artifact to dashboard collection. Treat evidence as research
+  data and restrict access appropriately. Original metric files are not
+  modified by score staging. New score fields need explicit projection and
+  packaging tests; never widen the upload to arbitrary JSON.
+
+The mocked `e2e-results` artifact is unchanged: the dashboard hosts its HTML
+journey reports and reads its results. If it later exceeds the dashboard's
+80 MiB download limit, split out only diagnostic traces; keep HTML, its linked
+screenshots/resources and results together in `e2e-results`. Do not raise the
+dashboard limit to accommodate diagnostic evidence.
 
 The BiomniBench quarantine can be lifted after the agent sandbox has the
 scientific Python packages and its citation search completes within a reviewed

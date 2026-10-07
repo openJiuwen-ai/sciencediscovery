@@ -151,11 +151,23 @@ jobs:
       - name: Summarize actual planned and executed cases
         if: always()
         run: node .ci/tagged-summary.mjs
-      - name: Upload real E2E evidence
+      - name: Stage real E2E scores
+        if: always()
+        run: node .ci/prepare-real-e2e-results.mjs
+      - name: Upload real E2E results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: real-e2e-results
+          path: .tmp/real-e2e-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload real E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-evidence
           path: .ci-results
           include-hidden-files: true
           if-no-files-found: warn
