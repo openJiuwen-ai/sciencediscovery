@@ -132,10 +132,17 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
     await journey.step("完成后保留灰色可展开记录和产物卡", "完成的工具无框，结果可展开；本轮产物仍有原框且能打开固定版本。",
       async () => {
         expect((await waitForRunTerminal(page, fixture!.session.id, runId)).status).toBe("completed");
-        const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
+        // A finished run is handed from the live timeline it streamed into to its
+        // persisted record, and the record mounts its cards afresh. Whether that
+        // hand-off lands before or after the API reports the run terminal varies
+        // run to run, so the card has to be looked up in the record: one resolved
+        // just before the hand-off is detached just after it, and a detached
+        // element's computed border is "" rather than 0px.
+        const record = page.locator(`.run-timeline[data-run-record="${runId}"]`);
+        const tool = record.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
         await expect(tool).toHaveClass(/process-record/);
         await expect(tool).not.toHaveAttribute("open", "");
-        expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(tool).toHaveCSS("border-top-width", "0px");
         const timeline = tool.locator("xpath=..");
         await expect(timeline.locator(".message.assistant .avatar")).toHaveCount(1);
         await expect(timeline.locator(".message.assistant .message-role")).toHaveCount(1);
@@ -184,7 +191,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
       await tool.locator(":scope > summary").click();
       await expect(tool).not.toHaveAttribute("open", "");
-      expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+      await expect(tool).toHaveCSS("border-top-width", "0px");
       await page.mouse.move(0, 0);
     });
     await journey.step("展开后在数量左侧显示多选图标", "收起只显示总数；展开后多选图标出现在数量左边，切换多选不收起面板。", async () => {

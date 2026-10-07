@@ -4504,6 +4504,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         onOpenSkillReviews={openGeneratedSkillDraftExplorer}
                         onListSkillDrafts={listSkillDrafts}
                         onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)}
+                        recordedRunId={block.runId}
                         references={reportReferences}
                         onToggle={(id, expanded) => setReplayTimelines((current) => {
                           const forSession = current[session.id] ?? {};
