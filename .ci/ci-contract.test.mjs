@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 
@@ -34,6 +34,59 @@ import { resultsLabel } from "../test/support/tagged/shared.mjs";
 // Repository-local, like the other script tests, so a fixture never lands
 // outside the checkout CI cleans up.
 const testRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".tmp", "ci-script-tests");
+
+for (const runtimeKind of ["relative", "absolute"]) {
+  test(`E2E exports one absolute data directory for ${runtimeKind} runtime paths`, async (t) => {
+    await mkdir(testRoot, { recursive: true });
+    const root = await mkdtemp(join(testRoot, "e2e runtime "));
+    t.after(() => rm(root, { force: true, recursive: true }));
+    for (const directory of [".ci", ".e2e/node_modules", "scripts", "test", "bin"]) {
+      await mkdir(join(root, directory), { recursive: true });
+    }
+    await writeFile(join(root, ".ci/run-e2e.sh"), await readFile(join(defaultRepositoryRoot, ".ci/run-e2e.sh")));
+    await writeFile(join(root, ".e2e/package.json"), "{}");
+    await writeFile(join(root, "test/check-e2e-meta.mjs"), "// No browser or metadata collection in this fixture.\n");
+    const executable = (file, body) => writeFile(join(root, file), `#!/usr/bin/env bash\nset -eu\n${body}\n`, { mode: 0o755 });
+    // Exercise the real entry script, replacing only services and external tools.
+    // The stack writes a marker before npm changes cwd, just as the shell fixture does.
+    await executable("scripts/start-stack.sh", `
+mkdir -p "$SCIENCE_DISCOVERY_DATA_DIR"
+printf started > "$SCIENCE_DISCOVERY_DATA_DIR/started.txt"
+printf '%s' "$SCIENCE_DISCOVERY_DATA_DIR" > "$PROBE_STACK"
+exec sleep 30`);
+    await executable("bin/curl", 'test -f "$PROBE_STACK"');
+    await executable("bin/ss", "exit 0");
+    await executable("bin/npm", `
+test "$1" = --prefix
+cd "$2"
+node -e 'const fs = require("node:fs"), path = require("node:path");
+fs.writeFileSync(process.env.PROBE_BROWSER, JSON.stringify({
+  cwd: process.cwd(), data: process.env.SCIENCE_DISCOVERY_DATA_DIR,
+  reports: process.env.E2E_JOURNEY_REPORTS,
+  marker: fs.existsSync(path.resolve(process.env.SCIENCE_DISCOVERY_DATA_DIR, "started.txt"))
+}));'`);
+    const runtime = runtimeKind === "relative" ? ".tmp/runtime with spaces" : join(root, ".tmp/absolute runtime");
+    const result = spawnSync("bash", [join(root, ".ci/run-e2e.sh"), "mocked"], {
+      cwd: root,
+      env: {
+        ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`,
+        CI_E2E_BACKEND: "legacy", CI_E2E_FIXTURE: "standard", CI_E2E_PREPARED: "1", CI_E2E_PREPARE_ONLY: "0",
+        CI_E2E_BROWSERS_DIR: "", CI_E2E_STACK_TIMEOUT_SECONDS: "5",
+        CI_RUNTIME_DIR: runtime, CI_RESULTS_DIR: ".tmp/results with spaces",
+        PROBE_STACK: join(root, "stack-data.txt"), PROBE_BROWSER: join(root, "browser-data.json"),
+      },
+      encoding: "utf8", timeout: 15_000,
+    });
+    assert.equal(result.status, 0, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`);
+    const browser = JSON.parse(await readFile(join(root, "browser-data.json"), "utf8"));
+    assert.equal(browser.cwd, join(root, ".e2e"));
+    assert.ok(isAbsolute(browser.data), "Playwright must not receive a relative data directory");
+    assert.equal(browser.data, resolve(root, runtime, "data"));
+    assert.equal(await readFile(join(root, "stack-data.txt"), "utf8"), browser.data);
+    assert.equal(browser.marker, true, "Playwright must see the marker written by the stack");
+    assert.equal(browser.reports, join(root, ".tmp/results with spaces/e2e-legacy/journey-reports"));
+  });
+}
 
 /** A structured clone of the real catalog that a test can then break. */
 function mutableCatalog() {
