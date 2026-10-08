@@ -449,6 +449,14 @@ local API token, builds and starts its own stack, installs the pinned Chromium,
 and always stops the stack while collecting reports. It never reads
 `E2E_LLM_*` and cannot select the `real` Playwright project.
 
+For local E2E, both `CI_RUNTIME_DIR` and `CI_RESULTS_DIR` accept relative paths,
+for example `CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:e2e`.
+The E2E entry resolves them against the repository root before starting services
+or Playwright. Direct `bash .ci/run-e2e.sh mocked` invocations follow the same
+rule, so npm's `.e2e` working directory cannot move the data or journey reports.
+Absolute paths retain their existing locations. The browser-free path regression
+checks are included in `node --test .ci/ci-contract.test.mjs`.
+
 `E2E_COMMIT_SHA` gives journey reports an immutable revision even when the
 mounted checkout is a linked worktree whose external Git metadata is not
 visible in the container. A regular clone can still resolve its own SHA, but
