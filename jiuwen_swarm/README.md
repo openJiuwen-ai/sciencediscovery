@@ -269,6 +269,21 @@ subagent records. The existing per-run total task limit is unchanged. This is
 not a server-wide concurrency or memory limit: separate sessions have separate
 pools, and Swarm's own native spawn mechanism is outside the platform `task` pool.
 
+### Invalid tool arguments
+
+A task response that finished normally but has a tool call whose arguments do not
+parse is not executed. The gateway withholds every call of that response, appends
+`[invalid_tool_arguments:tool_calls_withheld]` with the tool names and parser
+messages (not the arguments), and finishes it the way it finishes an output-limit
+cut. Swarm's output-recovery boundary then tells the model which call failed and
+asks it to re-issue the call, within the same two extra model calls that output-limit
+recovery allows. The withheld response is not replayed into the history. If the
+model is still producing unparseable arguments after that, or Swarm ends on a
+withheld response, the run fails with `Model returned invalid tool arguments
+(tools: …) after N recovery attempts; gateway request …`, which the run failure
+classifies as `invalid-tool-call`. Swarm housekeeping calls (titles, compaction)
+have no recovery boundary and still fail on invalid arguments.
+
 ### Invalid tool argument diagnostics
 
 Invalid model tool arguments produce a `[model-arguments]` warning with the gateway

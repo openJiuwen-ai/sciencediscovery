@@ -50,7 +50,8 @@ export interface ModelGateway {
   restore<T extends Record<string, unknown>>(message: T): T;
   /** The last model turn served, for what the run's end has to say about it. */
   lastTurn(): { text: string; toolCalls: number; truncated: boolean; recoveryAttempts?: number } | undefined;
-  lastFailure(): { requestId: string; truncated: boolean; tools: string[] } | undefined;
+  /** The last task turn whose tool calls were withheld because their arguments did not parse. */
+  lastFailure(): { requestId: string; truncated: boolean; tools: string[]; recoveryAttempts?: number } | undefined;
   /** Payload-free metadata for active requests; never includes prompts or arguments. */
   diagnostics(): Array<{ id: string; purpose: "task" | "auxiliary"; phase: string; elapsedMs: number;
     upstreamChunks: number; downstreamChunks: number; upstreamIdleMs: number; downstreamIdleMs: number }>;
@@ -119,7 +120,20 @@ const warnTrajectory = (error: unknown) => {
 };
 
 const WITHHELD_TOOLS = "[output_limit:tool_calls_withheld] No tools from this response were executed.";
+// A finished response with unparseable tool arguments is withheld the same way, under its own marker,
+// so Swarm's recovery boundary asks the model to re-issue the call instead of the run ending.
+const INVALID_TOOLS = "[invalid_tool_arguments:tool_calls_withheld] No tools from this response were executed.";
+const RECOVERY_PROMPT = /^\[(?:Output limit|Tool argument) recovery ([12])\/2;/;
 const finishReason = (turn: ModelTurn) => turn.truncated ? "length" : turn.toolCalls.length ? "tool_calls" : "stop";
+/** Which recovery attempt a request is, from the feedback Swarm's recovery boundary appended last. */
+const recoveryAttemptOf = (body: ChatRequest) => {
+  const latest = body.messages?.at(-1);
+  const match = latest?.role === "user" && typeof latest.content === "string" ? latest.content.match(RECOVERY_PROMPT) : null;
+  return match ? Number(match[1]) : undefined;
+};
+/** Tool names and parser messages tell the model what to fix; the raw arguments are not repeated. */
+const invalidNotice = (calls: ModelTurn["toolCalls"]) => `${INVALID_TOOLS} Arguments that are not valid JSON: ${
+  calls.slice(0, 20).map((call) => `${call.name} (${(call.argsParseError ?? "").slice(0, 200)})`).join("; ")}.`;
 const toolCallsOf = (turn: ModelTurn) => turn.toolCalls.map((call, index) => ({
   index, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) },
 }));
@@ -168,11 +182,9 @@ export async function startModelGateway(
   const active = new Map<string, () => ReturnType<ModelGateway["diagnostics"]>[number]>();
   const remember = (turn: ModelTurn, body: ChatRequest) => {
     produced.set(turnKey(turn.assistantMessage), turn.assistantMessage);
-    const latest = body.messages?.at(-1);
-    const recovery = latest?.role === "user" && typeof latest.content === "string"
-      ? latest.content.match(/^\[Output limit recovery ([12])\/2;/) : null;
+    const recovery = recoveryAttemptOf(body);
     last = { text: textOf(turn.assistantMessage.content), toolCalls: turn.toolCalls.length,
-      truncated: turn.truncated === true, ...(recovery ? { recoveryAttempts: Number(recovery[1]) } : {}) };
+      truncated: turn.truncated === true, ...(recovery ? { recoveryAttempts: recovery } : {}) };
     if (turn.truncated) console.warn(`[output-recovery] ${JSON.stringify({ event: "model.output_limit",
       kind: turn.toolCalls.length ? "tool_arguments" : last.text.trim() ? "partial_answer" : "reasoning_only",
       maxTokens: policy.maxTokens, recoveryAttempts: last.recoveryAttempts ?? 0,
@@ -217,15 +229,23 @@ export async function startModelGateway(
     response.on("close", () => { if (!response.writableEnded) controller.abort(); });
     const id = `chatcmpl-${randomUUID()}`;
     if (!auxiliary) lastFailure = undefined;
-    const rejectInvalidArguments = (turn: ModelTurn) => {
-      // Truncated calls are withheld and returned to Swarm for bounded recovery.
-      if (turn.truncated) return;
+    // A call whose arguments do not parse is never executed. Truncated turns have their own recovery;
+    // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping has no such
+    // boundary, so it still fails.
+    const invalidCalls = (turn: ModelTurn) => {
+      if (turn.truncated) return [];
       const invalid = turn.toolCalls.filter(call => call.argsParseError);
-      if (!invalid.length) return;
-      if (!auxiliary) lastFailure = { requestId: id, truncated: false,
-        tools: invalid.map(call => call.name).slice(0, 20) };
-      throw new Error("Model returned invalid tool arguments");
+      if (!invalid.length) return invalid;
+      if (auxiliary) throw new Error("Model returned invalid tool arguments");
+      const recovery = recoveryAttemptOf(body);
+      lastFailure = { requestId: id, truncated: false, tools: invalid.map(call => call.name).slice(0, 20),
+        ...(recovery ? { recoveryAttempts: recovery } : {}) };
+      return invalid;
     };
+    // Reuses the output-limit finish so any Swarm boundary that already holds back a cut response
+    // treats this one the same; the marker tells the recovery which feedback to give.
+    const withheldNotice = (turn: ModelTurn, invalid: ModelTurn["toolCalls"]) =>
+      `${textOf(turn.assistantMessage.content) ? "\n\n" : ""}${invalidNotice(invalid)}`;
     const streamStarted = Date.now();
     let upstreamChunks = 0, downstreamChunks = 0, toolArgumentChars = 0;
     let lastUpstreamAt = streamStarted, lastDownstreamAt = streamStarted, lastLogAt = 0;
@@ -303,17 +323,19 @@ export async function startModelGateway(
         });
         controller.signal.throwIfAborted();
         await recordInvalidArguments(turn, id);
-        rejectInvalidArguments(turn);
+        const invalid = invalidCalls(turn);
         start();
         if (!auxiliary) remember(turn, body);
         if (turn.truncated) {
           if (turn.toolCalls.length) writeDelta({ content: WITHHELD_TOOLS });
+        } else if (invalid.length) {
+          writeDelta({ content: withheldNotice(turn, invalid) });
         } else {
           for (const call of toolCallsOf(turn)) writeDelta({ tool_calls: [call] });
         }
         await record(turn);
         const usage = usageOf(turn);
-        response.write(chunk({}, finishReason(turn), usage ? { usage } : {}));
+        response.write(chunk({}, invalid.length ? "length" : finishReason(turn), usage ? { usage } : {}));
         response.end("data: [DONE]\n\n");
         trace("complete", true);
         return;
@@ -328,15 +350,16 @@ export async function startModelGateway(
       });
       controller.signal.throwIfAborted();
       await recordInvalidArguments(turn, id);
-      rejectInvalidArguments(turn);
+      const invalid = invalidCalls(turn);
       if (!auxiliary) remember(turn, body);
       await record(turn);
       const content = typeof turn.assistantMessage.content === "string" ? turn.assistantMessage.content : textOf(turn.assistantMessage.content);
+      const withheld = turn.truncated && turn.toolCalls.length ? WITHHELD_TOOLS : invalid.length ? withheldNotice(turn, invalid) : "";
       const usage = usageOf(turn);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({
         id, object: "chat.completion", created: Math.floor(Date.now() / 1000), model: endpoint.model,
-        choices: [{ index: 0, finish_reason: finishReason(turn), message: { role: "assistant", content: content + (turn.truncated && turn.toolCalls.length ? WITHHELD_TOOLS : ""), ...(!turn.truncated && turn.toolCalls.length ? { tool_calls: toolCallsOf(turn).map(({ index: _index, ...call }) => call) } : {}) } }],
+        choices: [{ index: 0, finish_reason: invalid.length ? "length" : finishReason(turn), message: { role: "assistant", content: content + withheld, ...(!turn.truncated && !invalid.length && turn.toolCalls.length ? { tool_calls: toolCallsOf(turn).map(({ index: _index, ...call }) => call) } : {}) } }],
         ...(usage ? { usage } : {}),
       }));
     } catch (error) {

@@ -352,6 +352,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         this.emit({ type: "turn_truncated" } as never);
         throw new Error("Swarm ended with an unrecovered output limit");
       }
+      // Nor may a run end on a response whose tool calls were withheld for invalid arguments.
+      if (modelGateway.lastFailure()) throw new Error("Swarm ended on withheld tool calls");
       return {
         finalMessages: [{ role: "user", content: text }, ...transcript.finish(finalText).map((message) => modelGateway.restore(message))] as never,
       };
@@ -363,7 +365,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       const modelFailure = modelGateway.lastFailure();
       if (modelFailure) throw new Error(
         `Model returned invalid tool arguments (tools: ${modelFailure.tools.join(", ") || "unknown"})${modelFailure.truncated
-          ? ` after reaching max_tokens (${policy.maxTokens})` : ""}; gateway request ${modelFailure.requestId}`,
+          ? ` after reaching max_tokens (${policy.maxTokens})` : ""}${modelFailure.recoveryAttempts
+          ? ` after ${modelFailure.recoveryAttempts} recovery attempts` : ""}; gateway request ${modelFailure.requestId}`,
         { cause: error },
       );
       const last = modelGateway.lastTurn();

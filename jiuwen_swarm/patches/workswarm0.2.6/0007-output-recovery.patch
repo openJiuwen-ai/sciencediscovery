@@ -1,12 +1,14 @@
 --- /dev/null
 +++ b/jiuwenswarm/server/runtime/mcp/output_recovery.py
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,110 @@
 +# Copyright (C) 2026 Huawei Technologies Co., Ltd
 +# SPDX-License-Identifier: Apache-2.0
 +"""Bounded output-limit recovery for platform-owned ReAct instances only.
 +
 +The gateway quarantines tool deltas until a non-truncated finish. This second
-+boundary also rejects native truncated tool calls before argument repair.
++boundary also rejects native truncated tool calls before argument repair. A
++finished response whose tool arguments do not parse arrives the same way, held
++back under its own marker, so the model is asked to re-issue the call.
 +"""
 +import json
 +import logging
@@ -16,6 +18,8 @@
 +logger = logging.getLogger(__name__)
 +MAX_RECOVERIES = 2
 +WITHHELD_TOOLS = "[output_limit:tool_calls_withheld]"
++INVALID_TOOLS = "[invalid_tool_arguments:tool_calls_withheld]"
++NOT_EXECUTED = "No tools from this response were executed."
 +
 +
 +class OutputRecoveryExhausted(RuntimeError):
@@ -26,6 +30,51 @@
 +            "priorArtifactsPreserved": True,
 +        }
 +        super().__init__(json.dumps(self.details, sort_keys=True))
++
++
++def _kind(message, content):
++    if INVALID_TOOLS in content:
++        return "invalid_tool_arguments"
++    if message.tool_calls or WITHHELD_TOOLS in content:
++        return "tool_arguments"
++    return "partial_answer" if content.strip() else "reasoning_only"
++
++
++def _feedback(kind, attempt, content):
++    """Guidance for the next attempt. Earlier text is quoted as untrusted, never as a result."""
++    if kind == "invalid_tool_arguments":
++        partial, _, report = content.partition(INVALID_TOOLS)
++        feedback = (
++            f"[Tool argument recovery {attempt + 1}/{MAX_RECOVERIES}; {kind}] "
++            "The previous response called a tool with arguments that are not valid JSON. "
++            "NO tools from that response were executed. Earlier successful operations and artifacts remain valid: "
++            "do not replay them. Re-issue only the call that is still needed, with one valid JSON object as its "
++            "arguments: escape double quotes, backslashes and newlines inside strings. "
++            "For long text, save a short draft or append one small section per call (aim below 2000 characters). "
++            "Prefer existing artifact/file transfer tools over retyping full documents."
++        )
++        report = report.replace(NOT_EXECUTED, "").strip()
++        if report:
++            feedback += "\nGateway report: " + report[:1000]
++        label = "Text of the previous response (its tool calls were not executed):"
++    else:
++        partial = content.replace(WITHHELD_TOOLS, "")
++        feedback = (
++            f"[Output limit recovery {attempt + 1}/{MAX_RECOVERIES}; {kind}] "
++            "The previous response hit its output token limit; it was not a completed answer. "
++            "NO tools from that response were executed. Earlier successful operations and artifacts remain valid: "
++            "do not replay them. Stop expanding the plan and perform ONE small useful action now. "
++            "For long files, save a short draft or append one small section per call (aim below 2000 characters). "
++            "Prefer existing artifact/file transfer tools over retyping full documents. "
++            "If the task is already done, return a brief handoff with artifact references."
++        )
++        label = "Previous unfinished text excerpt (not a completed result):"
++    partial = partial.replace(NOT_EXECUTED, "").strip()
++    if partial:
++        # A bounded excerpt is explicitly untrusted partial output, not
++        # an assistant completion or an instruction to execute.
++        feedback += f"\n{label}\n" + partial[:2000]
++    return feedback
 +
 +
 +def enable_output_recovery(agent):
@@ -48,8 +97,7 @@
 +            if not isinstance(message, AssistantMessage) or str(message.finish_reason).lower() not in {"length", "max_tokens"}:
 +                return message
 +            content = message.content if isinstance(message.content, str) else ""
-+            kind = "tool_arguments" if message.tool_calls or WITHHELD_TOOLS in content else (
-+                "partial_answer" if content.strip() else "reasoning_only")
++            kind = _kind(message, content)
 +            diagnostic = {"kind": kind, "recoveryAttempt": attempt,
 +                          "maxRecoveries": MAX_RECOVERIES, "currentTurnToolsExecuted": False}
 +            logger.warning("[output-recovery] %s", json.dumps(diagnostic, sort_keys=True))
@@ -58,21 +106,7 @@
 +            # Do not insert unfinished tool calls or provider reasoning into the
 +            # replay history. There are no orphan tool IDs to pair or execute.
 +            # Original responses/usage remain in the gateway's trajectory log.
-+            partial = content.replace(WITHHELD_TOOLS, "").strip()
-+            feedback = (
-+                f"[Output limit recovery {attempt + 1}/{MAX_RECOVERIES}; {kind}] "
-+                "The previous response hit its output token limit; it was not a completed answer. "
-+                "NO tools from that response were executed. Earlier successful operations and artifacts remain valid: "
-+                "do not replay them. Stop expanding the plan and perform ONE small useful action now. "
-+                "For long files, save a short draft or append one small section per call (aim below 2000 characters). "
-+                "Prefer existing artifact/file transfer tools over retyping full documents. "
-+                "If the task is already done, return a brief handoff with artifact references."
-+            )
-+            if partial:
-+                # A bounded excerpt is explicitly untrusted partial output, not
-+                # an assistant completion or an instruction to execute.
-+                feedback += "\nPrevious unfinished text excerpt (not a completed result):\n" + partial[:2000]
-+            await context.add_messages(UserMessage(content=feedback))
++            await context.add_messages(UserMessage(content=_feedback(kind, attempt, content)))
 +        raise AssertionError("unreachable")
 +
 +    react._call_model = call

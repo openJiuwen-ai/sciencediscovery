@@ -71,7 +71,7 @@ test("invalid arguments retain private diagnostics without leaking payload into 
   const g = await gateway(streamer);
   try {
     const response = await post(g, { stream: true, messages: [] });
-    assert.match(await response.text(), /Model returned invalid tool arguments/);
+    assert.match(await response.text(), /invalid_tool_arguments:tool_calls_withheld/);
     const entry = JSON.parse(await readFile(file, "utf8"));
     assert.equal(entry.calls[0].rawArguments, raw);
     assert.equal(entry.calls[0].error, "Unexpected private-payload");
@@ -80,9 +80,9 @@ test("invalid arguments retain private diagnostics without leaking payload into 
     assert.match(entry.requestId, /^chatcmpl-/);
     assert.equal((await stat(file)).mode & 0o777, 0o600);
     assert.ok(!warnings.join("").includes("private-payload"));
-    // A logging failure must preserve the original model error.
+    // A logging failure must not change what the run is told.
     process.env.SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE = join(dir, "absent", "invalid.jsonl");
-    assert.match(await (await post(g, { stream: true, messages: [] })).text(), /Model returned invalid tool arguments/);
+    assert.match(await (await post(g, { stream: true, messages: [] })).text(), /invalid_tool_arguments:tool_calls_withheld/);
     assert.ok(warnings.some((line) => line.includes("diagnostic file write failed")));
   } finally {
     await g.close();
@@ -442,6 +442,76 @@ test("truncated responses withhold ALL tools in streaming and unary modes, prese
       assert.ok(payloads.at(-1).usage);
     } finally { await g.close(); }
   }
+});
+
+test("a finished response with unparseable arguments withholds ALL its calls for recovery, in streaming and unary modes", async () => {
+  for (const stream of [false, true]) {
+    let calls = 0;
+    const raw = '{"command":"printf private-payload';
+    const turn = answer({ assistantMessage: { role: "assistant", content: "Writing the report.", tool_calls: [
+      { id: "valid", type: "function", function: { name: "read_file", arguments: '{"path":"notes.md"}' } },
+      { id: "bad", type: "function", function: { name: "run_shell", arguments: raw } },
+    ] }, toolCalls: [
+      { id: "valid", name: "read_file", args: { path: "notes.md" } },
+      { id: "bad", name: "run_shell", args: {}, argsParseError: "Unterminated string in JSON at position 33" },
+    ] });
+    const g = await gateway(async (_e, _p, _h, _t, _policy, _signal, callbacks) => {
+      calls++;
+      callbacks?.onTextDelta?.("Writing the report.");
+      callbacks?.onToolCallDelta?.({ index: 0, id: "valid", name: "read_file", arguments: '{"path":"notes.md"}' });
+      callbacks?.onToolCallDelta?.({ index: 1, id: "bad", name: "run_shell", arguments: raw });
+      return turn;
+    });
+    try {
+      const response = await post(g, { stream, messages: [{ role: "user", content: "go" }] });
+      assert.equal(response.status, 200);
+      const wire = await response.text();
+      const payloads = stream ? wire.split("\n\n").filter(s => s.startsWith("data: {")).map(s => JSON.parse(s.slice(6))) : [JSON.parse(wire)];
+      for (const p of payloads) {
+        assert.equal(p.error, undefined);
+        assert.equal((p.choices[0].delta ?? p.choices[0].message).tool_calls, undefined, "no call of the response may be executed");
+      }
+      assert.equal(payloads.at(-1).choices[0].finish_reason, "length", "Swarm's recovery boundary engages on a withheld response");
+      const content = payloads.map(p => (p.choices[0].delta ?? p.choices[0].message).content ?? "").join("");
+      assert.match(content, /^Writing the report\.\n\n\[invalid_tool_arguments:tool_calls_withheld\] No tools from this response were executed\./);
+      assert.match(content, /run_shell \(Unterminated string in JSON at position 33\)/);
+      assert.doesNotMatch(wire, /private-payload|notes\.md/, "the arguments themselves are not echoed");
+      assert.equal(calls, 1, "the gateway does not retry the model itself");
+      assert.deepEqual(g.lastFailure()?.tools, ["run_shell"]);
+      assert.match(g.lastFailure()?.requestId ?? "", /^chatcmpl-/);
+      assert.equal(g.lastTurn()?.truncated, false);
+      assert.ok(payloads.at(-1).usage);
+    } finally { await g.close(); }
+  }
+});
+
+test("withheld invalid arguments count recovery attempts and clear once a later task turn succeeds", async () => {
+  let count = 0;
+  const g = await gateway(async () => ++count === 1
+    ? answer({ toolCalls: [{ id: "bad", name: "run_shell", args: {}, argsParseError: "bad" }],
+      assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad", type: "function", function: { name: "run_shell", arguments: "{" } }] } })
+    : answer());
+  try {
+    const retry = { messages: [{ role: "user", content: "[Tool argument recovery 2/2; invalid_tool_arguments] Re-issue the call." }] };
+    assert.equal((await post(g, retry)).status, 200);
+    assert.equal(g.lastFailure()?.recoveryAttempts, 2);
+    assert.equal(g.lastTurn()?.recoveryAttempts, 2);
+    assert.equal((await post(g, { messages: [{ role: "user", content: "go" }] })).status, 200);
+    assert.equal(g.lastFailure(), undefined, "a recovered run must not end on a stale failure");
+  } finally { await g.close(); }
+});
+
+test("housekeeping has no recovery boundary, so unparseable arguments there still fail the request", async () => {
+  const g = await gateway(async () => answer({ toolCalls: [{ id: "bad", name: "run_shell", args: {}, argsParseError: "bad" }],
+    assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad", type: "function", function: { name: "run_shell", arguments: "{" } }] } }));
+  try {
+    const response = await fetch(`${g.url}/chat/completions`, { method: "POST", headers: {
+      authorization: `Bearer ${g.token}`, "x-sciencediscovery-model-purpose": "housekeeping",
+    }, body: JSON.stringify({ messages: [] }) });
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /Model returned invalid tool arguments/);
+    assert.equal(g.lastFailure(), undefined, "housekeeping never stands in for the run's own failure");
+  } finally { await g.close(); }
 });
 
 test("recovery diagnostics count feedback but do not mask a later provider error", async () => {

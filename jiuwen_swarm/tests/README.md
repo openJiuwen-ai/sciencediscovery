@@ -266,8 +266,15 @@ Unrecovered partial answers fail rather than appear completed. Existing
 artifacts remain available to the parent; failure diagnostics identify the
 truncation kind, attempts and that current-turn tools were not executed.
 
+A finished response whose tool arguments do not parse reaches the same wrapper:
+the gateway withholds all its calls under `[invalid_tool_arguments:tool_calls_withheld]`
+with the tool names and parser messages, and the wrapper answers with
+`[Tool argument recovery N/2; invalid_tool_arguments]` guidance instead of the
+output-limit guidance. Exhaustion raises the same structured error with
+`"kind": "invalid_tool_arguments"`.
+
 `test_output_recovery.py` covers this boundary and drives the real ReAct loop
 with controlled model responses to verify that only the recovered tool call
-executes. Gateway tests separately cover streaming/unary withholding and usage.
+executes, for both a truncated and an invalid-argument response. Gateway tests separately cover streaming/unary withholding and usage.
 Look for `[output-recovery]` in the Swarm log and `output_recovery_exhausted` in
 the task error. This is a bounded recovery attempt, not a completion guarantee.
