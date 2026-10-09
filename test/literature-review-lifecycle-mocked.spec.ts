@@ -194,6 +194,8 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
         expect(lastUserText(main[1]!.messages)).toContain("run_shell (");
         expect(main[2]!.results.join("\n")).toContain("LR_REISSUED_CALL");
         await expect(page.locator(".message.assistant").last()).toContainText("LR_RECOVERED_FINAL");
+        // The withheld-response notice is for Swarm's recovery boundary, never shown to the user.
+        await expect(page.locator("body")).not.toContainText("tool_calls_withheld");
       } else if (id === "LR-02" || id === "LR-17") {
         // Explicit terminal failure, NOT silent success.
         expect(terminal.status).toBe("failed");
@@ -208,6 +210,7 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
             .toEqual(["[Tool argument recovery 1/2; inv", "[Tool argument recovery 2/2; inv"]);
           expect(terminal.error).toContain("invalid tool arguments (tools: run_shell) after 2 recovery attempts");
           await expect(page.locator("body")).toContainText(/could not be read|参数无法解析/);
+          await expect(page.locator("body")).not.toContainText("tool_calls_withheld");
         } else {
           await expect(page.locator("body")).toContainText(/error|failed|错误|失败/i);
         }
