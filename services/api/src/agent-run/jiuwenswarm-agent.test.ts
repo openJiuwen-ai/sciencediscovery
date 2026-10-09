@@ -1342,6 +1342,18 @@ test("a run whose model re-issues an invalid call after recovery feedback comple
   } finally { await started.close(); }
 });
 
+test("with JiuwenSwarm's own sub-agents, which have no recovery boundary, an invalid call fails its request instead of being withheld", async () => {
+  const { adapter, wires } = swarmAsking([[{ role: "user", content: "go" }]], "failed");
+  const started = await adapter;
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: started.url, subagents: "jiuwenswarm", modelStreamer: async () => invalidTurn })(withRunSubagent());
+    await assert.rejects(agent.execute("go"), /^Error: Model returned invalid tool arguments \(tools: run_shell\); gateway request chatcmpl-/);
+    const [reply = ""] = wires;
+    assert.match(reply, /Model returned invalid tool arguments/);
+    assert.doesNotMatch(reply, /tool_calls_withheld/, "a sub-agent without the boundary would take this for its final answer");
+  } finally { await started.close(); }
+});
+
 test("Swarm ending on a withheld invalid call fails the run instead of completing it", async () => {
   const { adapter } = swarmAsking([[{ role: "user", content: "[Tool argument recovery 2/2; invalid_tool_arguments] Re-issue it." }]], "completed");
   const started = await adapter;

@@ -51,7 +51,7 @@ export interface ModelGateway {
   /** The last model turn served, for what the run's end has to say about it. */
   lastTurn(): { text: string; toolCalls: number; truncated: boolean; recoveryAttempts?: number } | undefined;
   /** The last task turn whose tool calls were withheld because their arguments did not parse. */
-  lastFailure(): { requestId: string; truncated: boolean; tools: string[]; recoveryAttempts?: number } | undefined;
+  lastFailure(): { requestId: string; tools: string[]; recoveryAttempts?: number } | undefined;
   /** Payload-free metadata for active requests; never includes prompts or arguments. */
   diagnostics(): Array<{ id: string; purpose: "task" | "auxiliary"; phase: string; elapsedMs: number;
     upstreamChunks: number; downstreamChunks: number; upstreamIdleMs: number; downstreamIdleMs: number }>;
@@ -152,6 +152,12 @@ export interface ModelGatewayLifecycle {
   progress(): void;
   /** Synchronous admission, before sending a task model request upstream. */
   beforeTurn?(): void;
+  /**
+   * Whether every task request comes from a Swarm instance with the output-recovery boundary
+   * (default true). JiuwenSwarm's own sub-agents share this gateway without it and would take a
+   * withheld response for a final answer, so with them unparseable arguments fail the request.
+   */
+  recoversWithheldCalls?: boolean;
 }
 
 // The pinned Swarm forked compressor retains tool schemas for prefix caching.
@@ -230,16 +236,17 @@ export async function startModelGateway(
     const id = `chatcmpl-${randomUUID()}`;
     if (!auxiliary) lastFailure = undefined;
     // A call whose arguments do not parse is never executed. Truncated turns have their own recovery;
-    // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping has no such
-    // boundary, so it still fails.
+    // a finished task turn is withheld whole for Swarm's recovery boundary. Housekeeping, and runs whose
+    // requests may come from instances without that boundary, still fail the request.
     const invalidCalls = (turn: ModelTurn) => {
       if (turn.truncated) return [];
       const invalid = turn.toolCalls.filter(call => call.argsParseError);
       if (!invalid.length) return invalid;
       if (auxiliary) throw new Error("Model returned invalid tool arguments");
       const recovery = recoveryAttemptOf(body);
-      lastFailure = { requestId: id, truncated: false, tools: invalid.map(call => call.name).slice(0, 20),
+      lastFailure = { requestId: id, tools: invalid.map(call => call.name).slice(0, 20),
         ...(recovery ? { recoveryAttempts: recovery } : {}) };
+      if (lifecycle?.recoversWithheldCalls === false) throw new Error("Model returned invalid tool arguments");
       return invalid;
     };
     // Reuses the output-limit finish so any Swarm boundary that already holds back a cut response
