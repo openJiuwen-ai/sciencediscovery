@@ -501,6 +501,22 @@ test("withheld invalid arguments count recovery attempts and clear once a later 
   } finally { await g.close(); }
 });
 
+test("without a recovery boundary on every requester, unparseable arguments fail the request and name the call", async () => {
+  const controller = new AbortController();
+  const g = await startModelGateway(ENDPOINT, POLICY, controller.signal, async () => answer({
+    toolCalls: [{ id: "bad", name: "run_shell", args: {}, argsParseError: "bad" }],
+    assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad", type: "function", function: { name: "run_shell", arguments: "{" } }] } }),
+  undefined, { progress() {}, recoversWithheldCalls: false });
+  try {
+    for (const stream of [false, true]) {
+      const wire = await (await post(g, { stream, messages: [{ role: "user", content: "go" }] })).text();
+      assert.match(wire, /Model returned invalid tool arguments/);
+      assert.doesNotMatch(wire, /tool_calls_withheld/);
+      assert.deepEqual(g.lastFailure()?.tools, ["run_shell"]);
+    }
+  } finally { await g.close(); }
+});
+
 test("housekeeping has no recovery boundary, so unparseable arguments there still fail the request", async () => {
   const g = await gateway(async () => answer({ toolCalls: [{ id: "bad", name: "run_shell", args: {}, argsParseError: "bad" }],
     assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad", type: "function", function: { name: "run_shell", arguments: "{" } }] } }));

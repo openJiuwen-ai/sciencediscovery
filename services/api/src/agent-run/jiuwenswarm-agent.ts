@@ -331,7 +331,9 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
       trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,
-      { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }) });
+      { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }),
+        // Only the run's own instance has the output-recovery boundary; JiuwenSwarm's sub-agents do not.
+        recoversWithheldCalls: !jiuwenSwarmSubagents });
     const deadlines = new RunDeadlines(this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS,
       this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS, () => {
         this.logGatewayProgress(`${deadlines.expired ?? "unknown"}_deadline_expired`, modelGateway);
@@ -364,8 +366,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       if (this.controller.signal.aborted) throw new Error("Agent run cancelled");
       const modelFailure = modelGateway.lastFailure();
       if (modelFailure) throw new Error(
-        `Model returned invalid tool arguments (tools: ${modelFailure.tools.join(", ") || "unknown"})${modelFailure.truncated
-          ? ` after reaching max_tokens (${policy.maxTokens})` : ""}${modelFailure.recoveryAttempts
+        `Model returned invalid tool arguments (tools: ${modelFailure.tools.join(", ") || "unknown"})${modelFailure.recoveryAttempts
           ? ` after ${modelFailure.recoveryAttempts} recovery attempts` : ""}; gateway request ${modelFailure.requestId}`,
         { cause: error },
       );
