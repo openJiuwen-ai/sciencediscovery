@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
@@ -20,7 +22,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, test } from "node:test";
+
 import { promisify } from "node:util";
 
 import { NO_SANDBOX_NETWORK_ACCESS, type RunnerHealth, type SandboxNetworkAccess } from "@sciencediscovery/schema";
@@ -218,7 +220,7 @@ const FETCH_SCRIPT = "import sys, urllib.request\n"
 
 test("a real sandbox reaches allowed domains through the gateway and nothing else", async (t) => {
   if (!await bwrapAvailable()) {
-    t.skip("bubblewrap is not installed");
+    assert.fail("bubblewrap is not installed");
     return;
   }
   const directory = await scratchDirectory();
@@ -236,7 +238,7 @@ test("a real sandbox reaches allowed domains through the gateway and nothing els
   try {
     await resolveEgressBridge(directory);
   } catch {
-    t.skip("no host Python 3 interpreter for the egress bridge");
+    assert.fail("no host Python 3 interpreter for the egress bridge");
     await gateway.close();
     await new Promise<void>((closed) => target.close(() => closed()));
     return;

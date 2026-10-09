@@ -24,8 +24,10 @@
 // convention for effect-driven components — SSR never runs useEffect) so the
 // chain fetch, the label split, and the reused WebPageDetail card's CAS
 // read-back are all exercised end to end rather than asserted in isolation.
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 

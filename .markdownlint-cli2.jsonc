@@ -1,0 +1,21 @@
+{
+  "globs": [
+    "README.md",
+    "README_zh.md",
+    "CONTRIBUTING.md",
+    "docs/**/*.md"
+  ],
+  "ignores": [
+    "**/node_modules/**"
+  ],
+  "config": {
+    "default": false,
+    "MD001": true,
+    "MD012": {
+      "maximum": 1
+    },
+    "MD031": true,
+    "MD040": true,
+    "MD045": true
+  }
+}

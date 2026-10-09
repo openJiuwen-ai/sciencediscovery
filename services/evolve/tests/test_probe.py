@@ -25,6 +25,8 @@ from typing import Any, List
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.probe import ProbeError, run_probe
 from test_puct_engine import JUDGED_CARD, judged_spec  # noqa: F401 - shared fixtures
 

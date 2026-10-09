@@ -9,6 +9,11 @@ description: >
 
 Project-local skill for **sciencediscovery** on gitcode.com (not under `skills/`).
 
+New issues and pull requests for this repository are **not** filed here. Use
+[`gh`](../github/SKILL.md) against `openJiuwen-ai/sciencediscovery`, and write
+the title and body in English. This skill is for an existing GitCode mirror
+item that still has to be read or commented on.
+
 Use the command table below, `gitcode schema`, or `gitcode <cmd> --help` to
 resolve flags. Only if a flag is still unclear, run
 `gitcode api repos/gitcode-cli/cli/contents/docs`, select the `download_url` for
@@ -162,7 +167,7 @@ For complete Issue inventories, treat `length == --limit` as “possibly truncat
 1. This repo's own `.gitcode/` Issue/PR templates, if present (`openJiuwen/sciencediscovery` currently has none).
 2. Otherwise the **openJiuwen org templates** below — this is the default source, not an opt-in path.
 
-**Language**: default to the **Chinese** templates (`ISSUE_TEMPLATE.zh/` + `PULL_REQUEST_TEMPLATE.md` / `PULL_REQUEST_TEMPLATE.zh-CN.md`). Use the English set (`ISSUE_TEMPLATE.en/`, `PULL_REQUEST_TEMPLATE.en.md`) **only when the user explicitly asks for English**.
+**Language**: a GitHub issue or pull request is English and is created with `gh` — see [github](../github/SKILL.md). This section applies only when you are still editing an item on the GitCode mirror. There, default to the **Chinese** templates (`ISSUE_TEMPLATE.zh/` + `PULL_REQUEST_TEMPLATE.md` / `PULL_REQUEST_TEMPLATE.zh-CN.md`). Use the English set (`ISSUE_TEMPLATE.en/`, `PULL_REQUEST_TEMPLATE.en.md`) only when the person who asked explicitly wants English on that mirror item.
 
 Upstream (do not vendor into git): `openJiuwen/.gitcode` @ `master`, tree `.gitcode/`
 (web: https://gitcode.com/openJiuwen/.gitcode).

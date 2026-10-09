@@ -22,9 +22,11 @@
  * run.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { after, test } from "node:test";
+
 
 import { MemoryGraphClient, MemoryGraphSink } from "@sciencediscovery/memory";
 
@@ -83,9 +85,9 @@ async function delivered(graph: { batches: unknown[] }, count: number): Promise<
   assert.equal(graph.batches.length, count, `timed out waiting for ${count} batch(es)`);
 }
 
-test("a terminal event flushes the buffer immediately", async () => {
+test("a terminal event flushes the buffer immediately", async (t) => {
   const graph = await startFakeGraph();
-  after(() => graph.close());
+  t.after(() => graph.close());
   const sink = new MemoryGraphSink(new MemoryGraphClient({ token: "t", url: graph.url }), () => true);
 
   sink.observeSearchProgress({ records: [record(1, "search_started")], searchId: "run-1", sessionId: "s1", taskId: searchSubTaskId("run-1") });
@@ -102,9 +104,9 @@ test("a terminal event flushes the buffer immediately", async () => {
   assert.equal(batch.task_id, "subtask:evolve:run-1", "the SubTask binding rides with the batch");
 });
 
-test("a partial batch is flushed by the timer", async () => {
+test("a partial batch is flushed by the timer", async (t) => {
   const graph = await startFakeGraph();
-  after(() => graph.close());
+  t.after(() => graph.close());
   const sink = new MemoryGraphSink(new MemoryGraphClient({ token: "t", url: graph.url }), () => true);
 
   sink.observeSearchProgress({ records: [record(1, "expanded")], searchId: "run-2", sessionId: "s1" });
@@ -113,9 +115,9 @@ test("a partial batch is flushed by the timer", async () => {
   assert.equal(graph.batches.length, 1);
 });
 
-test("a full buffer flushes without waiting for the timer", async () => {
+test("a full buffer flushes without waiting for the timer", async (t) => {
   const graph = await startFakeGraph();
-  after(() => graph.close());
+  t.after(() => graph.close());
   const sink = new MemoryGraphSink(new MemoryGraphClient({ token: "t", url: graph.url }), () => true);
 
   for (let sequence = 1; sequence <= 50; sequence += 1) {
@@ -127,9 +129,9 @@ test("a full buffer flushes without waiting for the timer", async () => {
   assert.equal(graph.batches[0]!.records.length, 50);
 });
 
-test("the feature being off leaves no trace at all", async () => {
+test("the feature being off leaves no trace at all", async (t) => {
   const graph = await startFakeGraph();
-  after(() => graph.close());
+  t.after(() => graph.close());
   const sink = new MemoryGraphSink(new MemoryGraphClient({ token: "t", url: graph.url }), () => false);
 
   sink.observeSearchProgress({ records: [record(1, "search_finished")], searchId: "run-4", sessionId: "s1" });
@@ -138,9 +140,9 @@ test("the feature being off leaves no trace at all", async () => {
   assert.equal(graph.batches.length, 0, "a default-off feature must not call out");
 });
 
-test("a graph that refuses the write never reaches the run", async () => {
+test("a graph that refuses the write never reaches the run", async (t) => {
   const graph = await startFakeGraph({ status: 500 });
-  after(() => graph.close());
+  t.after(() => graph.close());
   const sink = new MemoryGraphSink(new MemoryGraphClient({ token: "t", url: graph.url }), () => true);
 
   // The whole point of the sink layer: this is a void method that swallows its
@@ -155,9 +157,9 @@ test("an unreachable graph never reaches the run either", async () => {
   await settle();
 });
 
-test("flushing a search with nothing buffered is a no-op", async () => {
+test("flushing a search with nothing buffered is a no-op", async (t) => {
   const graph = await startFakeGraph();
-  after(() => graph.close());
+  t.after(() => graph.close());
   const sink = new MemoryGraphSink(new MemoryGraphClient({ token: "t", url: graph.url }), () => true);
 
   sink.flushSearchProgress("never-started");

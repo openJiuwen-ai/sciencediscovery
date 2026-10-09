@@ -77,6 +77,12 @@ serve options:
   --sandbox-provider <p>   auto, bubblewrap, or seatbelt (default: auto)
   --skip-sandbox-check     Start when the platform sandbox probe fails
   --no-scientific-envs     Do not provision the managed scientific environments
+  --no-jiuwenswarm         Run agent turns on the native loop instead of the
+                           embedded JiuwenSwarm (the release binary always
+                           embeds it and runs on it by default; see
+                           docs/en/getting-started/deployment.md)
+  --jiuwenswarm            Accepted for compatibility; this is already the
+                           default
 
 run options:
   input (positional)       Problem text, or a JSON object for full input
@@ -94,8 +100,8 @@ run options:
   --output <jsonl|text>    Output format, default jsonl (no TTY) / text (TTY)
   --timeout <ms>           Wall-clock timeout for the run
 
-Bubblewrap is the only required host dependency. Neo4j is not bundled, so the
-memory-graph feature stays off unless a separate server is configured.
+Bubblewrap is the only required host dependency. The memory graph is on for a
+new data directory and kept as local files; Neo4j is optional and not bundled.
 
 First launch downloads uv and the Python dependencies of the bundled MCP
 servers into the data directory (later launches skip this). Optional overrides:
@@ -156,6 +162,15 @@ export function defaultSettings(
     runnerPort: parsePort("SCIENCE_AGENT_RUNNER_PORT", env.SCIENCE_AGENT_RUNNER_PORT?.trim() || "4311"),
     scientificEnvironments: truthy(env.SCIENTIFIC_ENVS),
     skipSandboxCheck: false,
+    // The release binary always embeds JiuwenSwarm and the adapter (see
+    // build-payload.sh), so it runs on JiuwenSwarm by default; set
+    // SCIENCE_AGENT_EXECUTOR=native or pass --no-jiuwenswarm for the native
+    // loop instead. Other entry points into this same env var (the API and
+    // adapter run outside this launcher, e.g. in source/Docker mode) keep
+    // their own default of native — this default belongs to the launcher
+    // alone, which is the one thing that decides whether to set
+    // SCIENCE_AGENT_EXECUTOR=jiuwenswarm for the API it starts.
+    jiuwenswarm: env.SCIENCE_AGENT_EXECUTOR?.trim() !== "native",
   };
 }
 
@@ -221,6 +236,8 @@ export function parseInvocation(
       case "--port": invocation.settings.port = parsePort(argument, next()); break;
       case "--runner-port": invocation.settings.runnerPort = parsePort(argument, next()); break;
       case "--skip-sandbox-check": invocation.settings.skipSandboxCheck = true; break;
+      case "--jiuwenswarm": invocation.settings.jiuwenswarm = true; break;
+      case "--no-jiuwenswarm": invocation.settings.jiuwenswarm = false; break;
       case "--to": invocation.extractTo = resolve(cwd, next()); break;
       case "-h": case "--help": invocation.command = "help"; break;
       // run 选项

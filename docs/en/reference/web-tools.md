@@ -1,8 +1,10 @@
 # Web Search and Web Fetch
 
+This page documents the **product-owned** `web_search` and `web_fetch` tools. They are visible by default in the native executor. The default JiuwenSwarm backend exposes its own `free_search`/`paid_search` and `fetch_webpage` instead; set `SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours` to use the product tools. The permission, provider, cache, audit, and slash-command details below describe product Web calls; do not assume they apply to Swarm's Web tools. See [Agent backends](agent-backends.md).
+
 ## Boundary
 
-Web is a global base capability, not an MCP Source, and has no Session-level provider override. The model always sees `web_search` and `web_fetch`. Node owns permission, credentials, cache, CAS, and audit, **and now also calls the vendors itself**.
+Product Web is a global base capability, not an MCP Source, and has no Session-level provider override. When the product tools are selected, the model sees `web_search` and `web_fetch`. Node owns permission, credentials, cache, CAS, and audit, and calls the vendors itself.
 
 ```text
 Agent tool → WebBroker ──────────────→ NativeWebProviderClient ──outbound HTTPS──▶ vendor API
@@ -59,7 +61,7 @@ Installs configured before aggregation stored one `searchProvider` (plus `ddgsBa
 - Raw provider results are stored in CAS; results include invocation ID and CAS hash.
 - Search snippets are not full pages, and ordinary web content does not automatically become scientific Evidence.
 
-The Node-native loop neutralizes framework tags in remote tool results before they reach history or the UI (see agent-backend.md). Outbound sensitive information is an authorization concern before the call; scientific quality still needs later review.
+The native Node loop neutralizes framework tags in remote tool results before they reach history or the UI (see [Agent backend](../developer-docs/agent-backend.md)). JiuwenSwarm has a separate tool/result path; the native-loop statement is not a guarantee for its Web tools. Outbound sensitive information is an authorization concern before the call; scientific quality still needs later review.
 
 ## Slash commands
 

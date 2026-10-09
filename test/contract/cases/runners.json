@@ -1,0 +1,156 @@
+{
+ "domain": "Environments, runner, remote hosts",
+ "cases": [
+  {
+   "id": "runners-environments-reads",
+   "description": "Reads of runners, environments and remote hosts, and rejected input. No host is contacted and nothing is installed.",
+   "steps": [
+    {
+     "name": "runners",
+     "request": {
+      "method": "GET",
+      "path": "/api/runners"
+     },
+     "covers": [
+      "GET /api/runners"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "the local runner",
+     "request": {
+      "method": "GET",
+      "path": "/api/runners/local"
+     },
+     "covers": [
+      "GET /api/runners/:id"
+     ]
+    },
+    {
+     "name": "an unknown runner",
+     "request": {
+      "method": "GET",
+      "path": "/api/runners/nope"
+     }
+    },
+    {
+     "name": "npu runners",
+     "request": {
+      "method": "GET",
+      "path": "/api/runners/npu"
+     },
+     "covers": [
+      "GET /api/runners/npu"
+     ]
+    },
+    {
+     "name": "workspaces on the local runner",
+     "request": {
+      "method": "GET",
+      "path": "/api/runners/local/workspaces"
+     },
+     "covers": [
+      "GET /api/runners/:id/workspaces"
+     ]
+    },
+    {
+     "name": "files of an unknown workspace",
+     "request": {
+      "method": "GET",
+      "path": "/api/runners/local/workspaces/nope/files"
+     },
+     "covers": [
+      "GET /api/runners/:id/workspaces/:sessionId/files"
+     ]
+    },
+    {
+     "name": "connect log of the local runner",
+     "request": {
+      "method": "GET",
+      "path": "/api/runners/local/connect-log"
+     },
+     "covers": [
+      "GET /api/runners/:id/connect-log"
+     ]
+    },
+    {
+     "name": "environments",
+     "request": {
+      "method": "GET",
+      "path": "/api/environments"
+     },
+     "covers": [
+      "GET /api/environments"
+     ]
+    },
+    {
+     "name": "environment setup",
+     "request": {
+      "method": "GET",
+      "path": "/api/environment-setup"
+     },
+     "covers": [
+      "GET /api/environment-setup"
+     ]
+    },
+    {
+     "name": "environment revisions",
+     "request": {
+      "method": "GET",
+      "path": "/api/environment-revisions"
+     },
+     "covers": [
+      "GET /api/environment-revisions"
+     ]
+    },
+    {
+     "name": "remote hosts",
+     "request": {
+      "method": "GET",
+      "path": "/api/remote-hosts"
+     },
+     "covers": [
+      "GET /api/remote-hosts"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "ssh key files",
+     "request": {
+      "method": "GET",
+      "path": "/api/remote-hosts/key-files"
+     },
+     "covers": [
+      "GET /api/remote-hosts/key-files"
+     ]
+    },
+    {
+     "name": "ssh config hosts",
+     "request": {
+      "method": "GET",
+      "path": "/api/remote-hosts/ssh-config"
+     },
+     "covers": [
+      "GET /api/remote-hosts/ssh-config"
+     ]
+    },
+    {
+     "name": "register a remote host with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/remote-hosts",
+      "body": {}
+     }
+    },
+    {
+     "name": "probe an unknown remote host",
+     "request": {
+      "method": "POST",
+      "path": "/api/remote-hosts/nope/probe",
+      "body": {}
+     }
+    }
+   ]
+  }
+ ]
+}

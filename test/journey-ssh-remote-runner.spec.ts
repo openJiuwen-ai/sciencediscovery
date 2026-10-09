@@ -17,6 +17,9 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ssh-remote-runner.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /** Session contract for remote runners: the fixed-target field is replaced by an allowlist override. */
@@ -917,4 +920,6 @@ test("F1 远程 Runner 机器目录与 Project/Session 允许名单", { tag: "@m
     await page.unrouteAll({ behavior: "wait" });
     await cleanupJourney(page, fixture);
   }
+});
+
 });

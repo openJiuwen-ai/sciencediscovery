@@ -26,6 +26,9 @@ import {
   waitForRunTerminal,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-json-artifact-preview.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 
 /** Issue #69-shaped document: formatted JSON whose dna/rna values never contain a space. */
 const DNA_VALUE = "GTCAACACTGGTTTGAAAACGGCGGCGGCGACGCTTCAGCGGCGGCAGCTGCAGCGTGAGCGTGACCACGACGGCATTCATCTATGTGCTGCAGAAGCCTGGGCTCGGTTCCCGCAGGCGCCTGAAGCAGCTGAAGCGGTGAAGCGGTGGCGGCGATTGATGGCGTACGTCAACGGCGGCGGCGACGTTCAGCGGCGGCAGCUGCAGCGUGAGCGUGACCACGACGGCAUUCAUCUAUGUGCUGCAGAAGCCUGGGCUCGGUUCCCGCAGGCGCCUGAAGCAGCUGAAGCGGUGAAGCGGUGGCGGCGAUUGAUGGCGUACGUCAACGGCGGCGG";
@@ -255,4 +258,6 @@ test("J8 打开超长字段 JSON 产物时预览完整可读且契约不变", { 
     await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

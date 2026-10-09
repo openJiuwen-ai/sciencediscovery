@@ -1,12 +1,21 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+// The children below are plain Node processes with no TypeScript loader, so
+// they import this package's build output. The file itself runs from `src/`
+// under the shared plan and from `dist/` under `pnpm --filter … test`, so
+// anchor on the package root instead of on whichever of the two it is in.
+const built = (name: string) => new URL(`dist/${name}`, new URL("..", new URL(".", import.meta.url))).href;
+
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 import { RefStore, VersionStore } from "./versioning.js";
 import { withWorkspaceLease, withWorkspaceLeases, withWorkspaceMutation, workspaceHeadName } from "./workspace-lease.js";
 
@@ -21,7 +30,7 @@ function latch() { let release!: () => void; const promise = new Promise<void>((
 
 test("Workspace lease coordinates independent processes and does not block observers", async (t) => {
   const { workspace } = await fixture(t);
-  const entry = new URL("./workspace-lease.js", import.meta.url).href;
+  const entry = built("workspace-lease.js");
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     import { withWorkspaceLease } from ${JSON.stringify(entry)};
     await withWorkspaceLease(${JSON.stringify(workspace)}, async () => {
@@ -94,7 +103,7 @@ test("ref publication failure closes admission across later operations", async (
 
 test("process loss releases the OS lock but refuses unverified files instead of replaying work", async (t) => {
   const { workspace } = await fixture(t);
-  const entry = new URL("./workspace-lease.js", import.meta.url).href;
+  const entry = built("workspace-lease.js");
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     import { withWorkspaceLease } from ${JSON.stringify(entry)};
     await withWorkspaceLease(${JSON.stringify(workspace)}, async () => { process.stdout.write('ready'); setInterval(() => {}, 1000); await new Promise(() => {}); });

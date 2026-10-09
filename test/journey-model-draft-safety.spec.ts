@@ -19,6 +19,9 @@ import type { ModelProfile, ModelProvider } from "@sciencediscovery/schema";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-model-draft-safety.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 async function apiJson<T>(page: Page, path: string, options: { data?: unknown; method?: string } = {}): Promise<T> {
@@ -295,4 +298,5 @@ test("T1 服务商草稿不会静默丢失", { tag: "@mocked" }, async ({ journe
       await apiJson(page, `/api/providers/${encodeURIComponent(providerB.id)}`, { method: "DELETE" }).catch(() => undefined);
     }
   }
+});
 });

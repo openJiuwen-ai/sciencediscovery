@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ComposerReference, SkillDescriptor, WorkbenchSearchResult } from "@sciencediscovery/schema";
+import { UNTITLED_SESSION_TITLE, type ArtifactOrigin, type ComposerReference, type SkillDescriptor, type WorkbenchSearchResult } from "@sciencediscovery/schema";
 
 import { CloseIcon, FileIcon, ProjectIcon, SearchIcon, SessionIcon, SparkleIcon } from "../icons.js";
-import { useLocale } from "../i18n/index.js";
+import { useLocale, type MessageKey } from "../i18n/index.js";
 
 export interface ComposerTrigger {
   query: string;
@@ -95,6 +95,11 @@ export function insertComposerReference(
   return `${text.slice(0, trigger.start)}${composerReferenceToken(reference)} ${text.slice(cursor)}`;
 }
 
+/** Where the caret belongs after `inserted` replaced the trigger: behind it and its trailing space. */
+export function composerInsertionCaret(trigger: ComposerTrigger, inserted: string): number {
+  return trigger.start + inserted.length + 1;
+}
+
 export const GLOBAL_SEARCH_DEBOUNCE_MS = 250;
 
 export function insertComposerCommand(
@@ -120,6 +125,40 @@ export function removeSkillAuthoringCommand(text: string, command: `/${string}`)
     .replace(new RegExp(`(^|\\s)${escapeRegularExpression(command)}(?=\\s|$)`, "g"), "$1")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/^[ \t]+/, "");
+}
+
+type Translate = (key: MessageKey, variables?: Record<string, number | string>) => string;
+
+const ARTIFACT_ORIGIN_KEYS: Record<ArtifactOrigin, MessageKey> = {
+  legacy_auto: "artifact.origin.legacy_auto",
+  llm_declared: "artifact.origin.llm_declared",
+  mcp_download: "artifact.origin.mcp_download",
+  server_generated: "artifact.origin.server_generated",
+  user_upload: "artifact.origin.user_upload",
+};
+
+/** How an artifact came to be, in the UI's language; an origin this UI does not know is shown as sent. */
+export function artifactOriginLabel(origin: string, t: Translate): string {
+  const key = ARTIFACT_ORIGIN_KEYS[origin as ArtifactOrigin];
+  return key ? t(key) : origin;
+}
+
+function sessionTitleLabel(title: string, t: Translate): string {
+  return title === UNTITLED_SESSION_TITLE ? t("app.untitledSession") : title;
+}
+
+/** A search result's title, with a Session not yet named shown in the UI's language. */
+export function searchResultLabel(result: WorkbenchSearchResult, t: Translate): string {
+  return result.kind === "session" ? sessionTitleLabel(result.label, t) : result.label;
+}
+
+/** A search result's description in the UI's language, from its parts; the API's English line when it sent none. */
+export function searchResultDetail(result: WorkbenchSearchResult, t: Translate): string {
+  if (result.projectName === undefined) return result.detail;
+  if (result.kind === "project") return t("search.kind.project");
+  if (result.kind === "session") return result.archived ? `${result.projectName} · ${t("sidebar.archived")}` : result.projectName;
+  const session = result.sessionTitle !== undefined ? sessionTitleLabel(result.sessionTitle, t) : t("app.deletedSession");
+  return `${result.projectName} / ${session}${result.origin ? ` · ${artifactOriginLabel(result.origin, t)}` : ""}`;
 }
 
 export function filterSearchResults(results: WorkbenchSearchResult[], query: string): WorkbenchSearchResult[] {
@@ -240,10 +279,10 @@ export function GlobalSearchDialog({
         </div>
         <div className="global-search-results">
           {visible.map((result) => (
-            <button key={result.id} type="button" onClick={() => onSelect(result)} title={`${result.label} · ${result.detail}`}>
+            <button key={result.id} type="button" onClick={() => onSelect(result)} title={`${searchResultLabel(result, t)} · ${searchResultDetail(result, t)}`}>
               <i>{result.kind === "project" ? <ProjectIcon size={16} /> : result.kind === "session" ? <SessionIcon size={16} /> : <FileIcon size={16} />}</i>
-              <span><strong>{result.label}</strong><small>{result.detail}</small></span>
-              <em>{result.kind}</em>
+              <span><strong>{searchResultLabel(result, t)}</strong><small>{searchResultDetail(result, t)}</small></span>
+              <em>{t(`search.kind.${result.kind}`)}</em>
             </button>
           ))}
           {loading ? <p>{t("search.loading")}</p> : null}

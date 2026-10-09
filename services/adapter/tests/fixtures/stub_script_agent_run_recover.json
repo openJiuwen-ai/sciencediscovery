@@ -1,0 +1,6 @@
+[
+  {"tool":"~run_shell","arguments":{"command":"echo FIRST"}},
+  {"text":"first call handled"},
+  {"tool":"~run_shell","arguments":{"command":"echo SECOND"}},
+  {"text":"second call completed"}
+]

@@ -16,6 +16,9 @@ import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage, waitForRunTerminal, type JourneyFixture } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-response-identity.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 function gate() {
   let release!: () => void;
   const ready = new Promise<void>((resolve) => { release = resolve; });
@@ -233,4 +236,6 @@ test("调整审批后继续阅读完整响应，刷新和工具间隔保持一�
       await cleanupJourney(page, fixture);
     }
   }
+});
+
 });

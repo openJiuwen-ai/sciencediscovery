@@ -31,12 +31,14 @@
  * `TypeError: fetch failed`.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { createServer } from "node:http";
-import test from "node:test";
+
 
 import type {
   JsonValue,

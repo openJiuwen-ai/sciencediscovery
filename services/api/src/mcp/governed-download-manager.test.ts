@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { resolve } from "node:path";
-import test from "node:test";
+
 
 import type { ArtifactJob, ArtifactPlan, McpInvocation, McpToolResult } from "@sciencediscovery/schema";
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
@@ -43,7 +45,8 @@ async function waitForCompleted(store: SessionStore, sessionId: string, jobId: s
   throw new Error("Artifact job did not finish");
 }
 
-test("governed download manager derives an immutable plan from MCP CAS data and downloads after approval", async (context) => {
+for (const fixture of ["pdf", "html", "empty", "non-pdf"] as const) {
+test(`governed download validates ${fixture} content before publishing a completed artifact`, async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `artifact-manager-${Date.now()}-${process.pid}`);
   await mkdir(dataDir, { recursive: true });
   context.after(() => rm(dataDir, { force: true, recursive: true }));
@@ -67,18 +70,19 @@ test("governed download manager derives an immutable plan from MCP CAS data and 
     new McpSourceCatalog(registry, gateway),
     gateway,
   );
-  const bytes = Buffer.from("%PDF-1.4\nverified artifact\n");
+  const bytes = Buffer.from(fixture === "html" ? "<html>Login required</html>" : fixture === "empty" ? ""
+    : fixture === "non-pdf" ? "id,value\n1,2\n" : "%PDF-1.4\nverified artifact\n");
   const result: McpToolResult = {
     artifacts: [{
       attribution: "NCBI",
       checksum: { algorithm: "sha256", value: createHash("sha256").update(bytes).digest("hex") },
       expectedBytes: bytes.length,
-      format: "pdf",
+      format: fixture === "non-pdf" ? "csv" : "pdf",
       id: "candidate-1",
       kind: "paper",
       license: "public-domain",
       logicalName: "record.pdf",
-      mimeType: "application/pdf",
+      mimeType: fixture === "non-pdf" ? "text/csv" : "application/pdf",
       sourceId: "pubmed",
       sourceRecordId: "12524540",
       sourceUrl: "https://eutils.ncbi.nlm.nih.gov/artifacts/record.pdf",
@@ -122,7 +126,8 @@ test("governed download manager derives an immutable plan from MCP CAS data and 
     registry,
     broker,
     async () => new Response(bytes, {
-      headers: { "content-length": String(bytes.length) },
+      // A lying PDF Content-Type must not make an HTML page valid.
+      headers: { "content-length": String(bytes.length), "content-type": "application/pdf" },
       status: 200,
     }),
     1024,
@@ -142,6 +147,15 @@ test("governed download manager derives an immutable plan from MCP CAS data and 
   assert.ok(approved);
   const terminal = await terminalPromise;
   const completed = terminal.job ?? await waitForCompleted(store, session.id, approved.job.id);
+
+  if (fixture === "html" || fixture === "empty") {
+    assert.equal(terminal.status, "failed");
+    assert.equal(completed.state, "failed");
+    assert.equal(completed.error?.retryable, false);
+    assert.match(completed.error?.message ?? "", /no PDF header/);
+    await assert.rejects(readFile(resolve(store.workspacePath(session.id), "downloads/record.pdf")), { code: "ENOENT" });
+    return;
+  }
 
   assert.equal(terminal.status, "completed");
   assert.equal(completed.state, "completed");
@@ -169,6 +183,7 @@ test("governed download manager derives an immutable plan from MCP CAS data and 
   assert.equal(await readFile(resolve(childRoot, "downloads/record.pdf"), "utf8"), bytes.toString("utf8"));
   await assert.rejects(readFile(resolve(store.workspacePath(session.id), `subagents/${child.id}/downloads/record.pdf`)), { code: "ENOENT" });
 });
+}
 
 test("governed download manager resumes concurrent downloads without corrupting shared job state", async (context) => {
   const dataDir = resolve(process.cwd(), ".tmp", `artifact-resume-concurrent-${Date.now()}-${process.pid}`);

@@ -33,6 +33,8 @@ from __future__ import annotations
 import math
 
 import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 from unittest.mock import MagicMock
 
 from sciencediscovery_evolve.vendor.openevolve import (

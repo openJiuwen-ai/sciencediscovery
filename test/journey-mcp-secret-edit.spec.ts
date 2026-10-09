@@ -16,6 +16,9 @@ import { test } from "./helpers/e2e.ts";
 import { createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-mcp-secret-edit.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN", actionTimeout: 15_000 });
 
 for (const field of ["env", "headers"] as const) {
@@ -158,3 +161,5 @@ for (const field of ["env", "headers"] as const) {
     }
   });
 }
+
+});

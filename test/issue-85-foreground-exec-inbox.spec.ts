@@ -25,6 +25,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("issue-85-foreground-exec-inbox.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 interface SessionRunRecord {
@@ -318,12 +321,22 @@ test("已完成的助手仍会被它没看过的后台结果唤醒，且不改�
     });
 
     let wake: SessionRunRecord | undefined;
-    await journey.step("助手提交后台命令后本轮结束", "主回答结束时助手已是完成态，后台命令还在跑或刚跑完。", async () => {
+    await journey.step("助手提交后台命令后本轮结束", "主回答结束时助手的委派轮已经跑完，后台命令还在跑或刚跑完。", async () => {
       await page.setViewportSize({ width: 1440, height: 1000 });
       await openProjectSession(page, fixture!);
       const run = await sendUserMessage(page, fixture!.session.id, "让助手把一条命令放到后台跑，然后直接汇报。");
       expect((await waitForRunTerminal(page, fixture!.session.id, run.id)).status).toBe("completed");
-      expect((await subagents(page, fixture!.session.id)).map((child) => child.status)).toEqual(["completed"]);
+      // The wake this journey is about reopens the child (reopenSubagentForContinuation
+      // puts it back to "running"), and the dispatcher fires it as soon as the Session is
+      // idle — measured at 0.3 s after the parent run went terminal, i.e. inside the gap
+      // between these two lines. The instantaneous status is therefore a race with the
+      // very wake the next step waits for; what belongs to *this* step is that the
+      // delegated turn ended, which the finish time and the absent error record. The last
+      // step asserts the child is completed again once the wake has closed.
+      const children = await subagents(page, fixture!.session.id);
+      expect(children).toHaveLength(1);
+      expect(children[0]!.finishedAt, "the delegated turn should have ended").toBeTruthy();
+      expect(children[0]!.error).toBeUndefined();
     });
 
     await journey.step("唤醒送到助手自己而不是主 Agent", "运行时为助手发起一轮唤醒，回复以助手名义记入对话。", async () => {
@@ -361,3 +374,5 @@ async function expectNoAutomaticWakeBeyond(page: Page, sessionId: string, allowe
     await page.waitForTimeout(250);
   }
 }
+
+});

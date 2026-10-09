@@ -149,7 +149,7 @@ rm -rf -- "$output_dir"/.work-* "$output_dir/.shared" "$output_dir/.downloads"
 {
   echo "sciencediscovery=$version"
   echo "format=sciencediscovery-single-binary-v1"
-  echo "contents=web+api+gateway+runner+node+cpython+micromamba"
+  echo "contents=web+api+gateway+runner+node+cpython+micromamba+jiuwenswarm+adapter"
   echo "excluded=neo4j,uv,gateway-python-deps"
   echo "first-launch-installs=uv,gateway-python-deps"
   echo "host-requirements=bubblewrap"

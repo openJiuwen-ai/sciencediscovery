@@ -8,11 +8,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+
 import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { CustomMcpServers, normalizeCustomMcpConfig } from "./custom-servers.js";
 import { McpNodeClient } from "./node-client.js";

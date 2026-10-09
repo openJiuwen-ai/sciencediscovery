@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React, { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import type {
+  JiuwenSwarmSkill,
   CreateSkillPackageRequest,
   GitSkillRepositoryInspection,
   SkillLibrary,
@@ -141,6 +142,11 @@ export function requestFromDraft(draft: SkillEditorDraft): CreateSkillPackageReq
   };
 }
 
+type SkillManagerView = "jiuwenswarm" | "libraries" | "memory" | "skills";
+
+/** Whether agents run on JiuwenSwarm, so that the tabs offer its skills. */
+const JiuwenSwarmTab = createContext(false);
+
 export function SkillManager({
   client,
   initialView = "skills",
@@ -155,7 +161,7 @@ export function SkillManager({
   workspaceLaunch,
 }: {
   client: ApiClient;
-  initialView?: "libraries" | "memory" | "skills";
+  initialView?: SkillManagerView;
   onCatalogChange: (skills: SkillDescriptor[]) => void;
   onDistillSession?: () => void;
   onError: (reason: string | Error) => void;
@@ -166,22 +172,37 @@ export function SkillManager({
   skills: SkillDescriptor[];
   workspaceLaunch?: { requestId: number; skillId?: string };
 }) {
-  const [view, setView] = useState<"libraries" | "memory" | "skills">(initialView);
+  const [view, setView] = useState<SkillManagerView>(initialView);
+  // With the JiuwenSwarm backend its skills (ours imported there, and its own) get a tab of their own.
+  const [jiuwenSwarm, setJiuwenSwarm] = useState(false);
+  useEffect(() => {
+    let active = true;
+    // An API without the route (or a client without the call) is the built-in backend.
+    void Promise.resolve().then(() => client.listJiuwenSwarmSkills())
+      .then((result) => { if (active) setJiuwenSwarm(result.backend === "jiuwenswarm"); }, () => undefined);
+    return () => { active = false; };
+  }, [client]);
 
   if (view === "memory") {
-    return <div className="skill-manager">
+    return <JiuwenSwarmTab.Provider value={jiuwenSwarm}><div className="skill-manager">
       <SkillManagerViewTabs activeView="memory" onViewChange={setView} />
       <AgentMemoryPanel client={client} onError={onError} />
-    </div>;
+    </div></JiuwenSwarmTab.Provider>;
+  }
+
+  if (view === "jiuwenswarm" && jiuwenSwarm) {
+    return <JiuwenSwarmTab.Provider value={jiuwenSwarm}><div className="skill-manager">
+      <JiuwenSwarmSkillsManager client={client} onError={onError} onViewChange={setView} />
+    </div></JiuwenSwarmTab.Provider>;
   }
 
   if (view === "libraries") {
-    return <div className="skill-manager">
+    return <JiuwenSwarmTab.Provider value={jiuwenSwarm}><div className="skill-manager">
       <SkillLibraryManager client={client} onError={onError} onViewChange={setView} />
-    </div>;
+    </div></JiuwenSwarmTab.Provider>;
   }
 
-  return <div className="skill-manager">
+  return <JiuwenSwarmTab.Provider value={jiuwenSwarm}><div className="skill-manager">
     <SkillCatalogManager
       client={client}
       onCatalogChange={onCatalogChange}
@@ -195,21 +216,23 @@ export function SkillManager({
       skills={skills}
       workspaceLaunch={workspaceLaunch}
     />
-  </div>;
+  </div></JiuwenSwarmTab.Provider>;
 }
 
 function SkillManagerViewTabs({
   activeView,
   onViewChange,
 }: {
-  activeView: "libraries" | "memory" | "skills";
-  onViewChange: (view: "libraries" | "memory" | "skills") => void;
+  activeView: SkillManagerView;
+  onViewChange: (view: SkillManagerView) => void;
 }) {
   const { t } = useLocale();
+  const jiuwenSwarm = useContext(JiuwenSwarmTab);
   return <div aria-label={t("skillManager.viewsAria")} className="skill-manager-tabs" role="tablist">
     <button aria-selected={activeView === "skills"} className={activeView === "skills" ? "active" : ""} onClick={() => onViewChange("skills")} role="tab" type="button">{t("skillManager.tabSkills")}</button>
     <button aria-selected={activeView === "libraries"} className={activeView === "libraries" ? "active" : ""} onClick={() => onViewChange("libraries")} role="tab" type="button">{t("skillManager.tabLibraries")}</button>
     <button aria-selected={activeView === "memory"} className={activeView === "memory" ? "active" : ""} onClick={() => onViewChange("memory")} role="tab" type="button">{t("skillManager.tabMemory")}</button>
+    {jiuwenSwarm ? <button aria-selected={activeView === "jiuwenswarm"} className={activeView === "jiuwenswarm" ? "active" : ""} onClick={() => onViewChange("jiuwenswarm")} role="tab" type="button">{t("skillManager.tabJiuwenSwarm")}</button> : null}
   </div>;
 }
 
@@ -232,7 +255,7 @@ function SkillCatalogManager({
   onError: (reason: string | Error) => void;
   onOpenSession?: (sessionId: string) => void;
   onStartSkillCreation?: () => void;
-  onViewChange: (view: "libraries" | "memory" | "skills") => void;
+  onViewChange: (view: SkillManagerView) => void;
   onWorkspaceLaunchHandled?: (requestId: number) => void;
   sessionId?: string;
   skills: SkillDescriptor[];
@@ -607,7 +630,7 @@ function SkillLibraryManager({
 }: {
   client: ApiClient;
   onError: (reason: string | Error) => void;
-  onViewChange: (view: "libraries" | "memory" | "skills") => void;
+  onViewChange: (view: SkillManagerView) => void;
 }) {
   const [libraries, setLibraries] = useState<SkillLibrary[]>([]);
   const { t } = useLocale();
@@ -647,25 +670,26 @@ function SkillLibraryManager({
   }, [client, onError]);
 
   useEffect(() => {
+    let active = true;
+    void client.listSkillLibraryProposals().then((items) => {
+      if (active) setProposals(items);
+    }).catch((reason: Error) => {
+      if (active) onError(reason);
+    });
+    return () => { active = false; };
+  }, [client, onError]);
+
+  useEffect(() => {
     if (!selectedId) {
       setVersions([]);
       setSelectedVersionId(undefined);
-      setProposals([]);
       setSelectedProposalIds(new Set());
       return;
     }
     let active = true;
-    void Promise.all([
-      client.listSkillLibraryVersions(selectedId),
-      client.listSkillLibraryProposals(selectedId),
-    ]).then(([items, nextProposals]) => {
+    void client.listSkillLibraryVersions(selectedId).then((items) => {
       if (!active) return;
       setVersions(items);
-      setProposals(nextProposals);
-      setSelectedProposalIds((current) => {
-        const pendingIds = new Set(nextProposals.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id));
-        return new Set(Array.from(current).filter((proposalId) => pendingIds.has(proposalId)));
-      });
       const head = libraries.find((library) => library.id === selectedId)?.headVersionId;
       setSelectedVersionId((current) => current && items.some((item) => item.id === current) ? current : head ?? items.at(-1)?.id);
       setFromVersionId((current) => current && items.some((item) => item.id === current) ? current : items[0]?.id ?? "");
@@ -686,7 +710,12 @@ function SkillLibraryManager({
     setSelectedId(selectId);
     const nextVersions = await client.listSkillLibraryVersions(selectId);
     setVersions(nextVersions);
-    setProposals(await client.listSkillLibraryProposals(selectId));
+    const nextProposals = await client.listSkillLibraryProposals();
+    setProposals(nextProposals);
+    setSelectedProposalIds((current) => {
+      const pendingIds = new Set(nextProposals.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id));
+      return new Set(Array.from(current).filter((proposalId) => pendingIds.has(proposalId)));
+    });
     const head = nextLibraries.find((library) => library.id === selectId)?.headVersionId;
     setSelectedVersionId(head ?? nextVersions.at(-1)?.id);
     setFromVersionId(nextVersions[0]?.id ?? "");
@@ -861,7 +890,7 @@ function SkillLibraryManager({
         <div aria-label={t("skillLibrary.statsAria")} className="skill-manager-stats">
           <span><strong>{libraries.length}</strong><small>{t("skillLibrary.statLibraries")}</small></span>
           <span><strong>{versions.length}</strong><small>{t("skillLibrary.statVersions")}</small></span>
-          <span className={selectedLibraryProposals.length ? "has-pending" : undefined}><strong>{selectedLibraryProposals.length}</strong><small>{t("skillLibrary.statProposals")}</small></span>
+          <span className={proposals.some((proposal) => proposal.status === "pending") ? "has-pending" : undefined}><strong>{proposals.filter((proposal) => proposal.status === "pending").length}</strong><small>{t("skillLibrary.statProposals")}</small></span>
         </div>
       </div>
     </section>
@@ -935,5 +964,80 @@ function SkillLibraryManager({
         </>}
       </div>
     </div>
+  </div>;
+}
+
+/**
+ * The skills installed in JiuwenSwarm, when it runs the agents: ScienceDiscovery's (imported before each run) and
+ * JiuwenSwarm's own. Each has one on/off switch for every session.
+ */
+function JiuwenSwarmSkillsManager({
+  client,
+  onError,
+  onViewChange,
+}: {
+  client: ApiClient;
+  onError: (reason: string | Error) => void;
+  onViewChange: (view: SkillManagerView) => void;
+}) {
+  const { t } = useLocale();
+  const [skills, setSkills] = useState<JiuwenSwarmSkill[]>();
+  const [pending, setPending] = useState<string>();
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void client.listJiuwenSwarmSkills().then((result) => { if (active) setSkills(result.skills); },
+      (reason) => { if (active) { setSkills([]); onError(reason instanceof Error ? reason : String(reason)); } });
+    return () => { active = false; };
+  }, [client, onError]);
+
+  async function toggle(skill: JiuwenSwarmSkill): Promise<void> {
+    setPending(skill.name);
+    try {
+      const result = await client.setJiuwenSwarmSkillEnabled(skill.name, !skill.enabled);
+      setSkills((current) => current?.map((item) => item.name === skill.name ? { ...item, enabled: result.enabled } : item));
+    } catch (reason) {
+      onError(reason instanceof Error ? reason : String(reason));
+    } finally {
+      setPending(undefined);
+    }
+  }
+
+  const needle = query.trim().toLowerCase();
+  const visible = (skills ?? []).filter((skill) => !needle || `${skill.name} ${skill.description}`.toLowerCase().includes(needle));
+  const sourceLabel = (source: string) => source === "sciencediscovery" ? t("skillManager.jwSourceOurs")
+    : source === "builtin" ? t("skillManager.jwSourceBuiltin") : t("skillManager.jwSourceOther", { source });
+
+  return <div className="skill-catalog-manager">
+    <section className="skill-manager-hero">
+      <div><span className="eyebrow">{t("skillManager.jwEyebrow")}</span><h3>{t("skillManager.jwTitle")}</h3></div>
+      <div className="skill-manager-hero-actions">
+        <SkillManagerViewTabs activeView="jiuwenswarm" onViewChange={onViewChange} />
+        <div aria-label={t("skillManager.statsAria")} className="skill-manager-stats">
+          <span><strong>{skills?.length ?? 0}</strong><small>{t("skillManager.statInstalled")}</small></span>
+          <span><strong>{skills?.filter((skill) => skill.enabled).length ?? 0}</strong><small>{t("skillManager.jwStatOn")}</small></span>
+        </div>
+      </div>
+    </section>
+    <p className="config-note" role="note">{t("skillManager.jwNote")}</p>
+    <div className="skill-manager-toolbar">
+      <label className="skill-search-field"><span aria-hidden="true">⌕</span><input aria-label={t("skillManager.searchAria")} onChange={(event) => setQuery(event.target.value)} placeholder={t("skillManager.searchPlaceholder")} value={query} /></label>
+    </div>
+    {skills === undefined ? <p className="muted">{t("skillManager.jwLoading")}</p> : <ul className="jiuwenswarm-skill-list">
+      {visible.map((skill) => <li className={skill.enabled ? "" : "off"} key={skill.name}>
+        <div>
+          <strong>{skill.name}</strong>
+          <span className={`skill-source ${skill.source === "sciencediscovery" ? "managed" : "built-in"}`}>{sourceLabel(skill.source)}</span>
+          {skill.skillId && skill.skillId !== skill.name ? <small>{t("skillManager.jwRenamed", { id: skill.skillId })}</small> : null}
+          <p>{skill.description}</p>
+        </div>
+        <label className="jiuwenswarm-skill-switch">
+          <input aria-label={t("skillManager.jwToggleAria", { name: skill.name })} checked={skill.enabled} disabled={pending !== undefined} onChange={() => void toggle(skill)} type="checkbox" />
+          <span>{skill.enabled ? t("skillManager.jwOn") : t("skillManager.jwOff")}</span>
+        </label>
+      </li>)}
+      {!visible.length ? <li className="muted">{t("skillManager.noMatches")}</li> : null}
+    </ul>}
   </div>;
 }

@@ -62,7 +62,9 @@ export type PermissionAuthorizationSource =
   | "legacy_grant"
   | "user_deny"
   | "user_grant"
-  | "user_once";
+  | "user_once"
+  // With the JiuwenSwarm backend its permission engine decides; what it let through is recorded with this source.
+  | "jiuwenswarm";
 
 export interface PermissionRequest {
   action: PermissionAction;

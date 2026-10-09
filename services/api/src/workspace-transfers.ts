@@ -43,8 +43,10 @@ export class WorkspaceTransfers {
     return this.db.prepare("SELECT record FROM workspace_transfers WHERE session = ? AND agent = ? ORDER BY rowid DESC").all(owner.sessionId, owner.agentId)
       .map((row) => JSON.parse(String(row.record)) as WorkspaceTransfer);
   }
-  snapshot(sessionId: string): WorkspaceTransfer[] {
-    return this.db.prepare("SELECT record FROM workspace_transfers WHERE session = ? ORDER BY id").all(sessionId)
+  snapshot(sessionId: string, agentId?: string): WorkspaceTransfer[] {
+    const where = agentId === undefined ? "session = ?" : "session = ? AND agent = ?";
+    const args = agentId === undefined ? [sessionId] : [sessionId, agentId];
+    return this.db.prepare(`SELECT record FROM workspace_transfers WHERE ${where} ORDER BY id`).all(...args)
       .map((row) => JSON.parse(String(row.record)) as WorkspaceTransfer);
   }
   get(id: string, owner: ExecutionOwner): WorkspaceTransfer {

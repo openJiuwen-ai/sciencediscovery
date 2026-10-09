@@ -6,6 +6,7 @@
 
 - 本地模式默认基址与绑定地址：`http://127.0.0.1:4310`。
 - Docker 默认发布地址：`http://127.0.0.1:4310`。
+- 默认 JiuwenSwarm 后端下，`:4310` 是 adapter 对外入口，产品路由转发到 `:4410` 的 API；带令牌的 `GET /agent/info` 可查看 executor 与网关连通性。native 模式下 API 直接占用 `:4310`。详见 [Agent 后端](agent-backends.md)。
 - `GET /health` 与 `GET /api/health` 无需认证。
 - MCP OAuth 浏览器回调 `GET /api/mcp/oauth/callback` 不使用本地 bearer token，而是校验待处理的一次性 OAuth state，并通过 PKCE 交换授权码。
 - 其他 `/api/*` 请求必须携带 `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`。没有默认 token：该变量未设置时，服务端在首次启动生成本地服务访问令牌，打印 `Open to sign in` 链接与令牌，并保存在 `<数据目录>/secrets/auth-token`。
@@ -101,7 +102,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 演进搜索
 
-`/evolve-design` 运行的只读视图，以及停止一次运行。搜索由 Agent 通过 `create_evolve_run` 工具发起，不经由本 API。参见[程序演进](../explanation/evolve.md)。
+`/evolve-design` 运行的只读视图，以及停止一次运行。搜索由 Agent 通过 `create_evolve_run` 工具发起，不经由本 API。参见[程序演进](../core/evolve.md)。
 
 | 方法与路径 | 请求/查询 | 成功 |
 |---|---|---|
@@ -112,7 +113,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 自定义 MCP 服务器与 Inspector
 
-界面操作见[配置自定义 MCP](../how-to/configure-custom-mcp.md)。路由位于 `services/api/src/http/custom-mcp.ts`，请求和响应类型位于 `packages/schema/src/custom-mcp.ts`。下表接口均需本地服务访问令牌（Bearer token）。
+界面操作见[配置自定义 MCP](../advanced-setup/configure-custom-mcp.md)。路由位于 `services/api/src/http/custom-mcp.ts`，请求和响应类型位于 `packages/schema/src/custom-mcp.ts`。下表接口均需本地服务访问令牌（Bearer token）。
 
 | 方法与路径 | 请求 | 响应 |
 |---|---|---|
@@ -157,7 +158,7 @@ curl -X POST http://127.0.0.1:4310/api/projects \
 
 ## 代理配置
 
-以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置网络代理](../how-to/configure-network-proxy.md)。
+以下接口均需 bearer 认证。配置步骤与凭据注意事项见[配置网络代理](../advanced-setup/configure-network-proxy.md)。
 
 | 方法与路径 | 请求 | 成功响应 |
 |---|---|---|

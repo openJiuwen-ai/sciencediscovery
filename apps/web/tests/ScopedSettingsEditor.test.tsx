@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import type { ConnectorManifest, ModelProfile, RuntimeSettingsDetails, SkillDescriptor, SkillLibrary } from "@sciencediscovery/schema";
 import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
@@ -285,4 +287,21 @@ test("disambiguates duplicate model options without removing either profile", ()
     skills,
   }));
   assert.match(inheritedHtml, /Inherit · Primary model · test-model · OpenAI standard · Model default · model-1 \(Global setting\)/);
+});
+
+test("with the JiuwenSwarm backend a Session has no skill selection, only a note saying where skills are switched", () => {
+  const html = renderToStaticMarkup(createElement(ScopedSettingsEditor, {
+    connectors: [connector],
+    details: details(),
+    models: [model],
+    onSave: () => undefined,
+    scopeLabel: "Session",
+    skillLibraries,
+    skillScope: "session",
+    skills,
+    skillsBackend: "jiuwenswarm",
+  }));
+  const skillFieldset = html.slice(html.indexOf("<legend>Skills</legend>"), html.indexOf("<legend>Skill libraries</legend>"));
+  assert.match(skillFieldset, /one set of skills for every session/);
+  assert.doesNotMatch(skillFieldset, /<select|Allow all skills/);
 });

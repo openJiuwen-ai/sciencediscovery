@@ -1,0 +1,262 @@
+{
+ "domain": "Permissions",
+ "cases": [
+  {
+   "id": "permission-requests-and-grants",
+   "description": "A permission asked for directly through the API, allowed once for the session, then revoked. No model or run is involved.",
+   "steps": [
+    {
+     "name": "create a project",
+     "request": {
+      "method": "POST",
+      "path": "/api/projects",
+      "body": {
+       "name": "L1 permissions"
+      }
+     },
+     "capture": {
+      "projectId": "$.id",
+      "sessionId": "$.firstSession.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "ask for a permission",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/permission-requests",
+      "body": {
+       "action": "connector",
+       "resource": "web",
+       "summary": "Use the web connector"
+      }
+     },
+     "covers": [
+      "POST /api/sessions/:id/permission-requests"
+     ],
+     "capture": {
+      "requestId": "$.request.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "the request is pending",
+     "request": {
+      "method": "GET",
+      "path": "/api/permission-requests"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "allow it for matching requests",
+     "request": {
+      "method": "POST",
+      "path": "/api/permission-requests/{{requestId}}/decision",
+      "body": {
+       "decision": "allow_matching"
+      }
+     },
+     "capture": {
+      "grantId": "$.authorization.permissionGrantId"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "the grant is listed",
+     "request": {
+      "method": "GET",
+      "path": "/api/permission-grants"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "the authorization is on record",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/permission-authorizations"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "a wrong token cannot list permission requests",
+     "request": {
+      "method": "GET",
+      "path": "/api/permission-requests",
+      "headers": {
+       "authorization": "Bearer wrong"
+      }
+     },
+     "expectStatus": 401
+    },
+    {
+     "name": "a wrong token cannot decide a request",
+     "request": {
+      "method": "POST",
+      "path": "/api/permission-requests/{{requestId}}/decision",
+      "headers": {
+       "authorization": "Bearer wrong"
+      },
+      "body": {
+       "decision": "allow_once"
+      }
+     },
+     "expectStatus": 401
+    },
+    {
+     "name": "a wrong token cannot revoke a grant",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/permission-grants/{{grantId}}",
+      "headers": {
+       "authorization": "Bearer wrong"
+      }
+     },
+     "expectStatus": 401
+    },
+    {
+     "name": "revoke the grant",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/permission-grants/{{grantId}}"
+     },
+     "covers": [
+      "DELETE /api/permission-grants/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "the grant is gone",
+     "request": {
+      "method": "GET",
+      "path": "/api/permission-grants"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "a decision must be one of the known ones",
+     "request": {
+      "method": "POST",
+      "path": "/api/permission-requests/{{requestId}}/decision",
+      "body": {
+       "decision": "maybe"
+      }
+     }
+    },
+    {
+     "name": "delete the project",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/projects/{{projectId}}",
+      "body": {
+       "confirmationId": "{{projectId}}"
+      }
+     },
+     "always": true
+    }
+   ]
+  },
+  {
+   "id": "permission-grant-survives-epoch-rotation",
+   "description": "A session-scoped grant lets a request through without asking, and keeps doing so after the session's permission epoch is rotated. (Issue 90 expected the grant to stop applying; the legacy API does not do that. The epoch is about the sandbox, the grant is about the session.)",
+   "steps": [
+    {
+     "name": "create a project",
+     "request": {
+      "method": "POST",
+      "path": "/api/projects",
+      "body": {
+       "name": "L1 epoch"
+      }
+     },
+     "capture": {
+      "projectId": "$.id",
+      "sessionId": "$.firstSession.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "ask for a permission",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/permission-requests",
+      "body": {
+       "action": "connector",
+       "resource": "web",
+       "summary": "Use the web connector"
+      }
+     },
+     "capture": {
+      "requestId": "$.request.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "allow it for matching requests",
+     "request": {
+      "method": "POST",
+      "path": "/api/permission-requests/{{requestId}}/decision",
+      "body": {
+       "decision": "allow_matching"
+      }
+     },
+     "capture": {
+      "grantId": "$.authorization.permissionGrantId"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "the same request is now allowed without asking",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/permission-requests",
+      "body": {
+       "action": "connector",
+       "resource": "web",
+       "summary": "Use the web connector"
+      }
+     }
+    },
+    {
+     "name": "rotate the permission epoch",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/permission-epoch",
+      "body": {}
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "the same request after the rotation is still allowed",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/permission-requests",
+      "body": {
+       "action": "connector",
+       "resource": "web",
+       "summary": "Use the web connector"
+      }
+     }
+    },
+    {
+     "name": "revoke the grant",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/permission-grants/{{grantId}}"
+     },
+     "always": true
+    },
+    {
+     "name": "delete the project",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/projects/{{projectId}}",
+      "body": {
+       "confirmationId": "{{projectId}}"
+      }
+     },
+     "always": true
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,206 @@
+diff --git a/MindSPONGE/applications/rf_diffusion/rfdiffusion/inference/ab_util.py b/MindSPONGE/applications/rf_diffusion/rfdiffusion/inference/ab_util.py
+index 29a676e..6b488f7 100644
+--- a/MindSPONGE/applications/rf_diffusion/rfdiffusion/inference/ab_util.py
++++ b/MindSPONGE/applications/rf_diffusion/rfdiffusion/inference/ab_util.py
+@@ -21,6 +21,7 @@ import logging
+ from typing import List, Optional
+ 
+ import mindspore as ms
++import numpy as np
+ 
+ from ..kinematics import xyz_to_t2d
+ from ..parsers import *
+@@ -657,107 +658,111 @@ def ab_write_pdblines(
+             A dictionary mapping loop names to lists of residue indices
+     """
+ 
+-    ctr = 1
++    def _to_numpy(value):
++        if value is None:
++            return None
++        if isinstance(value, ms.Tensor):
++            return np.asarray(value.asnumpy())
++        return np.asarray(value)
++
++    atoms = _to_numpy(atoms)
++    seq = np.asarray(_to_numpy(seq)).reshape(-1)
++    chain_idx = _to_numpy(chain_idx)
++    nres = int(seq.shape[0])
+     if bfacts is None:
+-        bfacts = ms.mint.zeros(atoms.shape[0])
++        bfacts = np.zeros(nres, dtype=np.float32)
++    else:
++        bfacts = _to_numpy(bfacts)
+     if idx_pdb is None:
+-        # Default to 1-indexed residue numbers
+-        idx_pdb = 1 + ms.mint.arange(atoms.shape[0])
++        idx_pdb = np.arange(1, nres + 1, dtype=np.int32)
++    else:
++        idx_pdb = _to_numpy(idx_pdb)
+     if loop_map is None:
+         loop_map = {}
+ 
+-    Bfacts = np.clip(
+-        bfacts,
+-        a_min=0,
+-        a_max=1,
+-    )
++    Bfacts = np.clip(bfacts, a_min=0, a_max=1)
+ 
+     pdblines = []
+-    for i in range(seq.shape[0]):
+-        chain = chain_idx[i]
++    ctr = 1
++    for i in range(nres):
++        c = chain_idx[i]
++        if isinstance(c, (bytes, np.bytes_)):
++            chain = c.decode()
++        else:
++            chain = str(c)
++        seq_i = int(seq[i])
++        res_name = num2aa[seq_i]
++        res_idx = int(idx_pdb[i])
++        bfac = float(Bfacts[i])
+ 
+         # If the input is a single set of atomic coordinates, assume it is a C-alpha trace
+         if len(atoms.shape) == 2:
+-
+             pdblines.append(
+                 stamp_pdbline(
+                     prefix="ATOM",
+                     ctr=ctr,
+                     atom_name=" CA ",
+-                    residue_name=num2aa[seq[i]],
++                    residue_name=res_name,
+                     chain=chain,
+-                    residue_idx=idx_pdb[i],
+-                    x_coord=atoms[i, 0],
+-                    y_coord=atoms[i, 1],
+-                    z_coord=atoms[i, 2],
++                    residue_idx=res_idx,
++                    x_coord=float(atoms[i, 0]),
++                    y_coord=float(atoms[i, 1]),
++                    z_coord=float(atoms[i, 2]),
+                     occupancy=1.0,
+-                    b_factor=Bfacts[i],
++                    b_factor=bfac,
+                 )
+             )
+-
+             ctr += 1
+ 
+         # If the input is a set of atomic coordinates with 3 atoms per residue,
+         # assume it is a backbone trace
+         elif atoms.shape[1] == 3:
+             for j, atm_j in enumerate([" N  ", " CA ", " C  "]):
+-
+                 pdblines.append(
+                     stamp_pdbline(
+                         prefix="ATOM",
+                         ctr=ctr,
+                         atom_name=atm_j,
+-                        residue_name=num2aa[seq[i]],
++                        residue_name=res_name,
+                         chain=chain,
+-                        residue_idx=idx_pdb[i],
+-                        x_coord=atoms[i, j, 0],
+-                        y_coord=atoms[i, j, 1],
+-                        z_coord=atoms[i, j, 2],
++                        residue_idx=res_idx,
++                        x_coord=float(atoms[i, j, 0]),
++                        y_coord=float(atoms[i, j, 1]),
++                        z_coord=float(atoms[i, j, 2]),
+                         occupancy=1.0,
+-                        b_factor=Bfacts[i],
++                        b_factor=bfac,
+                     )
+                 )
+-
+                 ctr += 1
+ 
+         # If the input is a set of atomic coordinates with 4 atoms per residue,
+         # assume it is a backbone trace with an oxygen atom
+         elif atoms.shape[1] == 4:
+             for j, atm_j in enumerate([" N  ", " CA ", " C  ", " O  "]):
+-
+                 pdblines.append(
+                     stamp_pdbline(
+                         prefix="ATOM",
+                         ctr=ctr,
+                         atom_name=atm_j,
+-                        residue_name=num2aa[seq[i]],
++                        residue_name=res_name,
+                         chain=chain,
+-                        residue_idx=idx_pdb[i],
+-                        x_coord=atoms[i, j, 0],
+-                        y_coord=atoms[i, j, 1],
+-                        z_coord=atoms[i, j, 2],
++                        residue_idx=res_idx,
++                        x_coord=float(atoms[i, j, 0]),
++                        y_coord=float(atoms[i, j, 1]),
++                        z_coord=float(atoms[i, j, 2]),
+                         occupancy=1.0,
+-                        b_factor=Bfacts[i],
++                        b_factor=bfac,
+                     )
+                 )
+-
+                 ctr += 1
+ 
+         # Otherwise, assume the input is a full atomic tensor with either 14 or 27 atoms per residue
+         else:
+             natoms = atoms.shape[1]
++            assert natoms in (14, 27), "Invalid number of atoms per residue, must be 14 or 27"
++            atms = aa2long[seq_i]
+ 
+-            assert (
+-                natoms in (14, 27)
+-            ), "Invalid number of atoms per residue, must be 14 or 27"
+-
+-            atms = aa2long[aa2num[seq[i]]]
+-
+-            # his prot hack
+-            if (
+-                aa2num[seq[i]] == 8
+-                and ms.ops.norm(atoms[i, 9, :] - atoms[i, 5, :]) < 1.7
+-            ):
++            if seq_i == 8 and np.linalg.norm(atoms[i, 9, :] - atoms[i, 5, :]) < 1.7:
+                 atms = (
+                     " N  ",
+                     " CA ",
+@@ -795,14 +800,14 @@ def ab_write_pdblines(
+                             prefix="ATOM",
+                             ctr=ctr,
+                             atom_name=atm_j,
+-                            residue_name=seq[i],
++                            residue_name=res_name,
+                             chain=chain,
+-                            residue_idx=idx_pdb[i],
+-                            x_coord=atoms[i, j, 0],
+-                            y_coord=atoms[i, j, 1],
+-                            z_coord=atoms[i, j, 2],
++                            residue_idx=res_idx,
++                            x_coord=float(atoms[i, j, 0]),
++                            y_coord=float(atoms[i, j, 1]),
++                            z_coord=float(atoms[i, j, 2]),
+                             occupancy=1.0,
+-                            b_factor=Bfacts[i],
++                            b_factor=bfac,
+                         )
+                     )
+                     ctr += 1
+@@ -834,10 +839,10 @@ def stamp_pdbline(
+ ) -> str:
+     return (
+         f"{prefix:<6}"
+-        f"{ctr:>5} "
++        f"{int(ctr):>5} "
+         f"{atom_name:>4} "
+         f"{residue_name:>3} "
+-        f"{chain}{residue_idx:>4}    "
+-        f"{x_coord:8.3f}{y_coord:8.3f}{z_coord:8.3f}"
+-        f"{occupancy:6.2f}{b_factor:6.2f}\n"
++        f"{chain}{int(residue_idx):>4}    "
++        f"{float(x_coord):8.3f}{float(y_coord):8.3f}{float(z_coord):8.3f}"
++        f"{float(occupancy):6.2f}{float(b_factor):6.2f}\n"
+     )

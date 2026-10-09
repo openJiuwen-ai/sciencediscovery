@@ -17,10 +17,12 @@
 // release that quietly stopped carrying the catalog would leave a first,
 // network-less start with no model metadata at all.
 
+import { createTest } from "../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { test } from "node:test";
+
 
 import { assertCatalogPayload, catalogUrl, fetchModelCatalogSnapshot } from "../fetch-model-catalog.mjs";
 

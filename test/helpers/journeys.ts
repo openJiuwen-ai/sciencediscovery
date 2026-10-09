@@ -15,9 +15,10 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { expect, request, type Locator, type Page } from "@playwright/test";
+import { expect, request, type Locator, type Page, type TestInfo } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
+import { RunPollRecovery } from "./run-poll-recovery.js";
 
 export interface JourneyModel {
   id: string;
@@ -72,6 +73,7 @@ export interface ScriptedToolStep {
   reasoning?: string;
   arguments: Record<string, unknown>;
   delayMs?: number;
+  waitFor?: Promise<void>;
   tool: string;
 }
 
@@ -84,6 +86,8 @@ export interface ScriptedTextStep {
 export type ScriptedModelStep = ScriptedTextStep | ScriptedToolStep;
 
 export interface ScriptedModelCall {
+  systemPrompt?: string;
+  toolResults?: string[];
   offeredTools?: string[];
   arguments?: Record<string, unknown>;
   route: "main" | "subagent";
@@ -166,14 +170,35 @@ function completionChunk(id: string, model: string, delta: Record<string, unknow
 }
 
 /**
+ * What the user said in a model request's user message. JiuwenSwarm, the agent backend, hands the model a user
+ * message inside its own envelope (`你收到一条消息：{"source": ..., "content": "..."}`, or its English form); the
+ * text is its `content`. Anything else is the message itself.
+ */
+function userText(content: unknown): unknown {
+  if (typeof content !== "string") return content;
+  const envelope = content.match(/^[^\n{]{0,40}[:：]\s*(\{[\s\S]*\})\s*$/);
+  if (!envelope) return content;
+  try {
+    const parsed = JSON.parse(envelope[1]!) as { content?: unknown };
+    return typeof parsed.content === "string" ? parsed.content : content;
+  } catch {
+    return content;
+  }
+}
+
+/**
  * Start a deterministic OpenAI-compatible model for a complete user journey.
  * Each nested mainSteps array is one user turn. Within a turn, every tool
  * result advances to the next step. Subagent requests are routed only by the
  * product's general-purpose preset marker, keeping orchestration under test.
+ * waitForShellCompletion opts dependent workflows into execution_status
+ * polling and requires exit code zero before advancing past run_shell.
+ * Leave it off for scripts that deliberately inspect errors or overlap work.
  */
 export function scriptedModel(
   mainSteps: ScriptedTurns,
   subagentSteps?: ScriptedTurns,
+  options: { captureContext?: boolean; waitForShellCompletion?: boolean } = {},
 ): Promise<ScriptedModel> {
   const calls: ScriptedModelCall[] = [];
   const model = "journey-scripted-model";
@@ -183,6 +208,7 @@ export function scriptedModel(
   let mainTurn = 0;
   let subagentStepIndex = 0;
   const lastAnswer: Partial<Record<"main" | "subagent", string>> = {};
+  const waitingForShell: Partial<Record<"main" | "subagent", boolean>> = {};
   const server: Server = createServer((request, response) => {
     const bodyChunks: Buffer[] = [];
     request.on("data", (chunk) => bodyChunks.push(Buffer.from(chunk)));
@@ -213,8 +239,9 @@ export function scriptedModel(
         const route = isSubagent ? "subagent" : "main";
         // Runtime observations are appended as data-only user messages. They
         // must not hide the actual user request or completion notification.
-        const latestUser = [...messages].reverse().find((message) => message.role === "user"
-          && !(typeof message.content === "string" && message.content.startsWith("<runtime_context_data ")))?.content;
+        const latestUser = userText([...messages].reverse().find((message) => message.role === "user"
+          && !(typeof message.content === "string" && (message.content.startsWith("<runtime_context_data ")
+            || message.content.startsWith("<system-reminder>"))))?.content);
         if (typeof latestUser === "string" && latestUser.startsWith("[Execution notifications]")) {
           // Completion is a notification turn, not the next scripted user task.
           // Acknowledge the prior answer without replaying commands or consuming
@@ -233,12 +260,37 @@ export function scriptedModel(
         if (!scripts) throw new Error("The product made an unexpected subagent model request");
         const steps = scriptedTurn(scripts, turn);
         const stepIndex = isSubagent ? subagentStepIndex : mainStepIndex;
-        const step: ScriptedModelStep = steps[stepIndex]!;
+        let step: ScriptedModelStep = steps[stepIndex]!;
         if (!step) throw new Error(`No ${route} scripted step ${stepIndex + 1} for turn ${turn + 1}`);
+        let pollingShell = false;
+        if (waitingForShell[route]) {
+          // Swarm wraps tool JSON in a Python repr ({'result': '...'}).
+          // Read only the execution's scalar fields, without evaluating that
+          // wrapper or treating a foreground wait deadline as completion.
+          const result = String([...messages].reverse().find(message => message.role === "tool")?.content ?? "");
+          const executionId = result.match(/"id"\s*:\s*"([^"]+)"/)?.[1];
+          const state = result.match(/"state"\s*:\s*"([^"]+)"/)?.[1];
+          if (!executionId || !state) throw new Error("Scripted shell returned no execution id/state");
+          if (state === "queued" || state === "running") {
+            step = { tool: "execution_status", arguments: { execution_id: executionId, wait_ms: 30_000 } };
+            pollingShell = true;
+          } else {
+            const exitCode = result.match(/"exitCode"\s*:\s*(-?\d+)/)?.[1];
+            if (state !== "completed" || exitCode !== "0") {
+              throw new Error(`Scripted shell did not succeed: state=${state}, exitCode=${exitCode ?? "missing"}`);
+            }
+            waitingForShell[route] = false;
+          }
+        }
 
         sequence += 1;
         const id = `chatcmpl-journey-${sequence}`;
         calls.push({
+          ...(options.captureContext ? {
+            systemPrompt,
+            toolResults: messages.filter((message) => message.role === "tool").map((message) =>
+              typeof message.content === "string" ? message.content : JSON.stringify(message.content)),
+          } : {}),
           offeredTools: body.tools?.map((tool) => tool.function?.name ?? ""),
           ...("tool" in step ? { arguments: step.arguments, tool: step.tool } : {}),
           route,
@@ -250,6 +302,7 @@ export function scriptedModel(
           role: "assistant", reasoning_content: step.reasoning,
         }, null))}\n\n`);
         if (step.delayMs) await new Promise((resolveDelay) => setTimeout(resolveDelay, step.delayMs));
+        if ("tool" in step && step.waitFor) await step.waitFor;
         if ("tool" in step) {
           response.write(`data: ${JSON.stringify(completionChunk(id, model, {
             ...(step.text ? { content: step.text } : {}),
@@ -276,6 +329,10 @@ export function scriptedModel(
           })}\n\n`);
         }
         response.end("data: [DONE]\n\n");
+        if (pollingShell) return;
+        if (options.waitForShellCompletion && "tool" in step && step.tool === "run_shell") {
+          waitingForShell[route] = true;
+        }
         if (!("tool" in step)) lastAnswer[route] = step.text;
         if (isSubagent) {
           if ("tool" in step) subagentStepIndex += 1;
@@ -405,8 +462,8 @@ export async function openProjectSession(
   );
   await page.goto("/");
   await expect(page.getByText("ScienceDiscovery").first()).toBeVisible();
-  await page.locator("button.nav-item").filter({ hasText: fixture.project.name }).click();
-  await page.locator("button.nav-item").filter({ hasText: currentSession.title }).click();
+  await page.locator("#projects-panel-content button.nav-item").filter({ hasText: fixture.project.name }).click();
+  await page.locator("#sessions-panel-content button.nav-item").filter({ hasText: currentSession.title }).click();
   await expect(page.getByRole("heading", { exact: true, name: currentSession.title })).toBeVisible();
 }
 
@@ -437,9 +494,19 @@ export async function waitForRunTerminal(
   timeout = 420_000,
 ): Promise<JourneyRun> {
   let current: JourneyRun | undefined;
+  const recovery = new RunPollRecovery();
   await expect.poll(async () => {
-    current = (await apiJson<JourneyRun[]>(page, `/api/sessions/${encodeURIComponent(sessionId)}/runs`))
-      .find((run) => run.id === runId);
+    try {
+      current = (await apiJson<JourneyRun[]>(page, `/api/sessions/${encodeURIComponent(sessionId)}/runs`))
+        .find((run) => run.id === runId);
+      recovery.succeeded();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Only this read-only poll is retried. Never replay task creation or writes.
+      const failures = recovery.failed(error);
+      console.warn(`[run-poll] run=${runId} transient failure ${failures}/3: ${message}`);
+      return "poll_unavailable";
+    }
     return current?.status;
   }, { message: `Run ${runId} should reach a terminal state`, timeout }).toMatch(/^(cancelled|completed|failed|interrupted)$/);
   return current!;
@@ -521,7 +588,8 @@ export async function readRunActivity(page: Page, options: { expandTools?: boole
     tools.push({
       details: (await card.locator(".timeline-content").textContent())?.trim() ?? "",
       status: (await card.locator(".timeline-status").textContent())?.trim() ?? "",
-      summary: (await card.locator("summary").textContent())?.trim() ?? "",
+      // Only the card's own summary: an expanded card can hold nested disclosures.
+      summary: (await card.locator(":scope > summary").textContent())?.trim() ?? "",
     });
   }
   return { text: await views.timelines.allInnerTexts(), tools };
@@ -676,6 +744,121 @@ export function sessionExecutionRuns(page: Page, sessionId: string): Promise<Arr
 /** Query the setup state without triggering installation or other environment changes. */
 export function environmentSetup(page: Page): Promise<{ message: string; state: string }> {
   return apiJson(page, "/api/environment-setup");
+}
+
+/** Records a first-run journey cannot tolerate, counted before anything is deleted. */
+export interface FirstRunLeftovers {
+  models: number;
+  projects: number;
+  providers: number;
+}
+
+/**
+ * Set to `1` only by `.ci/run-e2e.sh`, for the throwaway stack it starts itself
+ * on a run-scoped data directory. Nothing else grants it.
+ */
+export const STACK_RESET_VARIABLE = "E2E_ALLOW_STACK_RESET";
+
+/** The port the guideline reserves for the human's own long-running instance. */
+const TRIAL_INSTANCE_PORT = "4310";
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * Whether this run is allowed to delete records it did not create, and why not
+ * when it is not.
+ *
+ * Deleting every Project and Provider is the right thing to do to a stack the
+ * run owns and the wrong thing to do to anything else, and the suite cannot
+ * tell the two apart by looking at them — a colleague's instance answers the
+ * same API. So permission is granted, never inferred: the E2E layer sets
+ * `E2E_ALLOW_STACK_RESET=1` for the stack it just started, and a suite that was
+ * merely pointed at an address clears nothing. The loopback and trial-port
+ * checks then catch an opt-in that was exported into the wrong shell.
+ */
+export function stackResetRefusal(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const base = apiBaseUrl(env);
+  const target = new URL(base);
+  if (env[STACK_RESET_VARIABLE] !== "1") {
+    return `${STACK_RESET_VARIABLE} is not set, so this run may not delete records on ${base}`;
+  }
+  if (!LOOPBACK_HOSTS.has(target.hostname)) {
+    return `${base} is not a loopback address, so this run may not delete records on it`;
+  }
+  if (target.port === TRIAL_INSTANCE_PORT) {
+    return `${base} is the local trial instance, whose data belongs to its user`;
+  }
+  return undefined;
+}
+
+async function firstRunLeftovers(page: Pick<Page, "request">): Promise<FirstRunLeftovers> {
+  const [projects, providers, models] = await Promise.all([
+    apiJson<Array<{ id: string }>>(page, "/api/projects"),
+    // The registry answers with the catalogue of presets alongside what is
+    // actually configured; only the configured ones exist to delete.
+    apiJson<{ providers: Array<{ id: string }> }>(page, "/api/providers").then((body) => body.providers),
+    apiJson<Array<{ id: string }>>(page, "/api/models"),
+  ]);
+  return { models: models.length, projects: projects.length, providers: providers.length };
+}
+
+/**
+ * Bring this stack to the first-run state a journey reads, or stop the journey
+ * saying why it could not.
+ *
+ * A journey that asserts "create a project" / "no providers yet" cannot reach
+ * that state on a stack that still holds records, and one predecessor that died
+ * mid-run leaves enough behind to fail every later run for an unrelated reason.
+ * Each journey already cleans up its own records in `finally`; this is the other
+ * half — what a crashed predecessor could not clean up.
+ *
+ * It deletes nothing unless this run owns the stack (see `stackResetRefusal`).
+ * On someone's own instance the journey is reported as BLOCKED instead, which
+ * is the honest outcome: the state cannot be reached, and their data is not the
+ * suite's to remove.
+ */
+export async function requireFirstRunState(
+  page: Pick<Page, "request">,
+  testInfo: TestInfo,
+): Promise<FirstRunLeftovers> {
+  const found = await firstRunLeftovers(page);
+  const total = found.projects + found.providers + found.models;
+  if (!total) return found;
+
+  const refusal = stackResetRefusal();
+  expect(refusal, `BLOCKED: this journey reads the first-run empty state, but the stack holds `
+    + `${found.projects} project(s), ${found.providers} provider(s) and ${found.models} model profile(s) from an `
+    + `earlier run. ${refusal}. Run the E2E layer (\`pnpm ci:e2e\`), which starts a throwaway stack and grants the `
+    + `reset, or point E2E_BASE_URL at a stack you can afford to empty — the suite will not clear one it was only `
+    + "pointed at.").toBeUndefined();
+
+  // Sessions reference models, so Projects go first; a runtime default pointing
+  // at a model would otherwise block that model's Provider from being deleted.
+  const projects = await apiJson<Array<{ id: string }>>(page, "/api/projects");
+  for (const project of projects) {
+    await apiJson(page, `/api/projects/${encodeURIComponent(project.id)}`, {
+      data: { confirmationId: project.id },
+      method: "DELETE",
+    });
+  }
+  const settings = await apiJson<{ overrides?: Record<string, unknown> }>(page, "/api/settings").catch(() => undefined);
+  const overrides = { ...(settings?.overrides ?? {}) };
+  const referenced = ["modelId", "reviewModelId"].filter((key) => overrides[key] !== undefined);
+  if (referenced.length) {
+    for (const key of referenced) delete overrides[key];
+    await apiJson(page, "/api/settings", { data: overrides, method: "PUT" });
+  }
+  const { providers } = await apiJson<{ providers: Array<{ id: string }> }>(page, "/api/providers");
+  for (const provider of providers) {
+    await apiJson(page, `/api/providers/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
+  }
+  // A Provider takes its own models with it; anything still listed was added
+  // without one.
+  const models = await apiJson<Array<{ id: string }>>(page, "/api/models");
+  for (const model of models) {
+    await apiJson(page, `/api/models/${encodeURIComponent(model.id)}`, { method: "DELETE" });
+  }
+  return found;
 }
 
 /** Best-effort cleanup for data created in an isolated E2E run. */

@@ -2,6 +2,8 @@
 
 This page lists tools visible inside the agent loop. `createWorkspaceTools` in `packages/workspace` builds them, while `packages/tools` owns registration and dispatch policy; implementations live in the Node control plane while the gateway receives only names, descriptions, and JSON Schema. Except for tools marked always available, Session configuration controls visibility, and `toolPolicy` can further restrict a subagent to a whitelist.
 
+The tables describe **product-owned tools** and the native executor's visible names. In the default JiuwenSwarm backend, its own Web tools replace `web_search`/`web_fetch`, its todo tools replace `update_plan`, and the platform `task` bridge remains the default for subagents. Other Swarm tools may also appear. See [Agent backends](agent-backends.md) for switches and boundaries.
+
 ## Base tools (always available)
 
 | Tool | Parameters | Behavior and boundary |
@@ -22,20 +24,20 @@ Every tool result crosses one bound before model input. Ordinary non-self-bounde
 
 Shell execution requests `code` permission. Generated files retain diff and derivation audit but become Artifacts only after `declare_artifact`; remote files must first be explicitly copied to local storage. Uploads and governed MCP downloads retain their existing Artifact registration flow.
 
-## Web tools (always available)
+## Product Web tools (native default; JiuwenSwarm can use its own)
 
 | Tool | Parameters | Behavior and boundary |
 |---|---|---|
 | `web_search` | `query` (1–2000 characters) | Aggregates search engines — keyed paid providers first, then the enabled free engines — and returns the first that answers; snippets and URLs do not prove the page was read |
 | `web_fetch` | full public HTTP(S) `url` | Extracts one page; rejects credential URLs and private/loopback targets; no cross-provider fallback |
 
-Node performs permission, CAS, and `WebInvocation` audit, and calls the vendors in-process. See [Web tools](web-tools.md).
+When these product tools are selected, Node performs permission, CAS, and `WebInvocation` audit and calls vendors in-process. See [Web tools](web-tools.md).
 
 ## Orchestration tools
 
 | Tool | Condition | Key parameters |
 |---|---|---|
-| `update_plan` | Always available during an Agent run | complete replacement `plan` snapshot (0–20 items with `step` and status), plus optional `explanation`; an empty list clears it |
+| `update_plan` | Native Agent run, or JiuwenSwarm with `SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan` | complete replacement `plan` snapshot (0–20 items with `step` and status), plus optional `explanation`; an empty list clears it |
 | `task` | main run; unavailable inside subagents | `description` ≤80, `prompt` ≤20000, optional Brief v1, up to 50 `inputPaths`, `max_turns` ≤300, `timeout_seconds` ≤3600, `specialistId`, and up to 32 whitelisted `tools`; same-turn calls may run in parallel |
 | `query_graph` | ScienceMemory enabled | case-insensitive cross-Session substring `query`; returns `{hits,total,truncated}` |
 
@@ -47,7 +49,7 @@ Update timing ultimately depends on the selected model's instruction-following a
 
 ## Scientific environment tools
 
-Python and R execute through `run_shell`; separate `run_python` / `run_r` tools are removed. Managed updates occur in place without cloning each revision. See [execution and Workspace lifecycle](../explanation/execution-workspaces.md).
+Python and R execute through `run_shell`; separate `run_python` / `run_r` tools are removed. Managed updates occur in place without cloning each revision. See [execution and Workspace lifecycle](../core/execution-workspaces.md).
 
 These appear after managed scientific-environment setup and capability injection.
 
@@ -77,7 +79,7 @@ Enabled sources expose `mcp__<source>__<tool>` with manifest descriptions and sc
 | Tool | Condition | Boundary |
 |---|---|---|
 | `artifact_download` | any MCP source enabled | Uses a prior `mcpInvocationId` and `candidateId`, optional `destinationPath`; waits for permission and terminal download state; never parses PDF |
-| `paper_extract_pdf` | paper extraction wired | Accepts a completed `artifactJobId` and performs bounded extraction |
+| `paper_extract_pdf` | paper extraction wired | Accepts a completed `artifactJobId`, or the `path` of a PDF already in the workspace (such as an upload), and performs bounded extraction |
 
 Download and extraction require different model turns because same-turn calls are independent and there is no `dependsOn` mechanism.
 
@@ -92,7 +94,7 @@ Download and extraction require different model turns because same-turn calls ar
 | `read_skill_resource` | a selected skill has text resources | Reads bounded UTF-8 supporting content after the skill; never executes or installs it |
 | `create_skill` | the main Agent selected and loaded `skill-creator` with `read_skill` | Creates an inactive, persistent Skill draft from an explicit user description, with optional version and bounded UTF-8 resources. Revisions to the same pending name update one review item and diff against the previous Agent proposal; the conversation provides a review shortcut, and user confirmation publishes the reviewed package as a new immutable Skill Library version |
 
-Skill loading is described in [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md). The complete frozen package of every selected skill is already staged read-only at `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>` before the sandbox starts, and the prompt lists each package path and package hash. Address a package through that variable rather than its expanded value, which is `/skills` only under bubblewrap. `read_file` and `list_files` page through those package files directly and accept `$SCIENCEDISCOVERY_SKILLS_DIR/...`, `${SCIENCEDISCOVERY_SKILLS_DIR}/...`, or the bare bind path; `run_shell` accepts a `scriptPath` inside a package with explicit `arguments`, without copying anything into the workspace first. `$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` is a writable area reserved for later self-evolution and is empty by default. Staging a package is not the same as auto-executing or installing its `scripts/`; execution requires an explicit Agent call. `read_skill` and `read_skill_resource` remain as compatibility channels.
+Skill loading is described in [skill-progressive-disclosure.md](../developer-docs/skill-progressive-disclosure.md). The complete frozen package of every selected skill is already staged read-only at `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>` before the sandbox starts, and the prompt lists each package path and package hash. Address a package through that variable rather than its expanded value, which is `/skills` only under bubblewrap. `read_file` and `list_files` page through those package files directly and accept `$SCIENCEDISCOVERY_SKILLS_DIR/...`, `${SCIENCEDISCOVERY_SKILLS_DIR}/...`, or the bare bind path; `run_shell` accepts a `scriptPath` inside a package with explicit `arguments`, without copying anything into the workspace first. `$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` is a writable area reserved for later self-evolution and is empty by default. Staging a package is not the same as auto-executing or installing its `scripts/`; execution requires an explicit Agent call. `read_skill` and `read_skill_resource` remain as compatibility channels.
 
 `run_npu_job` is a separate, opt-in Host NPU Broker, not a general host Shell. The Broker starts fixed allowlisted entry points and checks Session ownership. The Agent selects `environment_id`; the API resolves its latest Revision for the Broker's internal audit field. An old Revision ID is not an environment selector, and submit rejects `environment_revision_id`. Use `environment_list` and managed package tools to prepare dependencies, then pass the environment ID. NPU hardware availability and workload-specific validation remain separate from ordinary sandboxed Shell execution.
 
@@ -104,7 +106,7 @@ Skill loading is described in [skill-progressive-disclosure.md](../explanation/s
 
 ## Related documentation
 
-- [Agent backend](../explanation/agent-backend.md)
-- [Control plane](../explanation/control-plane.md)
-- [Sandbox execution](../explanation/sandbox-execution.md)
-- [Ascend NPU Host Broker](../explanation/ascend-npu-runner.md)
+- [Agent backend](../developer-docs/agent-backend.md)
+- [Control plane](../developer-docs/control-plane.md)
+- [Sandbox execution](../developer-docs/sandbox-execution.md)
+- [Ascend NPU Host Broker](../developer-docs/ascend-npu-runner.md)

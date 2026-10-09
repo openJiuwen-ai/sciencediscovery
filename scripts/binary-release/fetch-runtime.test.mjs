@@ -1,8 +1,10 @@
+import { createTest } from "../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import test from "node:test";
+
 
 import { binaryCacheUrl, downloadRuntimeArchive, loadManifest, resolveRuntime } from "./fetch-runtime.mjs";
 
@@ -118,46 +120,4 @@ test("cache-only runtime downloads fail without contacting the source", async (c
     /Required binary cache object is missing or invalid/,
   );
   assert.deepEqual(requested, ["https://cache.example/toolchains/v1/runtime.tar.xz"]);
-});
-
-test("the formal workflow consumes caches without owning stable cache uploads", async () => {
-  const manifest = await loadManifest();
-  const micromamba = JSON.parse(await readFile(resolve("services/runner/src/micromamba-releases.json"), "utf8"));
-  const packageJson = JSON.parse(await readFile(resolve("package.json"), "utf8"));
-  const armPackager = await readFile(resolve(".ci/package-binary-codearts.sh"), "utf8");
-  const provisioner = await readFile(resolve(".ci/provision-runner.sh"), "utf8");
-  const workflow = await readFile(resolve(".codearts/workflow/codearts-pipeline.yml"), "utf8");
-
-  for (const entry of Object.values(manifest.uv.architectures)) {
-    // The provisioner names the same wheels but takes the version from this
-    // manifest through .ci/ci-constants.sh instead of spelling it out again.
-    const named = entry.filename.replace(manifest.uv.version, "$UV_REQUIRED");
-    assert.notEqual(named, entry.filename, "the manifest filename does not carry its version");
-    assert.match(provisioner, new RegExp(named.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  }
-  assert.ok(Object.values(micromamba.releases).every((release) => release.condaPackage));
-  const pnpmVersion = packageJson.packageManager.replace(/^pnpm@/, "");
-  // Every CI step moved into a repository script so it runs on the build
-  // quota; the workflow only passes parameters now.
-  const armVerifier = await readFile(resolve(".ci/codearts-verify.sh"), "utf8");
-  const layer = await readFile(resolve(".ci/codearts-layer.sh"), "utf8");
-  assert.match(layer, /short_sha="\$\{source_sha:0:8\}"/);
-  assert.match(armPackager, /short_commit="\$\{artifact_commit:0:8\}"/);
-  assert.match(armPackager, /ARTIFACT_COMMIT/);
-  assert.match(armPackager, /ScienceDiscovery-\$short_commit-linux-\$architecture/);
-  assert.match(armVerifier, /quote\(sys\.argv\[2\], safe=""\)/);
-  assert.doesNotMatch(armVerifier, /toolchain-cache|node-v22\.19\.0-linux-arm64/);
-  assert.match(provisioner, /version="\$\{pnpm_spec#pnpm@\}"/);
-  assert.match(provisioner, /--filename "pnpm-\$version\.tgz"/);
-  assert.match(provisioner, /bfe4d2b2c7a3210565bba62929f9efe493eb5f24627201a102ea4514eae8cf80/);
-  assert.equal(pnpmVersion, "11.1.2");
-  assert.match(workflow, /CI_BINARY_CACHE_URL:[\s\S]*?sciencediscovery\/cache\/toolchains\/v1/);
-  assert.match(layer, /CI_BINARY_CACHE_ONLY=1/);
-  assert.match(
-    workflow,
-    /GIT_TARGET_REF: "refs\/heads\/\$\{sciencediscovery_TARGET_BRANCH\}"/,
-  );
-  assert.match(armPackager, /BINARY_CACHE_ONLY="\$\{CI_BINARY_CACHE_ONLY:-0\}"/);
-  assert.doesNotMatch(workflow, /key: sciencediscovery\/cache\//);
-  assert.doesNotMatch(workflow, /CI_BINARY_CACHE_PUBLISH/);
 });

@@ -1,0 +1,73 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# How GitHub groups a release's pull requests. It is read from the default
+# branch and applies wherever notes are generated — the Releases page, `gh
+# release create --generate-notes`, and the generate-notes API that
+# scripts/release-notes.mjs calls — so the categories below and the counts and
+# contributor list that script adds are one release note, not two.
+#
+# This file classifies; it does not enforce. Nothing here makes a pull request
+# carry exactly one `release:*` label, and an unlabelled one silently lands in
+# Other Changes. The create-github-pr skill owns choosing the label, and a
+# release's Other Changes section is the thing to read first when checking a
+# generated note.
+#
+# A pull request's category is decided by what it changes, never by who opened
+# it. There is deliberately no rule excluding bot authors or `sync-managed`:
+# on this repository the sync and release bots author most of what lands,
+# including real user-facing change, and hiding their work would empty the
+# release note of the things a reader most needs to see.
+changelog:
+  exclude:
+    labels:
+      - release:skip
+
+  categories:
+    # Breaking first: the section a reader upgrading has to see before the
+    # list of things they might enjoy.
+    - title: "💥 Breaking Changes / 不兼容变更"
+      labels:
+        - release:breaking
+
+    - title: "✨ Features / 新功能"
+      labels:
+        - release:feature
+
+    - title: "🐛 Bug Fixes / 问题修复"
+      labels:
+        - release:fix
+
+    - title: "⚡ Performance / 性能优化"
+      labels:
+        - release:performance
+
+    - title: "📚 Documentation / 文档"
+      labels:
+        - release:docs
+
+    - title: "📦 Dependencies / 依赖更新"
+      labels:
+        - release:dependency
+
+    - title: "🔧 Maintenance / 工程维护"
+      labels:
+        - release:internal
+
+    # The catch-all has to stay last and has to stay: without it an unlabelled
+    # pull request is dropped from the note entirely rather than showing up
+    # somewhere visible enough to be noticed and fixed.
+    - title: "Other Changes / 其他变更"
+      labels:
+        - "*"

@@ -11,14 +11,56 @@ import type { AgentNotifications } from "./agent-notifications.js";
 type Record = Omit<AgentShellExecution, "result"> & { resultRef?: AgentStateRef };
 type RecordExecution = (id: string, dispatch: RunnerClient["executeShell"], status: () => "succeeded" | "failed" | "cancelled") => Promise<ShellExecutionResult>;
 const terminal = (state: ManagedExecution["state"]) => state !== "queued" && state !== "running";
+const MAX_CONSECUTIVE_OBSERVATION_FAILURES = 5;
+const MAX_OBSERVATION_RETRY_DELAY_MS = 5_000;
 class RecordedRunnerFailure extends Error {}
+type ObservationFailure = { cause?: unknown; code?: unknown; message?: unknown; name?: unknown; statusCode?: unknown };
+const observationFailureChain = (error: unknown): ObservationFailure[] => {
+  const chain: ObservationFailure[] = [];
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current) && chain.length < 8) {
+    seen.add(current);
+    const failure = current as ObservationFailure;
+    chain.push(failure);
+    current = failure.cause;
+  }
+  return chain;
+};
+const observationHttpStatus = (chain: ObservationFailure[]): number | undefined => {
+  for (const failure of chain) {
+    if (typeof failure.statusCode === "number") return failure.statusCode;
+    const match = typeof failure.message === "string"
+      ? /Runner request failed \((\d{3})\)/i.exec(failure.message) : null;
+    if (match) return Number(match[1]);
+  }
+  return undefined;
+};
+const retryableObservationFailure = (error: unknown): boolean => {
+  const chain = observationFailureChain(error);
+  const status = observationHttpStatus(chain);
+  if (status !== undefined) return status === 502 || status === 503 || status === 504;
+  return chain.some((failure) =>
+    failure.name === "TimeoutError" || failure.name === "AbortError"
+    || (typeof failure.message === "string" && /fetch failed|operation was aborted|Remote runner is not connected/i.test(failure.message))
+    || (typeof failure.code === "string" && /^(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_[A-Z0-9_]+)$/i.test(failure.code)));
+};
+const errorDetail = (error: unknown): string => {
+  if (!(error instanceof Error)) return String(error);
+  const chain = observationFailureChain(error);
+  const code = chain.map((failure) => failure.code).find((value): value is string => typeof value === "string");
+  if (code) return `${error.message} (${code})`;
+  const status = observationHttpStatus(chain);
+  return status !== undefined && !error.message.includes(String(status)) ? `${error.message} (HTTP ${status})` : error.message;
+};
 
 /** Tracks accepted work independently of an Agent turn. It never replays commands. */
 export class ShellExecutions {
   private readonly active = new Map<string, Promise<void>>();
 
   constructor(private readonly db: DatabaseSync, private readonly versions: VersionStore,
-    private readonly notifications: AgentNotifications, private readonly pollMs = 200) {
+    private readonly notifications: AgentNotifications, private readonly pollMs = 200,
+    private readonly waitForPoll: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
     db.exec("CREATE TABLE IF NOT EXISTS shell_executions (id TEXT PRIMARY KEY, session TEXT NOT NULL, agent TEXT NOT NULL, record TEXT NOT NULL)");
     for (const row of db.prepare("SELECT record FROM shell_executions").all()) {
       const execution = JSON.parse(String(row.record)) as Record;
@@ -41,8 +83,10 @@ export class ShellExecutions {
     return JSON.parse(String(row.record)) as Record;
   }
 
-  snapshot(sessionId: string): Record[] {
-    return this.db.prepare("SELECT record FROM shell_executions WHERE session = ? ORDER BY rowid").all(sessionId)
+  snapshot(sessionId: string, agentId?: string): Record[] {
+    const where = agentId === undefined ? "session = ?" : "session = ? AND agent = ?";
+    const args = agentId === undefined ? [sessionId] : [sessionId, agentId];
+    return this.db.prepare(`SELECT record FROM shell_executions WHERE ${where} ORDER BY rowid`).all(...args)
       .map((row) => JSON.parse(String(row.record)) as Record);
   }
 
@@ -81,6 +125,8 @@ export class ShellExecutions {
     let acknowledge!: () => void;
     const accepted = new Promise<void>((resolve) => { acknowledge = resolve; });
     let observed: ManagedExecution | undefined;
+    let consecutiveObservationFailures = 0;
+    let nextPollDelayMs = this.pollMs;
     const assertOwner = (value: ManagedExecution) => {
       if (value.id !== execution.id || value.sessionId !== owner.sessionId || value.agentId !== owner.agentId) {
         throw new Error("Runner Execution identity mismatch");
@@ -105,8 +151,22 @@ export class ShellExecutions {
             execution.state = observed.state === "queued" ? "queued" : "running";
             this.save(execution);
             if (terminal(observed.state)) break;
-            await new Promise<void>((resolve) => setTimeout(resolve, this.pollMs));
-            observed = await runner().getShellExecution(execution.id, owner, AbortSignal.timeout(10_000));
+            await this.waitForPoll(nextPollDelayMs);
+            try {
+              observed = await runner().getShellExecution(execution.id, owner, AbortSignal.timeout(10_000));
+              consecutiveObservationFailures = 0;
+              nextPollDelayMs = this.pollMs;
+            } catch (error) {
+              if (!retryableObservationFailure(error)) throw error;
+              consecutiveObservationFailures++;
+              if (consecutiveObservationFailures >= MAX_CONSECUTIVE_OBSERVATION_FAILURES) {
+                throw new Error(`Runner status remained unavailable after ${consecutiveObservationFailures} consecutive attempts: ${
+                  errorDetail(error)}`, { cause: error });
+              }
+              // The command has already been accepted. A failed status read is
+              // not a failed execution; query the same ID again, never submit it.
+              nextPollDelayMs = Math.min(this.pollMs * 2 ** (consecutiveObservationFailures - 1), MAX_OBSERVATION_RETRY_DELAY_MS);
+            }
           }
           if (!observed.result && (observed.state === "failed" || observed.state === "cancelled")
             && (observed.version || !observed.startedAt)) {
@@ -127,7 +187,7 @@ export class ShellExecutions {
         const recorded = error instanceof RecordedRunnerFailure;
         if (observed?.version) execution.runnerVersionId = observed.version.digest;
         this.finish(execution, { state: recorded ? observed!.state : "unknown", provenance: recorded ? "committed" : "unconfirmed",
-          error: error instanceof Error ? error.message : "Execution finalization failed" });
+          error: error instanceof Error ? errorDetail(error) : "Execution finalization failed" });
       } finally { acknowledge(); }
     }).catch(() => {
       // Storage failures must not become an unhandled rejection or a successful completion.

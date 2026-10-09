@@ -28,6 +28,8 @@ from typing import Any, Dict
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.script_domain import ScriptError, script_domain
 from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 
@@ -74,10 +76,7 @@ with open(os.environ["SCIENCE_AGENT_RESULT"], "w") as handle:
 GOOD = "def measure(text):\n    return len(text)\n"
 BAD = "def measure(text):\n    return 0\n"
 
-live = pytest.mark.skipif(
-    not detect_local_capability().available,
-    reason="needs a real sandbox: a candidate is model-written code and must not run unisolated",
-)
+live = pytest.mark.science_tags(sandbox="bubblewrap")
 
 
 def domain(script: str = EVALUATOR, card: Dict[str, Any] = CARD):

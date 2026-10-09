@@ -18,6 +18,9 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-reviewer-localization.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -94,4 +97,6 @@ test("中文界面保留 Reviewer Specialist 名称并本地化审核控制项",
     }).catch(() => undefined);
     await cleanupJourney(page, fixture);
   }
+});
+
 });

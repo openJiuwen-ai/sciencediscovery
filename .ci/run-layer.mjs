@@ -18,12 +18,17 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { isAbsolute, join, resolve } from "node:path";
 
-import { layers, utGuestPackages } from "./test-catalog.mjs";
+import { layers, stepArguments } from "./test-catalog.mjs";
 
 const layer = process.argv[2];
+// Anything after the layer name is forwarded to the shared runner — `--profile`
+// is how a scheduled or tagged pipeline asks for a policy other than `pr`.
+// Only to the shared runner: the opt-in live layers' install and build steps
+// would choke on a flag meant for the planner.
+const forwarded = process.argv.slice(3);
 
 if (!(layer in layers)) {
-  console.error(`Usage: node .ci/run-layer.mjs ${Object.keys(layers).sort().join("|")}`);
+  console.error(`Usage: node .ci/run-layer.mjs ${Object.keys(layers).sort().join("|")} [--profile <name>]`);
   process.exit(2);
 }
 
@@ -52,7 +57,10 @@ async function run(command, args) {
   emit(`\n$ ${display}\n`, process.stdout);
   const child = spawn(command, args, {
     cwd: repositoryRoot,
-    env: { ...process.env, CI: "1", SCIENCE_AGENT_DATA_DIR: runtimeRoot },
+    // Resolve CI_RESULTS_DIR for the step too, so the frozen plan a slice
+    // writes lands beside this layer's own log instead of under the default
+    // the step would have picked for itself.
+    env: { ...process.env, CI: "1", CI_RESULTS_DIR: resultsRoot, SCIENCE_AGENT_DATA_DIR: runtimeRoot },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (chunk) => {
@@ -103,33 +111,13 @@ try {
     if (!process.env.SCIENCE_AGENT_NPU_PYTHON?.trim()) {
       throw new Error("missing SCIENCE_AGENT_NPU_PYTHON");
     }
-  } else if (layer === "ut-guest") {
-    // The guest tier only runs tests. Its host installs and builds the
-    // workspace and hands the result over, so a missing dependency tree or
-    // build output is a broken handover, not something to rebuild here under
-    // software emulation.
-    // Check what this tier actually consumes. The root install tree is not
-    // shipped: pnpm links workspace dependencies straight at their package
-    // directories, so the guest needs those links and the build output, and
-    // nothing from the store.
-    const required = utGuestPackages.flatMap(({ directory }) => [
-      join(directory, "dist"),
-      join(directory, "node_modules"),
-    ]);
-    for (const relativePath of required) {
-      try {
-        await stat(join(repositoryRoot, relativePath));
-      } catch {
-        throw new Error(`${relativePath} is missing; the guest tier expects a workspace its host already installed and built`);
-      }
-    }
   }
   const configuredRuntimeRoot = process.env.CI_RUNTIME_DIR?.trim() || "/ci-cache/sciencediscovery-tests";
   await mkdir(configuredRuntimeRoot, { recursive: true });
   runtimeRoot = await mkdtemp(join(configuredRuntimeRoot, `${layer}-`));
   await stat(join(repositoryRoot, "package.json"));
   for (const [command, args] of layers[layer]) {
-    const result = await run(command, args);
+    const result = await run(command, stepArguments([command, args], forwarded));
     exitCode = result.exitCode;
     if (layer === "st-npu" && exitCode === 0 && !validNpuSmoke(result.stdout)) {
       exitCode = 1;

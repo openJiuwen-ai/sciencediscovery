@@ -69,7 +69,7 @@ def completion_for(
     token: str,
     *,
     max_tokens: int = 16_000,
-    temperature: float = 0.7,
+    temperature: Optional[float] = None,
     thinking: Optional[str] = None,
     timeout: float = 300.0,
     on_usage: Optional[Callable[[CompletionUsage], None]] = None,
@@ -104,6 +104,13 @@ def completion_for(
     Leaving it unset sends nothing, which is what a provider that has never
     heard of the field should receive. The option is one-sided anyway: an
     endpoint that does not know it ignores it.
+
+    ``temperature`` is the same story: left unset, nothing is sent and the
+    provider's own default applies — observed necessary on a deployment whose
+    gateway rejects every value except the one it was configured with
+    (``HTTP 400 invalid temperature: only 0.6 is allowed for this model``),
+    which turned every mutation call into a failed candidate. A caller that
+    wants a specific value can still pass one.
 
     ``max_tokens`` defaults high because a reasoning model with thinking left on
     spends the budget on hidden tokens and returns an empty reply — and an empty
@@ -156,8 +163,9 @@ def completion_for(
         body: dict[str, Any] = {
             "max_tokens": max_tokens,
             "messages": [{"content": prompt, "role": "user"}],
-            "temperature": temperature,
         }
+        if temperature is not None:
+            body["temperature"] = temperature
         if thinking:
             body["thinking"] = {"type": thinking}
         payload = json.dumps(body).encode("utf-8")

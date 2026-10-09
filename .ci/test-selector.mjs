@@ -19,7 +19,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { assertCiContract, catalogProblems, knownTags } from "./ci-contract.mjs";
-import { tagDimensions, testCases, utWorkloads } from "./test-catalog.mjs";
+import { layers, tagDimensions, testCases } from "./test-catalog.mjs";
 
 const actions = new Set(["check", "list", "run", "tags"]);
 const action = process.argv[2];
@@ -230,10 +230,7 @@ try {
     if (action === "check") {
       if (args.length > 0) throw new Error("check takes no options");
       await assertCiContract();
-      const tiers = ["host", "guest"]
-        .map((tier) => `${tier}=${utWorkloads.filter((workload) => workload.tier === tier).length}`)
-        .join(", ");
-      console.log(`CI test catalog OK: ${testCases.length} cases, ${knownTags().size} tags, UT workloads ${tiers}`);
+      console.log(`CI test catalog OK: ${testCases.length} cases, ${knownTags().size} tags, ${Object.keys(layers).length} layers`);
     } else if (action === "tags") {
       if (options.cases.length || options.excludes.length || options.tags.length) throw new Error("tags only accepts --json");
       printTags(options.json);

@@ -195,10 +195,13 @@ export const DEFAULT_SYSTEM_TIMEOUT_SETTINGS: SystemTimeoutSettings = {
 };
 
 /**
- * Product-level volume quotas. A value of 0 disables that limit
+ * Product-level resource quotas. For byte quotas, 0 disables the limit
  * (unlimited workspace / upload, or no output truncation).
+ * Subagent concurrency instead requires an integer from 1 to 10.
  */
 export interface SystemQuotaSettings {
+  /** Per parent run, queued tasks wait without consuming a child execution deadline. Defaults to 10. */
+  maxConcurrentSubagents?: number;
   /** Combined stdout+stderr retain budget for one execution; 0 disables truncation. */
   runnerMaxOutputBytes: number;
   /**
@@ -240,7 +243,9 @@ export interface MemoryGraphSettings {
 }
 
 export const DEFAULT_MEMORY_GRAPH_SETTINGS: MemoryGraphSettings = {
-  enabled: false,
+  // On for a new data directory: the local backend needs nothing installed. A directory keeps the value it
+  // was created with, so an existing installation is not switched on behind its user's back.
+  enabled: true,
   backend: "local",
   neo4jHttp: "http://127.0.0.1:7474",
   neo4jUser: "neo4j",

@@ -1,0 +1,115 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The scheduled build runs the default branch and dispatches an independent
+# run for the release branch. Each run uses that branch's own nightly.yml and
+# ci.yml, and keeps the packaged binaries it produces, stamped with the date
+# and commit so a build can be traced back to what went into it.
+#
+# Daily adds real-model E2E to the hermetic merge gate. The reusable workflow
+# owns both jobs; the daily profile selects paid journeys from source tags.
+
+name: Nightly
+
+on:
+  schedule:
+    # 16:00 UTC is 00:00 the next day in Asia/Shanghai, so the run starts
+    # overnight for the team that reads it and has finished by the working
+    # morning. GitHub schedules cron only on the default branch, evaluates it
+    # in UTC with no daylight-saving adjustment, and drops or delays runs when
+    # its queue is busy — treat a missing night as a scheduling miss and
+    # re-dispatch rather than as a build failure.
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # GitHub evaluates schedules only from the default branch. Dispatching the
+  # release ref creates a separate workflow run whose GITHUB_REF/GITHUB_SHA,
+  # jobs, logs and artifacts all belong to that branch. This job has no needs,
+  # so the two branch runs can proceed in parallel. The event guard prevents a
+  # manually dispatched run from fanning out or recursing.
+  dispatch-release:
+    name: Dispatch release Nightly
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Start the release branch run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: releases/v0.3.0.beta
+        run: |
+          gh workflow run nightly.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${RELEASE_REF}"
+
+  # A separate job only because GitHub expressions cannot produce a date, and
+  # the version has to be decided before the reusable workflow is called.
+  stamp:
+    name: Stamp the build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.stamp.outputs.version }}
+    steps:
+      - id: stamp
+        # The date is the run's own, in the same zone as the cron above, so a
+        # build started at 00:00 Asia/Shanghai carries that day. The short SHA
+        # is what makes the name resolvable: two nights can share a date, but
+        # not a commit.
+        run: |
+          date=$(TZ=Asia/Shanghai date +%Y%m%d)
+          echo "version=nightly-${date}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+  gate:
+    name: Gate
+    needs: stamp
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+    with:
+      # Includes real-model and judge cases; PR remains credential-free.
+      profile: daily
+      release-version: ${{ needs.stamp.outputs.version }}
+
+  # The nightly build is only useful if a failure is visible without opening
+  # it, and a scheduled run has no pull request to turn red. This states the
+  # outcome of every gate job in the run summary.
+  report:
+    name: Report the outcome
+    needs: [stamp, gate]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize
+        env:
+          RESULT: ${{ needs.gate.result }}
+          VERSION: ${{ needs.stamp.outputs.version }}
+        run: |
+          {
+            echo "### Nightly ${VERSION}"
+            echo
+            echo "Gate: **${RESULT}** for \`${GITHUB_SHA}\`"
+            echo
+            echo "Binaries are attached to this run as \`binary-release-x86_64\`"
+            echo "and \`binary-release-aarch64\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # A skipped or cancelled gate is not a pass either; only success is.
+          [[ "${RESULT}" == "success" ]]

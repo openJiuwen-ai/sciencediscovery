@@ -1,10 +1,14 @@
+
+import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine, ResearchStore, node, now
+from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine, ResearchStore, node, now, parse_json
 from sciencediscovery_evolve.vendor.idea_tree.research_service import Settings
 from sciencediscovery_evolve.vendor.idea_tree.templates import snapshot
 
@@ -200,6 +204,24 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state['status'], 'interrupted')
         self.assertEqual(len(self.store.read('p', 's', 'research-test')['nodes']), 1)
 
+    async def test_a_parent_outside_the_selection_gets_one_correction(self):
+        # Observed with Kimi: round 2 proposed under a direction that was not selected, and the
+        # research stopped without the model being told, as a malformed answer would have been.
+        self.state['settings']['maxRounds'] = 1
+        asked = []
+
+        async def model(role, payload):
+            if role == 'ideate':
+                asked.append(payload)
+                parent = 'NOT-SELECTED' if len(asked) == 1 else payload['selectedParentIds'][0]
+                return json.dumps(dict(candidates=[dict(parentId=parent, direction='D', hypothesis='H', rationale='R')], reason='r')), 10
+            return await self.model(role, payload)
+        self.state['nodes'].append({**node('NOT-SELECTED', 'ROOT', 'Other', 'direction', 1), 'searchStatus': 'pruned'})
+        await IdeaTreeEngine(self.state, self.store, {}, model).run()
+        self.assertEqual(len(asked), 2)
+        self.assertIn('not selected', asked[1]['correction'])
+        self.assertNotEqual(self.state['status'], 'interrupted')
+
     async def test_propagation_resume_skips_saved_parent(self):
         self.state['settings']['maxRounds'] = 1
         fail = True
@@ -230,7 +252,7 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         from sciencediscovery_evolve.vendor.idea_tree import research_service as service
         from fastapi import HTTPException
         entered, release = asyncio.Event(), asyncio.Event()
-        async def ask(engine, role, payload):
+        async def ask(engine, role, payload, check=None):
             entered.set()
             await release.wait()
             engine.check_stop()
@@ -323,3 +345,40 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved['status'], 'interrupted')
         self.assertEqual(saved['activities'][0]['status'], 'failed')
         self.assertEqual(saved['activities'][0]['error'], 'provider unavailable')
+
+
+def test_transport_leaves_temperature_to_the_provider(monkeypatch):
+    # Kimi answers 400 "invalid temperature: only 1 is allowed" to any other value.
+    sent = []
+
+    class Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self, *_):
+            return json.dumps(dict(choices=[dict(message=dict(content='{}'))], usage=dict(total_tokens=7))).encode()
+
+    def urlopen(request, timeout):
+        sent.append(json.loads(request.data))
+        return Reply()
+
+    monkeypatch.setattr('urllib.request.urlopen', urlopen)
+    with tempfile.TemporaryDirectory() as root:
+        engine = IdeaTreeEngine(dict(id='r'), ResearchStore(Path(root)), dict(url='http://model.test/v1/chat/completions', token='t'))
+        assert engine.transport('system', dict(a=1), 100) == ('{}', 7)
+    assert 'temperature' not in sent[0]
+    assert sent[0]['max_tokens'] == 100
+
+
+def test_a_fenced_json_answer_is_read_as_json():
+    # Kimi answers the ideation prompt with ```json ... ```.
+    assert parse_json('```json\n{"candidates": []}\n```') == {'candidates': []}
+    assert parse_json('  ```\n{"a": 1}\n```  ') == {'a': 1}
+    assert parse_json('{"a": 1}') == {'a': 1}
+    with pytest.raises(ValueError):
+        parse_json('```python\n{"a": 1}\n```')
+    with pytest.raises(ValueError):
+        parse_json('Here it is: {"a": 1}')

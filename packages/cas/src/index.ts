@@ -14,7 +14,7 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { CasObjectRef } from "@sciencediscovery/schema";
@@ -100,6 +100,25 @@ export class CasStore implements ContentStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
+    }
+    throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
+  }
+
+  /** Stream immutable content without placing large artifacts in memory. */
+  async *stream(hash: string): AsyncGenerator<Buffer> {
+    for (const path of this.readPaths(hash)) {
+      let file;
+      try { file = await open(path, "r"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+      const digest = createHash("sha256");
+      try {
+        for await (const chunk of file.createReadStream({ autoClose: false })) {
+          digest.update(chunk as Buffer);
+          yield chunk as Buffer;
+        }
+        if (digest.digest("hex") !== hash) throw new Error("CAS integrity failure");
+      } finally { await file.close(); }
+      return;
     }
     throw Object.assign(new Error("CAS object not found"), { code: "ENOENT" });
   }

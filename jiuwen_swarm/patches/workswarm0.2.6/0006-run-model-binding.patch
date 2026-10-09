@@ -1,0 +1,142 @@
+diff --git a/jiuwenswarm/server/runtime/agent_adapter/interface.py b/jiuwenswarm/server/runtime/agent_adapter/interface.py
+--- a/jiuwenswarm/server/runtime/agent_adapter/interface.py
++++ b/jiuwenswarm/server/runtime/agent_adapter/interface.py
+@@ -2663,6 +2663,7 @@
+             request.session_id,
+             compute_chat_send_mcp_needed(params),
+             model_name=params.get("model_name"),
++            run_model=params.get("run_model"),
+             history_before_request_id=request.request_id,
+         )
+ 
+@@ -2977,6 +2978,7 @@
+             request.session_id,
+             compute_chat_send_mcp_needed(params),
+             model_name=params.get("model_name"),
++            run_model=params.get("run_model"),
+             history_before_request_id=request.request_id,
+         )
+ 
+@@ -4086,6 +4088,7 @@
+         needed: list[str] | None,
+         *,
+         model_name: str | None = None,
++        run_model: dict | None = None,
+         history_before_request_id: str | None = None,
+     ) -> None:
+         """Reconcile this session's MCP set to ``needed`` (idempotent diff).
+@@ -4118,6 +4121,10 @@
+                 for parameter in parameters.values()
+             )
+             supported_kwargs = {}
++            if run_model is not None:
++                if "run_model" not in parameters and not accepts_kwargs:
++                    raise ValueError("This adapter does not support run-level model binding")
++                supported_kwargs["run_model"] = run_model
+             if "model_name" in parameters or accepts_kwargs:
+                 supported_kwargs["model_name"] = model_name
+             if "history_before_request_id" in parameters or accepts_kwargs:
+diff --git a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+--- a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
++++ b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+@@ -2627,10 +2627,19 @@
+         session_id: str | None,
+         *,
+         model_name: str | None = None,
++        run_model: dict | None = None,
+         pending_mcp_scan_names: set[str] | None = None,
+         history_before_request_id: str | None = None,
+     ) -> "JiuWenSwarmDeepAdapter":
+         """Return the session-owned adapter, creating and initializing it once."""
++        if run_model is not None:
++            if not isinstance(run_model, dict) or any(
++                not isinstance(run_model.get(key), str) or not run_model[key].strip()
++                for key in ("model_name", "api_base", "api_key", "client_provider")
++            ):
++                raise ValueError("Invalid run-level model binding")
++            if model_name != run_model["model_name"]:
++                raise ValueError("Run-level model name does not match requested model")
+         if self._is_session_scoped_adapter:
+             self._touch_session_adapter(session_id)
+             return self
+@@ -2697,11 +2706,17 @@
+                     # live MCPs later, but cannot dispose the child underneath
+                     # this first caller.
+                     existing.mark_session_mcp_reconcile_started()
++                if run_model is not None and run_model != getattr(existing, "_run_model", None):
++                    if existing.is_session_active(sid) or existing.is_deep_agent_executing_for_session(sid):
++                        raise ValueError("Cannot replace model binding of an active session")
++                    existing._run_model = dict(run_model)
++                    await existing.reload_agent_config(reload_scopes={"model"})
+                 await self._reload_session_adapter_if_stale(sid, existing)
+                 self._touch_session_adapter(sid)
+                 return existing
+ 
+             adapter = self._new_session_scoped_adapter(sid)
++            adapter._run_model = dict(run_model) if run_model is not None else None
+             restored_profile = self._load_skill_retrieval_session_profile(sid)
+             restored_mcp_names = (
+                 {
+@@ -4112,6 +4127,7 @@
+         needed: list[str] | None,
+         *,
+         model_name: str | None = None,
++        run_model: dict | None = None,
+         history_before_request_id: str | None = None,
+     ) -> None:
+         """Reconcile this session's MCP set to ``needed`` (idempotent diff).
+@@ -4131,6 +4147,7 @@
+         child = await self._get_or_create_session_adapter(
+             session_id,
+             model_name=model_name,
++            run_model=run_model,
+             pending_mcp_scan_names=needed_set,
+             history_before_request_id=history_before_request_id,
+         )
+@@ -5393,6 +5410,15 @@
+         inject_attribution_to_config(config)
+ 
+     def _create_model(self, config: dict) -> Model:
++        # Session-owned connection parameters outlive approval transport requests,
++        # but never enter the process-wide model catalog or persisted config.
++        binding = getattr(self, "_run_model", None)
++        if binding is not None:
++            from copy import deepcopy
++            config = deepcopy(config)
++            config["models"] = {"defaults": [{
++                "model_client_config": dict(binding), "model_config_obj": {}, "is_default": True,
++            }]}
+         # 指纹比对：模型配置未变且缓存非空时跳过重建，避免热更新时反复销毁/重建 Model 实例
+         new_fp = self._models_config_fingerprint(config)
+         if (
+@@ -5452,6 +5478,8 @@
+ 
+         self._default_model_name = default_name
+         self._model = self._model_cache[default_name]
++        if binding is not None:
++            self._last_resolved_model = self._model
+         self._model_client_config = self._model.model_client_config
+         self._model_request_config = self._model.model_config
+         self._selected_model_context_window_tokens = getattr(
+@@ -5533,6 +5561,9 @@
+         while keeping the pure-name path (format 1) intact.
+         """
+         requested = (requested_model_name or "").strip()
++        binding = getattr(self, "_run_model", None)
++        if binding is not None and requested and requested != binding["model_name"]:
++            raise ValueError("Requested model does not match the session's run binding")
+         if not requested:
+             # ask_user_interrupt 等中断恢复请求不带 model_name，
+             # 回退到 session 上次应用的模型，而非 config.yaml 默认占位模型。
+diff --git a/jiuwenswarm/common/e2a/gateway_normalize.py b/jiuwenswarm/common/e2a/gateway_normalize.py
+--- a/jiuwenswarm/common/e2a/gateway_normalize.py
++++ b/jiuwenswarm/common/e2a/gateway_normalize.py
+@@ -521,6 +521,8 @@
+     if kind == E2A_RESPONSE_KIND_E2A_ERROR and e2a.is_final:
+         det = body.get("details")
+         pl = dict(det) if isinstance(det, dict) else dict(body)
++        pl["event_type"] = "chat.error"
++        pl.setdefault("error", body.get("message") or "Agent error")
+         return AgentResponseChunk(agent_ref=_agent_ref, metadata=_meta, 
+             request_id=rid,
+             channel_id=ch,

@@ -13,6 +13,9 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-sandbox-network-settings.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: Sandbox network settings recommend only the current execution tool at desktop and narrow widths.
@@ -52,4 +55,6 @@ test("沙箱网络设置只推荐当前 Shell 工具", { tag: "@mocked" }, async
   } finally {
     await cleanupJourney(page, fixture);
   }
+});
+
 });

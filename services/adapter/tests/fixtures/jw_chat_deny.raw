@@ -1,0 +1,16 @@
+ACK {"type": "event", "event": "connection.ack", "payload": {"protocol_version": "1.0", "transport": "tui"}}
+{"type": "res", "id": "chat-c61b0f7d", "ok": true, "payload": {"accepted": true, "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-deny-6832", "is_processing": true, "is_complete": false}}
+{"type": "event", "event": "chat.tool_result", "payload": {"event_type": "chat.tool_result", "result": "success=False data=None error=''", "tool_name": "bash", "tool_call_id": "call_1789918998724", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.ask_user_question", "payload": {"event_type": "chat.ask_user_question", "request_id": "call_1789918998724", "questions": [{"question": "write /tmp/j-mark-2", "header": "权限审批: bash", "options": [{"label": "本次允许", "description": "仅本次授权执行"}, {"label": "会话内记住", "description": "本次会话内自动放行同类操作"}, {"label": "永久记住", "description": "写回磁盘，所有会话均自动放行"}, {"label": "拒绝", "description": "拒绝执行此工具"}], "multi_select": false}], "source": "permission_interrupt", "session_id": "rec-deny-6832"}}
+{"type": "res", "id": "answer-a98f4900", "ok": true, "payload": {"accepted": true, "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-deny-6832", "is_processing": true, "is_complete": false}}
+{"type": "event", "event": "chat.final", "payload": {"event_type": "chat.final", "content": "", "final_mode": "patch_segment", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.tool_call", "payload": {"event_type": "chat.tool_call", "tool_call": {"name": "bash", "arguments": "{\"command\": \"touch /tmp/j-mark-2 && echo J-MARK-2\"}", "tool_call_id": "call_1789918998724", "display_name": "执行 touch /tmp/j-mark-2 && echo J-MARK-2"}, "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.tool_update", "payload": {"event_type": "chat.tool_update", "tool_name": "bash", "tool_call_id": "call_1789918998724", "arguments": "{\"command\": \"touch /tmp/j-mark-2 && echo J-MARK-2\"}", "status": "in_progress", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.tool_result", "payload": {"event_type": "chat.tool_result", "result": "拒绝", "tool_name": "bash", "tool_call_id": "call_1789918998724", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "approved ", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "and ", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "done", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.final", "payload": {"event_type": "chat.final", "content": "approved and done", "final_mode": "patch_segment", "session_id": "rec-deny-6832"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-deny-6832", "is_processing": false, "is_complete": true}}

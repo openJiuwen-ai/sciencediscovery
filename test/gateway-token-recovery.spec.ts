@@ -16,6 +16,9 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { BROWSER_TOKEN_STORAGE_KEY, requireApiToken } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("gateway-token-recovery.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * Recovering from a rejected access token.
  *
@@ -106,4 +109,6 @@ test("the recovery dialog stays operable on a narrow viewport", async ({ page })
   await saveToken(page, requireApiToken());
 
   await expect(connectionDialog(page)).toBeHidden();
+});
+
 });

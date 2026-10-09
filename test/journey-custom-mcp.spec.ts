@@ -14,6 +14,9 @@ import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-custom-mcp.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN", actionTimeout: 15_000 });
 
 /**
@@ -182,11 +185,11 @@ test("Custom MCP and Inspector user journey", { tag: "@mocked" }, async ({ page,
 
 /**
  * E2E-META
- * Purpose: Agent discovers and calls a custom MCP tool after Session-level selection.
+ * Purpose: Agent discovers and calls selected custom MCP tools, including one added after a prior run.
  * Steps:
- *   1. Select the custom connector in the composer.
- *   2. Send a request; the scripted local model discovers and invokes the MCP tool.
- *   3. Assert persisted successful MCP invocation and final response; clean up.
+ *   1. Select the first custom connector and call its echo tool.
+ *   2. Add a second connector to the Session and call its echo tool in a new run.
+ *   3. Assert persisted successful MCP invocations and final responses; clean up.
  * Environment: Isolated local stack and data directory, current local working tree.
  * Type: mocked
  * LLM: Local deterministic OpenAI-compatible stub; no provider API is called.
@@ -195,51 +198,84 @@ test("Custom MCP and Inspector user journey", { tag: "@mocked" }, async ({ page,
  * MCP: Real SDK stdio echo fixture on the API host.
  * OtherExternal: none; browser non-local requests are blocked.
  * Credentials: E2E_API_TOKEN; local stub token has no external access.
- * CostSideEffects: Temporary model, project and MCP server; removed in finally.
+ * CostSideEffects: Temporary model, project and two MCP servers; removed in finally.
  */
-test("Agent uses a selected custom MCP server", { tag: "@mocked" }, async ({ page, journey }) => {
+test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, async ({ page, journey }) => {
   await page.addInitScript(() => localStorage.setItem("science-agent-locale", "zh-CN"));
   const name = `Agent MCP ${Date.now()}`;
-  const savedResponse = await page.request.post(`${apiBaseUrl()}/api/mcp/servers`, { headers: authorizationHeader(), data: {
-    name, command: process.execPath, args: [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url))], enabled: true,
-  } });
-  expect(savedResponse.ok()).toBe(true);
-  const saved = await savedResponse.json() as { id: string };
-  const toolsResponse = await page.request.get(`${apiBaseUrl()}/api/mcp/sources/${saved.id}/tools`, { headers: authorizationHeader() });
-  expect(toolsResponse.ok()).toBe(true);
-  const tools = await toolsResponse.json() as Array<{ id: string; mcpToolName: string }>;
-  const tool = tools.find((item) => item.mcpToolName === "echo")!;
-  const toolName = `mcp__${saved.id}__${tool.id}`;
+  const makeServer = async (suffix: string) => {
+    const serverName = `${name} ${suffix}`;
+    const savedResponse = await page.request.post(`${apiBaseUrl()}/api/mcp/servers`, { headers: authorizationHeader(), data: {
+      name: serverName, command: process.execPath, args: [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url))], enabled: true,
+    } });
+    expect(savedResponse.ok()).toBe(true);
+    const saved = await savedResponse.json() as { id: string };
+    const toolsResponse = await page.request.get(`${apiBaseUrl()}/api/mcp/sources/${saved.id}/tools`, { headers: authorizationHeader() });
+    expect(toolsResponse.ok()).toBe(true);
+    const tools = await toolsResponse.json() as Array<{ id: string; mcpToolName: string }>;
+    const tool = tools.find((item) => item.mcpToolName === "echo")!;
+    return { id: saved.id, name: serverName, toolName: `mcp__${saved.id}__${tool.id}` };
+  };
+  const first = await makeServer("first");
+  const second = await makeServer("second");
   const stub = await scriptedModel([
-    { tool: "tool_search", arguments: { query: `select:${toolName}` } },
-    { tool: toolName, arguments: { text: "agent mcp verified" } },
-    { text: "AGENT MCP VERIFIED" },
+    [
+      { tool: "tool_search", arguments: { query: `select:${first.toolName}` } },
+      { tool: first.toolName, arguments: { text: "first mcp verified" } },
+      { text: "FIRST MCP VERIFIED" },
+    ],
+    [
+      { tool: "tool_search", arguments: { query: `select:${second.toolName}` } },
+      { tool: second.toolName, arguments: { text: "second mcp verified" } },
+      { text: "SECOND MCP VERIFIED" },
+    ],
   ]);
   const fixture = await createProjectAndSession(page, {
     projectName: name, sessionTitle: "Agent MCP selection", approvalMode: "always_allow",
     model: { apiToken: stub.apiToken, baseUrl: stub.baseUrl, model: stub.model, name: `${name} model` },
   });
-  journey.scenario({ goal: "An Agent can discover and execute the selected custom MCP tool", preconditions: ["Local MCP fixture connected", "Local scripted model", "No external calls"] });
+  journey.scenario({ goal: "An Agent calls each custom MCP tool after it is selected", preconditions: ["Local MCP fixtures connected", "Local scripted model", "No external calls"] });
+  const invocations = async () => {
+    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/mcp/invocations`, { headers: authorizationHeader() });
+    expect(response.ok()).toBe(true);
+    return await response.json() as Array<{ sourceId: string; status: string }>;
+  };
   try {
-    await journey.step("选择自定义 MCP", "输入区列出服务器名称，勾选后保存到当前 Session", async () => {
-      await openProjectSession(page, fixture);
+    await openProjectSession(page, fixture);
+    await journey.step("选择第一个自定义 MCP", "输入区列出服务器名称，勾选后保存到当前 Session", async () => {
       await page.locator(".connector-picker-trigger").click();
-      await page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(name) }).click();
-      await expect(page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(name) })).toBeChecked();
+      await page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(first.name) }).click();
+      await expect(page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(first.name) })).toBeChecked();
       await page.keyboard.press("Escape");
     });
-    await journey.step("Agent 发现并调用", "运行完成，保存成功的 MCP 调用记录，正文展示最终结果", async () => {
-      const run = await sendUserMessage(page, fixture.session.id, "请用刚刚启用的本地 MCP echo 工具把 agent mcp verified 转成大写。");
+    await journey.step("调用第一个 MCP", "运行完成并保存第一个服务器的成功调用记录", async () => {
+      const run = await sendUserMessage(page, fixture.session.id, "请用第一个本地 MCP echo 工具把 first mcp verified 转成大写。");
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
       expect(terminal.status, terminal.error).toBe("completed");
-      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/mcp/invocations`, { headers: authorizationHeader() });
-      const invocations = await response.json() as Array<{ sourceId: string; status: string }>;
-      expect(invocations.some((item) => item.sourceId === saved.id && item.status === "succeeded")).toBe(true);
-      await expect(page.locator(".message").filter({ hasText: "AGENT MCP VERIFIED" }).last()).toBeVisible();
+      expect((await invocations()).some((item) => item.sourceId === first.id && item.status === "succeeded")).toBe(true);
+      await expect(page.locator(".message").filter({ hasText: "FIRST MCP VERIFIED" }).last()).toBeVisible();
+    });
+    await journey.step("追加第二个自定义 MCP", "第二个服务器成为当前 Session 可用连接器", async () => {
+      await page.locator(".connector-picker-trigger").click();
+      await page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(second.name) }).click();
+      await expect(page.locator(".connector-picker-popover").getByRole("checkbox", { name: new RegExp(second.name) })).toBeChecked();
+      await page.keyboard.press("Escape");
+    });
+    await journey.step("调用新加入的 MCP", "新运行也能执行工具并保存成功调用记录", async () => {
+      const run = await sendUserMessage(page, fixture.session.id, "请用新启用的本地 MCP echo 工具把 second mcp verified 转成大写。");
+      const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
+      expect(terminal.status, terminal.error).toBe("completed");
+      const saved = await invocations();
+      expect(saved.some((item) => item.sourceId === first.id && item.status === "succeeded")).toBe(true);
+      expect(saved.some((item) => item.sourceId === second.id && item.status === "succeeded")).toBe(true);
+      await expect(page.locator(".message").filter({ hasText: "SECOND MCP VERIFIED" }).last()).toBeVisible();
     });
   } finally {
     await cleanupJourney(page, fixture);
     await stub.stop();
-    await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${saved.id}`, { headers: authorizationHeader() });
+    await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${first.id}`, { headers: authorizationHeader() });
+    await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${second.id}`, { headers: authorizationHeader() });
   }
+});
+
 });

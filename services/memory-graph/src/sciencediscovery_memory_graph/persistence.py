@@ -1315,7 +1315,7 @@ def _link_scope_children(session: Any, session_id: str, scope_task_id: str) -> N
         WITH ordered
         UNWIND range(0, size(ordered) - 2) AS i
         WITH ordered[i] AS a, ordered[i + 1] AS b
-        MERGE (a)-[r:next]->(b)
+        MERGE (a)-[r:next {method: 'scope_chain'}]->(b)
           ON CREATE SET r.inferred = true,
                         r.basis    = 'seq',
                         r.method   = 'scope_chain'
@@ -1371,9 +1371,10 @@ def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
 
     # goal → first SubTask (head of the chain). OPTIONAL MATCH so a session
     # whose first-message hook hasn't run (no ResearchGoal yet) still gets
-    # the SubTask→SubTask chain below — the goal→head link is added later by
-    # the next upsert once the goal exists. A child never qualifies as head —
-    # the WHERE clause excludes ``subtask:subagent:...:exec:...`` ids so the
+    # the SubTask→SubTask chain below — a late goal upsert runs this linker
+    # again to add goal→head. A child never qualifies as head because the
+    # WHERE clause excludes nodes with parent_subtask_id set, so the
+
     # main chain's head is always a session-main node (scope / main exec / main
     # mcp). seq orders the chain; finished_at is only a legacy tiebreaker.
     session.run(
@@ -1382,14 +1383,14 @@ def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
         WHERE (st:Task OR st:ToolCall)
           AND st.session_id = $sid
           AND st.task_id STARTS WITH 'subtask:'
-          AND NOT st.task_id CONTAINS ':exec:'
+          AND st.parent_subtask_id IS NULL
         WITH st ORDER BY coalesce(st.seq, 0), st.finished_at
         WITH collect(st)[0] AS head
         CALL (head) {
           OPTIONAL MATCH (g:ResearchGoal {goal_id: $goal_id})
           WITH g, head
           WHERE g IS NOT NULL
-          MERGE (g)-[r:next]->(head)
+          MERGE (g)-[r:next {method: 'temporal_chain'}]->(head)
             ON CREATE SET r.inferred = true,
                           r.basis     = 'seq',
                           r.method    = 'temporal_chain'
@@ -1409,12 +1410,12 @@ def _link_subtasks_by_finish_time(session: Any, session_id: str) -> int:
         WHERE (st:Task OR st:ToolCall)
           AND st.session_id = $sid
           AND st.task_id STARTS WITH 'subtask:'
-          AND NOT st.task_id CONTAINS ':exec:'
+          AND st.parent_subtask_id IS NULL
         WITH st ORDER BY coalesce(st.seq, 0), st.finished_at
         WITH collect(st) AS ordered
         UNWIND range(0, size(ordered) - 2) AS i
         WITH ordered[i] AS a, ordered[i + 1] AS b
-        MERGE (a)-[r:next]->(b)
+        MERGE (a)-[r:next {method: 'temporal_chain'}]->(b)
           ON CREATE SET r.inferred = true,
                         r.basis    = 'seq',
                         r.method   = 'temporal_chain'
@@ -1450,8 +1451,9 @@ def upsert_session_first_message(
     project. After MERGEing the goal it attaches every still-dangling
     SourceFile of the session with a ``feeds`` edge — files uploaded before
     the first message have a node but no goal to feed yet (the upload path
-    must not create a placeholder goal). Returns ``goal_id`` on success,
-    ``None`` when skipped.
+    must not create a placeholder goal). It also reconnects executions that
+    landed before the goal. Returns ``goal_id`` on success, ``None`` when
+    skipped.
     """
     driver = handle()
     if not driver.is_reachable():
@@ -1482,6 +1484,10 @@ def upsert_session_first_message(
                 domain=domain,
                 topic_scope=topic_scope,
             ).consume()
+            # Executions can already exist when the user enables ScienceMemory
+            # mid-session. Reattach the temporal head immediately, even if no
+            # further execution is mirrored after this goal arrives.
+            _link_subtasks_by_finish_time(session, session_id)
         log.info("upsert_session_first_message done: session=%s goal=%s", session_id, goal_id)
         return goal_id
     except Exception as exc:

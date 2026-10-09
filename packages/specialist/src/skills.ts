@@ -65,7 +65,7 @@ import { parseDocument, stringify } from "yaml";
 
 /** Domain skills bundled with the first-party Specialist catalog. */
 export const BUNDLED_SKILL_IDS = [
-  "antibody-protenix-pipeline",
+  "antibody-design",
   "audit-hypothesis-tournament",
   "audit-systematic-review",
   "audit-tree-search",
@@ -117,7 +117,7 @@ export const SKILL_LIMITS = {
 } as const;
 
 const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
-  "antibody-protenix-pipeline": "1.0.0",
+  "antibody-design": "1.0.0",
   "audit-hypothesis-tournament": "1.1.0",
   "audit-systematic-review": "1.1.0",
   "audit-tree-search": "1.1.0",

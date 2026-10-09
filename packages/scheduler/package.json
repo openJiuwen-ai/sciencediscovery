@@ -20,7 +20,7 @@
   "types": "./src/plugin.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test dist/*.test.js",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

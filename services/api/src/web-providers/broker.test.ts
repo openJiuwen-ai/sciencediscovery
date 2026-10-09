@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import test from "node:test";
+
 
 import type { FreeSearchEngine, PaidSearchProvider } from "@sciencediscovery/schema";
 
@@ -440,4 +442,33 @@ test("successful web_fetch mirrors a WebPage with contentHash to the memory grap
   assert.equal(emissions.length, 2);
   const cachedProduct = (emissions[1] as { products: Array<{ contentHash?: string }> }).products[0]!;
   assert.equal(cachedProduct.contentHash, expectedHash);
+});
+
+test("a search and a fetch that ran in JiuwenSwarm are recorded in the memory graph as ours are", async (contextTest) => {
+  const root = resolve(process.cwd(), ".tmp", `web-broker-external-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  contextTest.after(() => rm(root, { force: true, recursive: true }));
+  const observed: any[] = [];
+  const broker = new WebBroker(root, singleEngine(), gateway([], {}), { memoryGraphSink: { observeToolCall: (call: unknown) => { observed.push(call); } } as never });
+  await broker.recordExternalResult({ kind: "search", toolName: "free_search", rows: [
+    { url: "https://a.example/1", title: "A", snippet: "first" }, { url: "https://a.example/1", title: "dup" }, { url: "https://b.example/2" },
+  ] }, context);
+  await broker.recordExternalResult({ kind: "fetch", toolName: "fetch_webpage", url: "https://a.example/1", content: "<html>body</html>" }, context);
+  assert.equal(observed.length, 2);
+  assert.equal(observed[0].toolName, "free_search");
+  assert.equal(observed[0].sessionId, "session-1");
+  assert.deepEqual(observed[0].products, [
+    { productType: "web_page", url: "https://a.example/1", title: "A", snippet: "first" },
+    { productType: "web_page", url: "https://b.example/2" },
+  ], "one node per URL");
+  assert.equal(observed[1].products[0].url, "https://a.example/1");
+  assert.match(observed[1].products[0].contentHash, /^[0-9a-f]{64}$/, "the body is in the CAS pool, its hash on the node");
+});
+
+test("without a memory graph nothing is recorded and nothing fails", async (contextTest) => {
+  const root = resolve(process.cwd(), ".tmp", `web-broker-external-none-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  contextTest.after(() => rm(root, { force: true, recursive: true }));
+  const broker = new WebBroker(root, singleEngine(), gateway([], {}));
+  await broker.recordExternalResult({ kind: "search", toolName: "free_search", rows: [{ url: "https://a.example" }] }, context);
 });

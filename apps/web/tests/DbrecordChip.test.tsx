@@ -15,8 +15,10 @@
 //     it up (an earlier change left WebPage/DbRecord as a gap; this file
 //     closes the DbRecord half — WebPage closes in its own file).
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import { CHAIN_BUTTONS, NODE_LABELS } from "../src/MemoryGraphExplorer.js";
 import { KIND_TO_LABEL } from "../src/Markdown.js";

@@ -3,7 +3,7 @@
 **This is not a service.** It has no HTTP port, no FastAPI application, and the
 start-up script does not launch it. The agent loop, model transport, MCP client,
 and web providers all run natively in the Node control plane (see
-[Agent backend](../../docs/en/explanation/agent-backend.md)).
+[Agent backend](../../docs/en/developer-docs/agent-backend.md)).
 
 What remains is the two bundled provider-facing MCP servers and the external-URL
 registry they share:

@@ -190,7 +190,11 @@ function checkFile(name) {
     }
 
     const declaration = text.slice(match.index, match.index + TAG_WINDOW);
-    const tags = [...declaration.matchAll(/tag\s*:\s*["']@(mocked|real)["']/g)].map((tag) => tag[1]);
+    // `tag` takes a string or an array, and a spec that mixes groups declares
+    // its selection tag beside the plan's own `@group:value` ones, so read the
+    // whole option rather than only the single-string form.
+    const option = /tag\s*:\s*(\[[^\]]*\]|["'][^"']*["'])/.exec(declaration)?.[1] ?? "";
+    const tags = [...option.matchAll(/["']@(mocked|real)["']/g)].map((tag) => tag[1]);
     if (!tags.includes(type)) {
       errors.push(`${name}:${line}: Type: ${type} but the test lacks a { tag: "@${type}" } option`);
     }

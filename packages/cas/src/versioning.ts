@@ -172,13 +172,15 @@ export class VersionStore {
     for (const ref of dependencies) assertRef(ref);
     // Dependencies embedded in values cannot silently escape closure validation.
     const found = new Map<string, ObjectRef>();
-    const visit = (v: unknown): void => {
+    const visit = (v: unknown, path = "$"): void => {
       if (!v || typeof v !== "object") return;
       if ("pool" in v && "digest" in v) {
         const ref = v as ObjectRef;
-        assertRef(ref);
+        try { assertRef(ref); } catch (error) {
+          throw new Error(`Invalid or cross-pool reference in ${kind} at ${path} (pool=${String(ref.pool).slice(0, 40)}, digestLength=${String(ref.digest).length}, size=${ref.size}, mediaType=${String(ref.mediaType).slice(0, 80)})`, { cause: error });
+        }
         found.set(canonicalize(ref), ref);
-      } else for (const child of Object.values(v)) visit(child);
+      } else for (const [key, child] of Object.entries(v)) visit(child, `${path}.${key}`);
     };
     canonicalize(value); // reject cycles before traversing
     visit(value);

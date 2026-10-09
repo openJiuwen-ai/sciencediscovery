@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -20,7 +22,7 @@ import { request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, resolve } from "node:path";
-import { test } from "node:test";
+
 import { fileURLToPath } from "node:url";
 
 import type {
@@ -50,7 +52,7 @@ const protenixPipelineScriptsDir = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../../..",
   "skills",
-  "antibody-protenix-pipeline",
+  "antibody-design",
   "scripts",
 );
 
@@ -1131,7 +1133,7 @@ test("runner NPU Broker runs the Protenix manager workload through its own allow
   const fixture = await workspaceFixture(context);
   const python = pythonForTest();
   if (!python) {
-    context.skip("Python interpreter unavailable");
+    assert.fail("Python interpreter unavailable");
     return;
   }
   const managerScript = resolve(fixture.dataDir, "protenix_manager.py");
@@ -1274,7 +1276,7 @@ test("runner NPU Broker rewrites workspace helper directory arguments even when 
   const fixture = await workspaceFixture(context);
   const python = pythonForTest();
   if (!python) {
-    context.skip("Python interpreter unavailable");
+    assert.fail("Python interpreter unavailable");
     return;
   }
   const managerScript = resolve(fixture.dataDir, "protenix_manager_no_helpers.py");
@@ -1413,7 +1415,7 @@ test("Protenix full pipeline forwards user hotspots to the screening stage", asy
 test("Protenix shell scheduler enforces device concurrency and reports failed designs", async (context) => {
   const bash = bashForTest();
   if (!bash) {
-    context.skip("bash unavailable");
+    assert.fail("bash unavailable");
     return;
   }
 
@@ -1620,7 +1622,7 @@ exit 2
 test("Protenix manager normalizes hotspot formats and rejects invalid diffuser schedules", (context) => {
   const python = pythonForTest();
   if (!python) {
-    context.skip("Python interpreter unavailable");
+    assert.fail("Python interpreter unavailable");
     return;
   }
   const managerScript = resolve(protenixPipelineScriptsDir, "antibody_pipeline_manager.py");
@@ -1698,7 +1700,7 @@ test("runner NPU Broker loads allowlisted workloads from config", async (context
   const fixture = await workspaceFixture(context);
   const python = pythonForTest();
   if (!python) {
-    context.skip("Python interpreter unavailable");
+    assert.fail("Python interpreter unavailable");
     return;
   }
   const managerScript = resolve(fixture.dataDir, "custom_manager.py");

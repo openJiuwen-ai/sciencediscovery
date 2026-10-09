@@ -308,6 +308,7 @@ export interface WorkspaceFileProvenance {
 export type WorkbenchSearchResultKind = "artifact" | "project" | "session";
 
 export interface WorkbenchSearchResult {
+  /** A one-line English description; the fields below carry its parts for a client that shows them in its own language. */
   detail: string;
   id: string;
   kind: WorkbenchSearchResultKind;
@@ -315,6 +316,11 @@ export interface WorkbenchSearchResult {
   path?: string;
   projectId: string;
   sessionId?: string;
+  projectName?: string;
+  /** For an artifact: the title of the Session that created it, absent when that Session was deleted. */
+  sessionTitle?: string;
+  archived?: boolean;
+  origin?: ArtifactOrigin;
 }
 
 export interface WorkbenchSearchResponse {

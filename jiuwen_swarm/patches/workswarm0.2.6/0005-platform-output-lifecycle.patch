@@ -1,0 +1,157 @@
+diff --git a/jiuwenswarm/common/schema/message.py b/jiuwenswarm/common/schema/message.py
+index 1960b98..8c12c40 100644
+--- a/jiuwenswarm/common/schema/message.py
++++ b/jiuwenswarm/common/schema/message.py
+@@ -451,6 +451,7 @@ class EventType(Enum):
+     GOAL_SNAPSHOT = "goal.snapshot"
+     GOAL_UPDATED = "goal.updated"
+     RUNTIME_ACCEPTED = "runtime.accepted"
++    RUNTIME_OUTPUT_OWNER = "runtime.output_owner"
+     EXECUTION_ERROR = "execution.error"
+     TEAM_MEMBER = "team.member"
+     TEAM_TASK = "team.task"
+diff --git a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+index b2548b5..6bf6e13 100644
+--- a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
++++ b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+@@ -1233,6 +1233,8 @@ def _deep_agent_kv_cache_affinity_config(
+ def _build_context_assemble_rail() -> ContextAssembleRail | None:
+     """Build ContextAssembleRail."""
+     try:
++        from jiuwenswarm.server.runtime.mcp.platform_interaction import configure_swarm_context_files
++        configure_swarm_context_files()
+         context_assemble_rail = ContextAssembleRail()
+         logger.info("[JiuWenSwarmDeepAdapter] ContextAssembleRail create success")
+     except Exception as exc:
+@@ -13238,6 +13240,12 @@ class JiuWenSwarmDeepAdapter:
+                     is_complete=True,
+                 )
+ 
++            if request.params.get("sci_persistent_output"):
++                from jiuwenswarm.server.runtime.mcp.platform_interaction import retain_output_across_approvals
++                retain_output_across_approvals(self._instance)
++                from jiuwenswarm.server.runtime.mcp.output_recovery import enable_output_recovery
++                enable_output_recovery(self._instance)
++
+             if pending_goal_op is not None:
+                 # dispatch 前采样：之后 active_round 可能已切到 goal
+                 defer_goal_history = self._should_defer_goal_objective_history(session_id)
+@@ -13444,6 +13450,12 @@ class JiuWenSwarmDeepAdapter:
+             # A previous consumer may have stopped mid-round; this stream must
+             # sample the run kind again on its own first chunk.
+             self._reset_round_kind_latch()
++            if request.params.get("sci_persistent_output"):
++                yield AgentResponseChunk(
++                    request_id=rid, channel_id=cid,
++                    payload={"event_type": "runtime.output_owner", "request_id": rid},
++                    is_complete=False,
++                )
+             async for chunk in interaction_stream:
+                 self._track_round_output_boundary(chunk)
+                 # First chunk handed back by the runner: records the time to
+diff --git a/jiuwenswarm/server/runtime/mcp/platform_interaction.py b/jiuwenswarm/server/runtime/mcp/platform_interaction.py
+new file mode 100644
+--- /dev/null
++++ b/jiuwenswarm/server/runtime/mcp/platform_interaction.py
+@@ -0,0 +1,101 @@
++# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
++
++"""Keep a platform run's output lease across permission interruptions.
++
++The native supervisor remains authoritative for completion and queued work.
++Only platform runs opt in; regular Swarm UI request streams are unchanged.
++"""
++def retain_output_across_approvals(agent):
++    configure_stream_tool_merge()
++    if getattr(agent, "_sci_persistent_output", False):
++        return
++    agent._sci_persistent_output = True
++    agent._sci_waiting_approval = False
++    write_result = agent._write_round_result_to_stream
++    keep_open = agent._should_keep_interaction_open_locked
++
++    async def write(result, session):
++        # Set before publishing the interrupt: an auto-approval can arrive as
++        # soon as the event is visible. A resumed round clears this only when
++        # it has an actual result, not when its request is acknowledged.
++        agent._sci_waiting_approval = result.get("result_type") == "interrupt"
++        await write_result(result, session)
++
++    def keep():
++        return keep_open() or agent._sci_waiting_approval
++
++    agent._write_round_result_to_stream = write
++    agent._should_keep_interaction_open_locked = keep
++
++
++def configure_swarm_context_files():
++    """Swarm retired HEARTBEAT.md; do not ask the SDK to read it each round.
++
++    Restrict this compatibility shim to ContextAssembleRail, not file tools or
++    the new heartbeat scheduler. Other context-file errors remain visible.
++    """
++    from openjiuwen.harness.rails.context_engineer import context_assemble_rail as rail
++    original = rail.build_context_file_sections
++    if getattr(original, "_sci_context_files", False):
++        return
++
++    class WorkspaceView:
++        def __init__(self, workspace):
++            self.workspace = workspace
++
++        def get_node_path(self, key):
++            if getattr(key, "value", key) == "HEARTBEAT.md":
++                return None
++            return self.workspace.get_node_path(key)
++
++        def __getattr__(self, key):
++            return getattr(self.workspace, key)
++
++    async def build(sys_operation, workspace, language="cn"):
++        return await original(sys_operation, WorkspaceView(workspace) if workspace is not None else None, language)
++
++    build._sci_context_files = True
++    rail.build_context_file_sections = build
++
++
++def configure_stream_tool_merge():
++    """SDK compatibility: merge indexed argument deltas, not the last call.
++
++    Preserve the SDK's content/usage/provider metadata merge unchanged. This
++    can be removed once the pinned SDK supports interleaved tool indices.
++    """
++    from openjiuwen.core.foundation.llm.schema.message_chunk import AssistantMessageChunk
++    original = AssistantMessageChunk.__add__
++    if getattr(original, "_sci_indexed_tools", False):
++        return
++
++    def merge(left, right):
++        if not isinstance(right, AssistantMessageChunk):
++            return original(left, right)
++        calls = [call.model_copy() for call in (left.tool_calls or [])]
++        for incoming in right.tool_calls or []:
++            match = next((call for call in calls if (
++                call.index == incoming.index if incoming.index is not None
++                else bool(incoming.id and call.id == incoming.id)
++            )), None)
++            if match is None and incoming.index is None and not incoming.id and calls:
++                match = calls[-1]  # Legacy providers without indices/identities.
++            if match is None:
++                calls.append(incoming.model_copy())
++                continue
++            if match.id and incoming.id and match.id != incoming.id:
++                raise ValueError("streamed tool index changed identity")
++            match.id = match.id or incoming.id
++            match.name = match.name or incoming.name
++            match.arguments = (match.arguments or "") + (incoming.arguments or "")
++            match.response_item_id = match.response_item_id or incoming.response_item_id
++        result = original(left.model_copy(update={"tool_calls": None}),
++                          right.model_copy(update={"tool_calls": None}))
++        result.tool_calls = calls or None
++        return result
++
++    merge._sci_indexed_tools = True
++    AssistantMessageChunk.__add__ = merge

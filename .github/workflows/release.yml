@@ -1,0 +1,191 @@
+# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Pushing a version tag builds the release and publishes it.
+#
+# The gate is the merge gate, called from ci.yml rather than restated, so what
+# ships is checked by the same UT, ST, mocked E2E, both native binary builds
+# with their four-entry smoke gate, and the Docker deployment contract. Only
+# then does anything become downloadable: `publish` needs the whole called
+# workflow, so one red job anywhere leaves the tag without a release.
+#
+# The binaries are not rebuilt for publication. They are the artifacts the
+# gate already smoke-tested, downloaded and checked against the SHA256SUMS the
+# build wrote — republishing from a fresh build would ship bytes nothing
+# exercised.
+
+name: Release
+
+on:
+  push:
+    tags:
+      # The tags this project already uses are bare versions — 0.1.1, 0.2.0 —
+      # and `v`-prefixed ones are accepted because they are the common habit
+      # and a release should not silently not happen. `+` means one or more of
+      # the preceding character in a GitHub filter pattern, and the trailing
+      # `*` admits a prerelease suffix such as 1.0.0-rc1.
+      - "[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Resolve the version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - id: resolve
+        # The tag names the release; the version names the files inside it.
+        # They differ only by a `v`, which existing artifacts do not carry:
+        # 0.2.0's assets are ScienceDiscovery-0.2.0-linux-<arch>, so stripping
+        # it keeps a v-tagged release consistent with every earlier one.
+        #
+        # A hyphen is semver's prerelease marker (1.0.0-rc1), and marking those
+        # as prereleases is what keeps them off "Latest" for everyone who lands
+        # on the releases page.
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [[ "${version}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Tag ${tag} releases version ${version}."
+
+  gate:
+    name: Gate
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    with:
+      # A version tag is held to the nightly standard: `release` is defined as
+      # `daily`, so strengthening the nightly policy strengthens a release.
+      profile: release
+      release-version: ${{ needs.version.outputs.version }}
+
+  publish:
+    name: Publish the release
+    needs: [version, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # The only elevated permission in these pipelines, and only in the job
+      # that creates the release. The gate itself stays read-only.
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # `gh` names its target repository by reading the git remote of the
+      # working directory. The checkout below is shallow and exists only to
+      # bring in the notes script — every figure that script reports comes from
+      # the API, not from local history — so stating the repository here is
+      # what keeps `gh` from depending on how that checkout was configured.
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      # Shallow on purpose: only scripts/release-notes.mjs is needed, and it
+      # reads the release's history from the API rather than from this
+      # checkout, so there is nothing for a full clone to supply.
+      - uses: actions/checkout@v4
+
+      # Deliberately not merged into one directory: each architecture's
+      # artifact carries its own SHA256SUMS and VERSION, and merging would let
+      # one silently overwrite the other's.
+      - name: Download the gate's binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-release-*
+          path: artifacts
+
+      - name: Verify and assemble the release files
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          found=0
+          for directory in artifacts/binary-release-*; do
+            [[ -d "$directory" ]] || continue
+            # The build wrote these sums next to the binary it had just
+            # smoke-tested. Checking them here proves the bytes about to be
+            # published are those bytes and not a truncated upload.
+            ( cd "$directory" && sha256sum --check SHA256SUMS )
+            cp "$directory"/ScienceDiscovery-*-linux-* release/
+            cat "$directory/SHA256SUMS" >> release/SHA256SUMS
+            found=$((found + 1))
+          done
+
+          # Both architectures are gated, so both are expected. Publishing one
+          # would quietly ship a half release.
+          if [[ "$found" -ne 2 ]]; then
+            echo "::error::expected two architecture artifacts, found ${found}"
+            exit 1
+          fi
+
+          # The file names carry the version, so a mismatch here means the gate
+          # built something other than what this tag claims to release.
+          for binary in release/ScienceDiscovery-*-linux-*; do
+            case "$(basename "$binary")" in
+              "ScienceDiscovery-${VERSION}-linux-"*) ;;
+              *) echo "::error::$(basename "$binary") is not version ${VERSION}"; exit 1 ;;
+            esac
+          done
+
+          sort -k2 -o release/SHA256SUMS release/SHA256SUMS
+          ( cd release && sha256sum --check SHA256SUMS )
+          ls -lh release
+
+      # What's Changed, New Contributors and the compare link, with the counts
+      # this release is worth measuring by on top. Written to a file so the
+      # publishing step below stays about publishing.
+      - name: Compose the release notes
+        run: node scripts/release-notes.mjs --repo "${GH_REPO}" --tag "${TAG}" --output release-notes.md
+
+      - name: Publish
+        # Idempotent on purpose: the gate ahead of this job runs for the better
+        # part of an hour, so a re-run after a failed upload must not be
+        # blocked by the release the first attempt already created.
+        run: |
+          set -euo pipefail
+          files=(release/ScienceDiscovery-*-linux-* release/SHA256SUMS)
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} exists; replacing its assets."
+            gh release upload "${TAG}" "${files[@]}" --clobber
+          else
+            arguments=(
+              --title "ScienceDiscovery v${VERSION} Release Note"
+              --notes-file release-notes.md
+            )
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              arguments+=(--prerelease)
+            fi
+            gh release create "${TAG}" "${arguments[@]}" "${files[@]}"
+          fi
+
+          {
+            echo "### Release ${TAG}"
+            echo
+            echo "$(gh release view "${TAG}" --json url --jq .url)"
+            echo
+            echo '```'
+            cat release/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

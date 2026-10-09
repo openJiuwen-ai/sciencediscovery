@@ -26,11 +26,20 @@
  * where the behaviour is — are tested everywhere.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+// Hooks are frozen once collection ends, so a helper a test body calls cannot
+// register one while it runs. It hands its teardown to this list instead, and
+// the one hook declared here — at collection time — drains it, which is the
+// order the module-level `after` calls used to run in.
+const cleanups: Array<() => unknown> = [];
+const cleanup = (fn: () => unknown) => { cleanups.push(fn); };
+after(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { after, test } from "node:test";
+
 
 import type { EvolveEvent, EvolveGoal, EvolveRun } from "@sciencediscovery/schema";
 import { isEvolveRunActive } from "@sciencediscovery/schema";
@@ -157,7 +166,7 @@ async function startApi(): Promise<{ orchestrator: EvolveOrchestrator; origin: s
     });
   });
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  after(async () => {
+  cleanup(async () => {
     // Let any run this test started settle before the directory goes away: a
     // background `drive()` still writing into a directory being removed is a
     // flake, and one that only shows up when the suite runs as a whole.

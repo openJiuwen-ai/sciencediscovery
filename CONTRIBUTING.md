@@ -14,9 +14,25 @@ Run the stack once before running the full check suite — the API agent-path te
 
 Alternatively, provide a standalone `services/gateway/.venv`.
 
+The agent loop runs on [JiuwenSwarm](https://gitcode.com/openJiuwen/jiuwenswarm); set it up once before working on
+anything agent-path related — a chat turn, tools, permissions, skills, or context assembly:
+
+```bash
+scripts/jiuwenswarm.sh setup                          # once: clone the pinned tag, install it, create the instance
+./scripts/start-stack.sh --mode local --jiuwenswarm    # starts JiuwenSwarm if needed, then the stack
+```
+
+See [Local mode](docs/en/getting-started/deployment.md#local-mode-host-processes) for requirements, every environment
+variable, and troubleshooting, and [JiuwenSwarm migration: status and hand-over](docs/en/reference/jiuwenswarm-migration-status.md)
+for what is verified and what is still open.
+
 ## Development commands
 
 ```bash
+pnpm test:shared  # the one plan CI runs: freeze it from source tags, then run all of it
+pnpm test:list    # freeze and print that plan without running a single test body
+pnpm test:run --category e2e --model mock   # any query over the tag dimensions
+pnpm test:policy  # what each CI profile selects, as the dimensions themselves
 pnpm check        # typecheck, paper tests, build, and package unit tests
 pnpm test         # build + recursive package unit tests
 pnpm smoke        # build + @sciencediscovery/api unit tests only
@@ -26,16 +42,37 @@ pnpm dev          # API watch (after build; does not start runner/gateway by its
 pnpm --filter @sciencediscovery/web dev   # UI hot reload on :5173 (proxies API :4310)
 ```
 
+Test sources are not part of the product build. `tsconfig.base.json` excludes
+`**/*.test.ts` and `**/*.test.tsx`, so no package compiles a test into `dist/`
+and the Docker image needs nothing from `test/`. They are still type-checked:
+the root `tsconfig.tests.json` owns exactly those files, and `pnpm typecheck`
+runs it after the per-package pass. A package's own `pnpm test` therefore runs
+the sources, `node --import tsx --test "src/**/*.test.ts"`, and the quotes have
+to stay — Node's test runner does that matching itself, and a pattern the shell
+ate would leave the command passing with nothing run.
+
 ## Agent-loop smoke tests
 
 Targeted adapter/integration smokes, not wired into `pnpm smoke`; run from the
-repository root. These scripts instantiate `createNativeAgent` in-process and
-do not test the product startup and public client path, so they are not E2E:
+repository root. These do not test the product startup and public client path,
+so they are not E2E:
 
 ```bash
 ./test/api/run_m1_smoke.sh       # Node adapter (hermetic)
-./test/api/run_real_smoke.sh     # native adapter → live model → tool callbacks
+./test/api/run_real_smoke.sh     # live model → tool callbacks
 ```
+
+Against a running JiuwenSwarm stack, `test/contract/jw-only/live.mjs` checks
+what only that backend does — conversation continuity, todo planning, context
+compression, history-restart:
+
+```bash
+./scripts/start-stack.sh --mode local --jiuwenswarm
+node test/contract/jw-only/live.mjs
+```
+
+Browser E2E against JiuwenSwarm: `CI_E2E_BACKEND=jiuwenswarm .ci/run-e2e.sh mocked` (JiuwenSwarm must already be
+running).
 
 ## User-perspective E2E
 
@@ -57,8 +94,11 @@ not such a reason; unavailable prerequisites are BLOCKED, not an exemption.
 
 ### Browser journeys (Playwright)
 
-Requires an isolated running stack on `:4310` (or `E2E_BASE_URL`) and its
-generated access token exported as `E2E_API_TOKEN`. Specs live in `test/`; the
+Requires an isolated running stack on `:4410` (or `E2E_BASE_URL`) and its
+generated access token exported as `E2E_API_TOKEN`. That port, and the data
+directory below `.e2e-data/`, are deliberately not the ones an instance you run
+for yourself uses (`:4310`, `.sciencediscovery-data`): a test run gets its own,
+so it can never drive — or be asked to empty — your own instance. Specs live in `test/`; the
 local environment is **`.e2e/`** (fully gitignored: deps, reports,
 screenshots). Committed bootstrap files under `test/` recreate it:
 
@@ -167,14 +207,31 @@ Integration/E2E tests under `test/` are **not** part of `pnpm check`.
 
 ## CI layers
 
-CI groups the commands above into three layer entry points. Reproducing a
-pipeline failure locally means running the same one:
+There is one plan and three layer entry points that slice it. `pnpm test:shared`
+runs the whole plan; each layer runs the group CI schedules as its own job, and
+the three groups together are exactly that plan:
 
 ```bash
-pnpm ci:ut    # both UT tiers: static checks, package tests, Python suites
-pnpm ci:st    # build, then the hermetic agent-loop smoke
-pnpm ci:e2e   # starts its own isolated stack and runs @mocked browser journeys
+pnpm test:shared   # all of it, in one process
+
+pnpm ci:ut    # category:ut
+pnpm ci:st    # category:st
+pnpm ci:e2e   # category:e2e: starts its own isolated stack, runs the browser journeys
 ```
+
+Which cases a command runs is decided by the tags each test declares in its own
+source, read through the single selector in
+[test/support/tagged/profiles.mjs](test/support/tagged/profiles.mjs). Nothing
+about the machine takes part in that decision: no credential, device, installed
+service or `CI_*` variable can add a case or remove one. A run then has to
+execute every planned case — `selected == 0`, a missing prerequisite, a skip,
+or `executed != planned` all fail it, so a layer cannot go green by running
+less.
+
+Live-model, NPU, legacy-quarantine and macOS work is deliberately not in that
+plan. It is tagged, collected and deselected, and keeps its own opt-in entry
+points. [test/support/tagged/MIGRATION.md](test/support/tagged/MIGRATION.md) is
+the ledger: what the shared plan covers, what is outside it, and why.
 
 The CI `e2e` layer is the mocked browser subset, not the definition of all
 user-perspective E2E. Record separately executed API/CLI/stack journeys in the
@@ -190,132 +247,109 @@ point them somewhere writable:
 CI_RESULTS_DIR=.tmp/ci-results CI_RUNTIME_DIR=.tmp/ci-runtime pnpm ci:st
 ```
 
+Beside that, each slice writes its frozen plan and its accounting to
+`<CI_RESULTS_DIR>/<layer>/tagged/` — `plan.json` (every selected identity, its
+source hash, tags and target, and the profile that selected them), `preflight.json` (what the host was asked for
+and what it had) and `summary.json` (`planned`, `executed`, `passed`, `failed`,
+`skipped`, and each problem by identity). `pnpm test:shared` leaves the same
+files in `.test-runs/<slice>/`. `CI_RESULTS_DIR=.test-runs node
+.ci/tagged-summary.mjs` reads either layout back into one table, and is what
+fails a CI job when a layer ran less than it planned. Read
+`summary.json` rather than an exit code: a layer's own script can return zero
+and still have executed fewer cases than it froze.
+
+Coverage comes from the same run, never from a second one. `--coverage` makes a
+layer record it while it executes the plan — `pnpm ci:ut -- --coverage` writes
+it to `<CI_RESULTS_DIR>/ut/tagged/coverage/`, `ci:st` likewise — and
+`pnpm coverage:report -- --layer ut=<dir> --layer st=<dir>` merges the layers
+into `coverage/` without running anything. CI's Coverage job does exactly that
+with the UT and ST jobs' uploads; see
+[.ci/README.md](.ci/README.md#coverage-reporting).
+
 Live and hardware layers (`ci:st:real`, `ci:e2e:real`, `ci:st:npu`,
 `ci:e2e:legacy`) fail closed behind their `CI_ALLOW_*` variables and are never
 part of a default command. See [.ci/README.md](.ci/README.md) for the toolchain
 image, the per-layer Docker commands, and the tag catalog used to select cases
 (`pnpm ci:tags`, `pnpm ci:list`, `pnpm ci:run`).
 
-### The two UT tiers
+### The sandbox capability
 
-UT is split into exactly two tiers, and every UT case belongs to one of them:
+UT is one layer. A test that drives a real bubblewrap sandbox declares
+`sandbox:bubblewrap`, and the plan turns that tag into a preflight: a host that
+cannot create the user namespaces bubblewrap needs fails the whole run instead
+of quietly running the rest.
 
 ```bash
-pnpm ci:ut:host    # no sandbox: static checks, the Python suites, and every
-                   # workspace package except the sandbox ones
-pnpm ci:ut:guest   # the sandbox packages, which execute a real bubblewrap
+bwrap --ro-bind / / --dev /dev true && echo sandbox ok
 ```
 
-`pnpm ci:ut` is the aggregate for a host that can run both, and is derived as
-the host tier followed by the guest tier — it is not a third definition.
+On Ubuntu 24.04 a failure here is usually the AppArmor restriction on
+unprivileged user namespaces:
 
-When you add a unit test, it inherits the tier of the package or suite it lives
-in. Two rules keep the split honest:
+```bash
+sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+```
 
-- A host-tier test may not depend on a guest capability. If it needs
-  bubblewrap or user namespaces, it belongs to a guest-tier package.
-- A guest-tier assertion may not be weakened so the test can move to the host
-  tier. Isolation and the sandbox's `/workspace` view are the point of those
-  tests.
+Every CI job that needs the sandbox clears it the same way before using it.
 
-`.ci/test-catalog.mjs` lists the guest-tier packages; everything else is the
-host tier by construction. `pnpm ci:catalog:check` fails when a package with
-tests ends up in both tiers or in neither, when the aggregate stops equalling
-the two tiers, when the guest tier grows an install or build step, or when a
-`ci:ut:*` entry point appears outside the two tiers. `pnpm ci:selftest` runs
-that guard's own regression tests, and the host tier runs it.
+When you add a unit test it inherits the tags of the file it lives in. Two
+rules keep that honest: a test may not depend on a capability it does not
+declare, and an isolation assertion may not be weakened so a test can run
+without the sandbox — isolation and the sandbox's `/workspace` view are the
+point of those tests.
 
-On macOS there is no guest tier: `services/runner/src/macos-seatbelt.test.ts`
-lives in the guest tier's package and skips itself off macOS, so run
-`pnpm --filter @sciencediscovery/runner test` natively to exercise Seatbelt.
+`services/runner/src/macos-seatbelt.test.ts` carries `os:macos`, so a Linux
+plan does not contain it at all — it no longer skips itself at run time. To
+exercise Seatbelt, run `pnpm --filter @sciencediscovery/runner test` natively on
+macOS.
 
-### What each pipeline covers
+`.ci/ci-contract.mjs` is the guard behind `pnpm ci:catalog:check`. It fails when
+a package's test file sits outside the shared runner's collection patterns and
+so would be run by no layer at all, when a package has a test script but no test
+file, when a layer runs something that is not a slice of the shared plan, or
+when an entry point drifts off that slice. `pnpm ci:selftest` runs that guard's
+own regression tests, and the UT layer runs it.
 
-Two test-layer pipelines run, and **neither runs everything**. GitCode
-merge-request CI is CodeArts-only; this repository intentionally has no
-`.gitcode/workflows/` Actions pipeline.
+### What the pipeline covers
 
-| Pipeline | UT | ST | Browser E2E subset | Release binaries |
-| --- | --- | --- | --- | --- |
-| GitHub Actions — `.github/workflows/ci.yml` | full `ci:ut` | yes | mocked `ci:e2e` | x86_64 + aarch64, smoke-gated |
-| CodeArts — `.codearts/workflow/` on a merge request to `main` | both tiers: `ci:ut:host` on the runner, `ci:ut:guest` in a QEMU guest | yes | off while its Playwright timeouts are sized for native speed | x86_64 + aarch64 packages; smoke is host-dependent |
+**GitHub Actions is the only CI, and it is the gate.** It runs on the pull
+request and decides whether a change is ready. gitcode.com is a read-only
+mirror: nothing runs there.
 
-Every CodeArts job runs on a build task rather than a pipeline executor,
-because the two are billed against separate quotas and only the build one has
-room. No job's own status decides the run: each records an exit code in OBS and
-a single verification job reads them back, which is also what the merge
-request's result table reports. Its x86_64 and aarch64 jobs each call
-`scripts/package-binary-release.sh` and verifies `SHA256SUMS`. The x86_64 job
-runs directly on the hosted x64 runner and uploads its files to a run-specific
-OBS path. The aarch64 job invokes the separately configured ARM CodeArts Build
-task: the pipeline passes only `.ci/package-binary-codearts.sh`, line-oriented
-environment records, and line-oriented arguments, while
-the Build task's reusable bootstrap fetches both the target branch and MR ref,
-rebases its system `COMMIT_ID` onto the current target, and calls
-`.ci/codearts-build-dispatch.sh`. The integration SHA verifies the code being
-built, while the original source SHA keeps artifact names and OBS paths
-stable. The pasted bootstrap deliberately contains no backslashes because the
-graphical Build shell action compiles its command as Groovy before invoking
-Bash. It records
-the real command status and full output even on failure so the following Build
-step can upload available artifacts plus `run.log` and `exit-code` to the
-run-specific aarch64 OBS path. A dependent pipeline job probes the binary,
-`SHA256SUMS`, `VERSION`, `run.log`, and `exit-code`, then validates the recorded
-exit code and checksum format, so an empty or misconfigured Build task cannot
-produce a false successful result. Both paths probe bubblewrap before
-packaging; if the runner cannot create user namespaces, they pass
-`--skip-smoke` and log that the artifact is packaging-only rather than
-claiming that the release smoke gate passed. Both Linux packaging paths fetch
-the pinned micromamba conda package from the Tsinghua TUNA conda-forge mirror,
-verify the package SHA256, extract `bin/micromamba`, and then verify the
-executable against the existing release-binary SHA256. The mirror is limited
-to this debug pipeline; normal runtime provisioning keeps its upstream URL.
+| Job | Runs |
+| --- | --- |
+| UT | `pnpm ci:ut` — the `category:ut` slice, including the tests that drive a real bubblewrap sandbox |
+| ST | `pnpm ci:st` — the `category:st` slice |
+| E2E (mocked) | `pnpm ci:e2e` — the `category:e2e` slice on an isolated stack |
+| Binary release | both architectures, each built and smoke-gated on its own runner |
+| Docker image | a cold `docker compose build`, then the deployment contract against the running container |
 
-CodeArts's `default` pool has the same shape. The job is a pod on a CCE
-Kubernetes cluster (EulerOS 2.0 SP10, kernel 4.18, 16 CPUs, 31 GiB) running as
-the unprivileged user `octopus` with Docker's default capability bounding set
-and an active seccomp filter, so `unshare` and bubblewrap are refused outright;
-`sudo` is not setuid, so nothing can be installed with `dnf` either. The
-checked-in workflow runs the `ci:ut:host` tier and the hermetic `ci:st` layer
-directly. A second hosted x64 job runs the `ci:ut:guest` tier inside an Ubuntu
-VM under QEMU's software-only TCG accelerator. The VM supplies an independent
-kernel whose user namespaces work even though the outer CodeArts container
-denies them; `/dev/kvm` is not requested. Its checksum-pinned qcow2 is
-pre-provisioned by the separate `ci/codearts-resources` workflow, so a run
-never repeats apt, Node, pnpm, uv, or bubblewrap installation.
+`nightly.yml` (18:00 UTC) and `release.yml` (version tag) call `ci.yml` through
+`workflow_call`, so they run exactly the table above; they add only a version
+stamp and, for a release, the publishing step. They are not a second and third
+definition of the gate.
 
-That job installs and builds on its own CodeArts host and hands the guest a
-packed workspace, so the guest runs tests and nothing else. A third job reuses
-the same guest for the mocked E2E group: its host runs `pnpm ci:e2e` with
-`CI_E2E_PREPARE_ONLY=1` to install `.e2e` and the pinned Chromium, and the
-guest runs the same entry point with `CI_E2E_PREPARED=1` to start the stack and
-drive the journeys. Emulated CPU is
-far slower than native: before the split, one run spent 476 s on `pnpm build`
-and 92 s on `pnpm install` inside the VM to reach 142 s of tests, while
-downloading the pinned image took 17 s. A self-hosted Linux resource pool that
-passes the real bubblewrap probe remains the preferred long-term sandbox
-runner.
-
-The parent CodeArts workflow also invokes the externally registered reusable
-code-check child. That child runs SCA, anti-poison, static-analysis, and
-blacklist CloudBuild tasks whose complete commands remain in CodeArts; it does
-not write PR labels or comments. On merge-request runs, the parent reads each
-child task's result JSON and renders its own `PASSED` or `FAILED` status and
-detail link, alongside UT, ST, and both debug binary jobs, before publishing
-the final PR label. Manual runs always execute UT/ST and both debug binary jobs
-without modifying a PR; they run the PR-oriented child only when a `PR_ID` is
-supplied.
+The pipeline does not run the opt-in live layers — `ci:st:real`, `ci:e2e:real`,
+`ci:st:npu`, `ci:e2e:legacy` — which need credentials, live endpoints or an
+Ascend device. Run those deliberately, on a machine that has what they need.
 
 ## Repositories
 
-GitCode and GitHub host **separate repositories**, and GitCode syncs to GitHub
+GitCode and GitHub host **separate repositories**, and GitHub syncs to GitCode
 periodically. They are not two remotes of one history: the same change lands
 under a different SHA on each host.
 
 | Host | Repository | Role |
 | --- | --- | --- |
-| gitcode.com | `openJiuwen/sciencediscovery` | where changes are proposed and reviewed |
-| github.com | `openJiuwen-ai/sciencediscovery` | synced mirror |
+| github.com | `openJiuwen-ai/sciencediscovery` | where changes are proposed and reviewed |
+| gitcode.com | `openJiuwen/sciencediscovery` | synced mirror |
+
+This direction is the reverse of what it was: changes used to be proposed on
+GitCode and mirrored to GitHub, and GitCode ran a CodeArts pipeline on the
+merge request. Neither is true now — the mirror has no pipeline, and older
+merge requests and any documentation that has not caught up describe the old
+arrangement. Read a pairing from the direction in this table, not from which
+number is lower.
 
 Two consequences. A commit id is only meaningful alongside the host it came
 from — `refactor: move domain capabilities into packages` is `c151f58` on
@@ -323,16 +357,57 @@ GitCode and `625d7e0` on GitHub, and neither resolves on the other. And a GitHub
 remote can look diverged when the trees are identical, so compare trees
 (`git diff --stat`) rather than SHAs before concluding that work is missing.
 
-## Opening a merge request
+## Opening a pull request
 
-**Run all three layers locally first.** No pipeline runs the full set, so review
-otherwise starts from a change nothing has exercised:
+**Run all three layers locally first.** GitHub Actions runs them again on the
+pull request, so this is not the only check any more — it is the one that costs
+a reviewer nothing. A change pushed unexercised spends eleven minutes of CI and
+somebody's attention discovering what the local run would have said:
 
 ```bash
-pnpm ci:ut     # not ci:ut:host — the sandbox tests run only here and on GitHub
+pnpm ci:ut
 pnpm ci:st
 pnpm ci:e2e
 ```
+
+`pnpm test:shared` is those three in one process, on the same plan. Either way,
+report the numbers each slice's `summary.json` gives — `planned`, `executed`,
+`passed` — not "tests pass".
+
+Which tests a CI profile takes is stated once, as dimensions rather than as a
+selector string, in
+[test/support/tagged/profiles.mjs](test/support/tagged/profiles.mjs).
+`pnpm test:policy` prints them, each as the command that would ask the same
+question by hand:
+
+```text
+pr:
+  pnpm test:list --category ut --category st --category e2e --os linux --arch amd64 \
+    --npu none --model none --model mock --judge none --status reviewed
+  selector: (category:ut or category:st or category:e2e) and os:linux and …
+  run it:   pnpm test:run --profile pr
+```
+
+`--profile pr|daily|release` picks one and `pr` is the default. The three
+pipelines each name theirs: a pull request takes `pr`, `nightly.yml` takes
+`daily`, and `release.yml` takes `release`, which is *defined as* `daily` — a
+version tag is held to the nightly standard, not the merge one. All three
+select the same set today; they diverge the moment a live-model or `judge:llm`
+row lands, at which point the nightly and the tag need that row's credentials
+or their plan fails its preflight.
+
+CI names it as an argument (`pnpm ci:ut -- --profile release`) rather than an
+environment variable, so the same commit and the same command always mean the
+same plan and a tagged run's failure reproduces by copying the command.
+
+`pnpm test:run` / `pnpm test:list` take one `--<group> <value>` per tag
+dimension (`--category`, `--os`, `--arch`, `--npu`, `--model`, `--judge`,
+`--status`, `--sandbox`) when you want something the shared plan excludes on
+purpose — the live-model journeys, the legacy quarantine, a macOS target.
+Repeating a group is OR within it, different groups are AND, and the flags come
+from the tag schema rather than a hand-written list. That is a developer query,
+not a CI entry point: CI uses `--slice`, which can only ever name a subset of
+the shared plan.
 
 In addition to those existing CI gates, report a user-perspective E2E
 conclusion for affected product paths, including API/CLI/stack journeys when
@@ -354,25 +429,30 @@ unprivileged user namespaces, cleared with
 container it is normally unfixable for a process using that same host kernel;
 a full-system VM can instead provide an independent guest kernel.
 
-Then branch from an up-to-date `main`, **push the branch to your own GitCode
-fork**, and open the merge request against `openJiuwen/sciencediscovery`. Never
-push task branches to the upstream repository (`origin`); never push to
-`main`. Rebase rather than merge when `main` moves, so the diff stays readable.
+Then branch from an up-to-date `main`, **push the branch to your own GitHub
+fork**, and open the pull request against `openJiuwen-ai/sciencediscovery`.
+Never push task branches to an upstream repository on either host; never push
+to `main`. Rebase rather than merge when `main` moves, so the diff stays
+readable — and rebase onto the host's own `main`, since a branch based on one
+host's history does not belong on the other.
 
-Each contributor forks the upstream repo under their own GitCode login and
-keeps that fork updated. Do not hard-code anyone's login. A common local
-remote name for that fork is `gitcode-fork`. Resolve the login from
-`gitcode auth status --json` (do not print the token). If the fork does not
-exist yet: `gitcode repo fork openJiuwen/sciencediscovery --json`, then
-`git remote add gitcode-fork git@gitcode.com:<gitcode-login>/sciencediscovery.git`.
+Each contributor forks the upstream repo under their own GitHub login and keeps
+that fork updated. Do not hard-code anyone's login; resolve it from
+`gh api user --jq .login`. Note that `origin` here is GitCode, so it is not the
+personal fork and not the host the pull request goes to.
 
 ```bash
-git fetch origin && git checkout -b <type>/<short-topic> origin/main
-git push -u gitcode-fork <branch>
-gitcode pr create -R openJiuwen/sciencediscovery \
-  --head <gitcode-login>:<branch> --base main \
+git fetch github && git checkout -b <type>/<short-topic> github/main
+git push -u github-fork <branch>
+gh pr create --repo openJiuwen-ai/sciencediscovery \
+  --head <github-login>:<branch> --base main \
   --title "<type>: <what changed>" --body-file <file>
 ```
+
+Apply exactly one `release:*` label so the release note can group the change;
+[.github/release.yml](.github/release.yml) lists the categories and
+[the create-github-pr skill](.agents/skills/create-github-pr/SKILL.md) covers
+choosing one and what to do without the access to apply it.
 
 State in the body what was verified, with the numbers each layer reported.
 "Tests pass" is not reviewable. If the change cannot pass a layer, say which and
@@ -434,4 +514,16 @@ These do not carry a header:
 
 ## Architecture and docs
 
-Module boundaries, the agent backend, and connector internals are documented under [docs/](docs/) (Chinese). Start with [docs/README.md](docs/README.md).
+Module boundaries, the agent backend, and connector internals are documented under [docs/](docs/) in English and Chinese. Start with [docs/README.md](docs/README.md).
+
+Before submitting documentation changes, run:
+
+```bash
+pnpm docs:check
+```
+
+The same command runs in the host UT tier. It checks heading progression,
+blank-line and fenced-code structure, image alternative text, and the existence
+of repository-local link and image targets. External URLs are deliberately not
+requested by the gate, so an unavailable third-party site cannot make an
+otherwise unrelated pull request fail.

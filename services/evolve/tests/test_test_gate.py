@@ -26,6 +26,8 @@ from typing import Any, Dict
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.test_gate_domain import (
     TestGateError,
     _group_of,
@@ -188,10 +190,7 @@ def test_an_unparseable_report_is_an_error_rather_than_a_zero(tmp_path: Path) ->
         _read_junit(report)
 
 
-@pytest.mark.skipif(
-    not detect_local_capability().available,
-    reason="needs a real sandbox: this exercises the confinement itself, and a host that only carries the binary cannot provide it",
-)
+@pytest.mark.science_tags(sandbox="bubblewrap")
 def test_a_candidate_that_rewrites_the_tests_at_run_time_gains_nothing(tmp_path: Path) -> None:
     """The layer that cannot be skipped, exercised by actually running it.
 
@@ -204,7 +203,7 @@ def test_a_candidate_that_rewrites_the_tests_at_run_time_gains_nothing(tmp_path:
 
     capability = detect_local_capability()
     if not capability.available:
-        pytest.skip("no sandbox backend on this host")
+        pytest.fail("no sandbox backend on this host")
 
     root = tmp_path / "pristine"
     (root / "tests").mkdir(parents=True)
@@ -264,7 +263,7 @@ def test_a_missing_runner_says_so_instead_of_blaming_the_candidate(tmp_path: Pat
 
     capability = detect_local_capability()
     if not capability.available:
-        pytest.skip("no sandbox backend on this host")
+        pytest.fail("no sandbox backend on this host")
 
     root = project(tmp_path)
     card = {**CARD, "criteria": [{

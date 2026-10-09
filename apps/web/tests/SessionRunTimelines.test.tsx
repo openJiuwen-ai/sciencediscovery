@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import type { ChatMessage, RunStreamEvent, SessionRun, SessionRunEvent, Subagent } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../src/api.js";
@@ -588,11 +590,36 @@ test("terminal-run hydration rebuilds finished timelines and keeps disclosure st
     [finished.id]: {
       ...hydrated[finished.id]!,
       entries: hydrated[finished.id]!.entries.map((entry) =>
-        entry.type === "tool" ? { ...entry, expanded: true } : entry),
+        entry.type === "tool" ? { ...entry, expanded: true, userExpanded: true } : entry),
     },
   };
+  // First terminal refresh used to rebuild from scratch, discarding a click
+  // made on the live card just before the historical block replaced it.
+  const migrated = hydrateTerminalRunTimelines({}, [finished], { [finished.id]: records }, expanded[finished.id]);
+  const migratedTool = migrated[finished.id]?.entries.find(entry => entry.type === "tool");
+  assert.equal(migratedTool?.type === "tool" && migratedTool.userExpanded, true);
+  assert.equal(migratedTool?.type === "tool" && migratedTool.expanded, true);
+  const otherRun = hydrateTerminalRunTimelines({}, [finished], { [finished.id]: records },
+    { ...expanded[finished.id]!, runId: "different-run" });
+  const otherTool = otherRun[finished.id]?.entries.find(entry => entry.type === "tool");
+  assert.equal(otherTool?.type === "tool" && otherTool.expanded, false);
   const rehydrated = hydrateTerminalRunTimelines(expanded, [finished], { [finished.id]: records });
   assert.equal(rehydrated[finished.id], expanded[finished.id], "an up-to-date replay keeps its objects and disclosure state");
+
+  const lateStatus: SessionRunEvent = {
+    createdAt: "2026-01-01T00:00:03.000Z",
+    event: { run: finished, status: "completed", type: "run.status" },
+    runId: finished.id,
+    sequence: 3,
+    sessionId: finished.sessionId,
+  };
+  const withLateEvent = hydrateTerminalRunTimelines(expanded, [finished], {
+    [finished.id]: [...records, lateStatus],
+  });
+  const tool = withLateEvent[finished.id]?.entries.find((entry) => entry.type === "tool");
+  assert.equal(tool?.type === "tool" && tool.expanded, true, "late replay must keep the expanded tool card");
+  assert.equal(tool?.type === "tool" && tool.userExpanded, true);
+  assert.equal(withLateEvent[finished.id]?.lastSequence, 3);
 
   const withoutEvents = hydrateTerminalRunTimelines({}, [finished], { [finished.id]: [] });
   assert.equal(withoutEvents[finished.id], undefined, "legacy runs without events stay message-rendered");

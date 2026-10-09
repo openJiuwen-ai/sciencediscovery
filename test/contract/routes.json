@@ -1,0 +1,2336 @@
+{
+ "source": "issue 84 interface tables",
+ "rows": [
+  {
+   "domain": "Chat and runs",
+   "method": "POST",
+   "path": "/api/sessions/:id/messages",
+   "handling": "direct",
+   "target": "chat.send",
+   "notes": "SSE stream; the adapter also creates the run and writes the event log",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "POST",
+   "path": "/api/sessions/:id/runs",
+   "handling": "direct",
+   "target": "chat.send",
+   "notes": "Creates a queued run; the run registry is in the adapter",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "GET",
+   "path": "/api/sessions/:id/runs",
+   "handling": "adapter",
+   "target": "run registry",
+   "notes": "JiuwenSwarm has no run concept",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "GET",
+   "path": "/api/sessions/:id/runs/:runId",
+   "handling": "adapter",
+   "target": "run registry",
+   "notes": "Not called by frontend",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "GET",
+   "path": "/api/sessions/:id/runs/:runId/events",
+   "handling": "adapter",
+   "target": "event log",
+   "notes": "JSON or SSE, ?after=N resume; JiuwenSwarm has no replay, so it must be built ourselves",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "GET",
+   "path": "/api/sessions/:id/runs/:runId/streams/:streamId/events",
+   "handling": "adapter",
+   "target": "event log",
+   "notes": "Sub-stream, can correspond to jw's stream_id",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "POST",
+   "path": "/api/sessions/:id/runs/:runId/cancel",
+   "handling": "direct",
+   "target": "chat.interrupt",
+   "notes": "runId=current also goes through this route",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "POST",
+   "path": "/api/sessions/:id/runs/current/cancel",
+   "handling": "not-migrated",
+   "target": "",
+   "notes": "Shadowed by the previous route, actually unreachable",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "POST",
+   "path": "/api/sessions/:id/run/cancel",
+   "handling": "not-migrated",
+   "target": "",
+   "notes": "Legacy, no longer used by the frontend; not called by frontend",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "POST",
+   "path": "/api/sessions/:id/runs/:runId/skill-evolution",
+   "handling": "approximate",
+   "target": "evolution.*",
+   "notes": "Generates a skill evolution run from a run",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "GET",
+   "path": "/api/sessions/:id/prompt-manifests",
+   "handling": "adapter",
+   "target": "",
+   "notes": "The prompt manifest comes from our own context assembly, jw has no counterpart, need to decide whether to keep it",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "GET",
+   "path": "/api/sessions/:id/execution-runs",
+   "handling": "runner",
+   "target": "runner execution records",
+   "notes": "Code execution records",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "GET",
+   "path": "/api/runtime-status",
+   "handling": "runner",
+   "target": "runner /status",
+   "notes": "runner and kernel overview",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Chat and runs",
+   "method": "POST",
+   "path": "/api/runtime-status/kernels/:id/teardown",
+   "handling": "runner",
+   "target": "runner /kernels/:id/teardown",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/projects",
+   "handling": "direct",
+   "target": "project.list",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "POST",
+   "path": "/api/projects",
+   "handling": "direct",
+   "target": "project.create",
+   "notes": "Can create the first session at the same time",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "PATCH",
+   "path": "/api/projects/:id",
+   "handling": "direct",
+   "target": "project.rename / project.pin",
+   "notes": "Other fields go to adapter storage",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "DELETE",
+   "path": "/api/projects/:id",
+   "handling": "approximate",
+   "target": "project.* + cleanup",
+   "notes": "Also clean the runner kernel, memory-graph /cleanup/project",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/projects/:id/deletion-impact",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Cascade impact preview",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/projects/:id/sessions",
+   "handling": "approximate",
+   "target": "project.get_sessions / session.list",
+   "notes": "Filter by state",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "POST",
+   "path": "/api/projects/:id/sessions",
+   "handling": "direct",
+   "target": "session.create",
+   "notes": "Bind project",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id",
+   "handling": "approximate",
+   "target": "session.get_metadata + history.get",
+   "notes": "SessionDetail is assembled by the adapter",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "PATCH",
+   "path": "/api/sessions/:id",
+   "handling": "approximate",
+   "target": "session.rename + permissions.approval_overrides",
+   "notes": "title, approvalMode, etc.",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "DELETE",
+   "path": "/api/sessions/:id",
+   "handling": "approximate",
+   "target": "session.delete + cleanup",
+   "notes": "Also clean the kernel, memory-graph",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/deletion-impact",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "POST",
+   "path": "/api/sessions/:id/archive",
+   "handling": "direct",
+   "target": "session.archive",
+   "notes": "Also tear down the kernel",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "POST",
+   "path": "/api/sessions/:id/restore",
+   "handling": "direct",
+   "target": "session.unarchive",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "Session-level run settings override",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "PUT",
+   "path": "/api/sessions/:id/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/reviewer-specialist/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "PUT",
+   "path": "/api/sessions/:id/reviewer-specialist/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/subagents",
+   "handling": "approximate",
+   "target": "chat.subagent_activity / team.*",
+   "notes": "Accumulated from events, the adapter maintains the sub-agent table",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "POST",
+   "path": "/api/sessions/:id/subagents/:sid/resume",
+   "handling": "approximate",
+   "target": "to be confirmed",
+   "notes": "Whether jw supports resuming a single sub-agent needs a spike",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "POST",
+   "path": "/api/sessions/:id/subagents/:sid/stop",
+   "handling": "approximate",
+   "target": "to be confirmed",
+   "notes": "Not called by frontend",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "PATCH",
+   "path": "/api/sessions/:id/subagents/:sid/brief",
+   "handling": "not-migrated",
+   "target": "",
+   "notes": "Not called by frontend",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/remote-jobs",
+   "handling": "not-migrated",
+   "target": "",
+   "notes": "Legacy, the backend already returns 410",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "*",
+   "path": "/api/sessions/:id/remote-jobs/... (non-GET)",
+   "handling": "not-migrated",
+   "target": "",
+   "notes": "410; dead code remains in the frontend sessions.ts",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/remote-workspace/sync-records",
+   "handling": "runner",
+   "target": "runner /remote-workspace",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "DELETE",
+   "path": "/api/sessions/:id/remote-workspace/delete",
+   "handling": "runner",
+   "target": "runner DELETE /remote-workspace",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/agent-activity",
+   "handling": "adapter",
+   "target": "runner + jw cron + adapter",
+   "notes": "Summary of executions, transfers, timers, agents",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "GET",
+   "path": "/api/sessions/:id/agent-activity/executions/:execId/logs",
+   "handling": "runner",
+   "target": "runner /shell-executions/:id/logs",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Sessions, sub-agents, projects",
+   "method": "POST",
+   "path": "/api/sessions/:id/agent-activity/{executions|transfers|timers}/:id/cancel",
+   "handling": "runner",
+   "target": "runner + jw schedule.cancel",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "GET",
+   "path": "/api/permission-requests",
+   "handling": "approximate",
+   "target": "chat.ask_user_question event",
+   "notes": "The adapter maintains the pending request table",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "POST",
+   "path": "/api/sessions/:id/permission-requests",
+   "handling": "approximate",
+   "target": "to be confirmed",
+   "notes": "The frontend actively creates requests, the caller needs to be confirmed",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "POST",
+   "path": "/api/permission-requests/:id/decision",
+   "handling": "direct",
+   "target": "chat.user_answer",
+   "notes": "Must carry back interaction_id, source",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "GET",
+   "path": "/api/permission-grants",
+   "handling": "approximate",
+   "target": "permissions.rules.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "DELETE",
+   "path": "/api/permission-grants/:id",
+   "handling": "approximate",
+   "target": "permissions.rules.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "GET",
+   "path": "/api/sessions/:id/permission-authorizations",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Audit table permission_authorizations, jw has no counterpart",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "GET",
+   "path": "/api/sessions/:id/permission-epoch",
+   "handling": "adapter",
+   "target": "",
+   "notes": "The epoch is our own concept (rotated when sandbox settings change)",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Permissions",
+   "method": "POST",
+   "path": "/api/sessions/:id/permission-epoch",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Rotate the epoch and tear down the kernel",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "GET",
+   "path": "/api/models",
+   "handling": "direct",
+   "target": "models.list",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "POST",
+   "path": "/api/models",
+   "handling": "approximate",
+   "target": "models.replace_all",
+   "notes": "jw replaces as a whole, the adapter wraps it as incremental",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "PUT",
+   "path": "/api/models/:id",
+   "handling": "approximate",
+   "target": "models.replace_all",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "DELETE",
+   "path": "/api/models/:id",
+   "handling": "approximate",
+   "target": "models.replace_all",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "GET",
+   "path": "/api/providers",
+   "handling": "approximate",
+   "target": "config.get / model_vendor_registry",
+   "notes": "Includes provider presets",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "POST",
+   "path": "/api/providers",
+   "handling": "approximate",
+   "target": "config.set",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "PUT",
+   "path": "/api/providers/:id",
+   "handling": "approximate",
+   "target": "config.set",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "DELETE",
+   "path": "/api/providers/:id",
+   "handling": "approximate",
+   "target": "config.set",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "GET",
+   "path": "/api/providers/:id/models",
+   "handling": "adapter",
+   "target": "provider model discovery",
+   "notes": "Cached, ?refresh=1",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "POST",
+   "path": "/api/providers/:id/models",
+   "handling": "approximate",
+   "target": "models.replace_all",
+   "notes": "Turns discovered models into profiles",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "GET",
+   "path": "/api/model-catalog",
+   "handling": "adapter",
+   "target": "models.dev catalog",
+   "notes": "scripts/fetch-model-catalog.mjs already exists",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Models and providers",
+   "method": "POST",
+   "path": "/api/model-catalog/refresh",
+   "handling": "adapter",
+   "target": "models.dev catalog",
+   "notes": "Refresh via proxy",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/timeout-settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/timeout-settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/quota-settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "Upload and workspace quotas",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/quota-settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/sandbox-network-settings",
+   "handling": "runner",
+   "target": "runner + adapter storage",
+   "notes": "After saving, push to runner and rotate the epoch",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/sandbox-network-settings",
+   "handling": "runner",
+   "target": "runner + adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/environment-source-settings",
+   "handling": "runner",
+   "target": "adapter storage",
+   "notes": "Package source preference",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/environment-source-settings",
+   "handling": "runner",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/proxy/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/proxy/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "POST",
+   "path": "/api/proxy/servers",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "Includes encrypted credentials",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/proxy/servers/:id",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "DELETE",
+   "path": "/api/proxy/servers/:id",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/web/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "web search/fetch",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/web/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/web/usage",
+   "handling": "adapter",
+   "target": "web broker counters",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/reviewer-specialist/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/reviewer-specialist/settings",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/specialists",
+   "handling": "approximate",
+   "target": "agents.* / agent_templates.*",
+   "notes": "The 8 built-in specialists become agent templates",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "POST",
+   "path": "/api/specialists",
+   "handling": "approximate",
+   "target": "agent_templates.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "PUT",
+   "path": "/api/specialists/:id",
+   "handling": "approximate",
+   "target": "agent_templates.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "DELETE",
+   "path": "/api/specialists/:id",
+   "handling": "approximate",
+   "target": "agent_templates.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/api/search",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Workbench full-text search across session/artifact, jw has no counterpart",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Global settings",
+   "method": "GET",
+   "path": "/health, /api/health",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Includes memoryGraph, sandbox, runner, workspace probes",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/mcp/servers",
+   "handling": "direct",
+   "target": "mcp.list",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/servers",
+   "handling": "direct",
+   "target": "mcp.register_custom",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/servers/import",
+   "handling": "approximate",
+   "target": "mcp.install / register_custom",
+   "notes": "Bulk config import",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "PUT",
+   "path": "/api/mcp/servers/:customId",
+   "handling": "direct",
+   "target": "mcp.register_custom",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "DELETE",
+   "path": "/api/mcp/servers/:customId",
+   "handling": "approximate",
+   "target": "to be confirmed",
+   "notes": "jw delete method to be confirmed",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/servers/:customId/test",
+   "handling": "direct",
+   "target": "mcp.connect",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/servers/:customId/inspect",
+   "handling": "approximate",
+   "target": "mcp.show + tool call",
+   "notes": "Inspector calls tools directly; adapter must build its own MCP client",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/servers/:customId/oauth/start",
+   "handling": "approximate",
+   "target": "mcp.save_credentials",
+   "notes": "Whether jw covers the OAuth PKCE flow needs a spike",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/servers/:customId/oauth/cancel",
+   "handling": "approximate",
+   "target": "same as above",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/servers/:customId/oauth/clear",
+   "handling": "approximate",
+   "target": "same as above",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/mcp/oauth/callback",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Browser callback page without auth",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/mcp/sources",
+   "handling": "adapter",
+   "target": "science MCP source catalog",
+   "notes": "packages/mcp-sources, science data source list",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "POST",
+   "path": "/api/mcp/sources/reload",
+   "handling": "adapter",
+   "target": "",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/mcp/sources/:id",
+   "handling": "adapter",
+   "target": "",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/mcp/sources/:id/status",
+   "handling": "adapter",
+   "target": "",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/mcp/sources/:id/tools",
+   "handling": "adapter",
+   "target": "",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/mcp/proxy-policies",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "PUT",
+   "path": "/api/mcp/proxy-policies",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/connectors",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Connector list",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/invocations",
+   "handling": "adapter",
+   "target": "accumulated from tool_result events",
+   "notes": "MCP invocation records",
+   "frontendUnused": false
+  },
+  {
+   "domain": "MCP and data sources",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/invocations/:invId",
+   "handling": "adapter",
+   "target": "",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skills",
+   "handling": "direct",
+   "target": "skills.list / skills.installed",
+   "notes": "Includes executor capability labels",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skills",
+   "handling": "approximate",
+   "target": "skills.install / skills.files.*",
+   "notes": "Create a skill package",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skills/import",
+   "handling": "approximate",
+   "target": "skills multi-file upload HTTP",
+   "notes": "jw has skills_multipart_http",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skills/import-git/inspect",
+   "handling": "approximate",
+   "target": "skillnet.* / marketplace.*",
+   "notes": "Git repo inspection",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skills/import-git/review",
+   "handling": "approximate",
+   "target": "evolution.*",
+   "notes": "Generate a review draft",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skills/import-git",
+   "handling": "approximate",
+   "target": "skills.install",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skills/drafts/dialogue",
+   "handling": "approximate",
+   "target": "evolution.*",
+   "notes": "Generate a skill draft from dialogue",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/sessions/:id/skills/distill",
+   "handling": "approximate",
+   "target": "evolution.*",
+   "notes": "Distill a session into a skill",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skills/:id",
+   "handling": "direct",
+   "target": "skills.get",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "PUT",
+   "path": "/api/skills/:id",
+   "handling": "approximate",
+   "target": "skills.toggle / files.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "DELETE",
+   "path": "/api/skills/:id",
+   "handling": "approximate",
+   "target": "to be confirmed",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skills/:id/deletion-impact",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Checks references such as idea-tree, cross-service",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skills/:id/versions",
+   "handling": "direct",
+   "target": "skills.versions.list",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skills/:id/versions/:v",
+   "handling": "direct",
+   "target": "skills.versions.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "PUT",
+   "path": "/api/skills/:id/files/*path",
+   "handling": "direct",
+   "target": "skills.files.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skills/:id/resources/*path",
+   "handling": "direct",
+   "target": "skills.files.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-review-drafts",
+   "handling": "approximate",
+   "target": "evolution.status / get",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-review-drafts/:id",
+   "handling": "approximate",
+   "target": "evolution.get",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-review-drafts/merge",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Draft merge, no jw equivalent",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-review-drafts/:id/confirm",
+   "handling": "approximate",
+   "target": "evolution.save",
+   "notes": "Also auto-commits to the Project Skills library",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "DELETE",
+   "path": "/api/skill-review-drafts/:id",
+   "handling": "approximate",
+   "target": "evolution.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-libraries",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Library version management: commit / rollback / diff; jw only has versions.list",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-libraries",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-libraries/search",
+   "handling": "approximate",
+   "target": "retrieval.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-libraries/:id",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-libraries/:id/versions",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-libraries/:id/versions",
+   "handling": "adapter",
+   "target": "",
+   "notes": "Commit a version, including 409 conflict and dryRun",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-libraries/:id/versions/:v",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-libraries/:id/rollback",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-libraries/:id/proposals",
+   "handling": "adapter",
+   "target": "",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-libraries/:id/versions/:a/diff/:b",
+   "handling": "adapter",
+   "target": "",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "GET",
+   "path": "/api/skill-library-proposals",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-library-proposals/publish",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-library-proposals/:id/publish",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Skills, libraries, review drafts",
+   "method": "POST",
+   "path": "/api/skill-library-proposals/:id/reject",
+   "handling": "adapter",
+   "target": "",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/sessions/:id/files",
+   "handling": "approximate",
+   "target": "files.* / container_file_http list-files",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "POST",
+   "path": "/api/sessions/:id/files",
+   "handling": "approximate",
+   "target": "container_file_http",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/sessions/:id/file",
+   "handling": "approximate",
+   "target": "container_file_http raw-file",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "POST",
+   "path": "/api/sessions/:id/workspace/upload",
+   "handling": "approximate",
+   "target": "file.upload_chunk / upload",
+   "notes": "The conflict policy (conflict) must be implemented by the adapter",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/sessions/:id/workspace/provenance",
+   "handling": "standalone",
+   "target": "artifact/provenance service",
+   "notes": "File provenance",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/sessions/:id/trajectory",
+   "handling": "approximate",
+   "target": "trajectory_http sequences",
+   "notes": "Different format",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/sessions/:id/trajectory/detail",
+   "handling": "approximate",
+   "target": "trajectory_http stream-frames",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/sessions/:id/trajectory/export",
+   "handling": "approximate",
+   "target": "trajectory_http archive",
+   "notes": "Frontend expects NDJSON",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/cas/:sha256",
+   "handling": "standalone",
+   "target": "artifact/provenance service",
+   "notes": "CAS blob read",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Files, workspace, trajectory",
+   "method": "GET",
+   "path": "/api/sessions/:id/web-pages/:webPageId/content",
+   "handling": "standalone",
+   "target": "memory-graph /web-pages/content-hash",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/projects/:id/artifacts",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "DELETE",
+   "path": "/api/projects/:id/artifacts/:artifactId",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/projects/:id/artifacts/:artifactId/versions",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/projects/:id/artifact-versions/:versionId/content",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifacts",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-outputs",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifacts/:artifactId/versions",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-versions/:versionId/content",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-versions/:versionId/provenance",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-versions/:versionId/diff",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-versions/:versionId/preview",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "Table/text preview",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-versions/:versionId/annotations",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/artifact-versions/:versionId/annotations",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-dashboard",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "Whole-session aggregation",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-derivations",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/artifact-reviews",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/reviewer-audit-tasks",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/review-feedback",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/reviewer-specialist/review",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "Manually trigger a review",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/reviewer-specialist/cancel",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/claims",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/evidence-links",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/evidence-items",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/artifact-candidates",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "Download candidates",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/artifact-plans",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/mcp/artifact-plans",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/artifact-plans/:planId",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/mcp/artifact-plans/:planId/approve",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/artifact-jobs",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/artifact-jobs/:jobId",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/mcp/artifact-jobs/:jobId/cancel",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/mcp/artifact-jobs/:jobId/retry",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/artifact-extraction-jobs",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/mcp/artifact-extraction-jobs/:jobId",
+   "handling": "standalone",
+   "target": "artifact service",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/papers",
+   "handling": "standalone",
+   "target": "paper service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/papers/upload",
+   "handling": "standalone",
+   "target": "paper service",
+   "notes": "Raw PDF bytes",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "GET",
+   "path": "/api/sessions/:id/papers/vision-runs",
+   "handling": "standalone",
+   "target": "paper service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Artifacts, review, provenance",
+   "method": "POST",
+   "path": "/api/sessions/:id/papers/:paperId/vision",
+   "handling": "standalone",
+   "target": "paper service",
+   "notes": "Vision model analysis",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/sessions/:id/idea-tree/research",
+   "handling": "standalone",
+   "target": "idea-tree service /research/command",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/sessions/:id/idea-tree/research",
+   "handling": "standalone",
+   "target": "idea-tree service",
+   "notes": "create/get/pause/continue/end/defaults; create also writes a chat message",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/sessions/:id/idea-tree/research/:researchId/events",
+   "handling": "standalone",
+   "target": "idea-tree service /research/events",
+   "notes": "SSE",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/sessions/:id/idea-tree/graph",
+   "handling": "standalone",
+   "target": "idea-tree service /command",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/settings/idea-tree",
+   "handling": "standalone",
+   "target": "idea-tree service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "PUT",
+   "path": "/api/settings/idea-tree",
+   "handling": "standalone",
+   "target": "idea-tree service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/evolve/runs",
+   "handling": "standalone",
+   "target": "evolve service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/evolve/runs/:runId/events",
+   "handling": "standalone",
+   "target": "evolve service",
+   "notes": "JSON or SSE",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/evolve/runs/:runId/candidates/:codeHash",
+   "handling": "standalone",
+   "target": "evolve service",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/evolve/runs/:runId/stop",
+   "handling": "standalone",
+   "target": "evolve service /runs/:id/stop",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/internal/evolve-llm/:runId/v1/chat/completions",
+   "handling": "adapter",
+   "target": "adapter LLM proxy",
+   "notes": "evolve sandbox callback, run-level token, no user auth",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/memory/settings",
+   "handling": "standalone",
+   "target": "memory-graph + adapter storage",
+   "notes": "Also has to push backend/password to the sidecar",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "PUT",
+   "path": "/api/memory/settings",
+   "handling": "standalone",
+   "target": "memory-graph + adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/memory/subgraph",
+   "handling": "standalone",
+   "target": "memory-graph /subgraph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/memory/search-graph/:searchId",
+   "handling": "standalone",
+   "target": "memory-graph /query/search-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/query/match",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/query/by-node-type",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/query/by-edge-type",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/query/chain",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/query/chain-exists",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/query/scope-expansion",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/query/group-expansion",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "GET",
+   "path": "/api/memory/query/artifact-provenance",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "idea-tree, evolve, memory-graph",
+   "method": "POST",
+   "path": "/api/memory/trace/provenance",
+   "handling": "standalone",
+   "target": "memory-graph",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/environments",
+   "handling": "runner",
+   "target": "runner GET /environments",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/environments",
+   "handling": "runner",
+   "target": "runner POST /environments",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "DELETE",
+   "path": "/api/environments/:id",
+   "handling": "runner",
+   "target": "runner DELETE /environments/:id",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/environments/:id/install",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/environments/:id/uninstall",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/environment-setup",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/environment-setup",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/environment-revisions",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/runners/:id/environments…(3 kinds, same shape as above)",
+   "handling": "runner",
+   "target": "runner dispatch",
+   "notes": "Frontend RunnerEnvironmentApiClient rewrites the path",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/runners/:id/workspaces",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/runners/:id/workspaces/:sessionId/files",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "DELETE",
+   "path": "/api/runners/:id/workspaces/:sessionId",
+   "handling": "runner",
+   "target": "runner",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/runners",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/runners/:id",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/runners/npu",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "NPU resources",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "PUT",
+   "path": "/api/runners/:id/npu-devices",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/runners/:id/connect",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/runners/:id/disconnect",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/runners/local/connect",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/runners/local/probe",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "not called by the frontend",
+   "frontendUnused": true
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/runners/:id/connect-log",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/remote-hosts",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "SSH/SLURM hosts",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/remote-hosts",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "DELETE",
+   "path": "/api/remote-hosts/:id",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/remote-hosts/:id/probe",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/remote-hosts/:id/trust-host-key",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "PUT",
+   "path": "/api/remote-hosts/:id/credentials",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "Includes encrypted credentials",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/remote-hosts/:id/runner/connect",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/remote-hosts/:id/runner/disconnect",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/remote-hosts/:id/runner/connect-log",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/remote-hosts/key-files",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "POST",
+   "path": "/api/remote-hosts/generate-key",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Environments, runner, remote hosts",
+   "method": "GET",
+   "path": "/api/remote-hosts/ssh-config",
+   "handling": "runner",
+   "target": "compute module",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "GET",
+   "path": "/api/sessions/:id/usage",
+   "handling": "approximate",
+   "target": "chat.usage_summary / trajectory_http usage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "GET",
+   "path": "/api/usage/analytics",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "Cross-session aggregation; needs its own statistics table",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "GET",
+   "path": "/api/usage/analytics/export",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "csv/json",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "GET",
+   "path": "/api/usage/models",
+   "handling": "adapter",
+   "target": "adapter storage",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "GET",
+   "path": "/api/projects/:id/plugins",
+   "handling": "approximate",
+   "target": "plugins.* / extensions.*",
+   "notes": "plugin-sdk differs from the jw extension mechanism",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "POST",
+   "path": "/api/projects/:id/plugins/bridge",
+   "handling": "approximate",
+   "target": "plugins.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "GET",
+   "path": "/api/projects/:id/plugins/events",
+   "handling": "approximate",
+   "target": "plugins.*",
+   "notes": "SSE",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "GET",
+   "path": "/api/projects/:id/plugins/candidates",
+   "handling": "approximate",
+   "target": "plugins.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "POST",
+   "path": "/api/projects/:id/plugins/candidates",
+   "handling": "approximate",
+   "target": "plugins.*",
+   "notes": "",
+   "frontendUnused": false
+  },
+  {
+   "domain": "Usage, plugins",
+   "method": "POST",
+   "path": "/api/projects/:id/plugins/candidates/:candId/:cmd",
+   "handling": "approximate",
+   "target": "plugins.*",
+   "notes": "",
+   "frontendUnused": false
+  }
+ ]
+}

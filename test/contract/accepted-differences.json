@@ -1,0 +1,17 @@
+{
+  "comment": "Differences between the native executor and the JiuwenSwarm executor that were looked at and judged acceptable. Each rule names the case, the step and the path, and says why. run.mjs --compare lists them as accepted; --strict fails on them too. Adding a rule to make a comparison pass needs a human review.",
+  "rules": [
+    {
+      "case": "l2-provider-unauthorized",
+      "step": "run events",
+      "path": "$.events[*].error",
+      "reason": "the errorCode is the same (unauthorized); the text is each executor's own wording of the provider's 401"
+    },
+    {
+      "case": "l2-tool-call",
+      "step": "a tool's output stream",
+      "path": "$.body[*].event.evidence",
+      "reason": "GAP, not a preference: the native agent attaches evidence (agentRunId, contextRef, stateRef) to every event and records context.captured/state.committed/model.completed; the JiuwenSwarm executor produces none of it, so the trajectory view of such a run has nothing to show"
+    }
+  ]
+}

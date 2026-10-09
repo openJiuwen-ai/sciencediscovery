@@ -1,0 +1,1 @@
+[{"tool":"bash","arguments":{"command":"touch /tmp/j-mark-2 && echo J-MARK-2"}},{"text":"approved and done"}]

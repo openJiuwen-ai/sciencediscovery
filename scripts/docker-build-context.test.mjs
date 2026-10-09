@@ -1,9 +1,11 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { createTest } from "../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import test from "node:test";
+
 import { fileURLToPath } from "node:url";
 import {
   buildContextSources, handwrittenManifestCopies, importersMissingManifests,
@@ -58,4 +60,10 @@ test("every workspace project in the lockfile still has its manifest", () => {
   const importers = lockfileImporters(read("pnpm-lock.yaml"));
   assert.ok(importers.length > 1, "the lockfile should record the workspace projects");
   assert.deepEqual(importersMissingManifests(read("pnpm-lock.yaml"), onDisk), []);
+});
+test("local runtime and browser-test data never enter the image context", () => {
+  const ignored = new Set(read(".dockerignore").split(/\r?\n/u).map((line) => line.trim()));
+  assert.ok(ignored.has(".sciencediscovery-data/"));
+  assert.ok(ignored.has(".e2e-data/"));
+  assert.ok(ignored.has("data/"));
 });

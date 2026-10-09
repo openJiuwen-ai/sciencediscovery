@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+
 
 import { parsePayloadManifest } from "./payload-manifest.js";
 
@@ -39,6 +41,11 @@ const bootstrap = {
 };
 
 describe("payload manifest parsing", () => {
+  test("accepts embedded memory and rejects an incomplete memory descriptor", () => {
+    const memoryGraph = { sitePackages: "memory-graph/site-packages" };
+    assert.deepEqual(parsePayloadManifest(JSON.stringify({ ...base, formatVersion: 1, memoryGraph }), "manifest.json").memoryGraph, memoryGraph);
+    assert.throws(() => parsePayloadManifest(JSON.stringify({ ...base, formatVersion: 1, memoryGraph: {} }), "manifest.json"), /memoryGraph sitePackages/);
+  });
   test("still accepts a version-1 payload with embedded dependencies", () => {
     const manifest = parsePayloadManifest(JSON.stringify({ ...base, formatVersion: 1 }), "manifest.json");
     assert.equal(manifest.formatVersion, 1);

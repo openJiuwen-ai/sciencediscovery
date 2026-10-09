@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "status:external"] });
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { test } from "node:test";
+
 import { promisify } from "node:util";
 
 import type { RemoteHostTarget } from "@sciencediscovery/schema";
@@ -73,7 +75,7 @@ async function startContainer(root: string): Promise<{ keyPath: string; port: nu
   return { keyPath, port: Number(port) };
 }
 
-test("a real SSH machine without a runner is deployed to, connected, and used", { skip: !OPT_IN }, async (context) => {
+test("a real SSH machine without a runner is deployed to, connected, and used", { tags: ["status:external"] }, async (context) => {
   const root = await mkdtemp(resolve(tmpdir(), "sd-ssh-docker-"));
   context.after(async () => {
     await run("docker", ["rm", "-f", CONTAINER]).catch(() => undefined);

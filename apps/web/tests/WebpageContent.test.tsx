@@ -20,8 +20,10 @@
 // TestRenderer (the repo's convention for effect-driven components — SSR
 // never runs useEffect) so the fetch, its loading state, its error mapping,
 // and the unmount cleanup are all exercised for real.
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 

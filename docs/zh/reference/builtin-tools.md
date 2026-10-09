@@ -1,6 +1,8 @@
 # 内置工具清单（模型可见）
 
-本文列出 Agent 循环中模型可见的全部工具。工具由 `packages/workspace` 的 `createWorkspaceTools` 构建，并由 `packages/tools` 注册和调度：**实现全部在 Node 控制面**，模型请求里只带名称、描述与 JSON Schema（见 [agent-backend.md](../explanation/agent-backend.md)）。除标注「恒有」外，工具是否出现取决于会话配置；最终列表还会经 `toolPolicy` 过滤（子 Agent 可被限制为白名单子集）。
+本文列出 Agent 循环中模型可见的全部工具。工具由 `packages/workspace` 的 `createWorkspaceTools` 构建，并由 `packages/tools` 注册和调度：**实现全部在 Node 控制面**，模型请求里只带名称、描述与 JSON Schema（见 [agent-backend.md](../developer-docs/agent-backend.md)）。除标注「恒有」外，工具是否出现取决于会话配置；最终列表还会经 `toolPolicy` 过滤（子 Agent 可被限制为白名单子集）。
+
+下表描述**产品自有工具**及 native executor 的可见名称。默认 JiuwenSwarm 后端会用自己的网页工具替换 `web_search`/`web_fetch`，用 todo 工具替换 `update_plan`，子代理默认仍通过平台 `task` 桥接；还可能出现其它 Swarm 工具。开关和边界见 [Agent 后端](agent-backends.md)。
 
 ## 基础工具（恒有）
 
@@ -22,21 +24,21 @@
 
 `run_shell` 首次执行会触发 `code` 类权限卡片（见[运行时行为参考](runtime-behavior.md#权限与评审器)）。执行产生的文件仍保留 diff 与 derivation 审计，但不会仅因出现在工作区就进入产物目录；Agent 必须调用 `declare_artifact`，用户上传与 MCP 下载由控制面在入口处注册；远程文件必须先显式复制到本地 Workspace，再声明 Artifact，复制本身不自动声明。
 
-## Web 工具（恒有）
+## 产品 Web 工具（native 默认可见；JiuwenSwarm 可使用自有工具）
 
 | 工具 | 参数 | 行为与边界 |
 |---|---|---|
 | `web_search` | `query`（1-2000 字符） | 自动聚合搜索：先试已配置 key 的付费 Provider，再试开启的免费引擎，取第一个出结果的；返回片段与 URL，不代表已读全文 |
 | `web_fetch` | `url`（完整 http(s) URL） | 抽取指定公开网页；拒绝凭证 URL、内网/环回地址；不做跨 Provider 降级 |
 
-两者均由 Node 发起独立权限检查，写 CAS 快照和 `WebInvocation` 审计，厂商调用也在 Node 进程内完成。详见 [web-tools.md](web-tools.md)。
+选择这两个产品工具时，由 Node 发起权限检查、写 CAS 快照和 `WebInvocation` 审计，并在进程内调用厂商。详见 [web-tools.md](web-tools.md)。
 
 ## 编排工具
 
 | 工具 | 出现条件 | 参数要点 |
 |---|---|---|
-| `update_plan` | Agent run 期间始终可用 | 完整替换的 `plan` 快照（0–20 项，每项包含 `step` 与状态），以及可选 `explanation`；空列表表示清空计划 |
-| `task` | 主运行注入（子 Agent 内不可再派生） | `description`（≤80 字符）、`prompt`（≤20000）、可选 `brief`（Brief v1 契约，见 [subagent-orchestration.md](../explanation/subagent-orchestration.md#41-subagent-brief-v1-契约)）、`inputPaths`（≤50）、`max_turns`（≤300）、`timeout_seconds`（≤3600）、`specialistId`、`tools`（白名单，≤32）；同轮多次调用可并行 |
+| `update_plan` | native Agent run，或设置 `SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan` 的 JiuwenSwarm run | 完整替换的 `plan` 快照（0–20 项，每项包含 `step` 与状态），以及可选 `explanation`；空列表表示清空计划 |
+| `task` | 主运行注入（子 Agent 内不可再派生） | `description`（≤80 字符）、`prompt`（≤20000）、可选 `brief`（Brief v1 契约，见 [subagent-orchestration.md](../developer-docs/subagent-orchestration.md#41-subagent-brief-v1-契约)）、`inputPaths`（≤50）、`max_turns`（≤300）、`timeout_seconds`（≤3600）、`specialistId`、`tools`（白名单，≤32）；同轮多次调用可并行 |
 | `query_graph` | 在 System Settings 中启用 ScienceMemory | `query`：跨会话记忆图的大小写不敏感子串搜索，返回 `{hits, total, truncated}` |
 
 `update_plan` 是 run 范围内的轻量进度快照，不是审批门禁，也不是治理实体。每次调用都会完整替换计划，因此新增、删除、重排和状态更新共用一个接口。同一 LLM step 声明多个 `update_plan` 时，只提交模型声明顺序中的最后一次；此前调用以 superseded 成功结束。成功提交的 `plan.updated` 写入 run event stream，并折叠后注入下一次模型调用；主 Agent 与各子 Agent 分别维护自己的快照。
@@ -51,7 +53,7 @@
 
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| Python / R | 统一经 `run_shell` | 原地更新环境、Revision 仅追溯；详见 [执行与 Workspace 生命周期](../explanation/execution-workspaces.md) |
+| Python / R | 统一经 `run_shell` | 原地更新环境、Revision 仅追溯；详见 [执行与 Workspace 生命周期](../core/execution-workspaces.md) |
 | `environment_list` | 可选 `runner_id` | 列出该 Runner 共享的只读 base 与命名环境；Revision 仅追溯，执行选择 Environment ID 的最新版 |
 | `environment_create` | `name`、`language: python\|r`，可选 `baseEnvironmentId` | 从对应只读 base（或指定 base）克隆命名环境；首次显式创建 R 环境时按需准备 R base |
 | `environment_delete` | `environmentId` | 删除命名环境；base 拒绝删除 |
@@ -71,14 +73,14 @@
 
 ## 科研 MCP 工具（动态）
 
-出现条件：会话启用了对应 MCP 来源。命名 `mcp__<source>__<tool>`（如 `mcp__pubmed__search`），描述与输入 schema 来自来源 manifest，按需发现（`deferred: true`，模型初始只见工具名，schema 经 `tool_search` 晋升后暴露），返回内容视为不可信外部数据。注入链路、逐层过滤与模型可见性见 [science-connectors.md](../explanation/science-connectors.md) 第 3 节。
+出现条件：会话启用了对应 MCP 来源。命名 `mcp__<source>__<tool>`（如 `mcp__pubmed__search`），描述与输入 schema 来自来源 manifest，按需发现（`deferred: true`，模型初始只见工具名，schema 经 `tool_search` 晋升后暴露），返回内容视为不可信外部数据。注入链路、逐层过滤与模型可见性见 [science-connectors.md](../developer-docs/science-connectors.md) 第 3 节。
 
 配套的文件工具：
 
 | 工具 | 出现条件 | 参数与边界 |
 |---|---|---|
 | `artifact_download` | 任一 MCP 来源启用 | `mcpInvocationId` + `candidateId`（来自此前 MCP 调用返回的 `ArtifactCandidate`），可选 `destinationPath`；等待权限与下载终态，**不**解析 PDF |
-| `paper_extract_pdf` | 论文抽取接线 | `artifactJobId`（必须是已完成的下载任务）；触发有界 PDF 抽取（见 [paper-worker.md](paper-worker.md)） |
+| `paper_extract_pdf` | 论文抽取接线 | `artifactJobId`（必须是已完成的下载任务）或 `path`（工作区里已有的 PDF，例如用户上传的文件），二选一；触发有界 PDF 抽取（见 [../developer-docs/paper-worker.md](../developer-docs/paper-worker.md)） |
 
 下载与抽取必须分属不同模型回合——同回合工具并行执行，没有 `dependsOn` 机制。
 
@@ -93,7 +95,7 @@
 | `read_skill_resource` | 选中的技能中至少一个带文本资源 | `skillId`（枚举限定为本次运行选中的技能）+ `path`；读取 `read_skill` 后按需加载 supporting resource，返回有界 UTF-8 内容，**从不**执行或安装 |
 | `create_skill` | 主 Agent 本次运行选中且已通过 `read_skill` 加载 `skill-creator` | 从用户明确描述生成持久化但未激活的 Skill 草稿；同名待审 Skill 的再次修改会更新同一个审核项，并与上一次 Agent 提案做 Diff；对话中提供审核入口，用户确认后把审核内容发布为 Skill Library 的新不可变版本 |
 
-技能加载流程见 [skill-progressive-disclosure.md](../explanation/skill-progressive-disclosure.md)。本次运行已选技能的**完整冻结包**在沙箱启动前就已放入只读的 `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>`，Prompt 逐个给出包路径和包 hash。引用时用该变量而不是它展开后的值——`/skills` 只在 bubblewrap 下成立。`read_file` 与 `list_files` 可直接分页读取包内文件，并接受 `$SCIENCEDISCOVERY_SKILLS_DIR/...`、`${SCIENCEDISCOVERY_SKILLS_DIR}/...` 和裸 bind 路径三种写法；`run_shell` 的 `scriptPath` 也可以直接指向包内脚本并用 `arguments` 传显式 argv，无需先复制到工作区。`$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` 是为后续自演进预留的可写目录，默认为空。放入技能包**不等于**自动执行或安装其中的 `scripts/`；执行必须由 Agent 显式发起。`read_skill` / `read_skill_resource` 作为兼容通道保留。
+技能加载流程见 [skill-progressive-disclosure.md](../developer-docs/skill-progressive-disclosure.md)。本次运行已选技能的**完整冻结包**在沙箱启动前就已放入只读的 `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>`，Prompt 逐个给出包路径和包 hash。引用时用该变量而不是它展开后的值——`/skills` 只在 bubblewrap 下成立。`read_file` 与 `list_files` 可直接分页读取包内文件，并接受 `$SCIENCEDISCOVERY_SKILLS_DIR/...`、`${SCIENCEDISCOVERY_SKILLS_DIR}/...` 和裸 bind 路径三种写法；`run_shell` 的 `scriptPath` 也可以直接指向包内脚本并用 `arguments` 传显式 argv，无需先复制到工作区。`$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` 是为后续自演进预留的可写目录，默认为空。放入技能包**不等于**自动执行或安装其中的 `scripts/`；执行必须由 Agent 显式发起。`read_skill` / `read_skill_resource` 作为兼容通道保留。
 
 `run_npu_job` 是独立、显式启用的 Host NPU Broker，不是通用宿主 Shell。Broker 只启动白名单固定入口并校验 Session 归属。Agent 传 `environment_id`，API 将其最新版转换为 Broker 内部审计字段；旧 Revision ID 不能作为环境选择项。通过 `environment_list` 和受控环境工具准备依赖后传入环境 ID。NPU 硬件可用性和特定 workload 验证与常规沙箱 Shell 分开管理。
 
@@ -105,7 +107,7 @@
 
 ## 相关文档
 
-- [agent-backend.md](../explanation/agent-backend.md) — 工具规格如何下发到 gateway、回调如何执行
-- [control-plane.md](../explanation/control-plane.md) — 权限系统与工具回调注册
-- [sandbox-execution.md](../explanation/sandbox-execution.md) — `run_shell`（含 Python/R 命令）背后的沙箱
-- [Ascend NPU 宿主 Broker](../explanation/ascend-npu-runner.md) — Ascend NPU Broker 的设计背景与文档入口
+- [agent-backend.md](../developer-docs/agent-backend.md) — 工具规格如何下发到 gateway、回调如何执行
+- [control-plane.md](../developer-docs/control-plane.md) — 权限系统与工具回调注册
+- [sandbox-execution.md](../developer-docs/sandbox-execution.md) — `run_shell`（含 Python/R 命令）背后的沙箱
+- [Ascend NPU 宿主 Broker](../developer-docs/ascend-npu-runner.md) — Ascend NPU Broker 的设计背景与文档入口

@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import type { ScientificArtifactVersion } from "@sciencediscovery/schema";
 
@@ -128,6 +130,22 @@ test("Quick citation review reports only obvious dangling or unfinished referenc
 test("offline MVP skips content without a literature citation", () => {
   const result = offlineCitationPrecheck(Buffer.from("The analysis is complete."), "version-1");
   assert.equal(result.decision, "SKIPPED");
+});
+
+test("Quick citation review ignores numeric result arrays but still checks real markers", () => {
+  const dataOnly = offlineCitationPrecheck(
+    Buffer.from("| field | values |\n| --- | --- |\n| y_values | [1, 4, 9, 16, 25] |"),
+    "version-1",
+  );
+  assert.equal(dataOnly.decision, "SKIPPED");
+  assert.deepEqual(dataOnly.findings, []);
+
+  const cited = offlineCitationPrecheck(
+    Buffer.from("The method was validated [2, 3].\n\n## References\n[2] Study A.\n[3] Study B."),
+    "version-1",
+  );
+  assert.equal(cited.decision, "ACCEPT_AND_PROCEED");
+  assert.deepEqual(cited.findings, []);
 });
 
 test("Deep citation review validates Citation findings inside the Citation capability", () => {

@@ -16,8 +16,10 @@
 // The decision is a pure predicate so it can be tested without mounting the
 // explorer (the canvas is a WebGL island the SSR test harness cannot run).
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import { countVisibleAndTotal, shouldFocusEntryNode } from "../src/MemoryGraphExplorer.js";
 

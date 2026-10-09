@@ -25,6 +25,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("issue-77-wake-notice.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -127,3 +130,5 @@ async function runs(page: Page, sessionId: string): Promise<Array<{ automaticWak
   expect(response.ok()).toBe(true);
   return await response.json() as Array<{ automaticWake?: boolean; status: string }>;
 }
+
+});

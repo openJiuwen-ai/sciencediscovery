@@ -14,6 +14,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 import unittest
 
 from sciencediscovery_gateway.uniprot_mcp import _parse_tsv, prepare_sequence

@@ -9,6 +9,9 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-reviewer-auto-audit.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: A delivered report is automatically reviewed without blocking the researcher, and the completed review is visible in the Session.
@@ -103,4 +106,6 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
     await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

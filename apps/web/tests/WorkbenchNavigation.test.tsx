@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import type { ComposerReference, SkillDescriptor, WorkbenchSearchResult } from "@sciencediscovery/schema";
 import { createElement } from "react";
@@ -22,6 +24,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   ComposerCommandChips,
   ComposerReferenceMenu,
+  composerInsertionCaret,
+  composerReferenceToken,
   composerSkillSuggestions,
   GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
@@ -32,6 +36,7 @@ import {
   selectedSkillAuthoringCommands,
   SKILL_AUTHORING_COMMANDS,
 } from "../src/WorkbenchNavigation.js";
+import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
 
 const artifactReference: ComposerReference = {
   id: "session-1:plots/result.png",
@@ -48,6 +53,17 @@ test("detects Composer context triggers and inserts a stable reference token", (
   assert.equal(insertComposerReference("Compare @plo", trigger!, artifactReference), "Compare @[plots/result.png] ");
   assert.deepEqual(getComposerTrigger("Use /dock"), { query: "dock", start: 4, symbol: "/" });
   assert.equal(getComposerTrigger("email@example.org"), undefined);
+});
+
+test("the caret lands behind an inserted reference, even with text after the trigger", () => {
+  const text = "Compare @plo with the baseline";
+  const trigger = getComposerTrigger(text, "Compare @plo".length)!;
+  const inserted = insertComposerReference(text, trigger, artifactReference, "Compare @plo".length);
+  const caret = composerInsertionCaret(trigger, composerReferenceToken(artifactReference));
+  assert.equal(inserted.slice(0, caret), "Compare @[plots/result.png] ");
+  assert.equal(inserted.slice(caret), " with the baseline");
+  const command = getComposerTrigger("/dist")!;
+  assert.equal(insertComposerCommand("/dist", command, "/distill-session").slice(0, composerInsertionCaret(command, "/distill-session")), "/distill-session ");
 });
 
 test("inserts Skill authoring commands without attaching a catalog reference", () => {
@@ -162,4 +178,30 @@ test("global search renders limited mixed-catalog pages and authoritative server
   }));
   assert.match(targetedHtml, /target-after-250\.csv/);
   assert.ok(GLOBAL_SEARCH_DEBOUNCE_MS >= 200 && GLOBAL_SEARCH_DEBOUNCE_MS <= 500);
+});
+
+test("search results read in the UI's language when the API sends their parts", () => {
+  const zh = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(GlobalSearchDialog, {
+    hasMore: false,
+    loading: false,
+    onClose: () => undefined,
+    onQueryChange: () => undefined,
+    onSelect: () => undefined,
+    query: "growth",
+    results: [
+      { detail: "Mixed · Archived", id: "session:s1", kind: "session", label: "Untitled session", projectId: "p1", projectName: "Mixed", sessionId: "s1", archived: true },
+      { detail: "Mixed / Fit · llm_declared", id: "artifact:a1", kind: "artifact", label: "fit.png", origin: "llm_declared", projectId: "p1", projectName: "Mixed", sessionTitle: "Fit" },
+      { detail: "Mixed / Deleted Session · user_upload", id: "artifact:a2", kind: "artifact", label: "growth.csv", origin: "user_upload", projectId: "p1", projectName: "Mixed" },
+      { detail: "An older API's line", id: "artifact:a3", kind: "artifact", label: "old.csv", projectId: "p1" },
+    ],
+    total: 4,
+  })));
+  assert.match(zh, /未命名会话/);
+  assert.match(zh, /Mixed · 已归档/);
+  assert.match(zh, /Mixed \/ Fit · 智能体登记/);
+  assert.match(zh, /Mixed \/ 已删除会话 · 用户上传/);
+  assert.match(zh, /An older API&#x27;s line|An older API's line/);
+  assert.match(zh, /<em>会话<\/em>/);
+  assert.match(zh, /<em>产物<\/em>/);
+  assert.doesNotMatch(zh, /llm_declared|user_upload|<em>session<\/em>/);
 });

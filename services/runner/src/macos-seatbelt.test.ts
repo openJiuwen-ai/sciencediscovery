@@ -1,11 +1,13 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { after, before, test } = createTest(import.meta.url, { tags: ["category:ut", "os:macos", "arch:amd64", "arch:arm64", "sandbox:seatbelt"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
-import { after, before, test } from "node:test";
+
 
 import { detectSeatbeltCapability } from "@sciencediscovery/sandbox-capability";
 import type { PermissionEpoch } from "@sciencediscovery/schema";
@@ -62,7 +64,7 @@ function config(): ExecutorConfig {
 
 test("macOS Seatbelt writes only the workspace and denies direct network", async (context) => {
   if (process.platform !== "darwin" || !seatbeltUsable) {
-    context.skip("Seatbelt is unavailable on this host");
+    assert.fail("Seatbelt is unavailable on this host");
     return;
   }
   const secret = join(dataDir, "not-mounted-secret.txt");
@@ -89,7 +91,7 @@ test("macOS Seatbelt writes only the workspace and denies direct network", async
 
 test("macOS Seatbelt reaches an allowed domain only through the runner gateway", async (context) => {
   if (process.platform !== "darwin" || !seatbeltUsable) {
-    context.skip("Seatbelt is unavailable on this host");
+    assert.fail("Seatbelt is unavailable on this host");
     return;
   }
   const target = createServer((_request, response) => response.end("gateway-ok"));
@@ -133,7 +135,7 @@ test("macOS Seatbelt reaches an allowed domain only through the runner gateway",
 
 test("macOS persistent shell retains cwd and exports inside one Seatbelt", async (context) => {
   if (process.platform !== "darwin" || !seatbeltUsable) {
-    context.skip("Seatbelt is unavailable on this host");
+    assert.fail("Seatbelt is unavailable on this host");
     return;
   }
   const profiles = new SessionEnvProfileStore();
@@ -167,7 +169,7 @@ test("macOS persistent shell retains cwd and exports inside one Seatbelt", async
 
 test("macOS ephemeral shell reports logical workspace provenance", async (context) => {
   if (process.platform !== "darwin" || !seatbeltUsable) {
-    context.skip("Seatbelt is unavailable on this host");
+    assert.fail("Seatbelt is unavailable on this host");
     return;
   }
   const result = await executeShell(config(), {
@@ -184,7 +186,7 @@ test("macOS ephemeral shell reports logical workspace provenance", async (contex
 
 test("macOS runner starts healthy and reports the real sandbox capabilities", async (context) => {
   if (process.platform !== "darwin" || !seatbeltUsable) {
-    context.skip("Seatbelt is unavailable on this host");
+    assert.fail("Seatbelt is unavailable on this host");
     return;
   }
   const server = await startRunnerServer({

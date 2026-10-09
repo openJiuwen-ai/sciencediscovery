@@ -26,6 +26,8 @@
  * usage option) and that `finalMessages` round-trips into a second agent run —
  * the mechanism behind the review-correction turn.
  */
+import { createTest } from "../support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux", "arch:amd64", "model:mock"] });
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -170,7 +172,4 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-await main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+test("native agent loop preserves first-step tools and multi-turn history", async () => { await main(); });

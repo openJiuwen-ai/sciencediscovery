@@ -1,0 +1,11 @@
+ACK {"type": "event", "event": "connection.ack", "payload": {"protocol_version": "1.0", "transport": "tui"}}
+{"type": "res", "id": "chat-3e1af424", "ok": true, "payload": {"accepted": true, "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-bash-31449", "is_processing": true, "is_complete": false}}
+{"type": "event", "event": "chat.tool_call", "payload": {"event_type": "chat.tool_call", "tool_call": {"name": "bash", "arguments": "{\"command\": \"echo J-MARK-1 && pwd\"}", "tool_call_id": "call_1789918647815", "display_name": "执行 echo J-MARK-1 && pwd"}, "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.tool_update", "payload": {"event_type": "chat.tool_update", "tool_name": "bash", "tool_call_id": "call_1789918647815", "arguments": "{\"command\": \"echo J-MARK-1 && pwd\"}", "status": "in_progress", "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.tool_result", "payload": {"event_type": "chat.tool_result", "result": "success=True data={'content': 'Command: echo J-MARK-1 && pwd\\nStdout: J-MARK-1\\n/tmp\\n\\nStderr: (empty)\\nExit Code: 0'} error=None extracted_content=None include_extracted_content_only_once=False long_term_memory=None", "tool_name": "bash", "tool_call_id": "call_1789918647815", "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "tool ", "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "finished ", "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "ok", "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.final", "payload": {"event_type": "chat.final", "content": "tool finished ok", "final_mode": "patch_segment", "session_id": "rec-bash-31449"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-bash-31449", "is_processing": false, "is_complete": true}}

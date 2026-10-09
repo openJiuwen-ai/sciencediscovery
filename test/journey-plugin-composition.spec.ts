@@ -5,6 +5,9 @@ import {test} from "./helpers/e2e.ts";
 import {apiBaseUrl,authorizationHeader} from "./e2e-auth.js";
 import {artifactTree,cleanupJourney,createProjectAndSession,openProjectSession,scriptedModel,sendUserMessage,waitForRunTerminal} from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-plugin-composition.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 async function api(page:Page,path:string,data?:unknown) {
   const response=await page.request.fetch(apiBaseUrl()+path,{headers:authorizationHeader(),method:data===undefined?"GET":"POST",...(data===undefined?{}:{data})});
   expect(response.ok(),await response.text()).toBe(true);
@@ -34,9 +37,12 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
   test.setTimeout(180_000);
   journey.scenario({goal:"研究员只在界面管理可选扩展；后端仍支持项目独立插件组合、会话覆盖和审批应用，保存界面不会重置隐藏配置。",
     preconditions:["真实隔离 API/Runner 已启动","本地模型 stub，不调用外部服务；实验只执行模型回复及 Plan 更新"]});
+  // The journeys run on JiuwenSwarm's own tools (.ci/run-e2e.sh): the Plan plugin's tool is its todo list, not update_plan.
+  const planTool="todo_create";
   const stub=await scriptedModel([
     [{text:"Reduced composition completed."}],
-    [{tool:"update_plan",arguments:{plan:[{step:"Verify restored planning",status:"completed"}]}},{text:"Planning restored."}],
+    [{tool:"todo_create",arguments:{call_goal:"Verify restored planning",tasks:[{id:"verify",content:"Verify restored planning",activeForm:"Verifying restored planning",description:"Check the Plan tools are back."}]}},
+      {tool:"todo_modify",arguments:{action:"update",todos:[{id:"verify",status:"completed"}]}},{text:"Planning restored."}],
     [{text:"Baseline experiment completed."}],
     [{text:"Candidate experiment completed."}],
   ]);
@@ -103,7 +109,7 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
       const run=await sendUserMessage(page,fixture.session.id,"Complete this task without optional capabilities.");
       expect((await waitForRunTerminal(page,fixture.session.id,run.id)).status).toBe("completed");
       const tools=stub.calls.filter(call=>call.turn===0).flatMap(call=>call.offeredTools??[]);
-      expect(tools).not.toContain("update_plan");expect(tools).not.toContain("read_skill");expect(tools).not.toContain("task");
+      expect(tools).not.toContain(planTool);expect(tools).not.toContain("read_skill");expect(tools).not.toContain("task");
       expect(tools.some(name=>name.startsWith("mcp"))).toBe(false);
       await expect(page.getByText("Reduced composition completed.",{exact:true}).first()).toBeVisible();
     });
@@ -116,7 +122,7 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
       await openProjectSession(page,fixture);
       const run=await sendUserMessage(page,fixture.session.id,"Track verification with a Plan.");
       expect((await waitForRunTerminal(page,fixture.session.id,run.id)).status).toBe("completed");
-      expect(stub.calls.filter(call=>call.turn===1).some(call=>call.offeredTools?.includes("update_plan"))).toBe(true);
+      expect(stub.calls.filter(call=>call.turn===1).some(call=>call.offeredTools?.includes(planTool))).toBe(true);
       const state=await api(page,root+"/bridge?sessionId="+fixture.session.id,{apiVersion:1,pluginId:"plan",
         scope:{projectId:fixture.project.id,sessionId:fixture.session.id},kind:"query",method:"state",input:{runId:run.id}});
       expect(state.result.length).toBeGreaterThan(0);
@@ -146,8 +152,8 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
         expect((await waitForRunTerminal(page,sessionId,run.id)).status).toBe("completed");
         if(name==="baseline")baselineRunId=run.id;else candidateRunId=run.id;
       }
-      expect(stub.calls.filter(call=>call.turn===2).some(call=>call.offeredTools?.includes("update_plan"))).toBe(false);
-      expect(stub.calls.filter(call=>call.turn===3).some(call=>call.offeredTools?.includes("update_plan"))).toBe(true);
+      expect(stub.calls.filter(call=>call.turn===2).some(call=>call.offeredTools?.includes(planTool))).toBe(false);
+      expect(stub.calls.filter(call=>call.turn===3).some(call=>call.offeredTools?.includes(planTool))).toBe(true);
       expect((await api(page,root)).settings.effective.plugins.plan.enabled).toBe(false);
       await expect(page.getByText("Candidate experiment completed.",{exact:true}).first()).toBeVisible();
     });
@@ -189,4 +195,6 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
     if(otherProjectId) await page.request.delete(apiBaseUrl()+"/api/projects/"+otherProjectId,{headers:authorizationHeader()});
     await cleanupJourney(page,fixture).catch(()=>undefined);await stub.stop();
   }
+});
+
 });

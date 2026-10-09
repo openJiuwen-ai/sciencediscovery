@@ -297,7 +297,7 @@ export class RunnerClient {
     this.observeClock(response.headers.get("date"), sentAt, Date.now());
     if (!response.ok) {
       const body = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
-      throw new Error(body.error || `Runner request failed (${response.status})`);
+      throw Object.assign(new Error(body.error || `Runner request failed (${response.status})`), { statusCode: response.status });
     }
     return await response.json() as T;
   }

@@ -1,0 +1,272 @@
+{
+ "domain": "idea-tree, evolve, memory-graph",
+ "cases": [
+  {
+   "id": "idea-evolve-memory-reads",
+   "description": "Reads and input validation for idea-tree, evolve and memory-graph on a session that has never run. Nothing is started.",
+   "steps": [
+    {
+     "name": "create a project",
+     "request": {
+      "method": "POST",
+      "path": "/api/projects",
+      "body": {
+       "name": "L1 idea evolve memory"
+      }
+     },
+     "capture": {
+      "projectId": "$.id",
+      "sessionId": "$.firstSession.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "idea-tree settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/settings/idea-tree"
+     },
+     "covers": [
+      "GET /api/settings/idea-tree"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "research list of a fresh session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/idea-tree/research"
+     },
+     "covers": [
+      "GET /api/sessions/:id/idea-tree/research"
+     ]
+    },
+    {
+     "name": "start research with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/idea-tree/research",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/sessions/:id/idea-tree/research"
+     ]
+    },
+    {
+     "name": "events of an unknown research",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/idea-tree/research/nope/events",
+      "headers": {
+       "accept": "text/event-stream"
+      }
+     },
+     "stream": {
+      "until": [],
+      "timeoutMs": 2000
+     },
+     "covers": [
+      "GET /api/sessions/:id/idea-tree/research/:researchId/events"
+     ]
+    },
+    {
+     "name": "idea-tree graph of a fresh session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/idea-tree/graph"
+     },
+     "covers": [
+      "GET /api/sessions/:id/idea-tree/graph"
+     ]
+    },
+    {
+     "name": "evolve runs",
+     "request": {
+      "method": "GET",
+      "path": "/api/evolve/runs"
+     },
+     "covers": [
+      "GET /api/evolve/runs"
+     ]
+    },
+    {
+     "name": "events of an unknown evolve run",
+     "request": {
+      "method": "GET",
+      "path": "/api/evolve/runs/nope/events",
+      "headers": {
+       "accept": "text/event-stream"
+      }
+     },
+     "stream": {
+      "until": [],
+      "timeoutMs": 2000
+     },
+     "covers": [
+      "GET /api/evolve/runs/:runId/events"
+     ]
+    },
+    {
+     "name": "candidate of an unknown evolve run",
+     "request": {
+      "method": "GET",
+      "path": "/api/evolve/runs/nope/candidates/abc"
+     },
+     "covers": [
+      "GET /api/evolve/runs/:runId/candidates/:codeHash"
+     ]
+    },
+    {
+     "name": "stop an unknown evolve run",
+     "request": {
+      "method": "POST",
+      "path": "/api/evolve/runs/nope/stop",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/evolve/runs/:runId/stop"
+     ]
+    },
+    {
+     "name": "memory settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/memory/settings"
+     },
+     "covers": [
+      "GET /api/memory/settings"
+     ]
+    },
+    {
+     "name": "memory subgraph of a fresh session",
+     "request": {
+      "method": "GET",
+      "path": "/api/memory/subgraph?sessionId={{sessionId}}"
+     },
+     "covers": [
+      "GET /api/memory/subgraph"
+     ]
+    },
+    {
+     "name": "an unknown search graph",
+     "request": {
+      "method": "GET",
+      "path": "/api/memory/search-graph/nope"
+     },
+     "covers": [
+      "GET /api/memory/search-graph/:searchId"
+     ]
+    },
+    {
+     "name": "provenance of an unknown artifact",
+     "request": {
+      "method": "GET",
+      "path": "/api/memory/query/artifact-provenance?artifactId=nope"
+     },
+     "covers": [
+      "GET /api/memory/query/artifact-provenance"
+     ]
+    },
+    {
+     "name": "memory query match with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/query/match",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/query/match"
+     ]
+    },
+    {
+     "name": "memory query by-node-type with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/query/by-node-type",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/query/by-node-type"
+     ]
+    },
+    {
+     "name": "memory query by-edge-type with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/query/by-edge-type",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/query/by-edge-type"
+     ]
+    },
+    {
+     "name": "memory query chain with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/query/chain",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/query/chain"
+     ]
+    },
+    {
+     "name": "memory query chain-exists with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/query/chain-exists",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/query/chain-exists"
+     ]
+    },
+    {
+     "name": "memory query scope-expansion with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/query/scope-expansion",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/query/scope-expansion"
+     ]
+    },
+    {
+     "name": "memory query group-expansion with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/query/group-expansion",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/query/group-expansion"
+     ]
+    },
+    {
+     "name": "memory provenance trace with an empty body",
+     "request": {
+      "method": "POST",
+      "path": "/api/memory/trace/provenance",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/memory/trace/provenance"
+     ]
+    },
+    {
+     "name": "delete the project",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/projects/{{projectId}}",
+      "body": {
+       "confirmationId": "{{projectId}}"
+      }
+     },
+     "always": true
+    }
+   ]
+  }
+ ]
+}

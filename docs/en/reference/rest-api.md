@@ -6,6 +6,7 @@ This page records the key HTTP interfaces used by the current Web UI, based on `
 
 - Local default base and bind address: `http://127.0.0.1:4310`.
 - Docker default published address: `http://127.0.0.1:4310`.
+- With the default JiuwenSwarm backend, `:4310` is the adapter front door; it proxies product routes to the API on `:4410`. Authenticated `GET /agent/info` reports the executor and gateway reachability. In native mode, the API owns `:4310` directly. See [Agent backends](agent-backends.md).
 - `GET /health` and `GET /api/health` do not require authentication.
 - The MCP OAuth browser callback `GET /api/mcp/oauth/callback` does not use the local bearer token; it validates a pending, one-time OAuth state and exchanges the authorization code with PKCE.
 - Other `/api/*` requests require `Authorization: Bearer <SCIENCE_AGENT_AUTH_TOKEN>`. There is no default token: when the variable is unset the server generates a local service access token on its first start, prints the `Open to sign in` URL and token, and stores it in `<data-dir>/secrets/auth-token`.
@@ -99,7 +100,7 @@ A minimal Run requires only `content`:
 
 Read-only views of `/evolve-design` runs, plus stopping one. Searches are started by the agent through
 the `create_evolve_run` tool, not by this API. See
-[Program evolution](../explanation/evolve.md).
+[Program evolution](../core/evolve.md).
 
 | Method and path | Request/query | Success |
 |---|---|---|
@@ -110,7 +111,7 @@ the `create_evolve_run` tool, not by this API. See
 
 ## Custom MCP servers and Inspector
 
-See [Configure custom MCP servers](../how-to/configure-custom-mcp.md) for the UI workflow. Routes are implemented in `services/api/src/http/custom-mcp.ts`; request/response types are in `packages/schema/src/custom-mcp.ts`. All routes in this table require the local service access token (Bearer token).
+See [Configure custom MCP servers](../advanced-setup/configure-custom-mcp.md) for the UI workflow. Routes are implemented in `services/api/src/http/custom-mcp.ts`; request/response types are in `packages/schema/src/custom-mcp.ts`. All routes in this table require the local service access token (Bearer token).
 
 | Method and path | Request | Response |
 |---|---|---|
@@ -155,7 +156,7 @@ This is the exception to local bearer authentication described above, not a gene
 
 ## Proxy configuration
 
-All routes below require bearer authentication. See [Configure the network proxy](../how-to/configure-network-proxy.md).
+All routes below require bearer authentication. See [Configure the network proxy](../advanced-setup/configure-network-proxy.md).
 
 | Method and path | Request | Success |
 |---|---|---|

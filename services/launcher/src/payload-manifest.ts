@@ -62,6 +62,15 @@ export interface PayloadManifest {
   };
   /** Present from format version 2 on; absent in embedded-dependency payloads. */
   bootstrap?: PayloadBootstrap;
+  /**
+   * Present when the packaging script embedded JiuwenSwarm and its adapter
+   * (see scripts/binary-release/build-payload.sh). Both are flat, PYTHONPATH
+   * -addressable installs rather than a venv — see serve.ts for why — so
+   * these are directories to put on PYTHONPATH, not executables.
+   */
+  jiuwenswarm?: { tag: string; sitePackages: string; adapterSitePackages: string };
+  /** Optional for compatibility with older payloads; embedded sidecar dependencies. */
+  memoryGraph?: { sitePackages: string };
 }
 
 export function parsePayloadManifest(raw: string, source: string): PayloadManifest {
@@ -94,6 +103,9 @@ export function parsePayloadManifest(raw: string, source: string): PayloadManife
     if (!bootstrap.requirementsPath || !bootstrap.gatewayWheelPath) {
       throw new Error(`${source} is missing a bootstrap artifact path entry.`);
     }
+  }
+  if (manifest.memoryGraph && (typeof manifest.memoryGraph.sitePackages !== "string" || !manifest.memoryGraph.sitePackages)) {
+    throw new Error(`${source} is missing the memoryGraph sitePackages path.`);
   }
   return manifest as PayloadManifest;
 }

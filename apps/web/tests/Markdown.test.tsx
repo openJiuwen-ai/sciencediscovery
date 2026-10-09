@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -74,6 +76,21 @@ test("renders GFM structure and math", () => {
   assert.match(html, /disabled=""/);
   assert.match(html, /checked=""/);
   assert.doesNotMatch(html, /node="\[object Object\]"/);
+});
+
+test("shell variables and prices are text, not math", () => {
+  const shell = render("运行 shell 命令：for i in $(seq 1 120); do echo tick $i; sleep 1; done");
+  assert.doesNotMatch(shell, /class="katex"/);
+  assert.match(shell, /\$\(seq 1 120\); do echo tick \$i; sleep 1; done/);
+  assert.doesNotMatch(render("It costs $5 and $10."), /class="katex"/);
+  assert.match(render("Both $a$ and $b^2$ render."), /class="katex"/);
+});
+
+test("LaTeX \\( \\) and \\[ \\] math renders like dollar math", () => {
+  const html = render("误差随样本量 \\(N\\) 增大按 \\(1/\\sqrt{N}\\) 下降。\n\n\\[\nE = mc^2\n\\]");
+  assert.equal((html.match(/class="katex"/g) ?? []).length, 3);
+  assert.match(html, /class="katex-display"/);
+  assert.doesNotMatch(html, /\\sqrt\{N\}\)/);
 });
 
 test("does not render raw HTML or unsafe links", () => {

@@ -1,12 +1,15 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 import { AgentNotifications } from "./agent-notifications.js";
 import { SessionStore } from "./store.js";
 import { versioningAuthorities } from "./agent-run/versioning-authorities.js";
@@ -83,20 +86,48 @@ test("stop invalidates a prepared delivery and cancels timers but retains comple
   assert.equal(inbox.acknowledge(resumed), true);
 });
 
-test("stopping a child does not stop its parent or sibling; Session resume does not undo child stop", (context) => {
+test("resuming a child reopens a stopped Session and leaves other individually stopped agents stopped", (context) => {
   const { inbox } = fixture(context);
+  const sibling = { ...main, agentId: "subagent:sibling" };
   inbox.createTimer(child, { dueAt: 2_000, message: "Child reminder" });
   inbox.createTimer(main, { dueAt: 2_000, message: "Parent reminder" });
   inbox.stopAgent(child);
+  inbox.stopAgent(sibling);
   inbox.complete(child, "child-execution", "Child result ready");
   assert.equal(inbox.prepareDelivery(child), undefined);
   assert.equal(inbox.canWakeAgent(main), true);
   assert.equal(inbox.timers(main)[0]!.state, "pending");
   inbox.stop(main.sessionId);
+  inbox.resumeAgent(child);
+  assert.equal(inbox.canWakeAgent(main), true);
+  assert.equal(inbox.canWakeAgent(sibling), false);
+  assert.equal(inbox.prepareDelivery(child)!.notifications.length, 1);
+});
+
+test("resuming the Session does not undo an individual child's Stop", (context) => {
+  const { inbox } = fixture(context);
+  inbox.stopAgent(child);
+  inbox.stop(main.sessionId);
   inbox.resume(main.sessionId);
+  assert.equal(inbox.canWakeAgent(main), true);
   assert.equal(inbox.canWakeAgent(child), false);
   inbox.resumeAgent(child);
-  assert.equal(inbox.prepareDelivery(child)!.notifications.length, 1);
+  assert.equal(inbox.canWakeAgent(child), true);
+});
+
+test("resuming another child in an open Session preserves an acknowledged delivery batch", (context) => {
+  const { inbox } = fixture(context);
+  const sibling = { ...main, agentId: "subagent:sibling" };
+  inbox.complete(main, "job", "done");
+  const batch = inbox.prepareDelivery(main)!;
+  inbox.stopAgent(sibling);
+  assert.equal(inbox.acknowledge(batch), true, "the scheduler has marked the notice read before the model starts");
+  const sessionEpoch = inbox.generation(main.sessionId);
+  inbox.resumeAgent(sibling);
+  assert.equal(inbox.generation(main.sessionId), sessionEpoch);
+  assert.equal(inbox.deliveryAllowed(batch), true, "the already acknowledged notice can still start its model turn");
+  assert.equal(inbox.unread(main).length, 0);
+  assert.equal(inbox.canWakeAgent(sibling), true);
 });
 
 test("one-shot timers fire once and completion supersedes only its own pending reminder", (context) => {
@@ -201,7 +232,7 @@ test("SessionStore archive closes the gate; restoring the Session retains record
   store.notifications.resume(session.id);
   assert.equal(store.notifications.prepareDelivery(owner)!.notifications.length, 1);
   const versions = new VersionStore(root);
-  const ref = await versions.putRecord("NotificationAuthorityTest", await versioningAuthorities(store, session.id, "request")());
+  const ref = await versions.putRecord("NotificationAuthorityTest", await versioningAuthorities(store, { sessionId: session.id, executionId: "request" })());
   await versions.validateClosure(ref);
   const captured = (await versions.readRecord<{ notifications: { notifications: unknown[]; timers: { state: string }[] } }>(ref, "NotificationAuthorityTest")).value;
   assert.equal(captured.notifications.notifications.length, 1);

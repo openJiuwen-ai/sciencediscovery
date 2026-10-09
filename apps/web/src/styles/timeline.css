@@ -287,6 +287,16 @@
   .remote-npu-list > li { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .remote-npu-pick,
   .config-panel .remote-npu-pick { grid-column: 1 / -1; }
+  /* Collapsing the row to two columns is not enough on its own: a meter's caption and its reading
+     are both nowrap and the bar between them keeps a 36px floor, so the three side by side have a
+     minimum (measured at 154px) that the half-width column at phone size (130px) cannot meet, and
+     the card overflowed horizontally by a few pixels. Give the bar its own row rather than squeeze
+     a reading that has to stay legible; the first child is a caption on the memory meter and an
+     icon on the AI Core one, so both are placed by position. */
+  .remote-npu-meter { grid-template-columns: auto minmax(0, 1fr); }
+  .remote-npu-meter > :first-child { grid-area: 1 / 1; }
+  .remote-npu-meter-value { grid-area: 1 / 2; }
+  .remote-npu-meter-track { grid-area: 2 / 1 / 3 / -1; }
 }
 
 /* The live story of a connect attempt: a terminal-like panel under the card. */

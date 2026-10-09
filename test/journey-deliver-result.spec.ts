@@ -27,6 +27,9 @@ import {
   waitForRunTerminal,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-deliver-result.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: A researcher can receive one declared report, inspect and download it, update it as a new version, and distinguish scratch files from Artifacts.
@@ -72,6 +75,9 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
     [
       {
         arguments: {
+          // Exercise the asynchronous contract even on a fast runner. The
+          // scripted model must observe completion before declaring v2.
+          background: true,
           command: "python3 - <<'PY'\n" + [
             "from pathlib import Path",
             "Path('results/summary.md').write_text('# Summary\\n\\nmean=50.0\\n', encoding='utf-8')",
@@ -83,7 +89,7 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
       { arguments: { path: "results/summary.md" }, tool: "declare_artifact" },
       { text: "The updated results/summary.md now reports mean=50.0." },
     ],
-  ]);
+  ], undefined, { captureContext: true, waitForShellCompletion: true });
   const fixture = await createProjectAndSession(page, {
     approvalMode: "always_allow",
     model: {
@@ -127,6 +133,8 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
           "Analyze the small measurement set, keep intermediate data private, and deliver a Markdown summary.",
         );
         expect((await waitForRunTerminal(page, fixture.session.id, firstRun.id)).status).toBe("completed");
+        expect(stub.calls.some(call => call.turn === 0
+          && call.toolResults?.some(result => result.includes(firstMarker)))).toBe(true);
         const tool = await expandToolStep(page, { contains: firstMarker });
         await expect(tool).toContainText(firstMarker);
       },
@@ -193,6 +201,9 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
         );
         const terminal = await waitForRunTerminal(page, fixture.session.id, secondRun.id);
         expect(terminal.status, terminal.error).toBe("completed");
+        expect(stub.calls.some(call => call.turn === 1 && call.tool === "execution_status")).toBe(true);
+        expect(stub.calls.some(call => call.turn === 1
+          && call.toolResults?.some(result => result.includes(secondMarker)))).toBe(true);
         await expect(await expandToolStep(page, { contains: secondMarker })).toContainText(secondMarker);
         tree = await artifactTree(page);
         await expect(tree.artifactCount).toHaveText("1", { timeout: 30_000 });
@@ -244,4 +255,6 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
     await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

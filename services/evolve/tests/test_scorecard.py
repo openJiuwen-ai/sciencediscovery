@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.scorecard import (
     aggregate,
     evaluate_constraints,

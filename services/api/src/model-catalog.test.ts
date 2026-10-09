@@ -16,10 +16,12 @@
 // refresh persists, and what survives a failed refresh. No test here reaches
 // the network — the download is injected.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import test from "node:test";
+
 
 import { ModelCatalogFetchError } from "@sciencediscovery/model";
 import {

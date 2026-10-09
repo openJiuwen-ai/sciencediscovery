@@ -39,13 +39,15 @@ my-skill/
 
 技能只在全局库中存一份。创建或导入后默认即可用（all 模式），无需在 Global 中勾选——Global 不参与技能设置；如需收窄，在 Project 或 Session 运行时设置中切换为 selected 并勾选白名单。每次托管编辑产生不可变 revision；运行开始时冻结所选 revision，Prompt Manifest 记录技能 ID、revision、version 与包哈希。仅在 selected 模式下引用某技能的 Project 或 Session 会阻止该技能删除；all 模式下的存储列表不阻止删除。
 
+下述按沙箱路径加载技能的说明适用于 **native executor**。默认 JiuwenSwarm 后端将选中技能安装给 `skill_tool`；加载失败时 `read_skill` 和 `read_skill_resource` 仍可回退。见 [Agent 后端](agent-backends.md)。
+
 导入内容视为不可信本地数据。ZIP 条目会检查路径穿越、符号链接、加密、重复路径，以及归档限制（上传 25 MiB、解压 50 MiB、500 个文件、单资源 10 MiB、`SKILL.md` 512 KiB）。运行时 Prompt 列出生效技能的名称、描述、revision、包路径与包 hash，而不是包正文。沙箱启动前，每个已选技能的**完整冻结包**已放入只读的 `$SCIENCEDISCOVERY_SKILLS_DIR/<skillId>`，因此模型把 `SKILL.md`、supporting text 和捆绑文件当作普通路径读取，并可直接在包路径上用显式 argv 执行捆绑脚本。引用时一律走该变量：它在 bubblewrap 下展开为 bind 路径 `/skills`，在 macOS Seatbelt 下展开为宿主真实目录，写死 `/skills` 只在 Linux 成立。同一个已选技能集合在一个 Session 内按内容寻址只放入一次，选择相同冻结 revision 的多次运行共享同一份。`read_skill` 与有界的 `read_skill_resource` 作为兼容通道保留。**放入不等于安装**：仅选择技能不会自动运行 `scripts/`，也不会自动安装依赖，且默认包目录拒绝写入和删除。`$SCIENCEDISCOVERY_SKILL_EXTENSIONS_DIR` 是为后续自演进预留的可写目录，初始为空。不要为寻找包资源而全盘搜索文件系统（Prompt 已给出路径），也不要把捆绑大脚本重新读回上下文。
 
 ## 托管科学环境
 
 Runner 启动与健康检查不会等待环境安装。新数据目录会在后台下载并校验自管 micromamba，然后只创建 Python base；在 **系统配置 → Environments** 可查看当前 state、phase、说明、失败原因与时间，失败后可重试。默认不会下载 R；第一次显式创建 R 命名环境时才按需准备 R base，升级前已经存在的 R base 不会删除。
 
-每个 Runner 拥有自己的环境 catalog，在该 Runner 的 Project 之间共享。Python/R base 只读且不可删除；命名环境可以同时安装两种语言。受控装包/卸包原地更新 prefix，并推进 `currentRevisionId`；Revision 是追溯记录，不是可执行的历史环境副本。执行按 Environment ID 解析最新版。沙箱内托管 prefix 只读，Prompt 提示使用环境管理工具，不拦截或改写 Shell 命令。详见[执行与 Workspace 生命周期](../explanation/execution-workspaces.md)。
+每个 Runner 拥有自己的环境 catalog，在该 Runner 的 Project 之间共享。Python/R base 只读且不可删除；命名环境可以同时安装两种语言。受控装包/卸包原地更新 prefix，并推进 `currentRevisionId`；Revision 是追溯记录，不是可执行的历史环境副本。执行按 Environment ID 解析最新版。沙箱内托管 prefix 只读，Prompt 提示使用环境管理工具，不拦截或改写 Shell 命令。详见[执行与 Workspace 生命周期](../core/execution-workspaces.md)。
 
 ## 权限与评审器
 
@@ -69,7 +71,7 @@ Reviewer Specialist 默认关闭；在系统配置中启用后，可通过工作
 
 ## 执行限制
 
-没有计算资源档位，也没有 CPU/内存配额：沙箱代码可使用主机能提供的资源。仍保留的护栏是：可配置的单次执行墙钟超时（本地模式默认无限）、Runner 工作区总量默认 10 GiB、单次执行 stdout+stderr 默认保留 1 GiB（超限截断），以及全局单一执行 worker（同一时刻只跑一个沙箱任务）。Runner 当前不设置独立的单文件执行配额，但文件仍计入工作区总量。API 上传另有单文件 1 GiB、单请求 10 GiB 和累计工作区 10 GiB 的入口限制；这些上传限制不等同于 Runner 输出限制。完整变量和层级见[配置参考](configuration.md#配额层级)。隔离本身不变：bubblewrap 命名空间、seccomp，且主机文件系统只暴露会话工作区。网络是可配置策略而不是常量：默认 `none`（沙箱无网卡）；管理员在 **系统配置 → 沙箱网络** 开启 **域名允许列表** 后，沙箱仍然没有网卡，出站只经本部署的 egress gateway 并按允许域名过滤。生效策略随 Permission Epoch 快照，可在 `/api/health.sandboxNetwork` 查看；详见[沙箱执行](../explanation/sandbox-execution.md#31-沙箱网络访问)。
+没有计算资源档位，也没有 CPU/内存配额：沙箱代码可使用主机能提供的资源。仍保留的护栏是：可配置的单次执行墙钟超时（本地模式默认无限）、Runner 工作区总量默认 10 GiB、单次执行 stdout+stderr 默认保留 1 GiB（超限截断），以及全局单一执行 worker（同一时刻只跑一个沙箱任务）。Runner 当前不设置独立的单文件执行配额，但文件仍计入工作区总量。API 上传另有单文件 1 GiB、单请求 10 GiB 和累计工作区 10 GiB 的入口限制；这些上传限制不等同于 Runner 输出限制。完整变量和层级见[配置参考](configuration.md#配额层级)。隔离本身不变：bubblewrap 命名空间、seccomp，且主机文件系统只暴露会话工作区。网络是可配置策略而不是常量：默认 `none`（沙箱无网卡）；管理员在 **系统配置 → 沙箱网络** 开启 **域名允许列表** 后，沙箱仍然没有网卡，出站只经本部署的 egress gateway 并按允许域名过滤。生效策略随 Permission Epoch 快照，可在 `/api/health.sandboxNetwork` 查看；详见[沙箱执行](../developer-docs/sandbox-execution.md#31-沙箱网络访问)。
 
 ## 论文阅读器限制
 

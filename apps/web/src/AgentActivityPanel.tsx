@@ -99,6 +99,7 @@ export function AgentActivityPanel({ client, focus, sessionId }: { client: ApiCl
       </>}
     </div>
     </details> : null}
+    {activity?.agents.some((item) => item.stopped && item.agentId.startsWith("subagent:")) ? <p>{t("activity.resumeAgentScope")}</p> : null}
     {activity?.agents.filter((item) => item.stopped && item.agentId.startsWith("subagent:")).map((item) => <button key={item.agentId} type="button" disabled={busy} onClick={() => void action(() => client.resumeSubagent(sessionId, item.agentId.slice(9)))}>{t("activity.resumeAgent", { id: item.agentId })}</button>)}
   </div>;
 }

@@ -1,7 +1,9 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { test } from "node:test";
+
 import { appendFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +24,19 @@ test("exact admitted system sections preserve order and separators, not rejected
   assert.equal(blocks.slice(0, 2).map(b => b.content).join(""), input.systemPrompt);
   assert.equal(blocks[2]!.attribution, "unavailable");
   assert.equal(contextBlocks({ ...input, systemPrompt: "fallback" }, assembly)[0]!.attribution, "unavailable");
+});
+test("an external executor's whole prompt is one recorded section, still checked against what was sent", () => {
+  // JiuwenSwarm assembles the prompt itself and reports it as the single section it is.
+  const input = { systemPrompt: "assembled elsewhere", history: [{ role: "user", content: "question" }], tools: [] };
+  const assembly = { trace: { selectedPath: "external", admitted: { sections: [
+    { id: "jiuwenswarm-system", content: "assembled elsewhere", contributorId: "jiuwenswarm", slot: "system" },
+  ] }, renderedContext: { sectionIds: ["jiuwenswarm-system"] } } };
+  const [system] = contextBlocks(input, assembly);
+  assert.equal(system!.attribution, "recorded");
+  assert.equal(system!.source, "jiuwenswarm");
+  assert.equal(system!.content, input.systemPrompt);
+  // The equality is what earns "recorded": a section that is not what was sent falls back.
+  assert.equal(contextBlocks({ ...input, systemPrompt: "something else" }, assembly)[0]!.attribution, "unavailable");
 });
 test("classification and structured credential redaction", () => {
   assert.equal(eventKind({ type: "model_delta", kind: "thinking" }), "thinking");

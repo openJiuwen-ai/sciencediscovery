@@ -5,7 +5,7 @@
   "type": "module",
   "exports": { "types": "./src/index.ts", "default": "./dist/index.js" },
   "types": "./src/index.ts",
-  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --test dist/*.test.js", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "scripts": { "build": "tsc -p tsconfig.json", "test": "node --import tsx --test \"src/**/*.test.ts\"", "typecheck": "tsc -p tsconfig.json --noEmit" },
   "dependencies": {
     "@sciencediscovery/cas": "workspace:*",
     "@sciencediscovery/orchestration": "workspace:*",

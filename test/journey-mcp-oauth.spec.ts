@@ -14,6 +14,9 @@ import { cleanupJourney, createProjectAndSession, openProjectSession } from "./h
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { startOAuthFixture } from "./fixtures/mcp-oauth.mjs";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-mcp-oauth.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN", actionTimeout: 15_000 });
 
 /**
@@ -143,4 +146,6 @@ test("Authorize MCP, inspect tools and recover from denied consent", { tag: "@mo
     await cleanupJourney(page, fixture);
     await oauth.close();
   }
+});
+
 });

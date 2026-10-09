@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { TestContext } from "node:test";
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import test from "node:test";
+
 
 import { createOperationalLogger } from "./index.js";
 
-function withTempDataDir(context: test.TestContext): string {
+function withTempDataDir(context: TestContext): string {
   const tempRoot = resolve(process.cwd(), ".tmp");
   mkdirSync(tempRoot, { recursive: true });
   const dataDir = mkdtempSync(resolve(tempRoot, "operational-logging-"));

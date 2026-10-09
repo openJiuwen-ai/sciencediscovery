@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-version.mjs",
     "start": "node dist/server.js",
-    "test": "node --test scripts/*.test.mjs dist/*.test.js",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"scripts/*.test.mjs\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

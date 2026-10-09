@@ -801,6 +801,7 @@ export function RunTimeline({
   onListSkillDrafts,
   onPermissionDecision,
   onOpenSubagent,
+  subagentDisclosure,
   onToggle,
   references,
   onChipClick,
@@ -824,6 +825,7 @@ export function RunTimeline({
   onListSkillDrafts?: () => Promise<SkillReviewDraftSummary[]>;
   onPermissionDecision?: (request: PermissionRequest, decision: PermissionDecision) => Promise<void>;
   onOpenSubagent?: (subagent: Subagent) => void;
+  subagentDisclosure?: import("../session/run-activity.js").ActivityCardDisclosure;
   onToggle: (id: string, expanded: boolean) => void;
   /** Chip references (alias → graph node) for the session's latest report
    * artifact version, so [evidence1]/[artifact1] tokens in assistant report messages
@@ -985,6 +987,7 @@ export function RunTimeline({
         if (entry.type === "subagents") {
           return (
             <SubagentCards
+              {...subagentDisclosure}
               className="timeline-subagents"
               hideHeading
               key={entry.id}
@@ -1024,10 +1027,13 @@ export function RunTimeline({
               key={entry.id}
               open={entry.expanded}
               onToggle={(event) => {
-                if (event.currentTarget.open !== entry.expanded) onToggle(entry.id, event.currentTarget.open);
+                if (event.target === event.currentTarget && event.currentTarget.open !== entry.expanded) onToggle(entry.id, event.currentTarget.open);
               }}
             >
-              <summary>
+              <summary onClick={(event) => {
+                event.preventDefault();
+                onToggle(entry.id, !entry.expanded);
+              }}>
                 <span className="timeline-chevron"><ChevronRightIcon size={16} /></span>
                 <span className="timeline-icon">{statusIcon(entry.status)}</span>
                 <span className="timeline-label"><strong>{label}</strong><small>{entry.status === "running" ? t("timeline.modelDeciding") : t("timeline.modelReasoning")}</small></span>
@@ -1068,10 +1074,15 @@ export function RunTimeline({
             key={entry.id}
             open={entry.expanded}
             onToggle={(event) => {
-              if (event.currentTarget.open !== entry.expanded) onToggle(entry.id, event.currentTarget.open);
+              if (event.target === event.currentTarget && event.currentTarget.open !== entry.expanded) onToggle(entry.id, event.currentTarget.open);
             }}
           >
-            <summary>
+            <summary onClick={(event) => {
+              // Native toggle is asynchronous; save the choice before a
+              // terminal refresh can replace this live timeline instance.
+              event.preventDefault();
+              onToggle(entry.id, !entry.expanded);
+            }}>
               <span className="timeline-chevron"><ChevronRightIcon size={16} /></span>
               <span className="timeline-icon">{statusIcon(entry.trace.status)}</span>
               <span className="timeline-label"><strong>{entry.trace.status === "running" ? entry.trace.name : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: entry.trace.name })}</strong><small>{t("timeline.toolCall")}</small></span>

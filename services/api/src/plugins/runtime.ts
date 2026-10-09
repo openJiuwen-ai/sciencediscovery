@@ -27,7 +27,7 @@ export function runtimePluginDefinitions<M extends RuntimeMessage>(options: {
       publishSkillLibraryUpdate: options.workspace.publishSkillLibraryUpdate,
       toolPolicy: options.workspace.toolPolicy, durable: options.durable, scope: options.scope }),
     mcpPlugin<M>({ mcpTools: options.workspace.mcpTools, toolPolicy: options.workspace.toolPolicy }),
-    schedulerPlugin<M>({ runSubagent: options.workspace.runSubagent, specialists: options.workspace.specialists, toolPolicy: options.workspace.toolPolicy }),
+    schedulerPlugin<M>({ runSubagent: options.workspace.runSubagent, specialists: options.workspace.specialists, toolPolicy: options.workspace.toolPolicy, listArtifacts: options.workspace.listArtifacts }),
     ...(options.planStore ? [planPlugin<M>(options.planStore, [options.scope])] : []),
     ...(options.evolve ? [{
       manifest: { id: "evolve", version: "0.1.0", apiVersion: 1 as const },

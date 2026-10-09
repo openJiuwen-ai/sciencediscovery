@@ -1,0 +1,1 @@
+[{"tool":"tool_search","arguments":{"query":"run_shell"}},{"tool":"tool_call","arguments":{"name":"mcp_sci_run_shell","args":{"command":"echo J-MCP-1"}}},{"text":"mcp done"}]

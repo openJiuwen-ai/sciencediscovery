@@ -12,12 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
 
-import { DEFAULT_IDEA_TREE_SETTINGS, DEFAULT_WEB_SETTINGS } from "@sciencediscovery/schema";
 
-import { normalizeIdeaTreeSettings, resolveIdeaTreeSettings, normalizeWebSettings } from "./settings.js";
+import { DEFAULT_IDEA_TREE_SETTINGS, DEFAULT_WEB_SETTINGS, DEFAULT_SYSTEM_QUOTA_SETTINGS } from "@sciencediscovery/schema";
+
+import { normalizeIdeaTreeSettings, resolveIdeaTreeSettings, normalizeWebSettings, normalizeQuotaSettings, resolveQuotaSettings } from "./settings.js";
+
+test("subagent concurrency quota validates input and survives catalog normalization", () => {
+  for (const value of [0, -1, 11, 1.5, "2", null]) {
+    assert.throws(() => normalizeQuotaSettings({ ...DEFAULT_SYSTEM_QUOTA_SETTINGS, maxConcurrentSubagents: value }), /maxConcurrentSubagents/);
+  }
+  for (const limit of [1, 2, 10]) {
+    const saved = normalizeQuotaSettings({ ...DEFAULT_SYSTEM_QUOTA_SETTINGS, maxConcurrentSubagents: limit });
+    assert.equal(resolveQuotaSettings(JSON.parse(JSON.stringify(saved)), DEFAULT_SYSTEM_QUOTA_SETTINGS).maxConcurrentSubagents, limit);
+  }
+  assert.equal(resolveQuotaSettings({}, DEFAULT_SYSTEM_QUOTA_SETTINGS).maxConcurrentSubagents, undefined);
+});
 
 const base = {
   fetchCacheTtlSeconds: 86_400,

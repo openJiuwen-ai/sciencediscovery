@@ -1,8 +1,10 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 import { Type } from "typebox";
 
 import { ToolOutputGuard } from "./bounded-output.js";
@@ -333,6 +335,17 @@ test("tool details sanitizer does not treat shared references as circular", () =
   const shared = ["same"];
   const sanitized = sanitizeToolDetails({ left: shared, right: shared }) as Record<string, unknown>;
   assert.deepEqual(sanitized, { left: ["same"], right: ["same"] });
+});
+
+test("tool details sanitizer preserves CAS references atomically under detail pressure", () => {
+  for (const pool of ["data", "agent-state"]) {
+    const ref = { pool, digest: `sha256:${"a".repeat(64)}`, size: 123, mediaType: "application/json" };
+    assert.deepEqual((sanitizeToolDetails({ ref }) as { ref: unknown }).ref, ref);
+    const saturated = Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`field${index}`, "x".repeat(4_000)]));
+    const result = sanitizeToolDetails({ ...saturated, ref }) as { ref: unknown };
+    assert.equal(result.ref, "[reference omitted: detail budget]");
+    assert.doesNotMatch(JSON.stringify(result), /"digest":"\[truncated\]"/);
+  }
 });
 
 test("every result crosses the output bound before it becomes a history message", async () => {

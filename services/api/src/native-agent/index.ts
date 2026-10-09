@@ -209,7 +209,23 @@ function normalizeHistoryMessage(message: WireMessage): WireMessage {
   return normalized;
 }
 
-function formatRunContract(contract: string): string {
+/** The model endpoint a run talks to; shared by every executor so a model is reached the same way. */
+export function modelEndpointFor(options: Pick<NativeAgentOptions, "config">): ModelEndpoint {
+  const thinking = process.env.SCIENCE_AGENT_AGENT_THINKING?.trim();
+  return {
+    ...(options.config.apiProtocol ? { apiProtocol: options.config.apiProtocol } : {}),
+    ...(options.config.apiVariant ? { apiVariant: options.config.apiVariant } : {}),
+    baseUrl: options.config.baseUrl,
+    ...(options.config.apiToken ? { apiToken: options.config.apiToken } : {}),
+    model: options.config.model,
+    ...(options.config.thinkingEffort ? { thinkingEffort: options.config.thinkingEffort } : {}),
+    ...(options.config.thinkingMode ? { thinkingMode: options.config.thinkingMode } : {}),
+    ...(options.config.proxy ? { proxy: options.config.proxy } : {}),
+    ...(thinking === "disabled" || thinking === "enabled" ? { thinking } : {}),
+  } as ModelEndpoint;
+}
+
+export function formatRunContract(contract: string): string {
   return [
     "<run_contract>",
     "Runtime-preserved request/task contract for this request execution.",
@@ -220,6 +236,142 @@ function formatRunContract(contract: string): string {
     contract.trim(),
     "</run_contract>",
   ].join("\n");
+}
+
+/**
+ * Start the plugin scope for a run: the plugin-contributed tools (plan, subagent
+ * dispatch, evolve, ...) live here, not in buildTools. Shared by every executor.
+ * `runSubagent` lets the caller observe delegated children.
+ */
+export async function startPluginScope(
+  options: NativeAgentOptions,
+  durable: DurableContextStore,
+  signal: AbortSignal,
+  runSubagent?: WorkspaceAgentOptions["runSubagent"],
+) {
+  const plugins = await createRuntimePluginScope<WireMessage>({
+    scope: options.contextScope ?? (options.subagent?.name === "Reviewer Specialist" ? "reviewer" : options.subagent ? "subagent" : "main"),
+    planStore: options.planStore,
+    evolve: options.evolve,
+    workspace: { ...options, ...(runSubagent ?? options.runSubagent ? { runSubagent: runSubagent ?? options.runSubagent } : {}) },
+    durable,
+  }, options.disabledPlugins, options.pluginSettings);
+  await plugins.start(signal);
+  return plugins;
+}
+
+/** Every execution tool one run gets: the workspace tools plus what plugins contribute. */
+export function pluginTools(plugins: Awaited<ReturnType<typeof startPluginScope>>): AgentTool[] {
+  return plugins.contributions.flatMap((item) => item.tools);
+}
+
+/**
+ * The registry every run dispatches tool calls through: the workspace and plugin tools plus the
+ * tool-output reader, with the output guard (size bounds, references for oversized results),
+ * detail sanitisation, neutralisation of untrusted remote content and loop protection. Shared by
+ * every executor so a tool behaves the same wherever the model loop runs.
+ */
+export function createToolRegistry(
+  options: NativeAgentOptions,
+  plugins: Awaited<ReturnType<typeof startPluginScope>>,
+  durable: DurableContextStore,
+  hooks: {
+    recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void>;
+    /** Per-agent search-result index (native loop only; the swarm executor records via its model gateway instead). */
+    searchIndex?: SearchResultIndex;
+  } = {},
+): ToolRegistry<WireMessage> {
+  const executionTools = buildTools(options);
+  // Approval-gated plan lifecycle (V3-C2, plan-mode): composed directly.
+  // The model-declared snapshot tool (update_plan) comes from the plan
+  // plugin scope above, so both capabilities still coexist per run.
+  const planTools = [
+    ...(options.planRepository
+      ? createPlanLifecycleTools({
+          approvalMayBlock: options.approvalMode === "ask_for_dangerous",
+          repository: options.planRepository,
+        })
+      : []),
+  ];
+  // Retained per Session, not per AgentRun: a bounded result stays in the
+  // replayed history of later runs, so its ref has to keep resolving for as
+  // long as that history does. Session deletion removes this directory.
+  const toolOutputStore = new ToolOutputStore({
+    root: toolOutputStoreRoot(options.config.dataDir, options.sessionId),
+  });
+  const toolOutputSettings = resolveToolOutputSettings();
+  return new ToolRegistry([
+    ...executionTools, ...planTools, ...plugins.contributions.flatMap((item) => item.tools),
+    ...createToolOutputTools(toolOutputStore, {
+      tracker: new ToolOutputReadTracker(toolOutputSettings.readPolicy),
+    }),
+  ], {
+    batchPolicies: plugins.contributions.flatMap((item) => item.batchPolicies),
+    createResultMessage: (call, content, output) => ({
+      role: "tool", tool_call_id: call.id, name: call.name, content,
+      ...(output ? { additional_kwargs: { tool_output: output } } : {}),
+    }),
+    commitResult: async ({ call, content, isError, sequence }) => {
+      durable.observe(call, { content, isError }, sequence);
+      hooks.searchIndex?.observe(call, content, isError);
+      if (call.name === "read_skill" && !isError && typeof call.args.skillId === "string") {
+        const skill = options.skills?.find((item) => item.id === call.args.skillId);
+        if (skill) durable.registerSkill({
+          description: skill.description,
+          hash: skill.hash,
+          id: skill.id,
+          revision: skill.revision,
+          version: skill.version,
+        });
+      }
+      for (const contribution of plugins.contributions) {
+        await contribution.commitResult?.({ call, content, isError, sequence });
+      }
+    },
+    recordResult: hooks.recordResult,
+    outputGuard: new ToolOutputGuard({
+      maxBytes: toolOutputSettings.maxBytes,
+      maxLines: toolOutputSettings.maxLines,
+      retentionBytes: toolOutputSettings.retentionBytes,
+      sink: toolOutputStore,
+    }),
+  });
+}
+
+/**
+ * The system prompt an agent for these options gets, and its parts. Shared by every
+ * executor so the model is told the same thing wherever the loop runs.
+ */
+export function composeSystemPrompt(
+  options: NativeAgentOptions,
+  toolNames: ReadonlySet<string>,
+  promptSkills: RuntimeSkill[],
+  toolPromptSections: readonly string[] = [],
+): { parts: WorkspacePromptPart[]; systemPrompt: string } {
+  const governance = {
+    localRunnerAllowed: options.localRunnerAllowed,
+    ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
+    ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
+    ...(options.remoteRunners?.length ? { remoteRunners: options.remoteRunners.map((runner) => `${runner.runnerId}: ${runner.description || runner.hostAlias}`) } : {}),
+    ...(options.specialist ? { specialist: options.specialist } : {}),
+    ...(options.workflowInstructions ? { workflowInstructions: options.workflowInstructions } : {}),
+    ...(options.specialists?.filter((specialist) => specialist.builtIn).length
+      ? { builtinSpecialists: options.specialists!.filter((specialist) => specialist.builtIn).map((specialist) => ({ description: specialist.description, name: specialist.name })) }
+      : {}),
+    ...(options.subagent ? { subagent: options.subagent } : {}),
+    ...(toolNames.has("task") && !options.subagent ? { subagentOrchestration: true } : {}),
+    ...(options.knowledgeBaseScope ? { knowledgeBaseScope: options.knowledgeBaseScope } : {}),
+    ...(options.agentMemories?.length ? { agentMemories: options.agentMemories } : {}),
+  };
+  const baseSystemPrompt = buildWorkspaceSystemPrompt(promptSkills, Boolean(options.environments), governance);
+  return {
+    parts: buildWorkspacePromptParts(promptSkills, Boolean(options.environments), governance),
+    systemPrompt: [
+      baseSystemPrompt,
+      options.runContract ? formatRunContract(options.runContract) : "",
+      ...toolPromptSections,
+    ].filter(Boolean).join("\n\n"),
+  };
 }
 
 class NativeAgent implements NativeAgentHandle {
@@ -257,106 +409,22 @@ class NativeAgent implements NativeAgentHandle {
 
   private async initialize(signal: AbortSignal): Promise<void> {
     const options = this.options;
-    const pluginWorkspace = { ...options, ...(options.runSubagent ? {
-      runSubagent: async (...args: Parameters<NonNullable<WorkspaceAgentOptions["runSubagent"]>>) => {
-        const result = await options.runSubagent!(...args);
-        this.versionRecorder?.childCompleted(`subagent:${result.id}`);
-        return result;
-      },
-    } : {}) };
-    this.plugins = await createRuntimePluginScope<WireMessage>({
-      scope: options.contextScope ?? (options.subagent?.name === "Reviewer Specialist" ? "reviewer" : options.subagent ? "subagent" : "main"),
-      planStore: options.planStore,
-      evolve: options.evolve,
-      workspace: pluginWorkspace,
-      durable: this.durableContext,
-    }, options.disabledPlugins, options.pluginSettings);
-    await this.plugins.start(signal);
-    const executionTools = buildTools(options);
-    // Approval-gated plan lifecycle (V3-C2, plan-mode): composed directly.
-    // The model-declared snapshot tool (update_plan) comes from the plan
-    // plugin scope above, so both capabilities still coexist per run.
-    const planTools = [
-      ...(options.planRepository
-        ? createPlanLifecycleTools({
-            approvalMayBlock: options.approvalMode === "ask_for_dangerous",
-            repository: options.planRepository,
-          })
-        : []),
-    ];
-    // Retained per Session, not per AgentRun: a bounded result stays in the
-    // replayed history of later runs, so its ref has to keep resolving for as
-    // long as that history does. Session deletion removes this directory.
-    const toolOutputStore = new ToolOutputStore({
-      root: toolOutputStoreRoot(options.config.dataDir, options.sessionId),
-    });
-    const toolOutputSettings = resolveToolOutputSettings();
-    this.toolRegistry = new ToolRegistry([
-      ...executionTools, ...planTools, ...this.plugins.contributions.flatMap((item) => item.tools),
-      ...createToolOutputTools(toolOutputStore, {
-        tracker: new ToolOutputReadTracker(toolOutputSettings.readPolicy),
-      }),
-    ], {
-      batchPolicies: this.plugins.contributions.flatMap((item) => item.batchPolicies),
-      createResultMessage: (call, content, output) => ({
-        role: "tool", tool_call_id: call.id, name: call.name, content,
-        ...(output ? { additional_kwargs: { tool_output: output } } : {}),
-      }),
-      commitResult: async ({ call, content, isError, sequence }) => {
-        this.durableContext.observe(call, { content, isError }, sequence);
-        this.searchIndex.observe(call, content, isError);
-        if (call.name === "read_skill" && !isError && typeof call.args.skillId === "string") {
-          const skill = options.skills?.find((item) => item.id === call.args.skillId);
-          if (skill) this.durableContext.registerSkill({
-            description: skill.description,
-            hash: skill.hash,
-            id: skill.id,
-            revision: skill.revision,
-            version: skill.version,
-          });
-        }
-        for (const contribution of this.plugins!.contributions) {
-          await contribution.commitResult?.({ call, content, isError, sequence });
-        }
-      },
+    this.plugins = await startPluginScope(options, this.durableContext, signal, options.runSubagent ? async (...args) => {
+      const result = await options.runSubagent!(...args);
+      this.versionRecorder?.childCompleted(`subagent:${result.id}`);
+      return result;
+    } : undefined);
+    this.toolRegistry = createToolRegistry(options, this.plugins, this.durableContext, {
       recordResult: options.versioning ? async (input) => { await this.versionRecorder?.recordObservation(input); } : undefined,
-      outputGuard: new ToolOutputGuard({
-        maxBytes: toolOutputSettings.maxBytes,
-        maxLines: toolOutputSettings.maxLines,
-        retentionBytes: toolOutputSettings.retentionBytes,
-        sink: toolOutputStore,
-      }),
+      searchIndex: this.searchIndex,
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
     this.promptSkills = toolNames.has("read_skill")
       ? (options.skills ?? [])
       : [];
-    const governance = {
-      localRunnerAllowed: options.localRunnerAllowed,
-      ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
-      ...(options.memoryGraphEnabled ? { memoryGraphEnabled: options.memoryGraphEnabled } : {}),
-      ...(options.remoteRunners?.length ? { remoteRunners: options.remoteRunners.map((runner) => `${runner.runnerId}: ${runner.description || runner.hostAlias}`) } : {}),
-      ...(options.specialist ? { specialist: options.specialist } : {}),
-      ...(options.workflowInstructions ? { workflowInstructions: options.workflowInstructions } : {}),
-      ...(options.specialists?.filter((specialist) => specialist.builtIn).length
-        ? { builtinSpecialists: options.specialists!.filter((specialist) => specialist.builtIn).map((specialist) => ({ description: specialist.description, name: specialist.name })) }
-        : {}),
-      ...(options.subagent ? { subagent: options.subagent } : {}),
-      ...(toolNames.has("task") && !options.subagent ? { subagentOrchestration: true } : {}),
-      ...(options.knowledgeBaseScope ? { knowledgeBaseScope: options.knowledgeBaseScope } : {}),
-      ...(options.agentMemories?.length ? { agentMemories: options.agentMemories } : {}),
-    };
-    const baseSystemPrompt = buildWorkspaceSystemPrompt(
-      this.promptSkills,
-      Boolean(options.environments),
-      governance,
-    );
-    this.promptParts = buildWorkspacePromptParts(this.promptSkills, Boolean(options.environments), governance);
-    this.systemPrompt = [
-      baseSystemPrompt,
-      options.runContract ? formatRunContract(options.runContract) : "",
-      ...this.toolRegistry.promptSections(),
-    ].filter(Boolean).join("\n\n");
+    const composed = composeSystemPrompt(options, toolNames, this.promptSkills, this.toolRegistry.promptSections());
+    this.promptParts = composed.parts;
+    this.systemPrompt = composed.systemPrompt;
     this.history = (options.gatewayHistory ?? options.history ?? []).map(normalizeHistoryMessage);
     // Reasoning models bill hidden thought against the same `max_tokens` as
     // the answer, and on some endpoints the agent loop spends a whole turn on
@@ -365,18 +433,7 @@ class NativeAgent implements NativeAgentHandle {
     // toggle itself. Left unset by default: for most models the loop's own
     // reasoning is what makes it work. This belongs on the model profile
     // eventually; until then it is one switch for the deployment.
-    const thinking = process.env.SCIENCE_AGENT_AGENT_THINKING?.trim();
-    this.endpoint = {
-      ...(options.config.apiProtocol ? { apiProtocol: options.config.apiProtocol } : {}),
-      ...(options.config.apiVariant ? { apiVariant: options.config.apiVariant } : {}),
-      baseUrl: options.config.baseUrl,
-      ...(options.config.apiToken ? { apiToken: options.config.apiToken } : {}),
-      model: options.config.model,
-      ...(options.config.thinkingEffort ? { thinkingEffort: options.config.thinkingEffort } : {}),
-      ...(options.config.thinkingMode ? { thinkingMode: options.config.thinkingMode } : {}),
-      ...(options.config.proxy ? { proxy: options.config.proxy } : {}),
-      ...(thinking === "disabled" || thinking === "enabled" ? { thinking } : {}),
-    };
+    this.endpoint = modelEndpointFor(options);
     this.policy = resolveModelClientPolicy();
   }
 
@@ -859,7 +916,8 @@ class NativeAgent implements NativeAgentHandle {
  *  Exported for tests: every option here is forwarded by hand, so an option
  *  added at both ends but missed in the middle leaves its tool absent from the
  *  model's list with nothing failing anywhere. */
-function buildTools(options: NativeAgentOptions): AgentTool[] {
+/** The execution tools one run gets; also what another executor must expose. */
+export function buildTools(options: NativeAgentOptions): AgentTool[] {
   return createWorkspaceTools(options.workspaceRoot, {
     enabledConnectorIds: options.enabledConnectorIds,
     ...(options.extraTools?.length ? { extraTools: options.extraTools } : {}),
@@ -870,6 +928,7 @@ function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.executeScientific ? { executeScientific: options.executeScientific } : {}),
     ...(options.npuBroker ? { npuBroker: options.npuBroker } : {}),
     ...(options.artifactDownload ? { artifactDownload: options.artifactDownload } : {}),
+    ...(options.materializeArtifact ? { materializeArtifact: options.materializeArtifact } : {}),
     ...(options.declareArtifact ? { declareArtifact: options.declareArtifact } : {}),
     ...(options.getFileProvenance ? { getFileProvenance: options.getFileProvenance } : {}),
     ...(options.listArtifacts ? { listArtifacts: options.listArtifacts } : {}),

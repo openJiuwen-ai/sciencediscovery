@@ -1,0 +1,4 @@
+{"type": "res", "id": "chat-41b35256", "ok": true, "payload": {"accepted": true, "session_id": "rec-cancel-31125"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-cancel-31125", "is_processing": true, "is_complete": false}}
+{"type": "res", "id": "interrupt-b20fb198", "ok": true, "payload": {"accepted": true, "session_id": "rec-cancel-31125", "intent": "cancel"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-cancel-31125", "is_processing": false, "is_complete": true}}

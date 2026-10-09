@@ -50,8 +50,8 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
     with driver.session() as session:
         nodes_result = session.run(
             """
-            MATCH (n) WHERE n.session_id = $sid
-              AND NOT coalesce(n.deleted_session, false)
+            MATCH (n {session_id: $sid})
+            WHERE NOT coalesce(n.deleted_session, false)
               // A search contributes hundreds of SearchNodes and up to a few
               // dozen SearchCells. Left in, one /evolve run would eat a fifth of
               // the node budget and push the nodes a session is actually about
@@ -104,9 +104,8 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         # top of these real contains/produces edges).
         edges_result = session.run(
             """
-            MATCH (a)-[r]->(b)
-            WHERE a.session_id = $sid AND b.session_id = $sid
-              AND NOT coalesce(a.deleted_session, false)
+            MATCH (a {session_id: $sid})-[r]->(b {session_id: $sid})
+            WHERE NOT coalesce(a.deleted_session, false)
               AND NOT coalesce(b.deleted_session, false)
               // `searches` is in: it is the one edge that shows a session had a
               // search at all. The structural ones (expands/root/inspires/
@@ -161,7 +160,8 @@ def get_subgraph(session_id: str) -> dict[str, Any]:
         # target). A real produces edge between the same (scope, product) —
         # impossible today (products hang off the child, not the scope) — would
         # win the dedup key over the surrogate.
-        surrogates_result = session.run(
+        folded_products = getattr(session, "folded_products", None)
+        surrogates_result = folded_products(session_id) if folded_products else session.run(
             """
             MATCH (scope:Task)-[:contains]->(first:ToolCall)
             OPTIONAL MATCH (first)-[:next*0..]->(child:ToolCall)
@@ -788,9 +788,8 @@ def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
         # rather than an empty-but-healthy expansion.
         scope_rec = session.run(
             """
-            MATCH (scope:Task)
-            WHERE scope.task_id = $tid AND scope.session_id = $sid
-              AND scope.task_type = 'subagent'
+            MATCH (scope:Task {task_id: $tid, session_id: $sid})
+            WHERE scope.task_type = 'subagent'
               AND NOT coalesce(scope.deleted_session, false)
             RETURN elementId(scope) AS scope_eid
             """,
@@ -808,9 +807,8 @@ def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
         # shows a "no products yet" notice).
         children_result = session.run(
             """
-            MATCH (child:ToolCall)
-            WHERE child.parent_subtask_id = $tid AND child.session_id = $sid
-              AND NOT coalesce(child.deleted_session, false)
+            MATCH (child:ToolCall {parent_subtask_id: $tid, session_id: $sid})
+            WHERE NOT coalesce(child.deleted_session, false)
             RETURN child, labels(child)[0] AS child_label, elementId(child) AS child_eid
             ORDER BY coalesce(child.seq, 0), child.finished_at
             """,
@@ -842,10 +840,8 @@ def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
             subtree_eids = set(child_eids)
             subtree_result = session.run(
                 """
-                MATCH (child:ToolCall)-[:produces*1..3]->(prod)
+                MATCH (child:ToolCall {session_id: $sid})-[:produces*1..3]->(prod {session_id: $sid})
                 WHERE elementId(child) IN $child_eids
-                  AND child.session_id = $sid
-                  AND prod.session_id = $sid
                   AND NOT coalesce(child.deleted_session, false)
                   AND NOT coalesce(prod.deleted_session, false)
                 RETURN collect(DISTINCT elementId(prod)) AS prod_eids
@@ -859,9 +855,8 @@ def get_scope_expansion(scope_task_id: str, session_id: str) -> dict[str, Any]:
 
             edges_result = session.run(
                 """
-                MATCH (a)-[r]->(b)
-                WHERE a.session_id = $sid AND b.session_id = $sid
-                  AND NOT coalesce(a.deleted_session, false)
+                MATCH (a {session_id: $sid})-[r]->(b {session_id: $sid})
+                WHERE NOT coalesce(a.deleted_session, false)
                   AND NOT coalesce(b.deleted_session, false)
                   AND type(r) IN ['produces', 'contains', 'next']
                   AND elementId(a) IN $eids AND elementId(b) IN $eids
@@ -951,9 +946,8 @@ def get_group_expansion(group_id: str, session_id: str) -> dict[str, Any]:
         # Confirm the scope exists + is a subagent in this session.
         scope_rec = session.run(
             """
-            MATCH (scope:Task)
-            WHERE scope.task_id = $tid AND scope.session_id = $sid
-              AND scope.task_type = 'subagent'
+            MATCH (scope:Task {task_id: $tid, session_id: $sid})
+            WHERE scope.task_type = 'subagent'
               AND NOT coalesce(scope.deleted_session, false)
             RETURN scope.task_id AS scope_id
             """,
@@ -967,7 +961,9 @@ def get_group_expansion(group_id: str, session_id: str) -> dict[str, Any]:
         # filtered to the one kind this aggregate represents. Same traversal
         # shape get_subgraph's surrogate synthesis uses (contains→first, then
         # next*0.. so the first child matches with zero hops).
-        if kind == "Artifact":
+        if hasattr(session, "folded_products"):
+            members_result = session.folded_products(session_id, scope_id, kind)
+        elif kind == "Artifact":
             members_result = session.run(
                 """
                 MATCH (scope:Task)-[:contains]->(first:ToolCall)

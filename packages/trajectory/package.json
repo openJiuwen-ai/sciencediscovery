@@ -10,7 +10,7 @@
     "./web": { "types": "./src/web.tsx", "default": "./dist/web.js" },
     "./style.css": "./src/style.css"
   },
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "node --test dist/*.test.js" },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "node --import tsx --test \"src/**/*.test.ts\"" },
   "dependencies": { "@sciencediscovery/cas": "workspace:*" },
   "peerDependencies": { "react": "^19.0.0" },
   "devDependencies": { "@types/node": "26.1.1", "@types/react": "19.2.17", "react": "19.2.7" }

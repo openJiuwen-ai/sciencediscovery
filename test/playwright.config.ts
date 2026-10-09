@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { readFileSync } from "node:fs";
+import { validatePlan } from "../test/support/tagged/plan.mjs";
+import { planGrep as plannedGrep } from "../test/support/tagged/playwright-selection.mjs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,18 +41,31 @@ process.env.SCIENCE_AGENT_E2E_CONFIG_CONTRACT = "mocked-egress-v2";
 // Same resolution the API fixtures and the storage-state origin use, so the
 // browser and the REST calls can never address different services.
 const baseURL = apiBaseUrl();
+const planned = process.env.SCIENCE_TAG_PLAN && !process.env.SCIENCE_TAG_PW_CATALOG
+  ? validatePlan(JSON.parse(readFileSync(process.env.SCIENCE_TAG_PLAN, "utf8"))).entries.filter(e => e.runner === "playwright") : undefined;
+// Playwright grep uses space-joined project/describe/test titles. Decode the
+// same frozen identity the reporter produces, rather than maintaining a list.
+const planGrep = planned && plannedGrep(planned);
 
 export default defineConfig({
   // Fails the run immediately when E2E_API_TOKEN is missing, instead of letting
   // every scenario rediscover it as a 401. Skipped for `--list`.
   globalSetup: resolve(repoRoot, "test/global-setup.ts"),
   testDir: resolve(repoRoot, "test"),
+  // Only real research is a manual/benchmark opt-in. The mocked Swarm journey
+  // remains in the default mocked PR gate. Real LLMs also require E2E_REAL.
+  // Discovery is static. Credentials and opt-in flags are execution preflight,
+  // not a way of removing real tasks from the daily catalog.
+  testIgnore: [],
+  ...(planGrep ? { grep: planGrep } : {}),
   outputDir: resolve(envRoot, "test-results"),
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
   reporter: [
+    ...(process.env.SCIENCE_TAG_PW_REPORT ? [[resolve(repoRoot, "test/support/tagged/playwright-reporter.mjs")] as [string]] : []),
     ["list"],
     ["html", { open: "never", outputFolder: resolve(envRoot, "playwright-report") }],
     ["json", { outputFile: resolve(envRoot, "test-results/results.json") }],
@@ -76,33 +91,20 @@ export default defineConfig({
     // yet been audited against the E2E-META contract.
     {
       name: "mocked",
-      grep: /@mocked/,
+      grep: planGrep ?? /@mocked/,
+      // A run driving a frozen plan executes that plan and nothing else. The
+      // shared selector takes only `status:reviewed`, so a quarantined journey
+      // is deselected here rather than running and reporting a skip — which
+      // Playwright exits 0 on and the plan would have to count as a journey
+      // that did not execute. Collection (SCIENCE_TAG_PW_CATALOG) keeps seeing
+      // it, so the migration ledger still knows it exists.
+      ...(process.env.SCIENCE_TAG_PW_REPORT
+        ? { grepInvert: /@status:(external|legacy|unreviewed)\b/ }
+        : {}),
       use: { ...devices["Desktop Chrome"], serviceWorkers: "block" },
     },
-    // Specs tagged @real call live LLMs / external services and may cost
-    // money. The project only exists when E2E_REAL=1, so the default command
-    // cannot reach them; without the variable, --project=real fails with
-    // "Project(s) 'real' not found" — that run is BLOCKED, not passed.
-    ...(process.env.E2E_REAL === "1"
-      ? [
-          {
-            name: "real",
-            grep: /@real/,
-            use: { ...devices["Desktop Chrome"] },
-          },
-        ]
-      : []),
-    // Compatibility-only quarantine. This group may contain unaudited live
-    // behavior and is never present unless the caller explicitly opts in.
-    ...(process.env.E2E_LEGACY === "1"
-      ? [
-          {
-            name: "legacy",
-            grepInvert: /@(mocked|real)/,
-            use: { ...devices["Desktop Chrome"] },
-          },
-        ]
-      : []),
+    { name: "real", grep: planGrep ?? /@real/, use: { ...devices["Desktop Chrome"] } },
+    { name: "legacy", grepInvert: /@(mocked|real)/, use: { ...devices["Desktop Chrome"] } },
   ],
   expect: {
     timeout: 10000,

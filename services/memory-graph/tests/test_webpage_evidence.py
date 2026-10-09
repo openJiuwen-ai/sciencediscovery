@@ -24,6 +24,8 @@ import os
 from typing import Any
 
 import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 from fastapi.testclient import TestClient
 
 
@@ -39,10 +41,7 @@ def _live_neo4j_config() -> tuple[str, str] | None:
     return None
 
 
-needs_neo4j = pytest.mark.skipif(
-    _live_neo4j_config() is None,
-    reason="needs a live Neo4j (set SCIENCE_AGENT_MEMORY_GRAPH_TEST_NEO4J + ..._PASSWORD)",
-)
+needs_neo4j = pytest.mark.science_tags(status="external")
 
 
 def _wipe_session(session_id: str) -> None:
@@ -76,7 +75,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     cfg = _live_neo4j_config()
     if cfg is None:
-        pytest.skip("needs a live Neo4j")
+        pytest.fail("needs a live Neo4j")
     http_uri, password = cfg
     if http_uri == "local":
         monkeypatch.setenv("SCIENCE_AGENT_MEMORY_GRAPH_BACKEND", "local")
@@ -91,7 +90,7 @@ def live_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     importlib.reload(server)
     server.handle().set_password(password)
     if not server.handle().is_reachable():
-        pytest.skip("configured Neo4j not reachable")
+        pytest.fail("configured Neo4j not reachable")
     ensure_schema()
     return TestClient(server.app)
 

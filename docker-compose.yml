@@ -56,6 +56,14 @@ services:
       SCIENCE_AGENT_LOG_DIR: "${SCIENCE_AGENT_LOG_DIR:-}"
       SCIENCE_AGENT_LOG_MAX_BYTES: "${SCIENCE_AGENT_LOG_MAX_BYTES:-10485760}"
       SCIENCE_AGENT_LOG_BACKUP_COUNT: "${SCIENCE_AGENT_LOG_BACKUP_COUNT:-5}"
+      # The stack defaults to JiuwenSwarm; these settings are forwarded
+      # explicitly because Compose does not pass .env into the container.
+      SCIENCE_AGENT_EXECUTOR: "${SCIENCE_AGENT_EXECUTOR:-}"
+      SCIENCE_AGENT_JIUWENSWARM_PROMPT: "${SCIENCE_AGENT_JIUWENSWARM_PROMPT:-}"
+      SCIENCE_AGENT_JIUWENSWARM_TOOLS: "${SCIENCE_AGENT_JIUWENSWARM_TOOLS:-}"
+      SCIENCE_AGENT_JIUWENSWARM_PLANNING: "${SCIENCE_AGENT_JIUWENSWARM_PLANNING:-}"
+      SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS: "${SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS:-}"
+      SCIENCE_AGENT_JIUWENSWARM_SKILLS: "${SCIENCE_AGENT_JIUWENSWARM_SKILLS:-}"
       # Context assembly. The container does not read .env from inside the
       # image, so every key .env.docker.example offers has to be forwarded here
       # or it silently has no effect. An empty value means "use the built-in
