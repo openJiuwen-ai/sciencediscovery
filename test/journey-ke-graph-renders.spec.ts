@@ -18,6 +18,9 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { kePipelineStub } from "./helpers/ke-stub.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ke-graph-renders.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -211,4 +214,6 @@ test("J-KE2 图谱渲染与实体详情", { tag: "@mocked" }, async ({ journey, 
     }
     await stub.stop();
   }
+});
+
 });

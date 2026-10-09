@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import type {ReactNode} from "react";
 import type {EnabledSkillLibrary,RuntimeSettingsDetails,RuntimeSettingsOverrides,RuntimeSettingsField,SkillLibrary,SkillDescriptor,SkillSelectionMode} from "@sciencediscovery/schema";
-type SkillMessageKey = "settings.skillModeAria" | "settings.skillModeInherit" | "common.builtIn" | "settings.managedRevision" | "settings.noSkills" | "settings.skillModeAllHint" | "settings.skillLibrariesPickerHint" | "settings.skillLibraryToggleAria" | "settings.skillLibraryHead" | "settings.skillLibraryNoVersions" | "settings.skillLibraryVersion" | "settings.skillLibraryPriority" | "settings.skillLibraryLimit" | "settings.noSkillLibraries" | "settings.skills" | "settings.skillLibraries" | "settings.skillModeAll" | "settings.skillModeSelected";
+type SkillMessageKey = "settings.skillModeAria" | "settings.skillModeInherit" | "common.builtIn" | "settings.managedRevision" | "settings.noSkills" | "settings.skillModeAllHint" | "settings.skillLibrariesPickerHint" | "settings.skillLibraryToggleAria" | "settings.skillLibraryHead" | "settings.skillLibraryNoVersions" | "settings.skillLibraryVersion" | "settings.skillLibraryPriority" | "settings.skillLibraryLimit" | "settings.noSkillLibraries" | "settings.skills" | "settings.skillLibraries" | "settings.skillModeAll" | "settings.skillModeSelected" | "settings.skillsOnJiuwenSwarm";
 const FIELD_LABELS = {skillSelectionMode:"settings.skills",enabledSkillLibraries:"settings.skillLibraries"} as const;
 const SKILL_MODE_LABELS = {all:"settings.skillModeAll",selected:"settings.skillModeSelected"} as const;
 function normalizeSkillLibraryMount(mount: EnabledSkillLibrary): EnabledSkillLibrary {
@@ -27,9 +27,11 @@ export function normalizeSkillLibraryMounts(mounts: readonly EnabledSkillLibrary
 }
 
 
-export function SkillSettingsSection({details,draft,setDraft,skillLibraries,skills,skillScope,disabled,t,renderSource}:{
+export function SkillSettingsSection({details,draft,setDraft,skillLibraries,skills,skillScope,skillsBackend,disabled,t,renderSource}:{
 details:RuntimeSettingsDetails;draft:RuntimeSettingsOverrides;setDraft:(update:(value:RuntimeSettingsOverrides)=>RuntimeSettingsOverrides)=>void;
 skillLibraries:SkillLibrary[];skills:SkillDescriptor[];skillScope:"global"|"project"|"session";disabled:boolean;
+/** With `jiuwenswarm` there is no skill selection here: JiuwenSwarm has one set of skills for every session. */
+skillsBackend?:"jiuwenswarm"|"native";
 t:(key:SkillMessageKey,variables?:Record<string,string|number>)=>string;renderSource:(field:RuntimeSettingsField)=>ReactNode;
 }) {
  const saving=false;
@@ -91,7 +93,11 @@ t:(key:SkillMessageKey,variables?:Record<string,string|number>)=>string;renderSo
   const skillLibraryMounts = normalizeSkillLibraryMounts(rawSkillLibraryMounts, skillLibraries);
   const skillLibraryMountsById = new Map(skillLibraryMounts.map((mount) => [mount.libraryId, normalizeSkillLibraryMount(mount)]));
 
- return <>      {skillScope === "global" ? null : <fieldset className="settings-array" disabled={disabled || saving}>
+ return <>      {skillScope !== "global" && skillsBackend === "jiuwenswarm" ? <fieldset className="settings-array">
+        <legend>{t(FIELD_LABELS.skillSelectionMode)}</legend>
+        <small className="settings-hint">{t("settings.skillsOnJiuwenSwarm")}</small>
+      </fieldset> : null}
+      {skillScope === "global" || skillsBackend === "jiuwenswarm" ? null : <fieldset className="settings-array" disabled={disabled || saving}>
         <legend>{t(FIELD_LABELS.skillSelectionMode)}</legend>
         <select aria-label={t("settings.skillModeAria")} value={skillMode} onChange={(event) => setSkillMode(event.target.value as "inherit" | SkillSelectionMode)}>
           {skillInheritable ? <option value="inherit">

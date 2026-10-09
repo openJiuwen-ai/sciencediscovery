@@ -1,6 +1,6 @@
 # Configuration, Ports, Quotas, and Storage Reference
 
-This page lists local and Docker environment variables, default ports, workspace-related quotas, and storage locations. See [Deployment](../how-to/deployment.md) for operational steps.
+This page lists local and Docker environment variables, default ports, workspace-related quotas, and storage locations. See [Deployment](../getting-started/deployment.md) for operational steps.
 
 ## Environment variables (local mode)
 
@@ -20,6 +20,12 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_LOG_DIR` | `<data-dir>/logs` | Optional log directory override |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | Maximum bytes in one category log before rotation |
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | Rotated files retained per category |
+| `SCIENCE_AGENT_EXECUTOR` | `jiuwenswarm` with the stack launcher | Selects `jiuwenswarm` or `native`; direct API startup without the launcher defaults to native. See [Agent backends](agent-backends.md). |
+| `SCIENCE_AGENT_JIUWENSWARM_PROMPT` | `prepend` | JiuwenSwarm prompt handling; `replace` selects the product prompt instead. |
+| `SCIENCE_AGENT_JIUWENSWARM_TOOLS` | `jiuwenswarm` | JiuwenSwarm tools plus product tools; `ours` selects the product tool list. |
+| `SCIENCE_AGENT_JIUWENSWARM_PLANNING` | `todo` | JiuwenSwarm todo tools; `update_plan` selects the product planning tool. |
+| `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` | `task` | Platform task bridge (children still use Swarm); `jiuwenswarm` selects native Swarm subagents. |
+| `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `jiuwenswarm` | Install selected Skills into Swarm when default prompt/tools are used; `ours` uses product loading. |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | Initial no-output/no-progress timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | Initial whole-turn timeout (`0` is unlimited) |
 | `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` | `10` | Maximum concurrency for explicitly parallel-safe tool calls in one Agent step; positive integer, and `1` makes tool execution serial |
@@ -36,6 +42,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_NPM_REGISTRY` | empty (official registry) | Build-only registry passed to `pnpm install --registry`; does not alter user/global npm configuration |
 | `SCIENCE_AGENT_PYPI_INDEX` | empty (official PyPI) | Build-only `UV_DEFAULT_INDEX` for `uv sync`; the script backs up and restores `uv.lock` if the mirror causes re-resolution |
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | Memory-graph service bind address |
+| `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE` | `1` with a bundled sidecar; `0` for older single-file payloads without it | Whether the API exposes ScienceMemory on a new data directory; `0` skips the bundled sidecar. Single-file sidecar startup failure sets this to `0` for that run. |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | Memory-graph port |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | Memory-graph endpoint used by the API |
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API-to-memory-graph token |
@@ -94,7 +101,7 @@ In `GET /health`, `workspace.maxFileBytes`, `maxRequestBytes`, and `maxWorkspace
 
 ## Docker environment variables
 
-Compose reads the root `.env` (template: `.env.docker.example`) and interpolates the keys below into `docker-compose.yml`. They form two layers: the orchestration layer only affects how Compose starts the container; the container layer is forwarded into the container, key by key, through the service's `environment` block, and an empty value means the built-in default. Procedures and the layering are explained under [Docker deployment](../how-to/deployment.md#docker-deployment).
+Compose reads the root `.env` (template: `.env.docker.example`) and interpolates the keys below into `docker-compose.yml`. They form two layers: the orchestration layer only affects how Compose starts the container; the container layer is forwarded into the container, key by key, through the service's `environment` block, and an empty value means the built-in default. Procedures and the layering are explained under [Docker deployment](../getting-started/deployment.md#docker-deployment).
 
 ### Orchestration layer
 
@@ -116,8 +123,10 @@ Compose reads the root `.env` (template: `.env.docker.example`) and interpolates
 | `SCIENCE_AGENT_LOG_DIR` | `/app/data/logs` | Log directory; the default keeps logs inside the data directory |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | Maximum bytes per log category before rotation |
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | Rotated files kept per category |
-| `SCIENCE_AGENT_CONTEXT_MODE` | `dynamic` | Context-assembly mode; `legacy` and `shadow` exist for debugging and regression comparison |
-| `SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS`, `…_SECTION_MAX_CHARS`, `…_DATA_BUDGET_CHARS`, `…_ATTACHMENT_MAX_CHARS`, `…_CONTRIBUTED_MESSAGE_BUDGET_CHARS`, `…_MAX_CONTRIBUTED_MESSAGES`, `…_WINDOW_MESSAGES`, `…_WINDOW_ROUNDS`, `…_WINDOW_TOKENS` | see `.env.docker.example` | Context-assembly budgets and windows; see [Context assembly](../../architecture/context-assembly.md) |
+| `SCIENCE_AGENT_EXECUTOR` | `jiuwenswarm` | Backend selected by the stack launcher; `native` opts out. |
+| `SCIENCE_AGENT_JIUWENSWARM_PROMPT` / `SCIENCE_AGENT_JIUWENSWARM_TOOLS` / `SCIENCE_AGENT_JIUWENSWARM_PLANNING` / `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` / `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `prepend` / `jiuwenswarm` / `todo` / `task` / `jiuwenswarm` | JiuwenSwarm-specific behavior; see [Agent backends](agent-backends.md). Compose forwards these keys from `.env`. |
+| `SCIENCE_AGENT_CONTEXT_MODE` | `dynamic` | Native-loop context-assembly mode; `legacy` and `shadow` exist for debugging and regression comparison. JiuwenSwarm owns its own model context. |
+| `SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS`, `…_SECTION_MAX_CHARS`, `…_DATA_BUDGET_CHARS`, `…_ATTACHMENT_MAX_CHARS`, `…_CONTRIBUTED_MESSAGE_BUDGET_CHARS`, `…_MAX_CONTRIBUTED_MESSAGES`, `…_WINDOW_MESSAGES`, `…_WINDOW_ROUNDS`, `…_WINDOW_TOKENS` | see `.env.docker.example` | Native-loop context-assembly budgets and windows; see [Context assembly](../developer-docs/context-assembly.md) |
 | `SCIENCE_AGENT_CONTEXT_TRACE` / `SCIENCE_AGENT_CONTEXT_TRACE_DIR` | `0` / `/app/data/context-traces` | Context-assembly tracing switch and output directory |
 | `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API-to-runner token on container loopback |
 | `SCIENTIFIC_ENVS` | `1` | Managed Python/R environments and persistent kernels; the first start creates the starter Python automatically |
@@ -133,7 +142,7 @@ Compose reads the root `.env` (template: `.env.docker.example`) and interpolates
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | Usage-dashboard exchange-rate cache TTL; defaults to 6 hours |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | Usage-dashboard exchange-rate request timeout |
 
-Values fixed in the image are not changed through `.env`: `SCIENCE_AGENT_DATA_DIR=/app/data`, `SCIENCE_AGENT_HOST=0.0.0.0`, `SCIENCE_AGENT_PORT=4310`, `SCIENCE_AGENT_RUNNER_HOST=127.0.0.1`, `SCIENCE_AGENT_RUNNER_PORT=4311`, `SCIENCE_AGENT_RUNNER_URL`, and the paths of the baked Python environments, the model catalog snapshot, and the micromamba seed. The API listens on `0.0.0.0:4310` **inside the container**, while runner `4311` remains on container loopback; only the API port is published. Local mode's `SCIENCE_AGENT_MICROMAMBA_BASE_URL` is not needed under Docker: the image carries and seeds the pinned micromamba, so nothing is downloaded at run time. Other local-mode variables (such as `HTTP_PROXY`) are not forwarded; add them to the service's `environment` block in a `docker-compose.override.yml` when needed.
+Values fixed in the image are not changed through `.env`: `SCIENCE_AGENT_DATA_DIR=/app/data`, `SCIENCE_AGENT_HOST=0.0.0.0`, `SCIENCE_AGENT_PORT=4310`, `SCIENCE_AGENT_RUNNER_HOST=127.0.0.1`, `SCIENCE_AGENT_RUNNER_PORT=4311`, `SCIENCE_AGENT_RUNNER_URL`, and the paths of the baked Python environments, the model catalog snapshot, and the micromamba seed. In the default JiuwenSwarm mode, the adapter listens on `0.0.0.0:4310` inside the container and the API moves to internal `:4410`. In native mode the API listens on `:4310` directly. Runner `4311` remains on container loopback; only `4310` is published. Local mode's `SCIENCE_AGENT_MICROMAMBA_BASE_URL` is not needed under Docker: the image carries and seeds the pinned micromamba, so nothing is downloaded at run time. Other local-mode variables (such as `HTTP_PROXY`) are not forwarded; add them to the service's `environment` block in a `docker-compose.override.yml` when needed.
 
 ## Storage layout
 
@@ -154,10 +163,10 @@ Unless overridden, persistent application data is kept in the repository:
 | `.sciencediscovery-data/artifact-plans/`, `artifact-jobs/`, `artifact-extraction-jobs/` | Download and PDF-extraction job state |
 | `.sciencediscovery-data/scientific-envs/`, `runner-runtime/` | Managed environments and runner temporary state |
 | `.sciencediscovery-data/skills/` | Managed skill packages and revisions |
-| `.sciencediscovery-data/envs/paper/`, `.sciencediscovery-data/envs/gateway/` | Rebuildable uv service environments |
+| `.sciencediscovery-data/envs/{paper,gateway,adapter,memory-graph,evolve}/` | Rebuildable uv service environments in local source mode; the Docker image carries them under `/opt/sciencediscovery/envs/` |
 | `.sciencediscovery-data/logs/{api,run,gateway,runner,memory-graph}.log` | Rotating category logs; ScienceMemory exists only when enabled |
 | Browser local storage | Local service access token only; model credentials never leave the backend |
 
-The data directory is the only runtime root. `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh` moves state and service environments together. The former `SCIENCE_AGENT_DATA_DIR` is still read as a compatibility fallback and produces a log; when both are set, `SCIENCE_DISCOVERY_DATA_DIR` wins and the choice is logged. For the repository launcher, an existing default `data` directory is moved once into `.sciencediscovery-data`. For the single-file launcher, an existing default `./science-discovery-data` or the older `./science-agent-data` is imported once into `./.sciencediscovery-data`, newest first; an existing target is never overwritten and the skip is logged. Deleting the active data directory removes projects, sessions, credentials, and audit records. Under [Docker deployment](../how-to/deployment.md#docker-deployment), it is the host `./data` bind mount; only service `envs/` live in the image. `services/paper/.venv` and `services/gateway/.venv` are used only by standalone development or smoke commands.
+The data directory is the only runtime root. `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh` moves state and service environments together. The former `SCIENCE_AGENT_DATA_DIR` is still read as a compatibility fallback and produces a log; when both are set, `SCIENCE_DISCOVERY_DATA_DIR` wins and the choice is logged. For the repository launcher, an existing default `data` directory is moved once into `.sciencediscovery-data`. For the single-file launcher, an existing default `./science-discovery-data` or the older `./science-agent-data` is imported once into `./.sciencediscovery-data`, newest first; an existing target is never overwritten and the skip is logged. Deleting the active data directory removes projects, sessions, credentials, and audit records. Under [Docker deployment](../getting-started/deployment.md#docker-deployment), it is the host `./data` bind mount; only service `envs/` live in the image. `services/paper/.venv` and `services/gateway/.venv` are used only by standalone development or smoke commands.
 
 The single-file payload overrides follow the same naming and precedence rule: use `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR` for the extraction cache or `SCIENCE_DISCOVERY_PAYLOAD_DIR` for a pre-extracted payload. The corresponding `SCIENCE_AGENT_*` names remain logged compatibility fallbacks.

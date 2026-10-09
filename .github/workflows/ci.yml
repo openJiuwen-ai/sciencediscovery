@@ -19,6 +19,27 @@
 # actually receives and then exercise them. Every layer is hermetic: no model
 # credentials, no live endpoints, no NPU. The opt-in live layers
 # (ci:st:real, ci:e2e:real, ci:st:npu, ci:e2e:legacy) stay out of this file.
+#
+# The three test jobs below are three slices of one plan, not three suites.
+# `ci:ut`, `ci:st` and `ci:e2e` each run `test/support/tagged/shared.mjs`
+# against the single selector in `test/support/tagged/profiles.mjs`, narrowed
+# by `category`. Those three groups partition the plan,
+# so the three jobs together run exactly what `pnpm test:shared` runs on a
+# developer's machine — a case cannot be in two jobs or in none. Selection
+# reads source tags only; no job's environment, credential or installed
+# capability may add or remove a case. A missing capability fails the plan's
+# preflight, which fails the job.
+#
+# `node .ci/tagged-summary.mjs` reads each slice's frozen plan back and fails
+# the job unless planned == executed == passed with nothing skipped, including
+# when a layer stopped before producing any plan at all.
+#
+# This file is also the one definition of that gate for the scheduled and
+# tagged pipelines: nightly.yml and release.yml call it instead of restating
+# its jobs. When their coverage diverges from the merge gate, give this
+# workflow an input describing what to run and branch on it here — copying
+# jobs into those files is exactly the second test definition the CI contract
+# forbids.
 
 name: CI
 
@@ -31,9 +52,36 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-version:
+        description: >-
+          Version stamped into the release binaries and their file names. Left
+          empty the packaging script falls back to `git describe`, which on a
+          hosted runner's shallow checkout has no tags to describe and yields
+          0.0.0 — fine for a gate that only proves the build runs, useless for
+          an artifact somebody downloads. Callers that publish or keep the
+          output pass a real version.
+        type: string
+        default: ""
+      profile:
+        description: >-
+          Which CI policy the three test jobs select, from
+          `test/support/tagged/profiles.mjs`. `pr` is the merge gate. A
+          scheduled or tagged run passes `daily` or `release`, which is held to
+          the nightly standard rather than the merge one — today they select
+          the same set, and they diverge the moment a live-model or `judge:llm`
+          row lands, at which point the caller has to supply that row's
+          credentials or the plan fails its preflight.
+        type: string
+        default: pr
 
+# Keyed on the calling workflow as well as the ref: a nightly run and a push
+# run land on refs/heads/main at the same time, and without the workflow name
+# they would share a group and cancel each other. In a called workflow
+# `github.workflow` is the caller's name, so each pipeline gets its own lane.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -44,6 +92,75 @@ defaults:
     shell: bash
 
 jobs:
+  real-e2e:
+    name: E2E (real, daily only)
+    if: ${{ inputs.profile == 'daily' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: nightly-research
+    env:
+      CI_ALLOW_REAL: "1"
+      CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+      CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
+      CI_PREPARE_BIOMNI: "0"
+      E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
+      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
+      E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
+      E2E_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      E2E_JUDGE_TOKEN: ${{ secrets.E2E_JUDGE_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+      E2E_DRB_EVALUATION: full
+      E2E_BIOMNI_EVALUATION: rubric
+      E2E_DRB_MAX_SUBAGENTS: "2"
+      E2E_TEAM_CONCURRENCY_HINT: "2"
+      E2E_DRB_RUN_TIMEOUT_MS: "3600000"
+      E2E_DRB_EVAL_TIMEOUT_MS: "600000"
+      E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
+      E2E_BIOMNI_RUN_TIMEOUT_MS: "1200000"
+      LLM_BACKEND: openai
+      OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
+      RACE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      CLEAN_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      FACT_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      BIOMNI_JUDGE_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
+      BIOMNI_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+      BIOMNI_JUDGE_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Prepare real-research prerequisites (no model calls)
+        run: bash .ci/prepare-real-research.sh
+      - name: Provision sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --dev /dev true
+      - name: Run the frozen real-E2E daily slice
+        run: pnpm ci:e2e:real
+      - name: Summarize actual planned and executed cases
+        if: always()
+        run: node .ci/tagged-summary.mjs
+      - name: Upload real E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-results
+          path: .ci-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
   ut:
     name: UT
     runs-on: ubuntu-latest
@@ -74,18 +191,144 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
           bwrap --version
 
+      # Agent turns in the UT slice run on JiuwenSwarm: `pnpm ci:ut` wraps the
+      # shared runner in scripts/with-jiuwenswarm.sh, which installs the pinned
+      # release when missing (about 1.5 GB with its virtualenv), starts one
+      # instance and one adapter for the whole run, and stops them afterwards.
+      - name: Cache the JiuwenSwarm install
+        uses: actions/cache@v4
+        with:
+          path: |
+            .sciencediscovery-data/jiuwenswarm/src
+            ~/.local/share/uv/python
+          key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
+
+      # The `category:ut` slice, including the tests that drive the real
+      # bubblewrap sandbox provisioned above. `--coverage` records coverage in
+      # this same execution — per-file Node workers with V8 coverage, pytest
+      # with `coverage run` in front — and changes nothing about what is
+      # selected. The Coverage job below only merges what this step writes; a
+      # release build, which publishes no coverage, does not record it.
       - name: Run UT
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:ut
+        run: pnpm ci:ut -- --profile ${{ inputs.profile || 'pr' }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+
+      - name: Report the shared plan
+        if: always()
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        run: node .ci/tagged-summary.mjs
 
       - name: Upload UT results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ut-results
-          path: .ci-results/ut
+          path: |
+            .ci-results
+            !.ci-results/ut/tagged/coverage
+          # .ci-results is itself a dot-directory; by default nothing is uploaded.
+          include-hidden-files: true
+          if-no-files-found: warn
+
+      # Uploaded even when the run failed: the Coverage job summarises whatever
+      # a failed run managed to record and says that it failed, rather than
+      # running anything to fill the gap.
+      - name: Upload UT coverage data
+        if: always() && github.workflow != 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ut-coverage
+          path: .ci-results/ut/tagged/coverage
+          # upload-artifact drops dot-files by default; every file here is data.
+          include-hidden-files: true
+          # A layer that passed has recorded its coverage: finding none means
+          # the path is wrong, and the job says so here rather than leaving the
+          # Coverage job to fail on an artifact that was never uploaded.
+          if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
+
+  coverage:
+    name: Coverage
+    # Reports on the UT and ST jobs' own runs and merges them; it executes no
+    # test. The mocked browser E2E is not measured. Runs after a failed layer
+    # as well, to report what that run uploaded; a cancelled pipeline has
+    # nothing to report. Release calls skip it: a tagged build publishes no
+    # coverage.
+    needs: [ut, st]
+    if: ${{ !cancelled() && github.workflow != 'Release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+
+      # A layer that stopped before recording anything uploaded nothing; the
+      # summary then says so instead of a download failing the job.
+      - name: Download the UT run's coverage data
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ut-coverage
+          path: ${{ runner.temp }}/ut-coverage
+
+      - name: Download the ST run's coverage data
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: st-coverage
+          path: ${{ runner.temp }}/st-coverage
+
+      - name: Merge coverage
+        id: merge
+        run: >-
+          node scripts/coverage-report.mjs
+          --layer "ut=${{ runner.temp }}/ut-coverage" --producer "ut=${{ needs.ut.result }}"
+          --layer "st=${{ runner.temp }}/st-coverage" --producer "st=${{ needs.st.result }}"
+
+      - name: Summarize coverage
+        if: always()
+        env:
+          UT_RESULT: ${{ needs.ut.result }}
+          ST_RESULT: ${{ needs.st.result }}
+        run: node scripts/coverage-job-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Name the summary artifacts
+        id: names
+        if: always()
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORKFLOW: ${{ github.workflow }}
+        run: |
+          if [[ "$WORKFLOW" == "Nightly" ]]; then scope=nightly
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then scope="pr-${PR_NUMBER}"
+          else scope="$EVENT_NAME"; fi
+          echo "node=node-coverage-summary-${scope}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "python=python-coverage-summary-${scope}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Node.js coverage summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.node }}
+          path: |
+            coverage/summary.json
+            coverage/groups/**/summary.json
+          if-no-files-found: warn
+
+      - name: Upload Python coverage summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.python }}
+          path: |
+            coverage/python/summary.json
+            coverage/python/groups/**/summary.json
           if-no-files-found: warn
 
   st:
@@ -107,23 +350,48 @@ jobs:
           enable-cache: true
 
       # The hermetic agent loop drives a scripted local endpoint and performs a
-      # real workspace tool round trip; no sandbox and no model credential.
+      # real workspace tool round trip; no sandbox and no model credential. It
+      # runs the API's native agent in process, so `--coverage` records what
+      # the loop executes, exactly as it does for UT.
       - name: Run ST
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:st
+        run: pnpm ci:st -- --profile ${{ inputs.profile || 'pr' }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+
+      - name: Report the shared plan
+        if: always()
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        run: node .ci/tagged-summary.mjs
 
       - name: Upload ST results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: st-results
-          path: .ci-results/st
+          path: |
+            .ci-results
+            !.ci-results/st/tagged/coverage
+          # .ci-results is itself a dot-directory; by default nothing is uploaded.
+          include-hidden-files: true
           if-no-files-found: warn
 
+      - name: Upload ST coverage data
+        if: always() && github.workflow != 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: st-coverage
+          path: .ci-results/st/tagged/coverage
+          # upload-artifact drops dot-files by default; every file here is data.
+          include-hidden-files: true
+          # A layer that passed has recorded its coverage: finding none means
+          # the path is wrong, and the job says so here rather than leaving the
+          # Coverage job to fail on an artifact that was never uploaded.
+          if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
+
   e2e:
-    name: E2E (mocked)
+    name: E2E (mocked, JiuwenSwarm)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -159,54 +427,60 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('test/e2e.package-lock.json') }}
           restore-keys: playwright-${{ runner.os }}-
 
-      # run-e2e.sh owns the whole lifecycle: it syncs .e2e, installs Chromium,
-      # generates an ephemeral token, starts and stops its own isolated stack,
-      # runs the @mocked project and collects reports. E2E_COMMIT_SHA stamps
-      # journey reports with the revision under test.
+      # Agent turns run on JiuwenSwarm (Python 3.12, about 1.5 GB with its
+      # virtualenv), which run-e2e.sh installs when missing. Keyed on the script
+      # and compatibility patches, so a new pin or patch set installs afresh; uv's managed
+      # Python is kept too, since the virtualenv points into it.
+      - name: Cache the JiuwenSwarm install
+        uses: actions/cache@v4
+        with:
+          path: |
+            .sciencediscovery-data/jiuwenswarm/src
+            ~/.local/share/uv/python
+          key: jiuwenswarm-${{ runner.os }}-${{ hashFiles('scripts/jiuwenswarm.sh', 'scripts/swarm-patches.py', 'jiuwen_swarm/patches/**') }}
+
+      # The `category:e2e` slice. The layer still drives run-e2e.sh, which owns
+      # the whole lifecycle: it generates an ephemeral token, starts and stops
+      # its own isolated stack on a port block of its own — with agent turns on
+      # JiuwenSwarm, run-e2e.sh's default backend — runs the journeys and the
+      # JiuwenSwarm checks, and collects reports. What changed is which
+      # journeys run and how they are counted: the plan is frozen from the
+      # source tags first, and every planned journey must report a pass.
+      # E2E_COMMIT_SHA stamps journey reports with the revision under test.
       - name: Run mocked E2E
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-e2e
           E2E_COMMIT_SHA: ${{ github.sha }}
-        run: pnpm ci:e2e
+        run: pnpm ci:e2e -- --profile ${{ inputs.profile || 'pr' }}
 
-      # Playwright exits 0 on skips, so a BLOCKED journey — J3 whenever the
-      # default run keeps SCIENTIFIC_ENVS=0 — would otherwise vanish behind a
-      # green check. The repository rule is that blocked is not passed, so the
-      # counts and every not-passed title go into the run summary.
-      - name: Summarize the E2E outcome
+      # Playwright exits 0 on skips and produces no results.json at all when
+      # the stack never came up, so neither its exit code nor its report can be
+      # the verdict here. The frozen plan is: a journey that was planned and
+      # did not report a pass fails this step, and so does a missing plan.
+      - name: Report the shared plan
+        if: always()
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        run: node .ci/tagged-summary.mjs
+
+      # run-e2e.sh checks what only the JiuwenSwarm backend does against the
+      # same stack after the journeys; their outcome is part of the layer's
+      # exit code, and this shows which of them failed.
+      - name: Summarize the JiuwenSwarm checks
         if: always()
         run: |
-          results=.ci-results/e2e/test-results/results.json
-          if [[ ! -f "$results" ]]; then
-            echo "### E2E (mocked)" >> "$GITHUB_STEP_SUMMARY"
-            echo "No Playwright results.json; the layer stopped before test execution." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          checks=.ci-results/mocked-standard/e2e/jiuwenswarm-checks.log
+          if [[ -f "$checks" ]]; then
+            {
+              echo
+              echo "### JiuwenSwarm checks"
+              echo
+              echo '```'
+              grep -E '^[a-z-]+: |^FAILED|^jiuwenswarm_checks=' "$checks" || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          node -e '
-            const fs = require("node:fs");
-            const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const stats = report.stats;
-            const notPassed = [];
-            const walk = (suite) => {
-              for (const spec of suite.specs ?? []) {
-                const status = spec.tests?.[0]?.results?.[0]?.status ?? "unknown";
-                if (!spec.ok || status === "skipped") notPassed.push(`${status} — ${spec.title}`);
-              }
-              for (const child of suite.suites ?? []) walk(child);
-            };
-            for (const suite of report.suites ?? []) walk(suite);
-            const lines = [
-              "### E2E (mocked)",
-              "",
-              `passed **${stats.expected}** · skipped/blocked **${stats.skipped}** · failed **${stats.unexpected}** · flaky **${stats.flaky}**`,
-            ];
-            if (notPassed.length > 0) {
-              lines.push("", "Not passed (a skip may be a BLOCKED precondition, not a success):", "");
-              for (const entry of notPassed) lines.push(`- ${entry}`);
-            }
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
-          ' "$results"
 
       # Failure evidence — Playwright report, traces, screenshots, journey
       # reports, and the stack log that attributes a stack-side failure.
@@ -215,7 +489,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-results
-          path: .ci-results/e2e
+          path: .ci-results
+          # .ci-results is itself a dot-directory; by default nothing is uploaded.
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
 
@@ -265,8 +541,19 @@ jobs:
           bwrap --ro-bind / / --dev /dev true
           zstd --version
 
+      # The version reaches the VERSION file, the payload manifest and the
+      # artifact's own name, so a caller that publishes what comes out has to
+      # supply it; a merge-gate run leaves it empty and takes the script's
+      # `git describe` default.
       - name: Build both architectures
-        run: bash scripts/package-binary-release.sh --arch ${{ matrix.arch }} --output dist/binary-release
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          arguments=(--arch "${{ matrix.arch }}" --output dist/binary-release)
+          if [[ -n "${RELEASE_VERSION}" ]]; then
+            arguments+=(--version "${RELEASE_VERSION}")
+          fi
+          bash scripts/package-binary-release.sh "${arguments[@]}"
 
       - name: Report the artifacts
         if: always()
@@ -320,6 +607,23 @@ jobs:
       - name: Build the product image
         run: docker compose build
 
+      # The container carries its own bubblewrap, but the kernel policy it
+      # sandboxes under is the host's. Ubuntu 24.04 — what ubuntu-latest is —
+      # ships kernel.apparmor_restrict_unprivileged_userns=1, and a restricted
+      # unprivileged user namespace is created without the capabilities its
+      # owner normally holds, so bubblewrap gets as far as its own network
+      # namespace and then cannot bring up loopback:
+      #
+      #   bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+      #
+      # `security_opt: apparmor=unconfined` does not cover this: it governs the
+      # container's profile, not the host-wide restriction. The UT, ST, E2E and
+      # binary jobs all clear the same switch before touching the sandbox; this
+      # job needs it for the same reason, one layer down.
+      - name: Allow the sandbox's user namespaces on the host
+        run: |
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       # The documented first-run sequence: copy the example .env, name the
       # invoking user's ids in it (a hosted runner is not uid 1000, and the
       # container writes the bind mount as the ids .env names), create the bind
@@ -367,6 +671,19 @@ jobs:
           jq -e '.status == "ok"' "$health_json" >/dev/null || fail "API status is not ok"
           jq -e '.runner.status == "ok"' "$health_json" >/dev/null || fail "runner status is not ok"
           jq -e '.runner.sandbox == "bubblewrap"' "$health_json" >/dev/null || fail "runner does not report the bubblewrap sandbox"
+
+          # That field alone cannot fail a Linux deployment: it reports the
+          # configured provider (`executorSandboxKind` returns
+          # `sandboxProvider ?? "bubblewrap"`), not the probe's verdict. A
+          # container whose sandbox is unusable still answers
+          # `"sandbox": "bubblewrap"` with `"status": "ok"`, which is how this
+          # job once reported a healthy runner and a broken sandbox in the same
+          # breath. The runner does know — it probes at startup and says so on
+          # stderr — so read that.
+          if docker compose logs sciencediscovery 2>&1 | grep -q "could not build a sandbox"; then
+            docker compose logs sciencediscovery 2>&1 | grep -A 12 "could not build a sandbox" >&2 || true
+            fail "the runner probed its sandbox at startup and could not build one (see the container log above)"
+          fi
 
           # Compose's own health check, which is what `docker compose ps` shows
           # an operator. start_period is 60s, so allow for it.

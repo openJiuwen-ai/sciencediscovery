@@ -1,0 +1,8 @@
+ACK {"type": "event", "event": "connection.ack", "payload": {"protocol_version": "1.0", "transport": "tui"}}
+{"type": "res", "id": "chat-cc5cfcaa", "ok": true, "payload": {"accepted": true, "session_id": "rec-plain-20965"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-plain-20965", "is_processing": true, "is_complete": false}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "hello ", "session_id": "rec-plain-20965"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "from ", "session_id": "rec-plain-20965"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "stub", "session_id": "rec-plain-20965"}}
+{"type": "event", "event": "chat.final", "payload": {"event_type": "chat.final", "content": "hello from stub", "final_mode": "patch_segment", "session_id": "rec-plain-20965"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "rec-plain-20965", "is_processing": false, "is_complete": true}}

@@ -27,6 +27,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-kb-scope.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 interface KbScopeStub {
@@ -217,4 +220,6 @@ test("J-KBS1 对话内绑定知识库：徽章+持久化+提示词披露+工具�
     if (fixture) await cleanupJourney(page, fixture).catch(() => undefined);
     await stub.stop();
   }
+});
+
 });

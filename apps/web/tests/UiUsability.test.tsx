@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+
 
 import type { ModelProfile } from "@sciencediscovery/schema";
 
@@ -109,7 +111,10 @@ test("sidebar ellipsis text nodes carry their full visible names", () => {
   const app = source("App.tsx");
 
   assert.match(app, /<span title=\{project\.name\}>\{label\}<\/span>/);
-  assert.match(app, /<span title=\{item\.archivedAt \? `\$\{item\.title\} · \$\{t\("sidebar\.archived"\)\}` : item\.title\}>/);
+  assert.match(app, /<span title=\{item\.archivedAt \? `\$\{sessionTitle\(item\.title\)\} · \$\{t\("sidebar\.archived"\)\}` : sessionTitle\(item\.title\)\}>/);
+  // The "session created" toast names a new session in the UI's language too, not "Untitled session".
+  assert.doesNotMatch(app, /t\("app\.sessionCreated"\), created\.title\)/);
+  assert.match(app, /t\("app\.sessionCreated"\), sessionTitle\(created\.title\)\)/);
   // The removed Paper reader no longer mounts a second model picker.
   assert.doesNotMatch(app, /modelOptionLabel\(/);
   assert.match(app, /<ModelPicker/);

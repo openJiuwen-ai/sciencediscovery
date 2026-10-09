@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
+
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-skill-folder-import.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 /** Write one importable folder on disk; the browser is handed the directory, not a ZIP. */
 async function writeSkillFolder(root: string, files: Record<string, string>): Promise<string> {
@@ -38,7 +42,7 @@ async function writeSkillFolder(root: string, files: Record<string, string>): Pr
  *   2. Pick a folder without SKILL.md and read the refusal; nothing is installed.
  *   3. Pick the prepared Skill folder; the Skills Explorer opens on it and its file tree carries both packaged files.
  *   4. Close the Explorer and find the Skill card in the list with its description, and the installed count one higher.
- * Environment: Isolated local stack at E2E_BASE_URL; folders are written into this run's output directory and uploaded through the browser.
+ * Environment: Isolated local stack at E2E_BASE_URL; folders are written into a temporary directory and uploaded through the browser.
  * Type: mocked
  * LLM: none — importing a Skill package never calls a model.
  * WebSearch: none
@@ -48,17 +52,21 @@ async function writeSkillFolder(root: string, files: Record<string, string>): Pr
  * Credentials: E2E_API_TOKEN for the isolated local API only.
  * CostSideEffects: no external cost; the imported Skill is deleted in finally.
  */
-test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async ({ journey, page }, testInfo) => {
+test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(120_000);
   await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
   const skillName = `folder-import-${Date.now()}`;
   const description = "Imported from a local folder by the J11 journey.";
   const noteText = "# Field notes\n\nStep two reads this supporting file.\n";
-  const skillFolder = await writeSkillFolder(testInfo.outputPath(`valid/${skillName}`), {
+  // Not under testInfo.outputPath(): that path carries this test's Chinese title, and Chromium's directory upload
+  // (setInputFiles on a webkitdirectory input) never returns for a path with non-ASCII characters, so the journey
+  // timed out before the product saw a file.
+  const folders = await mkdtemp(join(tmpdir(), "sd-skill-folder-"));
+  const skillFolder = await writeSkillFolder(join(folders, `valid/${skillName}`), {
     "SKILL.md": `---\nname: ${skillName}\ndescription: ${description}\n---\n\n# ${skillName}\n\nRead reference/notes.md before starting.\n`,
     "reference/notes.md": noteText,
   });
-  const notASkillFolder = await writeSkillFolder(testInfo.outputPath("invalid/loose-notes"), {
+  const notASkillFolder = await writeSkillFolder(join(folders, "invalid/loose-notes"), {
     "readme.md": "# Loose notes\n\nThis folder has no SKILL.md.\n",
   });
 
@@ -152,5 +160,8 @@ test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async (
         method: "DELETE",
       }).catch(() => undefined);
     }
+    await rm(folders, { force: true, recursive: true });
   }
+});
+
 });

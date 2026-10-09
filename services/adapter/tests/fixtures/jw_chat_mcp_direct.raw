@@ -1,0 +1,10 @@
+ACK {"type": "event", "event": "connection.ack", "payload": {"protocol_version": "1.0", "transport": "tui"}}
+{"type": "res", "id": "chat-87fc3e85", "ok": true, "payload": {"accepted": true, "session_id": "direct-5159"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "direct-5159", "is_processing": true, "is_complete": false}}
+{"type": "event", "event": "chat.tool_call", "payload": {"event_type": "chat.tool_call", "tool_call": {"name": "mcp_sci_run_shell", "arguments": "{\"command\": \"echo J-DIRECT\"}", "tool_call_id": "call_1789920267728"}, "session_id": "direct-5159"}}
+{"type": "event", "event": "chat.tool_update", "payload": {"event_type": "chat.tool_update", "tool_name": "mcp_sci_run_shell", "tool_call_id": "call_1789920267728", "arguments": "{\"command\": \"echo J-DIRECT\"}", "status": "in_progress", "session_id": "direct-5159"}}
+{"type": "event", "event": "chat.tool_result", "payload": {"event_type": "chat.tool_result", "result": "{'result': 'SPIKE-OUT: echo J-DIRECT'}", "tool_name": "mcp_sci_run_shell", "tool_call_id": "call_1789920267728", "raw_output": {"result": "SPIKE-OUT: echo J-DIRECT"}, "session_id": "direct-5159"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "direct ", "session_id": "direct-5159"}}
+{"type": "event", "event": "chat.delta", "payload": {"event_type": "chat.delta", "content": "done", "session_id": "direct-5159"}}
+{"type": "event", "event": "chat.final", "payload": {"event_type": "chat.final", "content": "direct done", "final_mode": "patch_segment", "session_id": "direct-5159"}}
+{"type": "event", "event": "chat.processing_status", "payload": {"event_type": "chat.processing_status", "session_id": "direct-5159", "is_processing": false, "is_complete": true}}

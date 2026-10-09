@@ -89,11 +89,22 @@ export class AgentNotifications {
     });
   }
 
+  /** A user resuming one child is also explicitly resuming this Session's
+   * automatic wakeups. A Session Stop closes the global gate, so reopening only
+   * the child would leave its retained completion notice undeliverable.
+   * Keep both updates in one transaction: a partial resume must never expose a
+   * child as runnable while its Session remains stopped. */
   resumeAgent(owner: ExecutionOwner): void {
-    if (!this.canWake(owner.sessionId)) throw new Error("Resume the Session before resuming this Agent");
-    this.agentGate(owner);
-    this.db.prepare("UPDATE agent_instance_wake_gates SET stopped = 0, epoch = epoch + 1 WHERE session = ? AND agent = ?")
-      .run(owner.sessionId, owner.agentId);
+    if (this.archived(owner.sessionId)) throw new Error("Archived Session cannot resume automatic wakeups");
+    this.transaction(() => {
+      this.gate(owner.sessionId);
+      // Do not invalidate another agent's prepared delivery when the Session is already open.
+      this.db.prepare("UPDATE agent_wake_gates SET stopped = 0, epoch = epoch + 1 WHERE session = ? AND stopped = 1")
+        .run(owner.sessionId);
+      this.agentGate(owner);
+      this.db.prepare("UPDATE agent_instance_wake_gates SET stopped = 0, epoch = epoch + 1 WHERE session = ? AND agent = ? AND stopped = 1")
+        .run(owner.sessionId, owner.agentId);
+    });
   }
 
   /** Stop dominates outstanding delivery batches, including a batch already read by a scheduler. */
@@ -123,12 +134,14 @@ export class AgentNotifications {
   }
 
   /** Complete authority records for the existing turn-level State Pool, not a second version store. */
-  snapshot(sessionId: string): unknown {
+  snapshot(sessionId: string, agentId?: string): unknown {
+    const where = agentId === undefined ? "session = ?" : "session = ? AND agent = ?";
+    const args = agentId === undefined ? [sessionId] : [sessionId, agentId];
     return {
       gate: this.gate(sessionId),
-      agents: this.db.prepare("SELECT agent, stopped, epoch FROM agent_instance_wake_gates WHERE session = ? ORDER BY agent").all(sessionId),
-      notifications: this.db.prepare("SELECT * FROM agent_notifications WHERE session = ? ORDER BY created, id").all(sessionId),
-      timers: this.db.prepare("SELECT * FROM agent_timers WHERE session = ? ORDER BY due, id").all(sessionId),
+      agents: this.db.prepare(`SELECT agent, stopped, epoch FROM agent_instance_wake_gates WHERE ${where} ORDER BY agent`).all(...args),
+      notifications: this.db.prepare(`SELECT * FROM agent_notifications WHERE ${where} ORDER BY created, id`).all(...args),
+      timers: this.db.prepare(`SELECT * FROM agent_timers WHERE ${where} ORDER BY due, id`).all(...args),
     };
   }
 

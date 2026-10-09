@@ -16,11 +16,6 @@
  * The catalog classifies existing repository entry points; it does not define
  * a second test suite. Keep every environment fact explicit so a CI scheduler
  * can select work without inspecting implementation-specific runner syntax.
- *
- * UT is split into exactly two tiers and nothing else: `ut:host` runs on an
- * ordinary CI host, `ut:guest` needs a Linux guest kernel that grants the user
- * namespaces bubblewrap requires. `.ci/ci-contract.mjs` fails the build when a
- * UT case, workload, or workspace package escapes that partition.
  */
 export const tagDimensions = {
   arch: {
@@ -83,93 +78,74 @@ export const tagDimensions = {
       unreviewed: "Legacy coverage whose sandbox dependency is not audited",
     },
   },
-  ut: {
-    description: "UT execution tier; required on layer:ut cases and forbidden elsewhere",
-    scope: "layer:ut",
-    values: {
-      guest: "Needs a Linux guest kernel that grants the user namespaces bubblewrap requires",
-      host: "Runs on an ordinary CI host with no execution sandbox",
-    },
-  },
 };
 
 /**
- * The packages whose tests belong to the guest tier. Everything else in the
- * workspace is the host tier: the two commands below are generated from this
- * one list, so no package can land in both tiers or in neither.
+ * Run one slice of the one shared plan. Everything a layer executes is selected
+ * from source tags by `test/support/tagged/profiles.mjs`; the catalog holds no
+ * second list of cases for CI to run instead.
  */
-export const utGuestPackages = [
-  {
-    name: "@sciencediscovery/runner",
-    directory: "services/runner",
-    reason: "its tests execute a real bubblewrap sandbox and assert the remapped /workspace view",
-  },
-];
-
-const guestPackageFilters = utGuestPackages.flatMap(({ name }) => ["--filter", name]);
-const hostPackageFilters = utGuestPackages.flatMap(({ name }) => ["--filter", `!${name}`]);
-
-/** Every UT workload, each carrying exactly one tier. */
-export const utWorkloads = [
-  { command: ["pnpm", "architecture:check"], id: "architecture", tier: "host" },
-  { command: ["pnpm", "typecheck"], id: "typecheck", tier: "host" },
-  { command: ["pnpm", "ci:selftest"], id: "ci-contract", tier: "host" },
-  { command: ["pnpm", "binary:test"], id: "binary-scripts", tier: "host" },
-  { command: ["pnpm", "--recursive", ...hostPackageFilters, "test"], id: "workspace-packages", tier: "host" },
-  { command: ["pnpm", "paper:test"], id: "paper", tier: "host" },
-  { command: ["pnpm", "gateway:test"], id: "gateway", tier: "host" },
-  { command: ["pnpm", "memory-graph:test"], id: "memory-graph", tier: "host" },
-  { command: ["pnpm", "evolve:test"], id: "evolve", tier: "host" },
-  { command: ["pnpm", ...guestPackageFilters, "test"], id: "sandbox-packages", tier: "guest" },
-];
-
-const installStep = ["pnpm", ["install", "--frozen-lockfile"]];
-// Both project virtualenvs are prerequisites, not test steps: the API package
-// spawns services/paper/.venv/bin/python and the gateway interpreter, so the
-// package tests fail with ENOENT unless these exist before they run.
-const gatewaySyncStep = ["uv", ["sync", "--project", "services/gateway"]];
-const paperSyncStep = ["uv", ["sync", "--project", "services/paper"]];
-const buildStep = ["pnpm", ["build"]];
-const workloadSteps = (tier) =>
-  utWorkloads.filter((workload) => workload.tier === tier).map(({ command }) => [command[0], command.slice(1)]);
+const sharedSlice = (slice) => ["node", "test/support/tagged/shared.mjs", "run", "--slice", slice];
 
 /**
- * The ordered commands each layer entry point runs. `ut` is exactly
- * `ut-host` followed by `ut-guest`, so the aggregate cannot drift from the sum
- * of the tiers. `ut-guest` deliberately has no install or build step: its host
- * hands it an installed, built workspace and it spends emulated CPU on tests
- * only.
+ * What runs a command with JiuwenSwarm, the agent backend, and its adapter
+ * (`scripts/with-jiuwenswarm.sh`). On this branch agent turns in the UT slice
+ * run on a real JiuwenSwarm behind a real adapter: the wrapper installs and
+ * starts one of each for the whole run, and the tests reach it through
+ * `SCIENCE_AGENT_ADAPTER_URL`. It is part of the layer's definition, not of
+ * the machine, so `pnpm ci:ut` means the same run on a laptop and in CI.
+ */
+export const jiuwenSwarmWrapper = ["bash", "scripts/with-jiuwenswarm.sh"];
+
+const step = (command) => [command[0], command.slice(1)];
+
+/**
+ * The arguments a layer step runs with, given what the entry point was asked
+ * for (`pnpm ci:ut -- --profile daily --coverage`). They belong to the shared
+ * runner, which may sit behind a wrapper that only provides its environment;
+ * its own arguments always end the step, so that is where these go. A step
+ * that does not run the shared runner — the opt-in layers' install and build —
+ * gets none, since a planner flag would break it.
+ */
+export function stepArguments([command, args], forwarded) {
+  const full = [command, ...args];
+  const plans = full.some((part, index) => part === "test/support/tagged/shared.mjs" && full[index - 1] === "node");
+  return plans ? [...args, ...forwarded] : args;
+}
+const installStep = ["pnpm", ["install", "--frozen-lockfile"]];
+const buildStep = ["pnpm", ["build"]];
+
+/**
+ * The ordered commands each layer entry point runs.
+ *
+ * The hermetic layers carry no install or build step: the shared runner
+ * prepares exactly what its own slice needs (the workspace build, the four
+ * service virtualenvs, the pinned Chromium) before it freezes a plan, so a
+ * second preparation here would only be a chance for the two to disagree. The
+ * opt-in live layers below still drive their own scripts and keep theirs.
+ *
+ * `e2e` is deliberately not here. `pnpm ci:e2e` calls the slice directly,
+ * because `.ci/run-e2e.sh` already owns `<results>/e2e/run.log` and a layer
+ * wrapper would be a second writer of that same file.
  */
 export const layers = {
-  st: [installStep, buildStep, ["bash", ["test/api/run_m1_smoke.sh"]]],
+  st: [step(sharedSlice("st"))],
   "st-npu": [
     [process.env.SCIENCE_AGENT_NPU_PYTHON?.trim() || "python3", ["services/runner/workloads/npu-smoke-test.py"]],
   ],
   "st-real": [installStep, buildStep, ["bash", ["test/api/run_real_smoke.sh"]]],
-  ut: [installStep, gatewaySyncStep, paperSyncStep, buildStep, ...workloadSteps("host"), ...workloadSteps("guest")],
-  "ut-guest": [...workloadSteps("guest")],
-  "ut-host": [installStep, gatewaySyncStep, paperSyncStep, buildStep, ...workloadSteps("host")],
+  ut: [step([...jiuwenSwarmWrapper, ...sharedSlice("ut")])],
 };
 
 export const testCases = [
   {
-    id: "ut.host",
-    description: "The UT tier that needs no execution sandbox: static checks, Node package tests outside the sandbox packages, and the Python suites",
-    command: ["pnpm", "ci:ut:host"],
-    resultPath: "ut-host",
-    tags: [
-      "arch:amd64", "arch:arm64", "container:supported", "layer:ut",
-      "llm:none", "network:none", "npu:none", "sandbox:none", "ut:host",
-    ],
-  },
-  {
-    id: "ut.guest",
-    description: "The UT tier that needs a real bubblewrap sandbox; its host installs and builds the workspace and the guest runs only the tests",
-    command: ["pnpm", "ci:ut:guest"],
-    resultPath: "ut-guest",
+    id: "ut.all",
+    description: "The whole UT category: static checks, every workspace package's tests, the Python suites, and the sandbox tests that execute a real bubblewrap",
+    command: ["pnpm", "ci:ut"],
+    resultPath: "ut",
     tags: [
       "arch:amd64", "arch:arm64", "container:conditional", "layer:ut",
-      "llm:none", "network:none", "npu:none", "sandbox:bubblewrap", "ut:guest",
+      "llm:none", "network:local", "npu:none", "sandbox:bubblewrap",
     ],
   },
   {

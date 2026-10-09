@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import type { WebSettingsDetails } from "@sciencediscovery/schema";
 import { createElement } from "react";
@@ -95,4 +97,21 @@ test("builds one deferred update request from provider and credential drafts", (
 
   assert.equal(request.proxyPolicy, "proxy:corporate");
   assert.deepEqual(request.providerApiKeys, { exa: "exa-secret", jina: null });
+});
+
+test("on the JiuwenSwarm backend the page asks for JiuwenSwarm's keys and marks what it does not use", () => {
+  const jw = { ...settings, backend: "jiuwenswarm" as const, providers: [...settings.providers, { hasApiKey: true, provider: "bocha" as const }] };
+  const html = renderToStaticMarkup(createElement(WebSettingsEditor, { draft: createWebSettingsDraft(jw), onChange: () => undefined, settings: jw }));
+  assert.match(html, /web search and page fetching are JiuwenSwarm&#x27;s own/);
+  for (const name of ["Bocha", "Perplexity", "Serper", "Jina"]) assert.match(html, new RegExp(`${name} API key`));
+  for (const name of ["Tavily", "Exa", "Brave"]) assert.doesNotMatch(html, new RegExp(`${name} API key`));
+  assert.doesNotMatch(html, /Paid search providers \(tried first\)/, "no choice of our paid providers");
+  assert.match(html, /Brave \(free\) · not used by the JiuwenSwarm backend/);
+  assert.doesNotMatch(html, /DuckDuckGo · not used/);
+});
+
+test("a key for JiuwenSwarm's paid search is sent like any other", () => {
+  const draft = createWebSettingsDraft(settings);
+  const request = webSettingsRequest({ ...draft, keys: { ...draft.keys, bocha: " b-key " } });
+  assert.deepEqual(request.providerApiKeys, { bocha: "b-key" });
 });

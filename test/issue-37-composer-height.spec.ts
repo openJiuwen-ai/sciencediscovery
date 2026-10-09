@@ -20,6 +20,9 @@ import { test, expect, type Page } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("issue-37-composer-height.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * 会话 Composer 高度回归测试。
  *
@@ -621,4 +624,6 @@ test.describe("会话 Composer 高度 E2E", () => {
     }
     expect(logs, `控制台错误: ${logs.join("; ")}`).toEqual([]);
   });
+});
+
 });

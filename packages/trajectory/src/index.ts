@@ -43,7 +43,12 @@ export function contextBlocks(inputValue: unknown, assemblyValue: unknown): Cont
   const sections = Array.isArray(admitted.sections) ? admitted.sections.map(object) : [];
   const ids = Array.isArray(rendered.sectionIds) ? rendered.sectionIds : [];
   const ordered = ids.map(id => sections.find(s => s.id === id)).filter((s): s is Record<string, unknown> => !!s && typeof s.content === "string" && s.content.length > 0);
-  const exact = (trace.selectedPath ?? trace.used) === "dynamic" && ordered.length > 0 && ordered.map(s => s.content).join("\n") === input.systemPrompt;
+  // What makes the blocks trustworthy is the equality below: the sections the record kept,
+  // concatenated, are byte for byte what was sent. `selectedPath` only names who assembled
+  // them — the built-in loop's dynamic assembler, or an external executor that owns its own
+  // loop (JiuwenSwarm), which reports the prompt it built as the single section it is.
+  const assembler = trace.selectedPath ?? trace.used;
+  const exact = (assembler === "dynamic" || assembler === "external") && ordered.length > 0 && ordered.map(s => s.content).join("\n") === input.systemPrompt;
   const blocks: ContextBlock[] = exact
     ? ordered.map((s, i) => ({ id: `system-${i}`, kind: String(s.slot), source: String(s.contributorId), content: String(s.content) + (i < ordered.length - 1 ? "\n" : ""), attribution: "recorded" }))
     : [{ id: "system", kind: "system", source: "systemPrompt", content: text(input.systemPrompt ?? ""), attribution: "unavailable" }];

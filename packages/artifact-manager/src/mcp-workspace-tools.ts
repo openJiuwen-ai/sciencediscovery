@@ -48,6 +48,12 @@ export interface PaperExtractionPort {
     sessionId: string;
     signal?: AbortSignal;
   }): Promise<{ acquisition: PaperAcquisition; job: ArtifactExtractionJob }>;
+  extractWorkspacePdf(input: {
+    outputPathPrefix?: string;
+    path: string;
+    sessionId: string;
+    signal?: AbortSignal;
+  }): Promise<PaperAcquisition>;
 }
 
 export interface McpWorkspaceToolOptions {
@@ -218,7 +224,31 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
       }
     },
     mcpTools,
-    paperExtractPdf: async ({ artifactJobId }, signal) => {
+    paperExtractPdf: async ({ artifactJobId, path: workspacePath }, signal) => {
+      if (!artifactJobId) {
+        const relative = (workspacePath ?? "").trim().replace(/^\/workspace\//, "");
+        if (!/\.pdf$/i.test(relative)) throw new Error("paper_extract_pdf path must name a .pdf file in the workspace");
+        const releaseExternalWait = options.pauseExternalWait();
+        try {
+          const acquisition = await options.paperService.extractWorkspacePdf({
+            outputPathPrefix: options.workspacePathPrefix,
+            path: prefixedWorkspacePath(relative, options.workspacePathPrefix),
+            sessionId: options.sessionId,
+            signal,
+          });
+          const analysisRoot = acquisition.manifestPath.slice(0, acquisition.manifestPath.lastIndexOf("/"));
+          return {
+            manifestPath: unprefixedWorkspacePath(acquisition.manifestPath, options.workspacePathPrefix),
+            pageCount: acquisition.extraction.pageCount,
+            paperAcquisitionId: acquisition.id,
+            sourcePdfPath: relative,
+            textPath: unprefixedWorkspacePath(`${analysisRoot}/${acquisition.extraction.textPath}`, options.workspacePathPrefix),
+            warnings: acquisition.extraction.warnings,
+          };
+        } finally {
+          releaseExternalWait();
+        }
+      }
       const artifact = await options.artifactManager.getCompletedArtifact(
         options.sessionId,
         artifactJobId,

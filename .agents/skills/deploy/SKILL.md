@@ -11,7 +11,7 @@ description: >
 
 Project-local skill for **ScienceDiscovery**. Authoritative facts live in
 [`README.md`](../../../README.md) → **Quick start**, in
-[`docs/zh/how-to/deployment.md`](../../../docs/zh/how-to/deployment.md) (Chinese) → local
+[`docs/zh/getting-started/deployment.md`](../../../docs/zh/getting-started/deployment.md) (Chinese) → local
 mode and Docker deployment, and in [`docs/zh/reference/configuration.md`](../../../docs/zh/reference/configuration.md) → variable tables. Read the matching section before
 improvising; never invent ports, tokens, flags, or paths.
 

@@ -1,11 +1,19 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+// The children below are plain Node processes with no TypeScript loader, so
+// they import this package's build output. The file itself runs from `src/`
+// under the shared plan and from `dist/` under `pnpm --filter … test`, so
+// anchor on the package root instead of on whichever of the two it is in.
+const built = (name: string) => new URL(`dist/${name}`, new URL("..", new URL(".", import.meta.url))).href;
+
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import test from "node:test";
+
 import { CasStore, sha256 } from "./index.js";
 import { canonicalize, RECORD_MEDIA_TYPE, RefStore, snapshotWorkspace, StepCommitCoordinator, VersionStore,
   type AgentStateRef, type DataRef, type TrajectoryStep, type WorkspaceTree } from "./versioning.js";
@@ -151,7 +159,7 @@ test("process death inside the SQLite transaction retains the old complete head"
   const old = await store.putRecord("Root", { version: 1 });
   const next = await store.putRecord("Root", { version: 2, old });
   await refs.commit(store, "head", null, old); refs.close();
-  const moduleUrl = new URL("./versioning.js", import.meta.url).href;
+  const moduleUrl = built("versioning.js");
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
     import { VersionStore, RefStore } from ${JSON.stringify(moduleUrl)};
     const store = new VersionStore(${JSON.stringify(store.dataDir)});

@@ -1,0 +1,658 @@
+{
+ "domain": "Settings, status, providers and models",
+ "cases": [
+  {
+   "id": "global-settings-round-trips",
+   "description": "Every global settings route: read, change one value, read it back, restore the original. Nothing is left changed.",
+   "steps": [
+    {
+     "name": "timeout settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/timeout-settings"
+     },
+     "covers": [
+      "GET /api/timeout-settings"
+     ],
+     "capture": {
+      "timeouts": "$"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "change a timeout",
+     "request": {
+      "method": "PUT",
+      "path": "/api/timeout-settings",
+      "body": {
+       "gatewayIdleTimeoutMs": 250000,
+       "gatewayTurnTimeoutMs": 0,
+       "kernelIdleTimeoutMs": 0,
+       "permissionWaitTimeoutMs": 0,
+       "runnerExecTimeoutMs": 0
+      }
+     },
+     "covers": [
+      "PUT /api/timeout-settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "timeout settings after the change",
+     "request": {
+      "method": "GET",
+      "path": "/api/timeout-settings"
+     },
+     "covers": [
+      "GET /api/timeout-settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "restore the timeouts",
+     "request": {
+      "method": "PUT",
+      "path": "/api/timeout-settings",
+      "body": "{{timeouts}}"
+     },
+     "expectStatus": 200,
+     "always": true
+    },
+    {
+     "name": "quota settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/quota-settings"
+     },
+     "covers": [
+      "GET /api/quota-settings"
+     ],
+     "capture": {
+      "quotas": "$"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "write the quotas back unchanged",
+     "request": {
+      "method": "PUT",
+      "path": "/api/quota-settings",
+      "body": "{{quotas}}"
+     },
+     "covers": [
+      "PUT /api/quota-settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "sandbox network settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/sandbox-network-settings"
+     },
+     "covers": [
+      "GET /api/sandbox-network-settings"
+     ],
+     "capture": {
+      "network": "$"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "write the sandbox network settings back",
+     "request": {
+      "method": "PUT",
+      "path": "/api/sandbox-network-settings",
+      "body": {
+       "allowPrivateNetwork": false,
+       "allowedDomains": [],
+       "egressProxyPolicy": "inherit",
+       "mode": "none"
+      }
+     },
+     "covers": [
+      "PUT /api/sandbox-network-settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "environment source settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/environment-source-settings"
+     },
+     "covers": [
+      "GET /api/environment-source-settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "write the environment sources back",
+     "request": {
+      "method": "PUT",
+      "path": "/api/environment-source-settings",
+      "body": {
+       "condaSource": "upstream",
+       "pipSource": "upstream"
+      }
+     },
+     "covers": [
+      "PUT /api/environment-source-settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "web settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/web/settings"
+     },
+     "covers": [
+      "GET /api/web/settings"
+     ],
+     "capture": {
+      "web": "$"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "change the web fetch cache",
+     "request": {
+      "method": "PUT",
+      "path": "/api/web/settings",
+      "body": {
+       "fetchCacheTtlSeconds": 3600
+      }
+     },
+     "covers": [
+      "PUT /api/web/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "restore the web fetch cache",
+     "request": {
+      "method": "PUT",
+      "path": "/api/web/settings",
+      "body": {
+       "fetchCacheTtlSeconds": 86400
+      }
+     },
+     "expectStatus": 200,
+     "always": true
+    },
+    {
+     "name": "web usage",
+     "request": {
+      "method": "GET",
+      "path": "/api/web/usage"
+     },
+     "covers": [
+      "GET /api/web/usage"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "reviewer specialist settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/reviewer-specialist/settings"
+     },
+     "covers": [
+      "GET /api/reviewer-specialist/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "write the reviewer settings back",
+     "request": {
+      "method": "PUT",
+      "path": "/api/reviewer-specialist/settings",
+      "body": {
+       "enabled": false,
+       "feedbackPolicy": "record"
+      }
+     },
+     "covers": [
+      "PUT /api/reviewer-specialist/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "proxy settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/proxy/settings"
+     },
+     "covers": [
+      "GET /api/proxy/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "write the proxy policy back",
+     "request": {
+      "method": "PUT",
+      "path": "/api/proxy/settings",
+      "body": {
+       "defaultPolicy": "proxy:environment"
+      }
+     },
+     "covers": [
+      "PUT /api/proxy/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "global settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/settings"
+     },
+     "covers": [
+      "GET /api/settings"
+     ],
+     "capture": {
+      "originalOverrides": "$.overrides"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "write the global settings back",
+     "request": {
+      "method": "PUT",
+      "path": "/api/settings",
+      "body": "{{originalOverrides}}"
+     },
+     "covers": [
+      "PUT /api/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "workbench search",
+     "request": {
+      "method": "GET",
+      "path": "/api/search?q=nothing-matches-this"
+     },
+     "covers": [
+      "GET /api/search"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "web settings reject the whole GET body",
+     "request": {
+      "method": "PUT",
+      "path": "/api/web/settings",
+      "body": "{{web}}"
+     },
+     "always": true
+    }
+   ]
+  },
+  {
+   "id": "health-and-runtime-status",
+   "description": "The two status endpoints that describe the stack.",
+   "steps": [
+    {
+     "name": "health",
+     "request": {
+      "method": "GET",
+      "path": "/health"
+     },
+     "covers": [
+      "GET /health, /api/health"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "health under /api",
+     "request": {
+      "method": "GET",
+      "path": "/api/health"
+     },
+     "covers": [
+      "GET /health, /api/health"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "runtime status",
+     "request": {
+      "method": "GET",
+      "path": "/api/runtime-status"
+     },
+     "covers": [
+      "GET /api/runtime-status"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "tearing down an unknown kernel",
+     "request": {
+      "method": "POST",
+      "path": "/api/runtime-status/kernels/no-such-kernel/teardown",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/runtime-status/kernels/:id/teardown"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "proxy-servers-and-specialists-crud",
+   "description": "Proxy servers and specialists: create, rename, delete.",
+   "steps": [
+    {
+     "name": "add a proxy server",
+     "request": {
+      "method": "POST",
+      "path": "/api/proxy/servers",
+      "body": {
+       "name": "L1 proxy",
+       "kind": "custom_url",
+       "url": "http://127.0.0.1:9"
+      }
+     },
+     "covers": [
+      "POST /api/proxy/servers"
+     ],
+     "capture": {
+      "proxyId": "$.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "rename it",
+     "request": {
+      "method": "PUT",
+      "path": "/api/proxy/servers/{{proxyId}}",
+      "body": {
+       "name": "L1 proxy renamed",
+       "kind": "custom_url",
+       "url": "http://127.0.0.1:9"
+      }
+     },
+     "covers": [
+      "PUT /api/proxy/servers/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "reject an unknown kind",
+     "request": {
+      "method": "POST",
+      "path": "/api/proxy/servers",
+      "body": {
+       "name": "bad",
+       "kind": "http",
+       "url": "http://127.0.0.1:9"
+      }
+     },
+     "expectStatus": 400
+    },
+    {
+     "name": "delete it",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/proxy/servers/{{proxyId}}"
+     },
+     "covers": [
+      "DELETE /api/proxy/servers/:id"
+     ],
+     "expectStatus": 200,
+     "always": true
+    },
+    {
+     "name": "specialists",
+     "request": {
+      "method": "GET",
+      "path": "/api/specialists"
+     },
+     "covers": [
+      "GET /api/specialists"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "add a specialist",
+     "request": {
+      "method": "POST",
+      "path": "/api/specialists",
+      "body": {
+       "name": "L1 specialist",
+       "description": "d",
+       "instructions": "be brief"
+      }
+     },
+     "covers": [
+      "POST /api/specialists"
+     ],
+     "capture": {
+      "specialistId": "$.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "edit it",
+     "request": {
+      "method": "PUT",
+      "path": "/api/specialists/{{specialistId}}",
+      "body": {
+       "name": "L1 specialist 2",
+       "description": "d2",
+       "instructions": "be briefer"
+      }
+     },
+     "covers": [
+      "PUT /api/specialists/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "delete it",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/specialists/{{specialistId}}"
+     },
+     "covers": [
+      "DELETE /api/specialists/:id"
+     ],
+     "expectStatus": 200,
+     "always": true
+    }
+   ]
+  },
+  {
+   "id": "providers-and-models-crud",
+   "description": "Providers, their model discovery, and model profiles. The first model registered becomes the global default, so the settings are restored before it is deleted.",
+   "stub": {},
+   "steps": [
+    {
+     "name": "remember the global settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/settings"
+     },
+     "capture": {
+      "originalOverrides": "$.overrides"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "add a provider",
+     "request": {
+      "method": "POST",
+      "path": "/api/providers",
+      "body": {
+       "name": "L1 provider",
+       "baseUrl": "{{stubBaseUrl}}",
+       "apiProtocol": "openai-chat-completions",
+       "apiVariant": "openai"
+      }
+     },
+     "covers": [
+      "POST /api/providers"
+     ],
+     "capture": {
+      "providerId": "$.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "edit it",
+     "request": {
+      "method": "PUT",
+      "path": "/api/providers/{{providerId}}",
+      "body": {
+       "name": "L1 provider renamed",
+       "baseUrl": "{{stubBaseUrl}}",
+       "apiProtocol": "openai-chat-completions",
+       "apiVariant": "openai"
+      }
+     },
+     "covers": [
+      "PUT /api/providers/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "discover its models",
+     "request": {
+      "method": "GET",
+      "path": "/api/providers/{{providerId}}/models"
+     },
+     "covers": [
+      "GET /api/providers/:id/models"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "adding a model needs an id",
+     "request": {
+      "method": "POST",
+      "path": "/api/providers/{{providerId}}/models",
+      "body": {}
+     },
+     "expectStatus": 400
+    },
+    {
+     "name": "register one of the discovered models",
+     "request": {
+      "method": "POST",
+      "path": "/api/providers/{{providerId}}/models",
+      "body": {
+       "model": "contract-stub",
+       "label": "L1 provider model"
+      }
+     },
+     "covers": [
+      "POST /api/providers/:id/models"
+     ],
+     "capture": {
+      "providerModelId": "$.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "register a model by hand",
+     "request": {
+      "method": "POST",
+      "path": "/api/models",
+      "body": {
+       "vision": false,
+       "apiToken": "{{stubToken}}",
+       "baseUrl": "{{stubBaseUrl}}",
+       "model": "{{stubModel}}",
+       "name": "L1 model"
+      }
+     },
+     "covers": [
+      "POST /api/models"
+     ],
+     "capture": {
+      "modelId": "$.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "edit the model",
+     "request": {
+      "method": "PUT",
+      "path": "/api/models/{{modelId}}",
+      "body": {
+       "vision": true,
+       "apiToken": "{{stubToken}}",
+       "baseUrl": "{{stubBaseUrl}}",
+       "model": "{{stubModel}}",
+       "name": "L1 model renamed"
+      }
+     },
+     "covers": [
+      "PUT /api/models/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "models",
+     "request": {
+      "method": "GET",
+      "path": "/api/models"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "a model in use as the default cannot be deleted",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/models/{{providerModelId}}"
+     },
+     "expectStatus": 400,
+     "always": true
+    },
+    {
+     "name": "restore the global settings",
+     "request": {
+      "method": "PUT",
+      "path": "/api/settings",
+      "body": "{{originalOverrides}}"
+     },
+     "always": true
+    },
+    {
+     "name": "delete the model",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/models/{{modelId}}"
+     },
+     "covers": [
+      "DELETE /api/models/:id"
+     ],
+     "always": true
+    },
+    {
+     "name": "delete the provider's model",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/models/{{providerModelId}}"
+     },
+     "always": true
+    },
+    {
+     "name": "delete the provider",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/providers/{{providerId}}"
+     },
+     "covers": [
+      "DELETE /api/providers/:id"
+     ],
+     "expectStatus": 200,
+     "always": true
+    }
+   ]
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 # 配置、端口、配额与存储参考
 
-本文集中列出本地模式和 Docker 的环境变量、默认端口、工作区相关配额及存储布局。实际部署步骤见[部署指南](../how-to/deployment.md)。
+本文集中列出本地模式和 Docker 的环境变量、默认端口、工作区相关配额及存储布局。实际部署步骤见[部署指南](../getting-started/deployment.md)。
 
 ## 环境变量（本地模式）
 
@@ -20,6 +20,12 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_LOG_DIR` | `<数据目录>/logs` | 可选日志目录覆盖；通常保持默认以随数据目录持久化 |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | 单个类别日志滚动前的最大字节数 |
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | 每个类别保留的滚动历史文件数 |
+| `SCIENCE_AGENT_EXECUTOR` | 启动器默认为 `jiuwenswarm` | 可选 `jiuwenswarm` 或 `native`；绕过启动器直接启动 API 且未设置时默认 native。详见 [Agent 后端](agent-backends.md)。 |
+| `SCIENCE_AGENT_JIUWENSWARM_PROMPT` | `prepend` | JiuwenSwarm 提示词模式；`replace` 改用产品提示词。 |
+| `SCIENCE_AGENT_JIUWENSWARM_TOOLS` | `jiuwenswarm` | JiuwenSwarm 工具与产品工具；`ours` 改用产品工具集。 |
+| `SCIENCE_AGENT_JIUWENSWARM_PLANNING` | `todo` | JiuwenSwarm todo；`update_plan` 改用产品规划工具。 |
+| `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` | `task` | 平台 task 桥接（子运行仍使用 Swarm）；`jiuwenswarm` 改用 Swarm 原生子代理。 |
+| `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `jiuwenswarm` | 默认提示词与工具模式下将选中技能安装给 Swarm；`ours` 改用产品加载方式。 |
 | `SCIENCE_AGENT_GATEWAY_IDLE_TIMEOUT_MS` | `240000` | 初始 Agent 无响应上限：无流式输出或进度（`0` = 无限） |
 | `SCIENCE_AGENT_GATEWAY_TURN_TIMEOUT_MS` | `0` | 初始 Agent 单轮总时长上限（`0` = 无限） |
 | `SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS` | `10` | 单个 Agent Step 中显式声明为并发安全的工具最大并发数；必须为正整数，`1` 表示工具串行执行 |
@@ -36,6 +42,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_NPM_REGISTRY` | 空（官方 registry） | 构建步骤的 npm 镜像，仅作用于 `start-stack.sh` 内的 `pnpm install --registry`，不改用户/全局 npm 配置；如华为云 `https://mirrors.huaweicloud.com/repository/npm/` |
 | `SCIENCE_AGENT_PYPI_INDEX` | 空（PyPI 官方） | 构建步骤的 PyPI 镜像，仅作用于 `start-stack.sh` 内 `uv sync` 的 `UV_DEFAULT_INDEX`，不改用户/全局 uv 配置；如华为云 `https://mirrors.huaweicloud.com/repository/pypi/simple`。注意：`uv.lock` 记录 index 来源，设置镜像后 uv 会按镜像重新 resolve（版本仍受 `pyproject.toml` 约束但可能偏离 lock），脚本会自动备份并恢复 lockfile，工作区不会被改动 |
 | `SCIENCE_AGENT_MEMORY_GRAPH_HOST` | `127.0.0.1` | memory-graph 监听地址（服务进程使用） |
+| `SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE` | 自带服务时为 `1`；不含服务的旧单文件 payload 为 `0` | API 是否在新数据目录开放 ScienceMemory；`0` 跳过内置 sidecar，单文件 sidecar 启动失败时本次运行设为 `0`。 |
 | `SCIENCE_AGENT_MEMORY_GRAPH_PORT` | `17674` | memory-graph 监听端口（服务进程使用） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_URL` | `http://127.0.0.1:17674` | memory-graph 端点（API 客户端） |
 | `SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN` | `sciencediscovery-memory-graph-local` | API→memory-graph token |
@@ -53,7 +60,7 @@ set -a && source .env && set +a
 | `SCIENCE_AGENT_PROVISIONER_PATH` | — | 可选管理员提供的 provisioner 覆盖；正常 setup 安装应用自有固定二进制 |
 | `SCIENCE_AGENT_MICROMAMBA_BASE_URL` | — | 可选镜像目录 URL，托管 micromamba 固定版本的同名发布件；留空使用上游发布地址。无论从哪里下载，固定的 SHA-256 校验都不放宽 |
 | `SCIENCE_AGENT_NPU_PYTHON_PATH` | 自动探测 | 读取 NPU 状态时调用驱动 DCMI 接口所用的宿主 Python；留空按 `/usr/bin/python3`、`/usr/local/bin/python3` 顺序探测，都没有则回退到 `npu-smi` |
-| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存；设置后 provision 离线运行，不再拉取允许渠道。pip `indexUrl` 与 conda channel 仍执行安全校验，但安装时不访问这些网络源（见 [sandbox-execution.md](../explanation/sandbox-execution.md) §6 受控软件源） |
+| `SCIENCE_AGENT_PACKAGE_CACHE_DIR` | — | 可选预置缓存；设置后 provision 离线运行，不再拉取允许渠道。pip `indexUrl` 与 conda channel 仍执行安全校验，但安装时不访问这些网络源（见 [sandbox-execution.md](../developer-docs/sandbox-execution.md) §6 受控软件源） |
 | `SCIENCE_AGENT_SCIENTIFIC_CHANNELS` | `conda-forge` | 逗号分隔的包渠道白名单；内置镜像预设（TUNA/USTC）对应的频道 URL 始终被 Runner 接受，自定义频道仍须显式列入 |
 | `SCIENCE_AGENT_KERNEL_IDLE_MS` | `0` | 初始持久内核空闲超时（`0` = 无限） |
 | `SCIENCE_AGENT_WEB_DIR` | `apps/web/dist` | 静态 UI 资源 |
@@ -94,7 +101,7 @@ Ascend NPU Broker 面向需要访问宿主 Ascend 设备的部署，且需要管
 
 ## Docker 环境变量
 
-Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把下面的键插值到 `docker-compose.yml`。它们分两层：编排层只影响 Compose 如何启动容器；容器层由服务的 `environment` 块逐个转发进容器，留空等于使用内置默认值。操作步骤与分层说明见[Docker 部署](../how-to/deployment.md#docker-部署)。
+Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把下面的键插值到 `docker-compose.yml`。它们分两层：编排层只影响 Compose 如何启动容器；容器层由服务的 `environment` 块逐个转发进容器，留空等于使用内置默认值。操作步骤与分层说明见[Docker 部署](../getting-started/deployment.md#docker-部署)。
 
 ### 编排层
 
@@ -116,8 +123,10 @@ Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把�
 | `SCIENCE_AGENT_LOG_DIR` | `/app/data/logs` | 日志目录；保持默认即随数据目录持久化 |
 | `SCIENCE_AGENT_LOG_MAX_BYTES` | `10485760` | 单个类别日志滚动前的最大字节数 |
 | `SCIENCE_AGENT_LOG_BACKUP_COUNT` | `5` | 每个类别保留的滚动历史文件数 |
-| `SCIENCE_AGENT_CONTEXT_MODE` | `dynamic` | 上下文装配模式；`legacy` 与 `shadow` 仅用于调试和回归对比 |
-| `SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS`、`…_SECTION_MAX_CHARS`、`…_DATA_BUDGET_CHARS`、`…_ATTACHMENT_MAX_CHARS`、`…_CONTRIBUTED_MESSAGE_BUDGET_CHARS`、`…_MAX_CONTRIBUTED_MESSAGES`、`…_WINDOW_MESSAGES`、`…_WINDOW_ROUNDS`、`…_WINDOW_TOKENS` | 见 `.env.docker.example` | 上下文装配的预算与窗口，含义见[上下文装配](../../architecture/context-assembly.md) |
+| `SCIENCE_AGENT_EXECUTOR` | `jiuwenswarm` | 启动器选择的后端；`native` 可切回原生循环。 |
+| `SCIENCE_AGENT_JIUWENSWARM_PROMPT` / `SCIENCE_AGENT_JIUWENSWARM_TOOLS` / `SCIENCE_AGENT_JIUWENSWARM_PLANNING` / `SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS` / `SCIENCE_AGENT_JIUWENSWARM_SKILLS` | `prepend` / `jiuwenswarm` / `todo` / `task` / `jiuwenswarm` | JiuwenSwarm 专属行为；详见 [Agent 后端](agent-backends.md)。Compose 会从 `.env` 转发这些变量。 |
+| `SCIENCE_AGENT_CONTEXT_MODE` | `dynamic` | 仅 native loop 的上下文装配模式；`legacy` 与 `shadow` 仅用于调试和回归对比。JiuwenSwarm 自行管理模型上下文。 |
+| `SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS`、`…_SECTION_MAX_CHARS`、`…_DATA_BUDGET_CHARS`、`…_ATTACHMENT_MAX_CHARS`、`…_CONTRIBUTED_MESSAGE_BUDGET_CHARS`、`…_MAX_CONTRIBUTED_MESSAGES`、`…_WINDOW_MESSAGES`、`…_WINDOW_ROUNDS`、`…_WINDOW_TOKENS` | 见 `.env.docker.example` | 仅 native loop 的上下文装配预算与窗口，含义见[上下文装配](../developer-docs/context-assembly.md) |
 | `SCIENCE_AGENT_CONTEXT_TRACE` / `SCIENCE_AGENT_CONTEXT_TRACE_DIR` | `0` / `/app/data/context-traces` | 上下文装配追踪开关与输出目录 |
 | `SCIENCE_AGENT_RUNNER_TOKEN` | `sciencediscovery-runner-local` | API→runner token（仅容器回环） |
 | `SCIENTIFIC_ENVS` | `1` | 托管 Python/R 环境与持久内核；首次启动自动创建 starter Python |
@@ -133,7 +142,7 @@ Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把�
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TTL_MS` | `21600000` | 用量看板汇率缓存 TTL，默认 6 小时 |
 | `SCIENCE_AGENT_USAGE_EXCHANGE_RATE_TIMEOUT_MS` | `2500` | 用量看板汇率请求超时 |
 
-镜像内固定的值不经 `.env` 修改：`SCIENCE_AGENT_DATA_DIR=/app/data`、`SCIENCE_AGENT_HOST=0.0.0.0`、`SCIENCE_AGENT_PORT=4310`、`SCIENCE_AGENT_RUNNER_HOST=127.0.0.1`、`SCIENCE_AGENT_RUNNER_PORT=4311`、`SCIENCE_AGENT_RUNNER_URL`，以及镜像内 Python 环境、模型目录快照与 micromamba 种子的路径。API 在容器内监听 `0.0.0.0:4310`，runner `4311` 保持在容器回环，对外只发布 API 端口。本地模式的 `SCIENCE_AGENT_MICROMAMBA_BASE_URL` 在 Docker 中不需要：镜像已内置并播种固定版本的 micromamba，运行时不再下载。其余本地模式变量（如 `HTTP_PROXY`）未被转发，需要时通过 `docker-compose.override.yml` 追加到服务的 `environment` 块。
+镜像内固定的值不经 `.env` 修改：`SCIENCE_AGENT_DATA_DIR=/app/data`、`SCIENCE_AGENT_HOST=0.0.0.0`、`SCIENCE_AGENT_PORT=4310`、`SCIENCE_AGENT_RUNNER_HOST=127.0.0.1`、`SCIENCE_AGENT_RUNNER_PORT=4311`、`SCIENCE_AGENT_RUNNER_URL`，以及镜像内 Python 环境、模型目录快照与 micromamba 种子的路径。默认 JiuwenSwarm 模式下，adapter 在容器内监听 `0.0.0.0:4310`，API 移至容器内 `:4410`；native 模式下 API 直接监听 `:4310`。Runner `4311` 保持在容器回环，对外只发布 `4310`。本地模式的 `SCIENCE_AGENT_MICROMAMBA_BASE_URL` 在 Docker 中不需要：镜像已内置并播种固定版本的 micromamba，运行时不再下载。其余本地模式变量（如 `HTTP_PROXY`）未被转发，需要时通过 `docker-compose.override.yml` 追加到服务的 `environment` 块。
 
 ## 存储布局
 
@@ -154,10 +163,10 @@ Compose 读取仓库根目录 `.env`（模板为 `.env.docker.example`），把�
 | `.sciencediscovery-data/artifact-plans/`、`.sciencediscovery-data/artifact-jobs/`、`.sciencediscovery-data/artifact-extraction-jobs/` | 下载与 PDF 抽取任务状态 |
 | `.sciencediscovery-data/scientific-envs/`、`.sciencediscovery-data/runner-runtime/` | 托管 Python/R 环境与 runner 临时状态 |
 | `.sciencediscovery-data/skills/` | 本地托管技能包与 revision |
-| `.sciencediscovery-data/envs/paper/`、`.sciencediscovery-data/envs/gateway/` | uv 管理的 PDF worker 与 agent gateway Python 环境（可由运行脚本重建；非业务状态） |
+| `.sciencediscovery-data/envs/{paper,gateway,adapter,memory-graph,evolve}/` | 源码模式下可重建的 uv 服务环境；Docker 镜像将这些环境放在 `/opt/sciencediscovery/envs/` |
 | `.sciencediscovery-data/logs/{api,run,gateway,runner,memory-graph}.log` | 分级、按类别和大小滚动的运行日志；memory-graph 文件仅在功能启用时使用 |
 | 浏览器 local storage | 仅本地服务访问令牌——模型凭证从不离开后端 |
 
-数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于仓库启动器，已有默认 `data` 目录会一次性移动到 `.sciencediscovery-data`。对于单文件 launcher，已有默认 `./science-discovery-data` 或更早的 `./science-agent-data` 会按由新到旧的顺序一次性导入 `./.sciencediscovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../how-to/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `.sciencediscovery-data/envs/` 下的环境。
+数据目录是唯一运行时根：通过设置 `SCIENCE_DISCOVERY_DATA_DIR` 可同时迁移状态与服务环境（例如 `SCIENCE_DISCOVERY_DATA_DIR=/srv/science-discovery ./scripts/run-local.sh`）。原 `SCIENCE_AGENT_DATA_DIR` 仍作为兼容回退读取并打印日志；新旧同时设置时 `SCIENCE_DISCOVERY_DATA_DIR` 优先，且会记录该选择。对于仓库启动器，已有默认 `data` 目录会一次性移动到 `.sciencediscovery-data`。对于单文件 launcher，已有默认 `./science-discovery-data` 或更早的 `./science-agent-data` 会按由新到旧的顺序一次性导入 `./.sciencediscovery-data`；目标已存在时绝不覆盖并打印跳过原因。删除当前生效的数据目录会清除所有项目、会话、凭证与审计记录。在 [Docker 部署](../getting-started/deployment.md#docker-部署)中，同一目录就是宿主上的 bind mount `./data`，区别只在于 `envs/` 位于镜像内。`services/paper/.venv` 与 `services/gateway/.venv` 仅在独立开发或 smoke 命令中出现；应用本身使用 `.sciencediscovery-data/envs/` 下的环境。
 
 单文件 payload 覆盖变量遵循同一命名和优先级：用 `SCIENCE_DISCOVERY_PAYLOAD_CACHE_DIR` 指定解包缓存，或用 `SCIENCE_DISCOVERY_PAYLOAD_DIR` 指定已解包 payload；对应的 `SCIENCE_AGENT_*` 名称继续作为带日志的兼容回退。

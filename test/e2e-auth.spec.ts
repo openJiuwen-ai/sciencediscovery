@@ -26,6 +26,9 @@ import {
   resolveApiToken,
 } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("e2e-auth.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * The suite's own access-token wiring. These assertions need no stack and no
  * browser: they pin the contract every other spec now depends on — the token
@@ -141,4 +144,6 @@ test("padding, trailing slashes and blanks resolve to one normalized address", (
   expect(apiBaseUrl({}, "http://127.0.0.1:4410")).toBe("http://127.0.0.1:4410");
   expect(apiBaseUrl({ [BASE_URL_VARIABLE]: "http://127.0.0.1:4360" }, "http://127.0.0.1:4410"))
     .toBe("http://127.0.0.1:4360");
+});
+
 });

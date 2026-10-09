@@ -1,0 +1,19 @@
+# Code owners for this repository on GitHub.
+#
+# There are two CODEOWNERS files here and that is deliberate. GitHub looks in
+# .github/, then the repository root, then docs/, and uses the first one it
+# finds — so this file is the one GitHub applies and the root CODEOWNERS is not.
+# The root file names these same three people by their gitcode.com logins, for
+# the mirror's own review UI. The handles are not interchangeable: a GitHub
+# login means nothing there, and a GitCode login requests review from nobody
+# here. Change one and consider whether the other needs the same change.
+#
+# Syntax is gitignore's, with no negation and no character ranges. Rules apply
+# top to bottom and the last matching one wins, so a narrower rule added later
+# belongs below this one, not above it.
+#
+# An owner is only requested for review while they have write access to this
+# repository; GitHub silently ignores an entry for anyone who does not.
+
+# Every file.
+* @zhaozhaozz @zy95-12 @HongyeZhou

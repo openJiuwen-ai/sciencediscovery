@@ -14,6 +14,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 import re
 import unittest
 from pathlib import Path

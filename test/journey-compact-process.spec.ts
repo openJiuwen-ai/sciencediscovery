@@ -18,11 +18,14 @@ import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-compact-process.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: A researcher sees live cards become compact records without losing tool output, files or authorization behavior.
  * Steps:
- *   1. Open a local Project and check default-open workspace folders, closed secondary sections and absent disabled features.
+ *   1. Open a local Project and check default-open workspace folders and closed secondary sections.
  *   2. Collapse Files, send a request, verify streaming updates keep it closed, then grant permission and observe the running tool.
  *   3. Check completed records, copyable output and the unchanged declared Artifact card.
  *   4. Run a failing tool and verify its compact error record.
@@ -58,26 +61,27 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
   ]);
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
   try {
-    await journey.step("有内容的一级分区默认展开", "文件默认展开；没有任务内容时任务分区隐藏，未启用的科学记忆也不显示。",
+    await journey.step("有内容的一级分区默认展开", "文件与可用的科学记忆默认展开；没有任务内容时任务分区隐藏。",
       async () => {
         fixture = await createProjectAndSession(page, { approvalMode: "ask_for_dangerous",
           model: { ...stub, apiVariant: "deepseek", name: `卡片本地测试 ${Date.now()}` }, projectName: `卡片验收 ${Date.now()}`, sessionTitle: "卡片生命周期" });
         await openProjectSession(page, fixture);
-        const folders = page.locator(".workspace-folder:visible");
-        await expect(folders).toHaveCount(1);
+        const files = page.locator('[data-folder="files"]');
+        const memory = page.locator('[data-folder="memory"]');
+        await expect(files).toBeVisible();
+        await expect(memory).toBeVisible();
         await expect(page.locator('[data-folder="tasks"]')).toBeHidden();
-        await expect(page.locator('[data-folder="memory"]')).toHaveCount(0);
-        await expect(page.locator(".workspace-folder[open]:visible")).toHaveCount(1);
+        await expect(files).toHaveAttribute("open", "");
+        await expect(memory).toHaveAttribute("open", "");
         await expect(page.locator(".workspace-folder .workspace-fold[open]")).toHaveCount(0);
-        for (const [index, name] of ["文件"].entries()) {
-          const heading = folders.nth(index).locator(":scope > summary");
+        for (const [folder, name] of [[files, "文件"], [memory, "记忆"]] as const) {
+          const heading = folder.locator(":scope > summary");
           await expect(heading).toHaveText(name);
           await expect(heading.locator("svg")).toHaveCount(1);
           await expect(heading).toHaveCSS("border-top-width", "1px");
           await expect(heading).toHaveCSS("background-color", "rgb(250, 251, 252)");
         }
         await expect(page.locator('[data-folder="tasks"] .workspace-fold')).toHaveCount(0);
-        await expect(page.locator('[data-folder="files"]')).toHaveAttribute("open", "");
       });
     await journey.step("空列表隐藏，上传仍可用", "没有文件或产物时不显示空入口，拖放文件保留白底与虚线框以及大小限制。", async () => {
       const files = page.locator('[data-folder="files"]');
@@ -98,9 +102,15 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         const run = await sendUserMessage(page, fixture!.session.id, "生成本地 Markdown 报告并注册为产物。");
         runId = run.id;
         const thinking = page.locator(".timeline-disclosure.thinking.running");
-        await expect(thinking).toContainText("先生成一个可核对的本地报告");
+        // The stub deliberately waits 7 s before it answers at all, so for most of the default
+        // 10 s this card legitimately shows its "waiting for the model" placeholder and only the
+        // last seconds are the assertion's own. Setting up the first turn against a stack that has
+        // just started costs more than that margin, and the failure then reads as missing thinking
+        // text rather than as the clock it actually is. The card keeps `running` through the tool's
+        // own sleep, so waiting longer still observes the state this step is about.
+        await expect(thinking).toContainText("先生成一个可核对的本地报告", { timeout: 30_000 });
         await expect(thinking).not.toHaveClass(/process-record/);
-        expect(await thinking.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(thinking).not.toHaveCSS("border-top-width", "0px");
         const identity = page.locator(".run-timeline > .run-identity");
         await expect(identity).toHaveCount(1);
         await expect(page.locator(".run-timeline .message-body")).toHaveCount(0);
@@ -119,7 +129,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(page.locator(".permission-card")).toHaveCount(0);
         const tool = page.locator(".timeline-disclosure.tool.running").first();
         await expect(tool).toBeVisible();
-        expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(tool).not.toHaveCSS("border-top-width", "0px");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const authorization = (await tool.locator(".tool-authorization").boundingBox())!;
         const status = (await tool.locator(".timeline-status").boundingBox())!;
@@ -132,7 +142,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
         await expect(tool).toHaveClass(/process-record/);
         await expect(tool).not.toHaveAttribute("open", "");
-        expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(tool).toHaveCSS("border-top-width", "0px");
         const timeline = tool.locator("xpath=..");
         await expect(timeline.locator(".message.assistant .avatar")).toHaveCount(1);
         await expect(timeline.locator(".message.assistant .message-role")).toHaveCount(1);
@@ -164,14 +174,14 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await page.keyboard.press("Enter");
         await expect(tool).not.toHaveAttribute("open", "");
         await tool.locator(":scope > summary").click();
-        expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(tool).not.toHaveCSS("border-top-width", "0px");
         const stdout = tool.locator(".tool-io-section").filter({ hasText: "stdout" });
         await stdout.locator(":scope > summary").click();
         await expect(stdout.locator("pre")).toContainText("CARD_OK");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const artifact = page.getByRole("region", { name: "本轮产物", exact: true });
         await expect(artifact).toBeVisible();
-        expect(await artifact.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(artifact).not.toHaveCSS("border-top-width", "0px");
         await artifact.getByRole("button", { name: /report.md/ }).click();
         await expect(page.getByRole("dialog")).toContainText("CARD_OK");
         await page.getByRole("dialog").getByRole("button", { name: /关闭|Close/ }).first().click();
@@ -181,7 +191,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
       await tool.locator(":scope > summary").click();
       await expect(tool).not.toHaveAttribute("open", "");
-      expect(await tool.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+      await expect(tool).toHaveCSS("border-top-width", "0px");
       await page.mouse.move(0, 0);
     });
     await journey.step("展开后在数量左侧显示多选图标", "收起只显示总数；展开后多选图标出现在数量左边，切换多选不收起面板。", async () => {
@@ -223,11 +233,11 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         const failed = page.locator(".timeline-disclosure.tool.failed");
         await expect(failed).toHaveClass(/process-record/);
         await expect(failed.locator(":scope > summary")).toContainText("失败");
-        expect(await failed.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(failed).toHaveCSS("border-top-width", "0px");
         await expect(failed.locator(":scope > summary svg:visible")).toHaveCount(0);
         expect(await failed.locator(":scope > summary").evaluate((el) => getComputedStyle(el, "::after").width)).toBe("6px");
         await failed.locator(":scope > summary").click();
-        expect(await failed.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+        await expect(failed).not.toHaveCSS("border-top-width", "0px");
         const error = failed.locator(".tool-io-section").filter({ hasText: "CARD_ERROR" }).last();
         await error.locator(":scope > summary").click();
         await expect(error.locator("pre")).toContainText("CARD_ERROR");
@@ -291,7 +301,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
  *   2. Start Skill summarization from the UI and check live then completed presentation.
  *   3. Ask skill-creator to create a real draft and open/close its review UI without processing.
  *   4. Discard that exact draft through the public API and verify the browser and reload show a processed record.
- * Environment: Fresh isolated local API/Runner with only the built-in Skill library initially.
+ * Environment: Fresh isolated local API/Runner with only the built-in Skill library initially; a stack that already
+ * holds a writable library is reported as BLOCKED, since libraries cannot be deleted through the API.
  * Type: mocked
  * LLM: journey-owned local scripted model; no external requests.
  * WebSearch: none
@@ -306,13 +317,21 @@ test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "zh-CN"));
   journey.scenario({ goal: "确认源对话完成和打开审核窗口都不会提前压缩尚未处理的 Skill 入口。",
-    preconditions: ["隔离本地 API", "测试自己创建项目、模型和草稿"] });
+    preconditions: [
+      "隔离本地 API",
+      "实例内只有内置 Skill 库：可写库无法经 API 删除，已存在可写库时本旅程记为前置未满足",
+      "测试自己创建项目、模型和草稿",
+    ] });
   const skillName = `card-lifecycle-check-${Date.now()}`;
   const stub = await scriptedModel([
     [{ text: "普通分析已完成。" }],
     [{ delayMs: 6500, text: "这次分析没有足够可复用知识，不创建提案。" }],
     [
-      { tool: "read_skill", arguments: { skillId: "skill-creator" } },
+      // create_skill refuses until skill-creator has been loaded. The journeys run on JiuwenSwarm's own tools
+      // (.ci/run-e2e.sh), so the skills are installed in JiuwenSwarm and loaded with its skill_tool:
+      // ScienceDiscovery's skill-creator under this name (JiuwenSwarm has a skill-creator of its own), which
+      // the agent replays through read_skill for this very guard.
+      { tool: "skill_tool", arguments: { skill_name: "sciencediscovery-skill-creator" } },
       { tool: "create_skill", arguments: { name: skillName, description: "Validate a small local table.",
         instructions: "# Table validation\n\nRead the input table and report its row count without changing its values." } },
       { text: "草稿已生成，等待用户审核。" },
@@ -328,8 +347,18 @@ test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, 
   try {
     await journey.step("未配置可写库时完成普通源任务", "没有可写 Skill 库时不显示总结入口，也不出现不可点击的创建提案按钮。",
       async () => {
+        // This step's subject is what a user sees *before* any writable library
+        // exists, and a Skill library cannot be deleted through the API. The
+        // E2E layer starts its own stack on a run-scoped data directory, so a
+        // writable library found here is that isolation having broken, not a
+        // precondition the run may decline: the message names the one action
+        // that fixes it, and the journey fails rather than reporting a skip
+        // the shared plan would have to count as unexecuted.
         const libraries = await api("/api/skill-libraries") as Array<{ id: string }>;
-        expect(libraries.every((library) => library.id === "built-in-skills"), "Run this journey with fresh isolated Skill library data").toBe(true);
+        const writable = libraries.filter((library) => library.id !== "built-in-skills").map((library) => library.id);
+        expect(writable, `this stack already holds writable Skill librar${writable.length > 1 ? "ies" : "y"} `
+          + `${writable.join(", ")}, so the "no writable library" state cannot be reproduced. Skill libraries have no delete API; `
+          + "reset the E2E layer's data directory (keep data/envs) and rerun.").toEqual([]);
         fixture = await createProjectAndSession(page, { approvalMode: "always_allow", model: { ...stub, name: "Skill lifecycle local stub" },
           projectName: `Skill 生命周期 ${Date.now()}`, sessionTitle: "Skill 入口验证" });
         await openProjectSession(page, fixture);
@@ -356,7 +385,7 @@ test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, 
         const record = page.locator("details.process-record").filter({ has: page.locator(".skill-evolution-card") });
         await expect(record).toBeVisible({ timeout: 30_000 });
         await expect(record.locator(":scope > summary")).toContainText("已完成");
-        expect(await record.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        await expect(record).toHaveCSS("border-top-width", "0px");
       });
     await journey.step("创建真实待审草稿并打开再关闭审核", "草稿仍待审，关闭审核界面不会变成已处理记录。",
       async () => {
@@ -391,4 +420,6 @@ test("Skill 入口按自己的任务与草稿状态去框", { tag: "@mocked" }, 
     if (fixture) await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

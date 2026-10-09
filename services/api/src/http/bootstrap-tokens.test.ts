@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 
 import {
   accessTokenBanner,
@@ -157,6 +160,22 @@ test("startup output offers sign-in links for generated and operator-supplied to
   assert.equal(shown.includes(bootstrapTokenPath(dataDir, AUTH_TOKEN_FILE)), true);
   assert.equal(explicit.includes("#token=operator-token"), true);
   assert.match(explicit, /SCIENCE_AGENT_AUTH_TOKEN/);
+});
+
+test("the memory graph counts as available unless the deployment says it runs no sidecar", async (context) => {
+  const dataDir = await temporaryDataDir(context, "memory-graph-available");
+  assert.equal(loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir }).memoryGraph.available, true);
+  assert.equal(loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir, SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE: "0" }).memoryGraph.available, false);
+  assert.equal(loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir, SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE: "1" }).memoryGraph.available, true);
+});
+
+test("behind the JiuwenSwarm adapter the sign-in link names the public port, not the API's own", async (context) => {
+  const dataDir = await temporaryDataDir(context, "bootstrap-public-port");
+  const config = loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir, SCIENCE_AGENT_PORT: "4410", SCIENCE_AGENT_PUBLIC_PORT: "4310" });
+  assert.equal(config.port, 4410);
+  assert.equal(config.publicPort, 4310);
+  assert.equal(loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir }).publicPort, undefined);
+  assert.throws(() => loadServerConfig({ SCIENCE_AGENT_DATA_DIR: dataDir, SCIENCE_AGENT_PUBLIC_PORT: "http" }), /SCIENCE_AGENT_PUBLIC_PORT/);
 });
 
 for (const [host, expectedHost] of [["0.0.0.0", "127.0.0.1"], ["::", "127.0.0.1"], ["::1", "[::1]"]]) {

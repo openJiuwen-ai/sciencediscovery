@@ -1,0 +1,408 @@
+{
+ "domain": "Sessions, projects, permissions and model reads",
+ "cases": [
+  {
+   "id": "projects-and-sessions-lifecycle",
+   "description": "A project with its first session, a second session, settings, archive/restore and deletion. Everything created here is deleted at the end.",
+   "steps": [
+    {
+     "name": "create project",
+     "request": {
+      "method": "POST",
+      "path": "/api/projects",
+      "body": {
+       "name": "L1 contract project"
+      }
+     },
+     "covers": [
+      "POST /api/projects"
+     ],
+     "capture": {
+      "projectId": "$.id",
+      "sessionId": "$.firstSession.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "list projects",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects"
+     },
+     "covers": [
+      "GET /api/projects"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "rename project",
+     "request": {
+      "method": "PATCH",
+      "path": "/api/projects/{{projectId}}",
+      "body": {
+       "name": "L1 contract project renamed"
+      }
+     },
+     "covers": [
+      "PATCH /api/projects/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "project deletion impact",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects/{{projectId}}/deletion-impact"
+     },
+     "covers": [
+      "GET /api/projects/:id/deletion-impact"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "list the project's sessions",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects/{{projectId}}/sessions"
+     },
+     "covers": [
+      "GET /api/projects/:id/sessions"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "create a second session",
+     "request": {
+      "method": "POST",
+      "path": "/api/projects/{{projectId}}/sessions",
+      "body": {
+       "title": "L1 second session"
+      }
+     },
+     "covers": [
+      "POST /api/projects/:id/sessions"
+     ],
+     "capture": {
+      "secondSessionId": "$.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "get session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}"
+     },
+     "covers": [
+      "GET /api/sessions/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "rename session",
+     "request": {
+      "method": "PATCH",
+      "path": "/api/sessions/{{sessionId}}",
+      "body": {
+       "title": "L1 renamed session"
+      }
+     },
+     "covers": [
+      "PATCH /api/sessions/:id"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "session settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/settings"
+     },
+     "covers": [
+      "GET /api/sessions/:id/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "override a session setting",
+     "request": {
+      "method": "PUT",
+      "path": "/api/sessions/{{sessionId}}/settings",
+      "body": {
+       "semanticReviewEnabled": false
+      }
+     },
+     "covers": [
+      "PUT /api/sessions/:id/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "reviewer settings",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/reviewer-specialist/settings"
+     },
+     "covers": [
+      "GET /api/sessions/:id/reviewer-specialist/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "change reviewer settings",
+     "request": {
+      "method": "PUT",
+      "path": "/api/sessions/{{sessionId}}/reviewer-specialist/settings",
+      "body": {
+       "automaticReviewEnabled": false,
+       "level": "quick"
+      }
+     },
+     "covers": [
+      "PUT /api/sessions/:id/reviewer-specialist/settings"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "reviewer settings reject a non-boolean",
+     "request": {
+      "method": "PUT",
+      "path": "/api/sessions/{{sessionId}}/reviewer-specialist/settings",
+      "body": {
+       "enabled": true
+      }
+     },
+     "expectStatus": 400
+    },
+    {
+     "name": "session deletion impact",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/deletion-impact"
+     },
+     "covers": [
+      "GET /api/sessions/:id/deletion-impact"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "subagents",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/subagents"
+     },
+     "covers": [
+      "GET /api/sessions/:id/subagents"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "agent activity",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/agent-activity"
+     },
+     "covers": [
+      "GET /api/sessions/:id/agent-activity"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "permission epoch",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/permission-epoch"
+     },
+     "covers": [
+      "GET /api/sessions/:id/permission-epoch"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "rotate the permission epoch",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/permission-epoch",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/sessions/:id/permission-epoch"
+     ],
+     "expectStatus": 201
+    },
+    {
+     "name": "permission authorizations",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/permission-authorizations"
+     },
+     "covers": [
+      "GET /api/sessions/:id/permission-authorizations"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "pending permission requests",
+     "request": {
+      "method": "GET",
+      "path": "/api/permission-requests"
+     },
+     "covers": [
+      "GET /api/permission-requests"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "permission grants",
+     "request": {
+      "method": "GET",
+      "path": "/api/permission-grants"
+     },
+     "covers": [
+      "GET /api/permission-grants"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "archive",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/archive"
+     },
+     "covers": [
+      "POST /api/sessions/:id/archive"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "restore",
+     "request": {
+      "method": "POST",
+      "path": "/api/sessions/{{sessionId}}/restore"
+     },
+     "covers": [
+      "POST /api/sessions/:id/restore"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "deleting without the right confirmation is refused",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/sessions/{{secondSessionId}}",
+      "body": {}
+     },
+     "expectStatus": 400
+    },
+    {
+     "name": "delete the second session",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/sessions/{{secondSessionId}}",
+      "body": {
+       "confirmationId": "{{secondSessionId}}"
+      }
+     },
+     "covers": [
+      "DELETE /api/sessions/:id"
+     ],
+     "expectStatus": 200,
+     "always": true
+    },
+    {
+     "name": "delete the project",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/projects/{{projectId}}",
+      "body": {
+       "confirmationId": "{{projectId}}"
+      }
+     },
+     "covers": [
+      "DELETE /api/projects/:id"
+     ],
+     "expectStatus": 200,
+     "always": true
+    },
+    {
+     "name": "the project is gone",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects/{{projectId}}/sessions"
+     },
+     "expectStatus": 404,
+     "always": true
+    }
+   ]
+  },
+  {
+   "id": "unknown-ids",
+   "description": "What a client sees for ids that do not exist.",
+   "steps": [
+    {
+     "name": "unknown session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/00000000-0000-4000-8000-000000000000"
+     },
+     "expectStatus": 404
+    },
+    {
+     "name": "unknown project's sessions",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects/00000000-0000-4000-8000-000000000000/sessions"
+     },
+     "expectStatus": 404
+    },
+    {
+     "name": "unknown route",
+     "request": {
+      "method": "GET",
+      "path": "/api/no-such-route"
+     },
+     "expectStatus": 404
+    }
+   ]
+  },
+  {
+   "id": "models-and-providers-reads",
+   "description": "Read-only model and provider listings; the catalog is the bundled fixture.",
+   "steps": [
+    {
+     "name": "models",
+     "request": {
+      "method": "GET",
+      "path": "/api/models"
+     },
+     "covers": [
+      "GET /api/models"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "providers and presets",
+     "request": {
+      "method": "GET",
+      "path": "/api/providers"
+     },
+     "covers": [
+      "GET /api/providers"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "model catalog",
+     "request": {
+      "method": "GET",
+      "path": "/api/model-catalog"
+     },
+     "covers": [
+      "GET /api/model-catalog"
+     ],
+     "expectStatus": 200
+    }
+   ]
+  }
+ ]
+}

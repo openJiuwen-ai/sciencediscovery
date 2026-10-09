@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { test } from "node:test";
+
 import { DatabaseSync } from "node:sqlite";
 import { VersionStore, RefStore, workspaceHeadName, withWorkspaceMutation } from "@sciencediscovery/cas";
 
@@ -1910,16 +1912,41 @@ test("SessionStore seeds, validates, and persists product timeout settings", asy
   assert.deepEqual(reopened.getQuotaSettings(), quotas);
 });
 
+test("a new data directory starts with the memory graph on, or off where no sidecar runs; an existing choice stays", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-memory-graph-seed-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const local = new SessionStore(resolve(tempRoot, "local"));
+  await local.load();
+  assert.equal(local.getMemoryGraphSettings().enabled, true);
+
+  const docker = new SessionStore(resolve(tempRoot, "docker"), undefined, undefined, undefined, false);
+  await docker.load();
+  assert.equal(docker.getMemoryGraphSettings().enabled, false);
+  // Switched on by the user, it stays on across restarts even where no sidecar runs.
+  await docker.updateMemoryGraphSettings({ enabled: true });
+  const reopened = new SessionStore(resolve(tempRoot, "docker"), undefined, undefined, undefined, false);
+  await reopened.load();
+  assert.equal(reopened.getMemoryGraphSettings().enabled, true);
+
+  // A directory that already chose off keeps it under the new default.
+  await local.updateMemoryGraphSettings({ enabled: false });
+  const localAgain = new SessionStore(resolve(tempRoot, "local"));
+  await localAgain.load();
+  assert.equal(localAgain.getMemoryGraphSettings().enabled, false);
+});
+
 test("SessionStore seeds, validates, and persists memory-graph settings + password", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-memory-graph-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => rm(tempRoot, { force: true, recursive: true }));
 
-  // Default state: disabled, no password, defaults for Bolt/User.
+  // Default state: enabled on the local backend, no password, defaults for Bolt/User.
   const store = new SessionStore(tempRoot);
   await store.load();
   assert.deepEqual(store.getMemoryGraphSettings(), {
-    enabled: false,
+    enabled: true,
     backend: "local",
     neo4jHttp: "http://127.0.0.1:7474",
     neo4jUser: "neo4j",
@@ -1937,6 +1964,7 @@ test("SessionStore seeds, validates, and persists memory-graph settings + passwo
   );
 
   // 2B: saving the password alone does NOT flip enabled.
+  assert.equal((await store.updateMemoryGraphSettings({ enabled: false })).enabled, false);
   const initialPassword = `pw-${randomUUID()}`;
   await store.updateMemoryGraphSettings({ neo4jPassword: initialPassword });
   assert.equal(store.getMemoryGraphSettings().enabled, false);
@@ -2837,6 +2865,7 @@ test("SessionStore recovers flushed running subagents as failed after restart", 
   const [recovered] = reopened.listSubagents(session.id);
   assert.equal(recovered?.status, "failed");
   assert.match(recovered?.error ?? "", /interrupted by API restart/i);
+  assert.equal(recovered?.interruptedByRestart, true, "the task was cut off, so this status is a placeholder");
   assert.ok(recovered?.finishedAt);
   assert.equal(recovered?.turnCount, 2);
   assert.ok(recovered?.steps.some((step) => step.content.includes("Partial analysis survived")));
@@ -2845,6 +2874,11 @@ test("SessionStore recovers flushed running subagents as failed after restart", 
     subagents: Array<{ status: string }>;
   };
   assert.equal(persisted.subagents[0]?.status, "failed");
+
+  // The next restart must still see a placeholder rather than a reported failure.
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.equal(reloaded.listSubagents(session.id)[0]?.interruptedByRestart, true);
 });
 
 test("SessionStore gates privileged actions with Session-scoped matching grants and per-action authorizations", async (context) => {
@@ -4374,4 +4408,32 @@ test("Runner selections treat local and remote alike and preserve legacy default
   assert.deepEqual(reloaded.effectiveRunnerIds(session.id), ["local"], "legacy empty array still means local only");
   await assert.rejects(reloaded.updateSession(session.id, { runnerIds: [" "] }), /must not be empty/);
   await assert.rejects(reloaded.registerRemoteHost({ id: "local", alias: "reserved" }), /reserved/);
+});
+
+test("with every skill everywhere (the JiuwenSwarm backend) a Session's skill selection does not narrow its skills", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `every-skill-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  store.setAvailableSkillIds(["evolve-design", "code-engineer"]);
+  const project = await store.createProject("Skills");
+  const session = await store.createSession(project.id, "Skills", {}, {}, { allowUnconfiguredModel: true });
+  await store.replaceSessionSettings(session.id, { enabledSkillIds: ["code-engineer"], skillSelectionMode: "selected" });
+  assert.deepEqual(store.getSessionSettings(session.id).effective.enabledSkillIds, ["code-engineer"]);
+  store.useEverySkillEverywhere();
+  const effective = store.getSessionSettings(session.id).effective;
+  assert.equal(effective.skillSelectionMode, "all");
+  assert.deepEqual([...effective.enabledSkillIds].sort(), ["code-engineer", "evolve-design"]);
+});
+
+test("an action JiuwenSwarm's permission engine let through is allowed and recorded as its decision", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `jw-authorize-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Approvals");
+  const session = await store.createSession(project.id, "Approvals", {}, {}, { allowUnconfiguredModel: true });
+  const { allowed, authorization } = await store.authorizeByJiuwenSwarm(session.id, "code", "run_shell: ls", { toolCallId: "c1" });
+  assert.equal(allowed, true);
+  assert.equal(authorization.source, "jiuwenswarm");
+  assert.equal(authorization.outcome, "allowed");
+  assert.equal(store.getPermissionAuthorization(authorization.id)?.toolCallId, "c1");
 });

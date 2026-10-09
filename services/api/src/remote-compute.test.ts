@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test, describe } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import { resolve } from "node:path";
-import { test } from "node:test";
+
 
 import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 
@@ -586,11 +588,12 @@ function sshHostWithoutRunner(nodeVersion: string | null): RemoteHostTarget {
   };
 }
 
-test("SEA deploys without remote Node, reuses complete binaries and never starts an interrupted upload", async (context) => {
-  const runner = await startFakeRunner({ platform: "linux", token: "ignored", version: "runner-v1" });
-  context.after(() => runner.close());
-  for (const mode of ["install", "reuse", "interrupted", "checksum failure"] as const) {
-    await context.test(mode, async (t) => {
+describe("SEA deploys without remote Node, reuses complete binaries and never starts an interrupted upload", () => {
+for (const mode of ["install", "reuse", "interrupted", "checksum failure"] as const)  {
+ test(mode, async (t) => {
+const runner = await startFakeRunner({ platform: "linux", token: "ignored", version: "runner-v1" });
+t.after(() => runner.close());
+
       const transport = new FakeTransport([{ exitCode: 0, stderr: "", stdout: "architecture=x86_64\ndata_dir=/fixture/remote\n" }]);
       const started: string[] = [];
       const session = tunnelledSession(runner.port, [], started);
@@ -614,8 +617,9 @@ test("SEA deploys without remote Node, reuses complete binaries and never starts
         assert.doesNotMatch(started[0]!, /\bnode\b|server\.js/);
       } else { assert.equal(status.state, "error"); assert.equal(started.length, 0); }
       if (mode === "interrupted") assert.equal(commands.some(command => command.includes("mv -f")), false);
-    });
-  }
+    
+ });
+ }
 });
 
 

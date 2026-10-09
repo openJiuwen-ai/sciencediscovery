@@ -1,6 +1,8 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 from sciencediscovery_evolve.vendor.idea_tree.idea_tree import IdeaTreeError
 from sciencediscovery_evolve.vendor.idea_tree.idea_tree_service import IdeaTreeStore
 from sciencediscovery_evolve.tree import Tree
@@ -112,7 +114,7 @@ def test_settings_and_propagation_digest(api):
     assert api("resumeSettings", dict(workflowSkillId="idea-tree-team")) == settings
 
 
-@pytest.mark.parametrize("budgets", [dict(maxDepth=1, maxNodes=3, maxSearchRounds=1), dict(maxNodes=4)])
+@pytest.mark.parametrize("budgets", [{"maxDepth": 1, "maxNodes": 3, "maxSearchRounds": 1}, {"maxNodes": 4}])
 def test_explicit_budgets_override_settings_and_persist(api, budgets):
     defaults = dict(maxDepth=2, maxNodes=8, maxSearchRounds=2, designSystemPrompt="Keep this prompt")
     tree = api("create", dict(executor=EXECUTOR, idempotencyKey="budget", objective="test", rootHypothesis="root", **budgets), settings=defaults)

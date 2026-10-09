@@ -1,7 +1,9 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { AgentActivityPanel } from "../src/AgentActivityPanel.js";
@@ -49,6 +51,19 @@ test("pointing the panel at a record opens its fold and the record itself", asyn
     const opened = records().filter((record) => record.props.open);
     assert.equal(opened.length, 1);
     assert.ok(opened[0]!.findAllByType("code").some((code) => code.children.join("") === "job"), "the requested record is the one opened");
+  } finally { await act(async () => view!.unmount()); }
+});
+
+test("subagent Resume explains that a stopped Session also reopens for other agents", async () => {
+  const client = { getAgentActivity: async () => ({ executions: [], transfers: [], timers: [],
+    agents: [{ agentId: "subagent:a", stopped: true }] }) } as unknown as ApiClient;
+  let view: ReactTestRenderer;
+  await act(async () => { view = create(createElement(AgentActivityPanel, { client, sessionId: "session" })); });
+  try {
+    const text = JSON.stringify(view!.toJSON());
+    assert.match(text, /If this Session was stopped/);
+    assert.match(text, /Main and other subagents/);
+    assert.match(text, /Resume subagent:a/);
   } finally { await act(async () => view!.unmount()); }
 });
 

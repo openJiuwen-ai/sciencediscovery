@@ -18,11 +18,11 @@
  * counting handled by the caller).
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import test from "node:test";
-
 import { LIVING_REVIEW_MIN_DAYS, monitorConvergence } from "@sciencediscovery/knowledge-engine";
 
 import { KnowledgeEngineStore } from "./store.js";

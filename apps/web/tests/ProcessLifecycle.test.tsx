@@ -13,12 +13,14 @@
 // limitations under the License.
 
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
-import { createElement } from "react";
+
+import { createElement, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create } from "react-test-renderer";
-import type { ToolTrace } from "@sciencediscovery/schema";
+import type { Subagent, ToolTrace } from "@sciencediscovery/schema";
 import { ProcessRecord, WorkspaceFolder } from "../src/ProcessRecord.js";
 import { isMemoryGraphVisible, MemoryGraphView } from "../src/MemoryGraphView.js";
 import { AgentActivityPanel } from "../src/AgentActivityPanel.js";
@@ -26,6 +28,54 @@ import { ApiClient } from "../src/api.js";
 import type { AgentActivity } from "../src/api/runs.js";
 import { SkillReviewRecords, skillDraftFromOutput } from "../src/SkillReviewRecords.js";
 import { reduceRunTimeline, RunTimeline, setTimelineEntryExpanded, type RunTimelineEntry } from "../src/timeline/RunTimeline.js";
+
+test("subagent disclosure survives live-to-history remount before native toggle fires", async () => {
+  const child = { id: "child", status: "completed", input: { description: "Recovered child" },
+    steps: [], turnCount: 2, maxTurns: 6 } as unknown as Subagent;
+  function Conversation({ history }: { history: boolean }) {
+    const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
+    return createElement(RunTimeline, {
+      key: history ? "history" : "live", isRunning: false, onToggle: () => undefined,
+      entries: [{ id: "subagents-child", type: "subagents", subagents: [child] }],
+      subagentDisclosure: { expandedCards, onToggleCard: (id, expanded) =>
+        setExpandedCards(current => ({ ...current, [id]: expanded })) },
+    });
+  }
+  let view: ReturnType<typeof create>;
+  await act(async () => { view = create(createElement(Conversation, { history: false })); });
+  try {
+    assert.equal(view!.root.findByType("details").props.open, false);
+    await act(async () => { view!.root.findByType("summary").props.onClick({ preventDefault() {} }); });
+    // No onToggle event is delivered from the old DOM node before remount.
+    await act(async () => { view!.update(createElement(Conversation, { history: true })); });
+    assert.equal(view!.root.findByType("details").props.open, true);
+    await act(async () => { view!.root.findByType("summary").props.onClick({ preventDefault() {} }); });
+    assert.equal(view!.root.findByType("details").props.open, false);
+  } finally { await act(async () => view!.unmount()); }
+});
+
+test("tool and thinking clicks persist before asynchronous native toggle or remount", async () => {
+  for (const entry of [
+    { type: "tool", id: "tool-one", expanded: false, trace: { id: "one", name: "run_shell", status: "completed" } },
+    { type: "thinking", id: "thinking-1", expanded: false, status: "completed", content: "reasoning", turn: 1 },
+  ] as RunTimelineEntry[]) {
+    function Conversation({ history }: { history: boolean }) {
+      const [entries, setEntries] = useState([entry]);
+      return createElement(RunTimeline, { key: history ? "history" : "live", isRunning: false, entries,
+        onToggle: (id, expanded) => setEntries(current => setTimelineEntryExpanded(current, id, expanded)) });
+    }
+    let view: ReturnType<typeof create>;
+    await act(async () => { view = create(createElement(Conversation, { history: false })); });
+    try {
+      await act(async () => { view!.root.findAllByType("summary")[0]!.props.onClick({ preventDefault() {} }); });
+      // No native toggle event is dispatched before the old DOM disappears.
+      await act(async () => { view!.update(createElement(Conversation, { history: true })); });
+      assert.equal(view!.root.findAllByType("details")[0]!.props.open, true);
+      await act(async () => { view!.root.findAllByType("summary")[0]!.props.onClick({ preventDefault() {} }); });
+      assert.equal(view!.root.findAllByType("details")[0]!.props.open, false);
+    } finally { await act(async () => view!.unmount()); }
+  }
+});
 
 test("only terminal processes use borderless disclosures; top-level folders default open", () => {
   const child = createElement("article", { className: "original-card" }, "output");

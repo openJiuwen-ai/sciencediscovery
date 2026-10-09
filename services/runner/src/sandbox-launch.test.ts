@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { after, before, describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath as realpathFs, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+
 
 import { resetSandboxCapabilityCache, type SandboxProcMode } from "@sciencediscovery/sandbox-capability";
 
@@ -25,6 +27,7 @@ import {
   hostInterpreterMaskArguments,
   resolveHostRuntimeSupport,
   sandboxIdentityBindArguments,
+  sandboxIdentityName,
   sandboxLaunchProfile,
   type HostRuntimeSupport,
 } from "./executor.js";
@@ -147,7 +150,7 @@ describe("host CA trust inside the sandbox", () => {
     const binds = readOnlyBinds(support.bindArgs);
     const trustStores = binds.filter(({ source }) => source.startsWith("/etc/ssl/") || source.startsWith("/etc/pki/"));
     if (trustStores.length === 0) {
-      t.skip("this host has no system CA trust store to bind");
+      assert.fail("this host has no system CA trust store to bind");
       return;
     }
     // Every bundle the environment advertises must be reachable in the sandbox,
@@ -167,9 +170,17 @@ describe("host CA trust inside the sandbox", () => {
 });
 
 describe("sandbox process identity", () => {
+  test("uses a stable synthetic name when the container uid has no passwd entry", () => {
+    assert.equal(sandboxIdentityName(() => {
+      throw Object.assign(new Error("uv_os_get_passwd returned ENOENT"), { code: "ENOENT" });
+    }), "sciencediscovery");
+    assert.equal(sandboxIdentityName(() => ({ username: "host-user" })), "host-user");
+    assert.equal(sandboxIdentityName(() => ({ username: "unsafe:name" })), "sciencediscovery");
+  });
+
   test("stages only the current uid and gid for CANN GE/TBE lookups", async (t) => {
     if (typeof process.getuid !== "function" || typeof process.getgid !== "function") {
-      t.skip("POSIX identity files are only used by the Linux bubblewrap runner");
+      assert.fail("POSIX identity files are only used by the Linux bubblewrap runner");
       return;
     }
     const dataDir = await mkdtemp(join(tmpdir(), "sandbox-identity-"));

@@ -8,8 +8,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test, { type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 import { createElement, type ComponentProps } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { CustomMcpServerDetails, CustomMcpServerInput } from "@sciencediscovery/schema";

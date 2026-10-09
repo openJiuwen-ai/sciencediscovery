@@ -1,6 +1,8 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -8,7 +10,7 @@ import { once } from "node:events";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
-import test from "node:test";
+
 import { gunzipSync } from "node:zlib";
 import { runnerAsset } from "./build-runner.mjs";
 import { packRunnerBundle } from "../../packages/executor/dist/runner-bundle.js";
@@ -25,7 +27,7 @@ test("SEA asset preserves the ESM tree and excludes embedded binaries and tests"
 });
 
 test("standalone Runner SEA starts and authenticates with no Node in PATH", {
-  skip: process.env.RUNNER_SEA_SMOKE !== "1", timeout: 30_000,
+  tags: ["status:external"], timeout: 30_000,
 }, async () => {
   const root = resolve(".tmp/runner-sea-smoke");
   await mkdir(root, { recursive: true });

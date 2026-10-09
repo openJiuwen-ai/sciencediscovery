@@ -1,5 +1,7 @@
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 import { DEFAULT_IDEA_TREE_SETTINGS } from "@sciencediscovery/schema";
 import { ideaTreeLeadInstructions, ideaTreeRoleInstructions } from "./prompts.js";
 

@@ -154,6 +154,24 @@ function contractStopReason(stopReason: SubagentStopReason): SubagentContractSto
     : undefined;
 }
 
+/**
+ * Return the complete final assistant message from a subagent. Streaming
+ * runtimes may persist one logical answer as several adjacent assistant
+ * steps; taking only the last step silently drops the beginning of the answer.
+ */
+export function subagentFinalText(subagent: Pick<Subagent, "steps">): string | undefined {
+  const last = subagent.steps.findLastIndex((step) => step.kind === "assistant" && step.content.trim());
+  if (last < 0) return undefined;
+  let first = last;
+  while (first > 0 && subagent.steps[first - 1]?.kind === "assistant") first -= 1;
+  const text = subagent.steps.slice(first, last + 1)
+    .filter((step) => step.kind === "assistant")
+    .map((step) => step.content)
+    .join("")
+    .trim();
+  return text || undefined;
+}
+
 function summarizeSubagentResult(subagent: Subagent): {
   brief?: string;
   error?: string;
@@ -178,9 +196,7 @@ function summarizeSubagentResult(subagent: Subagent): {
   turnCount: number;
   usage?: Subagent["usage"];
 } {
-  const fullFinalText = subagent.steps
-    .findLast((step) => step.kind === "assistant" && step.content.trim())
-    ?.content.trim();
+  const fullFinalText = subagentFinalText(subagent);
   const finalText = fullFinalText?.slice(0, SUBAGENT_RESULT_TEXT_LIMIT);
   const stopReason = subagentStopReason(subagent);
   const subagentContractStopReason = contractStopReason(stopReason);
@@ -252,7 +268,9 @@ export interface WorkspaceToolOptions {
   createSkill?: (input: CreateSkillPackageRequest, signal?: AbortSignal) => Promise<SkillReviewDraftSummary>;
   /** Run-scoped capabilities supplied by the API composition layer. */
   extraTools?: AgentTool[];
+  materializeArtifact?: (input: { artifactId: string; version: number; path: string }, signal?: AbortSignal) => Promise<{ artifact_id: string; version: number; version_id: string; path: string; sha256: string; size: number }>;
   declareArtifact?: (input: {
+    artifactId?: string; baseVersionId?: string; toolCallId?: string;
     description?: string;
     name?: string;
     path: string;
@@ -332,11 +350,17 @@ export interface WorkspaceToolOptions {
     job: NpuJob,
     artifacts: Array<{ artifact_id: string; path: string; version: number }>,
   ) => void;
+  /** Exactly one of a completed download's artifactJobId or a workspace PDF path. */
   paperExtractPdf?: (input: {
-    artifactJobId: string;
+    artifactJobId?: string;
+    path?: string;
   }, signal?: AbortSignal) => Promise<unknown>;
   webFetch?: (toolCallId: string, url: string, signal?: AbortSignal) => Promise<unknown>;
   webSearch?: (toolCallId: string, query: string, signal?: AbortSignal) => Promise<unknown>;
+  /** Record a web search or page fetch that another runtime ran (JiuwenSwarm's own tools) as ours are recorded. */
+  recordWebResult?: (toolCallId: string, result:
+    | { kind: "search"; toolName: string; rows: Array<{ url: string; title?: string; snippet?: string }> }
+    | { kind: "fetch"; toolName: string; url: string; content: string }) => Promise<void>;
   approvalMode?: "always_allow" | "ask_for_dangerous";
   runSubagent?: (input: SubagentInput, signal?: AbortSignal) => Promise<Subagent>;
   /**
@@ -493,7 +517,10 @@ export interface WorkspaceToolOptions {
   toolPolicy?: ToolFilterPolicy;
 }
 
-function assertWorkspacePath(workspaceRoot: string, requestedPath: string): string {
+function assertWorkspacePath(workspaceRoot: string, path: string): string {
+  // An absolute path naming this workspace (JiuwenSwarm tells the model its host path) is taken as relative.
+  const named = isAbsolute(path) ? workspaceRelativeCwd(workspaceRoot, path) : path;
+  const requestedPath = named === "." ? path : named ?? path;
   if (!requestedPath.trim() || isAbsolute(requestedPath)) {
     throw new Error("Workspace paths must be non-empty and relative");
   }
@@ -504,6 +531,34 @@ function assertWorkspacePath(workspaceRoot: string, requestedPath: string): stri
     throw new Error(`Path escapes the workspace: ${requestedPath}`);
   }
   return candidate;
+}
+
+/**
+ * A Shell cwd as the Runner takes it: relative to the workspace. An absolute path that names the
+ * workspace itself (its host path, or the sandbox's `/workspace`) is made relative; the JiuwenSwarm
+ * backend tells the model the host path of its working directory, so the model passes it on. Any
+ * other absolute path is left as it is and refused by the Runner.
+ */
+export function workspaceRelativeCwd(workspaceRoot: string, cwd: string | undefined): string | undefined {
+  if (cwd === undefined || !isAbsolute(cwd)) return cwd;
+  const trimmed = cwd.replace(/\/+$/, "") || "/";
+  if (trimmed === "/workspace") return ".";
+  if (trimmed.startsWith("/workspace/")) return trimmed.slice("/workspace/".length);
+  const root = resolve(workspaceRoot);
+  const candidate = resolve(trimmed);
+  if (candidate === root) return ".";
+  return descendantPath(root, candidate) ?? cwd;
+}
+
+/**
+ * A command written with the Agent Workspace's host path, as the sandbox sees it: mounted at `/workspace`.
+ * JiuwenSwarm tells the model its project directory by that host path, which the sandbox does not have.
+ */
+export function sandboxWorkspacePaths(workspaceRoot: string, command: string): string {
+  const root = resolve(workspaceRoot);
+  if (root === "/" || !command.includes(root)) return command;
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return command.replace(new RegExp(`${escaped}(?=$|[/\\s'"\`;:|&()<>])`, "g"), "/workspace");
 }
 
 function descendantPath(parent: string, child: string): string | undefined {
@@ -894,8 +949,24 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     artifactTools.push(readArtifact);
   }
+  if (options.materializeArtifact) {
+    const parameters = Type.Object({
+      artifact_id: Type.String({ minLength: 1 }), version: Type.Integer({ minimum: 1 }),
+      path: Type.String({ minLength: 1, maxLength: 2_000 }),
+    });
+    const materialize: AgentTool<typeof parameters> = { name: "materialize_artifact", label: "Copy artifact to workspace", parameters,
+      description: "Copy an exact Artifact version into your current workspace as original bytes, including binary files. Use before editing or processing another agent's deliverable; do not reconstruct its text. No overwrite of different content. Edit or regenerate with suitable tools, then declare_artifact with artifact_id and the returned version_id as base_version_id. Returns metadata only.",
+      execute: async (_id, params, signal) => {
+        const details = await options.materializeArtifact!({ artifactId: params.artifact_id, version: params.version, path: params.path }, signal);
+        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      },
+    };
+    artifactTools.push(materialize);
+  }
   if (options.declareArtifact) {
     const parameters = Type.Object({
+      artifact_id: Type.Optional(Type.String({ minLength: 1 })),
+      base_version_id: Type.Optional(Type.String({ minLength: 1 })),
       description: Type.Optional(Type.String({ maxLength: 2_000 })),
       name: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
       path: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
@@ -905,8 +976,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       })),
     });
     const declareArtifact: AgentTool<typeof parameters> = {
-      description: "Declare existing files in your writable workspace as user-visible Project artifacts. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: when declaring a markdown/text artifact whose body carries [alias] citation tokens, call declare_artifact(output) AFTER all declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
+      description: "Declare existing files in your writable workspace as user-visible Project artifacts. To publish an edit of an existing Artifact, supply artifact_id and base_version_id together with one path (not paths/name). A stale base fails with ARTIFACT_VERSION_CONFLICT and preserves your local file. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: when declaring a markdown/text artifact whose body carries [alias] citation tokens, call declare_artifact(output) AFTER all declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
       execute: async (_toolCallId, params) => {
+        if (!!params.artifact_id !== !!params.base_version_id) throw new Error("artifact_id and base_version_id are required together");
+        if (params.artifact_id && (params.paths !== undefined || params.name !== undefined)) throw new Error("Artifact revision requires one path and cannot rename or batch");
         if (params.paths !== undefined) {
           if (params.paths.length === 0) throw new Error("paths must contain at least one path");
           if (params.paths.length > MAX_DECLARE_ARTIFACT_PATHS) {
@@ -941,6 +1014,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }
         if (!params.path) throw new Error("path or paths is required");
         const result = await options.declareArtifact!({
+          ...(params.artifact_id ? { artifactId: params.artifact_id, baseVersionId: params.base_version_id, toolCallId: _toolCallId } : {}),
           ...(params.description ? { description: params.description } : {}),
           ...(params.name ? { name: params.name } : {}),
           path: params.path,
@@ -2040,7 +2114,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const shellParameters = Type.Object({
       background: Type.Optional(Type.Boolean({ description: "Return after acceptance without waiting for completion." })),
       wait_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 30_000, description: "Foreground wait budget (default 10000 ms), not a process timeout." })),
-      arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32 })),
+      arguments: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 32, description: "Arguments passed to command or scriptPath, each quoted as one word." })),
       command: Type.Optional(Type.String({ maxLength: 20_000, minLength: 1 })),
       environment_id: Type.Optional(Type.String({ minLength: 1 })),
       cwd: Type.Optional(Type.String({ maxLength: 1_000 })),
@@ -2054,7 +2128,8 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
         }
-        let code = params.command?.trim() ?? "";
+        let code = sandboxWorkspacePaths(workspaceRoot,
+          [params.command?.trim() ?? "", ...(params.command ? params.arguments ?? [] : []).map(shellQuote)].join(" ").trim());
         if (params.scriptPath) {
           const script = await resolveSandboxScriptPath(
             workspaceRoot,
@@ -2067,9 +2142,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             : shellQuote(script.path);
           code = ["/usr/bin/bash", scriptWord, ...(params.arguments ?? []).map(shellQuote)].join(" ");
         }
+        const cwd = workspaceRelativeCwd(workspaceRoot, params.cwd);
         if (options.shellExecutions) {
           let execution = await options.shellExecutions.start(code, {
-            environmentId: params.environment_id, cwd: params.cwd,
+            environmentId: params.environment_id, cwd,
           }, signal, toolCallId, params.runner_id);
           if (!params.background) execution = await options.shellExecutions.wait(execution.id, params.wait_ms ?? 10_000, signal);
           const pending = execution.state === "queued" || execution.state === "running";
@@ -2084,7 +2160,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         }
         if (params.background || params.wait_ms !== undefined) throw new Error("Managed Shell Execution is unavailable on this runtime");
         const result = await options.executeShell!(code, "ephemeral", signal, toolCallId, params.runner_id, {
-          environmentId: params.environment_id, cwd: params.cwd,
+          environmentId: params.environment_id, cwd,
         });
         return {
           isError: result.exitCode !== 0,
@@ -2328,11 +2404,15 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   }
   if (options.paperExtractPdf) {
     const extractPdfParameters = Type.Object({
-      artifactJobId: Type.String({ minLength: 1 }),
+      artifactJobId: Type.Optional(Type.String({ minLength: 1, description: "A completed artifact_download job" })),
+      path: Type.Optional(Type.String({ minLength: 1, description: "A PDF already in the workspace, such as one the user uploaded" })),
     });
     const extractPdf: AgentTool<typeof extractPdfParameters> = {
-      description: "Extract text, tables, and page metadata from a completed PDF artifact download. Call this only after artifact_download has returned a completed artifactJobId.",
+      description: "Extract text, tables, and page metadata from a PDF. Pass artifactJobId for a paper fetched with artifact_download (only after it has returned a completed artifactJobId), or path for a PDF already in the workspace, such as one the user uploaded. Read the returned textPath instead of decoding the PDF yourself.",
       execute: async (_toolCallId, params, signal) => {
+        if (Boolean(params.artifactJobId) === Boolean(params.path)) {
+          throw new Error("paper_extract_pdf takes exactly one of artifactJobId or path");
+        }
         const result = await options.paperExtractPdf!(params, signal);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -2619,7 +2699,7 @@ export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | 
 }
 
 /** Default delegation preserves the established request/result and budget semantics. */
-export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy">): AgentTool[] {
+export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy" | "listArtifacts">): AgentTool[] {
   const tools: AgentTool[] = [];
   if (options.runSubagent) {
     const specialistSummary = summarizeSpecialistsForTaskTool(options.specialists);
@@ -2646,21 +2726,28 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
     const taskParameters = Type.Object({
       brief: Type.Optional(briefParameters),
       description: Type.String({ maxLength: 80, minLength: 1 }),
-      inputPaths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), { maxItems: 50 })),
+      inputPaths: Type.Optional(Type.Array(Type.String({
+        description: "Parent workspace file to deliver to the subagent. Include every file the prompt asks the subagent to read; relative paths and /workspace/... paths are accepted.",
+        maxLength: 2_000,
+        minLength: 1,
+      }), { maxItems: 50 })),
       max_turns: Type.Optional(Type.Integer({
         default: DEFAULT_SUBAGENT_MAX_TURNS,
-        description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
+        description: "Optional model-turn budget for this subagent. Set a smaller value for focused work or increase it for unusually deep delegated work.",
         maximum: MAX_SUBAGENT_MAX_TURNS,
-        minimum: DEFAULT_SUBAGENT_MAX_TURNS,
+        minimum: 1,
       })),
-      prompt: Type.String({ maxLength: 20_000, minLength: 1 }),
+      prompt: Type.String({
+        description: "Self-contained instructions. For long deliverables, request an Artifact plus a concise handoff with its ID/version and coverage, not a full copy of the file in the final reply.",
+        maxLength: 20_000, minLength: 1,
+      }),
       specialistId: Type.Optional(specialistIdSchema),
       subagent_type: Type.Optional(Type.String({ maxLength: 80, minLength: 1 })),
       timeout_seconds: Type.Optional(Type.Integer({
         default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-        description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
+        description: "Optional hard wall-clock runtime budget in seconds for this subagent, including model and tool waits.",
         maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
-        minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+        minimum: 1,
       })),
       tools: Type.Optional(Type.Union([
         Type.Null(),
@@ -2669,7 +2756,8 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
     });
     const task: AgentTool<typeof taskParameters> = {
       description: [
-        "Run one focused task in a subagent. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
+        "Run one focused task in a subagent. The subagent has an independent workspace: set inputPaths to every parent workspace file it must read, including files named in prompt. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
+        "Subagents have isolated workspaces: their file paths are NOT local files in your workspace. Ask them to declare deliverables with declare_artifact and return a concise handoff with the artifact ID/version, key findings and gaps. Do not also request the complete report or source package in the subagent's final reply unless the end user explicitly needs it inline; read the returned artifact with read_artifact using artifact_id and version, or use workspace_transfer when you need a local copy. An undeclared file mentioned in prose is not an artifact reference.",
         specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
       ].filter(Boolean).join(" "),
       execute: async (toolCallId, params, signal) => {
@@ -2684,7 +2772,11 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
           ...(params.timeout_seconds === undefined ? {} : { timeoutSeconds: params.timeout_seconds }),
           ...(params.tools === undefined ? {} : { tools: params.tools }),
         }, signal);
-        const summary = summarizeSubagentResult(subagent);
+        const artifacts = (await options.listArtifacts?.() ?? [])
+          .filter((artifact) => !artifact.deletedAt && artifact.originMeta?.subagentId === subagent.id)
+          .map((artifact) => ({ artifact_id: artifact.id, name: artifact.name, version: artifact.currentVersion }));
+        const summary = { ...summarizeSubagentResult(subagent), artifacts,
+          artifact_read_hint: "Use read_artifact with artifact_id and version. Child workspace paths are not parent-local paths." };
         return { content: [{ type: "text", text: JSON.stringify(summary) }], details: { subagent, summary } };
       },
       isConcurrencySafe: () => true,

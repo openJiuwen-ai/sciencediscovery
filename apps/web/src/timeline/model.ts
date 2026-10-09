@@ -233,6 +233,7 @@ export function hydrateTerminalRunTimelines(
   current: Readonly<Record<string, SessionRunTimeline>>,
   terminalRuns: SessionRun[],
   eventsByRun: Readonly<Record<string, SessionRunEvent[]>>,
+  liveTimeline?: SessionRunTimeline,
 ): Record<string, SessionRunTimeline> {
   const next: Record<string, SessionRunTimeline> = {};
   for (const run of terminalRuns) {
@@ -240,17 +241,21 @@ export function hydrateTerminalRunTimelines(
     if (!records?.length) continue; // recorded before event persistence existed
     const ordered = records.toSorted((left, right) => left.sequence - right.sequence);
     const lastSequence = ordered.at(-1)?.sequence ?? 0;
-    const existing = current[run.id];
+    // Carry explicit disclosure choices across the first live-to-history move.
+    const existing = current[run.id] ?? (liveTimeline?.runId === run.id ? liveTimeline : undefined);
     if (existing && existing.lastSequence >= lastSequence) {
       next[run.id] = existing;
       continue;
     }
-    next[run.id] = ordered.reduce<SessionRunTimeline>((timeline, record) => ({
+    const pending = existing
+      ? ordered.filter((record) => record.sequence > existing.lastSequence)
+      : ordered;
+    next[run.id] = pending.reduce<SessionRunTimeline>((timeline, record) => ({
       entries: reduceRunTimeline(timeline.entries, record.event),
       lastSequence: Math.max(timeline.lastSequence, record.sequence),
       ...timelineModelNameSnapshot(record.event, timeline.modelName),
       runId: run.id,
-    }), { entries: [], lastSequence: 0, runId: run.id });
+    }), existing ?? { entries: [], lastSequence: 0, runId: run.id });
   }
   return next;
 }

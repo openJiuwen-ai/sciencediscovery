@@ -47,6 +47,11 @@ export interface ServerConfig {
   paperPythonPath: string;
   paperWorkerPath: string;
   port: number;
+  /**
+   * The port users open when another process owns the public one (the JiuwenSwarm adapter sits in front of
+   * this API and moves it to port + 100). Only the sign-in link uses it; absent, it is `port`.
+   */
+  publicPort?: number;
   runnerToken: string;
   runnerUrl: string;
   sshConfigPath: string;
@@ -88,6 +93,10 @@ export interface ServerConfig {
     url: string;
     internalToken: string;
     neo4jPassword?: string;
+    /** False where this deployment runs no memory-graph sidecar (the Docker image): a new data directory then
+     *  starts with the graph off instead of on and degraded. Only seeds a new directory, like the defaults.
+     *  Absent means available. */
+    available?: boolean;
   };
   /** Evolve search sidecar (services/evolve, Python FastAPI, loopback). It
    *  holds no business state and never receives a model key, so there is
@@ -118,6 +127,11 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
     throw new Error("SCIENCE_AGENT_PORT must be an integer between 0 and 65535");
+  }
+  const rawPublicPort = env.SCIENCE_AGENT_PUBLIC_PORT?.trim();
+  const publicPort = rawPublicPort ? Number(rawPublicPort) : undefined;
+  if (publicPort !== undefined && (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65_535)) {
+    throw new Error("SCIENCE_AGENT_PUBLIC_PORT must be an integer between 1 and 65535");
   }
   const parseTimeoutMilliseconds = (name: string, fallback: number): number => {
     const raw = env[name]?.trim();
@@ -201,6 +215,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       : resolve(dataDir, "envs/paper/bin/python"),
     paperWorkerPath: resolve(repositoryRoot, env.SCIENCE_AGENT_PAPER_WORKER_PATH?.trim() || "services/paper/paper_worker.py"),
     port,
+    ...(publicPort !== undefined ? { publicPort } : {}),
     permissionWaitTimeoutMs,
     runnerExecTimeoutMs,
     runnerMaxOutputBytes,
@@ -233,6 +248,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       url: env.SCIENCE_AGENT_MEMORY_GRAPH_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:17674",
       internalToken: env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN?.trim() || "sciencediscovery-memory-graph-local",
       neo4jPassword: env.SCIENCE_AGENT_MEMORY_GRAPH_NEO4J_PASSWORD?.trim() || undefined,
+      available: env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE?.trim() !== "0",
     },
     evolve: {
       url: env.SCIENCE_AGENT_EVOLVE_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:4313",

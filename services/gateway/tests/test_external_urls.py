@@ -14,6 +14,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 import unittest
 
 from sciencediscovery_gateway.external_urls import external_url, external_url_list, format_external_url

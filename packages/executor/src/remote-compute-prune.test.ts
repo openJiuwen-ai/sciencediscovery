@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 
 import { parsePrunedBinaries, pruneRunnerBinariesScript } from "./remote-compute.js";
 
@@ -31,7 +34,7 @@ import { parsePrunedBinaries, pruneRunnerBinariesScript } from "./remote-compute
  */
 // /bin/sh is the one the product actually gets; the others are checked when the
 // machine has them, because a remote login shell is not always dash.
-const SHELLS = ["/bin/sh", "/bin/dash", "/bin/bash"].filter((shell) => existsSync(shell));
+const SHELLS = ["/bin/sh", "/bin/dash", "/bin/bash"];
 const name = (character: string) => character.repeat(64);
 const CURRENT = name("a");
 const BUSY = name("b");
@@ -102,7 +105,7 @@ test("pruning an empty directory removes nothing", async (context) => {
 });
 
 // root deletes from a read-only directory, so the situation cannot be staged.
-test("a file that cannot be removed is reported as kept, not as pruned", { skip: process.getuid?.() === 0 }, async (context) => {
+test("a file that cannot be removed is reported as kept, not as pruned", {}, async (context) => {
   const root = await mkdtemp(resolve(tmpdir(), "prune-runner-locked-"));
   context.after(async () => {
     await chmod(root, 0o700);

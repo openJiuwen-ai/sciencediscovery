@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import type { MemoryGraphEdgeType, MemoryGraphNodeLabel } from "@sciencediscovery/schema";
 import { createElement } from "react";
@@ -204,6 +206,36 @@ test("graphNodeName picks DbRecord source:identifier → identifier → title �
     graphNodeName({ label: "DbRecord", id: "d3", extra: { title: "BRCA1_HUMAN", url: "https://uniprot.org/P38398" } }),
     "BRCA1_HUMAN",
   );
+});
+
+test("a claim node is captioned by what it says, not by its id", () => {
+  const claim = { label: "Claim" as const, id: "7fa55a2e-0a75-45c5-a2ea-eba3ad383745", extra: {
+    claim_id: "7fa55a2e-0a75-45c5-a2ea-eba3ad383745", content: "biomass 随 day 线性增长，R²=0.96",
+  } };
+  assert.equal(graphNodeName(claim), "biomass 随 day 线性增长，R²=0.96");
+  assert.equal(graphNodeName({ ...claim, extra: { claim_id: "c-1" } }), "c-1");
+});
+
+test("tool calls and the code they ran are numbered separately", () => {
+  const nodes = [1, 2].flatMap((i) => [
+    { label: "ToolCall" as const, id: `t${i}`, extra: { tool_name: "run_shell" } },
+    { label: "Code" as const, id: `c${i}`, extra: { tool: "run_shell" } },
+  ]);
+  const display = graphNodeDisplayNames(nodes);
+  assert.deepEqual(["t1", "t2", "c1", "c2"].map((id) => display.get(id)),
+    ["run_shell #1", "run_shell #2", "run_shell #1", "run_shell #2"]);
+});
+
+test("repeated names are numbered in the order the work ran, not the order the graph lists them", () => {
+  const display = graphNodeDisplayNames([
+    { label: "ToolCall" as const, id: "t3", extra: { tool_name: "run_shell", seq: 3 } },
+    { label: "ToolCall" as const, id: "t1", extra: { tool_name: "run_shell", seq: 1 } },
+    { label: "ToolCall" as const, id: "t2", extra: { tool_name: "run_shell", seq: 2 } },
+    { label: "Code" as const, id: "c2", extra: { tool: "run_shell", started_at: "2026-09-23T08:35:44.080Z" } },
+    { label: "Code" as const, id: "c1", extra: { tool: "run_shell", started_at: "2026-09-23T08:35:28.822Z" } },
+  ]);
+  assert.deepEqual(["t1", "t2", "t3", "c1", "c2"].map((id) => display.get(id)),
+    ["run_shell #1", "run_shell #2", "run_shell #3", "run_shell #1", "run_shell #2"]);
 });
 
 test("graphNodeDisplayNames leaves unique names unchanged", () => {

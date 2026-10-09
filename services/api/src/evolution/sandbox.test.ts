@@ -22,19 +22,21 @@
  * against a different PATH.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { platform } from "node:process";
 import { resolve } from "node:path";
-import { test } from "node:test";
+
 
 import { probeEvolveSandbox, toSidecarCapability } from "./sandbox.js";
 
 test("the probe names the binary it probed, not a name to look up again", async (t) => {
   if (platform === "darwin") {
     // Seatbelt ships with the system; there is no binary to disambiguate.
-    return t.skip("bwrap resolution is a Linux concern");
+    return assert.fail("bwrap resolution is a Linux concern");
   }
   const directory = await mkdtemp(resolve(tmpdir(), "bwrap-probe-"));
   const fake = resolve(directory, "bwrap");

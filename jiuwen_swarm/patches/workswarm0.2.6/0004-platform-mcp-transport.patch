@@ -1,0 +1,282 @@
+diff --git a/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py b/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py
+--- a/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py
++++ b/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py
+@@ -152,7 +152,11 @@
+     _orig_create_client = getattr(ToolMgr, "_create_client")
+ 
+     def _create_client_with_timeout(config):
+-        client = _orig_create_client(config)
++        if (config.server_name == "sci" or (config.server_name.startswith("sci") and len(config.server_name) == 13 and config.server_name[3:].isdigit())) and config.client_type in {"streamable-http", "streamable_http"}:
++            from .sci_http_client import SciHttpClient
++            client = SciHttpClient(config)
++        else:
++            client = _orig_create_client(config)
+         timeout_s = (getattr(config, "params", None) or {}).get("timeout_s")
+         if isinstance(timeout_s, (int, float)) and timeout_s > 0:
+             try:
+diff --git a/jiuwenswarm/server/runtime/mcp/sci_http_client.py b/jiuwenswarm/server/runtime/mcp/sci_http_client.py
+new file mode 100644
+--- /dev/null
++++ b/jiuwenswarm/server/runtime/mcp/sci_http_client.py
+@@ -0,0 +1,261 @@
++# Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
++
++"""Own the platform MCP transport for its full lifetime, not a prewarm call.
++
++Only the stateless ScienceDiscovery bridge uses this client. Default tool deadlines
++are enforced per run by the adapter; an independent HTTP read deadline must
++not discard the result of an otherwise valid long-running task.
++"""
++import asyncio
++import json
++import logging
++import traceback
++from contextlib import AsyncExitStack, asynccontextmanager
++from pathlib import Path
++from uuid import uuid4
++
++import anyio
++import httpx
++from mcp import ClientSession
++from mcp.client.streamable_http import StreamableHTTPTransport
++from mcp.shared.message import SessionMessage
++from mcp.types import (JSONRPCMessage, JSONRPCRequest, JSONRPCResponse, JSONRPCError, ErrorData,
++                       ClientNotification, CancelledNotification, CancelledNotificationParams)
++from openjiuwen.core.foundation.tool.mcp.base import NO_TIMEOUT
++from openjiuwen.core.foundation.tool.mcp.client.streamable_http_client import StreamableHttpClient
++
++
++logger = logging.getLogger(__name__)
++
++
++class PlatformClientSession(ClientSession):
++    async def send_request(self, *args, **kwargs):
++        # Pinned SDK allocates/increments this id before its first await. It
++        # removes cancelled waiters but does not notify the transport itself.
++        request_id = self._request_id
++        try:
++            return await super().send_request(*args, **kwargs)
++        except BaseException:
++            with anyio.CancelScope(shield=True):
++                # Bounded cleanup also handles an already-dead transport.
++                with anyio.move_on_after(.5):
++                    try:
++                        await self.send_notification(ClientNotification(CancelledNotification(
++                            params=CancelledNotificationParams(requestId=request_id))))
++                    except (anyio.BrokenResourceError, anyio.ClosedResourceError):
++                        pass
++            raise
++
++
++@asynccontextmanager
++async def platform_http_client(url, client):
++    """Request-isolated JSON transport for our stateless platform endpoint only.
++
++    Keep SDK ClientSession correlation/initialization; do not patch global SDK
++    behavior. This endpoint explicitly has no SSE/resumption/session protocol.
++    Requests are never replayed, including after a lost response to a write.
++    """
++    transport = StreamableHTTPTransport(url)
++    connection = uuid4().hex
++    logger.info("platform_mcp_transport_open connection=%s", connection)
++    sender, reader = anyio.create_memory_object_stream(0)
++    writer, receiver = anyio.create_memory_object_stream(0)
++    active = {}
++
++    async def send(message, scope):
++        request = message.message.root
++        request_id = request.id if isinstance(request, JSONRPCRequest) else None
++        try:
++            with scope:
++                try:
++                    async with client.stream("POST", url, headers={**transport._prepare_headers(),
++                            "x-sci-mcp-connection": connection},
++                            json=message.message.model_dump(by_alias=True, mode="json", exclude_none=True)) as response:
++                        response.raise_for_status()
++                        if request_id is None:
++                            return
++                        if not response.headers.get("content-type", "").lower().startswith("application/json"):
++                            raise ValueError("Platform endpoint requires a JSON response")
++                        result = JSONRPCMessage.model_validate_json(await response.aread())
++                        if not isinstance(result.root, (JSONRPCResponse, JSONRPCError)) or result.root.id != request_id:
++                            raise ValueError("Mismatched platform response id or message type")
++                        if request.method == "initialize":
++                            transport._maybe_extract_protocol_version_from_message(result)
++                        await sender.send(SessionMessage(result))
++                except Exception as error:
++                    details = transport_failure_details(error)
++                    logger.error("platform_mcp_request_failed connection=%s request=%s %s", connection, request_id, json.dumps(details))
++                    if request_id is not None:
++                        status = f", HTTP {error.response.status_code}" if isinstance(error, httpx.HTTPStatusError) else ""
++                        failure = JSONRPCError(jsonrpc="2.0", id=request_id, error=ErrorData(
++                            code=-32000,
++                            message=f"Platform MCP request failed ({type(error).__name__}{status}); "
++                                    "execution outcome unknown; inspect state before retrying",
++                            data={"code": "PLATFORM_MCP_REQUEST_FAILED", "retryable": False,
++                                  "executionOutcome": "unknown"}))
++                        await sender.send(SessionMessage(JSONRPCMessage(failure)))
++        finally:
++            if request_id is not None and active.get(request_id) is scope:
++                active.pop(request_id, None)
++
++    async def receive(group):
++        async with receiver:
++            async for message in receiver:
++                root = message.message.root
++                # Our session emits this on caller cancellation/deadline. Closing
++                # only that HTTP request also propagates disconnect downstream.
++                if getattr(root, "method", None) == "notifications/cancelled":
++                    pending = active.get((root.params or {}).get("requestId"))
++                    if pending is not None:
++                        logger.info("platform_mcp_request_cancel connection=%s request=%s", connection, (root.params or {}).get("requestId"))
++                        pending.cancel()
++                    continue
++                scope = anyio.CancelScope()
++                if isinstance(root, JSONRPCRequest):
++                    active[root.id] = scope
++                group.start_soon(send, message, scope)
++
++    async with anyio.create_task_group() as group:
++        async with sender, reader, writer, receiver:
++            group.start_soon(receive, group)
++            try:
++                yield reader, writer
++            finally:
++                logger.info("platform_mcp_transport_close connection=%s pending=%s", connection, len(active))
++                group.cancel_scope.cancel()
++
++
++def transport_failure_details(error, depth=0):
++    """Keep exception types, HTTP status and code locations, never credentials.
++
++    HTTP exceptions can embed the credential-bearing MCP URL. Do not log their
++    message, repr, request, headers, body or captured frame locals.
++    """
++    details = {"type": type(error).__name__}
++    if depth >= 6:
++        return details
++    if isinstance(error, httpx.HTTPStatusError):
++        details["http_status"] = error.response.status_code
++    details["frames"] = [{"file": Path(frame.filename).name, "line": frame.lineno,
++                           "function": frame.name}
++                          for frame in traceback.extract_tb(error.__traceback__)[-8:]]
++    if isinstance(error, BaseExceptionGroup):
++        details["exceptions"] = [transport_failure_details(child, depth + 1)
++                                 for child in error.exceptions[:8]]
++    cause = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
++    if cause is not None and cause is not error:
++        details["cause"] = transport_failure_details(cause, depth + 1)
++    return details
++
++
++class SciHttpClient(StreamableHttpClient):
++    def __init__(self, config):
++        super().__init__(config)
++        self._owner = None
++        self._stop = None
++        self._failure = None
++        self._lifecycle_lock = asyncio.Lock()
++        self._closed = False
++
++    async def connect(self, *, timeout=NO_TIMEOUT, _recover=False):
++        async with self._lifecycle_lock:
++            if _recover and self._closed:
++                return False
++            self._closed = False
++            if self._owner is not None and not self._owner.done():
++                return await asyncio.shield(self._ready)
++            self._failure = None
++            logger.info("platform_mcp_connect_start recovery=%s", _recover)
++            self._stop = asyncio.Event()
++            ready = asyncio.get_running_loop().create_future()
++            self._ready = ready
++            limit = timeout if timeout != NO_TIMEOUT else 60.0
++            self._owner = asyncio.create_task(self._serve(ready, limit), name="sci-mcp-transport")
++            return await asyncio.shield(ready)
++
++    async def _serve(self, ready, limit):
++        try:
++            # Enter and exit all SDK/anyio contexts in this same task. Other
++            # tasks may issue requests, but never own or close these scopes.
++            async with AsyncExitStack() as stack:
++                client = await stack.enter_async_context(httpx.AsyncClient(
++                    timeout=httpx.Timeout(connect=limit, read=None, write=limit, pool=limit),
++                    headers=self._auth_headers, params=self._auth_query_params,
++                ))
++                read, write = await stack.enter_async_context(platform_http_client(
++                    self._server_path, client,
++                ))
++                session = await stack.enter_async_context(PlatformClientSession(read, write))
++                await asyncio.wait_for(session.initialize(), limit)
++                self._session = session
++                self._is_disconnected = False
++                logger.info("platform_mcp_connect_ready")
++                ready.set_result(True)
++                await self._stop.wait()
++        except asyncio.CancelledError:
++            self._failure = RuntimeError("Platform MCP transport was cancelled")
++            raise
++        except Exception as error:
++            logger.error("platform_mcp_transport_failed %s", json.dumps(transport_failure_details(error)))
++            self._failure = RuntimeError("Platform MCP transport failed; inspect tool state before retrying")
++            self._failure.__cause__ = error
++            self._last_connect_error = self._failure
++        finally:
++            self._session = None
++            self._is_disconnected = True
++            if not ready.done():
++                ready.set_result(False)
++
++    async def disconnect(self, *, timeout=NO_TIMEOUT):
++        async with self._lifecycle_lock:
++            self._closed = True
++            logger.info("platform_mcp_disconnect_requested")
++            if self._owner is None:
++                return True
++            self._stop.set()
++            limit = timeout if timeout != NO_TIMEOUT else 10.0
++            try:
++                await asyncio.wait_for(asyncio.shield(self._owner), limit)
++            except TimeoutError:
++                self._owner.cancel()
++                await asyncio.gather(self._owner, return_exceptions=True)
++            return True
++
++    async def _request(self, invoke):
++        if self._closed:
++            raise RuntimeError("Platform MCP transport explicitly disconnected")
++        if self._owner is None or self._owner.done() or self._session is None:
++            # Recover only for a new invocation. Never retry invoke() after it
++            # has started: the remote action may already have taken effect.
++            if not await self.connect(_recover=True):
++                raise self._failure or RuntimeError("Platform MCP connection failed")
++        owner = self._owner
++        if owner is None or owner.done() or self._session is None:
++            raise self._failure or RuntimeError("Platform MCP transport is not connected")
++        request = asyncio.create_task(invoke())
++        try:
++            done, _ = await asyncio.wait({request, owner}, return_when=asyncio.FIRST_COMPLETED)
++            if request in done:
++                return await request
++            raise self._failure or RuntimeError("Platform MCP transport closed during tool execution")
++        finally:
++            # Cancelling one tool must not cancel the shared owner or siblings.
++            if not request.done():
++                request.cancel()
++            await asyncio.gather(request, return_exceptions=True)
++
++    async def call_tool(self, tool_name, arguments, *, timeout=NO_TIMEOUT):
++        call = super().call_tool
++        # The adapter owns per-run tool deadlines. A shared registration's
++        # timeout must not truncate a longer child call. Explicit SDK deadlines
++        # remain supported; discovery/connect still have their own deadlines.
++        if timeout == NO_TIMEOUT:
++            timeout = float("inf")
++        return await self._request(lambda: call(tool_name, arguments, timeout=timeout))
++
++    async def list_tools(self, *, timeout=NO_TIMEOUT):
++        call = super().list_tools
++        return await self._request(lambda: call(timeout=timeout))

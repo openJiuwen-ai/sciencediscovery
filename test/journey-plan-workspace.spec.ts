@@ -24,6 +24,9 @@ import {
   waitForRunTerminal,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-plan-workspace.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: The Workspace shows independent current Plans for the main Agent and multiple Subagents, and clearing one Plan removes only that card.
@@ -44,17 +47,18 @@ import {
  */
 test("Workspace projects main and Subagent Plans independently", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(180_000);
+  // Planning is JiuwenSwarm's own todo list, which the run shows as its Plan: todo_create starts the first item,
+  // todo_modify moves statuses, and deleting every item clears the Plan. Delegation stays ScienceDiscovery's `task`.
+  const mainTodos = [
+    { id: "scope", content: "Define the review scope", activeForm: "Defining the review scope", description: "Fix what the review covers." },
+    { id: "delegate", content: "Delegate evidence checks", activeForm: "Delegating evidence checks", description: "Hand each source to its own worker." },
+    { id: "synthesize", content: "Synthesize findings", activeForm: "Synthesizing findings", description: "Combine both checks into one answer." },
+  ];
   const stub = await scriptedModel([
+    { arguments: { call_goal: "Coordinate two independent evidence checks", tasks: mainTodos }, tool: "todo_create" },
     {
-      arguments: {
-        explanation: "Coordinate two independent evidence checks",
-        plan: [
-          { status: "completed", step: "Define the review scope" },
-          { status: "in_progress", step: "Delegate evidence checks" },
-          { status: "pending", step: "Synthesize findings" },
-        ],
-      },
-      tool: "update_plan",
+      arguments: { action: "update", todos: [{ id: "scope", status: "completed" }, { id: "delegate", status: "in_progress" }] },
+      tool: "todo_modify",
     },
     {
       arguments: {
@@ -74,20 +78,17 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
       },
       tool: "task",
     },
-    { arguments: { plan: [] }, delayMs: 12_000, tool: "update_plan" },
+    { arguments: { action: "delete", ids: mainTodos.map((todo) => todo.id) }, delayMs: 12_000, tool: "todo_modify" },
     { text: "Both delegated evidence checks are complete." },
   ], [
     {
       arguments: {
-        explanation: "Inspect the delegated evidence source",
-        plan: [{ status: "in_progress", step: "Inspect delegated evidence" }],
+        call_goal: "Inspect the delegated evidence source",
+        tasks: [{ id: "inspect", content: "Inspect delegated evidence", activeForm: "Inspecting delegated evidence", description: "Read the assigned source." }],
       },
-      tool: "update_plan",
+      tool: "todo_create",
     },
-    {
-      arguments: { plan: [{ status: "completed", step: "Inspect delegated evidence" }] },
-      tool: "update_plan",
-    },
+    { arguments: { action: "update", todos: [{ id: "inspect", status: "completed" }] }, tool: "todo_modify" },
     { text: "The delegated evidence check is complete." },
   ]);
   const fixture = await createProjectAndSession(page, {
@@ -201,4 +202,6 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
     await cleanupJourney(page, fixture).catch(() => undefined);
     await stub.stop();
   }
+});
+
 });

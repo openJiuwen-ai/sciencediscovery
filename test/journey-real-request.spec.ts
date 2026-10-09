@@ -26,6 +26,9 @@ import {
   waitForRunTerminal,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-real-request.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: A real user request can generate measurements, calculate summary statistics, and deliver a referenced Markdown result through the full stack.
@@ -164,4 +167,6 @@ test("J5 真实请求生成统计结果并交付 Markdown", { tag: "@real" }, as
   } finally {
     await cleanupJourney(page, fixture);
   }
+});
+
 });

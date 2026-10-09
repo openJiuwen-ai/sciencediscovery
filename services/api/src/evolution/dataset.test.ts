@@ -20,11 +20,20 @@
  * number, and the number is believed.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+// Hooks are frozen once collection ends, so a helper a test body calls cannot
+// register one while it runs. It hands its teardown to this list instead, and
+// the one hook declared here — at collection time — drains it, which is the
+// order the module-level `after` calls used to run in.
+const cleanups: Array<() => unknown> = [];
+const cleanup = (fn: () => unknown) => { cleanups.push(fn); };
+after(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { after, test } from "node:test";
+
 
 import type { EvolveScorecard, EvolveSplit, ScorecardCriterion } from "@sciencediscovery/schema";
 
@@ -79,7 +88,7 @@ function fakeCas(content: Record<string, string>) {
 
 async function scratch(name: string): Promise<string> {
   const directory = await mkdtemp(resolve(tmpdir(), `evolve-${name}-`));
-  after(() => rm(directory, { force: true, recursive: true }));
+  cleanup(() => rm(directory, { force: true, recursive: true }));
   return directory;
 }
 

@@ -1,0 +1,329 @@
+{
+ "domain": "MCP and data sources",
+ "cases": [
+  {
+   "id": "custom-mcp-lifecycle",
+   "description": "A custom stdio MCP server (test/fixtures/mcp-echo.mjs, run with node from the repository root) saved, tested, inspected, renamed, imported and deleted, and the data-source, connector and invocation reads. No network.",
+   "steps": [
+    {
+     "name": "create a project",
+     "request": {
+      "method": "POST",
+      "path": "/api/projects",
+      "body": {
+       "name": "L1 mcp"
+      }
+     },
+     "capture": {
+      "projectId": "$.id",
+      "sessionId": "$.firstSession.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "custom servers before",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/servers"
+     },
+     "covers": [
+      "GET /api/mcp/servers"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "save a server with no command",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers",
+      "body": {
+       "name": "l1-bad"
+      }
+     },
+     "covers": [
+      "POST /api/mcp/servers"
+     ]
+    },
+    {
+     "name": "import a config",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers/import",
+      "body": {
+       "mcpServers": {
+        "l1-imported": {
+         "command": "node",
+         "args": [
+          "test/fixtures/mcp-echo.mjs"
+         ],
+         "cwd": "{{repoRoot}}"
+        }
+       }
+      }
+     },
+     "capture": {
+      "importedId": "$[0].id"
+     },
+     "covers": [
+      "POST /api/mcp/servers/import"
+     ]
+    },
+    {
+     "name": "delete the imported one",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/mcp/servers/{{importedId}}"
+     },
+     "always": true
+    },
+    {
+     "name": "save a stdio server",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers",
+      "body": {
+       "name": "l1-echo",
+       "enabled": true,
+       "command": "node",
+       "args": [
+        "test/fixtures/mcp-echo.mjs"
+       ],
+       "cwd": "{{repoRoot}}"
+      }
+     },
+     "capture": {
+      "serverId": "$.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "custom servers after",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/servers"
+     },
+     "expectStatus": 200
+    },
+    {
+     "name": "test it",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers/{{serverId}}/test",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/mcp/servers/:customId/test"
+     ]
+    },
+    {
+     "name": "its tools as a data source",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/sources/{{serverId}}/tools"
+     },
+     "covers": [
+      "GET /api/mcp/sources/:id/tools"
+     ]
+    },
+    {
+     "name": "its status",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/sources/{{serverId}}/status"
+     },
+     "covers": [
+      "GET /api/mcp/sources/:id/status"
+     ]
+    },
+    {
+     "name": "its source entry",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/sources/{{serverId}}"
+     },
+     "covers": [
+      "GET /api/mcp/sources/:id"
+     ]
+    },
+    {
+     "name": "inspect a tool that is not there",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers/{{serverId}}/inspect",
+      "body": {
+       "sessionId": "{{sessionId}}",
+       "toolName": "nope",
+       "arguments": {}
+      }
+     },
+     "covers": [
+      "POST /api/mcp/servers/:customId/inspect"
+     ]
+    },
+    {
+     "name": "update it",
+     "request": {
+      "method": "PUT",
+      "path": "/api/mcp/servers/{{serverId}}",
+      "body": {
+       "name": "l1-echo-renamed",
+       "enabled": true,
+       "command": "node",
+       "args": [
+        "test/fixtures/mcp-echo.mjs"
+       ],
+       "cwd": "{{repoRoot}}"
+      }
+     },
+     "covers": [
+      "PUT /api/mcp/servers/:customId"
+     ],
+     "capture": {
+      "serverId": "$.id"
+     }
+    },
+    {
+     "name": "start OAuth on a stdio server",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers/{{serverId}}/oauth/start",
+      "body": {
+       "redirectUrl": "{{baseUrl}}/api/mcp/oauth/callback"
+      }
+     },
+     "covers": [
+      "POST /api/mcp/servers/:customId/oauth/start"
+     ]
+    },
+    {
+     "name": "cancel OAuth",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers/{{serverId}}/oauth/cancel",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/mcp/servers/:customId/oauth/cancel"
+     ]
+    },
+    {
+     "name": "clear OAuth",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/servers/{{serverId}}/oauth/clear",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/mcp/servers/:customId/oauth/clear"
+     ]
+    },
+    {
+     "name": "the OAuth callback without a code",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/oauth/callback"
+     },
+     "covers": [
+      "GET /api/mcp/oauth/callback"
+     ]
+    },
+    {
+     "name": "data sources",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/sources"
+     },
+     "covers": [
+      "GET /api/mcp/sources"
+     ]
+    },
+    {
+     "name": "reload data sources",
+     "request": {
+      "method": "POST",
+      "path": "/api/mcp/sources/reload",
+      "body": {}
+     },
+     "covers": [
+      "POST /api/mcp/sources/reload"
+     ]
+    },
+    {
+     "name": "proxy policies",
+     "request": {
+      "method": "GET",
+      "path": "/api/mcp/proxy-policies"
+     },
+     "covers": [
+      "GET /api/mcp/proxy-policies"
+     ]
+    },
+    {
+     "name": "save proxy policies",
+     "request": {
+      "method": "PUT",
+      "path": "/api/mcp/proxy-policies",
+      "body": {
+       "policies": {}
+      }
+     },
+     "covers": [
+      "PUT /api/mcp/proxy-policies"
+     ]
+    },
+    {
+     "name": "connectors",
+     "request": {
+      "method": "GET",
+      "path": "/api/connectors"
+     },
+     "covers": [
+      "GET /api/connectors"
+     ]
+    },
+    {
+     "name": "invocations of a fresh session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/mcp/invocations"
+     },
+     "covers": [
+      "GET /api/sessions/:id/mcp/invocations"
+     ]
+    },
+    {
+     "name": "an unknown invocation",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/mcp/invocations/nope"
+     },
+     "covers": [
+      "GET /api/sessions/:id/mcp/invocations/:invId"
+     ]
+    },
+    {
+     "name": "delete the server",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/mcp/servers/{{serverId}}"
+     },
+     "covers": [
+      "DELETE /api/mcp/servers/:customId"
+     ],
+     "always": true
+    },
+    {
+     "name": "delete the project",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/projects/{{projectId}}",
+      "body": {
+       "confirmationId": "{{projectId}}"
+      }
+     },
+     "always": true
+    }
+   ]
+  }
+ ]
+}

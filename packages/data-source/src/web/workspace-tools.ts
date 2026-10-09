@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
-import type { WebBroker, WebCallContext } from "./broker.js";
+import type { ExternalWebResult, WebBroker, WebCallContext } from "./broker.js";
 
 export function createWebWorkspaceTools(options: {
   broker: WebBroker;
@@ -25,5 +25,8 @@ export function createWebWorkspaceTools(options: {
       options.broker.fetch(url, { ...options.context, toolCallId }, options.permission, signal),
     webSearch: (toolCallId: string, query: string, signal?: AbortSignal) =>
       options.broker.search(query, { ...options.context, toolCallId }, options.permission, signal),
+    /** A search or fetch another runtime ran for this turn (JiuwenSwarm's own), recorded like ours. */
+    recordWebResult: (toolCallId: string, result: ExternalWebResult) =>
+      options.broker.recordExternalResult(result, { ...options.context, forceRefresh: false, toolCallId }),
   };
 }

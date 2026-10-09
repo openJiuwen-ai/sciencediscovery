@@ -16,6 +16,9 @@ import { test, expect, type Page } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("issue-44-session-stop.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+
 // 用户场景 E2E：Session Stop 按钮 + 跨会话 Run 隔离。
 //
 // 前置：本地栈已启动（./scripts/run-local.sh），并已注册一个「接受 POST
@@ -269,4 +272,6 @@ test.describe("Session Stop 与 Run 会话隔离", () => {
       await screenshot(page, `${testInfo.title.slice(0, 2)}-failure`.replace(/\W+/g, "_"));
     }
   });
+});
+
 });

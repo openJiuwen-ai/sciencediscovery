@@ -4,6 +4,9 @@ import { expect, type Locator } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-execution-management.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * Open everything the activity panel keeps folded.
  *
@@ -29,6 +32,7 @@ async function expandRecords(panel: Locator): Promise<void> {
  *   1. Open Session activity and read identities and committed transfer progress.
  *   2. Read logs while execution remains running, then explicitly cancel execution and reminder.
  *   3. Inspect the same controls in a narrow viewport and the empty Session state.
+ *   4. See the scope of resuming a stopped child and verify that the action clears its stopped control.
  * Environment: Isolated production API/Web at E2E_BASE_URL; Session created over API; activity responses mocked locally.
  * Type: mocked
  * LLM: none
@@ -45,7 +49,8 @@ test("执行日志、取消与一次性提醒可管理", { tag: "@mocked" }, asy
   const activity = { executions: [{ id: "execution-1", agentId: "main", runnerId: "local", workspaceId: "ws_main_local", state: "running", provenance: "pending" }],
     transfers: [{ id: "transfer-1", sourceWorkspaceId: "ws_child_remote", targetWorkspaceId: "ws_main_local", state: "partial", files: [{ sourcePath: "result.txt", targetPath: "result.txt" }, { sourcePath: "missing.txt", targetPath: "missing.txt" }],
       progress: [{ targetPath: "result.txt", state: "completed", bytes: 42 }], error: "One file was unavailable; committed files were retained." }],
-    timers: [{ id: "timer-1", agentId: "main", message: "Inspect training output", dueAt: Date.now() + 60000, state: "pending" }], agents: [] };
+    timers: [{ id: "timer-1", agentId: "main", message: "Inspect training output", dueAt: Date.now() + 60000, state: "pending" }],
+    agents: [] as Array<{ agentId: string; stopped: boolean }> };
   let logsRead = false;
   await page.route(`**/api/sessions/${fixture.session.id}/agent-activity**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -53,6 +58,10 @@ test("执行日志、取消与一次性提醒可管理", { tag: "@mocked" }, asy
     else if (path.endsWith("/executions/execution-1/cancel")) { activity.executions[0]!.state = "cancelled"; await route.fulfill({ json: {} }); }
     else if (path.endsWith("/timers/timer-1/cancel")) { activity.timers[0]!.state = "cancelled"; await route.fulfill({ json: {} }); }
     else await route.fulfill({ json: activity });
+  });
+  await page.route(`**/api/sessions/${fixture.session.id}/subagents/child/resume`, async (route) => {
+    activity.agents[0]!.stopped = false;
+    await route.fulfill({ json: { resumed: true } });
   });
   try {
     await journey.step("查看执行与复制状态", "执行显示 Runner、Agent 和 Workspace；部分复制显示已提交文件数，不误报全部成功。", async () => {
@@ -92,5 +101,14 @@ test("执行日志、取消与一次性提醒可管理", { tag: "@mocked" }, asy
       // shows no fold at all rather than a fold reading zero.
       await expect(panel.locator("details.workspace-fold")).toHaveCount(0);
     });
+    await journey.step("恢复子代理前看清会话影响", "提示说明会话停止时，恢复子代理也会让主代理和其他未单独停止的代理继续；操作后恢复按钮消失。", async () => {
+      activity.agents.push({ agentId: "subagent:child", stopped: true });
+      const panel = page.getByLabel("Executions and reminders");
+      await expect(panel.getByText(/Main and other subagents that were not stopped individually can continue/)).toBeVisible();
+      await panel.getByRole("button", { name: "Resume subagent:child" }).click();
+      await expect(panel.getByRole("button", { name: "Resume subagent:child" })).toHaveCount(0);
+    });
   } finally { await cleanupJourney(page, fixture); }
+});
+
 });

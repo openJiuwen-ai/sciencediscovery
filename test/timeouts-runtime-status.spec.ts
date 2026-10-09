@@ -21,6 +21,9 @@ import { test } from "./helpers/e2e.ts";
 
 import { authorizationHeader } from "./e2e-auth.js";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("timeouts-runtime-status.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 const authorization = authorizationHeader();
 
 /** Remove leftover toasts so screenshots show a stable, caption-consistent final state. */
@@ -181,4 +184,6 @@ test("用户可配置无限超时、查看运行状态并在会话中追溯超�
     modelServer.closeAllConnections();
     await new Promise<void>((resolveClose) => modelServer.close(() => resolveClose()));
   }
+});
+
 });

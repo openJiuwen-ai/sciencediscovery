@@ -4,32 +4,38 @@
 
 This is the complete English documentation set.
 
-## Tutorials
+## Getting started
 
-- [Quick start](tutorial/01-quick-start.md) — install, start the stack, configure a model, and complete a first agent task.
-- [Evolve a solution](tutorial/02-evolve-a-solution.md) — run a program-evolution search end to end and judge whether the improvement is real.
+- [Quick start](getting-started/quick-start.md) — follow the shortest Linux or macOS path, configure a model, and complete a first inspectable Agent task.
+- [Basic concepts](getting-started/concepts.md) — understand Agent loops, Tools, Skills, Specialists, Workspaces, and Artifacts.
+- [Deployment](getting-started/deployment.md) — choose a prepackaged single file, local source mode, or Docker, with long-running operation and first-run troubleshooting.
 
-## How-to guides
+## Core capabilities
 
-- [Configure custom MCP servers](how-to/configure-custom-mcp.md): local/remote connections, secret editing, OAuth, Inspector and Session tool selection.
+- [Core capability overview](core/README.md) — the research capabilities ScienceDiscovery adds on top of a general Agent.
 
-- [Deployment](how-to/deployment.md) — local mode, Docker, and building a single-file binary from source.
-- [Configure the network proxy](how-to/configure-network-proxy.md) — add a proxy on the settings page and choose a policy for LLM, web, and MCP traffic.
-- [Literature research case guide](how-to/literature-research-case-guide.md) — run an end-to-end cross-database literature survey, from service startup to approvals and results.
-- [Run an evolution search](how-to/run-an-evolution-search.md) — propose a `/evolve-design` search, size its shards, watch it run, and read the held-out result.
-- [Install Neo4j and configure ScienceMemory](how-to/science-memory-setup.md) — install an external Neo4j, enable ScienceMemory in system settings, and explore chains in the frontend graph.
+## Domain guides
+
+- [Design an antibody on Ascend NPU](domains/antibody-design.md)
+- [Use PUCT to optimize a text compression algorithm](domains/evolve-a-solution.md) — run a program-evolution search end to end and judge whether the improvement is real.
+- [Analyze correlations and clusters of sepsis endotype scores](domains/analyze-sepsis-endotypes.md)
+- [Research how migrating birds determine location and direction](domains/literature-research.md)
+
+## Advanced setup
+
+- [Create and use custom Specialists](advanced-setup/configure-specialists.md)
+- [Import and manage research Skills](advanced-setup/configure-skills.md)
+- [Configure custom MCP servers](advanced-setup/configure-custom-mcp.md)
 
 ## Reference
 
-- [Configuration](reference/configuration.md) — environment variables, default ports, upload/workspace/output quotas, and data layout.
-- [REST API](reference/rest-api.md) — internal HTTP API used by the UI: authentication, request/response, and error semantics.
-- [Runtime behavior and limits](reference/runtime-behavior.md) — models, settings inheritance, skills, permissions, timeouts, and execution limits.
-- [Built-in tools](reference/builtin-tools.md) — parameters, boundaries, and exposure conditions for model-visible tools.
-- [Web tools](reference/web-tools.md) — web search/fetch providers, configuration, permissions, caching, and audit.
-- [Repository layout](reference/repository-layout.md) — directories, modules, default ports, and data locations.
-- [Paper Worker](reference/paper-worker.md) — PDF extraction protocol, pipeline, and limits.
-- [Web frontend](reference/web-frontend.md) — frontend stack, event mapping, and development/test entry points.
+- [Agent backends](reference/agent-backends.md) — current JiuwenSwarm defaults, native opt-out, tools, planning, Skills, and subagents.
+- [CLI](reference/cli.md) — command and behavior reference for `serve`, `run`, `extract`, and `version`.
+- [Built-in research capabilities](reference/builtin-research-capabilities.md)
+- [Configuration](reference/configuration.md)
+- [REST API](reference/rest-api.md)
+- [Runtime behavior and limits](reference/runtime-behavior.md)
 
-## Explanation
+## Developer documentation
 
-See the [explanation index](explanation/README.md), which covers the overall architecture, control plane, agent backend, sandbox, Ascend NPU host broker, rate limiting, connectors, MCP tool protocol, network proxy, review and provenance, ScienceMemory, skill progressive disclosure, subagent orchestration, and content-addressable storage.
+See the [developer documentation index](developer-docs/README.md) for architecture, module boundaries, protocols, and current feature designs.

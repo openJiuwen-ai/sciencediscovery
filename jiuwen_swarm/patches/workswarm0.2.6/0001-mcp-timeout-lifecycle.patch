@@ -1,0 +1,183 @@
+diff --git a/jiuwenswarm/server/agent_ws_server.py b/jiuwenswarm/server/agent_ws_server.py
+index f713060..a1cfe05 100644
+--- a/jiuwenswarm/server/agent_ws_server.py
++++ b/jiuwenswarm/server/agent_ws_server.py
+@@ -151,6 +151,13 @@ from jiuwenswarm.server.runtime.gateway_adapter import (
+     WorkspaceFileAdapter,
+ )
+ 
++# MCPs may be registered and prewarmed before the first agent adapter is
++# constructed. Install the call-timeout hook before that cold-start path can
++# create a client; otherwise the client silently keeps the 30 second fallback
++# even when its persisted McpServerConfig contains a larger timeout_s.
++from jiuwenswarm.server.runtime.mcp.call_timeout_patch import apply_mcp_call_timeout_patch
++apply_mcp_call_timeout_patch()
++
+ logger = logging.getLogger(__name__)
+ 
+ 
+diff --git a/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py b/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py
+index 6d609da..39e65b2 100644
+--- a/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py
++++ b/jiuwenswarm/server/runtime/mcp/call_timeout_patch.py
+@@ -14,10 +14,9 @@ This patch is applied once at process startup (from
+ ``JiuWenSwarmDeepAdapter.__init__``):
+ 
+   A. Wrap ``call_tool`` / ``list_tools`` on the HTTP transports with
+-     ``anyio.fail_after``. On timeout we ``disconnect()`` so the dead session
+-     is torn down and the very next call fails fast (the stock client raises
+-     "Not connected" once ``self._session`` is None) instead of waiting out
+-     the full timeout again.
++     ``anyio.fail_after``. A timeout is reported without disconnecting the
++     process-wide client: main and subagent calls share that transport, so
++     tearing it down would abort unrelated in-flight requests.
+ 
+      NB: must use ``anyio.fail_after`` (a cancel scope), *not*
+      ``asyncio.wait_for``. The MCP SDK runs its streamable-http transport
+@@ -30,8 +29,11 @@ This patch is applied once at process startup (from
+      (i.e. ``/mcp add ... --timeout_s N``) is stamped onto the client instance
+      as ``_jws_call_timeout`` and honored by (A). Falls back to
+      ``DEFAULT_CALL_TIMEOUT`` when unset.
++  C. Mark both resource-manager and model-facing MCP cards as internally
++     timeout-governed. OpenJiuwen otherwise adds a second 300-second outer
++     cancel scope and loses the marker while lazily materialising tools.
+ 
+-Both transforms are idempotent: a module-level ``_PATCHED`` guard makes the
++All transforms are idempotent: a module-level ``_PATCHED`` guard makes the
+ whole function a no-op on repeat calls.
+ """
+ from __future__ import annotations
+@@ -64,6 +66,7 @@ def apply_mcp_call_timeout_patch(default_timeout: float = DEFAULT_CALL_TIMEOUT)
+     )
+     from openjiuwen.core.foundation.tool.mcp.client.sse_client import SseClient
+     from openjiuwen.core.runner.resources_manager.tool_manager import ToolMgr
++    from openjiuwen.core.single_agent.ability_manager import AbilityManager
+ 
+     def _resolve_timeout(client: Any, explicit: Any) -> float:
+         # Explicit kwarg wins (currently never passed by invoke, but keeps the
+@@ -93,32 +96,16 @@ def apply_mcp_call_timeout_patch(default_timeout: float = DEFAULT_CALL_TIMEOUT)
+                     return await orig(self, *args, **kwargs)
+             except TimeoutError:
+                 logger.warning(
+-                    "[mcp-timeout] %s.%s timed out after %.1fs, disconnecting client: %s",
++                    "[mcp-timeout] %s.%s timed out after %.1fs: %s",
+                     cls.__name__,
+                     name,
+                     timeout,
+                     getattr(self, "_server_path", "?"),
+                 )
+-                # Tear down the dead session so the next call fails fast rather
+-                # than burning another full timeout window on a half-open conn.
+-                # disconnect runs the same anyio task-group teardown that can
+-                # raise a BaseExceptionGroup (containing GeneratorExit); coerce
+-                # it so the timeout path doesn't escape as an uncatchable group.
+-                try:
+-                    await self.disconnect()
+-                except BaseException as disc_exc:  # noqa: BLE001
+-                    from jiuwenswarm.server.runtime.mcp.exc_group import (
+-                        reraise_as_exception,
+-                    )
+-                    try:
+-                        reraise_as_exception(disc_exc)
+-                    except Exception as coerce_exc:  # noqa: BLE001
+-                        logger.warning(
+-                            "[mcp-timeout] %s.%s disconnect after timeout also failed: %r",
+-                            cls.__name__,
+-                            name,
+-                            coerce_exc,
+-                        )
++                # One MCP client is shared by concurrent main/subagent calls.
++                # Disconnecting it here aborts unrelated in-flight calls and
++                # poisons the whole run. The cancelled request is isolated by
++                # the MCP request id; keep the shared transport alive.
+                 raise
+             except BaseException as exc:
+                 # The mcp SDK's streamablehttp_client runs inside an anyio task
+@@ -191,6 +178,87 @@ def apply_mcp_call_timeout_patch(default_timeout: float = DEFAULT_CALL_TIMEOUT)
+     # (no type: ignore needed).
+     setattr(ToolMgr, "_create_client", staticmethod(_create_client_with_timeout))
+ 
++    # The sci bridge grows when a specialist adds tools. Re-registering an
++    # existing server normally returns stale cards; refresh this dynamic
++    # catalog without disconnecting the client used by in-flight calls.
++    from copy import deepcopy
++    from openjiuwen.core.runner.resources_manager.tool_manager import MCPTool
++
++    _orig_add_server = ToolMgr.add_tool_server
++
++    async def _add_dynamic_server(self, server_config, expiry_time=None):
++        if server_config.server_name == "sci":
++            async with self._mcp_server_lock(server_config.server_id):
++                resource = self._mcp_server_resources.get(server_config.server_id)
++                if resource is not None:
++                    cards = await resource.client.list_tools() or []
++                    for card in cards:
++                        card.id = self.generate_mcp_tool_id(server_config.server_id, server_config.server_name, card.name)
++                        properties = dict(card.properties or {})
++                        properties["resilience"] = {**(properties.get("resilience") or {}), "timeout_s": None}
++                        card.properties = properties
++                        # Replacing a lookup entry leaves any executing tool
++                        # object and its transport alive. Do not remove tools
++                        # that another active run may still reference.
++                        self._tools[card.id] = MCPTool(mcp_client=resource.client, tool_info=deepcopy(card))
++                    resource.tool_ids = list(dict.fromkeys([*resource.tool_ids, *(card.id for card in cards)]))
++                    logger.info("[mcp-catalog] refreshed sci tools=%d without reconnect", len(cards))
++                    return cards
++        return await _orig_add_server(self, server_config, expiry_time)
++
++    ToolMgr.add_tool_server = _add_dynamic_server
++
++    # (C) AbilityManager otherwise wraps every tool invocation in its own
++    # 300-second cancel scope. MCP calls already have the configured transport
++    # timeout from (A); an outer cancellation corrupts the shared ClientSession
++    # and aborts unrelated concurrent main/subagent calls. Mark explicitly
++    # configured MCP cards as internally governed, including cached cards.
++    _orig_refresh_tools = getattr(ToolMgr, "_inner_refresh_mcp_tools")
++
++    async def _refresh_tools_with_internal_timeout(self, client, server_config, expiry_time):
++        cards = await _orig_refresh_tools(self, client, server_config, expiry_time)
++        timeout_s = (getattr(server_config, "params", None) or {}).get("timeout_s")
++        if isinstance(timeout_s, (int, float)) and timeout_s > 0:
++            for card in cards:
++                properties = dict(getattr(card, "properties", None) or {})
++                properties["resilience"] = {**(properties.get("resilience") or {}), "timeout_s": None}
++                card.properties = properties
++                tool = getattr(self, "_tools", {}).get(card.id)
++                stored_card = getattr(tool, "card", None)
++                if stored_card is not None:
++                    stored_card.properties = dict(properties)
++        return cards
++
++    setattr(ToolMgr, "_inner_refresh_mcp_tools", _refresh_tools_with_internal_timeout)
++
++    # AbilityManager does not retain the McpToolCard returned by ToolMgr.
++    # It lazily creates a second, model-facing ToolCard in list_tool_info(),
++    # dropping the properties stamped above. Stamp that execution card after
++    # materialisation as well; AbilityManager.execute() resolves its outer
++    # timeout from this card, not from ToolMgr's MCPTool.card.
++    _orig_list_tool_info = getattr(AbilityManager, "list_tool_info")
++
++    async def _list_tool_info_with_internal_timeout(self, *args, **kwargs):
++        infos = await _orig_list_tool_info(self, *args, **kwargs)
++        for server_name, server_config in getattr(self, "_mcp_servers", {}).items():
++            timeout_s = (getattr(server_config, "params", None) or {}).get("timeout_s")
++            if not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
++                continue
++            server_id = str(getattr(server_config, "server_id", "") or "")
++            id_prefix = f"{server_id}.{server_name}."
++            for card in getattr(self, "_tools", {}).values():
++                if not str(getattr(card, "id", "") or "").startswith(id_prefix):
++                    continue
++                properties = dict(getattr(card, "properties", None) or {})
++                properties["resilience"] = {
++                    **(properties.get("resilience") or {}),
++                    "timeout_s": None,
++                }
++                card.properties = properties
++        return infos
++
++    setattr(AbilityManager, "list_tool_info", _list_tool_info_with_internal_timeout)
++
+     logger.info(
+         "[mcp-timeout] patch applied (default_timeout=%.1fs, covered=StreamableHttpClient,SseClient)",
+         default_timeout,

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { test } from "node:test";
+
 import { Check } from "typebox/value";
 
 import {
@@ -32,7 +34,7 @@ import {
   type WorkspaceFileProvenance,
 } from "@sciencediscovery/schema";
 
-import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath } from "./workspace.js";
+import { createSubagentTools, createWorkspaceTools, filterTools, normalizeWorkspaceRelativePath, sandboxWorkspacePaths, subagentFinalText, workspaceRelativeCwd } from "./workspace.js";
 import { ENVIRONMENT_TOOL_NAMES } from "./environment-tool-names.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
@@ -129,6 +131,57 @@ test("run_shell selects the latest environment by ID and preserves its execution
   assert.equal(executedCode, "python -m sample");
   assert.equal(executedToolCallId, "tool-call");
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /stdout:\nok/);
+});
+
+test("a command written with the workspace's host path uses the sandbox's /workspace instead", () => {
+  const root = "/data/projects/p/sessions/s/workspace";
+  assert.equal(
+    sandboxWorkspacePaths(root, `cat > ${root}/ols_fit.py << 'EOF'\nprint(1)\nEOF\npython ${root}/ols_fit.py`),
+    "cat > /workspace/ols_fit.py << 'EOF'\nprint(1)\nEOF\npython /workspace/ols_fit.py",
+  );
+  assert.equal(sandboxWorkspacePaths(root, `cd ${root} && ls "${root}"`), `cd /workspace && ls "/workspace"`);
+  assert.equal(sandboxWorkspacePaths(`${root}/`, `ls ${root}`), "ls /workspace");
+  // Another directory that merely starts with the same characters is not the workspace.
+  assert.equal(sandboxWorkspacePaths(root, `ls ${root}2/a`), `ls ${root}2/a`);
+  assert.equal(sandboxWorkspacePaths(root, "ls /workspace/a"), "ls /workspace/a");
+});
+
+test("workspaceRelativeCwd makes a cwd that names the workspace relative and leaves any other one alone", () => {
+  const root = resolve("/data/projects/p/sessions/s/workspace");
+  assert.equal(workspaceRelativeCwd(root, undefined), undefined);
+  assert.equal(workspaceRelativeCwd(root, "analysis"), "analysis");
+  assert.equal(workspaceRelativeCwd(root, root), ".");
+  assert.equal(workspaceRelativeCwd(root, `${root}/`), ".");
+  assert.equal(workspaceRelativeCwd(root, `${root}/analysis/run1`), "analysis/run1");
+  assert.equal(workspaceRelativeCwd(root, "/workspace"), ".");
+  assert.equal(workspaceRelativeCwd(root, "/workspace/analysis"), "analysis");
+  assert.equal(workspaceRelativeCwd(root, "/etc"), "/etc");
+  assert.equal(workspaceRelativeCwd(root, `${root}-other`), `${root}-other`);
+});
+
+test("run_shell runs in the workspace when the model passes the workspace's host path as cwd", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `workspace-cwd-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const seen: Array<string | undefined> = [];
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("legacy tool must not run"); },
+    executeShell: async (_code, _mode, _signal, _toolCallId, _runnerId, environment): Promise<ShellExecutionResult> => {
+      seen.push(environment?.cwd);
+      return {
+        cgroupMode: "none", createdFiles: [], environmentRevisionId: "test-python", environmentVariables: {},
+        executionId: "execution", exitCode: 0, finishedAt: new Date().toISOString(), kernelId: "ephemeral:execution",
+        kernelMode: "ephemeral", language: "shell", modifiedFiles: [], networkPolicy: "none", runnerVersion: "test",
+        sandbox: "bubblewrap", startedAt: new Date().toISOString(), stderr: "", stdout: "ok", workingDirectory: "/workspace",
+      };
+    },
+  });
+  const tool = tools.find((candidate) => candidate.name === "run_shell");
+  assert.ok(tool);
+  await tool.execute("tool-call-1", { command: "true", cwd: root });
+  await tool.execute("tool-call-2", { command: "true", cwd: `${root}/analysis` });
+  assert.deepEqual(seen, [".", "analysis"]);
 });
 
 for (const selection of [
@@ -312,9 +365,12 @@ test("run_shell executes an existing workspace script without rewriting or path 
     scriptPath: "root script.sh",
   });
   await tool.execute("shell-child", { scriptPath: "scripts/child script.sh" });
+  // Arguments run with a command too: a model that splits `python -c code` is not left running bare `python`.
+  await tool.execute("shell-command", { arguments: ["-c", "print('hi')"], command: "python" });
   assert.deepEqual(executedCodes, [
     "/usr/bin/bash '/workspace/root script.sh' 'value with spaces' 'quote'\"'\"'value' '$HOME; touch never'",
     "/usr/bin/bash '/workspace/scripts/child script.sh'",
+    "python '-c' 'print('\"'\"'hi'\"'\"')'",
   ]);
   await assert.rejects(
     tool.execute("shell-missing", { scriptPath: "missing.sh" }),
@@ -625,6 +681,27 @@ test("read_file pages a large file instead of returning it whole", async (contex
   assert.equal(secondText.endsWith("line-2001\nline-2002\nline-2003\nline-2004\nline-2005\n"), true);
 });
 
+test("file tools take a path written with the workspace's host path or /workspace", async (context) => {
+  // JiuwenSwarm tells the model its project directory by the host path; observed: read_file(<host workspace>/notes.md).
+  const root = resolve(process.cwd(), ".tmp", `workspace-read-absolute-${process.pid}-${Date.now()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { force: true, recursive: true }));
+  await writeFile(resolve(root, "notes.md"), "hello from the workspace\n");
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const read = tools.find((candidate) => candidate.name === "read_file")!;
+  const text = async (path: string) => {
+    const result = await read.execute("read", { path });
+    return result.content[0]?.type === "text" ? result.content[0].text : "";
+  };
+  assert.match(await text(resolve(root, "notes.md")), /hello from the workspace/);
+  assert.match(await text("/workspace/notes.md"), /hello from the workspace/);
+  await assert.rejects(read.execute("outside", { path: "/etc/hostname" }), /non-empty and relative/);
+  await assert.rejects(read.execute("root", { path: root }), /non-empty and relative/);
+});
+
 test("read_file returns metadata for a binary file and never its bytes", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `workspace-read-binary-${process.pid}-${Date.now()}`);
   await mkdir(root, { recursive: true });
@@ -790,6 +867,11 @@ test("artifact download and PDF extraction are separate tools", async () => {
   assert.deepEqual(calls, ["download"]);
   await extract.execute("extract-call", { artifactJobId: "job" });
   assert.deepEqual(calls, ["download", "extract"]);
+  await extract.execute("extract-upload", { path: "enzyme_paper.pdf" });
+  assert.deepEqual(calls, ["download", "extract", "extract"]);
+  await assert.rejects(extract.execute("extract-none", {}), /exactly one/);
+  await assert.rejects(extract.execute("extract-both", { artifactJobId: "job", path: "a.pdf" }), /exactly one/);
+  assert.equal(calls.length, 3);
 });
 
 test("project artifact tools declare, list, and read catalog entries", async () => {
@@ -851,7 +933,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     properties: Record<string, unknown>;
     required?: string[];
   };
-  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["description", "name", "path", "paths"]);
+  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "base_version_id", "description", "name", "path", "paths"]);
   assert.deepEqual(declareSchema.required ?? [], []);
   assert.deepEqual(
     declareSchema.properties.paths,
@@ -896,6 +978,10 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     declare.execute("declare-too-many", { paths: Array.from({ length: 51 }, (_, index) => `outputs/${index}`) }),
     /at most 50 paths/,
   );
+  await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", path: "edit.dat" }), /required together/);
+  await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", paths: ["edit.dat"] }), /cannot rename or batch/);
+  await declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", path: "edit.dat" });
+  assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", toolCallId: "revision", path: "edit.dat" });
   const listed = await list.execute("list", {});
   assert.match(listed.content[0]?.type === "text" ? listed.content[0].text : "", /llm_declared/);
   const readResult = await read.execute("read", { name: "result" });
@@ -1632,16 +1718,16 @@ test("subagent tools preserve structured governance inputs", async () => {
   });
   assert.deepEqual(taskProperties.max_turns, {
     default: DEFAULT_SUBAGENT_MAX_TURNS,
-    description: "Optional model-turn budget for this subagent. Increase it for unusually deep delegated work.",
+    description: "Optional model-turn budget for this subagent. Set a smaller value for focused work or increase it for unusually deep delegated work.",
     maximum: MAX_SUBAGENT_MAX_TURNS,
-    minimum: DEFAULT_SUBAGENT_MAX_TURNS,
+    minimum: 1,
     type: "integer",
   });
   assert.deepEqual(taskProperties.timeout_seconds, {
     default: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
-    description: "Optional wall-clock runtime budget in seconds for this subagent. Increase it for long delegated work.",
+    description: "Optional hard wall-clock runtime budget in seconds for this subagent, including model and tool waits.",
     maximum: MAX_SUBAGENT_TIMEOUT_SECONDS,
-    minimum: DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
+    minimum: 1,
     type: "integer",
   });
   assert.match(JSON.stringify(taskProperties.specialistId), /specialist-evidence/);
@@ -1650,6 +1736,8 @@ test("subagent tools preserve structured governance inputs", async () => {
   assert.match(task.description, /id: specialist-code; description: Builds and debugs analysis code/);
   assert.doesNotMatch(task.description, /Code implementer/);
   assert.match(task.description, /semantic match against specialist descriptions/);
+  assert.match(task.description, /Do not also request the complete report or source package/);
+  assert.match(JSON.stringify(taskProperties.prompt), /concise handoff with its ID\/version/);
   const result = await task.execute("task-call", {
     brief: {
       collaborationRules: ["Work independently", "Return one final JSON object"],
@@ -1679,6 +1767,8 @@ test("subagent tools preserve structured governance inputs", async () => {
   assert.equal((result.details as { subagent: Subagent }).subagent.input.brief?.goal, "Evaluate method A independently");
   assert.equal((result.details as { subagent: Subagent }).subagent.input.prompt, "Read the inputs, run method A, and summarize the result.");
   assert.deepEqual(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : ""), {
+    artifacts: [],
+    artifact_read_hint: "Use read_artifact with artifact_id and version. Child workspace paths are not parent-local paths.",
     brief: "Method A found a stable result.",
     finalText: "Method A found a stable result.",
     id: "subagent-1",
@@ -1695,6 +1785,38 @@ test("subagent tools preserve structured governance inputs", async () => {
   assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /steps/);
 });
 
+test("subagent result joins adjacent streamed assistant fragments", () => {
+  const timestamp = new Date().toISOString();
+  const subagent = {
+    steps: [{
+      content: "An earlier progress note.",
+      createdAt: timestamp,
+      id: "earlier-assistant",
+      kind: "assistant" as const,
+      status: "completed" as const,
+    }, {
+      content: "tool boundary",
+      createdAt: timestamp,
+      id: "tool",
+      kind: "tool" as const,
+      status: "completed" as const,
+    }, {
+      content: "Header: x,y\n",
+      createdAt: timestamp,
+      id: "final-fragment-1",
+      kind: "assistant" as const,
+      status: "completed" as const,
+    }, {
+      content: "Last: 5,25\nPASS",
+      createdAt: timestamp,
+      id: "final-fragment-2",
+      kind: "assistant" as const,
+      status: "completed" as const,
+    }],
+  };
+  assert.equal(subagentFinalText(subagent), "Header: x,y\nLast: 5,25\nPASS");
+});
+
 test("two task tool calls can run subagents concurrently", async () => {
   const timestamp = new Date().toISOString();
   let active = 0;
@@ -1702,6 +1824,12 @@ test("two task tool calls can run subagents concurrently", async () => {
   const tools = createWorkspaceTools(process.cwd(), {
     enabledConnectorIds: [],
     executePython: async () => { throw new Error("not used"); },
+    listArtifacts: async () => [
+      { id: "artifact-a", name: "sources.md", currentVersion: 2, originMeta: { subagentId: "subagent-a" } },
+      { id: "artifact-b", name: "sources.md", currentVersion: 1, originMeta: { subagentId: "subagent-b" } },
+      { id: "deleted", name: "old.md", currentVersion: 1, deletedAt: timestamp, originMeta: { subagentId: "subagent-a" } },
+      { id: "unrelated", name: "parent.md", currentVersion: 1 },
+    ] as Awaited<ReturnType<NonNullable<Parameters<typeof createWorkspaceTools>[1]["listArtifacts"]>>>,
     runSubagent: async (input): Promise<Subagent> => {
       active += 1;
       maxActive = Math.max(maxActive, active);
@@ -1731,6 +1859,10 @@ test("two task tool calls can run subagents concurrently", async () => {
 
   assert.equal(maxActive, 2);
   assert.deepEqual(results.map((result) => (result.details as { subagent: Subagent }).subagent.id), ["subagent-a", "subagent-b"]);
+  const summaries = results.map((result) => JSON.parse((result.content[0] as { text: string }).text));
+  assert.deepEqual(summaries[0].artifacts, [{ artifact_id: "artifact-a", name: "sources.md", version: 2 }]);
+  assert.deepEqual(summaries[1].artifacts, [{ artifact_id: "artifact-b", name: "sources.md", version: 1 }]);
+  assert.match(task.description, /isolated workspaces/);
 });
 
 test("task tool summarizes failed subagents with status contract metadata", async () => {

@@ -44,6 +44,7 @@ export async function searchWorkbench(
         kind: "project",
         label: project.name,
         projectId: project.id,
+        projectName: project.name,
       });
     }
     const sessions = store.listSessions(project.id, "all");
@@ -55,7 +56,9 @@ export async function searchWorkbench(
           kind: "session",
           label: session.title,
           projectId: project.id,
+          projectName: project.name,
           sessionId: session.id,
+          ...(session.archivedAt ? { archived: true } : {}),
         });
       }
     }
@@ -67,9 +70,11 @@ export async function searchWorkbench(
         id: `artifact:${artifact.id}`,
         kind: "artifact",
         label: artifact.name,
+        origin: artifact.origin,
         path: artifact.name,
         projectId: project.id,
-        ...(session ? { sessionId: session.id } : {}),
+        projectName: project.name,
+        ...(session ? { sessionId: session.id, sessionTitle: session.title } : {}),
       });
     }
   }

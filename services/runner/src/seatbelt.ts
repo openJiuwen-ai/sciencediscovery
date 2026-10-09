@@ -20,7 +20,7 @@ export function seatbeltString(value: string): string {
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
-async function canonicalPath(path: string): Promise<string> {
+export async function canonicalPath(path: string): Promise<string> {
   try {
     return await realpath(path);
   } catch {
@@ -66,6 +66,11 @@ export async function buildSeatbeltProfile(options: SeatbeltProfileOptions): Pro
 (allow sysctl-read)
 (allow mach-lookup)
 (allow ipc-posix-shm ipc-posix-sem)
+
+; Metadata only (stat/readlink, never contents). The /usr/bin/python3 and git
+; shims resolve the active developer directory through the /var/select symlink;
+; without this they report "no developer tools" inside the sandbox.
+(allow file-read-metadata)
 
 ; Stable operating-system and toolchain files. Workload-specific paths follow.
 (allow file-read*
@@ -127,4 +132,18 @@ export function seatbeltWorkspaceMapping(
       return relativePath ? `/workspace/${relativePath.split(sep).join("/")}` : "/workspace";
     },
   };
+}
+
+/**
+ * Bash prelude that makes `pwd` report the stable `/workspace` path.
+ *
+ * Seatbelt cannot mount a workspace at `/workspace`, so the shell really runs in
+ * the host directory. Commands that print or compare their cwd (`pwd -P`) would
+ * otherwise disagree with the path the API and the agent were told about.
+ */
+export function seatbeltPwdShim(hostRoot: string): string {
+  const root = `'${hostRoot.replaceAll("'", "'\\''")}'`;
+  return `pwd() { local __p; __p=$(builtin pwd "$@") || return; `
+    + `case "$__p" in ${root}) __p=/workspace;; ${root}/*) __p=/workspace\${__p#${root}};; esac; `
+    + `printf '%s\\n' "$__p"; }\n`;
 }

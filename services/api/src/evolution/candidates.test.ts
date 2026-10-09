@@ -17,11 +17,13 @@
  * lookup come off the wire and both land in a path join.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { after, test } from "node:test";
+
 
 import { CandidateSources } from "./candidates.js";
 

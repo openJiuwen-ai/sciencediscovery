@@ -1,9 +1,11 @@
 # Web Search 与 Web Fetch
 
+本文描述**产品自有**的 `web_search` 和 `web_fetch` 工具。native executor 默认显示它们；默认 JiuwenSwarm 后端则使用自己的 `free_search`/`paid_search` 和 `fetch_webpage`。若要让 JiuwenSwarm 使用产品工具，可设置 `SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours`。以下权限、供应商、缓存、审计与斜杠命令细节针对产品 Web 调用，不能直接套用到 Swarm 自有工具。见 [Agent 后端](agent-backends.md)。
+
 ## 边界
 
 Web 是全局基础能力，不是 MCP Source，也没有 Session 级 Provider 覆盖。
-模型始终看到 `web_search` 与 `web_fetch`；Node 负责权限、凭证、缓存、CAS
+选择产品工具时，模型会看到 `web_search` 与 `web_fetch`；Node 负责权限、凭证、缓存、CAS
 和审计，**各厂商的实际调用也在 Node 进程内完成**。
 
 ```text
@@ -92,7 +94,7 @@ custom/direct 模式也不再需要隔离进程，代理作用域天然限制在
   自动转换成科研 Evidence。
 
 Node 原生 Agent Loop 会在远程工具结果进入历史和 UI 之前净化其中的框架标签
-（见 agent-backend.md）。未公开或敏感信息是否可以出站属于调用前授权问题；
+（见[原生 Agent 后端](../developer-docs/agent-backend.md)）。JiuwenSwarm 使用不同的工具与结果路径，此处的原生行为不保证适用于它。未公开或敏感信息是否可以出站属于调用前授权问题；
 网页内容本身的科研质量仍由后续 Review 判断。
 
 ## 斜杠命令

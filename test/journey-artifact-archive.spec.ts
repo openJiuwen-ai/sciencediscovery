@@ -29,6 +29,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-artifact-archive.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * Read the downloaded archive with CPython's `zipfile`, which shares no code
  * with the packer under test. Handing the file back to the same library that
@@ -166,4 +169,6 @@ test("J10 多份交付物可以打包成一个压缩包带走", { tag: "@mocked"
     await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

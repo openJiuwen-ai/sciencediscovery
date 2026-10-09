@@ -74,11 +74,8 @@ import type {
   SessionArtifactOutput,
   SessionDetail,
   SessionListState,
-
   RevisePlanRequest,
   SessionPlan,
-
-
   SessionRunEvent,
   SessionUsageSummary,
   ScientificArtifact,
@@ -263,9 +260,11 @@ import { PermissionCards, PermissionGrantManager } from "./Permissions.js";
 import { translateActive, useLocale, type MessageKey } from "./i18n/index.js";
 import { formatRunFailure } from "./run-failure.js";
 import {
+  artifactOriginLabel,
   ComposerCommandChips,
   ComposerReferenceChips,
   ComposerReferenceMenu,
+  composerInsertionCaret,
   composerReferenceToken,
   composerSkillSuggestions,
   GLOBAL_SEARCH_DEBOUNCE_MS,
@@ -1120,9 +1119,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // live in the settings overrides, not on the Session record).
   const [keKbs, setKeKbs] = useState<KeKb[]>([]);
   const [sessionSettings, setSessionSettings] = useState<RuntimeSettingsDetails>();
-  // A graph node a report chip asked to open; MemoryGraphView selects it on
-  // change, then clears the pending state. Set by handleChipClick (paper chips).
-
   // A graph node a report chip asked to open; MemoryGraphExplorer picks it
   // up as `initialNodeId` on mount (and reacts to changes while open via an
   // effect — see MemoryGraphExplorer). Set by handleChipClick (paper /
@@ -1143,6 +1139,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // Timelines are buffered per Session so a run that keeps streaming while the
   // user is elsewhere still has its steps to show when they switch back.
   const [runTimelines, setRunTimelines] = useState<SessionRunTimelines>({});
+  // refreshSession awaits network data; read disclosure choices at application
+  // time, including clicks made while that refresh was in flight.
+  const runTimelinesRef = useRef(runTimelines);
+  runTimelinesRef.current = runTimelines;
   // Activity card expansion lives here, not inside the cards: a card group
   // moves between a conversation block and the tail of the flow as runs start
   // and finish, and component-local state would reset on every such move.
@@ -1314,6 +1314,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  // With the JiuwenSwarm backend its language follows the UI's: on load, and whenever the user switches.
+  useEffect(() => {
+    if (webSettings?.backend !== "jiuwenswarm") return;
+    void client.setJiuwenSwarmLanguage(locale).catch(() => undefined);
+  }, [client, locale, webSettings?.backend]);
   const listSkillDrafts = useCallback(() => client.listSkillReviewDrafts(), [client]);
 
   // Derived rather than stored: the panel must show the *current* record, so a
@@ -2126,8 +2131,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setClaims(claimItems);
     setEvidenceLinks(linkItems);
 
+    const liveTimeline = runTimelinesRef.current[sessionId];
     setReplayTimelines((current) => {
-      const hydrated = hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun);
+      const hydrated = hydrateTerminalRunTimelines(current[sessionId] ?? {}, terminalRuns, eventsByRun, liveTimeline);
       for (const [runId, timeline] of Object.entries(hydrated)) {
         hydrated[runId] = hydrateTimelineSubagents(
           timeline,
@@ -2436,7 +2442,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       isInFlight: () => sessionCreationInFlight.current,
       onCreated: (created) => {
         if (activeProjectIdRef.current !== projectId) {
-          pushToast("success", t("app.sessionCreated"), created.title);
+          pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
           return;
         }
         setSessions((current) => sessionListState === "archived" ? [created] : [created, ...current]);
@@ -2449,7 +2455,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           setMessage(initialMessage);
           setComposerReferences([]);
         }
-        pushToast("success", t("app.sessionCreated"), created.title);
+        pushToast("success", t("app.sessionCreated"), sessionTitle(created.title));
       },
       onError: setError,
       setInFlight: (value) => { sessionCreationInFlight.current = value; },
@@ -3967,9 +3973,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const cursor = composerTextarea.current?.selectionStart ?? message.length;
     const trigger = getComposerTrigger(message, cursor);
     if (!trigger) return;
+    // Typing goes on behind what was inserted, not at the start of the box.
+    const placeCaret = (position: number) => requestAnimationFrame(() => {
+      const textarea = composerTextarea.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(position, position);
+    });
     if (suggestion.command) {
       setMessage(insertComposerCommand(message, trigger, suggestion.command, cursor));
-      requestAnimationFrame(() => composerTextarea.current?.focus());
+      placeCaret(composerInsertionCaret(trigger, suggestion.command));
       return;
     }
     setMessage(insertComposerReference(message, trigger, suggestion.reference, cursor));
@@ -3977,7 +3990,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       reference.kind === suggestion.reference.kind && reference.id === suggestion.reference.id)
       ? current
       : [...current, suggestion.reference]);
-    requestAnimationFrame(() => composerTextarea.current?.focus());
+    placeCaret(composerInsertionCaret(trigger, composerReferenceToken(suggestion.reference)));
   }
 
   function removeComposerReference(reference: ComposerReference): void {
@@ -4171,8 +4184,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const activeProjectLabel = activeProject
     ? resourceLabelWithDraft(renameTarget, renameDraft, "project", activeProject.id, activeProject.name)
     : t("app.workspace");
+  // A new session is stored as UNTITLED_SESSION_TITLE until it is named; shown in the UI's language.
+  const sessionTitle = (title: string) => title === UNTITLED_SESSION_TITLE ? t("app.untitledSession") : title;
   const activeSessionLabel = session
-    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, session.title)
+    ? resourceLabelWithDraft(renameTarget, renameDraft, "session", session.id, sessionTitle(session.title))
     : t("app.startResearchSession");
   const mainProjectRenameTarget = activeProject
     && renameTarget?.kind === "project"
@@ -4199,7 +4214,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
     ? artifacts.map((artifact) => ({
-      detail: `${artifact.kind} · ${artifact.origin} · v${artifact.currentVersion}`,
+      detail: `${artifact.kind} · ${artifactOriginLabel(artifact.origin, t)} · v${artifact.currentVersion}`,
       reference: {
         createdInSessionTitle: artifact.createdInSessionTitle,
         id: artifact.id,
@@ -4309,8 +4324,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           plans={group.plans}
         />
 
-
-        <SubagentCards onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
+        <SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
         <GovernedDownloadCards
@@ -4446,12 +4460,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     && renameTarget.location === "sidebar"
                     ? renameTarget
                     : undefined;
-                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, item.title);
+                  const label = resourceLabelWithDraft(renameTarget, renameDraft, "session", item.id, sessionTitle(item.title));
                   return <div className="nav-resource" key={item.id}>
                     {inlineTarget && !item.archivedAt ? <div className={item.id === activeSessionId ? "nav-item nav-item-inline-editor active" : "nav-item nav-item-inline-editor"}>
                       <span className="nav-icon"><SessionIcon size={15} /></span>
                       <InlineRenameInput
-                        ariaLabel={t("app.renameSessionAria", { name: item.title })}
+                        ariaLabel={t("app.renameSessionAria", { name: sessionTitle(item.title) })}
                         className="nav-inline-rename"
                         disabled={renameSavingKeys.has(resourceTargetKey(inlineTarget))}
                         onChange={setRenameDraft}
@@ -4462,17 +4476,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       className={item.id === activeSessionId ? "nav-item active" : "nav-item"}
                       onClick={() => { setOpenSubagentId(undefined); setWorkspaceView("session"); setActiveSessionId(item.id); setOpenSessionMenuId(undefined); }}
                       onDoubleClick={() => { if (!item.archivedAt) beginInlineRename(target, "sidebar"); }}
-                      title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: item.title })}
+                      title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : t("app.renameSessionHint", { name: sessionTitle(item.title) })}
                       type="button"
                     >
-                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${item.title} · ${t("sidebar.archived")}` : item.title}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
+                      <span className="nav-icon">{item.archivedAt ? <ArchiveIcon size={15} /> : <SessionIcon size={15} />}</span><span title={item.archivedAt ? `${sessionTitle(item.title)} · ${t("sidebar.archived")}` : sessionTitle(item.title)}>{label}{item.archivedAt ? ` · ${t("sidebar.archived")}` : ""}</span>
                     </button>}
                     <SessionOverflowMenu
                       archived={Boolean(item.archivedAt)}
                       busy={runningSessionIds.has(item.id) || lifecycleBusy}
                       label={label}
                       onArchive={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("archive", item.id); }}
-                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: item.title }); }}
+                      onDelete={() => { setOpenSessionMenuId(undefined); void openDeletion({ id: item.id, kind: "session", label: sessionTitle(item.title) }); }}
                       onRename={() => { setOpenSessionMenuId(undefined); beginInlineRename(target, "sidebar"); }}
                       onRestore={() => { setOpenSessionMenuId(undefined); void changeSessionArchiveState("restore", item.id); }}
                       onSettings={() => { setOpenSessionMenuId(undefined); void openScopedSettings({ id: item.id, kind: "session", label: item.title }); }}
@@ -4583,7 +4597,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 ) : null}
               </div>
               <div className="session-bar-meta">
-                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: session.title })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
+                {session && <button className="secondary-button compact-button session-trajectory-button" type="button" aria-pressed={trajectorySession?.id === session.id} onClick={() => setTrajectorySession(current => current?.id === session.id ? undefined : { id: session.id, title: sessionTitle(session.title) })}>{t(trajectorySession?.id === session.id ? "app.showConversation" : "app.showTrajectory")}</button>}
                 {session ? <span className="session-runner-target" title={selectedRunnerIds.length
                   ? t("app.runnerSelectionTooltip", { hosts: selectedRunnerNames.join(", ") })
                   : t("app.runnerSelectionEmpty")}>
@@ -4613,7 +4627,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 </ol>
               </div>
             ) : trajectorySession && session.id === trajectorySession.id ? (
-              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={session.title} port={client.trajectory} locale={locale} onClose={() => {
+              <TrajectoryViewer key={trajectorySession.id} sessionId={trajectorySession.id} title={sessionTitle(session.title)} port={client.trajectory} locale={locale} onClose={() => {
                 setTrajectorySession(undefined);
                 // The inline view lives in the document flow, so on narrow stacked
                 // layouts the page may sit scrolled past the session bar; bring the
@@ -4671,6 +4685,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   ) : (
                     <Fragment key={`run-${block.runId}`}>
                       <RunTimeline
+                        subagentDisclosure={{ expandedCards: activityCardExpansion, onToggleCard: toggleActivityCard }}
                         artifactReviews={artifactReviews}
                         entries={sessionReplayTimelines[block.runId]?.entries ?? EMPTY_TIMELINE}
                         ideaResearchClient={client}
@@ -4710,6 +4725,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     </Fragment>
                   ))}
                   <RunTimeline
+                    subagentDisclosure={{ expandedCards: activityCardExpansion, onToggleCard: toggleActivityCard }}
                     artifactReviews={artifactReviews}
                     entries={runTimeline}
                     ideaResearchClient={client}
@@ -5069,10 +5085,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
             setMessage(`/evolve-design make the artifact ${seed.label} better: `);
           }}
           onMissing={closeMissingArtifact}
-          onNavigateArtifact={(name) => {
-            // Navigating to a different artifact via a parent link: that
-            // artifact's version was not pinned by the original chip.
-            setArtifactModalVersion(undefined);
+          onNavigateArtifact={(name, version) => {
+            // Provenance links can target an older version of the artifact
+            // already open. Preserve that pin even when the name is unchanged.
+            setArtifactModalVersion(version);
             setArtifactModalSessionId(undefined);
             setArtifactModalName(name);
           }}
@@ -5296,7 +5312,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 skills={skills}
                 workspaceLaunch={skillWorkspaceLaunch}
               /> : null}
-              {systemSettingsGroup === "specialists" ? <SpecialistManager client={client} connectors={connectors} onChanged={setSpecialists} onError={reportSystemSettingsError} skills={skills} /> : null}
+              {systemSettingsGroup === "specialists" ? <SpecialistManager client={client} connectors={connectors} onChanged={setSpecialists} onError={reportSystemSettingsError} skills={skills} skillsBackend={webSettings?.backend} /> : null}
               {systemSettingsGroup === "permissions" ? <PermissionGrantManager grants={permissionGrants.filter((grant) => grant.scope !== "once")} onRevoke={(grant) => void revokePermission(grant)} /> : null}
               {systemSettingsGroup === "runner-add" ? <RemoteHostManager
                 client={client} addMode onHostsChange={updateSettingsRunners}
@@ -5384,6 +5400,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               skillLibraries={skillLibraries}
               skillScope={settingsTarget.kind === "project" ? "project" : "session"}
               skills={skills}
+              skillsBackend={webSettings?.backend}
             /> : <p className="muted">{t("app.loadingScopedSettings")}</p>}
           </section>
         </div>

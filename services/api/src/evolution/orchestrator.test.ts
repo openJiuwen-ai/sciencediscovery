@@ -20,12 +20,21 @@
  * real orchestrator together — the seams where this commit's bugs would live.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { after, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+// Hooks are frozen once collection ends, so a helper or a test body cannot
+// register one while it runs. It hands its teardown to this list instead, and
+// the one hook declared here — at collection time — drains it, which is the
+// order the module-level `after` calls used to run in.
+const cleanups: Array<() => unknown> = [];
+const cleanup = (fn: () => unknown) => { cleanups.push(fn); };
+after(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { VersionStore, committedWorkspaceSnapshot, withWorkspaceMutation } from "@sciencediscovery/cas";
 import { resolve } from "node:path";
-import { after, test } from "node:test";
+
 
 import type { EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRun } from "@sciencediscovery/schema";
 
@@ -185,14 +194,14 @@ async function harness(sidecarUrl: string, name: string, options: {
     options.runTokens ?? null,
     { ...options },
   );
-  after(() => rm(dataDir, { force: true, recursive: true }));
+  cleanup(() => rm(dataDir, { force: true, recursive: true }));
   return { orchestrator, store };
 }
 
 test("test-gated Evolution stages the committed Workspace while an execution is writing", async () => {
   const dataDir = temporaryDataDir("evolve-stable-source");
   const workspace = resolve(dataDir, "workspace"); await mkdir(workspace, { recursive: true });
-  after(() => rm(dataDir, { recursive: true, force: true }));
+  cleanup(() => rm(dataDir, { recursive: true, force: true }));
   const versions = new VersionStore(dataDir);
   await writeFile(resolve(workspace, "test.py"), "committed test");
   await committedWorkspaceSnapshot(versions, workspace);
@@ -204,7 +213,7 @@ test("test-gated Evolution stages the committed Workspace while an execution is 
   }, { kind: "test" });
   await ready;
   const sidecar = await startFakeSidecar({ events: [FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-stable-export", {
     workspacePath: () => workspace, workspaceVersions: versions,
   });
@@ -240,7 +249,7 @@ test("a full run is persisted, published and settled", async () => {
       FINISHED("succeeded", 1),
     ],
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-full");
 
   const seen: EvolveEventRecord[] = [];
@@ -277,7 +286,7 @@ test("stop is carried through to the sidecar and leaves a resumable watermark", 
     ],
     holdUntilStop: true,
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-stop");
 
   const run = await orchestrator.start({ goal: goal(6), sessionId: "s1" });
@@ -300,7 +309,7 @@ test("a stream that ends without a terminal event fails the run rather than hang
   const sidecar = await startFakeSidecar({
     events: [{ algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }],
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-truncated");
 
   const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
@@ -325,7 +334,7 @@ test("an unreachable sidecar fails the run with a readable error", async () => {
 
 test("a refused run surfaces the sidecar's status", async () => {
   const sidecar = await startFakeSidecar({ status: 400 });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-refused");
 
   const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
@@ -344,7 +353,7 @@ test("a replayed record is neither re-logged nor re-published", async () => {
       record(3, FINISHED("succeeded", 1)),
     ],
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-replay");
 
   const published: number[] = [];
@@ -377,7 +386,7 @@ test("a token gate trips the run and says which budget ran out", async () => {
     ],
     holdUntilStop: true,
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-budget-tokens");
 
   const run = await orchestrator.start({ goal: goal(6, { maxTokens: 4_000 }), sessionId: "s1" });
@@ -398,7 +407,7 @@ test("a cost gate trips the run", async () => {
     ],
     holdUntilStop: true,
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-budget-cost");
 
   const run = await orchestrator.start({ goal: goal(6, { maxCostCents: 500 }), sessionId: "s1" });
@@ -413,7 +422,7 @@ test("a wall-clock gate trips a search that has gone quiet", async () => {
     events: [{ algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }],
     holdUntilStop: true,
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-budget-clock");
 
   const run = await orchestrator.start({ goal: goal(6, { maxSeconds: 0.15 }), sessionId: "s1" });
@@ -429,7 +438,7 @@ test("a run inside its budget is untouched", async () => {
       FINISHED("succeeded", 1),
     ],
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-budget-ok");
 
   const run = await orchestrator.start({ goal: goal(2, { maxCostCents: 500, maxTokens: 200_000 }), sessionId: "s1" });
@@ -442,7 +451,7 @@ test("a user stop is still reported as a stop, not as a budget", async () => {
     events: [{ algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }],
     holdUntilStop: true,
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-stop-vs-budget");
 
   const run = await orchestrator.start({ goal: goal(6), sessionId: "s1" });
@@ -455,7 +464,7 @@ test("a user stop is still reported as a stop, not as a budget", async () => {
 
 test("the sidecar is told what to grade with, not only what the scorecard is called", async () => {
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const tokens = new RunTokenRegistry();
   const { orchestrator, store } = await harness(sidecar.url, "evolve-spec", {
     apiOrigin: "http://127.0.0.1:4310",
@@ -479,7 +488,7 @@ test("the sidecar is told what to grade with, not only what the scorecard is cal
 
 test("the model proxy URL the sidecar is handed is absolute", async () => {
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-origin", {
     apiOrigin: "http://127.0.0.1:4310",
     runTokens: new RunTokenRegistry(),
@@ -533,7 +542,7 @@ function csvCas(rows: number) {
 
 test("a measured run is staged before the sidecar is asked to start", async () => {
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-staged", {
     cas: csvCas(40),
   });
@@ -558,7 +567,7 @@ test("a measured run is staged before the sidecar is asked to start", async () =
 
 test("a run whose dataset cannot be staged fails with the reason on the record", async () => {
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   // No CAS: the goal names a dataset this control plane cannot produce.
   const { orchestrator, store } = await harness(sidecar.url, "evolve-unstageable");
 
@@ -572,7 +581,7 @@ test("a run whose dataset cannot be staged fails with the reason on the record",
 
 test("a run that dies before the sidecar answers still tells its subscribers", async () => {
   const sidecar = await startFakeSidecar({ events: [] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "evolve-settle");
 
   const run = await orchestrator.start({ goal: measuredGoal(), sessionId: "s1" });
@@ -626,7 +635,7 @@ test("the search tuning reaches the sidecar, renamed into its options bag", asyn
   // question "did the prior help?" comes back answered about a run that never
   // used one. This is the hop that has a name change in it.
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "search-tuning", {
     cas: csvCas(40),
   });
@@ -652,7 +661,7 @@ test("a prior exponent of zero is sent, not dropped as a default", async () => {
   // never considered the prior — and the run record is what a re-run is
   // reproduced from.
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "prior-zero", {
     cas: csvCas(40),
   });
@@ -672,7 +681,7 @@ test("a prior exponent of zero is sent, not dropped as a default", async () => {
 
 test("a judged run is sent a rubric and its own model token, and no dataset", async () => {
   const sidecar = await startFakeSidecar({ events: [EXPANDED, FINISHED("succeeded", 1)] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const tokens = new RunTokenRegistry();
   const { orchestrator, store } = await harness(sidecar.url, "evolve-judged", {
     apiOrigin: "http://127.0.0.1:4310",
@@ -733,7 +742,7 @@ test("a finished run hands its winner to whatever saves results", async () => {
       FINISHED("succeeded", 1),
     ],
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
 
   const published: Array<{ runId: string; winnerCodeHash: string }> = [];
   const { orchestrator, store } = await harness(sidecar.url, "publish-winner", {
@@ -765,7 +774,7 @@ test("nothing is published when the seed won", async () => {
       FINISHED("succeeded", 0),
     ],
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
 
   const published: string[] = [];
   const { orchestrator, store } = await harness(sidecar.url, "publish-seed-won", {
@@ -790,7 +799,7 @@ test("a run that settled stays settled when publishing throws", async () => {
       FINISHED("succeeded", 1),
     ],
   });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
 
   const { orchestrator, store } = await harness(sidecar.url, "publish-throws", {
     publishResult: async () => { throw new Error("artifact store unavailable"); },
@@ -809,7 +818,7 @@ test("an interrupted PUCT run is not told it can resume", async () => {
   // who lost fifteen candidates to a control-plane restart went looking for a
   // resume that does not exist.
   const sidecar = await startFakeSidecar({ events: [] });
-  after(() => sidecar.close());
+  cleanup(() => sidecar.close());
   const { orchestrator, store } = await harness(sidecar.url, "adopt-puct");
 
   const run = await store.createRun({ goal: goal(), sessionId: "s1" });

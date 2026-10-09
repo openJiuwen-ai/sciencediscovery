@@ -1,9 +1,12 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test, describe } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import test, { type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 import { SessionStore } from "../store.js";
 import { installedPlugins } from "./catalog.js";
 import { builtinMcpSourceManifests, filterEnabledMcpSources } from "@sciencediscovery/mcp-sources/plugin";
@@ -41,9 +44,11 @@ test("all built-in source plugins support project isolation, session inheritance
   assert.deepEqual(filterEnabledMcpSources(selected, store.getSessionSettings(session.id).effective.plugins), ["pubmed"]);
 });
 
-test("ApplyPort and every classic settings writer share the catalog mutation boundary", async t => {
-  for (const writer of ["project", "session", "global", "composer", "runner"] as const) {
-    await t.test(writer, async t => {
+describe("ApplyPort and every classic settings writer share the catalog mutation boundary", () => {
+for (const writer of ["project", "session", "global", "composer", "runner"] as const)  {
+ test(writer, async (t) => {
+
+
       const { store, project, control } = await fixture(t);
       const session = await store.createSession(project.id, "Settings", {}, {}, { allowUnconfiguredModel: true });
       const before = control.snapshot({ projectId: project.id });
@@ -91,13 +96,16 @@ test("ApplyPort and every classic settings writer share the catalog mutation bou
         assert.equal(store.getSession(session.id)?.remoteRunnerHostIds, undefined);
         assert.equal(store.getSessionSettings(session.id).effective.plugins?.plan?.enabled, false);
       }
-    });
-  }
+    
+ });
+ }
 });
 
-test("Bridge rechecks inherited revision after queued classic writes, and a rejected CAS releases the queue", async t => {
-  for (const pluginId of ["host.settings", "skill"]) {
-    await t.test(pluginId, async t => {
+describe("Bridge rechecks inherited revision after queued classic writes, and a rejected CAS releases the queue", () => {
+for (const pluginId of ["host.settings", "skill"])  {
+ test(pluginId, async (t) => {
+
+
       const { store, project, control } = await fixture(t);
       const session = await store.createSession(project.id, "Child", {}, {}, { allowUnconfiguredModel: true });
       const scope = { projectId: project.id, sessionId: session.id };
@@ -115,8 +123,9 @@ test("Bridge rechecks inherited revision after queued classic writes, and a reje
       assert.deepEqual(store.getSessionSettings(session.id).overrides, {});
       await store.replaceSessionSettings(session.id, { plugins: { plan: { enabled: false } } });
       assert.equal(store.getSessionSettings(session.id).effective.plugins?.plan?.enabled, false);
-    });
-  }
+    
+ });
+ }
 });
 
 test("project and session overrides persist, retain inheritance and reject undeclared configuration",async t=>{

@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.candidates import run_candidate
 from sciencediscovery_evolve.sandbox_run import RunStopped, run_killable
 from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability

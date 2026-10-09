@@ -82,7 +82,7 @@ __sa_emit() {
   printf '%s %s %s %s %s %s %s %s\n' __SA_RESULT__ "$1" "$2" \
     "$(__sa_b64enc <"$__sa_out" 2>/dev/null)" \
     "$(__sa_b64enc <"$__sa_err" 2>/dev/null)" \
-    "$(printf %s "$(pwd -P)" | __sa_b64enc)" \
+    "$(printf %s "$(builtin pwd -P)" | __sa_b64enc)" \
     "$(env -0 | __sa_b64enc)" "$3"
 }
 __sa_on_exit() {
@@ -579,7 +579,7 @@ export class ShellSessionManager {
     });
     const commandArguments = [
       sandbox === "seatbelt" ? "/bin/bash" : "/usr/bin/bash",
-      "--noprofile", "--norc", "-c", SHELL_SESSION_WORKER,
+      "--noprofile", "--norc", "-c", `${launch.shellPrelude ?? ""}${SHELL_SESSION_WORKER}`,
     ];
     const child = await spawnSandboxProcess(
       this.config,

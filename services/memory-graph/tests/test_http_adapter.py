@@ -30,6 +30,8 @@ from typing import Any
 import httpx
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_memory_graph._neo4j_http import _HttpResult, _HttpRecord, _HttpSession
 
 

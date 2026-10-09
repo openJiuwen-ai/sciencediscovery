@@ -1,0 +1,15 @@
+diff --git a/jiuwenswarm/gateway/channel_manager/tui/tui_channel.py b/jiuwenswarm/gateway/channel_manager/tui/tui_channel.py
+index ee1731b..b2f4b12 100644
+--- a/jiuwenswarm/gateway/channel_manager/tui/tui_channel.py
++++ b/jiuwenswarm/gateway/channel_manager/tui/tui_channel.py
+@@ -235,4 +235,10 @@ class TuiChannel(BaseWsChannel):
+                 "id": getattr(agent_ref, "id", ""),
+             }
+         frame = {"type": "event", "event": event_name, "payload": out_payload}
++        # A session can have overlapping pause/resume streams. Preserve the
++        # envelope id separately from payload.request_id (the approval id), so
++        # clients cannot mistake an old stream's completion for the new one.
++        stream_request_id = getattr(msg, "id", None)
++        if stream_request_id:
++            frame["stream_request_id"] = stream_request_id
+         return json.dumps(frame, ensure_ascii=False)

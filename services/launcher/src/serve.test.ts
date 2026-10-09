@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { after, before, describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+
 
 import type { ServeCredentials } from "./bootstrap-tokens.js";
 import { defaultSettings } from "./cli-options.js";
+import { startMemoryGraph } from "./memory-graph.js";
 import type { PayloadManifest } from "./payload-manifest.js";
 import { mcpProbeRuntime, planServices, seedProvisioner, type ServeContext, type ServicePlanContext } from "./serve.js";
 
@@ -54,12 +57,65 @@ function contextFor(overrides: Partial<ServicePlanContext> = {}): ServicePlanCon
     credentials,
     manifest,
     payloadRoot: "/cache/payload/abc",
-    settings: defaultSettings({}, "/opt/sciencediscovery"),
+    // The release binary now defaults to JiuwenSwarm; most tests below are
+    // about the native-mode topology, so this fixture opts back out and the
+    // "jiuwenswarm mode" tests turn it on explicitly where they mean to.
+    settings: { ...defaultSettings({}, "/opt/sciencediscovery"), jiuwenswarm: false },
     ...overrides,
   };
 }
 
 describe("serve topology", () => {
+  test("bundles a loopback memory service with shared credentials in both executors", () => {
+    for (const jiuwenswarm of [false, true]) {
+      const context = contextFor({ manifest: { ...manifest, memoryGraph: { sitePackages: "memory-graph/site-packages" } } });
+      context.settings.jiuwenswarm = jiuwenswarm;
+      const [, api, memory] = planServices(context);
+      assert.equal(memory?.command, "/cache/payload/abc/python/bin/python3");
+      assert.deepEqual(memory?.args, ["-m", "sciencediscovery_memory_graph.server"]);
+      assert.equal(memory?.env.PYTHONPATH, "/cache/payload/abc/memory-graph/site-packages");
+      assert.equal(memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_HOST, "127.0.0.1");
+      assert.equal(memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR, join(context.settings.dataDir, "memory-graph"));
+      assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE, "1");
+      assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_URL, "http://127.0.0.1:17674");
+      assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN, memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN);
+      assert.match(memory!.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN!, /^[a-f0-9]{64}$/);
+    }
+  });
+
+  test("honors disable, external service and local overrides without spawning duplicates", () => {
+    const context = contextFor({ manifest: { ...manifest, memoryGraph: { sitePackages: "memory-graph/site-packages" } } });
+    context.baseEnv = { SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE: "0" };
+    assert.equal(planServices(context).length, 2);
+    context.baseEnv = { SCIENCE_AGENT_MEMORY_GRAPH_URL: "http://127.0.0.1:19999", SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: "external" };
+    const external = planServices(context);
+    assert.equal(external.length, 2);
+    assert.equal(external[1]?.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE, "1");
+    assert.equal(external[1]?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN, "external");
+    context.baseEnv = { SCIENCE_AGENT_MEMORY_GRAPH_PORT: "19999", SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR: "/persist/old-graph", SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: "local" };
+    const [, api, memory] = planServices(context);
+    assert.equal(memory?.healthUrl, "http://127.0.0.1:19999/health");
+    assert.equal(memory?.env.SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR, "/persist/old-graph");
+    assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN, "local");
+    context.baseEnv.SCIENCE_AGENT_MEMORY_GRAPH_PORT = "not-a-port";
+    assert.throws(() => planServices(context), /MEMORY_GRAPH_PORT/);
+  });
+
+  test("optional memory startup failure disables the API feature and cleans the sidecar", async () => {
+    const context = contextFor({ manifest: { ...manifest, memoryGraph: { sitePackages: "memory-graph/site-packages" } } });
+    const [, api, memory] = planServices(context);
+    let stopped = false;
+    const logs: string[] = [];
+    const ready = await startMemoryGraph({
+      start: async () => { throw new Error("port already in use"); },
+      stop: async () => { stopped = true; },
+    }, memory!, api!, (line) => logs.push(line));
+    assert.equal(ready, false);
+    assert.equal(stopped, true);
+    assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE, "0");
+    assert.match(logs.join("\n"), /Continuing without it/);
+  });
+
   test("starts the runner, then the API, each health gated — no Python service", () => {
     const services = planServices(contextFor());
     // The agent loop, the MCP client and the web providers all run inside the
@@ -198,6 +254,45 @@ describe("serve topology", () => {
   test("never references Docker in the process plan", () => {
     const plan = JSON.stringify(planServices(contextFor({ baseEnv: {} })));
     assert.ok(!/docker/i.test(plan), "the binary serve path must not invoke Docker");
+  });
+});
+
+describe("jiuwenswarm mode", () => {
+  test("native mode plans no executor override and the API keeps the public port", () => {
+    const [, api] = planServices(contextFor());
+    assert.equal(api?.env.SCIENCE_AGENT_PORT, "4310");
+    assert.equal(api?.env.SCIENCE_AGENT_EXECUTOR, undefined);
+    assert.equal(api?.env.SCIENCE_AGENT_ADAPTER_URL, undefined);
+    assert.equal(api?.env.SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE, "0");
+    assert.equal(api?.healthUrl, "http://127.0.0.1:4310/health");
+  });
+
+  test("moves the API to port + 100 and points it at the adapter on the public port", () => {
+    const context = contextFor();
+    context.settings.jiuwenswarm = true;
+    const [, api] = planServices(context);
+    assert.equal(api?.env.SCIENCE_AGENT_PORT, "4410");
+    assert.equal(api?.env.SCIENCE_AGENT_EXECUTOR, "jiuwenswarm");
+    assert.equal(api?.env.SCIENCE_AGENT_ADAPTER_URL, "http://127.0.0.1:4310");
+    assert.equal(api?.healthUrl, "http://127.0.0.1:4410/health");
+  });
+
+  test("only planServices' two services are the API and runner; the adapter and JiuwenSwarm are started separately by serve() once ports are known", () => {
+    const context = contextFor();
+    context.settings.jiuwenswarm = true;
+    assert.deepEqual(planServices(context).map((service) => service.name), [
+      "sandbox runner",
+      "control API and Web UI",
+    ]);
+  });
+
+  test("respects a custom port for the shift", () => {
+    const context = contextFor();
+    context.settings.jiuwenswarm = true;
+    context.settings.port = 8080;
+    const [, api] = planServices(context);
+    assert.equal(api?.env.SCIENCE_AGENT_PORT, "8180");
+    assert.equal(api?.env.SCIENCE_AGENT_ADAPTER_URL, "http://127.0.0.1:8080");
   });
 });
 

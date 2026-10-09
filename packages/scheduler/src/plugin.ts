@@ -10,7 +10,7 @@ export { manifest } from "./manifest.js";
 export type SubagentExecutionPort = NonNullable<WorkspaceToolOptions["runSubagent"]>;
 export interface SchedulingPolicy { dispatch: SubagentExecutionPort }
 /** Policies choose dispatch; execution, permission checks and child budgets remain with the port. */
-export function schedulerPlugin<M extends RuntimeMessage>(ports: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy">, policy?: SchedulingPolicy): PluginDefinition<RuntimeContribution<M>> {
+export function schedulerPlugin<M extends RuntimeMessage>(ports: Pick<WorkspaceToolOptions, "runSubagent" | "specialists" | "toolPolicy" | "listArtifacts">, policy?: SchedulingPolicy): PluginDefinition<RuntimeContribution<M>> {
   return { manifest, create: () => ({ contribution: {
     ...emptyRuntimeContribution<M>(),
     tools: createSubagentTools({ ...ports, runSubagent: ports.runSubagent ? policy?.dispatch ?? ports.runSubagent : undefined }),

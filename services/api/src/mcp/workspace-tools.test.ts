@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import test from "node:test";
+
 
 import { createBuiltinMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 
@@ -49,6 +51,45 @@ test("paper extraction stays in the owning Workspace even when another job ID is
     else await assert.rejects(tools.paperExtractPdf!({ artifactJobId: "known-job" }), /another Agent Workspace/);
     assert.equal(extracted, allowed);
   }
+});
+
+test("a PDF already in the workspace, such as an upload, is extracted by its path", async () => {
+  for (const [prefix, given, expected] of [
+    [undefined, "enzyme_paper.pdf", "enzyme_paper.pdf"],
+    [undefined, "/workspace/uploads/enzyme_paper.pdf", "uploads/enzyme_paper.pdf"],
+    ["subagents/child", "enzyme_paper.pdf", "subagents/child/enzyme_paper.pdf"],
+  ] as const) {
+    const requested: Array<{ outputPathPrefix?: string; path: string }> = [];
+    const root = prefix ? `${prefix}/papers/one` : "papers/one";
+    const tools = createMcpWorkspaceTools({
+      artifactManager: {} as GovernedDownloadManager,
+      broker: {} as McpGovernanceBroker, catalog: {} as McpSourceCatalog, enabledSourceIds: [],
+      emitPermissionRequest() {}, pauseExternalWait: () => () => undefined,
+      paperService: { extractWorkspacePdf: async (input: { outputPathPrefix?: string; path: string }) => {
+        requested.push(input);
+        return { id: "one", manifestPath: `${root}/analysis/manifest.json`, extraction: { pageCount: 2, textPath: "text.md", warnings: [] } };
+      } } as unknown as PaperService,
+      permission: {} as AgentPermissionRuntime, projectId: "project", sessionId: "session", turnId: "turn",
+      registry: createBuiltinMcpSourceRegistry(), store: {} as SessionStore, workspacePathPrefix: prefix,
+    });
+    const result = await tools.paperExtractPdf!({ path: given }) as Record<string, unknown>;
+    assert.deepEqual(requested.map((input) => input.path), [expected]);
+    assert.equal(requested[0]!.outputPathPrefix, prefix);
+    assert.equal(result.textPath, "papers/one/analysis/text.md");
+    assert.equal(result.pageCount, 2);
+  }
+});
+
+test("extraction by path takes only PDFs", async () => {
+  const tools = createMcpWorkspaceTools({
+    artifactManager: {} as GovernedDownloadManager,
+    broker: {} as McpGovernanceBroker, catalog: {} as McpSourceCatalog, enabledSourceIds: [],
+    emitPermissionRequest() {}, pauseExternalWait: () => () => undefined,
+    paperService: { extractWorkspacePdf: async () => assert.fail("not a PDF") } as unknown as PaperService,
+    permission: {} as AgentPermissionRuntime, projectId: "project", sessionId: "session", turnId: "turn",
+    registry: createBuiltinMcpSourceRegistry(), store: {} as SessionStore,
+  });
+  await assert.rejects(tools.paperExtractPdf!({ path: "data.csv" }), /\.pdf file/);
 });
 
 test("Reviewer MCP tools suppress Memory Graph mirroring", async () => {

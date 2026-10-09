@@ -14,6 +14,9 @@
 
 import { expect, test, type Page } from "@playwright/test";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("session-run-queue-stop.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@status:legacy", "@sandbox:bubblewrap"] }, () => {
+
 async function createProject(page: Page, name: string) {
   await page.getByRole("button", { name: "Add project" }).click();
   const dialog = page.getByRole("dialog", { name: "Create Project" });
@@ -58,4 +61,6 @@ test("running Session keeps Stop visible while the next prompt can be queued", a
 
   await page.locator(".composer textarea").fill("second prompt");
   await expect(page.getByRole("button", { name: "Add to queue" })).toBeEnabled();
+});
+
 });

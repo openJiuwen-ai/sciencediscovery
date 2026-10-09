@@ -6,6 +6,9 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-runner-locations.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: 用户从二级设置树管理本机和远程 Runner 的机器、工作区、科学环境，避免重复入口。
@@ -179,4 +182,6 @@ test("R1 设置树按 Runner 集中管理机器、工作区和科学环境", { t
       }
     });
   } finally { await cleanupJourney(page, fixture); }
+});
+
 });

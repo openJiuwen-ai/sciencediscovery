@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import test, { type TestContext } from "node:test";
+import type { TestContext } from "node:test";
+
 import { promisify } from "node:util";
 
 import type { ArtifactCandidate } from "@sciencediscovery/schema";
@@ -133,4 +136,29 @@ test("failed PDF extraction persists a terminal failed task", async (context) =>
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0]?.state, "failed");
   assert.equal(jobs[0]?.error?.code, "NORMALIZATION_FAILED");
+});
+
+test("a PDF the user uploaded to the workspace is extracted by its path, once", async (context) => {
+  const { service, session, store } = await fixture(context);
+  const target = resolve(store.workspacePath(session.id), "enzyme_paper.pdf");
+  await execFileAsync(resolve(paperRoot, ".venv/bin/python"), ["-c", [
+    "from reportlab.pdfgen import canvas",
+    "import sys",
+    "pdf=canvas.Canvas(sys.argv[1])",
+    "pdf.drawString(72,720,'Uploaded enzyme half-life at 70 C')",
+    "pdf.save()",
+  ].join("\n"), target]);
+
+  const first = await service.extractWorkspacePdf({ path: "enzyme_paper.pdf", sessionId: session.id });
+  assert.equal(first.connectorId, "upload");
+  assert.equal(first.title, "enzyme_paper");
+  const textPath = `${first.manifestPath.replace(/manifest\.json$/, "")}${first.extraction.textPath}`;
+  assert.match(await readFile(resolve(store.workspacePath(session.id), textPath), "utf8"), /enzyme half-life/);
+
+  const again = await service.extractWorkspacePdf({ path: "enzyme_paper.pdf", sessionId: session.id });
+  assert.equal(again.id, first.id);
+  assert.equal((await store.listPaperAcquisitions(session.id)).length, 1);
+
+  await writeFile(resolve(store.workspacePath(session.id), "notes.pdf"), "not a pdf", "utf8");
+  await assert.rejects(service.extractWorkspacePdf({ path: "notes.pdf", sessionId: session.id }), /PDF signature/);
 });

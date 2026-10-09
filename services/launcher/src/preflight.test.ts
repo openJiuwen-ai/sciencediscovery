@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { after, before, describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
+
 
 import { resetSandboxCapabilityCache } from "@sciencediscovery/sandbox-capability";
 
@@ -267,7 +269,7 @@ describe("host preflight", () => {
   // Mode bits do not restrain root, so the unwritable directory this needs
   // cannot be built when the tests run as one, which is the case inside the CI
   // container. The check itself is unconditional in the product.
-  test("rejects a data directory it cannot write", { skip: process.getuid?.() === 0 }, async () => {
+  test("rejects a data directory it cannot write", {}, async () => {
     const readOnly = join(workspace, "read-only");
     await mkdir(readOnly, { recursive: true });
     await chmod(readOnly, 0o500);

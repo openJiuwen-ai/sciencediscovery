@@ -21,6 +21,7 @@ import type { ComposerReference, MemoryGraphNodeLabel, ScientificArtifact } from
 import { evidenceCitationUrl, normalizeEvidenceCitationType } from "@sciencediscovery/schema";
 
 import { CopyButton } from "./CopyButton.js";
+import { normalizeMathMarkdown } from "./markdown-math.js";
 import { useLocale } from "./i18n/index.js";
 
 export interface MarkdownRendererProps {
@@ -407,7 +408,6 @@ export function MarkdownRenderer({
         <table {...props}>{children}</table>
       </div>
     ),
-
   }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, t, workspaceSessionId, wrapChip]);
 
   return (
@@ -418,7 +418,7 @@ export function MarkdownRenderer({
         remarkPlugins={[remarkGfm, remarkMath, remarkEvidenceCitations, [remarkGraphChips, { index: chipIndex }]]}
         urlTransform={preserveGraphChipUrls}
       >
-        {content}
+        {normalizeMathMarkdown(content)}
       </Markdown>
     </div>
   );

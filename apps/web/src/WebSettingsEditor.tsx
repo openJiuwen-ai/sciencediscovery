@@ -16,10 +16,13 @@ import type { FormEvent } from "react";
 
 import {
   FREE_SEARCH_ORDER,
+  JIUWENSWARM_FREE_ENGINES,
   PAID_SEARCH_ORDER,
+  WEB_KEY_PROVIDERS,
   type FreeSearchEngine,
   type PaidSearchProvider,
   type UpdateWebSettingsRequest,
+  type WebKeyProvider,
   type WebSettingsDetails,
 } from "@sciencediscovery/schema";
 
@@ -34,15 +37,25 @@ const ENGINE_LABELS: Record<FreeSearchEngine | PaidSearchProvider, string> = {
   tavily: "Tavily",
 };
 
+const KEY_LABELS: Record<WebKeyProvider, string> = {
+  bocha: "Bocha", brave: "Brave", exa: "Exa", jina: "Jina", perplexity: "Perplexity", serper: "Serper", tavily: "Tavily",
+};
+
+/** Whose keys the page asks for: the built-in search's, or JiuwenSwarm's paid search in the order it tries them. */
+const KEYS_BY_BACKEND: Record<"native" | "jiuwenswarm", readonly WebKeyProvider[]> = {
+  native: ["jina", "tavily", "exa", "brave"],
+  jiuwenswarm: ["bocha", "perplexity", "serper", "jina"],
+};
+
 export interface WebSettingsDraft {
-  keys: Record<"brave" | "exa" | "jina" | "tavily", string>;
+  keys: Record<WebKeyProvider, string>;
   remove: ReadonlySet<string>;
   values: WebSettingsDetails;
 }
 
 export function createWebSettingsDraft(settings: WebSettingsDetails): WebSettingsDraft {
   return {
-    keys: { brave: "", exa: "", jina: "", tavily: "" },
+    keys: Object.fromEntries(WEB_KEY_PROVIDERS.map((provider) => [provider, ""])) as Record<WebKeyProvider, string>,
     remove: new Set(),
     values: settings,
   };
@@ -50,7 +63,7 @@ export function createWebSettingsDraft(settings: WebSettingsDetails): WebSetting
 
 export function webSettingsRequest(draft: WebSettingsDraft): UpdateWebSettingsRequest {
   const providerApiKeys: UpdateWebSettingsRequest["providerApiKeys"] = {};
-  for (const provider of ["brave", "exa", "jina", "tavily"] as const) {
+  for (const provider of WEB_KEY_PROVIDERS) {
     if (draft.remove.has(provider)) providerApiKeys[provider] = null;
     else if (draft.keys[provider].trim()) providerApiKeys[provider] = draft.keys[provider].trim();
   }
@@ -80,6 +93,8 @@ export function WebSettingsEditor({
   }
 
   const values = draft.values;
+  const jiuwenswarm = settings.backend === "jiuwenswarm";
+  const notUsed = jiuwenswarm ? t("webSettings.notOnJiuwenswarm") : "";
   function togglePaid(provider: PaidSearchProvider, enabled: boolean): void {
     const selected = new Set(values.paidSearchProviders);
     if (enabled) selected.add(provider);
@@ -96,7 +111,8 @@ export function WebSettingsEditor({
       <h3>{t("settings.groups.web.label")}</h3>
       <p>{t("webSettings.help")}</p>
     </div>
-    <fieldset className="settings-array">
+    {jiuwenswarm ? <div className="config-note">{t("webSettings.jiuwenswarmNote")}</div> : null}
+    {jiuwenswarm ? null : <fieldset className="settings-array">
       <legend>{t("webSettings.paidLegend")}</legend>
       <div className="settings-choices">
         {PAID_SEARCH_ORDER.map((provider) => {
@@ -112,12 +128,13 @@ export function WebSettingsEditor({
         })}
       </div>
       <span className="settings-hint">{t("webSettings.paidHint")}</span>
-    </fieldset>
+    </fieldset>}
     <fieldset className="settings-array">
       <legend>{t("webSettings.freeLegend")}</legend>
       <div className="settings-choices">
         {FREE_SEARCH_ORDER.map((engine) => <label key={engine}>
           <input
+            disabled={jiuwenswarm && !JIUWENSWARM_FREE_ENGINES.includes(engine)}
             checked={values.freeSearchEngines[engine]}
             onChange={(event) => onChange({ ...draft, values: {
               ...values,
@@ -125,23 +142,24 @@ export function WebSettingsEditor({
             } })}
             type="checkbox"
           />
-          <span>{ENGINE_LABELS[engine]}</span>
+          <span>{ENGINE_LABELS[engine]}{jiuwenswarm && !JIUWENSWARM_FREE_ENGINES.includes(engine) ? ` · ${notUsed}` : ""}</span>
         </label>)}
       </div>
       <span className="settings-hint">{t("webSettings.freeHint")}</span>
     </fieldset>
-    <label><span>{t("webSettings.fetchProvider")}</span><select value={values.fetchProvider} onChange={(event) => onChange({ ...draft, values: { ...values, fetchProvider: event.target.value as typeof values.fetchProvider } })}>
+    <label><span>{t("webSettings.fetchProvider")}{jiuwenswarm ? ` · ${notUsed}` : ""}</span><select disabled={jiuwenswarm} value={values.fetchProvider} onChange={(event) => onChange({ ...draft, values: { ...values, fetchProvider: event.target.value as typeof values.fetchProvider } })}>
       <option value="jina">{t("webSettings.providerDefault", { provider: "Jina" })}</option>
       <option value="tavily">Tavily</option>
       <option value="exa">Exa</option>
     </select></label>
     <div className="config-note">{t("web.proxyMovedNote")}</div>
-    <label><span>{t("webSettings.searchCache")}</span><input min={0} max={2592000} type="number" value={values.searchCacheTtlSeconds} onChange={(event) => onChange({ ...draft, values: { ...values, searchCacheTtlSeconds: Number(event.target.value) } })} /></label>
-    <label><span>{t("webSettings.fetchCache")}</span><input min={0} max={2592000} type="number" value={values.fetchCacheTtlSeconds} onChange={(event) => onChange({ ...draft, values: { ...values, fetchCacheTtlSeconds: Number(event.target.value) } })} /></label>
-    {(["jina", "tavily", "exa", "brave"] as const).map((provider) => {
+    <label><span>{t("webSettings.searchCache")}{jiuwenswarm ? ` · ${notUsed}` : ""}</span><input disabled={jiuwenswarm} min={0} max={2592000} type="number" value={values.searchCacheTtlSeconds} onChange={(event) => onChange({ ...draft, values: { ...values, searchCacheTtlSeconds: Number(event.target.value) } })} /></label>
+    <label><span>{t("webSettings.fetchCache")}{jiuwenswarm ? ` · ${notUsed}` : ""}</span><input disabled={jiuwenswarm} min={0} max={2592000} type="number" value={values.fetchCacheTtlSeconds} onChange={(event) => onChange({ ...draft, values: { ...values, fetchCacheTtlSeconds: Number(event.target.value) } })} /></label>
+    {jiuwenswarm ? <span className="settings-hint">{t("webSettings.jiuwenswarmPaidHint")}</span> : null}
+    {KEYS_BY_BACKEND[jiuwenswarm ? "jiuwenswarm" : "native"].map((provider) => {
       const saved = settings.providers.some((item) => item.provider === provider && item.hasApiKey);
       return <div key={provider}>
-        <label><span>{t("webSettings.providerApiKey", { provider: provider[0]!.toUpperCase() + provider.slice(1) })}</span><input
+        <label><span>{t("webSettings.providerApiKey", { provider: KEY_LABELS[provider] })}</span><input
           type="password"
           value={draft.keys[provider]}
           onChange={(event) => {
@@ -151,7 +169,7 @@ export function WebSettingsEditor({
               remove: new Set([...draft.remove].filter((item) => item !== provider)),
             });
           }}
-          placeholder={saved ? t("webSettings.keyPlaceholderSaved") : provider === "jina" ? t("webSettings.keyPlaceholderOptional") : t("webSettings.keyPlaceholderRequired")}
+          placeholder={saved ? t("webSettings.keyPlaceholderSaved") : provider === "jina" || jiuwenswarm ? t("webSettings.keyPlaceholderOptional") : t("webSettings.keyPlaceholderRequired")}
         /></label>
         {saved ? <button className={draft.remove.has(provider) ? "credential-remove pending" : "credential-remove"} type="button" onClick={() => {
           const next = new Set(draft.remove);

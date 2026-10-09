@@ -1,11 +1,13 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test, describe } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
-import test from "node:test";
+
 import ssh2 from "ssh2";
 
 import { hostKeyFingerprint, SshConnection, SshHostKeyUntrustedError, type SshCredentials } from "./ssh-connection.js";
@@ -37,20 +39,18 @@ test("Runner file transfer uses the authenticated SFTP session and fails on disc
   assert.equal(ended, 2);
 });
 
-test("authentication diagnostics reflect actual SSH protocol exchanges without exposing credentials", async (context) => {
-  // ssh2 1.17 keygen strips leading zero public-key bytes; use the same
-  // fixed-width OpenSSH encoding as product-generated keys instead.
-  const hostKeys = generateSshKeyPair("authentication-test-host");
-  const parsed = ssh2.utils.parseKey(hostKeys.privateKey);
-  assert.ok(!(parsed instanceof Error) && !Array.isArray(parsed));
-  const trustedHostKey = { algorithm: "ssh-ed25519", fingerprint: hostKeyFingerprint(parsed.getPublicSSH()) };
-  const password = ` ${randomBytes(24).toString("hex")} `;
-  const privateKey = generateSshKeyPair("authentication-test-client").privateKey;
-  const passphrase = randomBytes(24).toString("hex");
-  const credentials: SshCredentials = { username: "operator", password, privateKey, passphrase };
+describe("authentication diagnostics reflect actual SSH protocol exchanges without exposing credentials", () => {
+for (const scenario of ["password rejected", "key rejected", "interactive accepted", "interactive rejected", "password change", "untrusted key"] as const)  {
+ test(scenario, { timeout: 5_000 }, async (t) => {
+const hostKeys = generateSshKeyPair("authentication-test-host");
+const parsed = ssh2.utils.parseKey(hostKeys.privateKey);
+assert.ok(!(parsed instanceof Error) && !Array.isArray(parsed));
+const trustedHostKey = { algorithm: "ssh-ed25519", fingerprint: hostKeyFingerprint(parsed.getPublicSSH()) };
+const password = ` ${randomBytes(24).toString("hex")} `;
+const privateKey = generateSshKeyPair("authentication-test-client").privateKey;
+const passphrase = randomBytes(24).toString("hex");
+const credentials: SshCredentials = { username: "operator", password, privateKey, passphrase };
 
-  for (const scenario of ["password rejected", "key rejected", "interactive accepted", "interactive rejected", "password change", "untrusted key"] as const) {
-    await context.test(scenario, { timeout: 5_000 }, async (t) => {
       const attempts: string[] = [];
       const connections = new Set<ssh2.Connection>();
       const offered: ssh2.AuthenticationType[] = scenario === "key rejected" ? ["publickey"] : scenario.startsWith("interactive") ? ["keyboard-interactive"] : ["publickey", "password"];
@@ -117,8 +117,9 @@ test("authentication diagnostics reflect actual SSH protocol exchanges without e
         else assert.match(error.message, /server did not accept authentication/);
         return true;
       });
-    });
-  }
+    
+ });
+ }
 });
 
 test("SSH errors after ready fail only that connection and reject pending commands", async (context) => {

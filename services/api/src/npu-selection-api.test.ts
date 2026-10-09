@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { TestContext } from "node:test";
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test, describe, before, after } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdir, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
-import test from "node:test";
+
 
 import type { RemoteComputeClient } from "@sciencediscovery/executor";
 import type { NpuInventory } from "@sciencediscovery/schema";
@@ -46,25 +49,27 @@ const inventory: NpuInventory = {
  * started API is in. Reading it there would reject every card as "this machine
  * reports no Ascend NPU cards" and make the tick impossible to save.
  */
-test("saving an NPU selection reads the Runner's current inventory, not a stored connection record", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `npu-selection-api-${process.pid}-${Date.now()}`);
-  await mkdir(root, { recursive: true });
-  const seed = new SessionStore(root);
-  seed.setAvailableSkillIds([]);
-  await seed.load();
-  const host = await seed.registerRemoteHost({
+describe("saving an NPU selection reads the Runner's current inventory, not a stored connection record", () => {
+let steps!: Record<string, (context: TestContext) => unknown>;
+ const cleanups: Array<() => unknown> = [];
+ after(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); });
+ before(async () => {
+ const context = { after: (fn: () => unknown) => cleanups.push(fn) };
+const root = resolve(process.cwd(), ".tmp", `npu-selection-api-${process.pid}-${Date.now()}`);
+await mkdir(root, { recursive: true });
+const seed = new SessionStore(root);
+seed.setAvailableSkillIds([]);
+await seed.load();
+const host = await seed.registerRemoteHost({
     alias: "npu-910b",
     connectionKind: "direct",
     endpoint: { host: "127.0.0.1", port: 4311, protocol: "http" },
     token: "runner-test-token",
   });
-  assert.equal(host.runnerStatus, undefined, "a persisted machine carries no connection state");
-
-  // What the Runner reports right now, and how it was asked. `current` is
-  // reassigned mid-test to play out a card being claimed by another tenant.
-  let current = inventory;
-  const consulted: Array<{ hostId: string; refresh: boolean }> = [];
-  const remoteCompute = {
+assert.equal(host.runnerStatus, undefined, "a persisted machine carries no connection state");
+let current = inventory;
+const consulted: Array<{ hostId: string; refresh: boolean }> = [];
+const remoteCompute = {
     close: async () => undefined,
     runnerClient: (hostId: string) => ({
       npuDevices: async (options: { refresh?: boolean } = {}) => {
@@ -73,7 +78,7 @@ test("saving an NPU selection reads the Runner's current inventory, not a stored
       },
     }),
   } as unknown as RemoteComputeClient;
-  const config: ServerConfig = {
+const config: ServerConfig = {
     authToken: "test-token", dataDir: root, host: "127.0.0.1", port: 0,
     gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 0, kernelIdleTimeoutMs: 0,
     modelCatalogPath: resolve(root, "absent.json"), paperPythonPath: resolve(root, "no-python"),
@@ -85,44 +90,38 @@ test("saving an NPU selection reads the Runner's current inventory, not a stored
     memoryGraph: { url: "http://127.0.0.1:1", internalToken: "test" },
     evolve: { url: "http://127.0.0.1:1", internalToken: "test" },
   };
-  const catalog = { loadedAt: new Date().toISOString(), revision: "npu-selection-test", servers: [] };
-  const server = createApiServer(config, {
+const catalog = { loadedAt: new Date().toISOString(), revision: "npu-selection-test", servers: [] };
+const server = createApiServer(config, {
     remoteCompute,
     mcpTransport: {
       catalog: async () => catalog, reload: async () => catalog,
       invoke: async () => { throw new Error("No MCP in this test"); },
     },
   });
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  context.after(async () => {
+await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+context.after(async () => {
     await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); });
     await rm(root, { force: true, recursive: true });
   });
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const put = (devices: number[]) => fetch(`${origin}/api/runners/${host.id}/npu-devices`, {
+const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+const put = (devices: number[]) => fetch(`${origin}/api/runners/${host.id}/npu-devices`, {
     body: JSON.stringify({ devices }),
     headers: { authorization: "Bearer test-token", "content-type": "application/json" },
     method: "PUT",
   });
-
-  const accepted = await put([4, 5]);
-  const acceptedBody = await accepted.text();
-  assert.equal(accepted.status, 200, acceptedBody);
-  assert.deepEqual(JSON.parse(acceptedBody), { devices: [4, 5], runnerId: host.id });
-  // Re-probed, not read from whatever the last status poll happened to see.
-  assert.deepEqual(consulted, [{ hostId: host.id, refresh: true }]);
-
-  // The Runner's verdict still governs: a card its probe refused is refused
-  // here, with the driver's own words rather than a generic rejection.
-  const refused = await put([0, 4, 5]);
-  assert.equal(refused.status, 409);
-  assert.match(await refused.text(), /dcmi model initialized failed/u);
-
-  const selections = await fetch(`${origin}/api/runners/npu`, { headers: { authorization: "Bearer test-token" } });
-  assert.equal(selections.status, 200);
-  assert.deepEqual((await selections.json() as { selections: Record<string, number[]> }).selections[host.id], [4, 5]);
-
-  await context.test("a ticked card that has since been claimed can still be unticked", async () => {
+const accepted = await put([4, 5]);
+const acceptedBody = await accepted.text();
+assert.equal(accepted.status, 200, acceptedBody);
+assert.deepEqual(JSON.parse(acceptedBody), { devices: [4, 5], runnerId: host.id });
+assert.deepEqual(consulted, [{ hostId: host.id, refresh: true }]);
+const refused = await put([0, 4, 5]);
+assert.equal(refused.status, 409);
+assert.match(await refused.text(), /dcmi model initialized failed/u);
+const selections = await fetch(`${origin}/api/runners/npu`, { headers: { authorization: "Bearer test-token" } });
+assert.equal(selections.status, 200);
+assert.deepEqual((await selections.json() as { selections: Record<string, number[]> }).selections[host.id], [4, 5]);
+ steps = {
+"a ticked card that has since been claimed can still be unticked": async () => {
     // NPU 5 goes the way NPU 0 already went: claimed by another tenant while
     // it was ticked. Taking it out of the selection grants nothing, so it must
     // not be refused for containing — or having contained — an unusable card.
@@ -140,18 +139,16 @@ test("saving an NPU selection reads the Runner's current inventory, not a stored
     // Nothing new was granted, so the machine was not disturbed for a probe —
     // which also means an unreachable Runner cannot trap the operator.
     assert.deepEqual(consulted, []);
-  });
-
-  await context.test("ticking a card that is unusable now still fails, with the driver's reason", async () => {
+  },
+"ticking a card that is unusable now still fails, with the driver's reason": async () => {
     const readded = await put([4, 5]);
     assert.equal(readded.status, 409);
     assert.match(await readded.text(), /NPU 5 cannot be opened inside the sandbox/u);
     const after = await fetch(`${origin}/api/runners/npu`, { headers: { authorization: "Bearer test-token" } });
     assert.deepEqual((await after.json() as { selections: Record<string, number[]> }).selections[host.id], [4],
       "a refused tick leaves the stored selection alone");
-  });
-
-  await context.test("a Runner that cannot be reached refuses the tick instead of storing it blind", async () => {
+  },
+"a Runner that cannot be reached refuses the tick instead of storing it blind": async () => {
     const unreachable = createApiServer({ ...config, dataDir: root }, {
       remoteCompute: {
         close: async () => undefined,
@@ -172,5 +169,10 @@ test("saving an NPU selection reads the Runner's current inventory, not a stored
     } finally {
       await new Promise<void>((done) => { unreachable.close(() => done()); unreachable.closeAllConnections(); });
     }
-  });
+  }
+ };
+ });
+test("a ticked card that has since been claimed can still be unticked", async (context) => { await steps["a ticked card that has since been claimed can still be unticked"]!(context); });
+test("ticking a card that is unusable now still fails, with the driver's reason", async (context) => { await steps["ticking a card that is unusable now still fails, with the driver's reason"]!(context); });
+test("a Runner that cannot be reached refuses the tick instead of storing it blind", async (context) => { await steps["a Runner that cannot be reached refuses the tick instead of storing it blind"]!(context); });
 });

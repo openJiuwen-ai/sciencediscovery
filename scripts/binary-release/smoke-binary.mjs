@@ -2,7 +2,8 @@
 // Release gate for the four public single-binary entry points. All temporary
 // state lives beside the artifact so large payload extraction never uses /tmp.
 import { execFile, spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -102,8 +103,9 @@ async function stopProcess(child, outcomePromise) {
   return await outcomePromise;
 }
 
-async function runServe(binary, context, timeoutMs) {
-  const [port, runnerPort, gatewayPort] = await availablePorts(3);
+async function runServe(binary, context, timeoutMs, verifyPersisted = false) {
+  const [port, runnerPort, gatewayPort, memoryPort] = await availablePorts(4);
+  const memoryToken = randomBytes(32).toString("hex");
   const args = [
     "serve",
     "--data-dir", join(context.cwd, "data"),
@@ -115,7 +117,15 @@ async function runServe(binary, context, timeoutMs) {
   ];
   const child = spawn(binary, args, {
     cwd: context.cwd,
-    env: context.env,
+    env: {
+      ...context.env,
+      SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE: "1",
+      SCIENCE_AGENT_MEMORY_GRAPH_URL: "",
+      SCIENCE_AGENT_MEMORY_GRAPH_PORT: String(memoryPort),
+      SCIENCE_AGENT_MEMORY_GRAPH_INTERNAL_TOKEN: memoryToken,
+      SCIENCE_AGENT_MEMORY_GRAPH_BACKEND: "local",
+      SCIENCE_AGENT_MEMORY_GRAPH_DATA_DIR: join(context.cwd, "data", "memory-graph"),
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -155,7 +165,33 @@ async function runServe(binary, context, timeoutMs) {
     if (healthStatus === undefined || healthStatus < 200 || healthStatus >= 300) {
       throw new Error(`serve did not become ready within ${timeoutMs} ms.\n${output}`);
     }
+    const memoryUrl = `http://127.0.0.1:${memoryPort}`;
+    const headers = { authorization: `Bearer ${memoryToken}`, "content-type": "application/json" };
+    const health = await fetch(`${memoryUrl}/health`, { signal: AbortSignal.timeout(5000) });
+    if (!health.ok || (await health.json()).backend !== "local") throw new Error("Bundled memory graph is not healthy");
+    const unauthorized = await fetch(`${memoryUrl}/subgraph?session_id=binary-smoke`, { signal: AbortSignal.timeout(5000) });
+    if (unauthorized.status !== 401) throw new Error("Memory graph must require its internal token");
+    if (verifyPersisted) {
+      const restored = await fetch(`${memoryUrl}/subgraph?session_id=binary-smoke`, { headers, signal: AbortSignal.timeout(5000) });
+      if (!restored.ok || !(await restored.json()).nodes?.some(node => node.id === "binary-smoke-goal")) {
+        throw new Error("Memory graph did not restore the previous launch's goal");
+      }
+    }
+    const written = await fetch(`${memoryUrl}/observe/session-first-message`, {
+      method: "POST", headers, signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({ session_id: "binary-smoke", goal_id: "binary-smoke-goal",
+        core_objective: "Verify packaged memory", created_at: new Date().toISOString() }),
+    });
+    if (!written.ok) throw new Error(`Memory graph write failed: ${written.status}`);
+    const graphResponse = await fetch(`${memoryUrl}/subgraph?session_id=binary-smoke`, { headers, signal: AbortSignal.timeout(5000) });
+    const graph = await graphResponse.json();
+    if (!graphResponse.ok || !graph.nodes?.length) throw new Error("Memory graph query lost the written goal");
+    const persisted = await readFile(join(context.cwd, "data", "memory-graph", "nodes.jsonl"), "utf8");
+    if (!persisted.includes("binary-smoke-goal")) throw new Error("Memory graph was not persisted in the application data directory");
     const stopped = await stopProcess(child, outcomePromise);
+    let sidecarAlive = false;
+    try { sidecarAlive = (await fetch(`${memoryUrl}/health`, { signal: AbortSignal.timeout(1000) })).ok; } catch {}
+    if (sidecarAlive) throw new Error("Memory graph outlived the launcher");
     assertNoSeaCrash(output, "serve");
     if (stopped.code !== 0 || stopped.signal) {
       throw new Error(
@@ -225,6 +261,8 @@ export async function smokeBinary(options) {
     }
 
     const serve = await runServe(options.binary, context, options.timeoutMs);
+    await runServe(options.binary, context, options.timeoutMs, true);
+    process.stdout.write("PASS memory graph: bundled service, authentication, write/query, restart persistence and shutdown cleanup\n");
     process.stdout.write(
       `PASS serve exit=0 after SIGTERM, health=${serve.healthStatus}: ${serve.readyLine}\n`,
     );

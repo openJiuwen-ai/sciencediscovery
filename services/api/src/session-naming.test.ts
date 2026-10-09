@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { test } from "node:test";
+
 
 import {
   createLocalSessionTitle,
@@ -86,6 +88,8 @@ test("Session title refinement uses an OpenAI-compatible model and records provi
   assert.equal(messages[0]?.role, "system");
   assert.doesNotMatch(messages[0]?.content ?? "", /no more than|characters/i);
   assert.equal((requestBody?.messages as Array<{ role: string }>)[1]?.role, "user");
+  // The message is framed as data to name, not handed over as a request to act on.
+  assert.match(messages[1]?.content ?? "", /<first_message>\n分析单细胞数据中的 TP53 表达\n<\/first_message>/);
   assert.equal(refined.title, "TP53 单细胞表达分析");
   assert.deepEqual(refined.usage, {
     cacheReadTokens: null,
@@ -212,6 +216,31 @@ test("Session title refinement retries without thinking for a strict compatible 
   assert.equal(requestBodies[1]?.thinking, undefined);
   assert.equal(requestBodies[1]?.max_tokens, undefined);
   assert.equal(refined.title, "Gateway fallback");
+});
+
+test("Session title refinement leaves the temperature to a model that takes only its own", async () => {
+  for (const modelId of ["kimi-for-coding", "deepseek-v4-flash"]) {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const refined = await generateRefinedSessionTitle({
+      apiToken: "secret",
+      fetchImpl: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        requestBodies.push(body);
+        if ("temperature" in body) {
+          return new Response(JSON.stringify({ error: { message: "invalid temperature: only 1 is allowed for this model" } }), { status: 400 });
+        }
+        return new Response(JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: "平方和计算" } }],
+          usage: { completion_tokens: 3, prompt_tokens: 20, total_tokens: 23 },
+        }), { status: 200 });
+      },
+      firstMessage: "用 Python 计算 1 到 100 的平方和",
+      model: { ...model, baseUrl: "https://api.kimi.com/coding/v1", model: modelId },
+    });
+    assert.equal(refined.title, "平方和计算", modelId);
+    assert.equal("temperature" in requestBodies.at(-1)!, false);
+    assert.equal(requestBodies.at(-1)?.thinking, undefined);
+  }
 });
 
 test("Session title refinement retries without a token limit when a gateway ignores thinking control", async () => {

@@ -26,6 +26,9 @@ import {
   waitForRunTerminal,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-delegate-subtask.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: A user can delegate a review, inspect the completed subagent's work, and receive both declared deliverables without exposing private workspace files as Artifacts.
@@ -267,4 +270,6 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
     await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

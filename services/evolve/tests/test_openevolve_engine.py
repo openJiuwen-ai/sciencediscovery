@@ -35,7 +35,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sciencediscovery_evolve import events
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
+from sciencediscovery_evolve import events, openevolve_engine
 from sciencediscovery_evolve.engine import RunSpec
 from sciencediscovery_evolve.openevolve_engine import (
     OpenEvolveEngine,
@@ -108,6 +110,36 @@ def test_mode_rejects_unknown():
         _mode(_spec(options={"mode": "bogus"}))
 
 
+# --- _default_completion -----------------------------------------------------
+# A gateway seen in the wild rejects every temperature except the one it is
+# configured with, which turned every mutation call into a failed candidate
+# (issue reported against `/evolve-design --algorithm puct`, which shares
+# this same default through `completion_for`). Sending none by default, like
+# `thinking`, is what fixed it.
+
+
+def test_default_completion_omits_temperature_when_unset(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    def fake_completion_for(*_args: Any, **kwargs: Any) -> Callable[[str], str]:
+        captured.update(kwargs)
+        return lambda _prompt: ""
+
+    monkeypatch.setattr(openevolve_engine, "completion_for", fake_completion_for)
+    openevolve_engine._default_completion(_spec(), MagicMock(), lambda: False)
+    assert captured["temperature"] is None
+
+
+def test_default_completion_forwards_explicit_temperature(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    def fake_completion_for(*_args: Any, **kwargs: Any) -> Callable[[str], str]:
+        captured.update(kwargs)
+        return lambda _prompt: ""
+
+    monkeypatch.setattr(openevolve_engine, "completion_for", fake_completion_for)
+    openevolve_engine._default_completion(_spec(options={"temperature": 0.6}), MagicMock(), lambda: False)
+    assert captured["temperature"] == 0.6
 
 
 
@@ -310,3 +342,17 @@ def test_finish_warns_when_all_scores_identical():
     reporter.finish("succeeded")
     logs = [e for e in collector.events if e["type"] == "log" and e["level"] == "warn"]
     assert any("scored the same" in e["message"] for e in logs)
+
+
+def test_rollouts_are_never_skipped_as_solved():
+    """As in the PUCT engine: a rollout scoring past `solved_threshold` proposes nothing.
+
+    Measured live: the first candidate scored 1.0 and a run planned for 4 expansions made 1
+    ("stopped because rounds"), every later rollout counted as solved.
+    """
+    import inspect
+
+    from sciencediscovery_evolve.openevolve_engine import OpenEvolveEngine
+
+    source = inspect.getsource(OpenEvolveEngine._search)
+    assert '"solved_threshold": 2.0' in source

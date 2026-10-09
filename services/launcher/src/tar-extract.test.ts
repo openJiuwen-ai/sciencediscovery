@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { after, before, describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
@@ -20,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
-import { after, before, describe, test } from "node:test";
+
 
 import { extractTar, safePayloadPath } from "./tar-extract.js";
 

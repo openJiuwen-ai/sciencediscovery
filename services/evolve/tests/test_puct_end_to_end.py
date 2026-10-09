@@ -35,6 +35,8 @@ from typing import Any, Dict, Iterator, List
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.vendor.puct.sandbox import detect_local_capability
 from fastapi.testclient import TestClient
 
@@ -159,16 +161,13 @@ SCORECARD: Dict[str, Any] = {
 }
 
 
-@pytest.mark.skipif(
-    not detect_local_capability().available,
-    reason="needs a real sandbox: this exercises the confinement itself, and a host that only carries the binary cannot provide it",
-)
+@pytest.mark.science_tags(sandbox="bubblewrap")
 def test_a_real_search_improves_on_its_baseline(tmp_path: Path, model_server: str) -> None:
     capability = detect_local_capability()
     if not capability.available:
-        pytest.skip("no sandbox backend on this host")
+        pytest.fail("no sandbox backend on this host")
     if missing_candidate_runtime():
-        pytest.skip("candidate runtime not installed (uv sync --extra candidates)")
+        pytest.fail("candidate runtime not installed (uv sync --extra candidates)")
 
     client = TestClient(app)
     response = client.post("/runs", json={

@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.candidates import CandidateStore, run_candidate
 from sciencediscovery_evolve.vendor.puct.sandbox import (
     SandboxCapability,
@@ -41,10 +43,7 @@ from sciencediscovery_evolve.vendor.puct.sandbox import (
     sandbox_command,
 )
 
-needs_sandbox = pytest.mark.skipif(
-    not detect_local_capability().available,
-    reason="needs Bubblewrap (Linux) or sandbox-exec (macOS)",
-)
+needs_sandbox = pytest.mark.science_tags(sandbox="bubblewrap")
 
 
 @needs_sandbox

@@ -83,6 +83,23 @@ export interface ModelStreamCallbacks {
   onProgress?: () => void;
   onTextDelta?: (delta: string) => void;
   onThinkingDelta?: (delta: string) => void;
+  /** Tool identity is sent once; arguments are append-only JSON fragments. */
+  onToolCallDelta?: (delta: { index: number; id?: string; name?: string; arguments: string }) => void;
+}
+
+/** Adapt protocol-specific cumulative buffers without replaying arguments. */
+function toolDeltaEmitter(callbacks: ModelStreamCallbacks) {
+  const sent = new Map<number, { id: string; name: string; arguments: string }>();
+  return (index: number, id: unknown, name: unknown, args: string) => {
+    if (!callbacks.onToolCallDelta || typeof id !== "string" || !id || typeof name !== "string" || !name) return;
+    const previous = sent.get(index);
+    if (previous && (previous.id !== id || previous.name !== name || !args.startsWith(previous.arguments))) {
+      throw new Error("Model changed an already streamed tool call");
+    }
+    const delta = args.slice(previous?.arguments.length ?? 0);
+    if (!previous || delta) callbacks.onToolCallDelta({ index, ...(!previous ? { id, name } : {}), arguments: delta });
+    sent.set(index, { id, name, arguments: args });
+  };
 }
 
 export interface ModelClientPolicy {
@@ -509,6 +526,7 @@ async function streamOpenAiTurn(
   let qwenReasoning: unknown;
   const minimaxReasoning: unknown[] = [];
   const fragments = new Map<number, OpenAiToolCallFragment>();
+  const emitTool = toolDeltaEmitter(callbacks);
   let usage: AgentModelUsage | undefined;
   let truncated = false;
   const buffersInlineThinking = variant === "minimax" || variant === "ollama";
@@ -579,6 +597,7 @@ async function streamOpenAiTurn(
           existing.function = fn;
         }
         fragments.set(index, existing);
+        emitTool(index, existing.id, existing.function?.name, existing.function?.arguments ?? "");
       }
     }
   }
@@ -677,6 +696,8 @@ async function streamResponsesTurn(
   let text = "";
   let usage: AgentModelUsage | undefined;
   const items = new Map<number, Record<string, unknown>>();
+  const partialItems = new Map<number, Record<string, unknown>>();
+  const emitTool = toolDeltaEmitter(callbacks);
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
@@ -690,9 +711,22 @@ async function streamResponsesTurn(
     } else if ((event.type === "response.reasoning_text.delta" || event.type === "response.reasoning_summary_text.delta")
       && typeof event.delta === "string") {
       callbacks.onThinkingDelta?.(event.delta);
+    } else if (event.type === "response.output_item.added" && isRecord(event.item)) {
+      const index = typeof event.output_index === "number" ? event.output_index : partialItems.size;
+      partialItems.set(index, structuredClone(event.item));
+      if (event.item.type === "function_call") emitTool(index, event.item.call_id, event.item.name,
+        typeof event.item.arguments === "string" ? event.item.arguments : "");
+    } else if (event.type === "response.function_call_arguments.delta" && typeof event.output_index === "number" && typeof event.delta === "string") {
+      const item = partialItems.get(event.output_index);
+      if (item) {
+        item.arguments = `${typeof item.arguments === "string" ? item.arguments : ""}${event.delta}`;
+        emitTool(event.output_index, item.call_id, item.name, item.arguments as string);
+      }
     } else if (event.type === "response.output_item.done" && isRecord(event.item)) {
       const index = typeof event.output_index === "number" ? event.output_index : items.size;
       items.set(index, structuredClone(event.item));
+      if (event.item.type === "function_call") emitTool(index, event.item.call_id, event.item.name,
+        typeof event.item.arguments === "string" ? event.item.arguments : "{}");
     } else if (event.type === "response.completed" && isRecord(event.response)) {
       usage = normalizeUsage(event.response.usage) ?? usage;
     } else if (event.type === "response.failed") {
@@ -826,6 +860,7 @@ async function streamAnthropicTurn(
   let cacheWriteTokens: number | null = null;
   const blocks = new Map<number, AnthropicBlock>();
   const toolJson = new Map<number, string>();
+  const emitTool = toolDeltaEmitter(callbacks);
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
@@ -839,7 +874,10 @@ async function streamAnthropicTurn(
       cacheWriteTokens = numberField(event.message.usage, ["cache_creation_input_tokens"]) ?? null;
     } else if (event.type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
       blocks.set(event.index, structuredClone(event.content_block));
-      if (event.content_block.type === "tool_use") toolJson.set(event.index, "");
+      if (event.content_block.type === "tool_use") {
+        toolJson.set(event.index, "");
+        emitTool(event.index, event.content_block.id, event.content_block.name, "");
+      }
     } else if (event.type === "content_block_delta" && typeof event.index === "number" && isRecord(event.delta)) {
       const block = blocks.get(event.index);
       if (!block) continue;
@@ -853,11 +891,16 @@ async function streamAnthropicTurn(
         block.signature = `${typeof block.signature === "string" ? block.signature : ""}${event.delta.signature}`;
       } else if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
         toolJson.set(event.index, `${toolJson.get(event.index) ?? ""}${event.delta.partial_json}`);
+        emitTool(event.index, block.id, block.name, toolJson.get(event.index)!);
       }
     } else if (event.type === "content_block_stop" && typeof event.index === "number") {
       const block = blocks.get(event.index);
       const json = toolJson.get(event.index);
-      if (block?.type === "tool_use" && json !== undefined) block.input = parseToolCallArgs(json).args;
+      if (block?.type === "tool_use" && json !== undefined) {
+        const raw = json || JSON.stringify(isRecord(block.input) ? block.input : {});
+        block.input = parseToolCallArgs(raw).args;
+        emitTool(event.index, block.id, block.name, raw);
+      }
     } else if (event.type === "message_delta") {
       if (isRecord(event.usage)) {
         outputTokens = numberField(event.usage, ["output_tokens"]) ?? outputTokens;

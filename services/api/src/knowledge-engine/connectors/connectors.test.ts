@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import test from "node:test";
-
 import { normalizeArxivId, parseArxivEntries } from "./arxiv.js";
 import { epmcToRef, createEuropePmcConnector } from "./europepmc.js";
 import { deinvertAbstract, openAlexToRef, createOpenAlexConnector } from "./openalex.js";

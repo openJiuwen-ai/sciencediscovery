@@ -21,6 +21,7 @@
 # cannot re-enter the build context. Unlike .gitignore, Docker patterns are
 # anchored at the context root, so it needs `**`.
 .sciencediscovery-data/
+.e2e-data/
 data/
 **/.deer-flow/
 **/.env
@@ -46,7 +47,11 @@ data/
 .mcp.json
 .ripgreprc
 
-# Docs and integration tests are not needed by the running services.
+# Docs and integration tests are not needed by the running services. All of
+# test/ stays out: no package's build reaches a test file any more, so the
+# image never resolves test/support/tagged/compat.mjs. Keeping the whole
+# directory out matters because the runtime stage is
+# `COPY --from=builder /app /app` — anything admitted here ships.
 docs/
 test/
 .github/

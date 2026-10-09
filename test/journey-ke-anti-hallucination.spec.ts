@@ -26,6 +26,9 @@ import {
 } from "./helpers/journeys.ts";
 import { keAntiHallucinationAgentStub, kePipelineStub } from "./helpers/ke-stub.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ke-anti-hallucination.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -220,4 +223,6 @@ test("J-KE6 反幻觉：夸大新颖性声明被检查结果标注", { tag: "@mo
     await extraction.stop();
     await agent.stop();
   }
+});
+
 });

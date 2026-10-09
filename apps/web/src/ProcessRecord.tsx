@@ -18,15 +18,20 @@ import { ChevronRightIcon } from "./icons.js";
 /** Active content retains its original surface; terminal records are disclosures.
  * A new `reveal` token opens the record and scrolls it into view, so another
  * part of the page can point the user at this record. */
-export function ProcessRecord({ active = false, children, failed = false, label, className = "", reveal }: {
+export function ProcessRecord({ active = false, children, failed = false, label, className = "", reveal,
+  expanded: controlledExpanded, onExpandedChange }: {
   active?: boolean;
   children: ReactNode;
   failed?: boolean;
   label: ReactNode;
   className?: string;
   reveal?: number;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = controlledExpanded ?? localExpanded;
+  const setExpanded = onExpandedChange ?? setLocalExpanded;
   const element = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     if (reveal === undefined) return;
@@ -41,7 +46,12 @@ export function ProcessRecord({ active = false, children, failed = false, label,
       if (detail instanceof HTMLDetailsElement && detail !== event.currentTarget) setExpanded(!detail.open);
     }}
     onToggle={(event) => { if (!active && event.target === event.currentTarget) setExpanded(event.currentTarget.open); }}>
-    <summary hidden={active}>
+    <summary hidden={active} onClick={onExpandedChange ? (event) => {
+      // Commit the user's choice before a live-to-history remount. Native
+      // toggle is asynchronous and can arrive after this instance disappears.
+      event.preventDefault();
+      setExpanded(!expanded);
+    } : undefined}>
       <span className="record-label">{label}</span>
       {failed ? <span className="record-failure-dot" aria-hidden="true" /> : null}
     </summary>

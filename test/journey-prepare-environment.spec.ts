@@ -31,6 +31,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-prepare-environment.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 /**
  * E2E-META
  * Purpose: A user can create a named Python environment in settings, use its immutable revision in an Agent request, inspect provenance, and delete it.
@@ -71,10 +74,9 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
     "系统设置的 Runner 目录里选本机，科学环境页签显示托管 Python 已经 Ready；base 没就绪时这条旅程应当被判为前置未满足。",
     async () => {
       const setup = await environmentSetup(page);
-      testInfo.skip(
-        setup.state !== "ready",
+      expect(setup.state,
         `BLOCKED: managed Python base is not ready (${setup.state}: ${setup.message})`,
-      );
+      ).toBe("ready");
       await page.goto("/");
       manager = await openEnvironmentPage(page);
       const setupDisclosure = await openEnvironmentDisclosure(manager, ".environment-setup-state");
@@ -222,4 +224,6 @@ test("J3 准备命名环境后让 Agent 使用并留下溯源", { tag: "@mocked"
     if (fixture) await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
 });

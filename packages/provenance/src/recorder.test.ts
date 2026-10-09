@@ -12,16 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+
 
 import type { NpuJob } from "@sciencediscovery/schema";
 import { MemoryGraphClient, MemoryGraphSink, type ObserveExecutionPayload } from "@sciencediscovery/memory";
 
-import { ProvenanceRecorder } from "./recorder.js";
+import { ProvenanceRecorder, recordedWorkspaceModifiedAt } from "./recorder.js";
+
+test("published Workspace mtime is attributed only while its bytes match the execution snapshot", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "recorder-mtime-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const path = join(root, "report.txt");
+  const fallback = "2026-09-24T03:00:00.000Z";
+  await writeFile(path, "good");
+  const hash = createHash("sha256").update("good").digest("hex");
+  assert.equal(await recordedWorkspaceModifiedAt(root, "report.txt", hash, 4, fallback),
+    (await stat(path)).mtime.toISOString());
+
+  await writeFile(path, "evil");
+  assert.equal(await recordedWorkspaceModifiedAt(root, "report.txt", hash, 4, fallback), fallback,
+    "a same-size external rewrite must not inherit the tool's origin");
+  await symlink(path, join(root, "linked.txt"));
+  assert.equal(await recordedWorkspaceModifiedAt(root, "linked.txt", hash, 4, fallback), fallback,
+    "a symlink is not a trustworthy published output");
+});
 
 /**
  * Subclass MemoryGraphClient so the sink sees a real client (its constructor

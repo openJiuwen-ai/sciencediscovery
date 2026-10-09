@@ -1,0 +1,222 @@
+{
+ "domain": "Files, workspace, trajectory; usage, plugins",
+ "cases": [
+  {
+   "id": "files-trajectory-usage-reads",
+   "description": "The read side of a workspace, trajectory, usage and plugins on a session that has never run. Uploads (multipart) and plugin writes are not covered here.",
+   "steps": [
+    {
+     "name": "create a project",
+     "request": {
+      "method": "POST",
+      "path": "/api/projects",
+      "body": {
+       "name": "L1 files and usage"
+      }
+     },
+     "capture": {
+      "projectId": "$.id",
+      "sessionId": "$.firstSession.id"
+     },
+     "expectStatus": 201
+    },
+    {
+     "name": "list workspace files of a fresh session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/files"
+     },
+     "covers": [
+      "GET /api/sessions/:id/files"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "list files of an unknown session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/nope/files"
+     },
+     "expectStatus": 404
+    },
+    {
+     "name": "read a file that does not exist",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/file?path=missing.txt"
+     },
+     "covers": [
+      "GET /api/sessions/:id/file"
+     ]
+    },
+    {
+     "name": "read a file outside the workspace",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/file?path=../../etc/passwd"
+     }
+    },
+    {
+     "name": "provenance of an empty workspace",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/workspace/provenance?paths=a.txt"
+     },
+     "covers": [
+      "GET /api/sessions/:id/workspace/provenance"
+     ]
+    },
+    {
+     "name": "trajectory of a session with no runs",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/trajectory"
+     },
+     "covers": [
+      "GET /api/sessions/:id/trajectory"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "trajectory detail for an unknown entry",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/trajectory/detail?id=nope"
+     },
+     "covers": [
+      "GET /api/sessions/:id/trajectory/detail"
+     ],
+     "expectStatus": 404
+    },
+    {
+     "name": "trajectory export of an empty session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/trajectory/export"
+     },
+     "covers": [
+      "GET /api/sessions/:id/trajectory/export"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "session usage before any run",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/usage"
+     },
+     "covers": [
+      "GET /api/sessions/:id/usage"
+     ],
+     "expectStatus": 200
+    },
+    {
+     "name": "usage of an unknown session",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/nope/usage"
+     },
+     "expectStatus": 404
+    },
+    {
+     "name": "a CAS blob by an invalid hash",
+     "request": {
+      "method": "GET",
+      "path": "/api/cas/notahash"
+     },
+     "covers": [
+      "GET /api/cas/:sha256"
+     ]
+    },
+    {
+     "name": "a web page body that is not there",
+     "request": {
+      "method": "GET",
+      "path": "/api/sessions/{{sessionId}}/web-pages/nope/content"
+     },
+     "covers": [
+      "GET /api/sessions/:id/web-pages/:webPageId/content"
+     ]
+    },
+    {
+     "name": "project plugins",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects/{{projectId}}/plugins"
+     },
+     "covers": [
+      "GET /api/projects/:id/plugins"
+     ]
+    },
+    {
+     "name": "project plugin events",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects/{{projectId}}/plugins/events",
+      "headers": {
+       "accept": "text/event-stream"
+      }
+     },
+     "covers": [
+      "GET /api/projects/:id/plugins/events"
+     ],
+     "stream": {
+      "until": [],
+      "timeoutMs": 2000
+     }
+    },
+    {
+     "name": "project plugin candidates",
+     "request": {
+      "method": "GET",
+      "path": "/api/projects/{{projectId}}/plugins/candidates"
+     },
+     "covers": [
+      "GET /api/projects/:id/plugins/candidates"
+     ]
+    },
+    {
+     "name": "usage analytics",
+     "request": {
+      "method": "GET",
+      "path": "/api/usage/analytics"
+     },
+     "covers": [
+      "GET /api/usage/analytics"
+     ]
+    },
+    {
+     "name": "usage analytics as csv",
+     "request": {
+      "method": "GET",
+      "path": "/api/usage/analytics/export?format=csv"
+     },
+     "covers": [
+      "GET /api/usage/analytics/export"
+     ]
+    },
+    {
+     "name": "usage per model",
+     "request": {
+      "method": "GET",
+      "path": "/api/usage/models"
+     },
+     "covers": [
+      "GET /api/usage/models"
+     ]
+    },
+    {
+     "name": "delete the project",
+     "request": {
+      "method": "DELETE",
+      "path": "/api/projects/{{projectId}}",
+      "body": {
+       "confirmationId": "{{projectId}}"
+      }
+     },
+     "always": true
+    }
+   ]
+  }
+ ]
+}

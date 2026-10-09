@@ -1,16 +1,18 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64", "sandbox:bubblewrap"] });
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { test } from "node:test";
+
 import { killSandboxProcess, spawnSandboxProcess } from "./executor.js";
 
 test("sandbox cancellation kills monitor and descendants before parent-death binding", {
-  skip: process.platform !== "linux",
+  tags: ["os:linux"],
 }, async () => {
   const root = await mkdtemp(resolve(tmpdir(), "sandbox-group-"));
   // Model bwrap's startup window: its descendant exists but has not yet bound

@@ -49,10 +49,12 @@ import os
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .auth import require_internal_token
+from ._cypher import CypherBudgetExceeded
 from .constraints import ensure_schema
 from .logging_config import get_logger
 from .backend import handle
@@ -88,6 +90,14 @@ from .query import (
 log = get_logger("server")
 
 app = FastAPI(title="sciencediscovery-memory-graph")
+
+
+@app.exception_handler(CypherBudgetExceeded)
+async def _query_budget_exceeded(_request: Request, _exc: CypherBudgetExceeded) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": {
+        "code": "memory_graph_query_limit",
+        "message": "Memory graph query exceeded its local work or time limit",
+    }})
 
 # Node/edge label vocabularies for request validation, so a bad_request
 # response is returned before any Cypher runs. The union of upstream's set
@@ -251,6 +261,8 @@ def observe_execution(req: ObserveExecutionRequest) -> dict[str, Any]:
         written = 1 + len(req.produced_artifacts)
         log.info("observe/execution done: execution=%s wrote %d node(s)", req.execution_id, written)
         return {"status": "healthy", "written": written}
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/execution failed: execution=%s: %s", req.execution_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
@@ -365,6 +377,8 @@ def observe_tool_call(req: ObserveToolCallRequest) -> dict[str, Any]:
         log.info("observe/tool-call done: task_id=%s wrote %d node(s) (%d products)",
                  req.task_id, written, len(req.products))
         return {"status": "healthy", "written": written, "products": len(req.products)}
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/tool-call failed: task_id=%s: %s", req.task_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
@@ -393,6 +407,8 @@ def observe_subagent(req: ObserveSubagentRequest) -> dict[str, Any]:
         )
         log.info("observe/subagent done: subagent=%s status=%s", req.subagent_id, req.status)
         return {"status": "healthy", "written": 1}
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/subagent failed: subagent=%s: %s", req.subagent_id, exc)
         raise HTTPException(status_code=500, detail=f"upsert failed: {exc}")
@@ -963,6 +979,8 @@ def persist_evidence(req: DeclareEvidenceRequest) -> dict[str, Any]:
                  evidence_id, req.session_id, link or "-",
                  source_file_id or "-", webpage_link or "-")
         return {"status": "ok", "evidence_id": evidence_id}
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("persist/evidence failed: session=%s: %s", req.session_id, exc)
         raise HTTPException(status_code=500, detail=f"declare_evidence failed: {exc}")
@@ -1225,6 +1243,8 @@ def persist_claim(req: DeclareClaimRequest) -> dict[str, Any]:
             artifact_id=req.artifact_id,
             artifact_version=req.artifact_version,
         )
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("persist/claim failed: session=%s: %s", req.session_id, exc)
         raise HTTPException(status_code=500, detail=f"declare_claim failed: {exc}")
@@ -1318,6 +1338,8 @@ def persist_stated_in(req: LinkClaimsRequest) -> dict[str, Any]:
         log.info("persist/stated_in done: artifact=%s v%s claims=%d linked=%d",
                  req.artifact_id, req.artifact_version, len(req.claim_ids), linked)
         return {"status": "ok", "artifact_id": req.artifact_id, "linked": linked}
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("persist/stated_in failed: session=%s: %s", req.session_id, exc)
         raise HTTPException(status_code=500, detail=f"link_claims_to_report failed: {exc}")
@@ -1347,6 +1369,8 @@ def cleanup_session(req: CleanupSessionRequest) -> dict[str, Any]:
         log.info("cleanup/session done: session=%s marked=%d deleted=%d",
                  req.session_id, result.get("marked"), result.get("deleted"))
         return result
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("cleanup/session failed: session=%s: %s", req.session_id, exc)
         raise HTTPException(status_code=500, detail=f"cleanup failed: {exc}")
@@ -1368,6 +1392,8 @@ def cleanup_project(req: CleanupProjectRequest) -> dict[str, Any]:
         result = delete_project_graph(project_id=req.project_id, session_ids=req.session_ids)
         log.info("cleanup/project done: project=%s deleted=%d", req.project_id, result.get("deleted"))
         return result
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("cleanup/project failed: project=%s: %s", req.project_id, exc)
         raise HTTPException(status_code=500, detail=f"cleanup failed: {exc}")
@@ -1403,6 +1429,8 @@ def observe_session_first_message(req: ObserveSessionFirstMessageRequest) -> dic
         )
         log.info("observe/session-first-message done: session=%s goal=%s", req.session_id, req.goal_id)
         return {"status": "healthy", "written": 1}
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/session-first-message failed: session=%s goal=%s: %s",
                       req.session_id, req.goal_id, exc)
@@ -1443,6 +1471,8 @@ def observe_upload_file(req: ObserveUploadFileRequest) -> dict[str, Any]:
         )
         log.info("observe/upload-file done: session=%s file=%s", req.session_id, req.file_id)
         return {"status": "healthy", "written": 1}
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # pragma: no cover - belt-and-suspenders
         log.exception("observe/upload-file failed: session=%s file=%s: %s",
                       req.session_id, req.file_id, exc)
@@ -1517,6 +1547,8 @@ def observe_search_artifacts(req: SearchArtifactsRequest) -> dict[str, Any]:
         return link_search_artifacts(
             search_id=req.search_id, session_id=req.session_id, artifacts=req.artifacts,
         )
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # noqa: BLE001
         log.warning("search artifacts failed: %s", exc)
         return {"linked": 0, "reason": str(exc)[:200]}
@@ -1542,6 +1574,8 @@ def observe_search_progress(req: SearchProgressRequest) -> dict[str, Any]:
                 finished_at=finished,
             )
         return result
+    except CypherBudgetExceeded:
+        raise
     except Exception as exc:  # noqa: BLE001
         # Degrade rather than fail: the graph is a projection of the control
         # plane's event log, so a write that does not land can be replayed later

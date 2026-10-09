@@ -26,6 +26,9 @@ import {
 } from "./helpers/journeys.ts";
 import { keDriftAgentStub, keMultiShapePipelineStub } from "./helpers/ke-stub.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ke-drift-search.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -262,4 +265,6 @@ test("J-KE9 会话内 DRIFT 主题定位", { tag: "@mocked" }, async ({ journey,
     await pipeline.stop();
     await agent.stop();
   }
+});
+
 });

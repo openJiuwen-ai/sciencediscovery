@@ -8,6 +8,9 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-reviewer-result-matrix.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 type Case = { checkpoint: "completed" | "failed"; toolCallId: string; review?: ArtifactReviewRun };
 
 function review(toolCallId: string, overrides: Partial<ArtifactReviewRun> = {}): ArtifactReviewRun {
@@ -73,4 +76,6 @@ test("研究员可区分 Quick 与 Deep 审核结果矩阵", { tag: "@mocked" },
       await expect(all.filter({ hasText: "Review incomplete" })).toContainText("Review failed");
     });
   } finally { await cleanupJourney(page, fixture); }
+});
+
 });

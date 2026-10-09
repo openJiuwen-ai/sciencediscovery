@@ -17,12 +17,12 @@
  * PDF when the ref carries an arXiv id and the e-print serves TeX.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import { resolve } from "node:path";
-import test from "node:test";
-
 import { BIOMEDICAL_SCHEMA } from "@sciencediscovery/knowledge-engine";
 
 import { downloadArxivEprint } from "./connectors/eprint.js";

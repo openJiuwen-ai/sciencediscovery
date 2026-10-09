@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
+
 from sciencediscovery_evolve.judge_domain import grader, judge_domain
 from sciencediscovery_evolve.text_candidate import extract_text
 

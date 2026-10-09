@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { describe, test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+
 
 import { defaultSettings, parseEnvFile, parseInvocation, USAGE } from "./cli-options.js";
 
@@ -92,6 +94,24 @@ describe("launcher option parsing", () => {
     assert.equal(invocation.settings.skipSandboxCheck, true);
     assert.equal(invocation.usesDefaultDataDir, false);
     assert.deepEqual(messages, []);
+  });
+
+  test("defaults to JiuwenSwarm, opt-out via SCIENCE_AGENT_EXECUTOR=native or --no-jiuwenswarm", () => {
+    assert.equal(defaultSettings({}, cwd).jiuwenswarm, true);
+    assert.equal(defaultSettings({ SCIENCE_AGENT_EXECUTOR: "jiuwenswarm" }, cwd).jiuwenswarm, true);
+    assert.equal(defaultSettings({ SCIENCE_AGENT_EXECUTOR: "native" }, cwd).jiuwenswarm, false);
+    assert.equal(parseInvocation(["serve"], {}, cwd).settings.jiuwenswarm, true);
+    assert.equal(parseInvocation(["serve", "--no-jiuwenswarm"], {}, cwd).settings.jiuwenswarm, false);
+    assert.equal(
+      parseInvocation(["serve", "--no-jiuwenswarm", "--jiuwenswarm"], {}, cwd).settings.jiuwenswarm,
+      true,
+      "the last flag wins",
+    );
+    assert.equal(
+      parseInvocation(["serve", "--no-jiuwenswarm"], { SCIENCE_AGENT_EXECUTOR: "jiuwenswarm" }, cwd).settings.jiuwenswarm,
+      false,
+      "a CLI flag overrides the environment",
+    );
   });
 
   test("accepts an explicit macOS Seatbelt launcher", () => {

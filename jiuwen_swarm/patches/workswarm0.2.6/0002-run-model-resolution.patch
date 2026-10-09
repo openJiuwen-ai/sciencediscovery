@@ -1,0 +1,25 @@
+diff --git a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+index b2548b5..deff25b 100644
+--- a/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
++++ b/jiuwenswarm/server/runtime/agent_adapter/interface_deep.py
+@@ -5570,6 +5570,20 @@ class JiuWenSwarmDeepAdapter:
+                 return self._model
+             return self._model_cache[cache_key]
+ 
++        # A concurrently started run can publish a private model after this
++        # adapter's cache was built. Resolve that exact published route; never
++        # silently send its task through the shared default proxy instead.
++        if "#" not in requested:
++            for entry in get_default_models(get_config()):
++                mcc = entry.get("model_client_config") or {}
++                if mcc.get("model_name") == requested:
++                    built = build_model_from_entry(mcc, entry.get("model_config_obj") or {})
++                    self._model_cache[requested] = built
++                    logger.info("[model-route] resolved newly published model %s", requested)
++                    return built
++        if self._default_model_name == "sciencediscovery-default":
++            raise ValueError(f"Requested run model {requested!r} is unavailable; refusing default-route fallback")
++
+         # Opencode Zen 免费模型（纯内存态，不入 config.yaml）：从进程内存缓存
+         # 取完整 model_client_config / model_config_obj 构建并缓存，供本次及后续请求复用。
+         # 不写回 config，开关关闭（get_zen_free_model_entries 返回空）则自然查不到。

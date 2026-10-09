@@ -105,6 +105,7 @@ export function ScopedSettingsEditor({
   skillLibraries = [],
   skills,
   skillScope = "session",
+  skillsBackend,
   submitLabel,
   showActions = true,
 }: {
@@ -126,6 +127,8 @@ export function ScopedSettingsEditor({
   skillLibraries?: SkillLibrary[];
   skills: SkillDescriptor[];
   skillScope?: SkillScope;
+  /** The agent backend: with JiuwenSwarm, skills are not chosen per Project or Session. */
+  skillsBackend?: "jiuwenswarm" | "native";
   submitLabel?: string;
   showActions?: boolean;
 }) {
@@ -249,7 +252,7 @@ export function ScopedSettingsEditor({
         {allowInheritance ? <SettingsSource details={details} field="kbScopeKbIds" /> : null}
       </fieldset>}
 
-      <PluginSettingsSections {...{ details, draft, setDraft, connectors, allowInheritance, disabled: disabled || saving, t, skillLibraries, skills, skillScope }} renderSource={(field) => <SettingsSource details={details} field={field} />} />
+      <PluginSettingsSections {...{ details, draft, setDraft, connectors, allowInheritance, disabled: disabled || saving, t, skillLibraries, skills, skillScope, skillsBackend }} renderSource={(field) => <SettingsSource details={details} field={field} />} />
       {afterFields}
       {disabled ? <p className="settings-readonly">{t("settings.archivedReadonly")}</p> : null}
       {!showActions ? null : onCancel ? <div className="dialog-actions">

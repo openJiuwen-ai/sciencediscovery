@@ -1,12 +1,15 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import type { TestContext } from "node:test";
+import { createTest } from "../../../test/support/tagged/compat.mjs";
+const { test, describe, before, after } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
-import test from "node:test";
+
 import { RemoteComputeClient, SshHostKeyUntrustedError, type RemoteSshAccess } from "@sciencediscovery/executor";
 import type { RemoteHostTarget, RemoteJob } from "@sciencediscovery/schema";
 import { createApiServer } from "./http/index.js";
@@ -15,13 +18,18 @@ import { startApprovedRemoteJob } from "./permissions/index.js";
 import type { SessionStore } from "./store.js";
 import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
 
-test("SSH settings preserve credentials and destination through persistence and trust retries", async (context) => {
-  const root = resolve(process.cwd(), ".tmp", `ssh-api-regression-${Date.now()}-${process.pid}`);
-  await mkdir(root, { recursive: true });
-  const targets: RemoteSshAccess[] = [];
-  const authenticationError = "SSH authentication failed for operator@auth-host:2222.\nServer offered: publickey, password.\nActually tried: none, password (none is method discovery).\nStored credentials: password yes; key no.";
-  const challenge = { algorithm: "ssh-ed25519", fingerprint: `SHA256:${"a".repeat(43)}`, changed: false };
-  const remoteCompute = new RemoteComputeClient(resolve(root, "ssh-config"), async () => { throw new Error("Explicit access required"); }, {
+describe("SSH settings preserve credentials and destination through persistence and trust retries", () => {
+let steps!: Record<string, (context: TestContext) => unknown>;
+ const cleanups: Array<() => unknown> = [];
+ after(async () => { for (const cleanup of cleanups.reverse()) await cleanup(); });
+ before(async () => {
+ const context = { after: (fn: () => unknown) => cleanups.push(fn) };
+const root = resolve(process.cwd(), ".tmp", `ssh-api-regression-${Date.now()}-${process.pid}`);
+await mkdir(root, { recursive: true });
+const targets: RemoteSshAccess[] = [];
+const authenticationError = "SSH authentication failed for operator@auth-host:2222.\nServer offered: publickey, password.\nActually tried: none, password (none is method discovery).\nStored credentials: password yes; key no.";
+const challenge = { algorithm: "ssh-ed25519", fingerprint: `SHA256:${"a".repeat(43)}`, changed: false };
+const remoteCompute = new RemoteComputeClient(resolve(root, "ssh-config"), async () => { throw new Error("Explicit access required"); }, {
     transport: {
       open: async () => { throw new Error("No real SSH in this test"); },
       run: async (target) => {
@@ -34,7 +42,7 @@ test("SSH settings preserve credentials and destination through persistence and 
       },
     },
   });
-  const config: ServerConfig = {
+const config: ServerConfig = {
     authToken: "test-token", dataDir: root, host: "127.0.0.1", port: 0,
     gatewayIdleTimeoutMs: 240_000, gatewayTurnTimeoutMs: 0, kernelIdleTimeoutMs: 0,
     modelCatalogPath: resolve(root, "absent.json"), paperPythonPath: resolve(root, "no-python"), paperWorkerPath: resolve(root, "no-worker"),
@@ -44,17 +52,23 @@ test("SSH settings preserve credentials and destination through persistence and 
     memoryGraph: { url: "http://127.0.0.1:1", internalToken: "test" },
     evolve: { url: "http://127.0.0.1:1", internalToken: "test" },
   };
-  const catalog = { loadedAt: new Date().toISOString(), revision: "ssh-settings-test", servers: [] };
-  const server = createApiServer(config, { remoteCompute, mcpTransport: {
+const catalog = { loadedAt: new Date().toISOString(), revision: "ssh-settings-test", servers: [] };
+const server = createApiServer(config, { remoteCompute, mcpTransport: {
     catalog: async () => catalog, reload: async () => catalog, invoke: async () => { throw new Error("No MCP in settings"); },
   } });
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  context.after(async () => {
+await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+context.after(async () => {
     await new Promise<void>((done) => { server.close(() => done()); server.closeAllConnections(); });
     await rm(root, { force: true, recursive: true });
   });
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  await context.test("key file browser is authenticated, metadata-only and reports invalid locations", async () => {
+const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+async function request<T>(path: string, body: unknown, method = "POST"): Promise<{ status: number; body: T }> {
+    const response = await fetch(origin + path, { method, headers: { authorization: "Bearer test-token", "content-type": "application/json" }, body: JSON.stringify(body) });
+    return { status: response.status, body: await response.json() as T };
+  }
+let hostId: string;
+ steps = {
+"key file browser is authenticated, metadata-only and reports invalid locations": async () => {
     const path = resolve(root, "picker");
     await mkdir(path);
     const contents = randomBytes(32).toString("hex");
@@ -71,20 +85,16 @@ test("SSH settings preserve credentials and destination through persistence and 
     assert.equal(missing.status, 400);
     assert.match(await missing.text(), /does not exist/);
     assert.equal(targets.length, 0, "browsing cannot initiate SSH");
-  });
-  async function request<T>(path: string, body: unknown, method = "POST"): Promise<{ status: number; body: T }> {
-    const response = await fetch(origin + path, { method, headers: { authorization: "Bearer test-token", "content-type": "application/json" }, body: JSON.stringify(body) });
-    return { status: response.status, body: await response.json() as T };
-  }
-  await context.test("independent job submission and old approval endpoints are retired", async () => {
+  },
+"independent job submission and old approval endpoints are retired": async () => {
     for (const suffix of ["", "/old-job/decision", "/old-job/refresh"]) {
       const before = targets.length;
       const result = await request(`/api/sessions/unused/remote-jobs${suffix}`, { command: "unsafe command", decision: "allow_once" });
       assert.equal(result.status, 410);
       assert.equal(targets.length, before);
     }
-  });
-  await context.test("method-level authentication diagnostics persist on credential save and subsequent reads", async () => {
+  },
+"method-level authentication diagnostics persist on credential save and subsequent reads": async () => {
     const password = randomBytes(24).toString("hex");
     const added = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "auth-host", port: 2222, username: "operator", password });
     assert.equal(added.status, 201);
@@ -98,8 +108,8 @@ test("SSH settings preserve credentials and destination through persistence and 
     const hosts = await list.json() as RemoteHostTarget[];
     assert.equal(hosts.find((host) => host.id === added.body.id)?.error, authenticationError);
     assert.ok(!JSON.stringify(hosts).includes(password), "host responses never contain stored passwords");
-  });
-  await context.test("resolving a historical approval cannot restart bare SSH execution", async () => {
+  },
+"resolving a historical approval cannot restart bare SSH execution": async () => {
     const before = targets.length;
     const job = { id: "historical-job", state: "approved" } as RemoteJob;
     const result = await startApprovedRemoteJob(job, {
@@ -108,8 +118,8 @@ test("SSH settings preserve credentials and destination through persistence and 
     assert.equal(result.state, "failed");
     assert.match(result.error!, /retired/);
     assert.equal(targets.length, before);
-  });
-  await context.test("parallel Runner identities on one host retain independent credentials and metadata", async () => {
+  },
+"parallel Runner identities on one host retain independent credentials and metadata": async () => {
     const first = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "same-host", runnerName: "CPU environment", description: "Data preparation", username: "cpu", password: "cpu-secret", port: 2201 });
     const second = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "same-host", runnerName: "GPU environment", description: "Model training", username: "gpu", password: "gpu-secret", port: 2202 });
     assert.equal(first.status, 201);
@@ -123,9 +133,8 @@ test("SSH settings preserve credentials and destination through persistence and 
     await request(`/api/remote-hosts/${first.body.id}/probe`, {});
     assert.equal(targets.at(-1)?.credentials.password, "cpu-secret");
     assert.equal(targets.at(-1)?.port, 2201);
-  });
-  let hostId: string;
-  await context.test("port, password and passphrase survive registration, probe and credential updates", async () => {
+  },
+"port, password and passphrase survive registration, probe and credential updates": async () => {
     const added = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "port-host", port: 2222, username: "old", password: " password ", passphrase: " phrase " });
     assert.equal(added.status, 201);
     hostId = added.body.id;
@@ -144,8 +153,8 @@ test("SSH settings preserve credentials and destination through persistence and 
     const retained = await request<RemoteHostTarget>(`/api/remote-hosts/${hostId}/credentials`, {}, "PUT");
     assert.equal(retained.body.hasPassword, true);
     assert.equal(targets.at(-1)?.credentials.password, " new password ");
-  });
-  await context.test("generated keys are consumed after saving and trust retries use the saved host", async () => {
+  },
+"generated keys are consumed after saving and trust retries use the saved host": async () => {
     const generated = await request<{ privateKeyPath: string; publicKey: string }>("/api/remote-hosts/generate-key", {});
     const input = { alias: "generated-host", username: "user", privateKeyPath: generated.body.privateKeyPath };
     const failed = await request<{ details: { hostId: string }; code: string }>("/api/remote-hosts", input);
@@ -164,8 +173,8 @@ test("SSH settings preserve credentials and destination through persistence and 
     const rejected = await request("/api/remote-hosts", { alias: "invalid name", username: "user", privateKeyPath: unsaved.body.privateKeyPath });
     assert.equal(rejected.status, 400);
     await access(unsaved.body.privateKeyPath);
-  });
-  await context.test("explicit credentials override login without bypassing config destination defaults", async () => {
+  },
+"explicit credentials override login without bypassing config destination defaults": async () => {
     await writeFile(config.sshConfigPath, "Host cluster\n HostName resolved.example\n Port 2223\n User imported\n IdentityFile /missing/unused-key\n");
     const imported = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "cluster", username: "manual", password: "password" });
     assert.equal(imported.status, 201);
@@ -175,8 +184,10 @@ test("SSH settings preserve credentials and destination through persistence and 
     const overridden = await request<RemoteHostTarget>("/api/remote-hosts", { alias: "cluster", port: 2224, username: "manual", password: "password" });
     assert.equal(overridden.body.port, 2224);
     assert.equal(targets.at(-1)?.port, 2224);
-  });
-  await context.test("connect host-key failures use the same structured error as probe", async () => {
+  },
+// This step mocks a method for its own duration, so it takes the running
+// test's context rather than the shared cleanup helper the others close over.
+"connect host-key failures use the same structured error as probe": async (context) => {
     context.mock.method(remoteCompute, "connectRunner", async (host: RemoteHostTarget) => ({
       hostId: host.id, state: "error" as const, error: "Host key changed", hostKeyChallenge: { ...challenge, changed: true },
     }));
@@ -185,5 +196,16 @@ test("SSH settings preserve credentials and destination through persistence and 
     assert.equal(failed.body.code, "SSH_HOST_KEY_CHANGED");
     assert.equal(failed.body.details.hostId, hostId);
     assert.deepEqual(failed.body.details.hostKey, { algorithm: challenge.algorithm, fingerprint: challenge.fingerprint });
-  });
+  }
+ };
+ });
+test("key file browser is authenticated, metadata-only and reports invalid locations", async (context) => { await steps["key file browser is authenticated, metadata-only and reports invalid locations"]!(context); });
+test("independent job submission and old approval endpoints are retired", async (context) => { await steps["independent job submission and old approval endpoints are retired"]!(context); });
+test("method-level authentication diagnostics persist on credential save and subsequent reads", async (context) => { await steps["method-level authentication diagnostics persist on credential save and subsequent reads"]!(context); });
+test("resolving a historical approval cannot restart bare SSH execution", async (context) => { await steps["resolving a historical approval cannot restart bare SSH execution"]!(context); });
+test("parallel Runner identities on one host retain independent credentials and metadata", async (context) => { await steps["parallel Runner identities on one host retain independent credentials and metadata"]!(context); });
+test("port, password and passphrase survive registration, probe and credential updates", async (context) => { await steps["port, password and passphrase survive registration, probe and credential updates"]!(context); });
+test("generated keys are consumed after saving and trust retries use the saved host", async (context) => { await steps["generated keys are consumed after saving and trust retries use the saved host"]!(context); });
+test("explicit credentials override login without bypassing config destination defaults", async (context) => { await steps["explicit credentials override login without bypassing config destination defaults"]!(context); });
+test("connect host-key failures use the same structured error as probe", async (context) => { await steps["connect host-key failures use the same structured error as probe"]!(context); });
 });

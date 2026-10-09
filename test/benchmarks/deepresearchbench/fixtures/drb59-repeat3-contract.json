@@ -1,0 +1,293 @@
+{
+  "provenance": "DRB-59 repeat-3 retained Judge response; criteria reduced to names/weights. No model calls or historical result changes.",
+  "response": {
+    "comprehensiveness": [
+      {
+        "criterion": "Coverage of Avian Navigational Systems and Internal Mechanisms",
+        "analysis": "Article 1 is exhaustive, distinguishing compass and map problems, vector versus true navigation, magnetic inclination, radical-pair and magnetite hypotheses, sun and star compasses, polarisation, geomagnetic map, olfactory navigation, landmarks, infrasound, genetics and ontogeny. Article 2 covers the main systems clearly but with less depth on genetic, ontogenetic, molecular, and contested mechanistic detail.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Breadth and Depth of External Navigational Cues Discussed",
+        "analysis": "Article 1 discusses solar, stellar, magnetic inclination/intensity/declination, olfactory, infrasound, landmarks and polarised light with quantitative anchors and controversy. Article 2 covers most major cues but omits infrasound and treats several cues less critically, with less depth on contested evidence.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Explanation of Cue Integration, Hierarchy, and Calibration",
+        "analysis": "Article 1 gives an unusually deep account of cue dominance, mutual calibration, masking effects, flexible weighting and unresolved neural integration. Article 2 has a solid dedicated integration section with hierarchy, calibration, maximum likelihood estimation and neural structures, but it is less nuanced about conflicting evidence.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Comprehensive Account of Navigational Disturbances and Their Impacts",
+        "analysis": "Article 1 covers artificial light, radiofrequency noise, geomagnetic disturbance, weather and climate with detailed mechanisms, quantitative results and explicit uncertainty. Article 2 also covers natural and anthropogenic disturbances, including habitat loss, but its treatment is less quantitative and less cautious about causal inference.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Consideration of Biological and Ecological Context",
+        "analysis": "Article 1 integrates genetics, ontogeny, age and experience, species differences, population consequences, climate and conservation implications. Article 2 considers age, experience, species examples and conservation, but lacks Article 1's depth on genetics, ontogeny and ecological uncertainty.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Acknowledgment of Research Frontiers and Unresolved Questions",
+        "analysis": "Article 1 explicitly separates established, contested and limiting evidence and provides a detailed research-gap section. Article 2 includes future directions, but it presents more as settled consensus and underplays several live controversies.",
+        "article_1_score": 10,
+        "article_2_score": 7
+      }
+    ],
+    "insight": [
+      {
+        "criterion": "Depth of Explanation of Navigational Cue Integration and Hierarchy",
+        "analysis": "Article 1 analyses integration as a dynamic, context-dependent system, including masking, calibration conflicts, bidirectional hierarchy and open neural questions. Article 2 explains hierarchy and calibration well but with less critical synthesis and fewer competing interpretations.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Analysis of Sensory Mechanisms and Cognitive Processes",
+        "analysis": "Article 1 examines molecular magnetoreception, cryptochrome evidence, magnetite reinterpretation, trigeminal pathways and neural integration with strong caveats. Article 2 also covers receptors, neural pathways and cognitive maps, but with broader and less sharply critical treatment.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Rigor in Analyzing the Impact and Mechanisms of Disturbances",
+        "analysis": "Article 1 traces causal pathways carefully, distinguishes cage from field evidence, quantifies effects and flags contested mechanisms. Article 2 explains disturbance mechanisms clearly but sometimes overstates field-level consequences, especially for radiofrequency noise and geomagnetic vagrancy.",
+        "article_1_score": 10,
+        "article_2_score": 7
+      },
+      {
+        "criterion": "Critical Evaluation of Evidence and Synthesis of Competing Theories",
+        "analysis": "Article 1 is outstanding, with explicit evidence-status tables, large-sample positive and negative findings, and synthesis of controversies. Article 2 acknowledges some debates, such as piloting versus mosaic maps, but generally presents the field more consensually and less critically.",
+        "article_1_score": 10,
+        "article_2_score": 7
+      },
+      {
+        "criterion": "Articulation of Ecological Significance and Identification of Key Knowledge Gaps",
+        "analysis": "Article 1 ties navigation to population structure, survival, climate change and conservation and lists specific research gaps. Article 2 also discusses ecological significance and future work, but its knowledge-gap analysis is less detailed and less sharply focused.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      }
+    ],
+    "instruction_following": [
+      {
+        "criterion": "Explanation of Navigation Mechanisms ('How')",
+        "analysis": "Both articles explain how birds navigate, but Article 1 gives a more complete mechanistic account across compasses, maps, vector navigation, true navigation and sensory integration. Article 2 is clear but less exhaustive.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Identification and Discussion of Navigational Cues",
+        "analysis": "Article 1 identifies a wider range of cues, including infrasound and detailed geomagnetic parameters, and discusses their evidentiary status. Article 2 covers the major cues but omits infrasound and gives less critical depth.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Identification and Discussion of Navigational Disturbances",
+        "analysis": "Article 1 thoroughly discusses artificial light, radiofrequency noise, geomagnetic disturbance and weather/climate with mechanisms and impacts. Article 2 also covers these and adds habitat alteration, but with less analytical depth and fewer caveats.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Adherence to Subject Focus on 'Birds'",
+        "analysis": "Both articles remain focused on birds. Article 1 occasionally cites non-bird comparative evidence, such as Drosophila and bats, but does so in direct service of avian navigation questions.",
+        "article_1_score": 10,
+        "article_2_score": 10
+      },
+      {
+        "criterion": "Adherence to Process Focus on 'Migration'",
+        "analysis": "Article 1 consistently frames mechanisms and disturbances around long-distance migration. Article 2 also addresses migration but sometimes shifts toward general homing, foraging and orientation, making the migration focus slightly less consistent.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Adherence to Domain Context of 'Ecology'",
+        "analysis": "Article 1 strongly integrates ecological context, including population dynamics, survival, climate and conservation. Article 2 also includes ecological and conservation framing, but less deeply and with fewer ecological caveats.",
+        "article_1_score": 10,
+        "article_2_score": 8
+      },
+      {
+        "criterion": "Completeness in Addressing All Explicit Task Questions",
+        "analysis": "Both articles address the how, cue and disturbance components of the task. Article 1 is more complete and explicit in separating and integrating these components.",
+        "article_1_score": 10,
+        "article_2_score": 9
+      }
+    ],
+    "readability": [
+      {
+        "criterion": "Language Clarity, Grammatical Correctness, and Terminological Precision",
+        "analysis": "Both articles use precise scientific terminology and are grammatically strong. Article 1 is extremely dense and abbreviation-heavy, while Article 2 is clearer and more accessible for a broad ecological readership.",
+        "article_1_score": 7.5,
+        "article_2_score": 9
+      },
+      {
+        "criterion": "Overall Article Structure and Logical Progression",
+        "analysis": "Both have clear structures. Article 1 is logically organized but very extensive and complex. Article 2 has a cleaner and more immediately navigable progression from concepts to mechanisms to disturbances.",
+        "article_1_score": 8.5,
+        "article_2_score": 9
+      },
+      {
+        "criterion": "Clarity and Depth in Explaining Complex Navigational Concepts and Mechanisms",
+        "analysis": "Article 1 provides exceptional depth but sometimes sacrifices clarity through density and detail. Article 2 explains complex concepts more accessibly, though with less depth on contested mechanisms.",
+        "article_1_score": 8,
+        "article_2_score": 9
+      },
+      {
+        "criterion": "Paragraph Organization, Cohesion, and Smooth Transitions",
+        "analysis": "Article 1 is cohesive but its paragraphs and sections are very dense. Article 2 has smoother transitions and more digestible paragraph organization.",
+        "article_1_score": 8,
+        "article_2_score": 9
+      },
+      {
+        "criterion": "Effective Use and Clarity of Visual Aids",
+        "analysis": "Article 1 includes one large evidence-status table that is informative but complex. Article 2 includes two well-designed summary tables, one for compass systems and one for anthropogenic disturbances, which aid comprehension more effectively.",
+        "article_1_score": 7,
+        "article_2_score": 8.5
+      },
+      {
+        "criterion": "Formatting, Layout, and Typographical Consistency",
+        "analysis": "Both articles are consistently formatted. Article 2 is cleaner and easier to scan, while Article 1 uses heavy bolding, long subsections and dense presentation.",
+        "article_1_score": 8,
+        "article_2_score": 9
+      },
+      {
+        "criterion": "Information Presentation: Conciseness, Focus, and Highlighting of Key Points",
+        "analysis": "Article 1 is thorough but not concise, with substantial repetition and dense evidential caveats. Article 2 is more concise, focused and effective at highlighting key points for the reader.",
+        "article_1_score": 6.5,
+        "article_2_score": 9
+      },
+      {
+        "criterion": "Audience Adaptation and Accessibility of Language Style",
+        "analysis": "Article 1 is written for a specialist research audience and assumes considerable background knowledge. Article 2 is more accessible to an educated ecological audience, defining concepts and sustaining a clearer explanatory tone.",
+        "article_1_score": 6,
+        "article_2_score": 9
+      }
+    ]
+  },
+  "criteria": {
+    "id": 59,
+    "prompt": "In ecology, how do birds achieve precise location and direction navigation during migration? What cues and disturbances influence this process?",
+    "dimension_weight": {
+      "readability": 0.17,
+      "insight": 0.35,
+      "comprehensiveness": 0.31,
+      "instruction_following": 0.17
+    },
+    "criterions": {
+      "comprehensiveness": [
+        {
+          "criterion": "Coverage of Avian Navigational Systems and Internal Mechanisms",
+          "weight": 0.25
+        },
+        {
+          "criterion": "Breadth and Depth of External Navigational Cues Discussed",
+          "weight": 0.25
+        },
+        {
+          "criterion": "Explanation of Cue Integration, Hierarchy, and Calibration",
+          "weight": 0.15
+        },
+        {
+          "criterion": "Comprehensive Account of Navigational Disturbances and Their Impacts",
+          "weight": 0.2
+        },
+        {
+          "criterion": "Consideration of Biological and Ecological Context",
+          "weight": 0.1
+        },
+        {
+          "criterion": "Acknowledgment of Research Frontiers and Unresolved Questions",
+          "weight": 0.05
+        }
+      ],
+      "insight": [
+        {
+          "criterion": "Depth of Explanation of Navigational Cue Integration and Hierarchy",
+          "weight": 0.25
+        },
+        {
+          "criterion": "Analysis of Sensory Mechanisms and Cognitive Processes",
+          "weight": 0.25
+        },
+        {
+          "criterion": "Rigor in Analyzing the Impact and Mechanisms of Disturbances",
+          "weight": 0.2
+        },
+        {
+          "criterion": "Critical Evaluation of Evidence and Synthesis of Competing Theories",
+          "weight": 0.15
+        },
+        {
+          "criterion": "Articulation of Ecological Significance and Identification of Key Knowledge Gaps",
+          "weight": 0.15
+        }
+      ],
+      "instruction_following": [
+        {
+          "criterion": "Explanation of Navigation Mechanisms ('How')",
+          "weight": 0.3
+        },
+        {
+          "criterion": "Identification and Discussion of Navigational Cues",
+          "weight": 0.25
+        },
+        {
+          "criterion": "Identification and Discussion of Navigational Disturbances",
+          "weight": 0.2
+        },
+        {
+          "criterion": "Adherence to Subject Focus on 'Birds'",
+          "weight": 0.05
+        },
+        {
+          "criterion": "Adherence to Process Focus on 'Migration'",
+          "weight": 0.05
+        },
+        {
+          "criterion": "Adherence to Domain Context of 'Ecology'",
+          "weight": 0.05
+        },
+        {
+          "criterion": "Completeness in Addressing All Explicit Task Questions",
+          "weight": 0.1
+        }
+      ],
+      "readability": [
+        {
+          "criterion": "Language Clarity, Grammatical Correctness, and Terminological Precision",
+          "weight": 0.2
+        },
+        {
+          "criterion": "Overall Article Structure and Logical Progression",
+          "weight": 0.2
+        },
+        {
+          "criterion": "Clarity and Depth in Explaining Complex Navigational Concepts and Mechanisms",
+          "weight": 0.2
+        },
+        {
+          "criterion": "Paragraph Organization, Cohesion, and Smooth Transitions",
+          "weight": 0.1
+        },
+        {
+          "criterion": "Effective Use and Clarity of Visual Aids (e.g., Diagrams, Conceptual Models, Maps)",
+          "weight": 0.1
+        },
+        {
+          "criterion": "Formatting, Layout, and Typographical Consistency",
+          "weight": 0.1
+        },
+        {
+          "criterion": "Information Presentation: Conciseness, Focus, and Highlighting of Key Points",
+          "weight": 0.05
+        },
+        {
+          "criterion": "Audience Adaptation and Accessibility of Language Style",
+          "weight": 0.05
+        }
+      ]
+    }
+  }
+}

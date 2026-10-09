@@ -495,3 +495,22 @@ export interface SkillLibrarySearchResult {
  * Built-ins: arxiv | europe-pmc | pubmed | uniprot.
  * New sources register under `packages/mcp-sources`.
  */
+
+/**
+ * A skill installed in JiuwenSwarm (the JiuwenSwarm agent backend): one imported from ScienceDiscovery
+ * (`source: "sciencediscovery"`, with `skillId`, its id here), one shipped with JiuwenSwarm (`builtin`), or one
+ * JiuwenSwarm installed itself (its source name).
+ */
+export interface JiuwenSwarmSkill {
+  description: string;
+  enabled: boolean;
+  name: string;
+  skillId?: string;
+  source: string;
+}
+
+/** `GET /api/jiuwenswarm/skills`: which backend runs agents, and with JiuwenSwarm, its skills. */
+export interface JiuwenSwarmSkillsResponse {
+  backend: "jiuwenswarm" | "native";
+  skills: JiuwenSwarmSkill[];
+}

@@ -7,4 +7,11 @@
 # The rules are applied from top to bottom, and the last matching rule will take effect.
 
 # If the file in PR does not match rule, the default maintainer wang_cheng_zhao will be designated to conduct code review.
+
+# This file is for gitcode.com, so the names below are GitCode logins. It no
+# longer drives anything in this repository: the CodeArts pipeline that read it
+# to decide who could comment /merge on a merge request was removed along with
+# the rest of that pipeline. It stays because gitcode.com's own review UI reads
+# it. GitHub does not: it prefers .github/CODEOWNERS, which names the same three
+# people by their GitHub logins. Keep the two in step.
 * @wang_cheng_zhao @yi-zhang95 @hong-ye-zhou

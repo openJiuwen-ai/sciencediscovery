@@ -1,17 +1,19 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import test from "node:test";
+
 import { committedWorkspaceSnapshot, withWorkspaceMutation, RefStore, VersionStore, type TrajectoryStep, type WorkspaceTree } from "@sciencediscovery/cas";
 import { createMainAgentProfile, createSubagentProfile } from "@sciencediscovery/orchestration";
 import type { ModelInput } from "@sciencediscovery/model";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import { AgentLoop, type RuntimeMessage } from "@sciencediscovery/runtime-core";
 import { createAgentRun } from "../agent-run/create-agent-run.js";
-import { setModelTurnStreamerForTest, type ModelTurnStreamer } from "./index.js";
+import { createNativeAgent, setModelTurnStreamerForTest, type ModelTurnStreamer } from "./index.js";
 import { AgentStateAssembler, AgentVersionRecorder, agentHeadName, type AgentStateSnapshot, type ContextAssemblyRecord, type ModelContextSnapshot } from "./versioning.js";
 import { openSessionTrajectory, type RecordedEvent } from "@sciencediscovery/trajectory/server";
 import type { AgentEvent } from "@sciencediscovery/orchestration";
@@ -75,6 +77,9 @@ test("production AgentRun records exact contexts, complete observations, sequent
       streamId: "main", sequence: events.length + 1, createdAt: new Date().toISOString(), event });
   };
   const bindings = {
+    // Pinned to the native loop regardless of SCIENCE_AGENT_EXECUTOR: this test drives model turns
+    // through setModelTurnStreamerForTest, a native-agent-only hook the JiuwenSwarm executor never calls.
+    createAgent: createNativeAgent,
     recordEvent,
     observer: (event: AgentEvent) => {
       if (event.type === "tool_execution_start" || event.type === "tool_execution_end") void recordEvent({
@@ -254,8 +259,11 @@ test("parent Step links the child trajectory using the same state and revision m
   try {
     const childProfile = createSubagentProfile({ connectorIds: [], deniedToolNames: [], presetId: "test", gatewayThreadId: "child-1", maxModelTurns: 2, runTimeoutMs: 0, workspaceRoot: childRoot });
     await createAgentRun(createMainAgentProfile({ connectorIds: [], gatewayThreadId: "parent-1", runTimeoutMs: 0, workspaceRoot: parentRoot }), {
+      // Pinned to the native loop regardless of SCIENCE_AGENT_EXECUTOR: setModelTurnStreamerForTest above is a
+      // native-agent-only hook the JiuwenSwarm executor never calls.
+      createAgent: createNativeAgent,
       workspace: { ...base, workspaceRoot: parentRoot, runSubagent: async (input) => {
-        await createAgentRun(childProfile, { workspace: { ...base, workspaceRoot: childRoot } }, {
+        await createAgentRun(childProfile, { createAgent: createNativeAgent, workspace: { ...base, workspaceRoot: childRoot } }, {
           agentRunId: "child-run", requestExecutionId: "child-request", history: [], prompt: input.prompt, purpose: "initial",
         }).execute();
         return { id: "child-1", input, description: input.description, maxTurns: 2, parentTurnId: "parent-run", sessionId: "parent-1",

@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, createReadStream } from "node:fs";
 import { link, lstat, mkdir, open, realpath, rename, rm, statfs } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 
@@ -30,6 +30,7 @@ async function safePath(root: string, path: string, createParents: boolean): Pro
 /** Shared local publication primitive: bounded memory, verified temporary file, atomic no-clobber. */
 export async function publishWorkspaceFile(input: {
   root: string; path: string; chunks: AsyncIterable<Uint8Array>;
+  reuseIdentical?: boolean;
   conflict?: "reject" | "overwrite"; expectedBytes?: number; expectedHash?: string;
   verifySource?: () => Promise<void>; signal?: AbortSignal;
   versions?: VersionStore;
@@ -84,6 +85,11 @@ async function publishUnlocked(input: Parameters<typeof publishWorkspaceFile>[0]
     try {
       const existing = await lstat(target);
       if (!existing.isFile() || existing.isSymbolicLink()) throw new Error("Workspace copy rejects symbolic links and special files");
+      if (input.reuseIdentical && existing.size === bytes) {
+        const digest = createHash("sha256");
+        for await (const chunk of createReadStream(target)) digest.update(chunk);
+        if (digest.digest("hex") === sha256) return { transferId, bytes, sha256 };
+      }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if (input.conflict === "overwrite") await rename(temporary, target);
     else {

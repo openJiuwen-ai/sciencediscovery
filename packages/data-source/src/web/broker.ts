@@ -50,6 +50,11 @@ export interface WebBrokerStore {
   resolveProxy(policy?: ProxyPolicy): ResolvedProxy;
 }
 
+/** A web result another runtime produced (JiuwenSwarm's own search and fetch), to record like one of ours. */
+export type ExternalWebResult =
+  | { kind: "search"; toolName: string; rows: Array<{ url: string; title?: string; snippet?: string }> }
+  | { kind: "fetch"; toolName: string; url: string; content: string };
+
 export interface WebCallContext {
   forceRefresh: boolean;
   projectId: string;
@@ -273,6 +278,51 @@ export class WebBroker {
       // Never throw into the fetch path. Swallow + log via the sink's own
       // mgLog (the sink also catches its own errors).
       console.warn("mirrorFetchToGraph failed: %s", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
+   * Record a web search or page fetch that ran elsewhere (JiuwenSwarm's own tools) in the memory graph, as
+   * ``mirrorSearchToGraph`` / ``mirrorFetchToGraph`` do for ours: search hits become WebPage nodes keyed by URL,
+   * a fetched page's body goes to the CAS data pool and its hash onto the node. Gated by the same registry
+   * entries. Never throws.
+   */
+  async recordExternalResult(result: ExternalWebResult, context: WebCallContext): Promise<void> {
+    if (!this.memoryGraphSink) return;
+    try {
+      if (result.kind === "search") {
+        const graphType = toolGraphType("web_search");
+        const seen = new Set<string>();
+        const products = result.rows.filter((row) => row.url && !seen.has(row.url) && seen.add(row.url)).map((row) => ({
+          productType: "web_page" as const,
+          url: row.url,
+          ...(row.title ? { title: row.title } : {}),
+          ...(row.snippet ? { snippet: row.snippet } : {}),
+        }));
+        if (graphType === undefined || !products.length) return;
+        this.memoryGraphSink.observeToolCall({
+          taskId: `subtask:web:${context.toolCallId}`, sessionId: context.sessionId, turnId: context.turnId,
+          toolName: result.toolName, toolType: graphType, resultCount: products.length, products,
+        });
+        return;
+      }
+      const graphType = toolGraphType("web_fetch");
+      if (graphType === undefined || !result.url) return;
+      let contentHash: string | undefined;
+      if (result.content.length > 0) {
+        try {
+          contentHash = (await this.dataCas.put(result.content)).hash;
+        } catch (error) {
+          console.warn("recordExternalResult: dataCas.put failed: %s", error instanceof Error ? error.message : String(error));
+        }
+      }
+      this.memoryGraphSink.observeToolCall({
+        taskId: `subtask:web-fetch:${context.toolCallId}`, sessionId: context.sessionId, turnId: context.turnId,
+        toolName: result.toolName, toolType: graphType, resultCount: 1,
+        products: [{ productType: "web_page", url: result.url, ...(contentHash ? { contentHash } : {}) }],
+      });
+    } catch (error) {
+      console.warn("recordExternalResult failed: %s", error instanceof Error ? error.message : String(error));
     }
   }
 

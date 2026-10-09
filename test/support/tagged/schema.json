@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "groups": {
+    "fixture": {
+      "multiple": false,
+      "values": ["standard", "research", "literature"],
+      "default": "standard"
+    },
+    "category": {
+      "multiple": false,
+      "values": [
+        "ut",
+        "st",
+        "e2e"
+      ]
+    },
+    "os": {
+      "multiple": true,
+      "values": [
+        "linux",
+        "macos",
+        "windows"
+      ]
+    },
+    "arch": {
+      "multiple": true,
+      "values": [
+        "amd64",
+        "arm64"
+      ]
+    },
+    "npu": {
+      "multiple": false,
+      "values": [
+        "none",
+        "required"
+      ],
+      "default": "none"
+    },
+    "model": {
+      "multiple": false,
+      "values": [
+        "none",
+        "mock",
+        "real"
+      ],
+      "default": "none"
+    },
+    "judge": {
+      "multiple": false,
+      "values": [
+        "none",
+        "llm"
+      ],
+      "default": "none"
+    },
+    "status": {
+      "multiple": false,
+      "values": [
+        "reviewed",
+        "external",
+        "quarantined",
+        "legacy",
+        "unreviewed"
+      ],
+      "default": "reviewed"
+    },
+    "sandbox": {
+      "multiple": false,
+      "values": [
+        "none",
+        "bubblewrap",
+        "seatbelt"
+      ],
+      "default": "none"
+    }
+  }
+}

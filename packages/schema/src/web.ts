@@ -27,6 +27,20 @@ export type PaidSearchProvider = "tavily" | "exa" | "brave";
 export type FreeSearchEngine = "duckduckgo" | "bing" | "brave-html";
 export type WebSearchProvider = PaidSearchProvider | FreeSearchEngine;
 export type WebFetchProvider = "jina" | "tavily" | "exa";
+/** Search providers that only the JiuwenSwarm backend uses (its paid search: Bocha, Serper, Perplexity, and Jina). */
+export type JiuwenSwarmSearchProvider = "bocha" | "serper" | "perplexity";
+/** Every provider whose API key the settings store. */
+export type WebKeyProvider = "jina" | "tavily" | "exa" | "brave" | JiuwenSwarmSearchProvider;
+export const WEB_KEY_PROVIDERS: readonly WebKeyProvider[] = ["jina", "tavily", "exa", "brave", "bocha", "serper", "perplexity"];
+export const JIUWENSWARM_SEARCH_PROVIDERS: readonly JiuwenSwarmSearchProvider[] = ["bocha", "serper", "perplexity"];
+
+/**
+ * Which backend runs agent turns, and so which web settings take effect. On `jiuwenswarm` web search and fetching
+ * are JiuwenSwarm's own: it has the DuckDuckGo and Bing free engines and Bocha, Serper, Perplexity and Jina as paid
+ * search, and nothing else (no Brave, Tavily or Exa, no choice of fetch provider, no cache settings).
+ */
+export type WebBackend = "native" | "jiuwenswarm";
+export const JIUWENSWARM_FREE_ENGINES: readonly FreeSearchEngine[] = ["duckduckgo", "bing"];
 
 /** Fixed attempt order for the paid tier; a provider joins once it has a key. */
 export const PAID_SEARCH_ORDER: readonly PaidSearchProvider[] = ["tavily", "exa", "brave"];
@@ -37,7 +51,7 @@ export type WebProxyMode = "environment" | "custom" | "direct";
 
 export interface WebProviderState {
   hasApiKey: boolean;
-  provider: WebSearchProvider | WebFetchProvider;
+  provider: WebKeyProvider;
 }
 
 export interface WebSettings {
@@ -103,11 +117,13 @@ export function migrateLegacyWebSettings(stored: Record<string, unknown>): Recor
 
 export interface UpdateWebSettingsRequest extends Partial<WebSettings> {
   /** API keys are write-only. null removes the saved key. */
-  providerApiKeys?: Partial<Record<"brave" | "exa" | "jina" | "tavily", string | null>>;
+  providerApiKeys?: Partial<Record<WebKeyProvider, string | null>>;
 }
 
 export interface WebSettingsDetails extends WebSettings {
   providers: WebProviderState[];
+  /** Which backend the settings apply to; absent means the built-in one. */
+  backend?: WebBackend;
 }
 
 export type WebOperation = "search" | "fetch";

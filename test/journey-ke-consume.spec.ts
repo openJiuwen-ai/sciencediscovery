@@ -26,6 +26,9 @@ import {
 } from "./helpers/journeys.ts";
 import { keAgentStub, kePipelineStub } from "./helpers/ke-stub.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ke-consume.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -207,4 +210,6 @@ test("J-KE3 会话内消费知识图谱", { tag: "@mocked" }, async ({ journey, 
     await extraction.stop();
     await agent.stop();
   }
+});
+
 });

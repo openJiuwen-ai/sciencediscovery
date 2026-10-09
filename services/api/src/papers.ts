@@ -144,6 +144,41 @@ export class PaperService {
     });
   }
 
+  /**
+   * Extract a PDF already in the Session Workspace, such as one the user uploaded. The same bytes
+   * extracted before in this Session return the earlier acquisition instead of a second copy.
+   */
+  async extractWorkspacePdf(input: {
+    outputPathPrefix?: string;
+    path: string;
+    sessionId: string;
+    signal?: AbortSignal;
+  }): Promise<PaperAcquisition> {
+    this.store.assertSessionWritable(input.sessionId);
+    const location = this.store.workspaceLocation(input.sessionId, input.path);
+    const bytes = await readFile(resolveWorkspaceFile(location.root, location.path));
+    validatePdf(bytes);
+    const hash = this.cas.hash(bytes);
+    const prefix = input.outputPathPrefix?.replace(/^\/+|\/+$/g, "");
+    const existing = (await this.store.listPaperAcquisitions(input.sessionId))
+      .find((paper) => paper.status === "succeeded" && paper.pdf.hash === hash
+        && (prefix ? paper.pdfPath.startsWith(`${prefix}/`) : !paper.pdfPath.startsWith("subagents/")));
+    if (existing) return existing;
+    const name = input.path.split("/").at(-1) ?? input.path;
+    return await this.storePaper({
+      bytes,
+      connectorId: "upload",
+      identifier: `workspace:${input.path}`,
+      license: "User supplied; verify reuse rights before redistribution",
+      outputPathPrefix: input.outputPathPrefix,
+      parentRevisionId: this.store.getWorkspaceFileProvenance(input.sessionId, input.path)?.currentRevision.id,
+      sessionId: input.sessionId,
+      signal: input.signal,
+      sourceUrl: "",
+      title: name.replace(/\.pdf$/i, ""),
+    });
+  }
+
   async extractArtifact(input: {
     artifactJobId: string;
     candidate: ArtifactCandidate;

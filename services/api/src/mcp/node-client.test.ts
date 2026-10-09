@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+
 
 import type { LogFields, OperationalLogger } from "@sciencediscovery/operational-logging";
 import type { McpInvokeRequest, ResolvedProxy } from "@sciencediscovery/schema";
@@ -32,6 +34,8 @@ const SDK_TYPES = import.meta.resolve("@modelcontextprotocol/sdk/types.js");
 const ECHO_SERVER_SOURCE = `
 import { Server } from "${SDK_SERVER}";
 import { StdioServerTransport } from "${SDK_STDIO}";
+import { appendFileSync } from "node:fs";
+if (process.env.MCP_TEST_PID_FILE) appendFileSync(process.env.MCP_TEST_PID_FILE, String(process.pid) + "\\n");
 import { CallToolRequestSchema, ListToolsRequestSchema } from "${SDK_TYPES}";
 
 const server = new Server({ name: "echo", version: "1.0.0" }, { capabilities: { tools: {} } });
@@ -51,6 +55,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const text = String(request.params.arguments?.text ?? "");
   if (text === "explode") return { content: [{ type: "text", text: "synthetic failure" }], isError: true };
+  if (text === "large-error") return { content: [{ type: "text", text: "x".repeat(5_000) }], isError: true };
   return {
     content: [{ type: "text", text: text.toUpperCase() }],
     structuredContent: { upper: text.toUpperCase() },
@@ -196,6 +201,102 @@ test("invoke round-trips content and structured content", async () => {
     ]);
     assert.deepEqual(first.content, [{ text: "ONE", type: "text" }]);
     assert.deepEqual(second.content, [{ text: "TWO", type: "text" }]);
+  } finally {
+    await client.close();
+  }
+});
+
+test("concurrent first invocations share one stdio connection and close it", async () => {
+  const recorded = recordingLogger();
+  const pidDir = mkdtempSync(join(tmpdir(), "mcp-cold-pids-"));
+  const pidFile = join(pidDir, "pids.txt");
+  const { client } = fixtureClient(recorded.logger, { MCP_TEST_PID_FILE: pidFile });
+  try {
+    const [first, second] = await Promise.all([
+      client.invoke({ ...invokeRequest({ text: "one" }), requestId: "cold-1" }),
+      client.invoke({ ...invokeRequest({ text: "two" }), requestId: "cold-2" }),
+    ]);
+    assert.equal(first.isError, false);
+    assert.equal(second.isError, false);
+    await client.close();
+    assert.equal(recorded.events.filter((entry) => entry.event === "mcp_connection_started").length, 1);
+    assert.equal(recorded.events.filter((entry) => entry.event === "mcp_connection_closed").length, 1);
+  } finally {
+    await client.close();
+    if (existsSync(pidFile)) {
+      for (const raw of readFileSync(pidFile, "utf8").trim().split(/\s+/).filter(Boolean)) {
+        try { process.kill(Number(raw), "SIGTERM"); } catch { /* already closed */ }
+      }
+    }
+    rmSync(pidDir, { recursive: true, force: true });
+  }
+});
+
+test("concurrent failed handshakes share one connection attempt", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-failed-handshake-"));
+  const serverPath = join(dir, "dies.mjs");
+  writeFileSync(serverPath, "process.exit(1);\n");
+  const configPath = join(dir, "extensions_config.json");
+  writeFileSync(configPath, JSON.stringify({ mcpServers: {
+    echo: { args: [serverPath], command: process.execPath, enabled: true, type: "stdio" },
+  } }));
+  const recorded = recordingLogger();
+  const client = new McpNodeClient(() => loadExtensionsConfig(configPath), undefined, recorded.logger);
+  try {
+    const request = invokeRequest({ text: "x" });
+    request.execution.retryPolicy.maxAttempts = 1;
+    const [first, second] = await Promise.all([
+      client.invoke({ ...request, requestId: "failed-1" }),
+      client.invoke({ ...request, requestId: "failed-2" }),
+    ]);
+    assert.equal(first.isError, true);
+    assert.equal(second.isError, true);
+    assert.equal(recorded.events.filter((entry) => entry.event === "mcp_connection_started").length, 1);
+  } finally {
+    await client.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cancelling during retry backoff stops before another MCP connection", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-cancel-backoff-"));
+  const serverPath = join(dir, "dies.mjs");
+  writeFileSync(serverPath, "process.exit(1);\n");
+  const configPath = join(dir, "extensions_config.json");
+  writeFileSync(configPath, JSON.stringify({ mcpServers: {
+    echo: { args: [serverPath], command: process.execPath, enabled: true, type: "stdio" },
+  } }));
+  const recorded = recordingLogger();
+  const controller = new AbortController();
+  const recordInfo = recorded.logger.info;
+  recorded.logger.info = (event, fields = {}) => {
+    recordInfo(event, fields);
+    if (event === "mcp_invocation_retry_scheduled") controller.abort();
+  };
+  const client = new McpNodeClient(() => loadExtensionsConfig(configPath), undefined, recorded.logger);
+  try {
+    const request = invokeRequest({ text: "x" });
+    request.execution.retryPolicy = {
+      initialDelayMs: 1_000, jitterRatio: 0, maxAttempts: 2, maxDelayMs: 1_000,
+      multiplier: 1, respectRetryAfter: false, retryOn: ["transport-error"],
+    };
+    await assert.rejects(() => client.invoke(request, controller.signal),
+      (error: Error) => error instanceof DOMException && error.name === "AbortError");
+    assert.equal(recorded.events.filter((entry) => entry.event === "mcp_connection_started").length, 1);
+  } finally {
+    await client.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("error responses obey the MCP response size cap", async () => {
+  const { client } = fixtureClient();
+  try {
+    const request = invokeRequest({ text: "large-error" });
+    request.execution.maxResponseBytes = 100;
+    const response = await client.invoke(request);
+    assert.equal(response.isError, true);
+    assert.equal(response.attempts.at(-1)?.errorCode, "RESPONSE_TOO_LARGE");
   } finally {
     await client.close();
   }

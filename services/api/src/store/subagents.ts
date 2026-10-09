@@ -27,6 +27,7 @@ import type {
 } from "@sciencediscovery/schema";
 
 import { normalizeSubagentBrief } from "../subagent-brief.js";
+import { INTERRUPTION_PLACEHOLDER_ERRORS, SUBAGENT_RESTART_LOAD_PLACEHOLDER_ERROR } from "../subagent-continuation.js";
 import { hasOwn, isRecord } from "./catalog.js";
 
 function persistedBriefVersion(value: unknown): number | undefined {
@@ -82,7 +83,13 @@ export function normalizePersistedSubagent(value: unknown): Subagent | undefined
   const status: Subagent["status"] = interrupted ? "failed" : persistedStatus;
   const error = typeof value.error === "string"
     ? value.error
-    : interrupted ? "Subagent interrupted by API restart before completion" : undefined;
+    : interrupted ? SUBAGENT_RESTART_LOAD_PLACEHOLDER_ERROR : undefined;
+  // A record left `running` by a dead API never reported an outcome, and neither
+  // did one an earlier build already closed for the same reason: both carry a
+  // placeholder status that a later continuation is allowed to replace.
+  const interruptedByRestart = interrupted
+    || value.interruptedByRestart === true
+    || (error !== undefined && INTERRUPTION_PLACEHOLDER_ERRORS.has(error));
   const finishedAt = typeof value.finishedAt === "string" ? value.finishedAt : recoveredAt;
   const rawHandoff = isRecord(value.handoff) ? value.handoff : undefined;
   const handoff = rawHandoff
@@ -146,6 +153,7 @@ export function normalizePersistedSubagent(value: unknown): Subagent | undefined
     ...(handoff ? { handoff } : {}),
     id: typeof value.id === "string" ? value.id : randomUUID(),
     input,
+    ...(interruptedByRestart ? { interruptedByRestart: true } : {}),
     maxTurns: typeof value.maxTurns === "number" && value.maxTurns > 0 ? value.maxTurns : DEFAULT_SUBAGENT_MAX_TURNS,
     ...(model ? { model } : {}),
     parentTurnId: typeof value.parentTurnId === "string" ? value.parentTurnId : "migrated",
