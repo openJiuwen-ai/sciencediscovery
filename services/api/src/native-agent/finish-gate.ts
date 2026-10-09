@@ -72,6 +72,30 @@ const GROUNDING_DIRECTIVE_PREFIX = "Pre-finish grounding enforcement:";
 const INTERVENTION_DIRECTIVE_PREFIX = "Pre-finish termination intervention:";
 
 /**
+ * All gate-directive prefixes. The post-run evaluator
+ * (runs/finish-gate-followup.ts) uses them to recognize gate-injected user
+ * messages in the DURABLE transcript — under the JiuwenSwarm executor the
+ * directives are persisted as continuation-run prompts, while on the native
+ * executor they survive inside the assistant message's modelContext. Either
+ * way the prefixes are the canonical marker that a "user" message is not
+ * user input, and the shared continuation cap counts them.
+ */
+export const FINISH_GATE_AUDIT_DIRECTIVE_PREFIX = DIRECTIVE_PREFIX;
+export const FINISH_GATE_GROUNDING_DIRECTIVE_PREFIX = GROUNDING_DIRECTIVE_PREFIX;
+export const FINISH_GATE_INTERVENTION_DIRECTIVE_PREFIX = INTERVENTION_DIRECTIVE_PREFIX;
+export const FINISH_GATE_DIRECTIVE_PREFIXES: readonly string[] = [
+  DIRECTIVE_PREFIX,
+  GROUNDING_DIRECTIVE_PREFIX,
+  INTERVENTION_DIRECTIVE_PREFIX,
+];
+
+/** Whether a user-role message content is a gate directive rather than user input. */
+export function isFinishGateDirective(content: unknown): boolean {
+  return typeof content === "string"
+    && FINISH_GATE_DIRECTIVE_PREFIXES.some((prefix) => content.startsWith(prefix));
+}
+
+/**
  * Deterministic termination-intervention detection (V2-C6 — SA
  * termination-interventions.ts adapted): catches premature finishes the
  * audit and grounding stages do not cover. Evaluated in order; the first
@@ -332,10 +356,7 @@ function currentRunSegmentStart(history: readonly { role?: string; content?: unk
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i]!;
     if (message.role !== "user") continue;
-    const content = typeof message.content === "string" ? message.content : "";
-    if (!content.startsWith(DIRECTIVE_PREFIX)
-      && !content.startsWith(GROUNDING_DIRECTIVE_PREFIX)
-      && !content.startsWith(INTERVENTION_DIRECTIVE_PREFIX)) return i + 1;
+    if (!isFinishGateDirective(message.content)) return i + 1;
   }
   return 0;
 }

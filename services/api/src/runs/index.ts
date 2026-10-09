@@ -30,10 +30,12 @@ import { createKeResidentSummaryFactory } from "../knowledge-engine/contributor.
 import { createKnowledgeEngineGraphMirror } from "../knowledge-engine/graph-mirror.js";
 import { RefStore, VersionStore, type TrajectoryStep } from "@sciencediscovery/cas";
 import { agentHeadName } from "../native-agent/versioning.js";
+import { evaluatePostRunFinishGate, chainRootIndex } from "./finish-gate-followup.js";
 import { shortErrorMessage } from "@sciencediscovery/operational-logging";
 
 import {
   buildWorkspaceSystemPrompt,
+  createResearchStatePort,
   DEFAULT_MAX_CONCURRENT_SUBAGENTS,
   DEFAULT_MAX_TOTAL_SUBAGENTS,
   subagentFinalText,
@@ -1049,6 +1051,12 @@ async function executeAgentRun(
   let lastAgentUsage = unreportedModelUsage();
   let assistantModelContext: AgentHistoryMessage[] = [];
   let turnNumber = 0;
+  // Set when the native loop's in-loop finish gate engaged this run (any
+  // finish_gate event). The post-run gate stays silent for such runs — the
+  // in-loop gate owns the chain, including when it was the turn budget (not
+  // the directive cap) that ended it. Under JiuwenSwarm no in-loop events
+  // exist, so the post-run gate always evaluates there.
+  let inLoopFinishGateSeen = false;
   const plansByAgent = new Map<string, PlanSnapshot>();
   const createRunPlanStore = (agentId: string, currentTurn = () => turnNumber): PlanStore => ({
     latest: async () => {
@@ -1346,6 +1354,11 @@ async function executeAgentRun(
   // (metadata.pre-finish-audit) — the finish gate's directive requires the tool
   // in this run's registry, and a skill-declared audit is an explicit request.
   const finishGateAuditDeclared = activeSkills.some((skill) => skill.preFinishAudit);
+  // Whether the review_checkpoint tool lands in this run's registry (the
+  // condition that gates the reviewCheckpoint spread inside agentOptions
+  // below). The post-run finish gate reuses the verdict for its audit stage.
+  const reviewCheckpointRegistered = (reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent) || finishGateAuditDeclared)
+    && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick");
   const agentOptions: WorkspaceAgentOptions = {
     workflowInstructions: ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
     pluginSettings: settingsSnapshot.plugins,
@@ -1575,8 +1588,9 @@ async function executeAgentRun(
       return result;
     },
     // Level gate applies either way: quick is the minimum.
-    ...((reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent) || finishGateAuditDeclared)
-      && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick") ? {
+    // `reviewCheckpointRegistered` (hoisted above agentOptions) is the same
+    // verdict the post-run finish gate evaluates its audit stage against.
+    ...(reviewCheckpointRegistered ? {
       reviewCheckpoint: async (input, signal, toolCallId) => {
         const checkpointToolCallId = toolCallId ?? randomUUID();
         const checkpointMessageId = checkpointToolCallId;
@@ -2331,6 +2345,7 @@ async function executeAgentRun(
     }
     if (event.type === "turn_truncated") turnTruncated = true;
     if (event.type === "finish_gate") {
+      inLoopFinishGateSeen = true;
       void emit({ action: event.action, turn: turnNumber, type: "finish_gate" });
     }
     if (event.type === "stall_kick") {
@@ -2561,6 +2576,75 @@ async function executeAgentRun(
       message: (await store.readMessages(sessionId)).find((entry) => entry.id === message.id) ?? message,
       type: "run.completed",
     });
+    // Post-run finish gate (executor-agnostic redo of the native
+    // TurnLifecycle.beforeFinish seam, which the JiuwenSwarm executor never
+    // consults): re-evaluate the gate from durable session state and, when a
+    // stage fires, enqueue the directive as a follow-up run. When the native
+    // in-loop gate engaged this run at all (any finish_gate event observed)
+    // it owns the chain and this stays silent — including the case where the
+    // turn budget, not the directive cap, ended the in-loop continuations.
+    // Also skipped when a newer run is already queued — the researcher moved
+    // on and that run gets its own gate.
+    if (!inLoopFinishGateSeen && !cancelledRuns.has(runId) && !requestAbortController.signal.aborted
+      && !(await store.listSessionRuns(sessionId)).some((queued) => queued.status === "queued")) {
+      const gate = await evaluatePostRunFinishGate({
+        // Compaction can prune the prompt echo from the run's history; then
+        // assistantModelContext persisted empty and the durable transcript
+        // lost this run's tool calls and in-loop directives. Patch the gate's
+        // view of the just-persisted answer from the in-memory trajectory
+        // (chain-rooted the same way) so the gate never judges blind.
+        messages: (await store.readMessages(sessionId)).map((entry) => {
+          if (entry.id !== message.id) return entry;
+          if (Array.isArray(entry.modelContext) && entry.modelContext.length) return entry;
+          const fallback = closedModelContext(initialResult.finalMessages.slice(chainRootIndex(initialResult.finalMessages)));
+          return fallback.length ? { ...entry, modelContext: fallback } : entry;
+        }),
+        pendingPlanItems: async () => {
+          try {
+            const full = await createResearchStatePort().get({ workspaceRoot: store.workspacePath(sessionId) });
+            const items = full.state.plan
+              .filter((item) => item.status === "pending" || item.status === "in_progress")
+              .slice(0, 5)
+              .map((item) => ({ id: item.id, text: item.text }));
+            return items.length ? items : undefined;
+          } catch {
+            return undefined;
+          }
+        },
+        quoteVerificationAvailable: Boolean(knowledgeEngineTools),
+        reviewCheckpointAvailable: reviewCheckpointRegistered,
+        skills: activeSkills,
+      });
+      // The evaluation awaited store/workspace reads — a Stop (or a newly
+      // queued user run) may have landed meanwhile. Re-check before enqueueing:
+      // a cancelled run must never spawn a continuation, and a stale chain
+      // must not inject its directive ahead of the researcher's new message.
+      if (gate.verdict && !cancelledRuns.has(runId) && !requestAbortController.signal.aborted
+        && !(await store.listSessionRuns(sessionId)).some((queued) => queued.status === "queued")) {
+        // The event lands on this (completing) run's stream deliberately: the
+        // continuation has no event stream until the scheduler starts it, and
+        // the timeline should show WHY a follow-up run appeared. Under
+        // JiuwenSwarm turnNumber may still be 0 (the bridge emits no
+        // turn_start); the schema allows it.
+        await emit({ action: "continue", turn: turnNumber, type: "finish_gate" });
+        const followUp = await store.createSessionRun({
+          prompt: gate.verdict.directive,
+          sessionId,
+          settingsSnapshot,
+        });
+        await publishRunEvent(store, sessionId, followUp.id, { run: followUp, type: "run.queued" });
+        runLog.info("finish_gate_continuation_queued", {
+          followUpRunId: followUp.id,
+          runId,
+          sessionId,
+          stage: gate.verdict.stage,
+        });
+      } else if (gate.capped) {
+        // Parity with the native loop's capped continuation: unmet gate
+        // conditions at the continuation budget surface as a denied event.
+        await emit({ action: "denied", turn: turnNumber, type: "finish_gate" });
+      }
+    }
     return "completed";
   } catch (error) {
     if (cancelledRuns.has(runId)) {
