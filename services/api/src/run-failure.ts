@@ -27,8 +27,8 @@ import type { RunFailureCode } from "@sciencediscovery/schema";
 /** Classify a run error into a stable code. The message is never consumed. */
 export function classifyRunFailure(error: unknown): RunFailureCode {
   const message = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
-  // The provider answered; the model's own tool call could not be read, even after re-issue
-  // feedback. Checked first so its gateway request id is never mistaken for a status code.
+  // The provider answered; the model's own tool call could not be read. Checked first: the tool
+  // names this message lists are arbitrary and may contain words the classes below look for.
   if (message.includes("model returned invalid tool arguments")) return "invalid-tool-call";
   if (error instanceof Error && error.name === "TimeoutError") return "timeout";
   // The idle-stall wording ("Agent run stalled: no ... progress for N ms")
