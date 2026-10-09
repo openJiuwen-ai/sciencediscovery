@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/jiuwenswarm/server/runtime/mcp/output_recovery.py
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,112 @@
 +# Copyright (C) 2026 Huawei Technologies Co., Ltd
 +# SPDX-License-Identifier: Apache-2.0
 +"""Bounded output-limit recovery for platform-owned ReAct instances only.
@@ -16,6 +16,8 @@
 +from openjiuwen.core.foundation.llm import AssistantMessage, UserMessage
 +
 +logger = logging.getLogger(__name__)
++# The ScienceDiscovery gateway reads the attempt back from this feedback (RECOVERY_PROMPT
++# in jiuwenswarm-model-gateway.ts matches "N/2"); change both together.
 +MAX_RECOVERIES = 2
 +WITHHELD_TOOLS = "[output_limit:tool_calls_withheld]"
 +INVALID_TOOLS = "[invalid_tool_arguments:tool_calls_withheld]"
