@@ -8,6 +8,9 @@ and transport bugs; research business logic remains in ScienceDiscovery.
 
 - Local `scripts/jiuwenswarm.sh setup` patches the pinned Git checkout before
   installing it. After updating patches, run `setup` again before `start`.
+  When the recorded patch set differs from the current one, `setup` first returns
+  the patched paths of the checkout to the pinned tag (files a patch created are
+  removed), so a patch revised in place applies again instead of failing.
 - Docker and binary builds retain the PyPI dependency provisioning layer, but
   replace the Swarm distribution with a wheel built by
   `scripts/build-swarm-wheel.sh` from the pinned Git tag plus our patches.
