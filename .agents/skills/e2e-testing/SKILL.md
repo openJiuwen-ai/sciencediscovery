@@ -540,6 +540,26 @@ an untracked exception.
 - Record what the run actually consumed (model, endpoints, connectors) and
   keep traces/screenshots so results can be reviewed without re-spending.
 
+### Real/live CI artifacts
+
+Keep score collection separate from diagnostics. Use
+`node .ci/prepare-real-e2e-results.mjs` to stage `real-e2e-results`: only exact
+`benchmark-metrics.json`, `team-metrics.json`, `evolve-metrics.json` basenames
+and `e2e-real/tagged/{plan,summary,preflight}.json` are allowed. Preserve their
+relative paths. The staging script projects metrics to score/status/duration
+fields and removes free-form tagged errors; prompts and raw model output stay
+in diagnostic evidence. Never write credentials to either artifact. Keep new
+public fields explicitly allowlisted and covered by packaging tests. Upload the full `.ci-results` separately as `real-e2e-evidence`, never
+as dashboard input. Both uploads run with `if: always()`, seven-day retention,
+`if-no-files-found: warn` and `include-hidden-files: true`.
+
+Mocked `e2e-results` keeps its results and HTML with linked resources so the
+dashboard can host the journeys. If that artifact exceeds 80 MiB, split out
+only diagnostic traces, not HTML or results. See
+[CI artifact rules](../../../.ci/README.md) and validate packaging changes with
+`node --test .ci/ci-contract.test.mjs`; no live model run is needed for packaging
+fixtures.
+
 ## Writing browser specs
 
 - Organize files and `describe` blocks by user goal, not by implementation

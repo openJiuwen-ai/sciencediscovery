@@ -57,12 +57,21 @@ esac
 results_suffix="e2e"
 if [[ "$group" != "mocked" ]]; then results_suffix="e2e-$group"; fi
 if [[ "$backend" != "jiuwenswarm" ]]; then results_suffix="$results_suffix-$backend"; fi
-results_root="${CI_RESULTS_DIR:-/ci-results}/$results_suffix"
+# npm runs Playwright from .e2e while the stack resolves paths from the
+# repository root. Export absolute paths before either child changes cwd.
+absolute_from_repository() {
+  if [[ "$1" == /* ]]; then
+    printf '%s\n' "$1"
+  else
+    printf '%s/%s\n' "$repository_root" "$1"
+  fi
+}
+results_root="$(absolute_from_repository "${CI_RESULTS_DIR:-/ci-results}")/$results_suffix"
 # A test run keeps its own data directory, separate from the one an instance a
 # person runs for themselves uses (`.sciencediscovery-data`). The container path
 # is what CI passes; the repository-local fallback is what a laptop gets, and it
 # is gitignored.
-runtime_root="${CI_RUNTIME_DIR:-$repository_root/.e2e-data}"
+runtime_root="$(absolute_from_repository "${CI_RUNTIME_DIR:-.e2e-data}")"
 stack_log="$results_root/stack.log"
 test_log="$results_root/run.log"
 summary="$results_root/summary.txt"
