@@ -94,12 +94,17 @@ file the request:
 login=$(gh api user --jq .login)
 git push -u <fork-remote> HEAD:<branch>
 gh pr create --repo openJiuwen-ai/sciencediscovery \
-  --base main --head "$login:<branch>" \
+  --base main --head "${login}:<branch>" \
   --title "type(scope): what changes, in English" \
   --body-file .tmp/pr.md
 gh pr view <n> --repo openJiuwen-ai/sciencediscovery \
   --json number,title,state,baseRefName,headRefName,url
 ```
+
+Keep the braces in `"${login}:<branch>"`: zsh reads `$login:chore/…` as
+`$login` with a `:c` modifier (likewise `:h`, `:t`, `:r`, `:e`) and sends
+GitHub a head that is not your branch. The symptom and both of its causes are
+in the create-github-pr skill's *Troubleshooting*, under `No commits between`.
 
 The title is an English sentence a reader can understand without the diff.
 `update`, `fix bug`, and a raw file name are not titles. The body states what

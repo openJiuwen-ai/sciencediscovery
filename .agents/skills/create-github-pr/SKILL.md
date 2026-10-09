@@ -184,8 +184,10 @@ the title and the body, and says what would have to be deleted first.
 ```bash
 login=$(gh api user --jq .login)
 git push -u <fork-remote> HEAD:<branch>
+# Keep the braces: in zsh, `$login:chore/…` reads `:c` as a modifier on $login
+# (likewise :h, :t, :r, :e), and the head GitHub receives is no longer the branch.
 gh pr create --repo openJiuwen-ai/sciencediscovery \
-  --base main --head "$login:<branch>" \
+  --base main --head "${login}:<branch>" \
   --title '<type>(<scope>): …' --body-file <file>
 
 gh pr view <n> --repo openJiuwen-ai/sciencediscovery \
@@ -218,7 +220,7 @@ green check alone does not mean the journeys ran.
 
 | Symptom | Meaning |
 | --- | --- |
-| `No commits between <base> and <head>` and `Head ref must be a branch` | The head branch does not exist. GitHub deletes it automatically when a pull request from it merges; confirm with `git ls-remote <fork> 'refs/heads/<branch>'` before believing the message's claim about the base. |
+| `No commits between <base> and <head>` and `Head ref must be a branch` | GitHub could not find the head you named. Two causes; check both before believing the message's claim about the base. **The branch was deleted**: GitHub removes it when a pull request from it merges, so `git ls-remote <fork> 'refs/heads/<branch>'` comes back empty. **The head string was mangled by zsh**: in `"$login:chore/…"` zsh reads `:c` as a modifier on `$login` (likewise `:h`, `:t`, `:r`, `:e`), so the branch exists but GitHub was asked for `<login>hore/…` — read the `<head>` echoed in the message and check it still contains the whole branch name. Which names break depends on the letters after the colon: under zsh 5.9, `chore/`, `feat/`, `release/` and `e2e/` are all mangled while `fix/` happens to survive, so a spelling that worked for the last branch proves nothing about this one. Write `"${login}:<branch>"`; bash accepts both spellings, zsh only the braced one. |
 | The fork's `main` is hundreds of commits behind | It is a fork nobody syncs. Do not use it as a base and do not push upstream's main to it — `on: push: branches: [main]` would spend a full CI run on nothing. Base the pull request on a `ci/*` branch pushed at the upstream commit instead. |
 | A GitHub remote looks diverged with identical files | Separate histories. Compare trees, not SHAs. |
 | The Docker or E2E job fails only on GitHub | Read the job log and the uploaded artifact (`docker-compose-logs`, `e2e-results`) before theorising; the product's own startup probe usually already said what was wrong. |
