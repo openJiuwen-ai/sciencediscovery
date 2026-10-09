@@ -293,7 +293,7 @@ export async function main(args=process.argv.slice(2)) {
       // directory beside them.
       const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
         CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,key),
-        CI_RUNTIME_DIR:join(process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),key),
+        CI_RUNTIME_DIR:resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),key),
         CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${key}`,
         SCIENCE_TAG_PLAN:batchPlan,SCIENCE_TAG_PW_REPORT:report,
         E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${key}-driver.log`),root,{echo:true});
