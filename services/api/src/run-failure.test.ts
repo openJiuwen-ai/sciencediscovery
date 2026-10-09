@@ -29,6 +29,8 @@ test("run failures classify into stable codes", () => {
     [new Error("Model request failed with status 503: service unavailable"), "server-error"],
     [new Error("Model endpoint is unavailable: connect ECONNREFUSED 127.0.0.1:9099"), "transport-error"],
     [new Error("assistant produced an unusable payload"), "semantic-error"],
+    [new Error("Model returned invalid tool arguments (tools: run_shell) after 2 recovery attempts; gateway request chatcmpl-2c3cbc55-d420-4a0e-ab0f-f460883c3061"), "invalid-tool-call"],
+    [new Error("Model returned invalid tool arguments (tools: run_shell) after reaching max_tokens (16384); gateway request chatcmpl-x"), "invalid-tool-call"],
   ];
   for (const [error, expected] of cases) {
     assert.equal(classifyRunFailure(error), expected, error.message);
