@@ -74,11 +74,8 @@ import type {
   SessionArtifactOutput,
   SessionDetail,
   SessionListState,
-
   RevisePlanRequest,
   SessionPlan,
-
-
   SessionRunEvent,
   SessionUsageSummary,
   ScientificArtifact,
@@ -1122,9 +1119,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   // live in the settings overrides, not on the Session record).
   const [keKbs, setKeKbs] = useState<KeKb[]>([]);
   const [sessionSettings, setSessionSettings] = useState<RuntimeSettingsDetails>();
-  // A graph node a report chip asked to open; MemoryGraphView selects it on
-  // change, then clears the pending state. Set by handleChipClick (paper chips).
-
   // A graph node a report chip asked to open; MemoryGraphExplorer picks it
   // up as `initialNodeId` on mount (and reacts to changes while open via an
   // effect — see MemoryGraphExplorer). Set by handleChipClick (paper /
@@ -4330,7 +4324,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
           plans={group.plans}
         />
 
-<SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
+        <SubagentCards expandedCards={activityCardExpansion} onToggleCard={toggleActivityCard} onOpenSubagent={(subagent) => setOpenSubagentId(subagent.id)} subagents={footerSubagents} />
         <PermissionCards expandedCards={activityCardExpansion} onDecision={decidePermission} onToggleCard={toggleActivityCard} requests={group.permissionRequests} />
         <RemoteJobsPanel busy={lifecycleBusy} expandedCards={activityCardExpansion} jobs={group.remoteJobs} onDecision={(job, decision) => void decideRemoteJob(job, decision)} onRefresh={(job) => void refreshRemoteJob(job)} onToggleCard={toggleActivityCard} />
         <GovernedDownloadCards

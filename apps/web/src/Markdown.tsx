@@ -408,7 +408,6 @@ export function MarkdownRenderer({
         <table {...props}>{children}</table>
       </div>
     ),
-
   }), [loadWorkspaceImage, onChipClick, onOpenArtifacts, t, workspaceSessionId, wrapChip]);
 
   return (
