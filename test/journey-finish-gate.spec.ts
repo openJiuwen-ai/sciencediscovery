@@ -27,6 +27,9 @@ import {
   type JourneyFixture,
 } from "./helpers/journeys.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-finish-gate.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 interface FinishGateStub {
@@ -206,4 +209,6 @@ test("J-FG1 finish-gate 拦截未审计的收尾", { tag: "@mocked" }, async ({ 
     if (fixture) await cleanupJourney(page, fixture).catch(() => undefined);
     await stub.stop();
   }
+});
+
 });

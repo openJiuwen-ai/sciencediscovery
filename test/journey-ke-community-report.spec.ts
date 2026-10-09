@@ -18,6 +18,9 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { keMultiShapePipelineStub } from "./helpers/ke-stub.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ke-community-report.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -239,4 +242,6 @@ test("J-KE8 社区报告生成与阅读", { tag: "@mocked" }, async ({ journey, 
     }
     await stub.stop();
   }
+});
+
 });

@@ -18,6 +18,9 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 import { kePipelineStub } from "./helpers/ke-stub.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ke-latex-ingest.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -205,4 +208,6 @@ test("J-KE7 arXiv LaTeX 源走 LaTeX-first 摄取通道", { tag: "@mocked" }, as
     }
     await stub.stop();
   }
+});
+
 });

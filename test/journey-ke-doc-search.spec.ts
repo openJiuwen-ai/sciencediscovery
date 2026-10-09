@@ -26,6 +26,9 @@ import {
 } from "./helpers/journeys.ts";
 import { kePipelineStub, keSearchAgentStub } from "./helpers/ke-stub.ts";
 
+// Static suite metadata is inherited by each framework-expanded journey.
+test.describe("journey-ke-doc-search.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+
 test.use({ locale: "zh-CN" });
 
 /**
@@ -211,4 +214,6 @@ test("J-KE5 会话内检索论文原文段落", { tag: "@mocked" }, async ({ jou
     await extraction.stop();
     await agent.stop();
   }
+});
+
 });

@@ -18,11 +18,11 @@
  * correctly end to end.
  */
 
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import test from "node:test";
-
 import { KnowledgeEngineStore } from "./store.js";
 import { graphFingerprintOf } from "./graph-roots.js";
 import { createKnowledgeEngineTools, KeKbNotFoundError } from "./tools.js";
