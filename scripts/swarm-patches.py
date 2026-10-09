@@ -14,9 +14,24 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def process(mode, target, tag):
+def restore_pinned(target, tag, paths, env):
+    """Return patched paths to the pinned tag, so that patches revised in place apply again.
+
+    Only a source checkout can do this: its Git history has the unpatched files. A
+    path the tag does not have was created by a patch and is removed.
+    """
+    for name in sorted(paths):
+        pinned = subprocess.run(["git", "-C", str(target), "cat-file", "-e", f"{tag}:{name}"],
+                                env=env, capture_output=True).returncode == 0
+        if pinned:
+            subprocess.run(["git", "-C", str(target), "checkout", tag, "--", name], env=env, check=True)
+        else:
+            (target / name).unlink(missing_ok=True)
+
+
+def process(mode, target, tag, patch_dir=None):
     target = Path(target).resolve()
-    patch_dir = Path(__file__).resolve().parents[1] / "jiuwen_swarm" / "patches" / tag
+    patch_dir = Path(patch_dir).resolve() if patch_dir else Path(__file__).resolve().parents[1] / "jiuwen_swarm" / "patches" / tag
     patches = sorted(patch_dir.glob("*.patch"))
     if not patches:
         raise ValueError(f"No supported Swarm patch set for {tag}")
@@ -31,6 +46,12 @@ def process(mode, target, tag):
         # A wheel's site-packages may be nested inside the application Git tree.
         # Do not let git apply discover that unrelated repository.
         env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(target.parent)}
+        # A patch revised in place no longer reverses cleanly over its old result,
+        # and a revised new-file patch finds its file already there. Start a source
+        # checkout from the pinned files whenever the recorded patch set changed.
+        previous = json.loads(manifest.read_text()) if manifest.exists() else None
+        if previous and previous.get("patches") != expected["patches"] and (target / ".git").exists():
+            restore_pinned(target, tag, set(paths) | set(previous.get("files", {})), env)
         for patch in patches:
             command = ["git", "-C", str(target), "apply"]
             if subprocess.run(command + ["--reverse", "--check", str(patch)],
@@ -52,5 +73,6 @@ if __name__ == "__main__":
     parser.add_argument("mode", choices=["apply", "verify"])
     parser.add_argument("target", help="Directory containing the jiuwenswarm package")
     parser.add_argument("tag")
+    parser.add_argument("--patch-dir", help="Patch set to use instead of jiuwen_swarm/patches/<tag>")
     args = parser.parse_args()
-    process(args.mode, args.target, args.tag)
+    process(args.mode, args.target, args.tag, args.patch_dir)
