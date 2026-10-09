@@ -21,7 +21,7 @@ import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, type AgentTool } from "@sciencedisc
 
 import { DurableContextStore } from "@sciencediscovery/context";
 
-import { startModelGateway, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
+import { startModelGateway, withoutWithheldNotice, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
 import { importSkillsToJiuwenSwarm, skillLoadedBy } from "./jiuwenswarm-skills.js";
 import { JiuwenSwarmTrajectory, stateProvider } from "./jiuwenswarm-trajectory.js";
 import { waitForRecording } from "./recording-wait.js";
@@ -821,13 +821,17 @@ class EventTranslator {
         this.emit({ type: "response_start", responseId: String(event.responseId), turn });
         break;
       }
-      case "assistant.delta":
-        this.transcript.delta(String(event.delta));
+      case "assistant.delta": {
+        // A withheld response's notice is for Swarm's recovery boundary, not the user or the transcript.
+        const delta = withoutWithheldNotice(String(event.delta));
+        if (!delta) break;
+        this.transcript.delta(delta);
         this.emit({
           type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: String(event.delta), responseId: String(event.responseId) },
+          assistantMessageEvent: { type: "text_delta", delta, responseId: String(event.responseId) },
         });
         break;
+      }
       case "assistant.thinking.delta":
         this.emit({
           type: "message_update",

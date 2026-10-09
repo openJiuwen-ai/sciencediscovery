@@ -119,10 +119,15 @@ const warnTrajectory = (error: unknown) => {
   console.warn(`[jiuwenswarm] could not record the model call in the trajectory: ${error instanceof Error ? error.message : String(error)}`);
 };
 
-const WITHHELD_TOOLS = "[output_limit:tool_calls_withheld] No tools from this response were executed.";
-// A finished response with unparseable tool arguments is withheld the same way, under its own marker,
-// so Swarm's recovery boundary asks the model to re-issue the call instead of the run ending.
-const INVALID_TOOLS = "[invalid_tool_arguments:tool_calls_withheld] No tools from this response were executed.";
+// Markers that Swarm's output-recovery boundary (jiuwen_swarm patch 0007) reads in a withheld response's
+// text. A finished response with unparseable tool arguments is withheld like a cut one, under its own
+// marker, so the boundary asks the model to re-issue the call instead of the run ending.
+const OUTPUT_LIMIT_MARKER = "[output_limit:tool_calls_withheld]";
+const INVALID_ARGUMENTS_MARKER = "[invalid_tool_arguments:tool_calls_withheld]";
+const NOT_EXECUTED = "No tools from this response were executed.";
+const WITHHELD_TOOLS = `${OUTPUT_LIMIT_MARKER} ${NOT_EXECUTED}`;
+const INVALID_TOOLS = `${INVALID_ARGUMENTS_MARKER} ${NOT_EXECUTED}`;
+// The boundary's feedback is "[<kind> recovery N/MAX; ...]"; MAX_RECOVERIES in patch 0007 is 2.
 const RECOVERY_PROMPT = /^\[(?:Output limit|Tool argument) recovery ([12])\/2;/;
 const finishReason = (turn: ModelTurn) => turn.truncated ? "length" : turn.toolCalls.length ? "tool_calls" : "stop";
 /** Which recovery attempt a request is, from the feedback Swarm's recovery boundary appended last. */
@@ -131,9 +136,21 @@ const recoveryAttemptOf = (body: ChatRequest) => {
   const match = latest?.role === "user" && typeof latest.content === "string" ? latest.content.match(RECOVERY_PROMPT) : null;
   return match ? Number(match[1]) : undefined;
 };
-/** Tool names and parser messages tell the model what to fix; the raw arguments are not repeated. */
+/** A parser message without the input excerpt V8 quotes in some of them ("Unexpected token 'x', ..."). */
+const parserMessage = (error = "") => error.replace(/, (?:\.\.\.)?"[\s\S]*"(?:\.\.\.)? is not valid JSON$/, " in JSON").slice(0, 200);
+/** Tool names and parser messages tell the model what to fix; the arguments are not repeated. */
 const invalidNotice = (calls: ModelTurn["toolCalls"]) => `${INVALID_TOOLS} Arguments that are not valid JSON: ${
-  calls.slice(0, 20).map((call) => `${call.name} (${(call.argsParseError ?? "").slice(0, 200)})`).join("; ")}.`;
+  calls.slice(0, 20).map((call) => `${call.name} (${parserMessage(call.argsParseError)})`).join("; ")}.`;
+
+/**
+ * Text Swarm streamed for display, without the withheld-response notice. The notice is meant for the
+ * recovery boundary only; the gateway writes it as the response's last text delta, so it runs to the
+ * end of that delta.
+ */
+export function withoutWithheldNotice(text: string): string {
+  const at = Math.min(...[OUTPUT_LIMIT_MARKER, INVALID_ARGUMENTS_MARKER].map((marker) => text.indexOf(marker)).filter((index) => index >= 0));
+  return Number.isFinite(at) ? text.slice(0, at).trimEnd() : text;
+}
 const toolCallsOf = (turn: ModelTurn) => turn.toolCalls.map((call, index) => ({
   index, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) },
 }));

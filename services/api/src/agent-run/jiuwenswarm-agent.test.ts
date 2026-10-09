@@ -246,6 +246,32 @@ test("translates the adapter's run events into agent events", async () => {
   }
 });
 
+test("a withheld response's notice reaches neither the user nor the transcript", async () => {
+  const adapter = await fakeAdapter((_request, response) => {
+    response.writeHead(200);
+    response.write(line({ event: { type: "assistant.response.started", responseId: "r1", turn: 1 } }));
+    response.write(line({ event: { type: "assistant.delta", delta: "Writing the report.", responseId: "r1" } }));
+    response.write(line({ event: { type: "assistant.delta", responseId: "r1", delta: "\n\n[invalid_tool_arguments:tool_calls_withheld] "
+      + "No tools from this response were executed. Arguments that are not valid JSON: run_shell (Unterminated string in JSON)." } }));
+    response.write(line({ event: { type: "assistant.response.settled", responseId: "r1", turn: 1 } }));
+    response.write(line({ event: { type: "assistant.response.started", responseId: "r2", turn: 2 } }));
+    response.write(line({ event: { type: "assistant.delta", delta: "[output_limit:tool_calls_withheld] No tools from this response were executed.", responseId: "r2" } }));
+    response.write(line({ event: { type: "assistant.response.settled", responseId: "r2", turn: 2 } }));
+    response.end(line({ done: { finalText: "done" } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options());
+    const events = collect(agent);
+    const result = await agent.execute("go");
+    const text = events.flatMap((event) => event.type === "message_update" && event.assistantMessageEvent.type === "text_delta"
+      ? [event.assistantMessageEvent.delta] : []);
+    assert.deepEqual(text, ["Writing the report."]);
+    assert.doesNotMatch(JSON.stringify(result), /tool_calls_withheld/);
+  } finally {
+    await adapter.close();
+  }
+});
+
 test("plugin-contributed tools (update_plan) are offered to the adapter and run here", async () => {
   const updates: unknown[] = [];
   const planStore = {

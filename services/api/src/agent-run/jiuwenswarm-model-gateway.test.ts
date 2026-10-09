@@ -21,7 +21,7 @@ import { join } from "node:path";
 
 import { ModelRequestError, type ModelTurn, type streamModelTurn } from "@sciencediscovery/model";
 
-import { isSwarmCompaction, startModelGateway, toModelRequest } from "./jiuwenswarm-model-gateway.js";
+import { isSwarmCompaction, startModelGateway, toModelRequest, withoutWithheldNotice } from "./jiuwenswarm-model-gateway.js";
 
 const POLICY = { maxRetries: 0, maxTokens: 1000, requestTimeoutMs: 1000 };
 
@@ -483,6 +483,25 @@ test("a finished response with unparseable arguments withholds ALL its calls for
       assert.ok(payloads.at(-1).usage);
     } finally { await g.close(); }
   }
+});
+
+test("the withheld notice quotes no argument text, even where V8's parser message would", async () => {
+  let message = "";
+  try { JSON.parse('{"command": cat secret-value}'); } catch (error) { message = (error as Error).message; }
+  assert.match(message, /cat secret/, "precondition: this parser message carries an input excerpt");
+  const g = await gateway(async () => answer({ toolCalls: [{ id: "bad", name: "run_shell", args: {}, argsParseError: message }],
+    assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad", type: "function", function: { name: "run_shell", arguments: "{" } }] } }));
+  try {
+    const wire = await (await post(g, { messages: [{ role: "user", content: "go" }] })).text();
+    assert.match(wire, /run_shell \(Unexpected token 'c' in JSON\)/);
+    assert.doesNotMatch(wire, /secret/);
+  } finally { await g.close(); }
+});
+
+test("display text keeps everything before a withheld notice and nothing after it", () => {
+  assert.equal(withoutWithheldNotice("plain text\n\n"), "plain text\n\n");
+  assert.equal(withoutWithheldNotice("Writing.\n\n[invalid_tool_arguments:tool_calls_withheld] No tools ... run_shell (x)."), "Writing.");
+  assert.equal(withoutWithheldNotice("[output_limit:tool_calls_withheld] No tools from this response were executed."), "");
 });
 
 test("withheld invalid arguments count recovery attempts and clear once a later task turn succeeds", async () => {
