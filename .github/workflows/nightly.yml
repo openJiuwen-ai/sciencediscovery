@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The scheduled build runs the default branch and dispatches an independent
-# run for the release branch. Each run uses that branch's own nightly.yml and
-# ci.yml, and keeps the packaged binaries it produces, stamped with the date
-# and commit so a build can be traced back to what went into it.
+# The scheduled build of the default branch. It keeps the packaged binaries it
+# produces, stamped with the date and commit so a build can be traced back to
+# what went into it. Any other branch runs this workflow only when it is
+# dispatched by hand at that ref.
 #
 # Daily adds real-model E2E to the hermetic merge gate. The reusable workflow
 # owns both jobs; the daily profile selects paid journeys from source tags.
@@ -37,29 +37,6 @@ permissions:
   contents: read
 
 jobs:
-  # GitHub evaluates schedules only from the default branch. Dispatching the
-  # release ref creates a separate workflow run whose GITHUB_REF/GITHUB_SHA,
-  # jobs, logs and artifacts all belong to that branch. This job has no needs,
-  # so the two branch runs can proceed in parallel. The event guard prevents a
-  # manually dispatched run from fanning out or recursing.
-  dispatch-release:
-    name: Dispatch release Nightly
-    if: ${{ github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Start the release branch run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_REF: releases/v0.3.0.beta
-        run: |
-          gh workflow run nightly.yml \
-            --repo "${GITHUB_REPOSITORY}" \
-            --ref "${RELEASE_REF}"
-
   # A separate job only because GitHub expressions cannot produce a date, and
   # the version has to be decided before the reusable workflow is called.
   stamp:

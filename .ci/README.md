@@ -49,13 +49,12 @@ command; no live credentials are required for these verification tests.
 
 Nightly runs at **00:00 Asia/Shanghai (16:00 UTC)**, with a separate real E2E job
 in the reusable CI workflow. GitHub schedules only workflows on the default
-branch. The scheduled `main` workflow therefore starts its own daily gate and,
-in parallel, dispatches an independent `workflow_dispatch` run at
-`releases/v0.3.0.beta`. That second run loads the workflow and source from the
-release ref, so its commit, jobs, logs and artifacts remain separate from
-`main`. Manually dispatched runs do not fan out. The nightly workflow passes
-secrets to the reusable workflow; PR jobs do not receive live credentials.
-Nothing here dispatches a paid run during development.
+branch, so the scheduled Daily covers `main` and nothing else; no other branch
+is built on a schedule. A daily gate for another branch runs only when someone
+starts `Nightly` by hand with `workflow_dispatch` at that ref, and that run
+loads the workflow and source from the ref it was dispatched at. The nightly
+workflow passes secrets to the reusable workflow; PR jobs do not receive live
+credentials. Nothing here dispatches a paid run during development.
 
 Configure the GitHub environment `nightly-research`:
 
