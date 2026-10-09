@@ -7,10 +7,15 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMe
   waitForRunTerminal, type JourneyFixture } from "./helpers/journeys.ts";
 import { researchModel, type ResearchScriptStep } from "./helpers/research-model.ts";
 
-const cases = ["LR-01", "LR-02", "LR-03", "LR-04", "LR-05", "LR-06"] as const;
-const names = { "LR-01": "invalid arguments are visible and never executed", "LR-02": "broken model stream does not execute a partial call",
+const cases = ["LR-01", "LR-02", "LR-03", "LR-04", "LR-05", "LR-06", "LR-17"] as const;
+const names = { "LR-01": "invalid arguments are never executed and the model re-issues the call", "LR-02": "broken model stream does not execute a partial call",
   "LR-03": "five children roll through two lifecycle permits", "LR-04": "one failed child does not lose sibling results",
-  "LR-05": "child timeout releases the queued task", "LR-06": "parent cancellation removes queued work" };
+  "LR-05": "child timeout releases the queued task", "LR-06": "parent cancellation removes queued work",
+  "LR-17": "repeated invalid arguments fail explicitly after bounded recovery" };
+const INVALID_SHELL = { name: "run_shell", arguments: {}, rawArguments: '{"command":"printf LR_SHOULD_NOT_EXECUTE' };
+const RECOVERY_FEEDBACK = "[Tool argument recovery ";
+const lastUserText = (messages: Array<{ role?: string; content?: unknown }>) =>
+  String(messages.filter(m => m.role === "user").at(-1)?.content ?? "");
 
 /**
  * E2E-META
@@ -102,9 +107,15 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
   journey.scenario({ goal: names[id], preconditions: ["exclusive Swarm stack", "local scripted model", "no external sources"] });
   const scripts: Record<string, ResearchScriptStep[]> = {};
   let timeoutRoute: string | undefined;
-  if (id === "LR-01" || id === "LR-02") {
-    scripts.main = [{ tools: [{ name: "run_shell", arguments: {}, rawArguments: '{"command":"printf LR_SHOULD_NOT_EXECUTE' }],
-      ...(id === "LR-02" ? { disconnect: true } : {}) }];
+  if (id === "LR-01") {
+    // The withheld call never enters the replayed history, so the same step is
+    // asked again; only the recovery feedback makes this script re-issue it.
+    scripts.main = [({ messages }) => lastUserText(messages).startsWith(RECOVERY_FEEDBACK)
+      ? { tools: [{ name: "run_shell", arguments: { command: "printf LR_REISSUED_CALL" } }] }
+      : { tools: [INVALID_SHELL] },
+    { text: "LR_RECOVERED_FINAL: the re-issued call ran." }];
+  } else if (id === "LR-02" || id === "LR-17") {
+    scripts.main = [{ tools: [INVALID_SHELL], ...(id === "LR-02" ? { disconnect: true } : {}) }];
   } else {
     const children = id === "LR-03" || id === "LR-06" ? ["a", "b", "c", "d", "e"] : ["a", "b"];
     if (reverseDispatch) children.reverse();
@@ -170,16 +181,36 @@ test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag:
       expect(stub.calls.slice(count).some(c => !["main", "title"].includes(c.route))).toBe(false);
     } else {
       const terminal = await waitForRunTerminal(page, fixture.session.id, runId, 90_000);
-      if (id === "LR-01" || id === "LR-02") {
-        // Current contract: explicit terminal failure, NOT silent success. This
-        // is not a claim that invalid-argument recovery has been implemented.
+      const main = stub.calls.filter(c => c.route === "main");
+      if (id === "LR-01") {
+        expect(terminal.status, terminal.error).toBe("completed");
+        const activity = await api<{ executions: unknown[] }>(page, `/api/sessions/${fixture.session.id}/agent-activity`);
+        await info.attach("recovered-run-activity", { body: JSON.stringify(activity), contentType: "application/json" });
+        expect(activity.executions, "Only the re-issued call may run").toHaveLength(1);
+        expect(JSON.stringify(activity)).not.toContain("LR_SHOULD_NOT_EXECUTE");
+        // The model was told which call failed and why, and the re-issued call's output reached it.
+        expect(main).toHaveLength(3);
+        expect(lastUserText(main[1]!.messages)).toMatch(/^\[Tool argument recovery 1\/2; invalid_tool_arguments\]/);
+        expect(lastUserText(main[1]!.messages)).toContain("run_shell (");
+        expect(main[2]!.results.join("\n")).toContain("LR_REISSUED_CALL");
+        await expect(page.locator(".message.assistant").last()).toContainText("LR_RECOVERED_FINAL");
+      } else if (id === "LR-02" || id === "LR-17") {
+        // Explicit terminal failure, NOT silent success.
         expect(terminal.status).toBe("failed");
         expect(terminal.error).toBeTruthy();
         const activity = await api<{ executions: unknown[] }>(page, `/api/sessions/${fixture.session.id}/agent-activity`);
         await info.attach("failed-run-activity", { body: JSON.stringify(activity), contentType: "application/json" });
         expect(activity.executions, "No shell execution may be created from partial/invalid JSON").toHaveLength(0);
-        if (id === "LR-01") expect(terminal.error).toContain("invalid tool arguments");
-        await expect(page.locator("body")).toContainText(/error|failed|错误|失败/i);
+        if (id === "LR-17") {
+          // One answer plus two bounded recovery attempts, then the run names the cause.
+          expect(main).toHaveLength(3);
+          expect(main.slice(1).map(c => lastUserText(c.messages).slice(0, 32)))
+            .toEqual(["[Tool argument recovery 1/2; inv", "[Tool argument recovery 2/2; inv"]);
+          expect(terminal.error).toContain("invalid tool arguments (tools: run_shell) after 2 recovery attempts");
+          await expect(page.locator("body")).toContainText(/could not be read|参数无法解析/);
+        } else {
+          await expect(page.locator("body")).toContainText(/error|failed|错误|失败/i);
+        }
       } else {
         expect(terminal.status, terminal.error).toBe("completed");
         const records = await children();
