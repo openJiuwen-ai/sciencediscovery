@@ -926,6 +926,35 @@ test("the tools offered are exactly the native registry's, every one with its ow
   }
 });
 
+// P2 audit pin (jiuwenswarm-migration action points): the research world model
+// was built tool-first (C1), so it crosses executors through the bridge; the
+// knowledge-base scope disclosure is a composeSystemPrompt governance section,
+// which this executor composes from the same options. Both are asserted here
+// against the payload the adapter actually receives.
+test("the research_state world model and the kbScope disclosure reach the JiuwenSwarm run", async () => {
+  const adapter = await fakeAdapter((_request, response) => {
+    response.writeHead(200);
+    response.end(line({ done: { finalText: "ok" } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({
+      knowledgeBaseScope: {
+        droppedKbIds: [], kbLabels: ["mAb repertoire"], singleKbId: "kb-1", webSearchEnabled: false,
+      },
+      researchProjectRoot: "/data/research-ledgers/project-1",
+    }));
+    await agent.execute("go");
+    const body = adapter.requests[0].body;
+    const researchState = body.tools.find((tool: { name: string }) => tool.name === "research_state");
+    assert.ok(researchState, "the research world model is offered");
+    assert.match(researchState.description, /auto-hydrate once per run/, "the project-ledger actions are disclosed");
+    assert.match(body.systemPrompt, /Knowledge-base scope: this conversation is bound to mAb repertoire/,
+      "the kbScope line survives into the Swarm system prompt");
+  } finally {
+    await adapter.close();
+  }
+});
+
 /** Tools that log when they start and end, so overlap is visible. */
 function timedTools(log: string[], concurrencySafe: boolean) {
   const make = (name: string, ms: number) => ({
