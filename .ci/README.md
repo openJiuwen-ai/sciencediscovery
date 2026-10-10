@@ -56,10 +56,34 @@ loads the workflow and source from the ref it was dispatched at. The nightly
 workflow passes secrets to the reusable workflow; PR jobs do not receive live
 credentials. Nothing here dispatches a paid run during development.
 
-Configure the GitHub environment `nightly-research`:
+Real-model credentials are confined to the real E2E job by configuration, not
+by naming:
+
+- The job runs only for the `daily` profile and never for a `pull_request`
+  event, so pull requests, including those from forks, never start a paid run.
+- It takes the credentials from the GitHub environment named in its
+  `environment:` key. GitHub releases environment secrets only to jobs that
+  declare that environment, so keep model credentials there, never as
+  repository secrets. Limit the environment's deployment branches to those that
+  may run paid journeys (`main`, `releases/*` and a branch used to try a new
+  environment), so that no other ref receives the secrets even if a workflow
+  change declares the environment.
+- `.ci/research-policy.test.mjs` checks, for every job that references the
+  model tokens, that it declares an environment and never runs for a pull
+  request. It does not pin the environment's name.
+
+The environment is `nightly-ci-ds` (the DeepSeek API). It must provide:
 
 - Variables: `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_JUDGE_BASE_URL`, `E2E_JUDGE_MODEL`.
 - Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`.
+
+To move Nightly to other endpoints, create an environment with the same names
+and change only that `environment:` line. To try one first, push that one-line
+change on a branch of this repository and start `Nightly` by hand at that
+branch; a fork's branch cannot read this repository's environments.
+
+Other Nightly settings:
+
 - Nightly retains the Biomni evaluation, timeout, judge and `HF_TOKEN` settings
   for later restoration. Manual BiomniBench runs require `HF_TOKEN` from an
   account that accepted the dataset terms. Set `CI_PREPARE_BIOMNI=1` (the

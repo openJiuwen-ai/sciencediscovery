@@ -97,7 +97,7 @@ jobs:
     if: ${{ inputs.profile == 'daily' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    environment: nightly-research
+    environment: nightly-ci-ds
     env:
       CI_ALLOW_REAL: "1"
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
