@@ -79,9 +79,27 @@ export interface RecordObject<T = unknown> {
   dependencies: ObjectRef[];
 }
 
+interface ObjectIdentity {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}
+
+interface VerifiedObject {
+  identity: ObjectIdentity;
+  dependencies: ObjectRef[];
+}
+
 /** Each pool is a standalone OCI image layout. Live refs are owned by SQLite, not index.json. */
 export class VersionStore {
   private initialized?: Promise<void>;
+  /**
+   * Objects are immutable after publication. Ref commits still walk the whole
+   * dependency graph, but unchanged objects need not be read and hashed again.
+   */
+  private readonly commitValidationCache = new Map<string, VerifiedObject>();
   constructor(readonly dataDir: string) {}
 
   poolRoot(pool: Pool): string { return resolve(this.dataDir, "versioning", pool); }
@@ -208,22 +226,65 @@ export class VersionStore {
     return record;
   }
 
-  async validateClosure(root: AgentStateRef): Promise<number> {
+  private async objectIdentity(ref: ObjectRef): Promise<ObjectIdentity> {
+    const info = await lstat(this.objectPath(ref), { bigint: true });
+    if (!info.isFile() || info.size !== BigInt(ref.size)) throw new Error("Object integrity failure");
+    return { dev: info.dev, ino: info.ino, size: info.size, mtimeNs: info.mtimeNs, ctimeNs: info.ctimeNs };
+  }
+
+  private sameIdentity(left: ObjectIdentity, right: ObjectIdentity): boolean {
+    return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+      && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+  }
+
+  private async validateReachable(root: AgentStateRef, reuseVerified: boolean): Promise<number> {
     const visited = new Set<string>();
     const pending: ObjectRef[] = [root];
+    // Publish cache entries only after the complete closure succeeds.
+    const verified = new Map<string, VerifiedObject>();
     while (pending.length) {
       const ref = pending.pop()!;
       assertRef(ref);
       const key = canonicalize(ref);
       if (visited.has(key)) continue;
       visited.add(key);
+
+      // Capture identity before reading bytes so a concurrent mutation cannot
+      // be cached as if the newly written bytes had passed verification.
+      const before = reuseVerified ? await this.objectIdentity(ref) : null;
+      if (before) {
+        const cached = this.commitValidationCache.get(key);
+        if (cached && this.sameIdentity(before, cached.identity)) {
+          pending.push(...cached.dependencies);
+          continue;
+        }
+      }
+
+      let dependencies: ObjectRef[] = [];
       if (ref.mediaType === RECORD_MEDIA_TYPE) {
         assertRef(ref, "agent-state");
         const record = await this.readRecord(ref as AgentStateRef);
-        pending.push(...record.dependencies);
+        dependencies = record.dependencies;
       } else await this.verifyRef(ref);
+      pending.push(...dependencies);
+      if (before) {
+        const after = await this.objectIdentity(ref);
+        if (!this.sameIdentity(before, after)) throw new Error("Object changed during validation");
+        verified.set(key, { identity: after, dependencies });
+      }
     }
+    if (reuseVerified) for (const [key, entry] of verified) this.commitValidationCache.set(key, entry);
     return visited.size;
+  }
+
+  /** Full byte-and-hash audit of every object reachable from root. */
+  async validateClosure(root: AgentStateRef): Promise<number> {
+    return this.validateReachable(root, false);
+  }
+
+  /** Commit-time validation that reuses prior byte verification for unchanged immutable objects. */
+  async validateClosureForCommit(root: AgentStateRef): Promise<number> {
+    return this.validateReachable(root, true);
   }
 }
 
@@ -319,7 +380,7 @@ export class RefStore {
     fault?: (point: "before-transaction" | "after-live-ref") => void): Promise<void> {
     if (!name || name.length > 512 || /[\x00-\x1f]/.test(name)) throw new Error("Invalid ref name");
     assertRef(target, "agent-state");
-    await store.validateClosure(target);
+    await store.validateClosureForCommit(target);
     fault?.("before-transaction");
     this.db.exec("BEGIN IMMEDIATE");
     try {
