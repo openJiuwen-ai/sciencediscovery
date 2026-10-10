@@ -7,7 +7,8 @@ import { evaluateTeam } from "./helpers/research-team.ts";
 import { expect } from "@playwright/test";
 import { test, allowRealEnvException, requireRealEnv, requireRealStack } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
-import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage } from "./helpers/journeys.ts";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
+  sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { startDeliverableChecker } from "./fixtures/deliverable-check.mjs";
 
@@ -104,22 +105,18 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
       : prompt;
     metrics.prompt = runPrompt;
     const run = await sendUserMessage(page, fixture.session.id, runPrompt); runId = run.id;
-    metrics.session_id = fixture.session.id; metrics.run_id = runId;
+    metrics.session_id = fixture.session.id; metrics.initial_run_id = runId; metrics.run_id = runId;
     await save("team-metrics.json", metrics);
-    while (Date.now() - started < budget) {
-      const runs = await api<any[]>(`${prefix}/runs`);
-      const state = runs.find(r => r.id === runId);
-      children = await api<any[]>(`${prefix}/subagents`);
-      await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
-      if (state && ["completed", "failed", "cancelled"].includes(state.status)) {
-        terminal = true; metrics.run = state; break;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10_000));
-    }
+    const finished = await waitForRunChainTerminal(page, fixture.session.id, runId, { timeout: budget });
+    terminal = true;
+    runId = finished.run.id;
+    metrics.run_id = runId;
+    metrics.run = finished.run;
+    metrics.run_chain = finished.runs.map(({ automaticWake, error, id, queueOrder, status }) =>
+      ({ automatic_wake: Boolean(automaticWake), error, id, queue_order: queueOrder, status }));
+    children = await api<any[]>(`${prefix}/subagents`);
+    await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
     metrics.generation_duration_ms = Date.now() - started;
-    if (!terminal) {
-      await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers }).catch(() => undefined);
-    }
     const delivery = await collectFinalDelivery(page, fixture.session.id, runId);
     metrics.delivery = delivery;
     metrics.integration = delivery.status;
@@ -152,7 +149,7 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     metrics.finished_at = new Date().toISOString();
     if (fixture) {
       const prefix = `/api/sessions/${fixture.session.id}`;
-      if (runId && !terminal) await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers }).catch(() => undefined);
+      if (runId && !terminal) await cancelActiveSessionRuns(page, fixture.session.id);
       metrics.usage = await api(`${prefix}/usage`).catch(() => null);
       children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
     }
