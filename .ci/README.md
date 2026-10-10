@@ -127,9 +127,11 @@ It drives the product and public APIs; it never imports a native agent directly.
 Each case owns its records and uses a pass-through to the actual provider.
 
 The shared basic-worker ledger caps 24 requests including retries, 300,000
-**input payload bytes** and 20,000 reserved output tokens (at most 1,024 per
-request). Payload bytes are a conservative operational guard, not measured
-input tokens or dollars. Provider-reported usage is attached separately. The
+input-token allowance and 20,000 output-token allowance (at most 1,024 output
+tokens per request). Before forwarding, input payload bytes provide a
+conservative reservation; provider-reported usage refunds unused input/output
+allowance. Cancelled or unreported calls keep their reservations. These bounds
+are not measured dollar costs. Provider usage is attached separately. The
 ledger survives worker restarts; a new isolated run needs a fresh runtime root.
 Missing or unknown usage must not be presented as zero cost. The seven
 three-minute case timeouts are failure bounds, not measured elapsed time.

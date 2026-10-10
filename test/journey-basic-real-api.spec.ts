@@ -44,7 +44,7 @@ for (const [id,title] of scenarios) {
  * MCP: Local deterministic echo/add_numbers tools; standard workspace tools for artifact delivery.
  * OtherExternal: Configured model endpoint only; local API, browser and Runner.
  * Credentials: E2E_API_TOKEN, E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN.
- * CostSideEffects: Entire basic shard permits at most 24 provider requests including retries, 300000 input payload bytes and 20000 reserved output tokens; temporary records removed in finally.
+ * CostSideEffects: Entire basic shard permits at most 24 provider requests including retries, 300000 reserved input tokens and 20000 reserved output tokens; unreported calls keep conservative reservations. Temporary records removed in finally.
  */
   test(`L3-${id}: ${title}`, { tag: ['@real','@category:e2e','@os:linux','@arch:amd64','@model:real','@tier:l3','@sandbox:bubblewrap'] }, async ({page,journey}, info) => {
     test.setTimeout(180_000);
@@ -74,6 +74,10 @@ for (const [id,title] of scenarios) {
           const server = await api(page,'/api/mcp/servers','POST',{name:`Basic tools ${marker}`,command:process.execPath,
             args:[fileURLToPath(new URL('./fixtures/mcp-echo.mjs',import.meta.url))],enabled:true});
           mcp = server.id;
+          // Connector inventory is loaded with the Session; refresh after a
+          // server is created through the API, as a user reopening it would.
+          await page.reload();
+          await openProjectSession(page,fixture!);
           await page.locator('.connector-picker-trigger').click();
           await page.locator('.connector-picker-popover').getByRole('checkbox',{name:new RegExp(`Basic tools ${marker}`)}).check();
           await page.keyboard.press('Escape');
@@ -135,14 +139,18 @@ for (const [id,title] of scenarios) {
         expect(usage.totals.invocationCount).toBeGreaterThan(0);
         await info.attach('real-api-usage',{body:JSON.stringify(usage),contentType:'application/json'});
         await info.attach('real-api-budget',{body:readFileSync(ledger),contentType:'application/json'});
+        expect(JSON.parse(readFileSync(ledger,'utf8')).exceeded ?? false).toBe(false);
       });
     } finally {
-      if (fixture) {
-        await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/current/cancel`,{headers:authorizationHeader(),data:{}}).catch(()=>undefined);
-        await cleanupJourney(page,fixture);
+      try {
+        if (fixture) {
+          await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/current/cancel`,{headers:authorizationHeader(),data:{}}).catch(()=>undefined);
+          await cleanupJourney(page,fixture);
+        }
+      } finally {
+        try { if (mcp) await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${mcp}`,{headers:authorizationHeader()}); }
+        finally { await proxy.stop(); }
       }
-      if (mcp) await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${mcp}`,{headers:authorizationHeader()});
-      await proxy.stop();
     }
   });
 }

@@ -11,7 +11,7 @@ import { preflight } from '../test/support/tagged/environment.mjs';
 import { realShards } from '../test/support/tagged/execution.mjs';
 import { route, gate } from './tier-policy.mjs';
 import { qualityProblems, reconcile } from './real-report.mjs';
-import { reserveRequest, realApiProxy } from '../test/helpers/real-api-budget.mjs';
+import { reserveRequest, settleRequest, realApiProxy } from '../test/helpers/real-api-budget.mjs';
 import { createServer } from 'node:http';
 const { test }=createTest(import.meta.url,{tags:['category:ut','os:linux','arch:amd64']});
 const target={os:'linux',arch:'amd64'};
@@ -71,6 +71,12 @@ test('real shard union is exact and missing worker evidence fails suite accounti
   // Re-freeze with the same entries so this isolates accounting from quality.
   const dailyPlan=subplan(daily,p.entries);
   assert.equal(reconcile(dailyPlan,root,{}).exitCode,0);
+  const file=join(root,`real-e2e-results-${shards[0].name}`,'e2e-real/tagged/plan.json');
+  const before=JSON.parse(readFileSync(file));
+  const drift=subplan(before,before.entries.map(e=>({...e,sourceHash:'b'.repeat(64)})));
+  writeFileSync(file,JSON.stringify(drift));
+  writeFileSync(join(file,'../summary.json'),JSON.stringify(verifyResults(drift,drift.entries.map(passed))));
+  assert.ok(reconcile(dailyPlan,root,{}).problems.some(p=>p.includes('SHARD_IDENTITY_MISMATCH')));
   rmSync(join(root,`real-e2e-results-${shards[0].name}`),{recursive:true});
   assert.equal(reconcile(dailyPlan,root,{}).exitCode,1);
 });
@@ -96,6 +102,17 @@ test('basic request budget survives worker restart and counts output reservation
   assert.equal(JSON.parse(readFileSync(ledger)).reservedOutputTokens,20_000);
 });
 
+test('reported usage refunds reservations; unknown calls and exhausted request count never reset',t=>{
+  const ledger=join(directory(t),'budget.json');
+  for(let i=0;i<24;i++) {
+    const reservation=reserveRequest(ledger,{messages:[{role:'user',content:'hi'}]});
+    settleRequest(ledger,reservation,{prompt_tokens:10,completion_tokens:3});
+  }
+  const used=JSON.parse(readFileSync(ledger));
+  assert.equal(used.reservedInputTokens,240);assert.equal(used.reservedOutputTokens,72);assert.equal(used.unreportedCalls,0);
+  assert.throws(()=>reserveRequest(ledger,{messages:[]}),/BUDGET_EXHAUSTED/);
+});
+
 test('real pass-through forwards a bounded real request and does not expose the provider key',async t=>{
   let received;
   const upstream=createServer(async(req,res)=>{let body='';for await(const c of req)body+=c;received={body:JSON.parse(body),authorization:req.headers.authorization};res.setHeader('content-type','application/json');res.end('{"choices":[{"message":{"content":"real response"}}]}');});
@@ -107,4 +124,22 @@ test('real pass-through forwards a bounded real request and does not expose the 
   assert.equal(response.status,200);assert.match(await response.text(),/real response/);
   assert.equal(received.authorization,'Bearer upstream-only');assert.equal(received.body.max_tokens,1024);
   assert.notEqual(proxy.token,'upstream-only');
+});
+
+test('streamed usage settles the request reservation across transport chunks',async t=>{
+  const upstream=createServer(async(req,res)=>{
+    for await(const _ of req) { /* consume request */ }
+    res.setHeader('content-type','text/event-stream');
+    res.write('data: {"choices":[],"usage":{"prompt_');
+    res.end('tokens":20,"completion_tokens":4}}\n\ndata: [DONE]\n\n');
+  });
+  await new Promise(resolve=>upstream.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>upstream.close(resolve)));
+  const ledger=join(directory(t),'ledger.json');
+  const proxy=await realApiProxy({baseUrl:`http://127.0.0.1:${upstream.address().port}/v1`,token:'test',ledger});
+  t.after(()=>proxy.stop());
+  const response=await fetch(`${proxy.baseUrl}/chat/completions`,{method:'POST',headers:{authorization:`Bearer ${proxy.token}`},body:JSON.stringify({messages:[{role:'user',content:'hello'}],stream:true})});
+  assert.match(await response.text(),/\[DONE\]/);
+  const saved=JSON.parse(readFileSync(ledger));
+  assert.equal(saved.reservedInputTokens,20);assert.equal(saved.reservedOutputTokens,4);assert.equal(saved.unreportedCalls,0);
 });

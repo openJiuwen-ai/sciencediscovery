@@ -6,17 +6,31 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 // One serialized basic shard owns this ledger, including Playwright worker
-// restarts after a failure. Count retries as requests. Input bytes are a
-// conservative payload budget, not a claim of provider token measurement.
+// restarts after a failure. Reserve input payload bytes as a conservative
+// token allowance, then refund against actual provider usage when reported.
+// Cancelled/unreported calls keep their reservation; they never count as free.
 export function reserveRequest(path, body) {
-  const used = existsSync(path) ? JSON.parse(readFileSync(path)) : { requests: 0, inputBytes: 0, reservedOutputTokens: 0 };
+  const used = existsSync(path) ? JSON.parse(readFileSync(path)) : { requests: 0, inputBytes: 0, reservedInputTokens: 0, reservedOutputTokens: 0, unreportedCalls: 0 };
   const inputBytes = Buffer.byteLength(JSON.stringify({ messages: body.messages, tools: body.tools }));
   const output = Math.min(1024, 20_000 - used.reservedOutputTokens);
-  if (used.requests >= 24 || used.inputBytes + inputBytes > 300_000 || output <= 0) throw new Error('REAL_API_BUDGET_EXHAUSTED');
-  const next = { requests: used.requests + 1, inputBytes: used.inputBytes + inputBytes, reservedOutputTokens: used.reservedOutputTokens + output };
+  if (used.exceeded || used.requests >= 24 || used.reservedInputTokens + inputBytes > 300_000 || output <= 0) throw new Error('REAL_API_BUDGET_EXHAUSTED');
+  const next = { ...used, requests: used.requests + 1, inputBytes: used.inputBytes + inputBytes,
+    reservedInputTokens: used.reservedInputTokens + inputBytes, reservedOutputTokens: used.reservedOutputTokens + output, unreportedCalls: used.unreportedCalls + 1 };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(next));
-  return { used: next, maxTokens: output };
+  return { used: next, inputAllowance: inputBytes, maxTokens: output };
+}
+
+export function settleRequest(path, reservation, usage) {
+  const input=usage?.prompt_tokens ?? usage?.input_tokens;
+  const output=usage?.completion_tokens ?? usage?.output_tokens;
+  if (![input,output].every(v=>Number.isSafeInteger(v)&&v>=0)) return;
+  const used=JSON.parse(readFileSync(path));
+  used.reservedInputTokens += input-reservation.inputAllowance;
+  used.reservedOutputTokens += output-reservation.maxTokens;
+  used.unreportedCalls--;
+  used.exceeded ||= used.reservedInputTokens>300_000 || used.reservedOutputTokens>20_000;
+  writeFileSync(path,JSON.stringify(used));
 }
 
 /** A bounded pass-through to the configured real provider, never a model stub. */
@@ -44,7 +58,18 @@ export async function realApiProxy({ baseUrl, token, ledger }) {
       const result = await fetch(upstream, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(body), signal: controller.signal, redirect: 'error' });
       response.writeHead(result.status, { 'content-type': result.headers.get('content-type') ?? 'application/json' });
-      for await (const chunk of result.body ?? []) { captured.responseChunks++; response.write(chunk); }
+      const decoder=new TextDecoder();let pending='',usage;
+      const parse=line=>{try { const value=JSON.parse(line.replace(/^data:\s*/,''));if(value.usage)usage=value.usage; } catch { /* SSE markers/partial records. */ }};
+      for await (const chunk of result.body ?? []) {
+        captured.responseChunks++;response.write(chunk);
+        pending+=decoder.decode(chunk,{stream:true});
+        if (result.headers.get('content-type')?.includes('text/event-stream')) {
+          const lines=pending.split('\n');pending=lines.pop();for(const line of lines)parse(line);
+        }
+        if(pending.length>1_000_000) throw new Error('Provider response exceeds budget');
+      }
+      parse(pending+decoder.decode());
+      settleRequest(ledger,reservation,usage);
       response.end();
     } catch {
       // Neither a provider response nor its URL/token belongs in diagnostics.

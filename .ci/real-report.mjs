@@ -44,7 +44,7 @@ export function reconcile(plan, root, baseline) {
       const workerPlan = validatePlan(JSON.parse(readFileSync(join(directory, 'e2e-real/tagged/plan.json'))));
       const summary = JSON.parse(readFileSync(join(directory, 'e2e-real/tagged/summary.json')));
       if (workerPlan.revision !== plan.revision || workerPlan.profile !== plan.profile || workerPlan.evaluatorRevision !== plan.evaluatorRevision || canonical(workerPlan.execution) !== canonical(plan.execution)
-        || canonical(workerPlan.entries.map(e=>e.key)) !== canonical(shard.keys)) throw new Error('SHARD_IDENTITY_MISMATCH');
+        || canonical(workerPlan.entries) !== canonical(plan.entries.filter(e=>shard.keys.includes(e.key)))) throw new Error('SHARD_IDENTITY_MISMATCH');
       const verified = verifyResults(workerPlan, summary.results);
       if (summary.status !== 'PASS' || summary.planDigest !== workerPlan.digest || verified.exitCode) throw new Error('SHARD_FAILED');
       results.push(...summary.results);
