@@ -371,6 +371,7 @@ export type ModelProviderPresetId =
   | "ollama"
   | "openai"
   | "openrouter"
+  | "requesty"
   | "siliconflow"
   | "zai"
   | "zhipu";
