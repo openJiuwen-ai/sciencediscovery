@@ -17,14 +17,15 @@ dimensions; `pnpm test:policy` prints it and the selector derived from it:
 (category:ut or category:st or category:e2e)
   and os:linux and arch:amd64
   and npu:none and (model:none or model:mock) and judge:none
-  and status:reviewed
+  and status:reviewed and (tier:l1 or tier:l2)
 ```
 
 against the single target `os=linux, arch=amd64`.
 
 `pnpm test:shared` runs all of it. CI runs the same plan as slices that
-partition it — `category` is single-valued and required, so `ut`, `st` and
-`e2e` cover it exactly once each.
+partition it: `l1`, `ut` (excluding L1), `st` and mocked `e2e` cover it exactly once.
+The new tier dimension defaults to L2, preserving the existing hermetic scope.
+L3/L4/L5 add real cases incrementally; see [CI operations](../../../.ci/README.md).
 
 Nothing in that selector can be satisfied or defeated by the machine a run
 happens on. The plan is frozen from source before anything looks at the host,
@@ -35,7 +36,7 @@ capability, a skip, or `executed != planned` are all failures of the run.
 
 | Before | Now |
 | --- | --- |
-| `ci:ut` → install, build, 9 pnpm workloads, then the sandbox package in a QEMU guest | `--slice ut` (`category:ut`) |
+| `ci:ut` → install, build, 9 pnpm workloads, then the sandbox package in a QEMU guest | `--slice ut` (`category:ut and not tier:l1`) |
 | `ci:st` → `bash test/api/run_m1_smoke.sh` | `--slice st` (`category:st`) |
 | `ci:e2e` → `bash .ci/run-e2e.sh mocked` | `--slice e2e` (`category:e2e`), which still drives `run-e2e.sh` for the stack lifecycle |
 

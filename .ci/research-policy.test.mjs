@@ -27,16 +27,16 @@ test('Docker and binaries build patched Swarm; service start only verifies it', 
   assert.doesNotMatch(start, /apply_compatibility_patches/);
 });
 
-test('PR gates hermetic UT/ST/mock and daily adds eligible real E2E; release spends no model tokens', () => {
-  for (const category of ['ut','st','e2e']) for (const model of ['none','mock','real']) {
-    const tags=normalizeTags([`category:${category}`,`model:${model}`,'os:linux','arch:amd64']);
-    assert.equal(compileSelector(profiles.pr.selector)(tags), model !== 'real');
-    assert.equal(compileSelector(profiles.daily.selector)(tags), model !== 'real' || category === 'e2e');
-    assert.equal(compileSelector(profiles.release.selector)(tags), model !== 'real');
-    const expected = model === 'real' ? 'e2e-real' : category;
-    const matches = Object.entries(slices).filter(([name,selector])=>name!=='shared'&&compileSelector(selector)(tags));
-    if(model !== 'real' || category === 'e2e') assert.deepEqual(matches.map(([name])=>name),[expected]);
+test('five cumulative policies partition into L1, UT, ST, mocked and real slices', () => {
+  for (let tier=1;tier<=5;tier++) for (const category of ['ut','st','e2e']) {
+    const tags=normalizeTags([`category:${category}`,`tier:l${tier}`,`model:${tier<=2?'mock':'real'}`,'os:linux','arch:amd64']);
+    for(let level=1;level<=5;level++) {
+      assert.equal(compileSelector(profiles[`l${level}`].selector)(tags), tier<=level&&(tier<=2||category==='e2e'));
+    }
+    const matches=Object.entries(slices).filter(([name,selector])=>name!=='shared'&&compileSelector(selector)(tags));
+    if(tier<=2||category==='e2e') assert.deepEqual(matches.map(([name])=>name),[tier===1?'l1':tier>2?'e2e-real':category]);
   }
+  for(const [alias,tier] of Object.entries({pr:2,merge:3,daily:4,release:5})) assert.equal(profiles[alias].selector,profiles[`l${tier}`].selector);
 });
 
 test('daily excludes quarantined real journeys before freezing the plan', () => {
@@ -52,7 +52,7 @@ test('OR-ed daily policy cannot leak UT identities into its real E2E slice', () 
 
 test('real prerequisites fail closed, independent of catalog selection', async () => {
   const plan=createPlan([{id:'live',source:'test/live.spec.ts',sourceHash:'a'.repeat(64),runner:'playwright',
-    tags:['category:e2e','model:real','judge:llm','os:linux','arch:amd64']}],
+    tags:['category:e2e','model:real','judge:llm','tier:l4','os:linux','arch:amd64']}],
     {revision:'test',selector:profiles.daily.selector,targets:[{os:'linux',arch:'amd64'}]});
   const checked=await preflight(plan,{platform:'linux',arch:'x64',env:{}});
   assert.equal(checked.ok,false);

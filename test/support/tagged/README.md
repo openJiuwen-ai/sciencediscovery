@@ -2,12 +2,12 @@
 
 A test's metadata is its own source, and one frozen plan is what a developer
 and CI both run. `pnpm test:shared` is that command; `pnpm ci:ut`, `pnpm ci:st`
-and `pnpm ci:e2e` are slices of the same selector, so the merge gate cannot run
+`pnpm ci:l1` and `pnpm ci:e2e` are slices of the same selector, so the merge gate cannot run
 a different set from the one on a laptop. [MIGRATION.md](MIGRATION.md) records
 which of the repository's existing cases are in that plan and why each of the
 rest — live model, NPU, legacy quarantine, macOS, live Neo4j — is not.
 
-Live-model, NPU and legacy work is **not** in the shared suite: it is tagged,
+Live-model work enters L3–L5, but not the default PR plan. NPU and legacy work remain outside it: it is tagged,
 collected and then deselected, and it keeps its own explicitly opt-in entry
 points. Selection cannot reach it by accident, and no environment variable can
 make it appear in or disappear from a shared run.
@@ -36,14 +36,15 @@ An exit code of zero alone is not sufficient. Results left by a previous run are
 removed before starting a worker, so an early `exit(0)` cannot reuse stale PASS
 records.
 
-Identity reconciliation uses the testcase ID plus the concrete OS and
-architecture, not just an aggregate count. Retry plugins are not enabled; repeated
+Identity reconciliation uses the testcase ID plus the concrete OS,
+architecture and (for browser cases) selected backend, not just an aggregate count. Retry plugins are not enabled; repeated
 pytest phases cannot be collapsed into an apparently clean pass.
 
 ## Tags
 
 | Group | Values | Default | Meaning |
 | --- | --- | --- | --- |
+| `tier` | `l1`, `l2`, `l3`, `l4`, `l5` | `l2` | First cumulative tier containing the case. |
 | `category` | `ut`, `st`, `e2e` | — | One test layer. |
 | `os` | `linux`, `macos`, `windows` | — | Supported platforms; one or more. |
 | `arch` | `amd64`, `arm64` | — | Supported architectures; one or more. |
@@ -74,10 +75,10 @@ evaluated. Thus a test supporting Linux and macOS can match `not os:linux` on
 its macOS instance, and a test runs once per OS/architecture in the target
 matrix — a repeated target does not produce a second instance.
 
-There is no `executor` group today. Issue #126 lists one, with the values
-`native` and `jiuwenswarm`, but this branch has no JiuwenSwarm backend: every
-test would carry the same value, and a dimension that never varies is a
-dimension nobody maintains correctly. The group comes back with the backend.
+Backend is deliberately not a tag. `--backend jiuwenswarm|legacy` or
+`CI_E2E_BACKEND` selects execution without changing the cases. `legacy` is the
+native loop. A missing backend capability is a preflight failure, never a
+selection filter or implicit fallback.
 
 ## Node declarations
 
@@ -195,48 +196,31 @@ why each of the rest is outside it.
 
 ## CI policy
 
-Which tests a profile takes is stated once, in [profiles.mjs](profiles.mjs), as
-the dimensions themselves rather than as a selector string somebody has to
-parse:
+Policies are cumulative rows in [profiles.mjs](profiles.mjs). `l1` through `l5`
+contain each preceding tier plus new cases. The aliases `pr`, `merge`, `daily`
+and `release` mean L2, L3, L4 and L5. `pnpm test:policy` prints the exact rules.
+The default `pr` plan is credential-free. L3 adds seven simple real API cases;
+L4 adds a daily research sample; L5 adds the complete release-scoped manifest
+and a calibrated quality gate. Required quarantined release cases remain in
+the plan and explicitly fail preflight.
 
-```js
-pr: [
-  { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64',
-    npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
-],
+`l1`, `ut`, `st`, `e2e` and `e2e-real` partition the selected profile. L1 command
+checks require no build, service environments or browser. UT excludes those
+L1 commands so a cumulative run does not count or run them twice. Higher-tier
+plans use their own candidate SHA, never a prior PR's results.
+
+Profiles and backend are explicit arguments, for example:
+
+```bash
+pnpm test:list --profile merge --slice e2e-real --backend legacy
+CI_ALLOW_REAL=1 pnpm ci:e2e:real -- --profile merge --backend jiuwenswarm
 ```
 
-One row is one rule: several values in a group are OR inside the row, different
-groups are AND, and several rows are OR between them. The selector every
-command runs is derived from those rows, so a policy cannot drift from the
-string that implements it.
-
-`pnpm test:policy` prints them, each as the command that would ask the same
-question by hand:
-
-```
-pr:
-  pnpm test:list --category ut --category st --category e2e --os linux --arch amd64 \
-    --npu none --model none --model mock --judge none --status reviewed
-  selector: (category:ut or category:st or category:e2e) and os:linux and …
-  targets:  linux/amd64
-  run it:   pnpm test:run --profile pr
-```
-
-`--profile pr|daily|release` picks one and `pr` is the default. `release` is
-*defined as* `daily` rather than copied from it, so strengthening the nightly
-policy strengthens a release and the two cannot drift apart by being edited
-separately; `test:policy` prints `defined as` when two names share a policy.
-Both are identical to `pr` until there are live-model and `judge:llm` cases to
-put in the rows `pr` does not have — and from the moment there are, a nightly
-or a tag needs those rows' credentials or the plan fails its preflight.
-
-CI passes the profile explicitly: `pnpm ci:ut -- --profile release`. Every
-profile writes to the same `<slice>/` directory, and the frozen `plan.json`
-records which profile it came from as `profile`. The profile is an
-argument and not an environment variable on purpose — the same commit and the
-same command have to mean the same plan, so reproducing a tagged run's failure
-is a matter of copying the command out of the log.
+Each slice writes its profile, SHA, execution configuration and digest into
+`plan.json`. Real workers are partitioned from that plan by `realShards`;
+the aggregator requires exact identities/configuration across all shards.
+See [CI tiers and operations](../../../.ci/README.md#five-cumulative-tiers-one-source-catalog)
+for triggers, secrets, budgets and release baseline setup.
 
 Coverage is a property of a run, not a run of its own. `--coverage` on a run
 that gates — `pnpm ci:ut -- --coverage` and `pnpm ci:st -- --coverage` in CI —

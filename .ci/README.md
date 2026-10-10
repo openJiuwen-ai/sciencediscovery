@@ -13,166 +13,183 @@ The image contains Node.js 22.19, pnpm 11.1.2, Python 3.12, uv, bubblewrap,
 build tools, and Playwright's Chromium system libraries. Product source and
 test dependencies are supplied only by the checkout mounted at `/src`.
 
-## One plan, three layers
+## Five cumulative tiers, one source catalog
 
-### Research-test scheduling after PR #154
+`test/support/tagged/profiles.mjs` owns every policy. `tier:l1` through
+`tier:l5` declare the first tier that needs a case; the default is `tier:l2`.
+Category (UT/ST/E2E), model/judge cost and execution backend remain independent.
+No workflow maintains its own list of case titles.
 
-| Profile / job | Scope | Paid credentials |
-| --- | --- | --- |
-| PR: `ci:ut` | Tagged package/helper tests and offline benchmark-verifier checks | None |
-| PR: `ci:st` | Mock agent-loop smoke and pinned Swarm SDK/MCP contract checks | None |
-| PR: `ci:e2e` | All reviewed mocked browser journeys, including research lifecycle/source fixtures | None |
-| Daily: `ci:e2e:real` | Eligible tagged real browser journeys: five DRB, research team and existing real journeys; two BiomniBench cases and the seeded literature-review journey are temporarily quarantined | the real-model GitHub environment only (see below) |
+| Tier | Event / authorization | Cumulative content | Gate / job ceiling |
+| --- | --- | --- | --- |
+| L1 | Every PR opened, synchronized or reopened | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
+| L2 (`pr`) | Every PR after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
+| L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + seven short real API journeys + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
+| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + fixed research representatives: DRB-58/59, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
+| L5 (`release`) | Version tag push | L4 + remaining DRB samples, two Biomni cases, literature review, PUCT AI audit and calibrated per-case regression gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
 
-`daily` adds a real-E2E policy row; `release` keeps the credential-free PR policy.
-The three hermetic jobs remain unchanged entry points; daily adds the disjoint
-`e2e-real` slice. Always parenthesize the OR-ed profile before intersecting a slice.
-The browser worker receives a frozen subplan, including exact test identities;
-inherited Playwright suite tags must not change which titles match that plan.
+`l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
+and `release` alias L2, L3, L4 and L5. The release policy now includes paid
+research; it is no longer equal to the hermetic PR policy. Release failures
+must not be worked around by moving the tag.
 
-Mocked source tags declare `fixture:standard`, `fixture:research` (MCP fault
-proxy and small-context Swarm), or `fixture:literature` (also offline sources).
-The shared runner starts separate disposable stacks for these batches. It does
-not weaken missing-fixture assertions into skips or inject fake sources into
-real benchmarks. `SCIENCE_AGENT_API_ENTRYPOINT` is a local-only startup seam
-used by the literature fixture; the default product API entry point is unchanged.
+Run only the desired slice, or the complete cumulative profile:
 
-The two Python benchmark-verifier suites are a planned UT command check;
-the pinned Swarm patch/SDK suites are a planned ST command check. Their individual
-framework case counts remain in logs rather than being counted as separate
-frozen identities. New Node helper/fixture tests are individually tagged.
-The UT preparation downloads the pinned DRB evaluator, but all of its judge and
-fetch calls in this suite are mocked. Empty or skipped Python suites fail the
-command; no live credentials are required for these verification tests.
+```bash
+pnpm ci:l1
+pnpm ci:ut
+pnpm ci:st
+pnpm ci:e2e -- --backend jiuwenswarm
+CI_ALLOW_REAL=1 pnpm ci:e2e:real -- --profile merge --backend legacy
+CI_ALLOW_REAL=1 pnpm test:run --profile daily --backend jiuwenswarm
+pnpm test:list --profile release --slice e2e-real --backend jiuwenswarm
+```
 
-### Daily real-E2E prerequisites
+The disjoint slices are `l1`, `ut` (excluding L1 commands), `st`, `e2e`
+(mocked), and `e2e-real`. Their union is the selected cumulative profile.
+`ci:e2e:real` defaults to `daily`; it always needs `CI_ALLOW_REAL=1` and live
+credentials. `ci:st:real` remains a separate native-agent compatibility smoke;
+it does not add a native E2E run. Adapter live UT is also accounted separately.
 
-Nightly runs at **00:00 Asia/Shanghai (16:00 UTC)**, with a separate real E2E job
-in the reusable CI workflow. GitHub schedules only workflows on the default
-branch, so the scheduled Daily covers `main` and nothing else; no other branch
-is built on a schedule. A daily gate for another branch runs only when someone
-starts `Nightly` by hand with `workflow_dispatch` at that ref, and that run
-loads the workflow and source from the ref it was dispatched at. The nightly
-workflow passes secrets to the reusable workflow; PR jobs do not receive live
-credentials. Nothing here dispatches a paid run during development.
+### Backend selection and exact accounting
 
-Real-model credentials are confined to the real E2E job by configuration, not
-by naming:
+Use `--backend jiuwenswarm|legacy`, `CI_E2E_BACKEND`, or the workflow's `backend`
+input. `legacy` means the native loop; JiuwenSwarm is the default. The backend
+changes execution identity, not selection. Run each backend explicitly if both
+must gate; one backend's pass never certifies another. An explicit CLI backend
+wins over the environment. No automatic second backend or fallback is added.
 
-- The job runs only for the `daily` profile and never for a `pull_request`
-  event, so pull requests, including those from forks, never start a paid run.
-- It takes the credentials from the GitHub environment named in its
-  `environment:` key. GitHub releases environment secrets only to jobs that
-  declare that environment, so keep model credentials there, never as
-  repository secrets. Limit the environment's deployment branches to those that
-  may run paid journeys (`main`, `releases/*` and a branch used to try a new
-  environment), so that no other ref receives the secrets even if a workflow
-  change declares the environment.
-- `.ci/research-policy.test.mjs` checks, for every job that references the
-  model tokens, that it declares an environment and never runs for a pull
-  request. It does not pin the environment's name.
+A browser identity contains case ID, OS/architecture and backend. The plan also
+records candidate SHA, model and judge names and an evaluator/input fingerprint.
+Capabilities such as `swarm-task` are execution requirements, not selector tags.
+An unsupported required capability fails preflight without dropping the case.
+Mock fixtures (`standard`, `research`, `literature`) still own separate stacks;
+no fake research fixture is injected into real tests.
 
-The environment is `nightly-ci-ds` (the DeepSeek API). It must provide:
+The real matrix is generated from the frozen catalog: one budgeted worker holds
+all L3 cases; each research case gets a separate job, with at most two workers
+running concurrently. The aggregate compares every shard to the parent plan's
+SHA, configuration and exact identities, then requires
+`planned == executed == passed`. Missing, cancelled, skipped, duplicate or
+wrong-backend results fail. Required quarantined release cases fail preflight as
+`QUARANTINED_REQUIRED_CASE`; their denominator remains visible.
 
-- Variables: `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_JUDGE_BASE_URL`, `E2E_JUDGE_MODEL`.
-- Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`.
+### Merge queue and credentials: repository setup
 
-To move Nightly to other endpoints, create an environment with the same names
-and change only that `environment:` line. To try one first, push that one-line
-change on a branch of this repository and start `Nightly` by hand at that
-branch; a fork's branch cannot read this repository's environments.
+The workflow defines a stable **merge-gate** check. Configure that check as
+required in the default branch ruleset and enable **Require merge queue**.
+Require approval of the current PR head and dismiss stale approvals. Start
+with queue build concurrency 1 and **Only merge non-failing pull requests**.
+Allow enough queue status-check time for L1/L2 + real setup/testing and the
+parallel distribution jobs. Do not require a queue-only check on the PR before
+it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
+Even a one-PR merge group receives its own run and candidate-SHA results.
 
-Other Nightly settings:
+Create these Environments with **no required reviewers and no final approval
+job**, as agreed in [issue #248](https://github.com/openJiuwen-ai/sciencediscovery/issues/248):
 
-- Nightly retains the Biomni evaluation, timeout, judge and `HF_TOKEN` settings
-  for later restoration. Manual BiomniBench runs require `HF_TOKEN` from an
-  account that accepted the dataset terms. Set `CI_PREPARE_BIOMNI=1` (the
-  preparation script's default) to download only the two tasks' CSVs,
-  instructions and rubrics.
-  Nightly sets `CI_PREPARE_BIOMNI=0` while these cases are quarantined.
-  The preparation script still requires `HF_TOKEN` and exports the Biomni
-  Python and data paths; only the dataset download is disabled.
-- The DRB evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`;
-  BiomniBench inputs are verified against committed blob hashes before model use.
+- `merge-api`: variables `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`; secret
+  `E2E_LLM_TOKEN`. Allow the intended `gh-readonly-queue/main/*` branch refs and
+  only explicitly trusted manual-test refs. Use a low-quota test key.
+- `nightly-ci-ds`: variables `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`,
+  `E2E_JUDGE_BASE_URL`, `E2E_JUDGE_MODEL`; secrets `E2E_LLM_TOKEN`,
+  `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`. Allow the default branch,
+  intended version tags and explicitly trusted dispatch refs. No production or
+  publication credential belongs here.
 
-Missing credentials/data/dependencies fail explicitly. No case disappears from
-discovery because an environment variable is absent. The three quarantined
-journeys remain discoverable for explicit local runs but are excluded from the
-daily plan by their `status` tag. Selected skips, missing results and assertion
-failures fail plan accounting. Real E2E uploads two separate artifacts even on
-failure, both with seven-day retention and `if-no-files-found: warn`:
+Keep model credentials in these Environments, not repository secrets.
+The credential-isolation regression checks every job that references a
+model token: it must declare an Environment and exclude pull-request events.
+The check intentionally does not pin Environment names. To change research
+endpoints, configure an Environment with the same variable/secret names and
+update the research Environment in both real-plan and real-e2e.
 
-- `real-e2e-results` is the small dashboard score artifact. Only files whose
-  basename is exactly `benchmark-metrics.json`, `team-metrics.json` or
-  `evolve-metrics.json`, plus `e2e-real/tagged/plan.json`, `summary.json` and
-  `preflight.json`, are staged from `.ci-results` by
-  `.ci/prepare-real-e2e-results.mjs`. Their relative paths are preserved in
-  `.tmp/real-e2e-results`; symlinks and all other files are excluded. This is
-  an allowlist, not a broad `*.json` match: traces, Playwright reports,
-  `child-trajectories.json`, `team-children.json`, stack/run logs, prompts,
-  model output and credential files do not belong in the score artifact.
-  Metric JSON is projected to case identity, integration status, timestamps,
-  duration and numeric evaluation fields (RACE/FACT, rubric, team total,
-  evolve scores and optional LLM total), retaining the dashboard's field
-  names. Embedded prompts, delivery text, judge explanations, tool errors,
-  model configuration and transcripts stay in evidence only. The tagged
-  summary keeps counts and outcomes, excluding free-form errors/problems;
-  the frozen plan and structured preflight are retained. Incomplete JSON is
-  skipped with a content-free warning; valid files still upload.
-- `real-e2e-evidence` retains the complete `.ci-results` directory, including
-  hidden files and diagnostic traces. Download it for failure investigation;
-  do not add this artifact to dashboard collection. Treat evidence as research
-  data and restrict access appropriately. Original metric files are not
-  modified by score staging. New score fields need explicit projection and
-  packaging tests; never widen the upload to arbitrary JSON.
+Environment variables are also used by the credential-free real-plan job so
+its frozen configuration matches its workers. API secrets are injected only
+into real workers. Fork PR runs remain L1/L2 even if an input requests another
+profile. There is no `pull_request_target` checkout of PR code. The maintainer's
+review and enqueue action are the trust decision: queued code can read the
+credentials injected into its job. Repository rules and Environment settings
+are administrative configuration, not created by committing workflow YAML.
+After L3 and the existing review requirements pass, the queue merges without
+another button. Default-branch push does not repeat the paid suite.
 
-The mocked `e2e-results` artifact is unchanged: the dashboard hosts its HTML
-journey reports and reads its results. If it later exceeds the dashboard's
-80 MiB download limit, split out only diagnostic traces; keep HTML, its linked
-screenshots/resources and results together in `e2e-results`. Do not raise the
-dashboard limit to accommodate diagnostic evidence.
+GitHub's behavior is documented in
+[Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
 
-The BiomniBench quarantine can be lifted after the agent sandbox has the
-scientific Python packages and its citation search completes within a reviewed
-budget. The literature-review quarantine can be lifted after CI provisions the
-required saved Pro/Flash models, PubMed connector and evidence-brief skill.
-Until then, run either journey explicitly for diagnosis; never report a
-quarantined case as passed by Nightly.
+### Real cases, prerequisites and budgets
 
-Real tests use one browser worker; the isolated runtime enforces child concurrency
-two. DRB additionally requests at most two total children; the team retains six
-roles. DRB-58/62/75 each get 90 minutes generation, DRB-59/64 each get 120 minutes;
-the team gets 55 minutes. Manual BiomniBench runs default to 30 minutes per case.
-Timeouts are failures, not success or a monetary cap. The job has a six-hour
-ceiling and does not retry failed cases.
-Judge scores and token usage are recorded separately from generator usage.
+`journey-basic-real-api.spec.ts` has seven backend-independent cases: response
+and stream completion, tool-result consumption, memory across turns, durable
+artifact/version retrieval after follow-up, ordered tool dependency, structured
+numeric arguments/results, and cancel/recover with no active orphan run.
+It drives the product and public APIs; it never imports a native agent directly.
+Each case owns its records and uses a pass-through to the actual provider.
 
-The three hermetic layers are three slices of one plan, not three suites. Each
-runs `test/support/tagged/shared.mjs` against the single selector in
-[test/support/tagged/profiles.mjs](../test/support/tagged/profiles.mjs),
-narrowed only by the group that layer schedules:
+The shared basic-worker ledger caps 24 requests including retries, 300,000
+**input payload bytes** and 20,000 reserved output tokens (at most 1,024 per
+request). Payload bytes are a conservative operational guard, not measured
+input tokens or dollars. Provider-reported usage is attached separately. The
+ledger survives worker restarts; a new isolated run needs a fresh runtime root.
+Missing or unknown usage must not be presented as zero cost. The seven
+three-minute case timeouts are failure bounds, not measured elapsed time.
 
-| CI layer | Entry point | Slice of the shared selector |
-|---|---|---|
-| UT | `pnpm ci:ut` | `category:ut` |
-| ST | `pnpm ci:st` | `category:st` |
-| Mock E2E | `pnpm ci:e2e` | `category:e2e and not model:real`, driving `.ci/run-e2e.sh` |
-| Daily real E2E | `pnpm ci:e2e:real` | `category:e2e and model:real`, daily profile only |
+Research cost is separate and currently uncalibrated. DRB-58/62/75 allow 90
+minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
+minutes. Team generation allows 55 minutes; PUCT generation 120 minutes and
+release AI audit up to 65 more. Job setup counts toward the four-hour worker
+ceiling. `fail-fast: false` retains evidence from independent workers; there
+are no automatic case retries. Rebuilding a merge group repeats its budget.
+Monthly usage is the sum of actual provider usage across queue attempts,
+approximately 30 daily runs and version candidates; provider rates and actual
+call counts, not timeout ceilings, determine money spent.
 
-The three hermetic slices partition the PR plan; the fourth slice adds eligible
-real journeys for daily CI. The hermetic slices together are `pnpm test:shared`, the command a developer
-runs. Which cases are selected comes from the tags in each test's own source —
-never from the machine, its credentials, its devices or its installed
-services. A missing capability fails the plan's preflight, and a skip is a
-failed run, so a layer cannot go green by running less.
-[test/support/tagged/MIGRATION.md](../test/support/tagged/MIGRATION.md) records
-what the plan covers. Real E2E is included only in the daily profile; live ST,
-NPU, legacy and macOS work keep their own opt-in entry points (`ci:st:real`, `ci:e2e:real`,
-`ci:st:npu`, `ci:e2e:legacy`).
+`prepare-real-research.sh` runs only for research workers. It needs `HF_TOKEN`
+even while the daily Biomni download is disabled. Release enables the pinned
+two-task download, subject to accepted dataset terms. The DRB evaluator is
+pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs have committed
+blob checksums. Missing inputs fail; they do not filter selection.
 
-`node .ci/tagged-summary.mjs` reads each slice's frozen plan back and fails
-unless `planned == executed == passed` with nothing skipped — including when a
-layer stopped before it produced a plan at all.
+The existing Biomni scientific-environment and literature seeded-model,
+connector and skill gaps remain explicit release blockers until repaired and
+verified. Do not simply remove their quarantine tag to certify a release.
+
+### Release quality calibration
+
+`.ci/release-quality-baseline.json` deliberately starts as
+`awaiting-calibration`. No measured baseline exists yet. L5 therefore cannot
+certify non-regression or publish until maintainers commit a calibrated
+baseline from repeat runs of a known reference version. Freeze generator,
+backend, judge, evaluator/input fingerprint and each case's sample definition.
+Retain repeated reference scores and set tolerances from their measured
+variation; do not treat guessed percentage points as a measured allowance.
+
+A calibrated baseline has `status: calibrated`, a traceable `reference`, the
+plan's `evaluatorRevision` and `execution`, and a `cases` mapping keyed by full
+case ID. Every `judge:llm` identity needs at least one score rule. Each rule has
+`path`, `statusPath`, `acceptedStatuses`, `minimum`, `reference` and `maxDrop`.
+For example, a DRB rule addresses `evaluation.race.overall_score` with status
+`evaluation.race.status` = `completed`; also bind FACT citation accuracy and
+verification coverage. Biomni uses `evaluation.score`, the team uses
+`evaluation.total_score`, and PUCT must cover held-out performance plus
+`llm_evaluation.total_score`. Preserve the original scale of each score.
+Unknown, non-finite, missing or mismatched evidence fails; every case must meet
+both its absolute floor and its allowed drop from reference. Configuration or
+evaluator changes require recalibration, not reuse of incomparable scores.
+
+### Results and dashboard compatibility
+
+Each worker always uploads score-only `real-e2e-results-<shard>` and complete
+`real-e2e-evidence-<shard>` separately (seven-day retention). The score staging
+allowlist remains exact `benchmark-metrics.json`, `team-metrics.json`,
+`evolve-metrics.json` plus tagged plan/summary/preflight JSON. Raw prompts,
+model text, traces and credentials never belong in a score artifact.
+
+The aggregator retains the existing **real-e2e-results** artifact for dashboard
+consumers, with a single suite-level plan/summary and namespaced per-case scores.
+`real-e2e-verdict` carries the aggregate failure reasons. Mock `e2e-results`
+continues to contain complete HTML, linked screenshots and results. Keep large
+diagnostic traces separate if that artifact exceeds the dashboard limit.
 
 ## Coverage reporting
 

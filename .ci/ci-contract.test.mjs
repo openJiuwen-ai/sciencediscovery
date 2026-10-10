@@ -113,6 +113,7 @@ async function workspaceFixture(t, testFiles) {
   await writeFile(join(root, "pnpm-workspace.yaml"), "packages:\n  - services/*\n");
   await writeFile(join(root, "package.json"), JSON.stringify({
     scripts: {
+      "ci:l1": "node test/support/tagged/shared.mjs run --profile l1 --slice l1",
       "ci:e2e": "node test/support/tagged/shared.mjs run --slice e2e",
       "ci:st": "node .ci/run-layer.mjs st",
       "ci:ut": "node .ci/run-layer.mjs ut",
@@ -307,8 +308,8 @@ test("real E2E uploads only staged scores and keeps complete evidence separately
     const jobs = workflowJobs(await readFile(join(directory, file), "utf8"));
     for (const [jobId, job] of Object.entries(jobs)) {
       const uploads = artifactUploads(job);
-      const scores = uploads.filter((upload) => upload.artifact === "real-e2e-results");
-      const evidence = uploads.filter((upload) => upload.artifact === "real-e2e-evidence");
+      const scores = uploads.filter((upload) => upload.artifact?.startsWith("real-e2e-results-"));
+      const evidence = uploads.filter((upload) => upload.artifact?.startsWith("real-e2e-evidence-"));
       if (!scores.length && !evidence.length) continue;
       const label = `${file}: ${jobId}`;
       assert.equal(scores.length, 1, `${label}: one score upload required`);
@@ -430,8 +431,8 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
   assert.match(run.stdout, /Staged 7 real E2E score\/plan files/);
   const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
   const uploads = artifactUploads(workflowJobs(ci)["real-e2e"]);
-  const scoreDirectory = join(root, uploads.find(upload => upload.artifact === "real-e2e-results").paths[0]);
-  const evidenceDirectory = join(root, uploads.find(upload => upload.artifact === "real-e2e-evidence").paths[0]);
+  const scoreDirectory = join(root, uploads.find(upload => upload.artifact?.startsWith("real-e2e-results-")).paths[0]);
+  const evidenceDirectory = join(root, uploads.find(upload => upload.artifact?.startsWith("real-e2e-evidence-")).paths[0]);
   assert.deepEqual(await filesBelow(scoreDirectory), allowed);
   assert.deepEqual(await filesBelow(evidenceDirectory), [...contents.keys()].sort());
   for (const path of allowed) {

@@ -27,7 +27,7 @@ import {
 } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-real-request.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-real-request.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l4", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * E2E-META

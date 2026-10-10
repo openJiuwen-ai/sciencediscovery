@@ -33,7 +33,7 @@ for (const sample of drbSamples) {
  * Credentials: E2E_API_TOKEN; E2E_LLM_MODEL_ID or E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN; Judge credentials and JINA_API_KEY.
  * CostSideEffects: Billable research and Judge calls; temporary application records deleted, local evaluation artifacts retained.
  */
-  test(`DRB-${sample.id} ${sample.difficulty} Swarm research integration`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap"] }, async ({ journey, page }, testInfo) => {
+  test(`DRB-${sample.id} ${sample.difficulty} Swarm research integration`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap", ([58,59].includes(sample.id) ? "@tier:l4" : "@tier:l5")] , annotation: { type: "capability", description: "swarm-task" } }, async ({ journey, page }, testInfo) => {
     // These evidence-heavy cases have reviewed generation budgets. Keep
     // their dedicated overrides ahead of the shorter suite-wide CI budget.
     const caseRunBudget = (sample.id === 58 || sample.id === 62 || sample.id === 75) ? 5_400_000

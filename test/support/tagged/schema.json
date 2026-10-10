@@ -1,6 +1,11 @@
 {
   "version": 1,
   "groups": {
+    "tier": {
+      "multiple": false,
+      "values": ["l1", "l2", "l3", "l4", "l5"],
+      "default": "l2"
+    },
     "fixture": {
       "multiple": false,
       "values": ["standard", "research", "literature"],

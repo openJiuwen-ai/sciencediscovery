@@ -22,6 +22,7 @@ import { createPlan, verifyResults, fileDigest, subplan } from './plan.mjs';
 import { schema } from './tags.mjs';
 import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources, pythonPlugins } from './profiles.mjs';
 import { preflight } from './environment.mjs';
+import { executionConfig, realShards } from './execution.mjs';
 import { checks } from './checks.mjs';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
@@ -134,7 +135,7 @@ export function resultsLabel(slice, query=false) {
 }
 
 export async function main(args=process.argv.slice(2)) {
-  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false;const query={};
+  const action=args.shift()??'run';let slice,output,profileName='pr',coverage=false,backend,shard;const query={};
   while(args.length){
     const flag=args.shift();
     // pnpm versions differ on whether the conventional separator is stripped,
@@ -144,6 +145,8 @@ export async function main(args=process.argv.slice(2)) {
     else if(flag==='--profile')profileName=args.shift();
     else if(flag==='--output')output=args.shift();
     else if(flag==='--coverage')coverage=true;
+    else if(flag==='--backend')backend=args.shift();
+    else if(flag==='--shard')shard=args.shift();
     else if(flag?.startsWith('--')&&schema.groups[flag.slice(2)]){
       const group=flag.slice(2),value=args.shift();
       if(!schema.groups[group].values.includes(value))throw new Error(`Unknown ${group}: ${value}; expected ${schema.groups[group].values.join('|')}`);
@@ -154,6 +157,7 @@ export async function main(args=process.argv.slice(2)) {
   const dimensions=Object.keys(query);
   if(action==='policy')return showPolicies();
   const profile=profiles[profileName];
+  const execution=executionConfig(process.env,backend);
   if(!profile)throw new Error(`Unknown profile: ${profileName}; known are ${Object.keys(profiles).join(', ')}`);
   if(dimensions.length&&(slice!==undefined||profileName!=='pr'))throw new Error('--profile and --slice name a part of a CI policy; a tag query builds its own selector. Use one or the other');
   slice??='shared';
@@ -180,15 +184,17 @@ export async function main(args=process.argv.slice(2)) {
   // Collection scope follows the categories asked for, whichever way they were
   // asked: a query for `--category e2e` needs Chromium and not the Python
   // virtualenvs, exactly as `--slice e2e` does.
-  const categories=query.category??(slice==='shared'?['ut','st','e2e']:[slice === 'e2e-real' ? 'e2e' : slice]);
-  const needUT=categories.includes('ut'), needPW=categories.includes('e2e');
+  const light=slice==='l1'||profileName==='l1';
+  const categories=query.category??(light?['ut']:slice==='shared'?['ut','st','e2e']:[slice === 'e2e-real' ? 'e2e' : slice]);
+  const needUT=!light&&categories.includes('ut'), needPW=categories.includes('e2e');
+  env.CI_E2E_BACKEND=execution.backend;
   // The E2E group can split preparation from execution: a host installs
   // everything and hands the workspace over, and this half only runs.
   const prepared=process.env.CI_E2E_PREPARED==='1';
   const prepareOnly=action==='prepare' || process.env.CI_E2E_PREPARE_ONLY==='1';
   if(prepared && process.env.CI_E2E_PREPARE_ONLY==='1')throw new Error('CI_E2E_PREPARE_ONLY and CI_E2E_PREPARED are mutually exclusive');
   if(action!=='list' && !prepared) {
-    const steps=[['pnpm',['install','--frozen-lockfile']],['pnpm',['build']]];
+    const steps=[['pnpm',['install','--frozen-lockfile']],...(!light?[['pnpm',['build']]]:[])];
     if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:['memory-graph','adapter'].includes(project)?['--extra','test']:[])]]);
     // Into the project's own environment, after the locked sync, so the tests
     // run on exactly the interpreter and packages they run on without it.
@@ -203,7 +209,7 @@ export async function main(args=process.argv.slice(2)) {
   // Source scopes follow workspace layout, never installed capabilities or environment gates.
   const nodeFiles=[...globSync([...nodeSources],{cwd:root}), ...nodeExtraSources].sort();
   const wantedCategory=categories.length===1?categories[0]:null;
-  const files=nodeFiles.filter(file=>{
+  const files=light?[]:nodeFiles.filter(file=>{
     const source=readFileSync(join(root,file),'utf8');
     return !wantedCategory||source.includes(`category:${wantedCategory}`);
   });
@@ -234,7 +240,20 @@ export async function main(args=process.argv.slice(2)) {
   const targets=dimensions.length
     ?(requestedOs??[profile.targets[0].os]).flatMap(os=>(requestedArch??[profile.targets[0].arch]).map(arch=>({os,arch})))
     :profile.targets;
-  const plan=createPlan(catalog,{revision,selector:selector||'',targets,...(dimensions.length?{}:{profile:profileName})});
+  let plan=createPlan(catalog,{revision,selector:selector||'',targets,execution,...(dimensions.length?{}:{profile:profileName})});
+  if(needPW){
+    // Pin the evaluator/input implementation independently of the candidate
+    // product SHA, so a new judge/rubric requires explicit recalibration.
+    const sources=[...globSync(['test/benchmarks/**/*.py','test/benchmarks/**/*.json','test/benchmarks/**/*.ts','test/helpers/*result.mjs'],{cwd:root})].sort();
+    const evaluatorRevision=fileDigest(sources.map(p=>p+'\n'+fileDigest(readFileSync(join(root,p)))).join('\n'));
+    plan=subplan({...plan,evaluatorRevision},plan.entries);
+  }
+  if(shard){
+    if(slice!=='e2e-real')throw new Error('--shard is only valid with --slice e2e-real');
+    const selected=realShards(plan).find(s=>s.name===shard);
+    if(!selected)throw new Error(`Unknown real shard: ${shard}`);
+    plan=subplan(plan,plan.entries.filter(e=>selected.keys.includes(e.key)));
+  }
   json(join(outputDir,'catalog.json'),catalog);json(join(outputDir,'plan.json'),plan);
   const asked=dimensions.length?`query ${dimensions.map(g=>`--${g} ${query[g].join(' --'+g+' ')}`).join(' ')}`:`profile ${profileName}, slice ${slice}`;
   console.log(`Frozen ${plan.entries.length} identities for ${asked}`);
@@ -244,7 +263,7 @@ export async function main(args=process.argv.slice(2)) {
   const checked=await preflight(plan);
   const requireSandbox=plan.entries.some(e=>e.tags.includes('sandbox:bubblewrap'));
   if(requireSandbox && spawnSync('bwrap',['--ro-bind','/','/','--dev','/dev','true'],{env,encoding:'utf8'}).status!==0)checked.problems.push({code:'BUBBLEWRAP_UNAVAILABLE'});
-  if(plan.entries.some(e=>e.tags.includes('category:ut')) && process.getuid?.()===0)checked.problems.push({code:'NON_ROOT_REQUIRED'});
+  if(!light && plan.entries.some(e=>e.tags.includes('category:ut')) && process.getuid?.()===0)checked.problems.push({code:'NON_ROOT_REQUIRED'});
   checked.ok=!checked.problems.length;json(join(outputDir,'preflight.json'),checked);
   const results=[], errors=checked.problems.map(p=>JSON.stringify(p));
   const coverageDir=join(outputDir,'coverage');
