@@ -58,6 +58,10 @@ MCP connects external tools and data. Skills provide reusable research methods.
 
 Packages responsibilities, methods, and tools into reusable research roles.
 
+### [Agent Team research collaboration](agent-team.md)
+
+Uses `science-research-team` to coordinate specialist roles through research, analysis, review, and reporting.
+
 These capabilities answer:
 
 > How does an Agent perform research tasks?
