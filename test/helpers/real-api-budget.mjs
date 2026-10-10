@@ -13,7 +13,11 @@ export function reserveRequest(path, body) {
   const used = existsSync(path) ? JSON.parse(readFileSync(path)) : { requests: 0, inputBytes: 0, reservedInputTokens: 0, reservedOutputTokens: 0, unreportedCalls: 0 };
   const inputBytes = Buffer.byteLength(JSON.stringify({ messages: body.messages, tools: body.tools }));
   const output = Math.min(1024, 20_000 - used.reservedOutputTokens);
-  if (used.exceeded || used.requests >= 24 || used.reservedInputTokens + inputBytes > 300_000 || output <= 0) throw new Error('REAL_API_BUDGET_EXHAUSTED');
+  if (used.exceeded || used.requests >= 24 || used.reservedInputTokens + inputBytes > 300_000 || output <= 0) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ ...used, rejectedRequests: (used.rejectedRequests ?? 0) + 1, lastRejection: 'REAL_API_BUDGET_EXHAUSTED' }));
+    throw new Error('REAL_API_BUDGET_EXHAUSTED');
+  }
   const next = { ...used, requests: used.requests + 1, inputBytes: used.inputBytes + inputBytes,
     reservedInputTokens: used.reservedInputTokens + inputBytes, reservedOutputTokens: used.reservedOutputTokens + output, unreportedCalls: used.unreportedCalls + 1 };
   mkdirSync(dirname(path), { recursive: true });

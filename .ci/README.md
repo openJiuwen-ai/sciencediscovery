@@ -125,6 +125,9 @@ artifact/version retrieval after follow-up, ordered tool dependency, structured
 numeric arguments/results, and cancel/recover with no active orphan run.
 It drives the product and public APIs; it never imports a native agent directly.
 Each case owns its records and uses a pass-through to the actual provider.
+The basic Project disables optional skill, planning and delegation plugins
+through the public API; workspace and MCP tools remain real. The same setup
+applies to both backends and keeps a research skill catalog out of short calls.
 
 The shared basic-worker ledger caps 24 requests including retries, 300,000
 input-token allowance and 20,000 output-token allowance (at most 1,024 output

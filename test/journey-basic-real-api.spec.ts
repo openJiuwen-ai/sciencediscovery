@@ -36,7 +36,7 @@ for (const [id,title] of scenarios) {
  *   1. Check credentials and the isolated stack; create a temporary real-model Session.
  *   2. Submit the selected basic task, observe completion or cancellation and verify its durable result.
  *   3. Read usage, save the shared request budget, and remove the owned records.
- * Environment: Isolated product stack selected by CI_E2E_BACKEND; standard fixture and local MCP echo server.
+ * Environment: Isolated product stack selected by CI_E2E_BACKEND; standard fixture, local MCP echo server and a basic project with optional skill/plan/scheduler plugins disabled.
  * Type: real
  * LLM: Real OpenAI-compatible endpoint behind a bounded pass-through; no model stub or AI judge.
  * WebSearch: none requested
@@ -59,6 +59,17 @@ for (const [id,title] of scenarios) {
       await journey.step('Prepare the selected product backend', 'A new Session uses the real model and owns all its records', async () => {
         fixture = await createProjectAndSession(page, {approvalMode:'always_allow',projectName:`Basic ${id} ${randomUUID()}`,sessionTitle:title,
           model:{baseUrl:proxy.baseUrl,apiToken:proxy.token,model:real.E2E_LLM_MODEL!,name:`Basic ${id}`,apiVariant:'openai'}});
+        // These short contracts need workspace/MCP tools, not the research
+        // skill catalog or delegation. Configure the owned Project through
+        // the public product API, identically for either execution backend.
+        const plugins = `/api/projects/${fixture.project.id}/plugins`;
+        const baseline = await api(page,plugins,'GET');
+        await api(page,`${plugins}/bridge`,'POST',{apiVersion:1,pluginId:'host.settings',scope:{projectId:fixture.project.id},kind:'command',method:'replace',
+          input:{expectedRevision:baseline.revision,overrides:{...baseline.settings.overrides,
+            plugins:Object.fromEntries(['skill','plan','scheduler'].map(name=>[name,{enabled:false}]))}}});
+        await api(page,`/api/sessions/${fixture.session.id}`,'PATCH',{
+          skillSelectionMode:'selected',enabledSkillIds:[],enabledSkillLibraries:[],enabledConnectorIds:[],specialistId:null,
+        });
         await openProjectSession(page,fixture);
       });
       const prefix = `/api/sessions/${fixture!.session.id}`;
@@ -140,7 +151,6 @@ for (const [id,title] of scenarios) {
         const usage=await drbApi<any>(page,`${prefix}/usage`);
         expect(usage.totals.invocationCount).toBeGreaterThan(0);
         await info.attach('real-api-usage',{body:JSON.stringify(usage),contentType:'application/json'});
-        await info.attach('real-api-budget',{body:readFileSync(ledger),contentType:'application/json'});
         expect(JSON.parse(readFileSync(ledger,'utf8')).exceeded ?? false).toBe(false);
       });
     } finally {
@@ -151,7 +161,12 @@ for (const [id,title] of scenarios) {
         }
       } finally {
         try { if (mcp) await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${mcp}`,{headers:authorizationHeader()}); }
-        finally { await proxy.stop(); }
+        finally {
+          await proxy.stop();
+          // Keep cost evidence for failures too, including a denied request.
+          try { await info.attach('real-api-budget',{body:readFileSync(ledger),contentType:'application/json'}); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        }
       }
     }
   });
