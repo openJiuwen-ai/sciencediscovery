@@ -21,3 +21,4 @@ export * from "./ports.js";
 export * from "./persistence.js";
 export * from "./runtime.js";
 export * from "./tools.js";
+export * from "./client.js";

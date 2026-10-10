@@ -211,6 +211,7 @@ export SCIENCE_DISCOVERY_DATA_DIR="$runtime_root/data"
 export SCIENCE_AGENT_PORT="${SCIENCE_AGENT_PORT:-4410}"
 export SCIENCE_AGENT_RUNNER_PORT="${SCIENCE_AGENT_RUNNER_PORT:-4411}"
 export SCIENCE_AGENT_EVOLVE_PORT="${SCIENCE_AGENT_EVOLVE_PORT:-4413}"
+export SCIENCE_AGENT_IDEA_TREE_PORT="${SCIENCE_AGENT_IDEA_TREE_PORT:-4414}"
 export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774}"
 # Moving a service is only half of it: the API dials each sidecar by URL, and
 # every one of those has its own hardcoded default (see
@@ -220,6 +221,7 @@ export SCIENCE_AGENT_MEMORY_GRAPH_PORT="${SCIENCE_AGENT_MEMORY_GRAPH_PORT:-17774
 # "fetch failed". Derive every URL from the port that was just chosen.
 export SCIENCE_AGENT_RUNNER_URL="http://127.0.0.1:${SCIENCE_AGENT_RUNNER_PORT}"
 export SCIENCE_AGENT_EVOLVE_URL="http://127.0.0.1:${SCIENCE_AGENT_EVOLVE_PORT}"
+export SCIENCE_AGENT_IDEA_TREE_URL="http://127.0.0.1:${SCIENCE_AGENT_IDEA_TREE_PORT}"
 export SCIENCE_AGENT_MEMORY_GRAPH_URL="http://127.0.0.1:${SCIENCE_AGENT_MEMORY_GRAPH_PORT}"
 # The default mocked job must not turn J3 into a conda-channel provisioning
 # job. A dedicated CI setup job may opt in after its network policy is reviewed.
@@ -334,7 +336,7 @@ if [[ "$prepared" -eq 1 ]]; then stack_arguments+=(--no-node-build); fi
 # journeys reach whoever already owns the address, and the run reports a wall of
 # 401s that reads like a broken token. Say it here instead, while the port is
 # still the answer.
-busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
+busy_ports=("$SCIENCE_AGENT_PORT" "$SCIENCE_AGENT_RUNNER_PORT" "$SCIENCE_AGENT_EVOLVE_PORT" "$SCIENCE_AGENT_IDEA_TREE_PORT" "$SCIENCE_AGENT_MEMORY_GRAPH_PORT")
 if [[ "$backend" == jiuwenswarm ]]; then
   busy_ports+=("${SCIENCE_AGENT_LEGACY_PORT:-$((SCIENCE_AGENT_PORT + 100))}")
 fi

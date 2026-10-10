@@ -18,7 +18,7 @@ import { resolve } from "node:path";
 import { McpSourceCatalog, type McpTransportClient } from "@sciencediscovery/data-source";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { createIdeaTreeAuthorityRegistry, type IdeaTreePersistence } from "@sciencediscovery/idea-tree";
-import { ideaTreeRepositoryForSession } from "../idea-tree/python-client.js";
+import { IdeaTreeServiceClient } from "@sciencediscovery/idea-tree";
 import { createMcpSourceRegistry } from "@sciencediscovery/mcp-sources";
 import { createPluginScope } from "@sciencediscovery/plugin-sdk";
 import { builtinMcpSourcePlugins } from "@sciencediscovery/mcp-sources/plugin";
@@ -156,13 +156,15 @@ export function createPlatformServices(
   });
   const memoryGraphSink = new MemoryGraphSink(memoryGraphClient, () => store.getMemoryGraphSettings().enabled);
   const memoryGraphEnabled = () => store.getMemoryGraphSettings().enabled;
+  const ideaTreeService = new IdeaTreeServiceClient({
+    url: config.ideaTree?.url ?? "http://127.0.0.1:4314",
+    token: config.ideaTree?.internalToken ?? "sciencediscovery-idea-tree-local",
+  });
   const ideaTreeRepository = (sessionId: string) => {
     const session = store.getSession(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
-    return dependencies.ideaTreeRepository?.({ projectId: session.projectId, sessionId }) ?? ideaTreeRepositoryForSession(
-      { token: config.evolve.internalToken, url: config.evolve.url },
-      { projectId: session.projectId, sessionId },
-    );
+    return dependencies.ideaTreeRepository?.({ projectId: session.projectId, sessionId })
+      ?? ideaTreeService.repository({ projectId: session.projectId, sessionId });
   };
   const provenanceRecorder = new ProvenanceRecorder(config.dataDir, store, memoryGraphSink);
   const mcpRegistry = createMcpSourceRegistry();
@@ -241,7 +243,7 @@ export function createPlatformServices(
   // Run-scoped model tokens. In memory only: a token that outlived the process
   // would outlive the run it belongs to, and that is the property it exists for.
   const evolveRunTokens = new RunTokenRegistry();
-  const ideaResearch = createIdeaResearchClient({ url: config.evolve.url, token: config.evolve.internalToken,
+  const ideaResearch = createIdeaResearchClient({ service: ideaTreeService,
     apiOrigin: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`, store, tokens: evolveRunTokens });
   const evolveCas = new CasStore(config.dataDir);
   const evolveCandidates = new CandidateSources(
@@ -392,12 +394,27 @@ export function createPlatformServices(
         releaseWait?.();
       }
     },
-    createIdeaResearch: async (input) => {
-      const view = await ideaResearch.command(turn.sessionId, "create", input);
-      await turn.emit({type: "idea_research.created", researchId: view.research.id});
-      return {researchId: view.research.id, status: view.research.status, message: "Python engine started. Follow progress in the Idea Tree card."};
-    },
-    getIdeaResearch: (researchId?: string) => ideaResearch.summary(turn.sessionId, researchId),
+    loadIdeaResearchTools: () => ideaTreeService.tools(async (name, input) => {
+      if (name === "create_idea_research") {
+        const view = await ideaResearch.command(turn.sessionId, "create", input);
+        await turn.emit({type: "idea_research.created", researchId: view.research.id});
+        return {researchId: view.research.id, status: view.research.status, message: "Python engine started. Follow progress in the Idea Tree card."};
+      }
+      if (name === "get_idea_research") return ideaResearch.summary(turn.sessionId, input.researchId as string | undefined);
+      if (name === "control_idea_research") {
+        if (!["pause", "continue", "end"].includes(String(input.operation))) throw new Error("Unknown research operation");
+        return ideaResearch.command(turn.sessionId, String(input.operation), input);
+      }
+      if (name === "view_idea_tree") {
+        const repository = ideaTreeRepository(turn.sessionId);
+        const treeId = typeof input.treeId === "string" ? input.treeId : (await repository.listTreeIds())[0];
+        return treeId ? repository.readGraph(treeId) : null;
+      }
+      throw new Error(`Unknown Idea Tree tool: ${name}`);
+    }).catch(error => {
+      apiLog.warn("idea_tree_tools_unavailable", {reason: error instanceof Error ? error.message : String(error)});
+      return [];
+    }),
     getEvolveRun: async (runId?: string) => {
       // The id is optional and prefix-tolerant, because the caller is a model
       // whose context routinely does not contain it: a search started in an

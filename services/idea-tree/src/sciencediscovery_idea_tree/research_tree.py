@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from threading import RLock
 
-from ...tree import Node, Tree
+from .tree import Node, Tree
 
 
 @dataclass

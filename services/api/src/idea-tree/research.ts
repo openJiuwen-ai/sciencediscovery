@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { IdeaResearchView } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
 import type { RunTokenRegistry } from "../evolution/llm-proxy.js";
+import { IdeaTreeServiceClient } from "@sciencediscovery/idea-tree";
 
 /** Only transport and credentials live here. Python owns research state and scheduling. */
 export function createIdeaResearchClient(options: {
-  url: string; token?: string; apiOrigin: string; store: SessionStore; tokens: RunTokenRegistry;
+  service: IdeaTreeServiceClient; apiOrigin: string; store: SessionStore; tokens: RunTokenRegistry;
 }) {
   const grants = new Map<string, { sessionId: string; token: string }>();
   const pending = new Set<string>();
@@ -30,22 +31,18 @@ export function createIdeaResearchClient(options: {
       if (!model || !options.store.getModelApiToken(model.id)) throw new Error("Configure a model with an API token before starting research");
       if (model.apiProtocol === "anthropic-messages") throw new Error("Idea Tree requires an OpenAI-compatible model endpoint");
       const researchId = previous?.research.id ?? `research-${randomUUID()}`;
+      const researchSettings = operation === "create" ? { ...await settings(), ...(input.settings as object ?? {}) } : undefined;
       options.tokens.revoke(researchId);
       const token = options.tokens.issue(researchId, sessionId, model.id);
       grants.set(researchId, { sessionId, token });
       issued = researchId;
       payload = { ...payload, researchId, modelId: model.id,
-        ...(operation === "create" ? { settings: { ...options.store.getIdeaTreeSettings(), ...(input.settings as object ?? {}) } } : {}),
+        ...(researchSettings ? { settings: researchSettings } : {}),
         llm: { token, url: `${options.apiOrigin}/internal/evolve-llm/${researchId}/v1/chat/completions` } };
     }
     try {
       const observedGrants = new Map(grants);
-      const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/command`, {
-        method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000),
-      });
-      const body = await response.json() as any;
-      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
+      const body = await options.service.research(payload);
       const views: IdeaResearchView[] = body.items ?? (body.research ? [body] : []);
       for (const view of views) {
         if (!["running", "pausing"].includes(view.research.status) && grants.has(view.research.id) && grants.get(view.research.id) === observedGrants.get(view.research.id)) {
@@ -74,20 +71,14 @@ export function createIdeaResearchClient(options: {
     finally { if (mutation) pending.delete(sessionId); }
   }
   async function cleanup(projectId: string, sessionId: string) {
-    const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/command`, {
-      method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
-      body: JSON.stringify({operation: "delete", projectId, sessionId}), signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) throw new Error(`Research cleanup failed: HTTP ${response.status}`);
+    await options.service.research({operation: "delete", projectId, sessionId});
     for (const [id, owner] of grants) if (owner.sessionId === sessionId) { options.tokens.revoke(id); grants.delete(id); }
   }
   async function events(sessionId: string, researchId: string, signal: AbortSignal) {
     const session = options.store.getSession(sessionId);
     if (!session) throw new Error("Session not found");
-    const response = await fetch(`${options.url.replace(/\/$/, "")}/idea-tree/research/events`, {
-      method: "POST", headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
-      body: JSON.stringify({operation: "get", projectId: session.projectId, sessionId, researchId}), signal,
-    });
+    const response = await options.service.request("/idea-tree/research/events", "POST",
+      {operation: "get", projectId: session.projectId, sessionId, researchId}, signal);
     if (!response.ok || !response.body) throw new Error(`Research stream failed: HTTP ${response.status}`);
     return response.body;
   }
@@ -99,5 +90,14 @@ export function createIdeaResearchClient(options: {
       id: n.id, hypothesis: n.hypothesis, status: n.status, score: n.score, insight: n.insight,
     })), insight: view.graph.nodes.find(n => n.id === "ROOT")?.insight };
   }
-  return { command, cleanup, events, summary, close() { clearInterval(timer); for (const id of grants.keys()) options.tokens.revoke(id); } };
+  async function settings(update?: unknown) {
+    return options.service.settings(options.store.getIdeaTreeSettings(), update);
+  }
+  async function references(sessionId: string, skillId: string): Promise<boolean> {
+    const session = options.store.getSession(sessionId);
+    if (!session) throw new Error("Session not found");
+    return (await options.service.json<{referenced: boolean}>("/references/skill", "POST",
+      {sessionId, projectId: session.projectId, skillId})).referenced;
+  }
+  return { command, cleanup, events, summary, settings, references, close() { clearInterval(timer); for (const id of grants.keys()) options.tokens.revoke(id); } };
 }

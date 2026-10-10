@@ -37,6 +37,9 @@ export function runtimePluginDefinitions<M extends RuntimeMessage>(options: {
 }
 
 export async function createRuntimePluginScope<M extends RuntimeMessage>(options: Parameters<typeof runtimePluginDefinitions<M>>[0], disabled: readonly string[] = [], settings: PluginSettingsMap = {}) {
+  if (options.evolve?.loadIdeaResearchTools) {
+    options = {...options, evolve: {...options.evolve, ideaResearchTools: await options.evolve.loadIdeaResearchTools()}};
+  }
   const normalized = validatePluginSettings(settings, installedPlugins);
   const services = new ServiceRegistry();
   services.provide({ id: "skill.catalog", version: 1 }, options.workspace.skills ?? []);
