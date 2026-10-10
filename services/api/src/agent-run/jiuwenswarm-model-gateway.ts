@@ -257,6 +257,11 @@ export async function startModelGateway(
       phase = "upstream_dispatched";
       trace("upstream_dispatched", true);
     };
+    const requireUsefulTurn = (turn: ModelTurn) => {
+      if (!turn.truncated && !turn.toolCalls.length && !textOf(turn.assistantMessage.content).trim()) {
+        throw new ModelRequestError("Model returned an empty assistant turn without tool calls", 502);
+      }
+    };
     const record = async (turn: ModelTurn) => {
       if (observed) await observe("completion", () => observed.completed(turn, history));
     };
@@ -302,6 +307,7 @@ export async function startModelGateway(
           },
         });
         controller.signal.throwIfAborted();
+        requireUsefulTurn(turn);
         await recordInvalidArguments(turn, id);
         rejectInvalidArguments(turn);
         start();
@@ -327,6 +333,7 @@ export async function startModelGateway(
         onToolCallDelta: progress,
       });
       controller.signal.throwIfAborted();
+      requireUsefulTurn(turn);
       await recordInvalidArguments(turn, id);
       rejectInvalidArguments(turn);
       if (!auxiliary) remember(turn, body);

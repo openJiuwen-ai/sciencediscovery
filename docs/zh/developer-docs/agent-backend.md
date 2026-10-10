@@ -118,6 +118,8 @@ Native executor 通过 ScienceDiscovery model package/client 直接调用用户�
 
 JiuwenSwarm 不直接绕过这些产品语义：其模型请求经 ScienceDiscovery 的 per-run model gateway/proxy 路径重新进入产品模型层。
 
+模型轮次只有在包含非空白的最终正文或可执行工具调用时才能结束 Agent 循环。只有推理内容或完全空白的轮次，即使 `finish_reason=stop` 也视为无效；明确的 `length` 仍走输出上限恢复流程。OpenAI 兼容客户端可在既有重试预算内对空轮次最多重试一次，之后以不包含提示词、回复正文、工具参数或密钥的有限诊断信息报错。SSE 读取器合并多行 `data:` 事件、处理末尾未换行的事件、保留有效的完整 `message` 快照，并在收到上游错误事件时拒绝把此前的部分输出当作成功。JiuwenSwarm 的单次运行模型网关也对其他模型客户端执行同样的完成条件。设置 `SCIENCE_AGENT_TRACE_SSE_SUMMARY=1` 只记录帧数与输出长度，不记录模型内容。
+
 ## 6. Tool dispatch
 
 Native executor 接收模型 tool call 后调用 ScienceDiscovery tool table。

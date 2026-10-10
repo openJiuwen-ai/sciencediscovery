@@ -82,6 +82,189 @@ test("provider context overflow is normalized without treating arbitrary token e
 
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
 
+
+test("a reasoning-only empty turn is retried once before a useful OpenAI answer", async () => {
+  let attempts = 0;
+  await withServer(async (request, response) => {
+    await readBody(request);
+    attempts += 1;
+    sse(response, attempts === 1
+      ? [{ choices: [{ delta: { reasoning_content: "still working" }, finish_reason: "stop" }] }]
+      : [{ choices: [{ delta: { content: "Recovered answer" }, finish_reason: "stop" }] }]);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", apiVariant: "deepseek",
+      baseUrl, model: "stub" }, "s", [], [], policy, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "Recovered answer");
+    assert.equal(attempts, 2);
+  });
+});
+
+test("repeated empty OpenAI turns fail with bounded finish diagnostics", async () => {
+  let attempts = 0;
+  await withServer(async (request, response) => {
+    await readBody(request);
+    attempts += 1;
+    sse(response, attempts === 1
+      ? [{ choices: [{ delta: {}, finish_reason: "stop" }] }]
+      : []);
+  }, async (baseUrl) => {
+    await assert.rejects(streamModelTurn({ apiProtocol: "openai-chat-completions",
+      baseUrl, model: "stub" }, "s", [], [], policy, new AbortController().signal),
+    /empty assistant turn.*finish_reason=missing, records=0, reasoning_chars=0/);
+    assert.equal(attempts, 2);
+  });
+});
+
+test("unknown provider finish reasons never appear in empty-turn diagnostics", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [{ choices: [{ delta: {}, finish_reason: "private-provider-detail" }] }]);
+  }, async (baseUrl) => {
+    await assert.rejects(streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal), (error: Error) => {
+      assert.match(error.message, /finish_reason=other/);
+      assert.doesNotMatch(error.message, /private-provider-detail/);
+      return true;
+    });
+  });
+});
+
+test("an SSE error event fails without exposing the provider message", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [{ error: { message: "private upstream detail" } }]);
+  }, async (baseUrl) => {
+    await assert.rejects(streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal), (error: Error) => {
+      assert.match(error.message, /upstream error event.*records=1, error_records=1/);
+      assert.doesNotMatch(error.message, /private upstream detail/);
+      return true;
+    });
+  });
+});
+
+test("an SSE error after partial text never returns a successful model turn", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [
+      { choices: [{ delta: { content: "partial answer" } }] },
+      { error: { message: "private upstream detail" } },
+    ]);
+  }, async (baseUrl) => {
+    const seen: string[] = [];
+    await assert.rejects(streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal,
+      { onTextDelta: (delta) => seen.push(delta) }), (error: Error) => {
+      assert.match(error.message, /upstream error event.*records=2, error_records=1/);
+      assert.doesNotMatch(error.message, /private upstream detail/);
+      return true;
+    });
+    assert.deepEqual(seen, ["partial answer"]);
+  });
+});
+
+test("an OpenAI SSE data line without a trailing newline is still consumed", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "final text" }, finish_reason: "stop" }] })}`);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "final text");
+  });
+});
+
+test("a multiline SSE data event preserves one JSON model chunk", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end('data: {"choices": [\n' +
+      'data: {"delta": {"content": "multiline answer"}, "finish_reason": "stop"}]}\n\n' +
+      'data: [DONE]\n\n');
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "multiline answer");
+  });
+});
+
+test("consecutive complete SSE data lines without blank separators remain distinct", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "first" } }] })}\n` +
+      `data: ${JSON.stringify({ choices: [{ delta: { content: " second" }, finish_reason: "stop" }] })}\n` +
+      "data: [DONE]\n");
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "first second");
+  });
+});
+
+test("a streamed terminal full message is not discarded as an empty turn", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [
+      { choices: [{ delta: { role: "assistant" } }] },
+      { choices: [{ message: { role: "assistant", content: "Complete answer" } }] },
+      { choices: [{ message: { role: "assistant", content: null }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 30, completion_tokens: 3, total_tokens: 33 } },
+    ]);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal);
+    assert.equal(turn.assistantMessage.content, "Complete answer");
+    assert.equal(turn.toolCalls.length, 0);
+  });
+});
+
+test("a terminal full message does not duplicate earlier streamed text", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [
+      { choices: [{ delta: { content: "already streamed" } }] },
+      { choices: [{ message: { role: "assistant", content: "already streamed" }, finish_reason: "stop" }] },
+    ]);
+  }, async (baseUrl) => {
+    const seen: string[] = [];
+    const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal,
+      { onTextDelta: (delta) => seen.push(delta) });
+    assert.equal(turn.assistantMessage.content, "already streamed");
+    assert.deepEqual(seen, ["already streamed"]);
+  });
+});
+
+test("a streamed terminal full message preserves a tool call", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    sse(response, [{ choices: [{ message: { role: "assistant", content: null,
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "write", arguments: '{"text":"report"}' } }] },
+      finish_reason: "tool_calls" }] }]);
+  }, async (baseUrl) => {
+    const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal);
+    assert.deepEqual(turn.toolCalls[0]?.args, { text: "report" });
+  });
+});
+
+test("a non-SSE success status yields content-free transport diagnostics", async () => {
+  await withServer(async (request, response) => {
+    await readBody(request);
+    response.writeHead(200, { "content-type": "text/plain" });
+    response.end("upstream text must stay out of diagnostics");
+  }, async (baseUrl) => {
+    await assert.rejects(streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+      "s", [], [], { ...policy, maxRetries: 0 }, new AbortController().signal), (error: Error) => {
+      assert.match(error.message, /raw_bytes=[1-9]\d*, data_lines=0.*content_type=other/);
+      assert.doesNotMatch(error.message, /upstream text/);
+      return true;
+    });
+  });
+});
+
 test("an installed catalog narrows thinking and pricing exactly as the snapshot states", () => {
   installTestModelCatalog();
   assert.deepEqual(lookupModelCatalog("gpt-5.5", "openai")!.thinking!.efforts, ["low", "medium", "high", "xhigh"]);

@@ -123,6 +123,34 @@ const post = (g: { url: string; token: string }, body: unknown, token = g.token)
 const events = async (response: Response) => (await response.text()).split("\n\n").filter((part) => part.startsWith("data: ") && !part.includes("[DONE]"))
   .map((part) => JSON.parse(part.slice(6)));
 
+test("an empty model turn cannot be sent as a successful final answer", async () => {
+  const { streamer } = fakeStreamer(answer({ assistantMessage: { role: "assistant", content: "" } }));
+  const g = await gateway(streamer);
+  try {
+    for (const stream of [false, true]) {
+      const response = await post(g, { stream, messages: [{ role: "user", content: "go" }] });
+      assert.equal(response.status, 502);
+      assert.match(await response.text(), /empty assistant turn without tool calls/);
+      assert.equal(g.lastTurn(), undefined);
+    }
+  } finally { await g.close(); }
+});
+
+test("streamed reasoning followed by an empty turn ends with an error event", async () => {
+  const { streamer } = fakeStreamer(answer({ assistantMessage: { role: "assistant", content: "" } }),
+    [["thinking", "uncommitted reasoning"]]);
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: true, messages: [{ role: "user", content: "go" }] });
+    assert.equal(response.status, 200, "stream headers may already have been sent");
+    const body = await response.text();
+    assert.match(body, /reasoning_content/);
+    assert.match(body, /model_gateway_error/);
+    assert.doesNotMatch(body, /"finish_reason":"stop"|data: \[DONE\]/);
+    assert.equal(g.lastTurn(), undefined);
+  } finally { await g.close(); }
+});
+
 test("gateway diagnostics report an active model request without logging its payload", async () => {
   let release!: () => void;
   let started!: () => void;

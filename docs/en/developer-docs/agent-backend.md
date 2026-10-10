@@ -103,6 +103,8 @@ Product semantics include provider/protocol variants, thinking controls, proxy p
 
 JiuwenSwarm does not intentionally bypass these product semantics: its model requests are routed through the ScienceDiscovery per-run model gateway/proxy path.
 
+A model turn may end an Agent loop only with non-whitespace assistant text or an executable tool call. A reasoning-only or otherwise empty terminal turn is invalid even if its `finish_reason` is `stop`; explicit `length` keeps the output-limit recovery path. The OpenAI-compatible client may retry an empty turn once within its configured retry budget, then fails with bounded diagnostics that exclude prompts, response text, tool arguments, and credentials. Its SSE reader joins multiline `data:` events, accepts an unfinished final line, retains a useful terminal full-message snapshot, and fails on an upstream error event even after partial output. The per-run JiuwenSwarm gateway enforces the same completion rule for alternate model clients. `SCIENCE_AGENT_TRACE_SSE_SUMMARY=1` enables framing and output-length counters without logging model content.
+
 ## 6. Tool dispatch
 
 Native executor executes the ScienceDiscovery tool table after model tool calls.

@@ -108,6 +108,18 @@ export interface ModelClientPolicy {
   requestTimeoutMs: number;
 }
 
+class EmptyModelTurnError extends Error {
+  constructor(finishReason: string, records: number, reasoningChars: number,
+    stats: SseReadStats, parseErrors: number, contentType: string | undefined) {
+    const safeReason = ["stop", "length", "tool_calls", "content_filter", "function_call", "missing"].includes(finishReason)
+      ? finishReason : "other";
+    const responseType = contentType?.toLowerCase().includes("text/event-stream") ? "sse"
+      : contentType?.toLowerCase().includes("json") ? "json" : contentType ? "other" : "missing";
+    super(`Model returned an empty assistant turn without tool calls (finish_reason=${safeReason}, records=${records}, reasoning_chars=${reasoningChars}, raw_bytes=${stats.rawBytes}, data_lines=${stats.dataLines}, multiline_events=${stats.multilineEvents}, done_markers=${stats.doneMarkers}, choice_records=${stats.choiceRecords}, delta_records=${stats.deltaRecords}, message_records=${stats.messageRecords}, error_records=${stats.errorRecords}, usage_records=${stats.usageRecords}, parse_errors=${parseErrors}, trailing_chars=${stats.trailingChars}, content_type=${responseType})`);
+    this.name = "EmptyModelTurnError";
+  }
+}
+
 export class ModelRequestError extends Error {
   constructor(message: string, readonly statusCode: number, readonly responseDetail = "") {
     super(message);
@@ -229,23 +241,76 @@ function parseToolCallArgs(rawArguments: string): { args: Record<string, unknown
   }
 }
 
-async function* sseData(body: AsyncIterable<Uint8Array>, onProgress?: () => void): AsyncGenerator<string> {
+interface SseReadStats {
+  rawBytes: number;
+  dataLines: number;
+  multilineEvents: number;
+  doneMarkers: number;
+  choiceRecords: number;
+  deltaRecords: number;
+  messageRecords: number;
+  errorRecords: number;
+  usageRecords: number;
+  trailingChars: number;
+}
+
+async function* sseData(body: AsyncIterable<Uint8Array>, onProgress?: () => void,
+  stats?: SseReadStats): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = "";
+  const dataLines: string[] = [];
+  const finishEvent = () => {
+    if (!dataLines.length) return undefined;
+    const payload = dataLines.join("\n");
+    if (dataLines.length > 1 && stats) stats.multilineEvents += 1;
+    dataLines.length = 0;
+    if (payload === "[DONE]" && stats) stats.doneMarkers += 1;
+    return payload;
+  };
+  const readLine = (rawLine: string) => {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (!line) return finishEvent();
+    if (line.startsWith("data:")) {
+      // Some compatible endpoints omit the blank line between complete JSON
+      // records. Flush a complete pending record before the next data line;
+      // incomplete JSON still accumulates as one standards-compliant event.
+      let previous: string | undefined;
+      if (dataLines.length) {
+        const pending = dataLines.join("\n");
+        try {
+          JSON.parse(pending);
+          previous = finishEvent();
+        } catch { /* a multiline JSON event is still incomplete */ }
+      }
+      const raw = line.slice(5);
+      const data = raw.startsWith(" ") ? raw.slice(1) : raw;
+      dataLines.push(data);
+      if (data && stats) stats.dataLines += 1;
+      return previous;
+    }
+    return undefined;
+  };
   for await (const chunk of body) {
     onProgress?.();
+    if (stats) stats.rawBytes += chunk.byteLength;
     buffer += decoder.decode(chunk, { stream: true });
     let newline = buffer.indexOf("\n");
     while (newline !== -1) {
-      const line = buffer.slice(0, newline).trim();
+      const payload = readLine(buffer.slice(0, newline));
       buffer = buffer.slice(newline + 1);
-      if (line.startsWith("data:")) {
-        const payload = line.slice(5).trim();
-        if (payload && payload !== "[DONE]") yield payload;
-      }
+      if (payload && payload !== "[DONE]") yield payload;
       newline = buffer.indexOf("\n");
     }
   }
+  // An EOF can terminate either the last data line or a complete event.
+  buffer += decoder.decode();
+  if (buffer && stats) stats.trailingChars = buffer.length;
+  if (buffer) {
+    const payload = readLine(buffer);
+    if (payload && payload !== "[DONE]") yield payload;
+  }
+  const finalPayload = finishEvent();
+  if (finalPayload && finalPayload !== "[DONE]") yield finalPayload;
 }
 
 interface RequestOptions {
@@ -259,13 +324,14 @@ interface RequestOptions {
 
 /** POST with a bounded retry budget for pre-stream failures (connect errors,
  *  429, 5xx). Once the stream starts flowing, errors surface to the caller. */
-async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncIterable<Uint8Array> & { dump(): Promise<void> } }> {
+async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncIterable<Uint8Array> & { dump(): Promise<void> }; contentType?: string }> {
   const dispatcher = proxyDispatcher(options.proxy);
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= options.policy.maxRetries; attempt += 1) {
     if (options.signal.aborted) throw new Error("aborted");
     let statusCode: number;
     let responseBody: AsyncIterable<Uint8Array> & { dump(): Promise<void> };
+    let contentType: string | undefined;
     let retryAfterMs: number | undefined;
     try {
       const response = await request(options.url, {
@@ -279,6 +345,9 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
       });
       statusCode = response.statusCode;
       responseBody = response.body;
+      const rawContentType = response.headers["content-type"];
+      contentType = typeof rawContentType === "string" ? rawContentType
+        : Array.isArray(rawContentType) ? rawContentType[0] : undefined;
       const retryAfter = response.headers["retry-after"];
       if (typeof retryAfter === "string" && Number.isFinite(Number(retryAfter))) {
         retryAfterMs = Number(retryAfter) * 1_000;
@@ -292,7 +361,7 @@ async function requestWithRetry(options: RequestOptions): Promise<{ body: AsyncI
       }
       throw new Error(`Model endpoint is unavailable: ${lastError.message}`);
     }
-    if (statusCode >= 200 && statusCode < 300) return { body: responseBody };
+    if (statusCode >= 200 && statusCode < 300) return { body: responseBody, contentType };
     const detail = (await collectBounded(responseBody, 2_000)).trim();
     const failure = new ModelRequestError(
       `Model request failed with status ${statusCode}${detail ? `: ${detail}` : ""}`,
@@ -501,7 +570,7 @@ async function streamOpenAiTurn(
   callbacks: ModelStreamCallbacks,
 ): Promise<ModelTurn> {
   const variant = endpointVariant(endpoint);
-  const { body } = await requestWithRetry({
+  const { body, contentType } = await requestWithRetry({
     url: chatUrl(endpoint.baseUrl),
     headers: { "content-type": "application/json", authorization: `Bearer ${endpoint.apiToken || "dummy"}` },
     body: JSON.stringify({
@@ -529,27 +598,57 @@ async function streamOpenAiTurn(
   const emitTool = toolDeltaEmitter(callbacks);
   let usage: AgentModelUsage | undefined;
   let truncated = false;
+  let finishReason = "missing";
+  let records = 0;
+  let parseErrors = 0;
+  let reasoningChars = 0;
+  let finalMessage: Record<string, unknown> | undefined;
+  let usedFinalMessage = false;
+  const sseStats: SseReadStats = { rawBytes: 0, dataLines: 0, multilineEvents: 0, doneMarkers: 0, choiceRecords: 0, deltaRecords: 0, messageRecords: 0, errorRecords: 0, usageRecords: 0, trailingChars: 0 };
   const buffersInlineThinking = variant === "minimax" || variant === "ollama";
 
-  for await (const payload of sseData(body, callbacks.onProgress)) {
+  for await (const payload of sseData(body, callbacks.onProgress, sseStats)) {
     let chunk: Record<string, unknown>;
     try {
       chunk = JSON.parse(payload) as Record<string, unknown>;
     } catch {
+      parseErrors += 1;
       continue;
     }
+    records += 1;
+    if (chunk.error !== undefined && chunk.error !== null) {
+      sseStats.errorRecords += 1;
+      // An upstream error after text fragments is still a failed completion.
+      // Never return the partial answer as a successful final model turn, and
+      // never copy the provider's error body into logs or the user response.
+      throw new ModelRequestError(`Model stream contained an upstream error event (records=${records}, error_records=${sseStats.errorRecords})`, 502);
+    }
+    if (chunk.usage !== undefined && chunk.usage !== null) sseStats.usageRecords += 1;
     const chunkUsage = normalizeUsage(chunk.usage);
     if (chunkUsage) usage = chunkUsage;
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
+    if (choices.length) sseStats.choiceRecords += 1;
+    if (choices.length && isRecord(choices[0]) && isRecord(choices[0].message)) {
+      sseStats.messageRecords += 1;
+      const message = choices[0].message;
+      if (contentText(message.content).trim()
+        || (Array.isArray(message.tool_calls) && message.tool_calls.length)
+        || (typeof message.reasoning_content === "string" && message.reasoning_content)) {
+        finalMessage = message;
+      }
+    }
     // Read before the `delta` guard below: the chunk that carries
     // `finish_reason` is the closing one, and it has no delta.
-    if (choices.length && isRecord(choices[0]) && choices[0].finish_reason === "length") {
-      truncated = true;
+    if (choices.length && isRecord(choices[0]) && typeof choices[0].finish_reason === "string") {
+      finishReason = choices[0].finish_reason;
+      if (finishReason === "length") truncated = true;
     }
     const delta = choices.length && isRecord(choices[0]) && isRecord(choices[0].delta)
       ? choices[0].delta
       : undefined;
     if (!delta) continue;
+    sseStats.deltaRecords += 1;
+    if (typeof delta.reasoning_content === "string") reasoningChars += delta.reasoning_content.length;
 
     if ((variant === "deepseek" || variant === "kimi-k3") && typeof delta.reasoning_content === "string") {
       deepseekReasoning += delta.reasoning_content;
@@ -602,6 +701,39 @@ async function streamOpenAiTurn(
     }
   }
 
+  // Some OpenAI-compatible backends stream a terminal complete `message`
+  // instead of `delta` fragments. Use it only when no useful fragments were
+  // streamed; a terminal snapshot must not duplicate earlier text or tools.
+  if (!text.trim() && !fragments.size && finalMessage) {
+    usedFinalMessage = true;
+    const fullText = contentText(finalMessage.content);
+    if (fullText) {
+      text = fullText;
+      if (!buffersInlineThinking) callbacks.onTextDelta?.(fullText);
+    }
+    if ((variant === "deepseek" || variant === "kimi-k3")
+      && !deepseekReasoning && typeof finalMessage.reasoning_content === "string") {
+      deepseekReasoning = finalMessage.reasoning_content;
+      if (deepseekReasoning) callbacks.onThinkingDelta?.(deepseekReasoning);
+    }
+    if (Array.isArray(finalMessage.tool_calls)) {
+      for (const [index, raw] of finalMessage.tool_calls.entries()) {
+        if (!isRecord(raw)) continue;
+        const fn = isRecord(raw.function) ? raw.function : {};
+        const fragment: OpenAiToolCallFragment = {
+          id: typeof raw.id === "string" ? raw.id : undefined,
+          type: typeof raw.type === "string" ? raw.type : undefined,
+          function: {
+            name: typeof fn.name === "string" ? fn.name : "",
+            arguments: typeof fn.arguments === "string" ? fn.arguments : "",
+          },
+        };
+        fragments.set(index, fragment);
+        emitTool(index, fragment.id, fragment.function?.name, fragment.function?.arguments ?? "");
+      }
+    }
+  }
+
   if (buffersInlineThinking) {
     const split = splitInlineThinking(text);
     text = split.text;
@@ -621,6 +753,17 @@ async function streamOpenAiTurn(
     const parsed = parseToolCallArgs(call.function.arguments);
     return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
   });
+  if (process.env.SCIENCE_AGENT_TRACE_SSE_SUMMARY === "1") {
+    console.info(`[model-sse-summary] ${JSON.stringify({ model: endpoint.model, records, parseErrors,
+      finishReason, contentChars: text.length, toolCalls: toolCalls.length, usedFinalMessage,
+      ...sseStats })}`);
+  }
+  // A zero-content, zero-tool turn is not a final answer. In particular, an
+  // EOF or [DONE] without a useful choice must not end the agent loop.
+  if (!truncated && !text.trim() && !toolCalls.length) {
+    throw new EmptyModelTurnError(finishReason, records, reasoningChars,
+      sseStats, parseErrors, contentType);
+  }
   const assistantMessage: AgentHistoryMessage = {
     role: "assistant",
     content: text,
@@ -953,7 +1096,19 @@ export async function streamModelTurn(
       return streamAnthropicTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
     case "openai-responses":
       return streamResponsesTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
-    default:
-      return streamOpenAiTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
+    default: {
+      // Retrying is safe here: the invalid turn has no text or executable tool
+      // calls. Bound this separately from pre-stream transport retries.
+      const emptyRetries = Math.min(policy.maxRetries, 1);
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await streamOpenAiTurn(endpoint, systemPrompt, history, tools, policy, signal, callbacks);
+        } catch (error) {
+          if (!(error instanceof EmptyModelTurnError) || attempt >= emptyRetries || signal.aborted) throw error;
+          console.warn(`[model-empty-retry] attempt=${attempt + 1} model=${endpoint.model} ${error.message}`);
+          await backoff(attempt, undefined, signal);
+        }
+      }
+    }
   }
 }
