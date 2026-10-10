@@ -79,7 +79,9 @@ for (const [id,title] of scenarios) {
           await page.reload();
           await openProjectSession(page,fixture!);
           await page.locator('.connector-picker-trigger').click();
-          await page.locator('.connector-picker-popover').getByRole('checkbox',{name:new RegExp(`Basic tools ${marker}`)}).check();
+          const connector = page.locator('.connector-picker-popover').getByRole('checkbox',{name:new RegExp(`Basic tools ${marker}`)});
+          await connector.click();
+          await expect(connector).toBeChecked();
           await page.keyboard.press('Escape');
           const prompt = id === 'tool' ? `Use the selected local MCP echo tool on ${marker}, then report exactly the tool's uppercase result.`
             : id === 'dependency' ? 'Use the selected local MCP add_numbers tool on 7 and 11. After receiving its result, call add_numbers again with that result and 13, then report the second result.'
