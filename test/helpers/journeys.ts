@@ -19,6 +19,7 @@ import { expect, request, type Locator, type Page, type TestInfo } from "@playwr
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 import { RunPollRecovery } from "./run-poll-recovery.js";
+import { RunChainSettler } from "./run-chain.ts";
 
 export interface JourneyModel {
   id: string;
@@ -48,10 +49,13 @@ export type JourneyRunStatus =
   | "running";
 
 export interface JourneyRun {
+  automaticWake?: boolean;
   createdAt: string;
   error?: string;
   id: string;
+  notificationDelivery?: { agentId: string };
   prompt: string;
+  queueOrder?: number;
   sessionId: string;
   status: JourneyRunStatus;
 }
@@ -510,6 +514,53 @@ export async function waitForRunTerminal(
     return current?.status;
   }, { message: `Run ${runId} should reach a terminal state`, timeout }).toMatch(/^(cancelled|completed|failed|interrupted)$/);
   return current!;
+}
+
+/**
+ * Follow one foreground Run through deferred shell work and the automatic main-Agent wake Runs that deliver its
+ * completion notices. A terminal foreground Run is not necessarily the end of the request: a background execution
+ * can still be running, and its completion creates a new automatic Run. Wait until both the Run chain and main-Agent
+ * executions have stayed quiet before choosing the last Run for delivery assertions.
+ */
+export async function waitForRunChainTerminal(
+  page: Page,
+  sessionId: string,
+  rootRunId: string,
+  options: { quietMs?: number; timeout?: number } = {},
+): Promise<{ run: JourneyRun; runs: JourneyRun[] }> {
+  const timeout = options.timeout ?? 420_000;
+  const quietMs = options.quietMs ?? 3_000;
+  let result: { run: JourneyRun; runs: JourneyRun[] } | undefined;
+  const settler = new RunChainSettler<JourneyRun>();
+  const recovery = new RunPollRecovery();
+  await expect.poll(async () => {
+    try {
+      const runs = await apiJson<JourneyRun[]>(page, `/api/sessions/${encodeURIComponent(sessionId)}/runs`);
+      const activity = await apiJson<{ executions?: Array<{ agentId?: string; id?: string; state?: string }> }>(
+        page, `/api/sessions/${encodeURIComponent(sessionId)}/agent-activity`,
+      );
+      recovery.succeeded();
+      result = settler.observe(runs, activity.executions ?? [], rootRunId, Date.now(), quietMs);
+      return result?.run.id;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failures = recovery.failed(error);
+      console.warn(`[run-chain-poll] root=${rootRunId} transient failure ${failures}/3: ${message}`);
+      return undefined;
+    }
+  }, { message: `Run chain rooted at ${rootRunId} should finish its automatic wake Runs`, timeout }).toBeTruthy();
+  return result!;
+}
+
+/** Stop all active Runs in an isolated E2E Session, including a late automatic wake. */
+export async function cancelActiveSessionRuns(page: Page, sessionId: string): Promise<JourneyRun[]> {
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}/runs`;
+  const known = await apiJson<JourneyRun[]>(page, path).catch(() => []);
+  const active = known.filter((run) => ["blocked", "queued", "running"].includes(run.status));
+  await Promise.all(active.map((run) => page.request.post(`${apiBaseUrl()}${path}/${encodeURIComponent(run.id)}/cancel`,
+    { headers: authorizationHeader() }).catch(() => undefined)));
+  await Promise.all(active.map((run) => waitForRunTerminal(page, sessionId, run.id, 30_000).catch(() => undefined)));
+  return apiJson<JourneyRun[]>(page, path).catch(() => known);
 }
 
 /**

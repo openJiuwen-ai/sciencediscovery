@@ -3,9 +3,8 @@
 import { writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { cleanupJourney, createProjectAndSession, openProjectSession,
-  sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
-import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
+  sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { researchPrompt, drbArticle, drbApi, positiveNumber,
   evaluationConfig, evaluationPreflight, evaluateReport } from "./helpers/deepresearchbench.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
@@ -84,11 +83,16 @@ for (const sample of drbSamples) {
       started = Date.now();
       const run = await sendUserMessage(page, fixture.session.id, drbPrompt);
       runId = run.id;
+      metrics.initial_run_id = runId;
       metrics.run_id = runId;
       metrics.session_id = fixture.session.id;
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
-      const finished = await waitForRunTerminal(page, fixture.session.id, runId, runBudget);
-      terminal = finished.status;
+      const finished = await waitForRunChainTerminal(page, fixture.session.id, runId, { timeout: runBudget });
+      runId = finished.run.id;
+      terminal = finished.run.status;
+      metrics.run_id = runId;
+      metrics.run_chain = finished.runs.map(({ automaticWake, error, id, queueOrder, status }) =>
+        ({ automatic_wake: Boolean(automaticWake), error, id, queue_order: queueOrder, status }));
       metrics.run_status = terminal;
       metrics.generation_duration_ms = Date.now() - started;
       const delivery = await collectFinalDelivery(page, fixture.session.id, runId);
@@ -116,11 +120,7 @@ for (const sample of drbSamples) {
       const visibleAnswers = await page.locator(".message.assistant").allTextContents().catch(() => []);
       await writeFile(testInfo.outputPath("assistant-messages.json"), JSON.stringify(visibleAnswers, null, 2));
       if (fixture) {
-        if (runId && !terminal) {
-          await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/${runId}/cancel`,
-            { headers: authorizationHeader() }).catch(() => undefined);
-          await waitForRunTerminal(page, fixture.session.id, runId, 30_000).catch(() => undefined);
-        }
+        if (runId && !terminal) await cancelActiveSessionRuns(page, fixture.session.id);
         metrics.generation_usage = await drbApi(page, `/api/sessions/${fixture.session.id}/usage`).catch(() => null);
         const details = await drbApi<Array<any>>(page, `/api/sessions/${fixture.session.id}/subagents`).catch(() => []);
         await writeFile(testInfo.outputPath("child-trajectories.json"), JSON.stringify(details, null, 2));

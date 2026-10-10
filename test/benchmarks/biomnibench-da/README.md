@@ -66,6 +66,8 @@ long-running literature searches are investigated. They remain manually
 runnable through the command above and never enter the PR gate; manual runs
 may enable rubric judging.
 Run timeout defaults to 30 minutes; override with `E2E_BIOMNI_RUN_TIMEOUT_MS`.
+The E2E follows deferred shell executions and automatic main-Agent wake Runs
+before checking final delivery.
 The runner cancels timed-out tasks; there is no automatic retry or monetary cap.
 
 ## Assertions and benchmark fidelity

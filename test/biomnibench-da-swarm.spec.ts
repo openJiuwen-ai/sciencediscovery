@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { cleanupJourney, createProjectAndSession, openProjectSession,
-  sendUserMessage, sessionExecutionRuns, waitForRunTerminal } from "./helpers/journeys.ts";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
+  sendUserMessage, sessionExecutionRuns, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { drbApi, drbArticle, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
@@ -91,21 +91,30 @@ for (const sample of cases) {
       start = Date.now();
       const run = await sendUserMessage(page, fixture.session.id, prompt);
       runId = run.id;
+      metrics.initial_run_id = runId;
       metrics.run_id = runId;
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
       try {
-        const finished = await waitForRunTerminal(page, fixture.session.id, runId, budget);
+        const finished = await waitForRunChainTerminal(page, fixture.session.id, runId, { timeout: budget });
         terminal = true;
-        metrics.run_status = finished.status;
-        metrics.run_error = finished.error;
+        runId = finished.run.id;
+        metrics.run_id = runId;
+        metrics.run_chain = finished.runs.map(({ automaticWake, error, id, queueOrder, status }) =>
+          ({ automatic_wake: Boolean(automaticWake), error, id, queue_order: queueOrder, status }));
+        metrics.run_status = finished.run.status;
+        metrics.run_error = finished.run.error;
       } catch (error) {
-        metrics.run_status = "wait_error";
+        metrics.run_status = "budget_exhausted";
         metrics.run_error = error instanceof Error ? error.message : String(error);
-        // Stop generation at the budget, then assess whatever was delivered.
-        await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers: authorizationHeader() });
-        const stopped = await waitForRunTerminal(page, fixture.session.id, runId, 30_000).catch(() => null);
-        terminal = stopped !== null;
-        if (stopped) metrics.run_status = stopped.status;
+        // Stop every active Run in the chain. The root may already be complete while an automatic wake is running.
+        const stopped = await cancelActiveSessionRuns(page, fixture.session.id);
+        const latest = stopped.toSorted((left, right) => (left.queueOrder ?? 0) - (right.queueOrder ?? 0)).at(-1);
+        runId = latest?.id ?? runId;
+        metrics.run_id = runId;
+        metrics.run_terminal_status = latest?.status;
+        metrics.run_chain = stopped.map(({ automaticWake, error: runError, id, queueOrder, status }) =>
+          ({ automatic_wake: Boolean(automaticWake), error: runError, id, queue_order: queueOrder, status }));
+        terminal = stopped.every((candidate) => !["blocked", "queued", "running"].includes(candidate.status));
       }
       metrics.generation_duration_ms = Date.now() - start;
       const executions = await sessionExecutionRuns(page, fixture.session.id).catch(() => null);
@@ -159,8 +168,7 @@ for (const sample of cases) {
       if (fixture) {
         const prefix = `/api/sessions/${fixture.session.id}`;
         if (runId && !terminal) {
-          await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers: authorizationHeader() }).catch(() => undefined);
-          await waitForRunTerminal(page, fixture.session.id, runId, 30_000).catch(() => undefined);
+          await cancelActiveSessionRuns(page, fixture.session.id);
         }
         metrics.generation_usage = await drbApi(page, `${prefix}/usage`).catch(() => null);
         metrics.children = await drbApi(page, `${prefix}/subagents`).catch(() => null);
