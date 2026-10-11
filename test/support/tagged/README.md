@@ -220,7 +220,7 @@ Each slice writes its profile, SHA, execution configuration and digest into
 `plan.json`. Real workers are partitioned from that plan by `realShards`;
 the aggregator requires exact identities/configuration across all shards.
 See [CI tiers and operations](../../../.ci/README.md#five-cumulative-tiers-one-source-catalog)
-for triggers, secrets, budgets and release baseline setup.
+for triggers, secrets, usage accounting and the initial release scope.
 
 Coverage is a property of a run, not a run of its own. `--coverage` on a run
 that gates — `pnpm ci:ut -- --coverage` and `pnpm ci:st -- --coverage` in CI —

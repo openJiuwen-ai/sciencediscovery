@@ -158,7 +158,7 @@ from payload bytes. A fresh isolated run uses a fresh runtime root.
 Transport buffer guards, request timeouts and the seven three-minute case
 timeouts remain; they are failure bounds, not monetary limits.
 
-Research cost is separate and currently uncalibrated. DRB-58/62/75 allow 90
+Research cost is separate and has not yet been measured. DRB-58/62/75 allow 90
 minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
 minutes. Team generation allows 55 minutes; PUCT generation 120 minutes and
 release AI audit up to 65 more. Job setup counts toward the four-hour worker
