@@ -399,7 +399,7 @@ Every `test/journey-*.spec.ts` **must** be written as user steps through the
 
 | File | Content |
 |---|---|
-| `report.md` | Result, commit SHA under test (and whether the tree was dirty), spec file, group/tags, start/end/duration, scenario goal, preconditions, gate reason when blocked, the step table, and per-step detail |
+| `report.md` | Result, commit SHA under test (and whether the tree was dirty), spec file, group/tags, start/end/duration, scenario goal, preconditions, gate reason when blocked, the test's error when it failed outside any step, the step table, and per-step detail |
 | `report.html` | The same content, self-contained: inline CSS only, screenshots by relative path, opens from the filesystem with no network |
 | `NN-<step>.png` | One screenshot per step, in step order; a step that failed or was blocked is suffixed accordingly |
 
@@ -616,8 +616,11 @@ fixtures.
   contradicts its step description is a report defect.
 - Failures keep the automatic failure screenshot and trace
   (`trace: retain-on-failure`); reports land in `playwright-report/` and
-  `test-results/` (including `results.json`) next to the config in use. Journey
-  reports are additionally attached to each test in the Playwright HTML report.
+  `test-results/` (including `results.json`) next to the config in use, unless
+  `E2E_OUTPUT_DIR` moves `test-results/`. `.ci/run-e2e.sh` points it at the
+  layer's results, so each test's evidence is uploaded even when the run is
+  cancelled before it ends. Journey reports are additionally attached to each
+  test in the Playwright HTML report.
 - A run report references evidence by relative path inside the run's artifact
   directory and states: SHA under test, worktree, ports, config baseline,
   start and test commands, health status, per-case expected/actual, and

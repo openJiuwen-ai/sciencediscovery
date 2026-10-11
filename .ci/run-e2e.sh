@@ -113,14 +113,11 @@ finish() {
         "$swarm_log" > "$results_root/platform-mcp-transport.log" || true
     fi
   fi
-  if [[ "$test_started" -eq 1 ]]; then
-    mkdir -p "$results_root/playwright-report" "$results_root/test-results"
-    if [[ -d "$repository_root/.e2e/playwright-report" ]]; then
-      cp -a "$repository_root/.e2e/playwright-report/." "$results_root/playwright-report/"
-    fi
-    if [[ -d "$repository_root/.e2e/test-results" ]]; then
-      cp -a "$repository_root/.e2e/test-results/." "$results_root/test-results/"
-    fi
+  # Playwright writes test-results/ into the results itself (E2E_OUTPUT_DIR);
+  # only the HTML report, which it renders once the whole run ends, is copied.
+  if [[ "$test_started" -eq 1 && -d "$repository_root/.e2e/playwright-report" ]]; then
+    mkdir -p "$results_root/playwright-report"
+    cp -a "$repository_root/.e2e/playwright-report/." "$results_root/playwright-report/"
   fi
   if [[ "$status" -eq 0 ]]; then
     result_status="passed"
@@ -234,6 +231,10 @@ export E2E_API_TOKEN="$auth_token"
 export E2E_BASE_URL="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
 export E2E_API_URL="$E2E_BASE_URL"
 export E2E_JOURNEY_REPORTS="$results_root/journey-reports"
+# Each test's traces, screenshots and metrics land in the results as that test
+# ends, rather than being copied when the run exits: a cancelled job is killed
+# within seconds, before any exit trap has finished.
+export E2E_OUTPUT_DIR="$results_root/test-results"
 # This layer started the stack above, on a data directory it owns, and will kill
 # it again on the way out, so a journey may empty it to reach a first-run state.
 # Nothing else grants that: a suite merely pointed at an address — someone's own

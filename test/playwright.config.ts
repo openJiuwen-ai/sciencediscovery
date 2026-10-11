@@ -46,6 +46,10 @@ const planned = process.env.SCIENCE_TAG_PLAN && !process.env.SCIENCE_TAG_PW_CATA
 // Playwright grep uses space-joined project/describe/test titles. Decode the
 // same frozen identity the reporter produces, rather than maintaining a list.
 const planGrep = planned && plannedGrep(planned);
+// Each test writes its traces, screenshots and metrics here as it ends.
+// run-e2e.sh points this into the layer's uploaded results, so a run that is
+// cancelled or killed still keeps the evidence of every test that finished.
+const outputDir = process.env.E2E_OUTPUT_DIR?.trim() || resolve(envRoot, "test-results");
 
 export default defineConfig({
   // Fails the run immediately when E2E_API_TOKEN is missing, instead of letting
@@ -58,7 +62,7 @@ export default defineConfig({
   // not a way of removing real tasks from the daily catalog.
   testIgnore: [],
   ...(planGrep ? { grep: planGrep } : {}),
-  outputDir: resolve(envRoot, "test-results"),
+  outputDir,
   testMatch: "**/*.spec.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
@@ -68,7 +72,7 @@ export default defineConfig({
     ...(process.env.SCIENCE_TAG_PW_REPORT ? [[resolve(repoRoot, "test/support/tagged/playwright-reporter.mjs")] as [string]] : []),
     ["list"],
     ["html", { open: "never", outputFolder: resolve(envRoot, "playwright-report") }],
-    ["json", { outputFile: resolve(envRoot, "test-results/results.json") }],
+    ["json", { outputFile: resolve(outputDir, "results.json") }],
   ],
   use: {
     baseURL,

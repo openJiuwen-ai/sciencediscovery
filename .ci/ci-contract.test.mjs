@@ -63,7 +63,7 @@ cd "$2"
 node -e 'const fs = require("node:fs"), path = require("node:path");
 fs.writeFileSync(process.env.PROBE_BROWSER, JSON.stringify({
   cwd: process.cwd(), data: process.env.SCIENCE_DISCOVERY_DATA_DIR,
-  reports: process.env.E2E_JOURNEY_REPORTS,
+  reports: process.env.E2E_JOURNEY_REPORTS, output: process.env.E2E_OUTPUT_DIR,
   marker: fs.existsSync(path.resolve(process.env.SCIENCE_DISCOVERY_DATA_DIR, "started.txt"))
 }));'`);
     const runtime = runtimeKind === "relative" ? ".tmp/runtime with spaces" : join(root, ".tmp/absolute runtime");
@@ -86,6 +86,8 @@ fs.writeFileSync(process.env.PROBE_BROWSER, JSON.stringify({
     assert.equal(await readFile(join(root, "stack-data.txt"), "utf8"), browser.data);
     assert.equal(browser.marker, true, "Playwright must see the marker written by the stack");
     assert.equal(browser.reports, join(root, ".tmp/results with spaces/e2e-legacy/journey-reports"));
+    // Written as each test ends, not copied at exit: a cancelled job is killed before its exit trap finishes.
+    assert.equal(browser.output, join(root, ".tmp/results with spaces/e2e-legacy/test-results"));
   });
 }
 

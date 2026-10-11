@@ -555,7 +555,12 @@ attempted command, exit code, and duration. It gives each run a unique
 `SCIENCE_AGENT_DATA_DIR` below `CI_RUNTIME_DIR` (default
 `/ci-cache/sciencediscovery-tests`) and removes it afterward, so tests cannot
 leave generated logs or bootstrap tokens in the source mount. The E2E entry propagates
-Playwright's exit code after copying reports, including failure evidence.
+Playwright's exit code after copying the HTML report. Everything else is written
+into the results while the run is still going: `test-results/` (through
+`E2E_OUTPUT_DIR`) and `journey-reports/` as each journey ends, and `run.log`
+and `stack.log` line by line. A run that is cancelled or killed therefore
+keeps the evidence of every journey that finished, and a failed journey's
+first error lines follow its `journey report (FAIL)` line in `run.log`.
 
 The default mocked suite passes today: 8 passed and 2 skipped against an
 isolated local stack. Both skips are preconditions, not coverage — J3 is
