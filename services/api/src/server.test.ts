@@ -3783,6 +3783,19 @@ test("legacy Reviewer does not inject findings or block the main agent", async (
   assert.equal((await fetch(`${origin}/api/sessions/${session.body.id}/reviews`, { headers: authorization })).status, 404);
 });
 
+test("health reports how agent turns run, so a deployment can be checked rather than declared", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `api-agent-stack-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+  for (const path of ["/health", "/api/health"]) {
+    const health = await jsonRequest<{ agent: { executor: string; subagents: string } }>(`${origin}${path}`);
+    assert.deepEqual(health.body.agent, onJiuwenSwarm
+      ? { executor: "jiuwenswarm", subagents: process.env.SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS?.trim() || "task" }
+      : { executor: "native", subagents: "task" }, path);
+  }
+});
+
 test("API runs a configured OpenAI-compatible model through the gateway and Python", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `api-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
