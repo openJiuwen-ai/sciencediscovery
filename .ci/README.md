@@ -22,7 +22,7 @@ test dependencies are supplied only by the checkout mounted at `/src`.
 | PR: `ci:ut` | Tagged package/helper tests and offline benchmark-verifier checks | None |
 | PR: `ci:st` | Mock agent-loop smoke and pinned Swarm SDK/MCP contract checks | None |
 | PR: `ci:e2e` | All reviewed mocked browser journeys, including research lifecycle/source fixtures | None |
-| Daily: `ci:e2e:real` | Eligible tagged real browser journeys: five DRB, research team and existing real journeys; two BiomniBench cases and the seeded literature-review journey are temporarily quarantined | `nightly-research` environment only |
+| Daily: `ci:e2e:real` | Eligible tagged real browser journeys: five DRB, research team and existing real journeys; two BiomniBench cases and the seeded literature-review journey are temporarily quarantined | the real-model GitHub environment only (see below) |
 
 `daily` adds a real-E2E policy row; `release` keeps the credential-free PR policy.
 The three hermetic jobs remain unchanged entry points; daily adds the disjoint
