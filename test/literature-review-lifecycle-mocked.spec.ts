@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect, type Page } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
+import { requireAgentStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage,
   waitForRunTerminal, type JourneyFixture } from "./helpers/journeys.ts";
@@ -34,7 +34,7 @@ const lastUserText = (messages: Array<{ role?: string; content?: unknown }>) =>
  * CostSideEffects: Temporary local project and session, removed after the test.
  */
 test("LR-16 upstream 503 cancellation leaves the same session and shared MCP usable", { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ page, journey }, info) => {
-  expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires Swarm task stack").toBe(false);
+  await requireAgentStack({ executor: "jiuwenswarm" });
   test.setTimeout(180_000);
   journey.scenario({ goal: "Recover from upstream failure without restarting services", preconditions: ["Swarm task stack", "local model"] });
   const stub = await researchModel({ main: [
@@ -90,7 +90,7 @@ for (const { id, reverseDispatch } of cases.flatMap(id =>
  * Steps:
  *   1. Register the local scripted model and dispatch from the UI.
  *   2. Inspect actual task records and model inputs; cancel and restore settings.
- * Environment: Dedicated Swarm stack with E2E_SWARM_TASK=1 and E2E_SWARM_EXCLUSIVE=1; never share with live research.
+ * Environment: Dedicated Swarm stack with platform task delegation (checked through /health) and E2E_SWARM_EXCLUSIVE=1; never share with live research.
  * Type: mocked
  * LLM: Loopback OpenAI SSE fixture with independent child identities and deterministic response gates.
  * WebSearch: none
@@ -101,7 +101,8 @@ for (const { id, reverseDispatch } of cases.flatMap(id =>
  * CostSideEffects: Temporary project and model; global concurrency quota restored in finally. No paid requests.
  */
 test(`${id} ${reverseDispatch ? "reversed dispatch: " : ""}${names[id]}`, { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ page, journey }, info) => {
-  expect(process.env.E2E_SWARM_TASK !== "1" || process.env.E2E_SWARM_EXCLUSIVE !== "1",
+  await requireAgentStack({ executor: "jiuwenswarm" });
+  expect(process.env.E2E_SWARM_EXCLUSIVE !== "1",
     "BLOCKED: needs an exclusive Swarm test stack; this case temporarily changes global quota settings").toBe(false);
   test.setTimeout(180_000);
   journey.scenario({ goal: names[id], preconditions: ["exclusive Swarm stack", "local scripted model", "no external sources"] });

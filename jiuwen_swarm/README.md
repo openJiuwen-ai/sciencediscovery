@@ -370,10 +370,11 @@ pnpm exec tsx --test services/api/src/agent-run/jiuwenswarm-agent.test.ts
 ```
 
 The browser regressions use an **isolated** stack and data directory. Set
-`E2E_BASE_URL` to its public adapter URL, `E2E_API_TOKEN` to its local access
-token, and `E2E_SWARM_TASK=1` to acknowledge that it runs Swarm with platform
-`task` delegation. The flag does not configure the backend: start the stack
-with `--jiuwenswarm` and the delegation settings above first.
+`E2E_BASE_URL` to its public adapter URL and `E2E_API_TOKEN` to its local access
+token. Start the stack with `--jiuwenswarm` and the delegation settings above
+first: each journey reads the stack's `/health` (`agent.executor`,
+`agent.subagents`) and reports BLOCKED, with what the stack reported, when it
+does not run JiuwenSwarm with platform `task` delegation.
 
 ```bash
 node test/sync-e2e.mjs --write
@@ -401,7 +402,7 @@ scripted; no public literature service or paid API is called. Temporary server,
 Specialist, model and project are cleaned up after the test.
 
 ```bash
-E2E_SWARM_TASK=1 npm --prefix .e2e run test:mocked -- swarm-specialist-mcp-mocked.spec.ts
+npm --prefix .e2e run test:mocked -- swarm-specialist-mcp-mocked.spec.ts
 ```
 
 The live test requires `E2E_REAL=1` and either a preconfigured live model ID in

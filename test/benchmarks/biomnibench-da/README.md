@@ -50,7 +50,7 @@ export BIOMNI_DATA_ROOT=/absolute/path/to/authorized/biomnibench-da
 export E2E_API_URL=http://127.0.0.1:4680
 export E2E_API_TOKEN='<isolated-stack access token>'
 export E2E_LLM_MODEL_ID='<registered real model id>'
-export E2E_REAL=1 E2E_RESEARCH=1 E2E_SWARM_TASK=1
+export E2E_REAL=1 E2E_RESEARCH=1
 export E2E_BIOMNI_EVALUATION=off
 node test/sync-e2e.mjs --write
 cd .e2e
