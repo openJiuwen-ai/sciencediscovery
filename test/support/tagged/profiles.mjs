@@ -28,9 +28,9 @@ const L2 = [...L1, { ...hermetic, tier: 'l2' }];
 const real = { category: 'e2e', os: 'linux', arch: 'amd64', npu: 'none', model: 'real', judge: ['none', 'llm'], status: ['reviewed', 'external'] };
 const L3 = [...L2, { ...real, tier: 'l3', judge: 'none' }];
 const L4 = [...L3, { ...real, tier: 'l4' }];
-// A release must account for quarantined release-required cases too. Preflight
-// reports them as coverage blockers; never silently shrink the denominator.
-const L5 = [...L4, { ...real, tier: 'l5', status: ['reviewed', 'external', 'quarantined'] }];
+// Start with the existing eligible suite. Quarantined cases stay discoverable
+// but enter release coverage only after their prerequisites are repaired.
+const L5 = [...L4, { ...real, tier: 'l5' }];
 
 const policies = {
   l1: L1, l2: L2, l3: L3, l4: L4, l5: L5,

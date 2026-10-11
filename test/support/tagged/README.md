@@ -200,9 +200,9 @@ Policies are cumulative rows in [profiles.mjs](profiles.mjs). `l1` through `l5`
 contain each preceding tier plus new cases. The aliases `pr`, `merge`, `daily`
 and `release` mean L2, L3, L4 and L5. `pnpm test:policy` prints the exact rules.
 The default `pr` plan is credential-free. L3 adds seven simple real API cases;
-L4 adds a daily research sample; L5 adds the complete release-scoped manifest
-and a calibrated quality gate. Required quarantined release cases remain in
-the plan and explicitly fail preflight.
+L4 adds a daily research sample; L5 adds the existing eligible release cases
+and records their AI scores without a historical baseline gate. Existing
+quarantined cases remain discoverable but outside automatic profiles.
 
 `l1`, `ut`, `st`, `e2e` and `e2e-real` partition the selected profile. L1 command
 checks require no build, service environments or browser. UT excludes those

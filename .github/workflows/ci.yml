@@ -162,7 +162,7 @@ jobs:
       E2E_COMMIT_SHA: ${{ github.sha }}
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
-      CI_PREPARE_BIOMNI: ${{ needs.l1.outputs.profile == 'release' && '1' || '0' }}
+      CI_PREPARE_BIOMNI: "0" # Existing Biomni cases remain quarantined.
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
@@ -831,7 +831,7 @@ jobs:
         run: docker compose down
 
   real-report:
-    name: Account for real cases and release quality
+    name: Account for real cases
     needs: [l1, real-plan, real-e2e]
     if: ${{ always() && needs.l1.outputs.real == 'true' }}
     runs-on: ubuntu-latest
@@ -849,8 +849,8 @@ jobs:
         with:
           pattern: real-e2e-results-*
           path: .ci-real-results
-      - name: Reconcile every identity and evaluate release regression
-        run: node .ci/real-report.mjs .ci-real-plan/plan.json .ci-real-results .ci/release-quality-baseline.json
+      - name: Reconcile every planned identity
+        run: node .ci/real-report.mjs .ci-real-plan/plan.json .ci-real-results
       - name: Stage combined real E2E scores
         if: always()
         run: node .ci/prepare-real-e2e-results.mjs

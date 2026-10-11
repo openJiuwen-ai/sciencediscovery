@@ -76,7 +76,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
     with:
-      # L5 contains L4 plus the complete release manifest and calibrated quality gate.
+      # L5 contains L4 plus the existing eligible release cases; quality calibration is deferred.
       # Failure leaves the existing tag without publishing Release/assets.
       profile: release
       release-version: ${{ needs.version.outputs.version }}

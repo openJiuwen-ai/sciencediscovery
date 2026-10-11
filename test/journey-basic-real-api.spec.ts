@@ -10,7 +10,7 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMe
 import { drbApi } from './helpers/deepresearchbench.ts';
 import { collectFinalDelivery } from './helpers/real-delivery.ts';
 import { apiBaseUrl, authorizationHeader } from './e2e-auth.js';
-import { realApiProxy } from './helpers/real-api-budget.mjs';
+import { realApiProxy } from './helpers/real-api-proxy.mjs';
 
 const scenarios = [
   ['response', 'Short response and stream completion'],
@@ -35,23 +35,23 @@ for (const [id,title] of scenarios) {
  * Steps:
  *   1. Check credentials and the isolated stack; create a temporary real-model Session.
  *   2. Submit the selected basic task, observe completion or cancellation and verify its durable result.
- *   3. Read usage, save the shared request budget, and remove the owned records.
+ *   3. Read usage, save the shared usage ledger, and remove the owned records.
  * Environment: Isolated product stack selected by CI_E2E_BACKEND; standard fixture, local MCP echo server and a basic project with optional skill/plan/scheduler plugins disabled.
  * Type: real
- * LLM: Real OpenAI-compatible endpoint behind a bounded pass-through; no model stub or AI judge.
+ * LLM: Real OpenAI-compatible endpoint behind a metered pass-through; no model stub or AI judge.
  * WebSearch: none requested
  * PaperSources: none
  * MCP: Local deterministic echo/add_numbers tools; standard workspace tools for artifact delivery.
  * OtherExternal: Configured model endpoint only; local API, browser and Runner.
  * Credentials: E2E_API_TOKEN, E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN.
- * CostSideEffects: Entire basic shard permits at most 24 provider requests including retries, 300000 reserved input tokens and 20000 reserved output tokens; unreported calls keep conservative reservations. Temporary records removed in finally.
+ * CostSideEffects: Billable model calls with no suite request/token cap; reported usage and unreported calls are recorded. Temporary records removed in finally.
  */
   test(`L3-${id}: ${title}`, { tag: ['@real','@category:e2e','@os:linux','@arch:amd64','@model:real','@tier:l3','@sandbox:bubblewrap'] }, async ({page,journey}, info) => {
     test.setTimeout(180_000);
-    journey.scenario({ goal: title, preconditions: ['Isolated selected backend', 'Real OpenAI-compatible model', 'Shared basic API budget'] });
+    journey.scenario({ goal: title, preconditions: ['Isolated selected backend', 'Real OpenAI-compatible model', 'Shared basic API usage ledger'] });
     const real = requireRealEnv(info,'E2E_LLM_BASE_URL','E2E_LLM_MODEL','E2E_LLM_TOKEN');
     await requireRealStack(info);
-    const ledger = resolve(process.env.CI_RUNTIME_DIR ?? '.e2e-data', 'basic-api-budget.json');
+    const ledger = resolve(process.env.CI_RUNTIME_DIR ?? '.e2e-data', 'basic-api-usage.json');
     const proxy = await realApiProxy({baseUrl:real.E2E_LLM_BASE_URL,token:real.E2E_LLM_TOKEN,ledger});
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let mcp: string | undefined;
@@ -151,7 +151,6 @@ for (const [id,title] of scenarios) {
         const usage=await drbApi<any>(page,`${prefix}/usage`);
         expect(usage.totals.invocationCount).toBeGreaterThan(0);
         await info.attach('real-api-usage',{body:JSON.stringify(usage),contentType:'application/json'});
-        expect(JSON.parse(readFileSync(ledger,'utf8')).exceeded ?? false).toBe(false);
       });
     } finally {
       try {
@@ -163,8 +162,8 @@ for (const [id,title] of scenarios) {
         try { if (mcp) await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${mcp}`,{headers:authorizationHeader()}); }
         finally {
           await proxy.stop();
-          // Keep cost evidence for failures too, including a denied request.
-          try { await info.attach('real-api-budget',{body:readFileSync(ledger),contentType:'application/json'}); }
+          // Keep cost evidence for failures too, including cancelled or unreported calls.
+          try { await info.attach('real-api-ledger',{body:readFileSync(ledger),contentType:'application/json'}); }
           catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
         }
       }

@@ -243,7 +243,7 @@ export async function main(args=process.argv.slice(2)) {
   let plan=createPlan(catalog,{revision,selector:selector||'',targets,execution,...(dimensions.length?{}:{profile:profileName})});
   if(needPW){
     // Pin the evaluator/input implementation independently of the candidate
-    // product SHA, so a new judge/rubric requires explicit recalibration.
+    // product SHA so stored scores identify their judge/rubric version.
     const sources=[...globSync(['test/benchmarks/**/*.py','test/benchmarks/**/*.json','test/benchmarks/**/*.ts','test/helpers/*result.mjs'],{cwd:root})].sort();
     const evaluatorRevision=fileDigest(sources.map(p=>p+'\n'+fileDigest(readFileSync(join(root,p)))).join('\n'));
     plan=subplan({...plan,evaluatorRevision},plan.entries);

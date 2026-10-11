@@ -10,8 +10,8 @@ import { profiles } from '../test/support/tagged/profiles.mjs';
 import { preflight } from '../test/support/tagged/environment.mjs';
 import { realShards } from '../test/support/tagged/execution.mjs';
 import { route, gate } from './tier-policy.mjs';
-import { qualityProblems, reconcile } from './real-report.mjs';
-import { reserveRequest, settleRequest, realApiProxy } from '../test/helpers/real-api-budget.mjs';
+import { reconcile } from './real-report.mjs';
+import { recordRequest, recordUsage, realApiProxy } from '../test/helpers/real-api-proxy.mjs';
 import { createServer } from 'node:http';
 const { test }=createTest(import.meta.url,{tags:['category:ut','os:linux','arch:amd64']});
 const target={os:'linux',arch:'amd64'};
@@ -51,14 +51,17 @@ test('backend changes execution identity but never selects a different case',()=
   assert.equal(verifyResults(a,b.entries.map(passed)).exitCode,1);
 });
 
-test('quarantined release obligations freeze and fail preflight instead of disappearing',async()=>{
-  const p=createPlan([descriptor('blocked','l5',['status:quarantined'])],{revision:'test',selector:profiles.release.selector,targets:[target]});
-  assert.equal(p.entries.length,1);
-  assert.ok((await preflight(p,{platform:'linux',arch:'x64',env:{}})).problems.some(p=>p.code==='QUARANTINED_REQUIRED_CASE'));
+test('existing quarantine stays outside release selection and fails if explicitly selected',async()=>{
+  const catalog=[descriptor('eligible','l5'),descriptor('blocked','l5',['status:quarantined'])];
+  const options={revision:'test',targets:[target]};
+  const p=createPlan(catalog,{...options,selector:profiles.release.selector});
+  assert.deepEqual(p.entries.map(e=>e.id),['eligible']);
+  const explicit=createPlan([catalog[1]],{...options,selector:'status:quarantined'});
+  assert.ok((await preflight(explicit,{platform:'linux',arch:'x64',env:{}})).problems.some(p=>p.code==='QUARANTINED_REQUIRED_CASE'));
 });
 
 test('real shard union is exact and missing worker evidence fails suite accounting',t=>{
-  const raw=plan();const p=subplan({...raw,profile:'daily'},raw.entries),root=directory(t);
+  const p=plan(),root=directory(t);
   const shards=realShards(p);
   assert.deepEqual(shards.flatMap(s=>s.keys).sort(),p.entries.map(e=>e.key).sort());
   for(const shard of shards) {
@@ -67,66 +70,52 @@ test('real shard union is exact and missing worker evidence fails suite accounti
     writeFileSync(join(dir,'plan.json'),JSON.stringify(worker));
     writeFileSync(join(dir,'summary.json'),JSON.stringify(verifyResults(worker,worker.entries.map(passed))));
   }
-  const daily={...p,profile:'daily'};delete daily.digest;
-  // Re-freeze with the same entries so this isolates accounting from quality.
-  const dailyPlan=subplan(daily,p.entries);
-  assert.equal(reconcile(dailyPlan,root,{}).exitCode,0);
+  // Release passes on complete existing evidence without a historical baseline.
+  assert.equal(reconcile(p,root).exitCode,0);
   const file=join(root,`real-e2e-results-${shards[0].name}`,'e2e-real/tagged/plan.json');
   const before=JSON.parse(readFileSync(file));
   const drift=subplan(before,before.entries.map(e=>({...e,sourceHash:'b'.repeat(64)})));
   writeFileSync(file,JSON.stringify(drift));
   writeFileSync(join(file,'../summary.json'),JSON.stringify(verifyResults(drift,drift.entries.map(passed))));
-  assert.ok(reconcile(dailyPlan,root,{}).problems.some(p=>p.includes('SHARD_IDENTITY_MISMATCH')));
+  assert.ok(reconcile(p,root).problems.some(p=>p.includes('SHARD_IDENTITY_MISMATCH')));
   rmSync(join(root,`real-e2e-results-${shards[0].name}`),{recursive:true});
-  assert.equal(reconcile(dailyPlan,root,{}).exitCode,1);
+  assert.equal(reconcile(p,root).exitCode,1);
 });
 
-test('release quality requires calibrated comparable evidence and per-case regression bounds',()=>{
-  const original=plan();const p=subplan({...original,evaluatorRevision:'pinned'},original.entries),judged=p.entries.find(e=>e.id==='judge');
-  const rows=new Map([[judged.key,{evaluation:{status:'scored',score:80}}]]);
-  const baseline={status:'calibrated',reference:'previous-release',evaluatorRevision:'pinned',execution:p.execution,
-    cases:{judge:[{path:'evaluation.score',statusPath:'evaluation.status',acceptedStatuses:['scored'],minimum:70,reference:82,maxDrop:3}]}};
-  assert.deepEqual(qualityProblems(p,rows,baseline),[]);
-  for(const metrics of [{evaluation:{status:'scored',score:78}},{evaluation:{status:'error',score:90}},{evaluation:{status:'scored',score:null}}]) {
-    assert.ok(qualityProblems(p,new Map([[judged.key,metrics]]),baseline).length);
+test('usage accounting survives restarts without rejecting prior budget thresholds',t=>{
+  const ledger=join(directory(t),'usage.json');
+  const body={messages:[{role:'user',content:'x'.repeat(320_000)}]};
+  for(let i=0;i<30;i++) {
+    recordRequest(ledger,body);
+    recordUsage(ledger,{prompt_tokens:50_000,completion_tokens:2_000});
   }
-  assert.ok(qualityProblems(p,rows,{}).length);
-  assert.ok(qualityProblems(p,new Map(),baseline).length);
-  assert.ok(qualityProblems(plan('legacy'),rows,baseline).length);
-});
-
-test('basic request budget survives worker restart and counts output reservations',t=>{
-  const ledger=join(directory(t),'budget.json');
-  for(let i=0;i<20;i++) reserveRequest(ledger,{messages:[{role:'user',content:'hello'}]});
-  assert.throws(()=>reserveRequest(ledger,{messages:[]}),/BUDGET_EXHAUSTED/);
-  assert.equal(JSON.parse(readFileSync(ledger)).reservedOutputTokens,20_000);
-});
-
-test('reported usage refunds reservations; unknown calls and exhausted request count never reset',t=>{
-  const ledger=join(directory(t),'budget.json');
-  for(let i=0;i<24;i++) {
-    const reservation=reserveRequest(ledger,{messages:[{role:'user',content:'hi'}]});
-    settleRequest(ledger,reservation,{prompt_tokens:10,completion_tokens:3});
-  }
+  // An interrupted call remains visible without substituting payload bytes for tokens.
+  recordRequest(ledger,body);
+  recordUsage(ledger,undefined);
+  recordUsage(ledger,{prompt_tokens:NaN,completion_tokens:2});
   const used=JSON.parse(readFileSync(ledger));
-  assert.equal(used.reservedInputTokens,240);assert.equal(used.reservedOutputTokens,72);assert.equal(used.unreportedCalls,0);
-  assert.throws(()=>reserveRequest(ledger,{messages:[]}),/BUDGET_EXHAUSTED/);
+  assert.equal(used.requests,31);
+  assert.equal(used.inputTokens,1_500_000);
+  assert.equal(used.outputTokens,60_000);
+  assert.equal(used.unreportedCalls,1);
+  assert.ok(used.inputBytes>9_000_000);
 });
 
-test('real pass-through forwards a bounded real request and does not expose the provider key',async t=>{
+test('real pass-through preserves caller token settings and does not expose the provider key',async t=>{
   let received;
   const upstream=createServer(async(req,res)=>{let body='';for await(const c of req)body+=c;received={body:JSON.parse(body),authorization:req.headers.authorization};res.setHeader('content-type','application/json');res.end('{"choices":[{"message":{"content":"real response"}}]}');});
   await new Promise(resolve=>upstream.listen(0,'127.0.0.1',resolve));
   t.after(()=>new Promise(resolve=>upstream.close(resolve)));
   const proxy=await realApiProxy({baseUrl:`http://127.0.0.1:${upstream.address().port}/v1`,token:'upstream-only',ledger:join(directory(t),'ledger.json')});
   t.after(()=>proxy.stop());
-  const response=await fetch(`${proxy.baseUrl}/chat/completions`,{method:'POST',headers:{authorization:`Bearer ${proxy.token}`},body:JSON.stringify({messages:[{role:'user',content:'hi'}],max_tokens:99999})});
+  const response=await fetch(`${proxy.baseUrl}/chat/completions`,{method:'POST',headers:{authorization:`Bearer ${proxy.token}`},body:JSON.stringify({messages:[{role:'user',content:'x'.repeat(320_000)}],max_completion_tokens:4096})});
   assert.equal(response.status,200);assert.match(await response.text(),/real response/);
-  assert.equal(received.authorization,'Bearer upstream-only');assert.equal(received.body.max_tokens,1024);
+  assert.equal(received.authorization,'Bearer upstream-only');assert.equal(received.body.max_completion_tokens,4096);
+  assert.equal(received.body.max_tokens,undefined);
   assert.notEqual(proxy.token,'upstream-only');
 });
 
-test('streamed usage settles the request reservation across transport chunks',async t=>{
+test('streamed usage records provider tokens across transport chunks',async t=>{
   const upstream=createServer(async(req,res)=>{
     for await(const _ of req) { /* consume request */ }
     res.setHeader('content-type','text/event-stream');
@@ -141,5 +130,5 @@ test('streamed usage settles the request reservation across transport chunks',as
   const response=await fetch(`${proxy.baseUrl}/chat/completions`,{method:'POST',headers:{authorization:`Bearer ${proxy.token}`},body:JSON.stringify({messages:[{role:'user',content:'hello'}],stream:true})});
   assert.match(await response.text(),/\[DONE\]/);
   const saved=JSON.parse(readFileSync(ledger));
-  assert.equal(saved.reservedInputTokens,20);assert.equal(saved.reservedOutputTokens,4);assert.equal(saved.unreportedCalls,0);
+  assert.equal(saved.inputTokens,20);assert.equal(saved.outputTokens,4);assert.equal(saved.unreportedCalls,0);
 });

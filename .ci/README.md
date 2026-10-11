@@ -26,7 +26,7 @@ No workflow maintains its own list of case titles.
 | L2 (`pr`) | Every PR after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + seven short real API journeys + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + fixed research representatives: DRB-58/59, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push | L4 + remaining DRB samples, two Biomni cases, literature review, PUCT AI audit and calibrated per-case regression gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
+| L5 (`release`) | Version tag push | L4 + remaining eligible DRB samples and PUCT AI audit; existing assertions and score recording, no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -66,13 +66,13 @@ An unsupported required capability fails preflight without dropping the case.
 Mock fixtures (`standard`, `research`, `literature`) still own separate stacks;
 no fake research fixture is injected into real tests.
 
-The real matrix is generated from the frozen catalog: one budgeted worker holds
+The real matrix is generated from the frozen catalog: one serialized worker holds
 all L3 cases; each research case gets a separate job, with at most two workers
 running concurrently. The aggregate compares every shard to the parent plan's
 SHA, configuration and exact identities, then requires
 `planned == executed == passed`. Missing, cancelled, skipped, duplicate or
-wrong-backend results fail. Required quarantined release cases fail preflight as
-`QUARANTINED_REQUIRED_CASE`; their denominator remains visible.
+wrong-backend results fail. Existing quarantined cases are excluded by policy
+before freezing the plan and are never counted as passed.
 
 ### Merge queue and credentials: repository setup
 
@@ -137,7 +137,7 @@ separate worktrees for browser reports). Do not point two concurrent runs at
 the same `JIUWENSWARM_HOME`. Reusing an instance name in different roots is
 supported; choose the same root again when stopping or inspecting that run.
 
-### Real cases, prerequisites and budgets
+### Real cases, prerequisites and usage
 
 `journey-basic-real-api.spec.ts` has seven backend-independent cases: response
 and stream completion, tool-result consumption, memory across turns, durable
@@ -149,58 +149,53 @@ The basic Project disables optional skill, planning and delegation plugins
 through the public API; workspace and MCP tools remain real. The same setup
 applies to both backends and keeps a research skill catalog out of short calls.
 
-The shared basic-worker ledger caps 24 requests including retries, 300,000
-input-token allowance and 20,000 output-token allowance (at most 1,024 output
-tokens per request). Before forwarding, input payload bytes provide a
-conservative reservation; provider-reported usage refunds unused input/output
-allowance. Cancelled or unreported calls keep their reservations. These bounds
-are not measured dollar costs. Provider usage is attached separately. The
-ledger survives worker restarts; a new isolated run needs a fresh runtime root.
-Missing or unknown usage must not be presented as zero cost. The seven
-three-minute case timeouts are failure bounds, not measured elapsed time.
+The basic worker has no suite request or token budget and does not override
+per-request model token settings. Its ledger records forwarded requests,
+payload bytes and provider-reported input/output tokens across worker restarts.
+Cancelled calls or responses without usage stay in `unreportedCalls`; measured
+totals are incomplete when that count is nonzero. No token count is inferred
+from payload bytes. A fresh isolated run uses a fresh runtime root.
+Transport buffer guards, request timeouts and the seven three-minute case
+timeouts remain; they are failure bounds, not monetary limits.
 
 Research cost is separate and currently uncalibrated. DRB-58/62/75 allow 90
 minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
 minutes. Team generation allows 55 minutes; PUCT generation 120 minutes and
 release AI audit up to 65 more. Job setup counts toward the four-hour worker
 ceiling. `fail-fast: false` retains evidence from independent workers; there
-are no automatic case retries. Rebuilding a merge group repeats its budget.
+are no automatic case retries. Rebuilding a merge group repeats its model calls.
 Monthly usage is the sum of actual provider usage across queue attempts,
 approximately 30 daily runs and version candidates; provider rates and actual
 call counts, not timeout ceilings, determine money spent.
 
 `prepare-real-research.sh` runs only for research workers. It needs `HF_TOKEN`
-even while the daily Biomni download is disabled. Release enables the pinned
-two-task download, subject to accepted dataset terms. The DRB evaluator is
-pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs have committed
-blob checksums. Missing inputs fail; they do not filter selection.
+even while the Biomni download is disabled. Both daily and release keep
+`CI_PREPARE_BIOMNI=0` while the two existing cases are quarantined. The DRB
+evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs
+have committed blob checksums for later restoration. Missing prerequisites for
+selected cases fail; they do not filter selection.
 
-The existing Biomni scientific-environment and literature seeded-model,
-connector and skill gaps remain explicit release blockers until repaired and
-verified. Do not simply remove their quarantine tag to certify a release.
+### Initial release scope and future quality calibration
 
-### Release quality calibration
+L5 runs the existing eligible cases and their current assertions, including AI
+judging where declared, and preserves scores/usage for later comparison. It
+requires every selected identity to pass, but does not require a historical
+quality baseline or apply a newly calibrated regression threshold. A green run
+certifies this selected suite, not measured capability non-regression or a
+complete upstream benchmark leaderboard.
 
-`.ci/release-quality-baseline.json` deliberately starts as
-`awaiting-calibration`. No measured baseline exists yet. L5 therefore cannot
-certify non-regression or publish until maintainers commit a calibrated
-baseline from repeat runs of a known reference version. Freeze generator,
-backend, judge, evaluator/input fingerprint and each case's sample definition.
-Retain repeated reference scores and set tolerances from their measured
-variation; do not treat guessed percentage points as a measured allowance.
+The real case counts are L3 **7**, L4 **14**, L5 **17**, with each higher tier
+including the lower tiers. Two Biomni cases and the seeded literature-review
+journey were already quarantined on main in commit `8bd4560d`; this change
+preserves their status and excludes them from all automatic profiles.
+Biomni needs scientific Python packages in the agent sandbox and citation
+search that completes within the test timeout. Literature review needs saved
+Pro/Flash models, the PubMed connector and the evidence-brief skill provisioned
+in CI. Repair and verify these prerequisites before restoring the cases.
 
-A calibrated baseline has `status: calibrated`, a traceable `reference`, the
-plan's `evaluatorRevision` and `execution`, and a `cases` mapping keyed by full
-case ID. Every `judge:llm` identity needs at least one score rule. Each rule has
-`path`, `statusPath`, `acceptedStatuses`, `minimum`, `reference` and `maxDrop`.
-For example, a DRB rule addresses `evaluation.race.overall_score` with status
-`evaluation.race.status` = `completed`; also bind FACT citation accuracy and
-verification coverage. Biomni uses `evaluation.score`, the team uses
-`evaluation.total_score`, and PUCT must cover held-out performance plus
-`llm_evaluation.total_score`. Preserve the original scale of each score.
-Unknown, non-finite, missing or mismatched evidence fails; every case must meet
-both its absolute floor and its allowed drop from reference. Configuration or
-evaluator changes require recalibration, not reuse of incomparable scores.
+Broader cases and measured quality regression thresholds are follow-up work.
+Stored scores retain generator, backend, judge and evaluator/input fingerprints
+so a future reference dataset can use comparable executions.
 
 ### Results and dashboard compatibility
 

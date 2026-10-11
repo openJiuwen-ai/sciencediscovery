@@ -323,7 +323,7 @@ mirror: nothing runs there.
 | L2 / `pr` | Every PR after L1: all hermetic UT, ST and mock E2E |
 | L3 / `merge` | Reviewed PR enters merge queue: rerun L1/L2 on group SHA, basic real APIs and distribution gates |
 | L4 / `daily` | Nightly at 16:00 UTC: L3 plus fixed research representatives |
-| L5 / `release` | Version tag: L4 plus the full release-scoped cases and calibrated quality regression gate |
+| L5 / `release` | Version tag: L4 plus existing eligible release cases and recorded AI scores; no historical baseline gate |
 
 `nightly.yml` and `release.yml` reuse `ci.yml`. The stable required check is
 `merge-gate`; queue success merges automatically, without Environment approval
@@ -389,7 +389,7 @@ the default), `merge` (L3), `daily` (L4) and `release` (L5). Higher tiers contai
 all lower cases and add their own. Real calls require explicit opt-in and
 credentials after the source plan is frozen. See
 [the tier contract](.ci/README.md#five-cumulative-tiers-one-source-catalog),
-including backend identity, budgets and release calibration requirements.
+including backend identity, usage accounting and the initial release scope.
 
 CI names it as an argument (`pnpm ci:ut -- --profile release`) rather than an
 environment variable, so the same commit and the same command always mean the
