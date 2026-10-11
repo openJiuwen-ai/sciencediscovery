@@ -103,6 +103,10 @@ jobs:
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
       CI_PREPARE_BIOMNI: "0"
+      # Trial branch only: run the same daily real slice on the built-in (native) loop.
+      # The Swarm-gated journeys check E2E_SWARM_TASK; the native loop has the same task delegation.
+      CI_E2E_BACKEND: legacy
+      E2E_SWARM_TASK: "1"
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
