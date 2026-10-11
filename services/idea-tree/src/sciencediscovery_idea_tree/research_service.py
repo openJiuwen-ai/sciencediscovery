@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
-from ...auth import require_internal_token
+from .auth import require_internal_token
+from .storage import data_root
 from .research import IdeaTreeEngine, ResearchStore, node, now
 from .prompts import DEFAULTS, CRITERIA
 from .templates import INTENSITIES, TEMPLATES, apply_intensity, snapshot
@@ -73,7 +74,7 @@ _running: dict[str, tuple[IdeaTreeEngine, asyncio.Task]] = {}
 def store():
     global _store
     if _store is None:
-        _store = ResearchStore(Path(os.environ.get('SCIENCE_AGENT_DATA_DIR', '.sciencediscovery-data')) / 'idea-research')
+        _store = ResearchStore(data_root() / 'idea-research')
     return _store
 
 

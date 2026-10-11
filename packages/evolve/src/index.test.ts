@@ -117,24 +117,9 @@ test("a search with no winner returns just the figures", async () => {
   assert.equal(JSON.parse(text).status, "running");
 });
 
-test("Idea Tree status reader returns the actual background research to the agent", async () => {
-  const summary = {id: "research-1", status: "running", activities: [{role: "activity", status: "running"}]};
-  const calls: Array<string | undefined> = [];
-  const tool = createEvolveTools(runtime({getIdeaResearch: async id => { calls.push(id); return summary; }}))
-    .find(tool => tool.name === "get_idea_research")!;
-  const result = await tool.execute("read", {} as never, new AbortController().signal);
-  assert.deepEqual(calls, [undefined]);
-  assert.deepEqual(result.details, summary);
-});
-
-test("Idea Tree handoff sends prepared evidence to Python and returns its run id", async () => {
-  let received: unknown;
-  const input = {objective: "Compare Fe/Mn catalysts", materials: "Supplied study: leaching is unresolved; source: study-A."};
-  const tool = createEvolveTools(runtime({createIdeaResearch: async args => {
-    received = args;
-    return {researchId: "research-new", status: "running"};
-  }})).find(tool => tool.name === "create_idea_research")!;
-  const result = await tool.execute("create", input as never, new AbortController().signal);
-  assert.deepEqual(received, input);
-  assert.deepEqual(result.details, {researchId: "research-new", status: "running"});
+test("Idea Tree tools are supplied by the independent service", () => {
+  const tool = {name: "get_idea_research", description: "Service contract", label: "Research", parameters: {} as never,
+    execute: async () => ({content: []})};
+  const tools = createEvolveTools(runtime({ideaResearchTools: [tool]}));
+  assert.equal(tools.find(t => t.name === tool.name), tool);
 });

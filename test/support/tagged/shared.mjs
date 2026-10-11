@@ -54,7 +54,7 @@ function projectEnv(env,project){return {...env,PYTHONPATH:[join(root,'services'
  * set of product roots. Each start is logged with whether it could be measured.
  */
 const coverageRequirement='coverage>=7.6,<8';
-const pythonRoots=['services/adapter/src','services/evolve/src','services/gateway/src','services/memory-graph/src','services/paper','services/runner/workloads','skills'];
+const pythonRoots=['services/adapter/src','services/evolve/src','services/idea-tree/src','services/gateway/src','services/memory-graph/src','services/paper','services/runner/workloads','skills'];
 const coverageHook=join(root,'test/support/tagged/python/coverage-hook');
 function coverageSetup(outputDir,coverageDir){
   const data=join(coverageDir,'python-data'),rc=join(outputDir,'coverage.rc');
@@ -189,7 +189,7 @@ export async function main(args=process.argv.slice(2)) {
   if(prepared && process.env.CI_E2E_PREPARE_ONLY==='1')throw new Error('CI_E2E_PREPARE_ONLY and CI_E2E_PREPARED are mutually exclusive');
   if(action!=='list' && !prepared) {
     const steps=[['pnpm',['install','--frozen-lockfile']],['pnpm',['build']]];
-    if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:['memory-graph','adapter'].includes(project)?['--extra','test']:[])]]);
+    if(needUT)for(const project of pythonProjects)steps.push(['uv',['sync','--project',`services/${project}`,'--locked',...(project==='evolve'?['--extra','test','--extra','candidates']:['memory-graph','idea-tree','adapter'].includes(project)?['--extra','test']:[])]]);
     // Into the project's own environment, after the locked sync, so the tests
     // run on exactly the interpreter and packages they run on without it.
     if(needUT&&coverage)for(const project of pythonProjects)steps.push(['uv',['pip','install','--python',python(project),coverageRequirement]]);

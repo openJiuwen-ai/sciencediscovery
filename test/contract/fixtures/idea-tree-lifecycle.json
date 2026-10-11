@@ -1,0 +1,4 @@
+{
+  "description": "Stable research lifecycle projection: create, pause, recover after restart, continue to SSE completion. Volatile timestamps and intermediate per-stage snapshots are excluded.",
+  "statuses": ["running", "paused", "paused", "completed"]
+}
