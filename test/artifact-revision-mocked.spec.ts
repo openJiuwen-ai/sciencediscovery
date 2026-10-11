@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
+import { requireAgentStack, test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage, waitForRunTerminal, type JourneyFixture } from "./helpers/journeys.ts";
 import { drbApi } from "./helpers/deepresearchbench.ts";
 import { researchModel } from "./helpers/research-model.ts";
@@ -26,7 +26,7 @@ import { researchModel } from "./helpers/research-model.ts";
 test("AR-01 child edits a fixed artifact version without copying its text", {
   tag: ["@mocked", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap", "@fixture:research"],
 }, async ({ page, journey }, info) => {
-  expect(process.env.E2E_SWARM_TASK, "requires native task delegation into Swarm").toBe("1");
+  await requireAgentStack({ executor: "jiuwenswarm" });
   test.setTimeout(180_000);
   journey.scenario({ goal: "Original bytes enter an isolated child; its edit creates one explicit new version", preconditions: ["Swarm task delegation", "local sandbox"] });
   let artifactId = "", baseVersionId = "";

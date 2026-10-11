@@ -90,7 +90,7 @@ export TEAM_JUDGE_MODEL=your-judge-model
 # Set TEAM_JUDGE_API_KEY through your local secret configuration.
 # Existing OPENAI_BASE_URL/OPENAI_API_KEY and RACE_MODEL are supported fallbacks.
 node test/sync-e2e.mjs --write
-E2E_RESEARCH=1 E2E_SWARM_TASK=1 npm --prefix .e2e run test:real -- science-research-team-real.spec.ts
+E2E_RESEARCH=1 npm --prefix .e2e run test:real -- science-research-team-real.spec.ts
 ```
 
 `E2E_TEAM_EVALUATION=rubric` is the default; use `off` to disable paid judging.

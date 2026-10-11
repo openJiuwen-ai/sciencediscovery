@@ -251,8 +251,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   # tools, sandbox, deliverables or sub-agent cards the delegation journeys are about (see Known gap 1a in
   # docs/en/reference/jiuwenswarm-migration-status.md).
   export SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task
-  export E2E_SWARM_TASK=1
-  if [[ "$swarm_offline_fixture" == 1 ]]; then
+  if [[ "$fixture" != standard ]]; then
     # Research mocks script platform tool contracts; standard/real use product defaults.
     export SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan
     export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours

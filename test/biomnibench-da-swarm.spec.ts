@@ -6,7 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
-import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { requireAgentStack, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
@@ -77,7 +77,7 @@ for (const sample of cases) {
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
     const preparationBudget = 1_800_000;
     test.setTimeout(budget + evaluationBudget + 2 * preparationBudget + 360_000);
-    expect(process.env.E2E_SWARM_TASK, "BLOCKED: isolated Swarm stack required").toBe("1");
+    const stack = await requireAgentStack();
     const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT", "E2E_BIOMNI_FIXTURE_ROOT", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN", "BIOMNI_JUDGE_BASE_URL", "BIOMNI_JUDGE_MODEL", "BIOMNI_JUDGE_API_KEY", "SCIENCE_TAG_PLAN");
     if ((process.env.E2E_BIOMNI_EVALUATION ?? "rubric") !== "rubric") throw new Error("L5 requires rubric scoring");
     const plan = validatePlan(JSON.parse(await readFile(env.SCIENCE_TAG_PLAN!, "utf8")));
@@ -89,7 +89,7 @@ for (const sample of cases) {
       key: entry.key, revision: plan.revision, integration_status: "not_run", evaluation: { status: "not_run", gating: true },
       identity: { dataset_revision: manifest.revision, manifest_sha256: manifestHash, evaluator_revision: plan.evaluatorRevision,
         measurement_version: MEASUREMENT_VERSION, generator_model: env.E2E_LLM_MODEL, judge_model: env.BIOMNI_JUDGE_MODEL,
-        backend: plan.execution.backend, run_budget_ms: budget, workspace_budget_bytes: workspaceBudget, machine: machineIdentity() } };
+        backend: stack.executor, run_budget_ms: budget, workspace_budget_bytes: workspaceBudget, machine: machineIdentity() } };
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let memory: Awaited<ReturnType<typeof startMemorySampler>> | undefined;
     let completed = false;

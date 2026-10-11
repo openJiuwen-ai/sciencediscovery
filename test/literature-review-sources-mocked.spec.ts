@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect, type Page } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
+import { requireAgentStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage, waitForRunTerminal, type JourneyFixture } from "./helpers/journeys.ts";
 import { researchModel, type ResearchScriptStep } from "./helpers/research-model.ts";
@@ -53,7 +53,8 @@ for (const scenario of ["LR-09", "LR-10", "LR-11-html", "LR-11-broken", "LR-11-f
  * CostSideEffects: Temporary project/model/downloads removed in finally; no paid calls.
  */
 test(`${scenario} offline literature source contract`, { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:literature"] }, async ({ page, journey }, info) => {
-  expect(process.env.E2E_SWARM_TASK !== "1" || process.env.E2E_LITERATURE_FIXTURE !== "1", "BLOCKED: requires dedicated offline literature API fixture and Swarm").toBe(false);
+  await requireAgentStack({ executor: "jiuwenswarm" });
+  expect(process.env.E2E_LITERATURE_FIXTURE !== "1", "BLOCKED: requires dedicated offline literature API fixture").toBe(false);
   test.setTimeout(180_000);
   journey.scenario({ goal: scenario, preconditions: ["offline source transport", "actual PDF parser", "actual Swarm"] });
   expect((await api(page, "/e2e/literature-fixture")).fixture).toBe("offline-literature-v1");

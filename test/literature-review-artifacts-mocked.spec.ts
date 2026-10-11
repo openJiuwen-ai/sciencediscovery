@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
+import { requireAgentStack, test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage,
   waitForRunTerminal, artifactTree, type JourneyFixture } from "./helpers/journeys.ts";
 import { drbArticle } from "./helpers/deepresearchbench.ts";
@@ -14,7 +14,7 @@ for (const id of ["LR-13", "LR-15"]) {
  * Steps:
  *   1. Write synthetic child notes, declare versions and read artifacts through the parent.
  *   2. Deliver the report, reload the browser and inspect persisted content.
- * Environment: Isolated Swarm stack with E2E_SWARM_TASK=1; local Runner enabled.
+ * Environment: Isolated Swarm stack whose /health reports platform task delegation; local Runner enabled.
  * Type: mocked
  * LLM: Loopback scripted model; actual Swarm and platform tool execution.
  * WebSearch: none
@@ -26,7 +26,7 @@ for (const id of ["LR-13", "LR-15"]) {
  */
 test(`${id} ${id === "LR-13" ? "child file names and report versions remain isolated" : "report survives reload with identical content and version"}`,
   { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ page, journey }, info) => {
-  expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires isolated Swarm stack with platform task delegation").toBe(false);
+  await requireAgentStack({ executor: "jiuwenswarm" });
   test.setTimeout(180_000);
   journey.scenario({ goal: "Read real persisted research outputs instead of trusting scripted final claims", preconditions: ["Swarm stack", "local sandbox"] });
   const report = "# Synthetic literature review\n\n## Methods\nLocal fixtures only.\n\n## Results\nSOURCE_A_V1, SOURCE_A_V2 and SOURCE_B are distinct.\n\n## References\nhttps://example.invalid/synthetic-source\n";

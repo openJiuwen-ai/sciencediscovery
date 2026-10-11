@@ -4,7 +4,7 @@
 // You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
 import { expect } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
+import { requireAgentStack, test } from "./helpers/e2e.ts";
 import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSession,
   readRunActivity, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
@@ -15,7 +15,7 @@ import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSessi
  *   1. A deterministic local model delegates a child through task.
  *   2. The child sees a failed shell result, then writes and declares fixture source notes.
  *   3. The parent continues, writes its report, and both Artifacts and completion are visible.
- * Environment: Isolated Swarm stack with SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task and E2E_SWARM_TASK=1.
+ * Environment: Isolated Swarm stack with SCIENCE_AGENT_JIUWENSWARM_SUBAGENTS=task (checked through /health).
  * Type: mocked
  * LLM: Local scripted OpenAI-compatible HTTP model; actual Swarm loops are not mocked.
  * WebSearch: none
@@ -26,7 +26,7 @@ import { artifactTree, cleanupJourney, createProjectAndSession, openProjectSessi
  * CostSideEffects: No billable API calls; temporary project and model removed in finally.
  */
 test("Swarm child tool failure recovers and parent delivers report", { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ page, journey }, testInfo) => {
-  expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires Swarm backend with platform task delegation (E2E_SWARM_TASK=1)").toBe(false);
+  await requireAgentStack({ executor: "jiuwenswarm" });
   test.setTimeout(240_000);
   journey.scenario({ goal: "Recover from a child tool error without losing the parent research run",
     preconditions: ["Swarm-backed isolated stack", "platform task delegation", "local sandbox"] });

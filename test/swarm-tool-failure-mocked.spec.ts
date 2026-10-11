@@ -3,7 +3,7 @@
 import { expect } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { blockNonLocalRequests, test } from "./helpers/e2e.ts";
+import { blockNonLocalRequests, requireAgentStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader, browserStorageState } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel,
   sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
@@ -17,7 +17,7 @@ const expectedError = fault === "disconnect" ? /read|connection|transport|unknow
  * Steps:
  *   1. Delegate and reject malformed args, inject HTTP 503 or disconnect a request.
  *   2. Recover and inspect parent/child/UI; verify an active sibling survives.
- * Environment: Isolated Swarm stack with E2E_SWARM_TASK=1; HTTP case additionally requires the local fault proxy and E2E_MCP_FAULT_PROXY=1.
+ * Environment: Isolated Swarm stack with platform task delegation (checked through /health); HTTP case additionally requires the local fault proxy and E2E_MCP_FAULT_PROXY=1.
  * Type: mocked
  * LLM: Local scripted OpenAI-compatible model; actual Swarm main/child loops.
  * WebSearch: none
@@ -28,7 +28,7 @@ const expectedError = fault === "disconnect" ? /read|connection|transport|unknow
  * CostSideEffects: No paid calls; temporary project/model removed in finally.
  */
 test(`${fault === "disconnect" ? "LR-07 " : ""}Swarm ${fault} child failure is visible after recovery`, { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ browser, page, journey }, info) => {
-  expect(process.env.E2E_SWARM_TASK !== "1", "Requires isolated Swarm stack with platform task delegation").toBe(false);
+  await requireAgentStack({ executor: "jiuwenswarm" });
   expect(transportFault && process.env.E2E_MCP_FAULT_PROXY !== "1", "Requires isolated loopback MCP fault proxy").toBe(false);
   test.setTimeout(420_000);
   journey.scenario({ goal: "Show pre-bridge tool errors without losing the recovered child result",

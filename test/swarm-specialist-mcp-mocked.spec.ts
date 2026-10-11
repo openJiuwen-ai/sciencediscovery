@@ -5,7 +5,7 @@
 
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
+import { requireAgentStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel,
   sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
@@ -17,7 +17,7 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedMo
  *   1. Register a local MCP server and a custom Specialist bound to that connector.
  *   2. Delegate through task; inspect actual child LLM requests and execute the MCP tool.
  *   3. Verify persisted child completion, parent receipt of the result and browser rendering.
- * Environment: Isolated Swarm stack with platform task delegation and E2E_SWARM_TASK=1.
+ * Environment: Isolated Swarm stack with platform task delegation (checked through /health).
  * Type: mocked
  * LLM: Local scripted OpenAI-compatible model; actual Swarm main/child loops.
  * WebSearch: none
@@ -28,7 +28,7 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedMo
  * CostSideEffects: Temporary MCP server, Specialist, model and project; cleaned up in finally.
  */
 test("Custom Specialist receives dedicated MCP and returns results through Swarm", { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ page, journey }, testInfo) => {
-  expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires Swarm with platform task delegation").toBe(false);
+  await requireAgentStack({ executor: "jiuwenswarm" });
   test.setTimeout(240_000);
   const headers = authorizationHeader();
   const marker = `specialist-mcp-${Date.now()}`;

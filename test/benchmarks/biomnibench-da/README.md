@@ -68,6 +68,11 @@ the original failed E2E into a pass. Neither driver approves a baseline.
 
 ## Pinned inputs and preparation
 
+The stack's `/health` must report `agent.subagents: "task"`; the journey accepts
+either the `jiuwenswarm` or `native` executor and records that reported executor
+in its metrics. The frozen plan calls the native backend `legacy`; metric
+validation treats that name as `native`.
+
 [manifest.json](manifest.json) fixes dataset revision
 `e1c8ca5e11a620087bc48d97888eb69176a1f235`, every public task ID, and the path,
 size and Git object checksum of its instruction, rubric, task configuration

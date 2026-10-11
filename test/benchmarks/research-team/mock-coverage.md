@@ -55,7 +55,7 @@ the global quota temporarily and restore it in `finally`. Explicit opt-in preven
 accidental interference. Run one worker; do not add real API credentials.
 
 ```bash
-E2E_SWARM_TASK=1 E2E_SWARM_EXCLUSIVE=1 \
+E2E_SWARM_EXCLUSIVE=1 \
   npm --prefix .e2e run test:mocked -- \
   literature-review-lifecycle-mocked.spec.ts \
   literature-review-artifacts-mocked.spec.ts --workers=1
@@ -101,7 +101,7 @@ seams. Unexpected download hosts fail closed. Nothing is added to production
 HTTP routes, and no live literature source/API key is used.
 
 Run `literature-review-sources-mocked.spec.ts` with `E2E_LITERATURE_FIXTURE=1`
-and `E2E_SWARM_TASK=1`. Missing fixture opt-in is reported as BLOCKED; an enabled
+on a JiuwenSwarm stack. Missing fixture opt-in is reported as BLOCKED; an enabled
 fixture with incorrect responses fails assertions, never becomes a skip.
 
 ### Context stack (LR-08)
