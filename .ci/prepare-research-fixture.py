@@ -10,7 +10,11 @@ import yaml
 instance = os.environ["JIUWENSWARM_INSTANCE"]
 if not re.fullmatch(r"sd-e2e-mocked-(research|literature)", instance):
     raise ValueError("Research fixture requires its own CI Swarm instance")
-path = Path.home() / ".jiuwenswarm-instances" / instance / "config/config.yaml"
+# CI must provide its disposable root; never fall back to a developer's home.
+home = Path(os.environ["JIUWENSWARM_HOME"])
+if not home.is_absolute():
+    raise ValueError("Research fixture requires an absolute JIUWENSWARM_HOME")
+path = home / ".jiuwenswarm-instances" / instance / "config/config.yaml"
 config = yaml.safe_load(path.read_text())
 context = config["react"]["context_engine_config"]
 context.update(enabled=True, context_window_tokens=32768, enable_context_debug=True)

@@ -117,6 +117,26 @@ another button. Default-branch push does not repeat the paid suite.
 GitHub's behavior is documented in
 [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
 
+### Isolated JiuwenSwarm state
+
+Every test entry sets `JIUWENSWARM_HOME` under its own `CI_RUNTIME_DIR`:
+browser E2E uses `<fixture-runtime>/jiuwenswarm`, UT's wrapper uses
+`<runtime>/with-jiuwenswarm/home`, and the SDK contract uses
+`<runtime>/swarm-contract`. Set an explicit `JIUWENSWARM_HOME` to choose another
+test-owned root. Relative values resolve against the repository root.
+
+That root contains `.jiuwenswarm/instances.yaml`,
+`.jiuwenswarm-instances/<instance>/` (config, skills, sessions and process
+state), and `jiuwenswarm-<instance>.log`. `setup`, `start`, `status`, `env` and
+`stop`, including the research fixture, use the same root. The process-wide
+`HOME` is unchanged. `JIUWENSWARM_ROOT` / `JIUWENSWARM_SRC` still select the
+pinned installation and may be shared; they do not isolate runtime state.
+
+Parallel runs need distinct runtime roots and API/Runner port blocks (and
+separate worktrees for browser reports). Do not point two concurrent runs at
+the same `JIUWENSWARM_HOME`. Reusing an instance name in different roots is
+supported; choose the same root again when stopping or inspecting that run.
+
 ### Real cases, prerequisites and budgets
 
 `journey-basic-real-api.spec.ts` has seven backend-independent cases: response

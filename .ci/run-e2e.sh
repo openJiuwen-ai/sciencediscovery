@@ -105,9 +105,9 @@ finish() {
   if [[ "$jiuwenswarm_started" -eq 1 ]]; then
     "$repository_root/scripts/jiuwenswarm.sh" stop >> "$stack_log" 2>&1 || true
     # Transport diagnostics already omit URLs, credentials, arguments and
-    # response bodies. Preserve them per fixture before the next Swarm start
-    # truncates its shared log; stack.log only contains the adapter's side.
-    local swarm_log="${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}/jiuwenswarm.log"
+    # response bodies. stack.log only contains the adapter's side; the Swarm
+    # log belongs to this run's isolated home and instance too.
+    local swarm_log="$JIUWENSWARM_HOME/jiuwenswarm-$JIUWENSWARM_INSTANCE.log"
     if [[ -f "$swarm_log" ]]; then
       grep -E 'platform_mcp_(request_failed|transport_failed|transport_open|transport_close|connect_ready|disconnect_requested|request_cancel)' \
         "$swarm_log" > "$results_root/platform-mcp-transport.log" || true
@@ -256,8 +256,9 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     export SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan
     export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
   fi
-  # A JiuwenSwarm instance of this layer's own, so a run never shares skills, config or sessions with the
-  # instance a developer uses (the install itself, JIUWENSWARM_ROOT, is shared).
+  # Isolate the registry as well as workspaces: names alone collide across
+  # concurrent worktrees. Only the pinned installation may be shared.
+  export JIUWENSWARM_HOME="$(absolute_from_repository "${JIUWENSWARM_HOME:-$runtime_root/jiuwenswarm}")"
   export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-e2e}"
   # Install the pinned release when missing and create this layer's instance. A
   # prepared workspace is one whose host installed the Node dependencies and the
@@ -274,7 +275,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   }
   jiuwenswarm_gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; jiuwenswarm_gateway_port="${jiuwenswarm_gateway_port%%/*}"
   if [[ "$fixture" != standard ]]; then
-    if (exec 3<>"/dev/tcp/127.0.0.1/$jiuwenswarm_gateway_port") 2>/dev/null; then
+    if "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
       echo 'BLOCKED: research fixture refuses to modify a running Swarm instance' >&2; exit 2
     fi
     swarm_python="${JIUWENSWARM_SRC:-${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}/src}/.venv/bin/python"
@@ -309,13 +310,16 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
       export SCIENCE_AGENT_API_ENTRYPOINT="$repository_root/test/fixtures/literature-api.mjs"
     fi
   fi
-  if ! (exec 3<>"/dev/tcp/127.0.0.1/$jiuwenswarm_gateway_port") 2>/dev/null; then
+  if ! "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
+    jiuwenswarm_started=1
     "$repository_root/scripts/jiuwenswarm.sh" start >> "$stack_log" 2>&1 || {
       printf 'BLOCKED: JiuwenSwarm did not start; see %s.\n' "$stack_log" | tee -a "$test_log" >&2
       exit 2
     }
-    jiuwenswarm_started=1
   fi
+  # Startup can reallocate occupied ports. Re-read this root's actual endpoints
+  # instead of connecting to the sibling that held the originally planned port.
+  eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || exit 2
   export JIUWENSWARM_GATEWAY_URL JIUWENSWARM_MGMT_URL
 fi
 
