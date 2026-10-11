@@ -25,7 +25,9 @@ against the single target `os=linux, arch=amd64`.
 `pnpm test:shared` runs all of it. CI runs the same plan as slices that
 partition it: `l1`, `ut` (excluding L1), `st` and mocked `e2e` cover it exactly once.
 The new tier dimension defaults to L2, preserving the existing hermetic scope.
-L3/L4/L5 add real cases incrementally; see [CI operations](../../../.ci/README.md).
+L3 adds seven basic real cases; L4 adds all ten previously eligible nightly
+cases. L5 currently matches L4 while retaining its extension point for future
+cases; see [CI operations](../../../.ci/README.md).
 
 Nothing in that selector can be satisfied or defeated by the machine a run
 happens on. The plan is frozen from source before anything looks at the host,

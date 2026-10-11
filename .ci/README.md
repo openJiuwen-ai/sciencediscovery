@@ -25,8 +25,8 @@ No workflow maintains its own list of case titles.
 | L1 | Every PR opened, synchronized or reopened | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
 | L2 (`pr`) | Every PR after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + seven short real API journeys + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
-| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + fixed research representatives: DRB-58/59, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push | L4 + remaining eligible DRB samples and PUCT AI audit; existing assertions and score recording, no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
+| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + all ten previously eligible nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
+| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -160,8 +160,9 @@ timeouts remain; they are failure bounds, not monetary limits.
 
 Research cost is separate and has not yet been measured. DRB-58/62/75 allow 90
 minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
-minutes. Team generation allows 55 minutes; PUCT generation 120 minutes and
-release AI audit up to 65 more. Job setup counts toward the four-hour worker
+minutes. Team generation allows 55 minutes; PUCT generation 120 minutes.
+Its optional AI audit allows up to 65 more minutes when explicitly enabled
+locally; both daily and release leave that audit disabled. Job setup counts toward the four-hour worker
 ceiling. `fail-fast: false` retains evidence from independent workers; there
 are no automatic case retries. Rebuilding a merge group repeats its model calls.
 Monthly usage is the sum of actual provider usage across queue attempts,
@@ -184,8 +185,10 @@ quality baseline or apply a newly calibrated regression threshold. A green run
 certifies this selected suite, not measured capability non-regression or a
 complete upstream benchmark leaderboard.
 
-The real case counts are L3 **7**, L4 **14**, L5 **17**, with each higher tier
-including the lower tiers. Two Biomni cases and the seeded literature-review
+The real case counts are L3 **7**, L4 **17**, L5 **17**. L4 retains all ten
+previously eligible nightly cases and inherits the seven new L3 cases. L5
+currently uses the same cases and evaluation modes as L4; its separate profile
+and `tier:l5` extension row remain available for future additions. Two Biomni cases and the seeded literature-review
 journey were already quarantined on main in commit `8bd4560d`; this change
 preserves their status and excludes them from all automatic profiles.
 Biomni needs scientific Python packages in the agent sandbox and citation

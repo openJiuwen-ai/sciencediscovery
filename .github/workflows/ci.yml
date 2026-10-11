@@ -173,7 +173,8 @@ jobs:
       JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       E2E_DRB_EVALUATION: full
       E2E_BIOMNI_EVALUATION: rubric
-      E2E_PUCT_LLM_EVALUATION: ${{ needs.l1.outputs.profile == 'release' && '1' || '0' }}
+      # Keep daily and release evaluation modes equal until L5 gains its own cases.
+      E2E_PUCT_LLM_EVALUATION: "0"
       E2E_DRB_MAX_SUBAGENTS: "2"
       E2E_TEAM_CONCURRENCY_HINT: "2"
       E2E_DRB_RUN_TIMEOUT_MS: "3600000"

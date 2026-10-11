@@ -322,8 +322,8 @@ mirror: nothing runs there.
 | L1 | Every PR: light static/catalog/document checks |
 | L2 / `pr` | Every PR after L1: all hermetic UT, ST and mock E2E |
 | L3 / `merge` | Reviewed PR enters merge queue: rerun L1/L2 on group SHA, basic real APIs and distribution gates |
-| L4 / `daily` | Nightly at 16:00 UTC: L3 plus fixed research representatives |
-| L5 / `release` | Version tag: L4 plus existing eligible release cases and recorded AI scores; no historical baseline gate |
+| L4 / `daily` | Nightly at 16:00 UTC: L3 plus all ten previously eligible nightly cases (17 real cases total) |
+| L5 / `release` | Version tag: same current cases and evaluation modes as L4; independent profile for future additions; no historical baseline gate |
 
 `nightly.yml` and `release.yml` reuse `ci.yml`. The stable required check is
 `merge-gate`; queue success merges automatically, without Environment approval
@@ -386,7 +386,8 @@ question by hand:
 
 `--profile l1|l2|l3|l4|l5` names a cumulative tier. The aliases are `pr` (L2,
 the default), `merge` (L3), `daily` (L4) and `release` (L5). Higher tiers contain
-all lower cases and add their own. Real calls require explicit opt-in and
+all lower cases and can add their own; L5 currently has the same eligible cases
+as L4. Real calls require explicit opt-in and
 credentials after the source plan is frozen. See
 [the tier contract](.ci/README.md#five-cumulative-tiers-one-source-catalog),
 including backend identity, usage accounting and the initial release scope.
