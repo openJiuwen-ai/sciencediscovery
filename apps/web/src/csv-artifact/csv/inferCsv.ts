@@ -119,6 +119,7 @@ export function profileRows(
   const idField = fields.find((field) => IDENTIFIER_NAMES.has(normalizeName(field)))
     ?? fields.find((field) => kinds.get(field) === "identifier");
   const seenIds = new Set<string>();
+  const nextSuffixes = new Map<string, number>();
   let duplicateIds = 0;
 
   const parsedRows: DataRow[] = rows.map((row, index) => {
@@ -127,10 +128,17 @@ export function profileRows(
       parsed[field] = parseValue(row[field], kinds.get(field) !== "quantitative");
     }
     const candidate = idField ? String(parsed[idField] ?? "").trim() : "";
-    let rowId = candidate || `row-${index + 2}`;
+    const baseRowId = candidate || `row-${index + 2}`;
+    let rowId = baseRowId;
     if (seenIds.has(rowId)) {
       duplicateIds += 1;
-      rowId = `${rowId}#${index + 2}`;
+      let suffix = Math.max(index + 2, nextSuffixes.get(baseRowId) ?? 0);
+      // A generated suffix can itself match an existing source identifier.
+      while (seenIds.has(rowId)) {
+        rowId = `${baseRowId}#${suffix}`;
+        suffix += 1;
+      }
+      nextSuffixes.set(baseRowId, suffix);
     }
     seenIds.add(rowId);
     parsed.__rowId = rowId;

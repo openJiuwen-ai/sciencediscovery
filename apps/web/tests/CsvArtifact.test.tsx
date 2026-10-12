@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -32,6 +33,7 @@ import {
   selectedPointIndicesByTrace,
 } from "../src/csv-artifact/charts/selection.js";
 import { ChartConfigPanel } from "../src/csv-artifact/components/ChartConfigPanel.js";
+import { InspectorPanel } from "../src/csv-artifact/components/InspectorPanel.js";
 import { VirtualDataTable } from "../src/csv-artifact/components/VirtualDataTable.js";
 import { parseCsvText } from "../src/csv-artifact/csv/inferCsv.js";
 import {
@@ -108,6 +110,82 @@ test("profiles artifact rows and keeps stable, disambiguated record IDs", () => 
   assert.equal(table.rows[0]?.umap_1, 1.2);
   assert.equal(table.columns.find((column) => column.id === "cell_type")?.kind, "categorical");
   assert.match(table.warnings[0] ?? "", /duplicate identifiers/);
+});
+
+test("selecting a duplicate CSV identifier highlights and inspects only the chosen record", () => {
+  const content = "id,value\nsample#4,111\nsample,222\nsample,333\n";
+  const table = parse("duplicate-ids.csv", content);
+  const selectedRowIds = [table.rows[2]!.__rowId];
+  const inspector = renderToStaticMarkup(createElement(InspectorPanel, {
+    selectedRowIds,
+    spec: createDefaultSpecs(table)[0]!,
+    table,
+  }));
+  assert.match(inspector, /<dt>value<\/dt><dd title="333">333<\/dd>/);
+  const grid = renderToStaticMarkup(createElement(VirtualDataTable, {
+    onExport: () => undefined,
+    onSelectRows: () => undefined,
+    rows: table.rows,
+    selectedRowIds,
+    table,
+  }));
+  assert.equal((grid.match(/aria-selected="true"/g) ?? []).length, 1);
+  assert.deepEqual(table.rows.map((row) => row.id), ["sample#4", "sample", "sample"]);
+  assert.deepEqual(table.rows.map((row) => row.value), [111, 222, 333]);
+  assert.deepEqual(parse("duplicate-ids.csv", content).rows, table.rows);
+});
+
+test("duplicate CSV identifiers remain unique through multiple occupied suffixes", () => {
+  const table = parse("occupied-suffixes.csv", [
+    "id,value",
+    "sample#6,111",
+    "sample#7,222",
+    "sample#8,333",
+    "sample,444",
+    "sample,555",
+  ].join("\n"));
+  assert.equal(new Set(table.rows.map((row) => row.__rowId)).size, 5);
+  assert.equal(table.rows.find((row) => row.__rowId === table.rows[4]!.__rowId)?.value, 555);
+  assert.match(table.warnings[0] ?? "", /1 duplicate identifiers/);
+});
+
+test("missing CSV identifiers remain unique when generated row IDs and suffixes are occupied", () => {
+  const table = parse("missing-id-collisions.csv", [
+    "id,value",
+    "row-4,111",
+    "row-4#4,222",
+    ",333",
+  ].join("\n"));
+  assert.equal(new Set(table.rows.map((row) => row.__rowId)).size, 3);
+  assert.equal(table.rows.find((row) => row.__rowId === table.rows[2]!.__rowId)?.value, 333);
+  assert.equal(table.rows[2]?.id, null);
+});
+
+test("large blocks of colliding CSV identifiers can be profiled without repeated suffix scans", () => {
+  // Run separately so a synchronous browser-style stall is actually bounded.
+  const moduleUrl = new URL("../src/csv-artifact/csv/inferCsv.ts", import.meta.url).href;
+  const program = `
+    import { parseCsvText } from ${JSON.stringify(moduleUrl)};
+    const content = ["id,value",
+      ...Array.from({ length: 20000 }, (_, i) => "sample#" + (20002 + i) + "," + i),
+      ...Array.from({ length: 20000 }, (_, i) => "sample," + (20000 + i)),
+    ].join("\\n");
+    const table = parseCsvText(content, {
+      fileHash: "a".repeat(64), fileName: "occupied-block.csv",
+      fileSize: new TextEncoder().encode(content).byteLength,
+      importedAt: "2026-07-27T00:00:00.000Z", sourceArtifactVersionId: "large-collision-test",
+    });
+    console.log(JSON.stringify({ rows: table.rows.length,
+      unique: new Set(table.rows.map(row => row.__rowId)).size,
+      lastValue: table.rows.at(-1).value }));
+  `;
+  const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", program], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(result.error, undefined, "CSV profiling exceeded the 10-second responsiveness budget");
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { rows: 40000, unique: 40000, lastValue: 39999 });
 });
 
 test("profiles common scientific missing-value tokens as null", () => {
