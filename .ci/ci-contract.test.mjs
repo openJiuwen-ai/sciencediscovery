@@ -335,7 +335,7 @@ test("real E2E uploads only staged scores and keeps complete evidence separately
 
 test("mocked E2E keeps the complete HTML and results upload", async () => {
   const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
-  const upload = artifactUploads(workflowJobs(ci).e2e).find((item) => item.artifact === "e2e-results");
+  const upload = artifactUploads(workflowJobs(ci)["merge-gate"]).find((item) => item.artifact === "e2e-results");
   assert.ok(upload);
   assert.deepEqual(upload.paths, [".ci-results"]);
   assert.deepEqual(upload.excluded, []);

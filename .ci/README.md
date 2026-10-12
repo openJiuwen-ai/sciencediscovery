@@ -74,6 +74,43 @@ SHA, configuration and exact identities, then requires
 wrong-backend results fail. Existing quarantined cases are excluded by policy
 before freezing the plan and are never counted as passed.
 
+### Parallel mocked browser workers
+
+The mocked matrix is frozen from the same `e2e` slice, with four independent
+jobs (`max-parallel: 4`, `fail-fast: false`). No case list lives in the workflow:
+
+| Worker | Fixture | Existing browser cases | Supplemental checks |
+| --- | --- | ---: | --- |
+| `standard-config` | `standard` | 19 | 9 JiuwenSwarm checks, once |
+| `standard-journeys` | `standard` | 25 | None |
+| `research` | `research` | 20 | None |
+| `literature` | `literature` | 6 | None |
+
+Standard mocked specs declare `isolation:global` for shared configuration,
+`isolation:session` for independent session journeys, or `isolation:fresh` for
+a journey that requires a pristine Skill library. Missing classifications fail
+planning. The fresh-library file stays first among global-state files; the
+reporter rejects a different order or multiple Playwright workers. Every file
+and its steps retain their serial execution order. Each CI job has its own
+checkout, service ports, runtime data, JiuwenSwarm home and reports; both
+standard workers still use the **standard fixture**, not a research fixture.
+Backend selection is independent and does not change the 70 browser identities.
+
+`pnpm ci:e2e -- --shard standard-config` runs one partition; without `--shard`,
+the local entry point retains the full serial suite and one supplemental pass.
+Concurrent local invocations must use prepared dependencies and distinct
+`CI_RESULTS_DIR`, `CI_RUNTIME_DIR`, API/legacy/Runner/evolve/memory-graph ports.
+The driver writes HTML into the worker's results directory, so reports cannot
+overwrite each other. Leave Playwright `workers: 1` and `retries: 0` unchanged.
+
+The existing `merge-gate` reconciles all four artifacts against the parent
+plan, requires exactly one PASS for every identity and verifies all nine
+supplemental checks, including their order (`skills` before `skill-switch`).
+Missing artifacts, changed identities/backends, skips or failed drivers fail
+the gate. Before paid real jobs start, `real-plan` makes the same check.
+No extra accounting job or human approval is added. The combined `e2e-results`
+artifact preserves worker HTML/image links and the suite-level plan/summary.
+
 ### Merge queue and credentials: repository setup
 
 The workflow defines a stable **merge-gate** check. In the default branch

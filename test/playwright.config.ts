@@ -71,7 +71,7 @@ export default defineConfig({
   reporter: [
     ...(process.env.SCIENCE_TAG_PW_REPORT ? [[resolve(repoRoot, "test/support/tagged/playwright-reporter.mjs")] as [string]] : []),
     ["list"],
-    ["html", { open: "never", outputFolder: resolve(envRoot, "playwright-report") }],
+    ["html", { open: "never", outputFolder: process.env.E2E_HTML_REPORT || resolve(envRoot, "playwright-report") }],
     ["json", { outputFile: resolve(outputDir, "results.json") }],
   ],
   use: {

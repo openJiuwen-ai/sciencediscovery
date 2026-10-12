@@ -284,7 +284,7 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
    * Credentials: E2E_API_TOKEN for the isolated local API only.
    * CostSideEffects: No external cost; the journey's Project and model are removed in finally.
    */
-  test("Connector 未启用时的失败反馈", { tag: ["@mocked", "@model:mock"] }, async ({ journey, page }) => {
+  test("Connector 未启用时的失败反馈", { tag: ["@mocked", "@model:mock", "@isolation:global"] }, async ({ journey, page }) => {
     test.setTimeout(180_000);
     await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
     const stub = await scriptedModel([

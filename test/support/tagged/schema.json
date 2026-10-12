@@ -78,6 +78,16 @@
         "seatbelt"
       ],
       "default": "none"
+    },
+    "isolation": {
+      "multiple": false,
+      "values": [
+        "none",
+        "fresh",
+        "global",
+        "session"
+      ],
+      "default": "none"
     }
   }
 }

@@ -22,7 +22,7 @@ import { createPlan, verifyResults, fileDigest, subplan } from './plan.mjs';
 import { schema } from './tags.mjs';
 import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources, pythonPlugins } from './profiles.mjs';
 import { preflight } from './environment.mjs';
-import { executionConfig, realShards } from './execution.mjs';
+import { executionConfig, realShards, mockedShards } from './execution.mjs';
 import { checks } from './checks.mjs';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
@@ -248,10 +248,13 @@ export async function main(args=process.argv.slice(2)) {
     const evaluatorRevision=fileDigest(sources.map(p=>p+'\n'+fileDigest(readFileSync(join(root,p)))).join('\n'));
     plan=subplan({...plan,evaluatorRevision},plan.entries);
   }
+  let selectedShard;
+  if (slice === 'e2e') mockedShards(plan); // Reject unclassified cases even in a serial local run.
   if(shard){
-    if(slice!=='e2e-real')throw new Error('--shard is only valid with --slice e2e-real');
-    const selected=realShards(plan).find(s=>s.name===shard);
-    if(!selected)throw new Error(`Unknown real shard: ${shard}`);
+    if(!['e2e','e2e-real'].includes(slice))throw new Error('--shard requires --slice e2e or e2e-real');
+    const selected=(slice==='e2e' ? mockedShards(plan) : realShards(plan)).find(s=>s.name===shard);
+    if(!selected)throw new Error(`Unknown ${slice} shard: ${shard}`);
+    selectedShard=selected;
     plan=subplan(plan,plan.entries.filter(e=>selected.keys.includes(e.key)));
   }
   json(join(outputDir,'catalog.json'),catalog);json(join(outputDir,'plan.json'),plan);
@@ -314,6 +317,7 @@ export async function main(args=process.argv.slice(2)) {
         CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,key),
         CI_RUNTIME_DIR:resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),key),
         CI_E2E_FIXTURE:batch.fixture,JIUWENSWARM_INSTANCE:`sd-e2e-${key}`,
+        ...(slice==='e2e'&&shard?{CI_E2E_SWARM_CHECKS:selectedShard.checks.length?'run':'off'}:{}),
         SCIENCE_TAG_PLAN:batchPlan,SCIENCE_TAG_PW_REPORT:report,
         E2E_SCIENTIFIC_ENVS:'1'},join(outputDir,`e2e-${key}-driver.log`),root,{echo:true});
       if(code)errors.push(`PLAYWRIGHT_WORKER_FAILED: ${code}`);

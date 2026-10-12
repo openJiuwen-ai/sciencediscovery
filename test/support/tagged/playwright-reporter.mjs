@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { fileDigest, validatePlan, canonical } from './plan.mjs';
 import { normalizeTags } from './tags.mjs';
 import { hostPlatform, hostArch } from './environment.mjs';
-import { backendName } from './execution.mjs';
+import { backendName, assertMockedOrder } from './execution.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 function descriptor(test) {
   const source = relative(root, test.location.file).replaceAll('\\','/');
@@ -43,6 +43,7 @@ export default class TaggedReporter {
       if(!e || e.sourceHash!==d.sourceHash || canonical(e.tags)!==canonical(d.tags) || canonical(e.requirements)!==canonical(d.requirements)) throw new Error(`COLLECTION_DRIFT: ${d.id}`);
     }
     if(catalog.length!==this.entries.size) throw new Error('PLAYWRIGHT_PLAN_MISMATCH');
+    assertMockedOrder(catalog, config);
   }
   onTestEnd(test,result) {
     const d=descriptor(test), e=this.entries.get(d.id);

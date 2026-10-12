@@ -32,7 +32,7 @@ test('PR inputs cannot enable real calls; every merge_group gets L3',()=>{
 });
 
 test('aggregate gate rejects failed, missing, skipped and cancelled required jobs',()=>{
-  const needs=Object.fromEntries(['l1','ut','st','e2e','real-plan','real-e2e','real-report','binary','docker'].map(n=>[n,{result:'success'}]));
+  const needs=Object.fromEntries(['l1','ut','st','e2e-plan','e2e','real-plan','real-e2e','real-report','binary','docker'].map(n=>[n,{result:'success'}]));
   assert.deepEqual(gate('merge',needs),[]);
   for(const value of ['failure','cancelled','skipped',undefined]) {
     assert.notEqual(gate('merge',{...needs,'real-e2e':{result:value}}).length,0);

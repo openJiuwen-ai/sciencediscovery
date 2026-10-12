@@ -81,7 +81,6 @@ fixture_pid=""
 fixture="${CI_E2E_FIXTURE:-standard}"
 case "$fixture" in standard|research|literature) ;; *) echo 'Unknown E2E fixture' >&2; exit 2;; esac
 if [[ "$fixture" != standard && "$group" != mocked ]]; then echo 'Offline fixtures must never reach real E2E' >&2; exit 2; fi
-test_started=0
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 mkdir -p "$results_root" "$runtime_root"
@@ -113,12 +112,8 @@ finish() {
         "$swarm_log" > "$results_root/platform-mcp-transport.log" || true
     fi
   fi
-  # Playwright writes test-results/ into the results itself (E2E_OUTPUT_DIR);
-  # only the HTML report, which it renders once the whole run ends, is copied.
-  if [[ "$test_started" -eq 1 && -d "$repository_root/.e2e/playwright-report" ]]; then
-    mkdir -p "$results_root/playwright-report"
-    cp -a "$repository_root/.e2e/playwright-report/." "$results_root/playwright-report/"
-  fi
+  # Playwright writes both results and HTML directly into this worker's tree;
+  # concurrent local shards must never copy another worker's shared report.
   if [[ "$status" -eq 0 ]]; then
     result_status="passed"
     # A preparation run installed dependencies and ran no journey; calling that
@@ -235,6 +230,7 @@ export E2E_JOURNEY_REPORTS="$results_root/journey-reports"
 # ends, rather than being copied when the run exits: a cancelled job is killed
 # within seconds, before any exit trap has finished.
 export E2E_OUTPUT_DIR="$results_root/test-results"
+export E2E_HTML_REPORT="$results_root/playwright-report"
 # This layer started the stack above, on a data directory it owns, and will kill
 # it again on the way out, so a journey may empty it to reach a first-run state.
 # Nothing else grants that: a suite merely pointed at an address — someone's own
@@ -378,7 +374,6 @@ fi
 node test/check-e2e-meta.mjs 2>&1 | tee -a "$test_log"
 metadata_status=${PIPESTATUS[0]}
 if [[ "$metadata_status" -ne 0 ]]; then exit "$metadata_status"; fi
-test_started=1
 playwright_args=()
 if [[ -n "${CI_E2E_SPEC:-}" ]]; then playwright_args+=("$CI_E2E_SPEC"); fi
 if [[ -n "${CI_E2E_GREP:-}" ]]; then playwright_args+=(--grep "$CI_E2E_GREP"); fi
@@ -393,10 +388,11 @@ journeys_status=${PIPESTATUS[0]}
 # journeys plan with update_plan), web-search (the internet), compression and
 # history-restart (a small context window, a JiuwenSwarm restart).
 live_status=0
-if [[ "$backend" == "jiuwenswarm" && "$group" == "mocked" && "$fixture" == standard ]]; then
+case "${CI_E2E_SWARM_CHECKS:-run}" in run|off) ;; *) echo 'Invalid CI_E2E_SWARM_CHECKS' >&2; exit 2;; esac
+if [[ "$backend" == "jiuwenswarm" && "$group" == "mocked" && "$fixture" == standard && "${CI_E2E_SWARM_CHECKS:-run}" == run ]]; then
   live_checks="${CI_E2E_JIUWENSWARM_CHECKS:-history history-names run-shell host-tools approvals skills skill-switch trajectory language}"
   # shellcheck disable=SC2086 # the list is words on purpose
-  node test/contract/jw-only/live.mjs $live_checks 2>&1 | tee "$results_root/jiuwenswarm-checks.log" | tee -a "$test_log"
+  CI_SWARM_CHECK_REPORT="$results_root/jiuwenswarm-checks.json" node test/contract/jw-only/live.mjs $live_checks 2>&1 | tee "$results_root/jiuwenswarm-checks.log" | tee -a "$test_log"
   live_status=${PIPESTATUS[0]}
   printf 'jiuwenswarm_checks=%s\n' "$([[ "$live_status" -eq 0 ]] && echo passed || echo failed)" >> "$results_root/jiuwenswarm-checks.log"
 fi
