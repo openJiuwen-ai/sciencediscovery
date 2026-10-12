@@ -117,7 +117,7 @@ jobs:
     if: ${{ needs.l1.outputs.real == 'true' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: ${{ needs.l1.outputs.profile == 'merge' && 'merge-api' || 'nightly-ci-ds' }}
+    environment: nightly-ci-ds
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     env:
@@ -153,7 +153,7 @@ jobs:
       matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
-    environment: ${{ needs.l1.outputs.profile == 'merge' && 'merge-api' || 'nightly-ci-ds' }}
+    environment: nightly-ci-ds
     env:
       CI_ALLOW_REAL: "1"
       CI_PROFILE: ${{ needs.l1.outputs.profile }}

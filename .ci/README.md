@@ -76,8 +76,10 @@ before freezing the plan and are never counted as passed.
 
 ### Merge queue and credentials: repository setup
 
-The workflow defines a stable **merge-gate** check. Configure that check as
-required in the default branch ruleset and enable **Require merge queue**.
+The workflow defines a stable **merge-gate** check. In the default branch
+ruleset, enable **Require status checks to pass**, add **merge-gate** from
+GitHub Actions, and enable **Require merge queue**. Enabling the queue alone
+does not make CI required; without required checks, it need not wait for L3.
 Require approval of the current PR head and dismiss stale approvals. Start
 with queue build concurrency 1 and **Only merge non-failing pull requests**.
 Allow enough queue status-check time for L1/L2 + real setup/testing and the
@@ -85,19 +87,18 @@ parallel distribution jobs. Do not require a queue-only check on the PR before
 it can enqueue: the same aggregate requires L1/L2 on PR and full L3 on the group.
 Even a one-PR merge group receives its own run and candidate-SHA results.
 
-Create these Environments with **no required reviewers and no final approval
-job**, as agreed in [issue #248](https://github.com/openJiuwen-ai/sciencediscovery/issues/248):
+L3, L4 and L5 reuse the existing **nightly-ci-ds** Environment, with **no required
+reviewers and no final approval job**, as agreed in
+[issue #248](https://github.com/openJiuwen-ai/sciencediscovery/issues/248):
 
-- `merge-api`: variables `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`; secret
-  `E2E_LLM_TOKEN`. Allow the intended `gh-readonly-queue/main/*` branch refs and
-  only explicitly trusted manual-test refs. Use a low-quota test key.
-- `nightly-ci-ds`: variables `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`,
-  `E2E_JUDGE_BASE_URL`, `E2E_JUDGE_MODEL`; secrets `E2E_LLM_TOKEN`,
-  `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`. Allow the default branch,
-  intended version tags and explicitly trusted dispatch refs. No production or
-  publication credential belongs here.
+- Variables: `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_JUDGE_BASE_URL`,
+  `E2E_JUDGE_MODEL`.
+- Secrets: `E2E_LLM_TOKEN`, `E2E_JUDGE_TOKEN`, `JINA_API_KEY`, `HF_TOKEN`.
+- If deployment branch restrictions are configured, allow the default branch,
+  intended `gh-readonly-queue/main/*` refs, version tags and explicitly trusted
+  dispatch refs. No production or publication credential belongs here.
 
-Keep model credentials in these Environments, not repository secrets.
+Keep model credentials in this Environment, not repository secrets.
 The credential-isolation regression checks every job that references a
 model token: it must declare an Environment and exclude pull-request events.
 The check intentionally does not pin Environment names. To change research
