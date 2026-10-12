@@ -150,14 +150,20 @@ The basic Project disables optional skill, planning and delegation plugins
 through the public API; workspace and MCP tools remain real. The same setup
 applies to both backends and keeps a research skill catalog out of short calls.
 
+`journey-runner-recovery-real.spec.ts` adds two real API cases: the Agent chooses
+to wait after Runner execution is blocked, or explains the failure and finishes
+without waiting, according to the user's request. The waiting case also checks
+card recovery after a browser reload and cancellation returned to the model.
+
 The basic worker has no suite request or token budget and does not override
 per-request model token settings. Its ledger records forwarded requests,
 payload bytes and provider-reported input/output tokens across worker restarts.
 Cancelled calls or responses without usage stay in `unreportedCalls`; measured
 totals are incomplete when that count is nonzero. No token count is inferred
 from payload bytes. A fresh isolated run uses a fresh runtime root.
-Transport buffer guards, request timeouts and the seven three-minute case
-timeouts remain; they are failure bounds, not monetary limits.
+Transport buffer guards and request timeouts remain. The seven basic cases have
+three-minute deadlines; the two Runner-recovery cases have four-minute deadlines.
+These are failure bounds, not monetary limits.
 
 Research cost is separate and has not yet been measured. DRB-58/62/75 allow 90
 minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
@@ -186,8 +192,8 @@ quality baseline or apply a newly calibrated regression threshold. A green run
 certifies this selected suite, not measured capability non-regression or a
 complete upstream benchmark leaderboard.
 
-The real case counts are L3 **7**, L4 **17**, L5 **17**. L4 retains all ten
-previously eligible nightly cases and inherits the seven new L3 cases. L5
+The real case counts are L3 **9**, L4 **19**, L5 **19**. L4 retains all ten
+previously eligible nightly cases and inherits the nine L3 cases. L5
 currently uses the same cases and evaluation modes as L4; its separate profile
 and `tier:l5` extension row remain available for future additions. Two Biomni cases and the seeded literature-review
 journey were already quarantined on main in commit `8bd4560d`; this change
