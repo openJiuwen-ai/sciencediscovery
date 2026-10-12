@@ -27,7 +27,7 @@ export function RunnerReadinessPanel({ client, runnerId }: { client: ApiClient; 
     void read(revision > 0);
     return () => { active = false; clearTimeout(timer); };
   }, [client, runnerId, revision]);
-  return <section className="card" aria-label={zh ? "计算能力" : "Execution readiness"}>
+  return <section className="runner-readiness-card" aria-label={zh ? "计算能力" : "Execution readiness"}>
     <strong>{zh ? "计算能力" : "Execution readiness"}</strong>
     <p role="status">{busy ? (zh ? "正在目标 Runner 检查…" : "Checking on the target Runner…") : value?.capability?.ready
       ? (zh ? "已连接，沙箱可用" : "Connected; sandbox available")
@@ -62,7 +62,7 @@ export function ExecutionBlockCards({ client, sessionId }: { client: ApiClient; 
     catch (reason) { setError(String(reason)); }
     finally { setBusy(undefined); }
   };
-  return <>{blocks.map(block => <section className="card" key={block.id} aria-label={zh ? "执行受阻" : "Execution blocked"}>
+  return <>{blocks.map(block => <section className="runner-readiness-card" key={block.id} aria-label={zh ? "执行受阻" : "Execution blocked"}>
     <strong>{zh ? "等待用户处理：代码尚未执行" : "Waiting for user: code has not executed"}</strong>
     {block.agentId && <p>{block.agentId}</p>}
     {block.summary && <p>{block.summary}</p>}
