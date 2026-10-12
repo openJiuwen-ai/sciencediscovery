@@ -3,7 +3,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { expect, type Page } from '@playwright/test';
 import { requireRealEnv, requireRealStack, test } from './helpers/e2e.ts';
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage, waitForRunTerminal } from './helpers/journeys.ts';
@@ -12,13 +11,15 @@ import { collectFinalDelivery } from './helpers/real-delivery.ts';
 import { apiBaseUrl, authorizationHeader } from './e2e-auth.js';
 import { realApiProxy } from './helpers/real-api-proxy.mjs';
 
+// Adapted scenarios, implemented through ScienceDiscovery's public product APIs.
+// See .ci/README.md for the upstream reference and the observable contracts.
 const scenarios = [
   ['response', 'Short response and stream completion'],
-  ['tool', 'Tool result reaches the final answer'],
-  ['memory', 'A follow-up recalls the previous turn'],
+  ['tool', 'A real command result reaches the final answer'],
+  ['files', 'Read and edit a workspace file without changing its neighbour'],
+  ['memory', 'Reopen a Session and recall its previous turn'],
   ['artifact', 'A delivered version remains readable after follow-up'],
-  ['dependency', 'The second tool consumes the first result'],
-  ['structured', 'Structured tool arguments preserve numeric types'],
+  ['workspace', 'Relative file writes stay in the selected Session'],
   ['cancel', 'Cancel a live run and continue the session'],
 ] as const;
 
@@ -26,6 +27,25 @@ async function api(page: Page, path: string, method: string, data?: unknown) {
   const response = await page.request.fetch(`${apiBaseUrl()}${path}`, { headers: authorizationHeader(), method, ...(data === undefined ? {} : {data}) });
   expect(response.ok(), `${method} ${path}: HTTP ${response.status()}`).toBe(true);
   return response.json();
+}
+
+async function uploadFile(page: Page, sessionId: string, name: string, text: string) {
+  const response = await page.request.post(`${apiBaseUrl()}/api/sessions/${sessionId}/workspace/upload`, {
+    headers: authorizationHeader(),
+    multipart: { files: { name, mimeType: 'text/plain', buffer: Buffer.from(text) } },
+  });
+  expect(response.status()).toBe(201);
+  const result = await response.json();
+  expect(result.errors).toEqual([]);
+  expect(result.uploaded.some((file: { path: string }) => file.path === name)).toBe(true);
+}
+
+async function readFile(page: Page, sessionId: string, name: string) {
+  const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${sessionId}/file?path=${encodeURIComponent(name)}`, {
+    headers: authorizationHeader(),
+  });
+  expect(response.ok(), `read workspace file ${name}: HTTP ${response.status()}`).toBe(true);
+  return response.text();
 }
 
 for (const [id,title] of scenarios) {
@@ -36,12 +56,12 @@ for (const [id,title] of scenarios) {
  *   1. Check credentials and the isolated stack; create a temporary real-model Session.
  *   2. Submit the selected basic task, observe completion or cancellation and verify its durable result.
  *   3. Read usage, save the shared usage ledger, and remove the owned records.
- * Environment: Isolated product stack selected by CI_E2E_BACKEND; standard fixture, local MCP echo server and a basic project with optional skill/plan/scheduler plugins disabled.
+ * Environment: Isolated product stack selected by CI_E2E_BACKEND; standard fixture and a basic project with optional skill/plan/scheduler plugins disabled.
  * Type: real
  * LLM: Real OpenAI-compatible endpoint behind a metered pass-through; no model stub or AI judge.
  * WebSearch: none requested
  * PaperSources: none
- * MCP: Local deterministic echo/add_numbers tools; standard workspace tools for artifact delivery.
+ * MCP: No external connector; backend-selected product workspace and shell tools.
  * OtherExternal: Configured model endpoint only; local API, browser and Runner.
  * Credentials: E2E_API_TOKEN, E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN.
  * CostSideEffects: Billable model calls with no suite request/token cap; reported usage and unreported calls are recorded. Temporary records removed in finally.
@@ -54,12 +74,12 @@ for (const [id,title] of scenarios) {
     const ledger = resolve(process.env.CI_RUNTIME_DIR ?? '.e2e-data', 'basic-api-usage.json');
     const proxy = await realApiProxy({baseUrl:real.E2E_LLM_BASE_URL,token:real.E2E_LLM_TOKEN,ledger});
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
-    let mcp: string | undefined;
+    let neighbour: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     try {
       await journey.step('Prepare the selected product backend', 'A new Session uses the real model and owns all its records', async () => {
         fixture = await createProjectAndSession(page, {approvalMode:'always_allow',projectName:`Basic ${id} ${randomUUID()}`,sessionTitle:title,
           model:{baseUrl:proxy.baseUrl,apiToken:proxy.token,model:real.E2E_LLM_MODEL!,name:`Basic ${id}`,apiVariant:'openai'}});
-        // These short contracts need workspace/MCP tools, not the research
+        // These short contracts need workspace tools, not the research
         // skill catalog or delegation. Configure the owned Project through
         // the public product API, identically for either execution backend.
         const plugins = `/api/projects/${fixture.project.id}/plugins`;
@@ -81,44 +101,50 @@ for (const [id,title] of scenarios) {
       };
       await journey.step('Complete the basic user task', title, async () => {
         const marker = `probe-${randomUUID().slice(0,8)}`;
-        if (['tool','dependency','structured'].includes(id)) {
-          const server = await api(page,'/api/mcp/servers','POST',{name:`Basic tools ${marker}`,command:process.execPath,
-            args:[fileURLToPath(new URL('./fixtures/mcp-echo.mjs',import.meta.url))],enabled:true});
-          mcp = server.id;
-          // Connector inventory is loaded with the Session; refresh after a
-          // server is created through the API, as a user reopening it would.
-          await page.reload();
-          await openProjectSession(page,fixture!);
-          await page.locator('.connector-picker-trigger').click();
-          const connector = page.locator('.connector-picker-popover').getByRole('checkbox',{name:new RegExp(`Basic tools ${marker}`)});
-          await connector.click();
-          await expect(connector).toBeChecked();
-          await page.keyboard.press('Escape');
-          const prompt = id === 'tool' ? `Use the selected local MCP echo tool on ${marker}, then report exactly the tool's uppercase result.`
-            : id === 'dependency' ? 'Use the selected local MCP add_numbers tool on 7 and 11. After receiving its result, call add_numbers again with that result and 13, then report the second result.'
-            : 'Use the selected local MCP add_numbers tool with JSON arguments a=17 and b=25 (numbers, not strings). Report the returned sum.';
-          const {delivery} = await submit(prompt);
-          expect(delivery.answer).toContain(id === 'tool' ? marker.toUpperCase() : id === 'dependency' ? '31' : '42');
-          const invocations = await drbApi<any[]>(page,`${prefix}/mcp/invocations`);
-          expect(invocations.filter(v=>v.sourceId===mcp && v.status==='succeeded').length).toBeGreaterThanOrEqual(id==='dependency'?2:1);
-          const messages = proxy.requests.flatMap((r:any)=>r.messages ?? []);
-          const calls = messages.flatMap((m:any)=>m.tool_calls ?? []).filter((c:any)=>c.function?.name?.includes('mcp__'));
-          expect(calls.length).toBeGreaterThan(0);
-          if (id==='structured') expect(calls.some((c:any)=>{const a=JSON.parse(c.function.arguments);return a.a===17&&a.b===25;})).toBe(true);
-          if (id==='dependency') {
-            // Inspect one complete model context: the second call must follow
-            // the first tool's delivered result, not two independent calls.
-            expect(proxy.requests.some((r:any)=>{
-              const ms=r.messages ?? [];
-              return ms.some((m:any,i:number)=>(m.tool_calls??[]).some((c:any)=>{
-                const a=JSON.parse(c.function.arguments);return a.a===18&&a.b===13;
-              }) && ms.slice(0,i).some((prior:any)=>prior.role==='tool'&&String(prior.content).includes('18')));
-            })).toBe(true);
-          }
-        } else if (id==='memory') {
-          await submit(`Remember the code ${marker}. Just acknowledge it.`);
-          const {delivery}=await submit('What code did I give you in the preceding message?');
+        if (id === 'tool') {
+          // The prompt does not contain the secret marker: only a successful
+          // tool read can supply it to the model's final answer.
+          await uploadFile(page, fixture!.session.id, 'command-input.txt', `${marker}\n`);
+          const firstRequest = proxy.requests.length;
+          const {delivery} = await submit('Use run_shell to execute cat command-input.txt in the Session workspace. Wait for execution completion if needed, then report the exact output.');
           expect(delivery.answer).toContain(marker);
+          const messages = proxy.requests.slice(firstRequest).flatMap((request: any) => request.messages ?? []);
+          expect(messages.some((message: any) => (message.tool_calls ?? []).some((call: any) =>
+            call.function?.name?.includes('run_shell')))).toBe(true);
+          expect(messages.some((message: any) => message.role === 'tool'
+            && JSON.stringify(message.content).includes(marker))).toBe(true);
+        } else if (id === 'files') {
+          const original = `code=${marker}\nstatus=draft\n`;
+          const untouched = `KEEP-${randomUUID()}\n`;
+          await uploadFile(page, fixture!.session.id, 'note.txt', original);
+          await uploadFile(page, fixture!.session.id, 'untouched.txt', untouched);
+          const {delivery} = await submit('Read note.txt. Replace only status=draft with status=final, preserving all other bytes. Read it back, then report its code value. Do not change untouched.txt.');
+          expect(delivery.answer).toContain(marker);
+          expect(await readFile(page, fixture!.session.id, 'note.txt')).toBe(original.replace('status=draft', 'status=final'));
+          expect(await readFile(page, fixture!.session.id, 'untouched.txt')).toBe(untouched);
+        } else if (id === 'memory') {
+          await submit(`Remember the code ${marker}. Just acknowledge it.`);
+          // Reopen through the product and verify stored history before the
+          // next model request. This covers client reconnection, not a server restart.
+          await page.goto('about:blank');
+          await openProjectSession(page, fixture!);
+          const session = await drbApi<any>(page, prefix);
+          expect(JSON.stringify(session.messages)).toContain(marker);
+          const firstRequest = proxy.requests.length;
+          const {delivery} = await submit('What code did I give you in the preceding message? Do not use tools.');
+          expect(delivery.answer).toContain(marker);
+          expect(proxy.requests.slice(firstRequest).some((request: any) =>
+            JSON.stringify(request.messages).includes(marker))).toBe(true);
+        } else if (id === 'workspace') {
+          neighbour = await createProjectAndSession(page, {approvalMode: 'always_allow',
+            projectName: `Neighbour ${randomUUID()}`, sessionTitle: 'Untouched workspace', modelId: fixture!.model!.id});
+          const untouched = `NEIGHBOUR-${randomUUID()}\n`;
+          await uploadFile(page, neighbour.session.id, 'where.txt', untouched);
+          await uploadFile(page, fixture!.session.id, 'where.txt', 'before\n');
+          await openProjectSession(page, fixture!);
+          await submit(`Replace where.txt in this Session workspace with exactly ${marker} followed by a newline. Use a relative path and read the file back.`);
+          expect(await readFile(page, fixture!.session.id, 'where.txt')).toBe(`${marker}\n`);
+          expect(await readFile(page, neighbour.session.id, 'where.txt')).toBe(untouched);
         } else if (id==='artifact') {
           const {delivery}=await submit(`Use workspace tools to write ${marker}.md containing the text ${marker}, declare it as an artifact and give its filename.`);
           expect(delivery.status).toBe('passed');
@@ -134,7 +160,7 @@ for (const [id,title] of scenarios) {
           expect((await drbApi<any[]>(page,`${prefix}/artifacts`)).some(a=>a.id===artifact!.id)).toBe(true);
         } else if (id==='cancel') {
           const run=await sendUserMessage(page,fixture!.session.id,'Write a long numbered list of 500 distinct scientific terms. Do not use tools.');
-          await expect.poll(()=>proxy.requests.some((r:any)=>r.stream&&r.responseChunks>0),{timeout:60_000}).toBe(true);
+          await expect.poll(()=>proxy.requests.some((r:any)=>r.stream&&r.contentDeltas>0),{timeout:60_000}).toBe(true);
           await api(page,`${prefix}/runs/${run.id}/cancel`,'POST',{});
           expect((await waitForRunTerminal(page,fixture!.session.id,run.id,30_000)).status).toBe('cancelled');
           expect((await submit('Reply with the word READY.')).delivery.answer).toContain('READY');
@@ -142,7 +168,7 @@ for (const [id,title] of scenarios) {
         } else {
           const {run,delivery}=await submit('Reply with the word READY. Do not call tools.');
           expect(delivery.answer).toContain('READY');
-          expect(proxy.requests.some((r:any)=>r.stream===true)).toBe(true);
+          expect(proxy.requests.some((r:any)=>r.stream===true && r.contentDeltas>0 && r.finishReasons.includes('stop'))).toBe(true);
           const events=await drbApi<any[]>(page,`${prefix}/runs/${run.id}/events`);
           expect(JSON.stringify(events)).toContain('run.completed');
         }
@@ -150,22 +176,27 @@ for (const [id,title] of scenarios) {
       await journey.step('Verify usage and persist cost evidence', 'The product reports invocations and the shared request ledger remains available', async () => {
         const usage=await drbApi<any>(page,`${prefix}/usage`);
         expect(usage.totals.invocationCount).toBeGreaterThan(0);
+        expect(usage.totals.inputTokens).toBeGreaterThan(0);
+        expect(usage.totals.outputTokens).toBeGreaterThan(0);
         await info.attach('real-api-usage',{body:JSON.stringify(usage),contentType:'application/json'});
       });
     } finally {
       try {
-        if (fixture) {
-          await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/current/cancel`,{headers:authorizationHeader(),data:{}}).catch(()=>undefined);
-          await cleanupJourney(page,fixture);
+        try {
+          if (neighbour) await cleanupJourney(page, neighbour);
+        } finally {
+          if (fixture) {
+            await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/current/cancel`, {
+              headers: authorizationHeader(), data: {},
+            }).catch(() => undefined);
+            await cleanupJourney(page, fixture);
+          }
         }
       } finally {
-        try { if (mcp) await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${mcp}`,{headers:authorizationHeader()}); }
-        finally {
-          await proxy.stop();
-          // Keep cost evidence for failures too, including cancelled or unreported calls.
-          try { await info.attach('real-api-ledger',{body:readFileSync(ledger),contentType:'application/json'}); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-        }
+        await proxy.stop();
+        // Keep cost evidence for failures too, including cancelled or unreported calls.
+        try { await info.attach('real-api-ledger', {body: readFileSync(ledger), contentType: 'application/json'}); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
       }
     }
   });

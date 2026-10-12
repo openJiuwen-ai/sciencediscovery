@@ -139,15 +139,30 @@ supported; choose the same root again when stopping or inspecting that run.
 
 ### Real cases, prerequisites and usage
 
-`journey-basic-real-api.spec.ts` has seven backend-independent cases: response
-and stream completion, tool-result consumption, memory across turns, durable
-artifact/version retrieval after follow-up, ordered tool dependency, structured
-numeric arguments/results, and cancel/recover with no active orphan run.
-It drives the product and public APIs; it never imports a native agent directly.
-Each case owns its records and uses a pass-through to the actual provider.
-The basic Project disables optional skill, planning and delegation plugins
-through the public API; workspace and MCP tools remain real. The same setup
-applies to both backends and keeps a research skill catalog out of short calls.
+`journey-basic-real-api.spec.ts` adapts seven short scenarios from
+[DeepSeek Harness's real-provider tests](https://github.com/deepseek-ai/deepseek-harness/tree/d743267388641bc76f17c45ce8b4c231aed1d32c/packages/llm/llm-deepseek/tests)
+and [agent journeys](https://github.com/deepseek-ai/deepseek-harness/tree/d743267388641bc76f17c45ce8b4c231aed1d32c/apps/cli/tests/profiles/headless/tests).
+The implementation drives ScienceDiscovery's running product through the browser
+and public APIs; it does not import either backend's agent internals.
+
+| L3 case | User goal and independently checked result | External calls |
+| --- | --- | --- |
+| `response` | Receive a short answer; observe real content deltas, a provider stop marker and a completed Run | Real LLM |
+| `tool` | Execute `cat command-input.txt`; a marker absent from the prompt must appear in an actual tool result and the final answer | Real LLM + local sandboxed shell |
+| `files` | Read and edit a file; download the exact changed contents and verify a neighbouring file remains byte-identical | Real LLM + workspace tools |
+| `memory` | Reopen the Session, inspect persisted history and ask the model to recall the previous code | Two real-model turns; client reconnection, not a server restart |
+| `artifact` | Deliver an artifact, continue the conversation, reopen the Session and retrieve the same immutable version | Real LLM + workspace/artifact tools |
+| `workspace` | Write a relative filename in one Session; another Session's same-named file stays unchanged | Real LLM + workspace tools |
+| `cancel` | Cancel after actual streamed output begins; reach cancelled state, complete another request and leave no active Run | Real LLM, including a cancelled request |
+
+Every case checks nonzero product-reported input/output token usage and retains
+the provider usage ledger, including on failure. These replace the former MCP
+echo, ordered-addition and numeric-argument probes; there is no external MCP
+server or AI judge. Each case owns its Project, Session, model and files. The
+basic Project disables optional skill, planning and delegation plugins through
+the public API. `--backend jiuwenswarm|legacy` changes execution only; the case
+list and assertions remain identical. L4/L5 inherit these seven cases and keep
+the ten existing nightly cases unchanged.
 
 The basic worker has no suite request or token budget and does not override
 per-request model token settings. Its ledger records forwarded requests,

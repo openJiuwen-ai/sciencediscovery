@@ -46,13 +46,23 @@ export async function realApiProxy({ baseUrl, token, ledger }) {
       for await (const chunk of request) { text += chunk; if (Buffer.byteLength(text) > 1_000_000) throw new Error('REAL_API_PAYLOAD_TOO_LARGE'); }
       const body = JSON.parse(text);
       recordRequest(ledger, body);
-      const captured={ messages: body.messages, tools: body.tools, stream: body.stream, responseChunks: 0 };
+      const captured={ messages: body.messages, tools: body.tools, stream: body.stream, responseChunks: 0, contentDeltas: 0, finishReasons: [] };
       requests.push(captured);
       const result = await fetch(upstream, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(body), signal: controller.signal, redirect: 'error' });
       response.writeHead(result.status, { 'content-type': result.headers.get('content-type') ?? 'application/json' });
       const decoder=new TextDecoder();let pending='',usage;
-      const parse=line=>{try { const value=JSON.parse(line.replace(/^data:\s*/,''));if(value.usage)usage=value.usage; } catch { /* SSE markers/partial records. */ }};
+      const parse = line => {
+        try {
+          const value = JSON.parse(line.replace(/^data:\s*/, ''));
+          if (value.usage) usage = value.usage;
+          // Count actual output, not headers, role-only frames or keepalives.
+          for (const choice of value.choices ?? []) {
+            if (choice.delta?.content || choice.delta?.reasoning_content) captured.contentDeltas++;
+            if (choice.finish_reason) captured.finishReasons.push(choice.finish_reason);
+          }
+        } catch { /* SSE markers/partial records. */ }
+      };
       for await (const chunk of result.body ?? []) {
         captured.responseChunks++;response.write(chunk);
         pending+=decoder.decode(chunk,{stream:true});

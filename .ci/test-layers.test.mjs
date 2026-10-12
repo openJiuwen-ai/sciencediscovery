@@ -119,6 +119,9 @@ test('streamed usage records provider tokens across transport chunks',async t=>{
   const upstream=createServer(async(req,res)=>{
     for await(const _ of req) { /* consume request */ }
     res.setHeader('content-type','text/event-stream');
+    res.write('data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n');
+    res.write(': keepalive\n\ndata: {"choices":[{"delta":{"content":"pong"},"finish_reason":null}]}\n\n');
+    res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
     res.write('data: {"choices":[],"usage":{"prompt_');
     res.end('tokens":20,"completion_tokens":4}}\n\ndata: [DONE]\n\n');
   });
@@ -131,4 +134,6 @@ test('streamed usage records provider tokens across transport chunks',async t=>{
   assert.match(await response.text(),/\[DONE\]/);
   const saved=JSON.parse(readFileSync(ledger));
   assert.equal(saved.inputTokens,20);assert.equal(saved.outputTokens,4);assert.equal(saved.unreportedCalls,0);
+  assert.equal(proxy.requests[0].contentDeltas,1);
+  assert.deepEqual(proxy.requests[0].finishReasons,['stop']);
 });
