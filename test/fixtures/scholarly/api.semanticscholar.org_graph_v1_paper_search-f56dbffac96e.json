@@ -1,8 +1,0 @@
-{
-  "status": 200,
-  "headers": {
-    "content-type": "application/json"
-  },
-  "body": "{\"data\":[],\"total\":0}",
-  "encoding": "utf8"
-}

@@ -1,8 +1,0 @@
-{
-  "status": 200,
-  "headers": {
-    "content-type": "application/json"
-  },
-  "body": "{\"hitCount\":0,\"resultList\":{\"result\":[]}}",
-  "encoding": "utf8"
-}
