@@ -245,8 +245,8 @@ echo, ordered-addition and numeric-argument probes; there is no external MCP
 server or AI judge. Each case owns its Project, Session, model and files. The
 basic Project disables optional skill, planning and delegation plugins through
 the public API. `--backend jiuwenswarm|legacy` changes execution only; the case
-list and assertions remain identical. L4/L5 inherit these seven cases and keep
-the ten existing nightly cases unchanged.
+list and assertions remain identical. L4/L5 inherit these seven basic cases and
+two Runner-recovery cases, then add twelve nightly cases.
 
 `journey-runner-recovery-real.spec.ts` adds two real API cases: the Agent chooses
 to wait after Runner execution is blocked, or explains the failure and finishes

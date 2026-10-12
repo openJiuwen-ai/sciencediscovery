@@ -65,7 +65,7 @@ Manual runs remain available through the command above. Run timeout defaults
 to 30 minutes locally; CI sets `E2E_BIOMNI_RUN_TIMEOUT_MS` to 80 minutes.
 The E2E follows deferred shell executions and automatic main-Agent wake Runs
 before checking final delivery.
-The runner cancels timed-out tasks; there is no automatic retry or monetary cap.
+A task that exceeds this budget is cancelled; there is no automatic retry or monetary cap.
 
 ## Assertions and benchmark fidelity
 
