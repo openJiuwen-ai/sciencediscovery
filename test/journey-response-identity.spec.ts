@@ -149,6 +149,11 @@ test("调整审批后继续阅读完整响应，刷新和工具间隔保持一�
     await journey.step("思考中切换审批", "切换后仍是同一张正在输出的思考卡片。", async () => {
       await openProjectSession(page, fixture!);
       runId = (await sendUserMessage(page, fixture!.session.id, "整理三个科研步骤。")).id;
+      // Agent preparation can outlast a UI assertion. Wait for the actual
+      // reasoning event; the model gate keeps it streaming for the UI checks.
+      await expect.poll(async () => (await records(page, fixture!.session.id, runId))
+        .some(({ event }) => event.type === "assistant.thinking.delta" && event.delta?.includes("先确认科研任务。")),
+      { timeout: 60_000, message: "the agent starts the controlled reasoning stream" }).toBe(true);
       await expect(timeline().locator(".thinking.running")).toContainText("先确认科研任务。");
       await page.locator(".approval-mode-toggle").click();
       await expect(timeline().locator(".boundary-note")).toHaveCount(1);

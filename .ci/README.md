@@ -100,6 +100,9 @@ Backend selection is independent and does not change the 70 browser identities.
 the local entry point retains the full serial suite and one supplemental pass.
 Concurrent local invocations must use prepared dependencies and distinct
 `CI_RESULTS_DIR`, `CI_RUNTIME_DIR`, API/legacy/Runner/evolve/memory-graph ports.
+On one host, let each JiuwenSwarm instance finish binding its automatically
+allocated ports before starting the next stack; separate CI runners do not
+share this port allocator. Browser runs can then overlap.
 The driver writes HTML into the worker's results directory, so reports cannot
 overwrite each other. Leave Playwright `workers: 1` and `retries: 0` unchanged.
 
