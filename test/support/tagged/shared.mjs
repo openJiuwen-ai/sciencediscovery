@@ -24,6 +24,8 @@ import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, python
 import { preflight } from './environment.mjs';
 import { executionConfig, realShards, mockedShards } from './execution.mjs';
 import { checks } from './checks.mjs';
+import { groupResource, schedule, utWorkers } from './scheduler.mjs';
+import { availableParallelism, totalmem } from 'node:os';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
 const json=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n');
@@ -185,6 +187,7 @@ export async function main(args=process.argv.slice(2)) {
   // asked: a query for `--category e2e` needs Chromium and not the Python
   // virtualenvs, exactly as `--slice e2e` does.
   const light=slice==='l1'||profileName==='l1';
+  const workers=slice==='ut'?utWorkers(process.env.CI_UT_WORKERS??'2'):1;
   const categories=query.category??(light?['ut']:slice==='shared'?['ut','st','e2e']:[slice === 'e2e-real' ? 'e2e' : slice]);
   const needUT=!light&&categories.includes('ut'), needPW=categories.includes('e2e');
   env.CI_E2E_BACKEND=execution.backend;
@@ -282,20 +285,40 @@ export async function main(args=process.argv.slice(2)) {
       const group=e.runner==='python'?e.source.split('/').slice(0,2).join('/'):e.source;
       const entries=groups.get(group)??[];entries.push(e);groups.set(group,entries);
     }
-    let index=0;
-    for(const [group,entries] of groups){
+    let peakWorkers=0;
+    const timings=[],controller=new AbortController();
+    const abort=()=>controller.abort();
+    process.once('SIGINT',abort);process.once('SIGTERM',abort);
+    console.log(`Worker pool: ${workers}; available CPUs: ${availableParallelism()}; host memory GiB: ${(totalmem()/2**30).toFixed(1)}`);
+    const tasks=[...groups].map(([group,entries],index)=>({resource:groupResource(group,entries[0].runner),run:async()=>{
       const project=entries[0].runner==='python'?group.split('/')[1]:null;
       const parts=group.split('/');const cwd=['packages','services','apps'].includes(parts[0])?join(root,...parts.slice(0,2)):root;
-      const directory=join(outputDir,`group-${++index}`);
-      console.log(`Run ${index}/${groups.size}: ${group} (${entries.length})`);
+      const directory=join(outputDir,`group-${index+1}`);
+      const startedAt=new Date();
+      console.log(`Run ${index+1}/${groups.size}: ${group} (${entries.length})`);
       if(coverage&&!project)owed.node++;
-      const base=project?projectEnv(env,project):env;
-      const summary=await execute({root,cwd,plan:subplan(plan,entries),outputDir:directory,
-        python:project?python(project):undefined,pytestPlugins:project?pythonPlugins[project]??[]:[],coverageDir:!project&&coverage?join(coverageDir,'node'):undefined,
-        nodeImports:['tsx'],env:recording?recording.env(base):base,timeoutMs:600_000});
-      results.push(...summary.results);errors.push(...summary.problems);
+      const workerEnv={...env,SCIENCE_DISCOVERY_DATA_DIR:join(directory,'runtime'),SCIENCE_AGENT_DATA_DIR:join(directory,'runtime')};
+      const base=project?projectEnv(workerEnv,project):workerEnv;
+      try {
+        return await execute({root,cwd,plan:subplan(plan,entries),outputDir:directory,
+          python:project?python(project):undefined,pytestPlugins:project?pythonPlugins[project]??[]:[],coverageDir:!project&&coverage?join(coverageDir,'node'):undefined,
+          nodeImports:['tsx'],env:recording?recording.env(base):base,timeoutMs:600_000,signal:controller.signal});
+      } finally {
+        const durationMs=Date.now()-startedAt.getTime();
+        timings.push({group,index:index+1,runner:entries[0].runner,startedAt,durationMs});
+        console.log(`Done ${index+1}/${groups.size}: ${group} (${durationMs}ms)`);
+      }
+    }}));
+    let completed;
+    try {completed=await schedule(tasks,{workers,signal:controller.signal,onChange:active=>{peakWorkers=Math.max(peakWorkers,active);}});}
+    finally {process.removeListener('SIGINT',abort);process.removeListener('SIGTERM',abort);}
+    json(join(outputDir,'timing.json'),{workers,peakWorkers,availableCpus:availableParallelism(),hostMemoryBytes:totalmem(),groups:timings.sort((a,b)=>a.index-b.index)});
+    for(const item of completed){
+      if(item.status==='fulfilled'){results.push(...item.value.results);errors.push(...item.value.problems);}
+      else errors.push(`GROUP_EXECUTION_FAILED: ${item.reason?.message??item.reason}`);
     }
-    for(const entry of plan.entries.filter(e=>e.runner==='command')){
+    if(controller.signal.aborted)errors.push('EXECUTION_ABORTED');
+    for(const entry of plan.entries.filter(e=>e.runner==='command'&&!controller.signal.aborted)){
       const [command,...argv]=entry.command;const code=await run(command,argv,env,join(outputDir,entry.id.replaceAll(':','-')+'.log'));
       results.push({key:entry.key,outcome:code?'FAIL':'PASS',actualTarget:entry.target});
     }

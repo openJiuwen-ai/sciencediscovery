@@ -18,6 +18,7 @@ import { resolve, relative, join, isAbsolute, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validatePlan, verifyResults, digest, canonical, subplan } from './plan.mjs';
 import { preflight, hostPlatform, hostArch } from './environment.mjs';
+import { invokeWorker } from './process.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const ignored = new Set(['.git', 'node_modules', '.venv', 'venv', '.e2e', 'dist', '.test-runs', '__pycache__', '.pytest_cache']);
@@ -147,7 +148,7 @@ export function relocateLcov(text, { root, cwd, source }) {
   }).join('\n');
 }
 
-export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pytestPlugins = [], nodeImports = [], coverageDir, env = process.env, timeoutMs = 300_000 }) {
+export async function execute({ root, cwd = root, plan, outputDir, python = 'python3', pytestPlugins = [], nodeImports = [], coverageDir, env = process.env, timeoutMs = 300_000, signal }) {
   validatePlan(plan);
   for (const entry of plan.entries) inside(root, entry.source);
   mkdirSync(outputDir, { recursive: true });
@@ -181,7 +182,7 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
         // artifact uploads leave out without a word.
         const lcov = coverageDir && join(coverageDir, `${files[0].replaceAll('/', '__').replace(/^\./, '_')}.lcov`);
         if (lcov) { mkdirSync(coverageDir, { recursive: true }); rmSync(lcov, { force: true }); }
-        const completed = invoke(process.execPath, [...nodeImports.flatMap(p => ['--import', p]),
+        const completed = await invokeWorker(process.execPath, [...nodeImports.flatMap(p => ['--import', p]),
           // Source maps let records from built output a test reaches — another
           // package's dist/, a child started from dist/server.js — resolve to
           // the TypeScript they were compiled from.
@@ -189,16 +190,16 @@ export async function execute({ root, cwd = root, plan, outputDir, python = 'pyt
           '--test-reporter', join(here, 'node-reporter.mjs'), '--test-reporter-destination', nativeReport,
           ...(lcov ? ['--test-reporter', 'lcov', '--test-reporter-destination', lcov] : []),
           join(here, 'node-worker.mjs')],
-        { root: cwd, env: { ...env, SCIENCE_TAG_RUN_REQUEST: request }, outputDir, name, timeoutMs });
+        { root: cwd, env: { ...env, SCIENCE_TAG_RUN_REQUEST: request }, outputDir, name, timeoutMs, signal });
         if (completed.status !== 0) errors.push(`NODE_WORKER_FAILED: ${name}`);
         if (lcov && existsSync(lcov)) writeFileSync(lcov, relocateLcov(readFileSync(lcov, 'utf8'), { root, cwd, source: files[0] }));
         const reported = nodeResults({ reportPath: nativeReport, entries, label: name });
         results.push(...reported.results); errors.push(...reported.errors);
       } else {
         writeJSON(request, part);
-        const completed = invoke(python, ['-m', 'pytest', '-p', 'science_tags', ...plugins(pytestPlugins), '--strict-markers', '--rootdir', root, '-q',
+        const completed = await invokeWorker(python, ['-m', 'pytest', '-p', 'science_tags', ...plugins(pytestPlugins), '--strict-markers', '--rootdir', root, '-q',
           ...scienceOptions({ root, plan: request, report: resultPath }), ...files.map(f => resolve(root, f))],
-        { root: cwd, env: childEnv(env), outputDir, name, timeoutMs });
+        { root: cwd, env: childEnv(env), outputDir, name, timeoutMs, signal });
         if (completed.status !== 0) errors.push(`PYTHON_WORKER_FAILED: ${name}`);
         if (existsSync(resultPath)) results.push(...readJSON(resultPath).results);
       }

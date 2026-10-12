@@ -74,6 +74,29 @@ SHA, configuration and exact identities, then requires
 wrong-backend results fail. Existing quarantined cases are excluded by policy
 before freezing the plan and are never counted as passed.
 
+### Parallel UT processes inside one job
+
+`pnpm ci:ut` runs a bounded pool of two child processes by default. Set
+`CI_UT_WORKERS=1` for serial diagnosis, or `2` through `4` to compare concurrency
+on the same machine. The standard public Linux runner has four vCPUs and
+16 GB RAM; two workers leave capacity for the shared SDK/adapter and for
+subprocesses started by a test. This does not create additional Actions jobs.
+
+Node files remain separate processes, with serial tests inside each file.
+All API files retain their order because they share the wrapper's JiuwenSwarm
+instance. Python projects also retain their order, while their lane overlaps
+Node execution. Other Node files can use free pool slots. Every group has its
+own product-data directory and reports; the SDK instance remains shared.
+Dependency preparation, collection, command checks and coverage aggregation
+remain outside the pool. Other slices retain serial execution.
+
+The frozen plan and exact result/coverage checks are unchanged. A failed
+group does not discard remaining groups; cancellation stops queued groups and
+terminates running worker process groups. `ut/tagged/timing.json` records the
+worker limit, peak active groups, CPU/memory information and each group's
+duration. Worker logs and timing records stay in their original group folders.
+The recorded host memory is capacity, not measured peak usage.
+
 ### Parallel mocked browser workers
 
 The mocked matrix is frozen from the same `e2e` slice, with four independent
