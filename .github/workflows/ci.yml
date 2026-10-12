@@ -127,9 +127,13 @@ jobs:
       E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
+          cache: pnpm
+      # Node collection imports tsx from the workspace, not the Playwright install.
+      - run: pnpm install --frozen-lockfile
       - run: node test/sync-e2e.mjs --write
       - run: npm ci --prefix .e2e
       # Collection makes no API/model call and needs no credential.
@@ -142,6 +146,15 @@ jobs:
           path: .ci-real-plan/plan.json
           include-hidden-files: true
           if-no-files-found: error
+      - name: Upload real E2E collection diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-collection-diagnostics
+          path: .ci-real-plan
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   real-e2e:
     name: Real E2E (${{ matrix.shard }})
