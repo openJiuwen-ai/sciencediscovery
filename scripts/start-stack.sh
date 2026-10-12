@@ -331,34 +331,12 @@ prepare_local() {
       *) echo "Native sandbox execution is unsupported on $(uname -s)." >&2; exit 1 ;;
     esac
   fi
+  # Installation/build do not require a working execution sandbox. The Runner
+  # probes in its own process and exposes a structured capability report.
   case "$sandbox_provider" in
-    bubblewrap)
-      # The package is called bubblewrap; the executable it installs is bwrap.
-      # Naming only one of the two sends people searching for the wrong thing.
-      require_command "${SCIENCE_AGENT_BWRAP_PATH:-bwrap}" \
-        "bubblewrap is required for isolated Linux execution, but its 'bwrap' executable is not on PATH." \
-        "Install the bubblewrap package — the binary it provides is named bwrap:" \
-        "  Debian / Ubuntu   sudo apt-get install -y bubblewrap" \
-        "  Fedora / RHEL     sudo dnf install -y bubblewrap" \
-        "  openEuler         sudo dnf install -y bubblewrap" \
-        "  Arch              sudo pacman -S bubblewrap" \
-        "  Alpine            sudo apk add bubblewrap" \
-        "Already installed elsewhere? Point SCIENCE_AGENT_BWRAP_PATH at it."
-      ;;
-    seatbelt)
-      if [[ "$(uname -s)" != "Darwin" ]]; then
-        echo "Seatbelt sandbox is available only on macOS." >&2
-        exit 1
-      fi
-      require_command "${SCIENCE_AGENT_SEATBELT_PATH:-/usr/bin/sandbox-exec}" \
-        "macOS Seatbelt is required for isolated execution, but sandbox-exec was not found." \
-        "sandbox-exec ships with macOS, so this usually means the current terminal or a" \
-        "parent sandbox is blocking it rather than something to install." \
-        "See docs/en/how-to/deployment.md#local-mode-host-processes"
-      ;;
+    bubblewrap|seatbelt) ;;
     *) echo "SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt." >&2; exit 1 ;;
   esac
-
   report_dependency_problems
 
   data_dir="$(absolute_from_repository "${SCIENCE_DISCOVERY_DATA_DIR:-.sciencediscovery-data}")"
@@ -620,7 +598,10 @@ start_stack() {
   echo "Starting the sandbox runner daemon..." >&2
   "${runner_command[@]}" &
   pids+=("$!")
-  wait_healthy "runner" "$runner_url/health"
+  local runner_pid="$!"
+  if ! wait_healthy "runner" "$runner_url/health"; then
+    echo "WARNING: local compute is unavailable; the workbench will remain accessible. Configure a remote Runner or repair local execution." >&2
+  fi
 
   # Start the memory-graph sidecar when the feature is available. An explicit
   # SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0 keeps isolated test stacks from
@@ -715,7 +696,12 @@ start_stack() {
 
   # Any Docker process exiting means the single-container stack is broken.
   set +e
-  wait -n
+  # The optional local Runner exiting must not tear down the workbench.
+  local essential_pids=()
+  for pid in "${pids[@]}"; do
+    if [[ "$pid" != "$runner_pid" ]]; then essential_pids+=("$pid"); fi
+  done
+  wait -n "${essential_pids[@]}"
   local status=$?
   set -e
   echo "A ScienceDiscovery process exited with status $status; stopping the stack." >&2

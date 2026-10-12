@@ -107,6 +107,22 @@ export function hostKeyFromError(reason: unknown): { changed: boolean; hostKey: 
 }
 
 export class SettingsApiClient extends ArtifactsApiClient {
+  getRunnerExecutionCapability(runnerId: string, refresh = false): Promise<{
+    runnerId: string; connected: boolean; reason?: string;
+    capability?: import("@sciencediscovery/schema").RunnerExecutionCapability;
+  }> {
+    return this.request(`/api/runners/${encodeURIComponent(runnerId)}/execution-capability`, { method: refresh ? "POST" : "GET" });
+  }
+
+  listExecutionBlocks(sessionId: string): Promise<import("@sciencediscovery/schema").ExecutionBlock[]> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/execution-blocks`);
+  }
+
+  decideExecutionBlock(sessionId: string, id: string, decision: import("@sciencediscovery/schema").ExecutionBlockDecision): Promise<void> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/execution-blocks/${encodeURIComponent(id)}`, {
+      method: "POST", body: JSON.stringify(decision),
+    });
+  }
   getProxySettings(): Promise<ProxySettingsDetails> {
     return this.request("/api/proxy/settings");
   }

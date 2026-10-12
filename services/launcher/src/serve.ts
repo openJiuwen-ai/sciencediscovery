@@ -246,7 +246,8 @@ export async function serve(context: ServeContext, log: (message: string) => voi
     seatbeltPath: settings.seatbeltPath,
     dataDir: settings.dataDir,
     env: context.baseEnv,
-    skipSandboxCheck: settings.skipSandboxCheck,
+    // Management/UI availability is independent of compute readiness.
+    skipSandboxCheck: true,
     warn: log,
   });
   await seedProvisioner(context);
@@ -274,19 +275,28 @@ export async function serve(context: ServeContext, log: (message: string) => voi
 
   const supervisor = new Supervisor({ log });
   const memorySupervisor = new Supervisor({ log });
+  const runnerSupervisor = new Supervisor({ log });
   let stopping = false;
   const shutdown = (signal: NodeJS.Signals): void => {
     if (stopping) return;
     stopping = true;
     log(`\nReceived ${signal}; stopping the ScienceDiscovery stack...`);
-    void supervisor.stop().then(() => memorySupervisor.stop());
+    void supervisor.stop().then(() => Promise.all([memorySupervisor.stop(), runnerSupervisor.stop()]));
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
   try {
     const [runnerService, apiService, memoryService] = services;
-    await supervisor.start([runnerService!]);
+    try {
+      await runnerSupervisor.start([runnerService!]);
+      void runnerSupervisor.waitForFirstExit().then(() => {
+        if (!stopping) log("Local Runner exited; the workbench remains available. Repair or select another Runner before executing code.");
+      });
+    } catch (error) {
+      await runnerSupervisor.stop();
+      log(`Local compute is unavailable: ${String(error)}. The workbench will continue starting.`);
+    }
 
     if (memoryService && await startMemoryGraph(memorySupervisor, memoryService, apiService!, log)) {
       void memorySupervisor.waitForFirstExit().then(() => {
@@ -340,6 +350,7 @@ export async function serve(context: ServeContext, log: (message: string) => voi
     stopping = true;
     await supervisor.stop();
     await memorySupervisor.stop();
+    await runnerSupervisor.stop();
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
   }

@@ -13,12 +13,16 @@
 // limitations under the License.
 
 import type {
+  RunnerCheckResult,
   AgentShellExecution,
   Environment,
   KernelMode,
   ResolvedProxy,
 } from "@sciencediscovery/schema";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
+import { RunnerUnavailableError } from "@sciencediscovery/workspace";
+import { randomUUID } from "node:crypto";
+import { createOperationalLogger } from "@sciencediscovery/operational-logging";
 
 import type { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
@@ -30,7 +34,7 @@ import { readPreparedSkillBundle, readPreparedSkillManifest } from "../skill-san
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
-  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "observeNpuJob" | "workspaceTransfers" | "shellExecutions" | "timers"
+  "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "observeNpuJob" | "workspaceTransfers" | "shellExecutions" | "timers" | "runnerReadiness"
 >;
 
 /**
@@ -48,6 +52,7 @@ export interface RemoteExecutionTarget {
 }
 
 export interface WorkspaceExecutionBindingOptions {
+  beginExternalWait?: () => (() => void);
   agentId: string;
   artifactPathPrefix?: string;
   executionId: string;
@@ -78,6 +83,7 @@ export interface WorkspaceExecutionBindingOptions {
 export function createWorkspaceExecutionBindings(
   options: WorkspaceExecutionBindingOptions,
 ): ExecutionBindings {
+  const executionLogger = () => createOperationalLogger({ category: "api", service: "api", dataDir: options.store.dataDir });
   const requireEnvironmentMutation = async (summary: string, signal?: AbortSignal, runnerId?: string): Promise<void> => {
     options.store.assertSessionWritable(options.sessionId);
     await options.permission.requirePrivilege({
@@ -143,7 +149,9 @@ export function createWorkspaceExecutionBindings(
     return {
       runnerId: target.runnerId,
       remoteHostAlias: target.hostAlias,
-      runnerClient: target.runnerClient(),
+      // Resolve connection lazily: an offline remote is a readiness outcome,
+      // not a failure while merely constructing an approval description.
+      get runnerClient() { return target.runnerClient(); },
       runnerWorkspaceKey: target.workspaceKey,
     };
   };
@@ -154,7 +162,52 @@ export function createWorkspaceExecutionBindings(
    * mount path; a failed sync fails the execution rather than running without
    * the Skills the Session selected.
    */
-  const prepareExecutionTarget = async (machine: string | undefined, signal?: AbortSignal) => {
+  // These records describe FAILED calls, not scheduled executions. They only
+  // let this agent explicitly ask the user about an operation it attempted.
+  const blockedOperations = new Map<string, { runner: RunnerCheckResult; toolCallId?: string; summary: string }>();
+  const waitingOperations = new Set<string>();
+  const checkRunner = async (machine?: string, signal?: AbortSignal, refresh = true): Promise<RunnerCheckResult> => {
+    signal?.throwIfAborted();
+    options.store.assertSessionWritable(options.sessionId);
+    const runnerId = machine?.trim() || "local";
+    options.store.assertSessionAllowsRunner(options.sessionId, runnerId);
+    if (runnerId !== "local" && !options.remoteTargets?.some(x => x.runnerId === runnerId)) {
+      throw new Error("Runner is not available to this Agent");
+    }
+    let result: RunnerCheckResult;
+    try {
+      const capability = await resolveExecutionTarget(runnerId).runnerClient.executionCapability(refresh, signal);
+      const ready = capability.ready === true;
+      result = { runnerId, checkedAt: capability.checkedAt ?? new Date().toISOString(), connected: true, ready,
+        reason: ready ? "ready" : capability.detail || capability.reason || "Runner execution readiness is unknown",
+        capability,
+        suggestions: ready ? [] : [capability.reason === "dependency-unavailable"
+          ? "Install or repair the sandbox executable on the target Runner; check its configured path."
+          : "Inspect the target Runner logs and host/container sandbox permissions. Do not disable isolation automatically.",
+          "After repair use check_runner, or explicitly request user help with wait_for_runner."] };
+    } catch (error) {
+      result = { runnerId, checkedAt: new Date().toISOString(), connected: false, ready: false,
+        reason: error instanceof Error ? error.message : String(error),
+        suggestions: ["Check the target Runner service, connection, authentication and version. A healthy API is not proof of Runner readiness.",
+          "Do not replay an already submitted execution if its outcome is unknown."] };
+    }
+    signal?.throwIfAborted();
+    options.store.assertSessionAllowsRunner(options.sessionId, runnerId);
+    return result;
+  };
+  const prepareExecutionTarget = async (machine: string | undefined, signal?: AbortSignal, toolCallId?: string, summary = "Scientific execution") => {
+    const runner = await checkRunner(machine, signal, false);
+    if (!runner.ready) {
+      const operationId = randomUUID();
+      if (blockedOperations.size >= 128) {
+        const removable = [...blockedOperations.keys()].find(id => !waitingOperations.has(id));
+        if (removable) blockedOperations.delete(removable);
+        else throw new Error("Too many pending Runner decisions; resolve existing requests first");
+      }
+      blockedOperations.set(operationId, { runner, toolCallId, summary: summary.slice(0, 500) });
+      throw new RunnerUnavailableError({ code: "RUNNER_UNAVAILABLE", dispatched: false, operationId, runner,
+        instruction: "This call has finished without dispatching code. Decide whether to continue other work, explain the blocker and finish, or call wait_for_runner(operation_id) to request user help. check_runner is diagnostic only. Do not repeatedly retry unchanged failures. Nothing will execute automatically." });
+    }
     let target = resolveExecutionTarget(machine);
     if (target.runnerId !== "local" && options.skillPackagesRoot) {
       const root = options.skillPackagesRoot;
@@ -189,7 +242,7 @@ export function createWorkspaceExecutionBindings(
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
-      target = await prepareExecutionTarget(machine, signal);
+      target = await prepareExecutionTarget(machine, signal, toolCallId, "Run shell: " + code);
       return {
         agentId: options.agentId,
         code,
@@ -237,6 +290,52 @@ export function createWorkspaceExecutionBindings(
     return job;
   };
   const common: ExecutionBindings = {
+    runnerReadiness: {
+      check: (machine, signal) => checkRunner(machine, signal),
+      wait: async (operationId, signal, waitToolCallId) => {
+        signal?.throwIfAborted();
+        const operation = blockedOperations.get(operationId);
+        if (!operation || waitingOperations.has(operationId)) throw new Error("Unknown, expired or already waiting operation for this Agent run");
+        options.store.assertSessionWritable(options.sessionId);
+        options.store.assertSessionAllowsRunner(options.sessionId, operation.runner.runnerId);
+        waitingOperations.add(operationId);
+        let release: (() => void) | undefined;
+        try {
+          release = options.beginExternalWait?.();
+          const alternatives = [];
+          for (const runnerId of options.store.effectiveRunnerIds(options.sessionId)) {
+            if (runnerId === operation.runner.runnerId) continue;
+            try {
+              if ((await checkRunner(runnerId, signal, false)).ready) alternatives.push({ runnerId, label: runnerId });
+            } catch { signal?.throwIfAborted(); }
+          }
+          const blocked = { sessionId: options.sessionId, executionId: options.executionId,
+            agentId: options.agentId, operationId, toolCallId: operation.toolCallId,
+            runnerId: operation.runner.runnerId, reason: operation.runner.reason,
+            suggestions: operation.runner.suggestions, summary: operation.summary, alternatives };
+          executionLogger().info("runner_wait_requested", { ...blocked, waitToolCallId });
+          const decision = await options.store.executionBlocks.wait(blocked, signal);
+          blockedOperations.delete(operationId);
+          signal?.throwIfAborted();
+          options.store.assertSessionWritable(options.sessionId);
+          executionLogger().info("execution_decision", { ...blocked, decision });
+          if (decision.action === "cancel") return { action: "cancel", operationId, dispatched: false,
+            instruction: "This operation was cancelled or the wait expired. Do not resubmit it without a new user request. You may continue unrelated work." };
+          const runner = await checkRunner(decision.action === "switch" ? decision.runnerId : operation.runner.runnerId, signal);
+          operation.runner = runner;
+          if (!runner.ready) blockedOperations.set(operationId, operation);
+          // Never execute here: a completed failed call cannot come back to life.
+          return { action: decision.action, operationId, dispatched: false, runner,
+            instruction: runner.ready
+              ? "Runner is ready. No code was executed. Decide whether to issue a NEW execution call. For a switched Runner prepare its workspace, inputs and environment first; normal permissions still apply."
+              : "Runner is still unavailable. No code was executed. Decide whether to wait again, do other work or finish; do not automatically retry." };
+        } finally {
+          release?.(); waitingOperations.delete(operationId);
+          // Failed rechecks can be discussed and explicitly waited on again.
+          if (signal?.aborted) blockedOperations.delete(operationId);
+        }
+      },
+    },
     timers: {
       create: async (input) => {
         options.store.assertSessionWritable(options.sessionId);
@@ -373,7 +472,7 @@ export function createWorkspaceExecutionBindings(
         ...(toolCallId ? { toolCallId } : {}),
         summary: `Run Python code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
-      target = await prepareExecutionTarget(machine, signal);
+      target = await prepareExecutionTarget(machine, signal, toolCallId, "Run Python: " + code);
       return options.provenanceRecorder.executePython({
         agentId: options.agentId,
         code,
@@ -517,7 +616,7 @@ export function createWorkspaceExecutionBindings(
           ...(toolCallId ? { toolCallId } : {}),
           summary: `Run ${language} code ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
         });
-        target = await prepareExecutionTarget(machine, signal);
+        target = await prepareExecutionTarget(machine, signal, toolCallId, "Run scientific code: " + code);
         return options.provenanceRecorder.executeScientific({
           agentId: options.agentId,
           code,

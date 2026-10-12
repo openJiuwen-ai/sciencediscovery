@@ -583,6 +583,10 @@ async function startScientificTestApi(
       });
       return;
     }
+    if (url.pathname === "/execution-capability") {
+      send(200, { instanceId: "test-runner", checkedAt: new Date().toISOString(), sandbox: "bubblewrap", dependencyAvailable: true, sandboxUsable: true, ready: true, reason: "ready" });
+      return;
+    }
     if (url.pathname === "/environment-setup") {
       const setup: ScientificEnvironmentSetup = {
         allowedChannels: ["conda-forge"],
