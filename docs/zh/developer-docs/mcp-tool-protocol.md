@@ -433,7 +433,7 @@ Record、Citation 身份及 URL。能产生 ArtifactCandidate 的 Source 还必�
 
 Node 集成测试必须验证：
 
-- 缓存、权限、最大并发和重试；
+- 缓存、权限、最大并发和重试；只有明确分类为只读的 PubMed 和 Europe PMC 元数据检索可在同轮并行，其余 MCP 工具仍串行，来源侧限流照常生效；
 - Python 返回伪造身份或非法 URL 时被拒绝；
 - Artifact 路径穿越、重定向和 checksum 防护；
 - MCP 查询不自动下载；
