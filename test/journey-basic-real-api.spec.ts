@@ -74,7 +74,6 @@ for (const [id,title] of scenarios) {
     const ledger = resolve(process.env.CI_RUNTIME_DIR ?? '.e2e-data', 'basic-api-usage.json');
     const proxy = await realApiProxy({baseUrl:real.E2E_LLM_BASE_URL,token:real.E2E_LLM_TOKEN,ledger});
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
-    let neighbour: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     try {
       await journey.step('Prepare the selected product backend', 'A new Session uses the real model and owns all its records', async () => {
         fixture = await createProjectAndSession(page, {approvalMode:'always_allow',projectName:`Basic ${id} ${randomUUID()}`,sessionTitle:title,
@@ -93,10 +92,12 @@ for (const [id,title] of scenarios) {
         await openProjectSession(page,fixture);
       });
       const prefix = `/api/sessions/${fixture!.session.id}`;
+      const completedRuns: string[] = [];
       const submit = async (prompt: string) => {
         const run = await sendUserMessage(page,fixture!.session.id,`${prompt} Keep the final answer brief. Do not delegate or use web search.`);
         const terminal = await waitForRunTerminal(page,fixture!.session.id,run.id,120_000);
         expect(terminal.status,terminal.error).toBe('completed');
+        completedRuns.push(run.id);
         return {run,delivery:await collectFinalDelivery(page,fixture!.session.id,run.id)};
       };
       await journey.step('Complete the basic user task', title, async () => {
@@ -136,15 +137,16 @@ for (const [id,title] of scenarios) {
           expect(proxy.requests.slice(firstRequest).some((request: any) =>
             JSON.stringify(request.messages).includes(marker))).toBe(true);
         } else if (id === 'workspace') {
-          neighbour = await createProjectAndSession(page, {approvalMode: 'always_allow',
-            projectName: `Neighbour ${randomUUID()}`, sessionTitle: 'Untouched workspace', modelId: fixture!.model!.id});
+          const neighbour = await api(page, `/api/projects/${fixture!.project.id}/sessions`, 'POST', {
+            title: 'Untouched workspace', modelId: fixture!.model!.id,
+          });
           const untouched = `NEIGHBOUR-${randomUUID()}\n`;
-          await uploadFile(page, neighbour.session.id, 'where.txt', untouched);
+          await uploadFile(page, neighbour.id, 'where.txt', untouched);
           await uploadFile(page, fixture!.session.id, 'where.txt', 'before\n');
           await openProjectSession(page, fixture!);
           await submit(`Replace where.txt in this Session workspace with exactly ${marker} followed by a newline. Use a relative path and read the file back.`);
           expect(await readFile(page, fixture!.session.id, 'where.txt')).toBe(`${marker}\n`);
-          expect(await readFile(page, neighbour.session.id, 'where.txt')).toBe(untouched);
+          expect(await readFile(page, neighbour.id, 'where.txt')).toBe(untouched);
         } else if (id==='artifact') {
           const {delivery}=await submit(`Use workspace tools to write ${marker}.md containing the text ${marker}, declare it as an artifact and give its filename.`);
           expect(delivery.status).toBe('passed');
@@ -159,8 +161,10 @@ for (const [id,title] of scenarios) {
           await openProjectSession(page,fixture!);
           expect((await drbApi<any[]>(page,`${prefix}/artifacts`)).some(a=>a.id===artifact!.id)).toBe(true);
         } else if (id==='cancel') {
+          const firstRequest = proxy.requests.length;
           const run=await sendUserMessage(page,fixture!.session.id,'Write a long numbered list of 500 distinct scientific terms. Do not use tools.');
-          await expect.poll(()=>proxy.requests.some((r:any)=>r.stream&&r.contentDeltas>0),{timeout:60_000}).toBe(true);
+          // Exclude auxiliary title requests: only the agent request carries tools.
+          await expect.poll(()=>proxy.requests.slice(firstRequest).some((r:any)=>r.tools?.length && r.stream && r.contentDeltas>0),{timeout:60_000}).toBe(true);
           await api(page,`${prefix}/runs/${run.id}/cancel`,'POST',{});
           expect((await waitForRunTerminal(page,fixture!.session.id,run.id,30_000)).status).toBe('cancelled');
           expect((await submit('Reply with the word READY.')).delivery.answer).toContain('READY');
@@ -168,7 +172,7 @@ for (const [id,title] of scenarios) {
         } else {
           const {run,delivery}=await submit('Reply with the word READY. Do not call tools.');
           expect(delivery.answer).toContain('READY');
-          expect(proxy.requests.some((r:any)=>r.stream===true && r.contentDeltas>0 && r.finishReasons.includes('stop'))).toBe(true);
+          expect(proxy.requests.some((r:any)=>r.tools?.length && r.stream===true && r.contentDeltas>0 && r.finishReasons.includes('stop'))).toBe(true);
           const events=await drbApi<any[]>(page,`${prefix}/runs/${run.id}/events`);
           expect(JSON.stringify(events)).toContain('run.completed');
         }
@@ -176,21 +180,22 @@ for (const [id,title] of scenarios) {
       await journey.step('Verify usage and persist cost evidence', 'The product reports invocations and the shared request ledger remains available', async () => {
         const usage=await drbApi<any>(page,`${prefix}/usage`);
         expect(usage.totals.invocationCount).toBeGreaterThan(0);
-        expect(usage.totals.inputTokens).toBeGreaterThan(0);
-        expect(usage.totals.outputTokens).toBeGreaterThan(0);
+        // A title-generation call must not hide missing usage for the actual Run.
+        for (const runId of completedRuns) {
+          const runUsage = usage.byRun.find((entry: {key: string}) => entry.key === runId);
+          expect(runUsage, `reported usage for completed Run ${runId}`).toBeDefined();
+          expect(runUsage.inputTokens).toBeGreaterThan(0);
+          expect(runUsage.outputTokens).toBeGreaterThan(0);
+        }
         await info.attach('real-api-usage',{body:JSON.stringify(usage),contentType:'application/json'});
       });
     } finally {
       try {
-        try {
-          if (neighbour) await cleanupJourney(page, neighbour);
-        } finally {
-          if (fixture) {
-            await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/current/cancel`, {
-              headers: authorizationHeader(), data: {},
-            }).catch(() => undefined);
-            await cleanupJourney(page, fixture);
-          }
+        if (fixture) {
+          await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/current/cancel`, {
+            headers: authorizationHeader(), data: {},
+          }).catch(() => undefined);
+          await cleanupJourney(page, fixture);
         }
       } finally {
         await proxy.stop();

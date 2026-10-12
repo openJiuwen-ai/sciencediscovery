@@ -152,10 +152,10 @@ and public APIs; it does not import either backend's agent internals.
 | `files` | Read and edit a file; download the exact changed contents and verify a neighbouring file remains byte-identical | Real LLM + workspace tools |
 | `memory` | Reopen the Session, inspect persisted history and ask the model to recall the previous code | Two real-model turns; client reconnection, not a server restart |
 | `artifact` | Deliver an artifact, continue the conversation, reopen the Session and retrieve the same immutable version | Real LLM + workspace/artifact tools |
-| `workspace` | Write a relative filename in one Session; another Session's same-named file stays unchanged | Real LLM + workspace tools |
+| `workspace` | Write a relative filename in one Session; another Session in the same Project keeps its same-named file unchanged | Real LLM + workspace tools |
 | `cancel` | Cancel after actual streamed output begins; reach cancelled state, complete another request and leave no active Run | Real LLM, including a cancelled request |
 
-Every case checks nonzero product-reported input/output token usage and retains
+Every completed Run must have nonzero product-reported input/output token usage and retains
 the provider usage ledger, including on failure. These replace the former MCP
 echo, ordered-addition and numeric-argument probes; there is no external MCP
 server or AI judge. Each case owns its Project, Session, model and files. The
