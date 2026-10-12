@@ -167,6 +167,45 @@ A resident interpreter could otherwise leave a thread or subprocess writing afte
 
 Historical Session profiles are not injected. Select cwd and environment on every call; put required exports and commands in the same script. Python/R memory is not retained between calls. Notebook-style shared memory is outside this implementation.
 
+## 8. Real-model Runner recovery E2E
+
+[`test/journey-runner-recovery-real.spec.ts`](../../../test/journey-runner-recovery-real.spec.ts)
+contains two `tier:l3` real-model journeys. The existing merge-queue `merge`
+profile selects both into the serialized basic worker; daily and release inherit
+them. Ordinary PR L2 does not make these paid model calls.
+
+- **Wait:** a natural-language task requires actual execution and asks to wait
+  for the user's decision if the environment blocks it. The model must choose
+  `wait_for_runner` itself. Assert that its operation ID matches the failed
+  execution, the real UI displays the card and preserves it across reload,
+  browser cancellation reaches the next model input, and the Agent completes
+  without resubmitting code.
+- **Finish:** the user asks for an explanation and explicitly does not want to
+  wait. Assert that the model observes the Runner failure, returns a final
+  answer, and never calls the waiting tool or leaves a pending card.
+
+The test runs the real Runner HTTP implementation with a nonexistent sandbox
+executable in a temporary directory. It does not change the host sandbox, mock
+the model, insert a waiting card, or override tool choice. A Session is restricted
+to that Runner; no code execution may reach its dispatch endpoints. A separate
+hermetic ST verifies the fault fixture's connectivity and fail-closed behavior.
+
+Run against an isolated prepared stack with `E2E_API_TOKEN`, `E2E_BASE_URL`
+(or `E2E_API_URL`), `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, and `E2E_LLM_TOKEN`:
+
+```bash
+cd .e2e
+E2E_REAL=1 npx playwright test ../test/journey-runner-recovery-real.spec.ts --project=real
+```
+
+Each case has a four-minute deadline and no automatic retry. The standard journey
+report, model inputs/tool protocol, target Runner requests, elapsed time and
+provider-reported token ledger are attached, including on failure. No LLM judge
+is used. One pass demonstrates that model's behavior on this run, not universal
+instruction following; inspect the trace to distinguish a model decision error
+from a missing tool, lost result, or UI defect. The CI-selected backend is recorded;
+a native-backend pass does not certify Swarm, or vice versa.
+
 ## Related documentation
 
 - [Shell, environments and workspaces](../core/execution-workspaces.md): user-visible execution behavior.

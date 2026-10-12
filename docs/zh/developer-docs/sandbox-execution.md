@@ -206,6 +206,35 @@ HTTP `/execute`、`/execute-shell`、`/shell-executions` 在创建 Workspace 或
 
 历史 Session profile 不再注入。每次显式选择 cwd 与环境，需要的 export 和命令写在同一个脚本中。Python/R 内存不跨调用保留；Notebook 式共享内存不属于本次实现。
 
+## 8. Runner 恢复的真实模型 E2E
+
+[`test/journey-runner-recovery-real.spec.ts`](../../../test/journey-runner-recovery-real.spec.ts)
+包含两条 `tier:l3` 用例，由 merge queue 的 `merge` profile 选入串行 basic
+worker，每日与 release 测试也继承执行；普通 PR L2 不调用真实模型。
+
+- **等待分支**：自然语言要求实际执行，受阻时等待用户决定，不直接指定工具名或要求弹卡片。
+  检查模型主动调用 `wait_for_runner`，operation ID 对应失败操作，真实前端显示卡片且刷新后保留；
+  浏览器取消后，选择进入下一次模型输入，Agent 正常结束且不重新提交代码。
+- **结束分支**：用户明确要求环境不可用时解释原因并结束，不等待。
+  检查模型实际收到 Runner 故障、给出最终答复，且从未调用等待工具或遗留等待卡片。
+
+故障通过真实 Runner HTTP 服务指向临时目录中不存在的沙箱程序产生，不修改宿主机安全设置，
+不模拟模型、不插入卡片、不强制工具选择。Session 仅允许使用该 Runner，执行请求不得进入
+Runner 的执行端点。另有不使用模型的 ST 检查故障环境仍可连接、直接执行被拒绝。
+
+在隔离测试实例准备好后，配置 `E2E_API_TOKEN`、`E2E_BASE_URL`（或 `E2E_API_URL`）、
+`E2E_LLM_BASE_URL`、`E2E_LLM_MODEL`、`E2E_LLM_TOKEN`，执行：
+
+```bash
+cd .e2e
+E2E_REAL=1 npx playwright test ../test/journey-runner-recovery-real.spec.ts --project=real
+```
+
+每例限时四分钟，不自动重试。不使用 LLM Judge，保留标准 journey 报告、模型输入与工具协议、
+Runner 请求、执行时间和 Provider 返回的 token 用量，失败时也收集。
+单次通过不是对模型指令遵循能力的普遍保证；通过轨迹区分模型决策错误与工具未暴露、结果丢失、
+前端渲染等框架问题。证据记录所选后端，native 通过不能替代 Swarm 验证，反之亦然。
+
 ## 相关文档
 
 - [Shell、环境与 Workspace](../core/execution-workspaces.md)：用户可见的执行行为。

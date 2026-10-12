@@ -24,7 +24,7 @@ No workflow maintains its own list of case titles.
 | --- | --- | --- | --- |
 | L1 | Every PR opened, synchronized or reopened | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
 | L2 (`pr`) | Every PR after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
-| L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + seven short real API journeys + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
+| L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + all ten previously eligible nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
 | L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
 
