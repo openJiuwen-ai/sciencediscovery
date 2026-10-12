@@ -100,7 +100,7 @@ jobs:
       E2E_COMMIT_SHA: ${{ github.sha }}
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
-      CI_PREPARE_BIOMNI: "0" # Existing Biomni cases remain quarantined.
+      CI_PREPARE_BIOMNI: ${{ matrix.prepareBiomni && '1' || '0' }}
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
@@ -118,7 +118,7 @@ jobs:
       E2E_DRB_RUN_TIMEOUT_MS: "3600000"
       E2E_DRB_EVAL_TIMEOUT_MS: "600000"
       E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
-      E2E_BIOMNI_RUN_TIMEOUT_MS: "1200000"
+      E2E_BIOMNI_RUN_TIMEOUT_MS: "4800000"
       LLM_BACKEND: openai
       OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
       OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}

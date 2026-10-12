@@ -1,9 +1,8 @@
 # BiomniBench-DA real Swarm E2E
 
-Two small-data tasks complement the literature-review suite. These tests are
-manual/benchmark opt-in, never part of the mocked PR gate. They use real data,
-real model calls and the running Swarm backend. This change does not add them to
-any currently running six-case research suite.
+Two small-data tasks complement the literature-review suite. These tests run
+in daily and release CI, never in the mocked PR gate. They use real data, real
+model calls and the running Swarm backend.
 
 | Task | Scientific scope | Input |
 | --- | --- | --- |
@@ -60,12 +59,10 @@ cd .e2e
 Alternatively set `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, `E2E_LLM_TOKEN` instead of a
 registered model ID. Playwright `--grep BiomniBench-da-13-3` selects one task
 locally. CI discovers both from source tags, independent of environment filters.
-`E2E_KEEP_RESEARCH_RECORDS=1` preserves application records. Both real cases
-are temporarily quarantined from daily CI while their sandbox environment and
-long-running literature searches are investigated. They remain manually
-runnable through the command above and never enter the PR gate; manual runs
-may enable rubric judging.
-Run timeout defaults to 30 minutes; override with `E2E_BIOMNI_RUN_TIMEOUT_MS`.
+`E2E_KEEP_RESEARCH_RECORDS=1` preserves application records. Daily and
+release CI prepare the two authorized datasets and enable rubric judging.
+Manual runs remain available through the command above. Run timeout defaults
+to 30 minutes locally; CI sets `E2E_BIOMNI_RUN_TIMEOUT_MS` to 80 minutes.
 The E2E follows deferred shell executions and automatic main-Agent wake Runs
 before checking final delivery.
 The runner cancels timed-out tasks; there is no automatic retry or monetary cap.
