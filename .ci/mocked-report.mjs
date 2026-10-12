@@ -16,13 +16,16 @@ export function reconcileMocked(plan, root) {
       const summary = JSON.parse(readFileSync(join(directory, 'e2e/tagged/summary.json')));
       if (worker.revision !== plan.revision || worker.profile !== plan.profile || worker.evaluatorRevision !== plan.evaluatorRevision || canonical(worker.execution) !== canonical(plan.execution)
         || canonical(worker.entries) !== canonical(plan.entries.filter(e => shard.keys.includes(e.key)))) throw new Error('SHARD_IDENTITY_MISMATCH');
-      if (summary.status !== 'PASS' || summary.planDigest !== worker.digest || verifyResults(worker, summary.results).exitCode) throw new Error('SHARD_FAILED');
+      if (summary.planDigest !== worker.digest) throw new Error('SHARD_RESULT_PLAN_MISMATCH');
+      // Keep validly identified failures in the totals: a failed worker ran
+      // its cases, whereas an absent or mismatched artifact proves no run.
+      results.push(...summary.results);
+      if (summary.status !== 'PASS' || verifyResults(worker, summary.results).exitCode) errors.push(`${shard.name}: SHARD_FAILED`);
       const evidence = join(directory, `mocked-${shard.fixture}`, 'e2e/jiuwenswarm-checks.json');
       if (shard.checks.length) {
         const checks = JSON.parse(readFileSync(evidence));
         if (canonical(checks) !== canonical(shard.checks.map(name => ({ name, outcome: 'PASS' })))) throw new Error('SWARM_CHECKS_INCOMPLETE');
       } else if (existsSync(evidence)) throw new Error('UNEXPECTED_SWARM_CHECKS');
-      results.push(...summary.results);
     } catch (error) { errors.push(`${shard.name}: ${error.code === 'ENOENT' ? 'SHARD_EVIDENCE_MISSING' : error.message}`); }
   }
   return verifyResults(plan, results, errors);

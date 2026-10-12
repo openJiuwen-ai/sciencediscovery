@@ -93,6 +93,17 @@ test('mocked reconciliation rejects source, revision, backend and case-set drift
   }
 });
 
+test('a failed case remains executed and failed in the suite totals', t => {
+  const p = plan(), root = evidence(t, p), path = file(root, 'e2e/tagged/summary.json');
+  const summary = JSON.parse(readFileSync(path));
+  summary.results[0].outcome = 'FAIL'; summary.status = 'FAIL';
+  writeFileSync(path, JSON.stringify(summary));
+  const result = reconcileMocked(p, root);
+  assert.equal(result.status, 'FAIL'); assert.equal(result.executed, 5);
+  assert.equal(result.passed, 4); assert.equal(result.failed, 1);
+  assert.ok(!result.problems.some(p => p.startsWith('NOT_RUN:')));
+});
+
 test('supplemental checks must run once, in order, on their designated stack', t => {
   for (const mutation of ['missing', 'omitted', 'duplicate', 'failed', 'order', 'wrong-worker']) {
     const p = plan(), root = evidence(t, p), path = file(root, 'mocked-standard/e2e/jiuwenswarm-checks.json');
