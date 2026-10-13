@@ -7,7 +7,7 @@ export class RunPollRecovery {
   succeeded(): void { this.failures = 0; }
   failed(error: unknown): number {
     const message = error instanceof Error ? error.message : String(error);
-    if (!/-> (502|503|504):|ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up/i.test(message) || ++this.failures > 3) throw error;
+    if (!/-> (502|503|504):|ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|Timeout \d+ms exceeded/i.test(message) || ++this.failures > 3) throw error;
     return this.failures;
   }
 }

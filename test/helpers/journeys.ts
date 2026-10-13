@@ -19,6 +19,8 @@ import { expect, request, type Locator, type Page, type TestInfo } from "@playwr
 
 import { apiBaseUrl, authorizationHeader } from "../e2e-auth.js";
 import { RunPollRecovery } from "./run-poll-recovery.js";
+import { RunChainSettler } from "./run-chain.ts";
+import { stopAndVerifySession, type SessionActivity, type SessionShutdownResult } from "./session-shutdown.ts";
 
 export interface JourneyModel {
   id: string;
@@ -48,10 +50,13 @@ export type JourneyRunStatus =
   | "running";
 
 export interface JourneyRun {
+  automaticWake?: boolean;
   createdAt: string;
   error?: string;
   id: string;
+  notificationDelivery?: { agentId: string };
   prompt: string;
+  queueOrder?: number;
   sessionId: string;
   status: JourneyRunStatus;
 }
@@ -129,13 +134,14 @@ const TERMINAL_RUN_STATUSES = new Set<JourneyRunStatus>([
 async function apiJson<T>(
   page: Pick<Page, "request">,
   path: string,
-  options: { data?: unknown; method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT" } = {},
+  options: { data?: unknown; method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT"; timeoutMs?: number } = {},
 ): Promise<T> {
   const method = options.method ?? "GET";
   const response = await page.request.fetch(`${apiBaseUrl()}${path}`, {
     ...(options.data === undefined ? {} : { data: options.data }),
     headers: authorizationHeader(),
     method,
+    ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
   });
   if (!response.ok()) {
     throw new Error(`${method} ${path} -> ${response.status()}: ${await response.text()}`);
@@ -510,6 +516,78 @@ export async function waitForRunTerminal(
     return current?.status;
   }, { message: `Run ${runId} should reach a terminal state`, timeout }).toMatch(/^(cancelled|completed|failed|interrupted)$/);
   return current!;
+}
+
+/** The entire generation budget expired while the main-Agent Run chain was still active. */
+export class RunChainTimeoutError extends Error {
+  constructor(rootRunId: string, timeoutMs: number) {
+    super(`Run chain rooted at ${rootRunId} did not settle within ${timeoutMs} ms`);
+    this.name = "RunChainTimeoutError";
+  }
+}
+
+/**
+ * Follow one foreground Run through deferred shell work and automatic main-Agent wake Runs.
+ * Wait until its Session Runs, main-Agent executions and timers have stayed quiet.
+ */
+export async function waitForRunChainTerminal(
+  page: Page,
+  sessionId: string,
+  rootRunId: string,
+  options: { quietMs?: number; timeout?: number } = {},
+): Promise<{ run: JourneyRun; runs: JourneyRun[] }> {
+  const timeout = options.timeout ?? 420_000;
+  const quietMs = options.quietMs ?? 3_000;
+  const deadline = Date.now() + timeout;
+  const settler = new RunChainSettler<JourneyRun>();
+  const recovery = new RunPollRecovery();
+  let lastReadError: unknown;
+  const prefix = `/api/sessions/${encodeURIComponent(sessionId)}`;
+  while (Date.now() < deadline) {
+    try {
+      const requestTimeout = Math.max(1_000, Math.min(5_000, deadline - Date.now()));
+      const runs = await apiJson<JourneyRun[]>(page, `${prefix}/runs`, { timeoutMs: requestTimeout });
+      const activity = await apiJson<{ executions?: Array<{ agentId?: string; id?: string; state?: string }>;
+        timers?: Array<{ agentId?: string; id?: string; state?: string }> }>(
+        page, `${prefix}/agent-activity`, { timeoutMs: requestTimeout },
+      );
+      recovery.succeeded();
+      lastReadError = undefined;
+      const settled = settler.observe(runs, activity.executions ?? [], rootRunId, Date.now(), quietMs, activity.timers ?? []);
+      if (settled) return settled;
+    } catch (error) {
+      settler.resetQuiet();
+      lastReadError = error;
+      const failures = recovery.failed(error);
+      console.warn(`[run-chain-poll] root=${rootRunId} transient failure ${failures}/3: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(250, Math.max(1, deadline - Date.now()))));
+  }
+  if (lastReadError) throw lastReadError;
+  throw new RunChainTimeoutError(rootRunId, timeout);
+}
+
+/** Stop wake admission first, then cancel and verify all work in this isolated E2E Session. */
+export async function cancelActiveSessionRuns(page: Page, sessionId: string): Promise<SessionShutdownResult<JourneyRun>> {
+  const prefix = `/api/sessions/${encodeURIComponent(sessionId)}`;
+  const request = <T>(path: string, method: "GET" | "POST" = "GET", timeoutMs = 5_000) =>
+    apiJson<T>(page, path, { method, timeoutMs: Math.min(5_000, timeoutMs) });
+  return stopAndVerifySession<JourneyRun>({
+    stop: async (timeoutMs) => { await request(`${prefix}/runs/current/cancel`, "POST", timeoutMs); },
+    snapshot: async (timeoutMs) => {
+      const [runs, activity] = await Promise.all([
+        request<JourneyRun[]>(`${prefix}/runs`, "GET", timeoutMs), request<SessionActivity>(`${prefix}/agent-activity`, "GET", timeoutMs),
+      ]);
+      if (!Array.isArray(runs) || !Array.isArray(activity.agents) || !Array.isArray(activity.executions)
+        || !Array.isArray(activity.timers) || !activity.agents.some((agent) => agent.agentId === "main")) {
+        throw new Error("Session shutdown snapshot is incomplete");
+      }
+      return { runs, activity };
+    },
+    cancelRun: async (id, timeoutMs) => { await request(`${prefix}/runs/${encodeURIComponent(id)}/cancel`, "POST", timeoutMs); },
+    cancelExecution: async (id, timeoutMs) => { await request(`${prefix}/agent-activity/executions/${encodeURIComponent(id)}/cancel`, "POST", timeoutMs); },
+    cancelTimer: async (id, timeoutMs) => { await request(`${prefix}/agent-activity/timers/${encodeURIComponent(id)}/cancel`, "POST", timeoutMs); },
+  });
 }
 
 /**

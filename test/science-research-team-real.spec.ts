@@ -3,13 +3,18 @@
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
+import { requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { evaluateTeam } from "./helpers/research-team.ts";
 import { expect } from "@playwright/test";
 import { test, allowRealEnvException, requireRealEnv, requireRealStack } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
-import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage } from "./helpers/journeys.ts";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
+  sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { startDeliverableChecker } from "./fixtures/deliverable-check.mjs";
+
+import { mainRunChain } from "./helpers/run-chain.ts";
+import { RunChainTimeoutError } from "./helpers/journeys.ts";
 
 const prompt = "综述 2020—2025 年 BRCA1 致病性或可能致病性胚系变异与女性乳腺癌风险的证据。提取可追溯的风险比或效应量，按指标类型及可比研究条件分组，进行小规模描述性统计，不进行合并效应估计；提供输入数据、可复现代码和结果。输出含 Methods、Results、References 章节的证据简报，并完成团队配置的交付审核。证据不足时明确说明，不得补造数据。";
 const roles = ["literature-searcher", "evidence-extractor", "code-engineer", "result-evaluator", "report-writer"];
@@ -104,27 +109,53 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
       : prompt;
     metrics.prompt = runPrompt;
     const run = await sendUserMessage(page, fixture.session.id, runPrompt); runId = run.id;
-    metrics.session_id = fixture.session.id; metrics.run_id = runId;
+    metrics.session_id = fixture.session.id; metrics.initial_run_id = runId; metrics.run_id = runId;
     await save("team-metrics.json", metrics);
-    while (Date.now() - started < budget) {
-      const runs = await api<any[]>(`${prefix}/runs`);
-      const state = runs.find(r => r.id === runId);
-      children = await api<any[]>(`${prefix}/subagents`);
-      await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
-      if (state && ["completed", "failed", "cancelled"].includes(state.status)) {
-        terminal = true; metrics.run = state; break;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10_000));
+    try {
+      const finished = await waitForRunChainTerminal(page, fixture.session.id, runId, { timeout: budget });
+      terminal = true;
+      runId = finished.run.id;
+      metrics.run_id = runId;
+      metrics.run = finished.run;
+      metrics.run_status = finished.run.status;
+      metrics.run_error = finished.run.error;
+      metrics.run_chain = finished.runs.map(({ automaticWake, error, id, queueOrder, status }) =>
+        ({ automatic_wake: Boolean(automaticWake), error, id, queue_order: queueOrder, status }));
+    } catch (error) {
+      if (!(error instanceof RunChainTimeoutError)) throw error;
+      metrics.run_status = "budget_exhausted";
+      metrics.run_error = error.message;
+      // Stop wake admission before cancelling active Runs, executions and timers.
+      const stopped = await cancelActiveSessionRuns(page, fixture.session.id);
+      metrics.shutdown = { ...stopped, runs: undefined };
+      const chain = mainRunChain(stopped.runs ?? [], metrics.initial_run_id);
+      const latest = chain.at(-1);
+      runId = latest?.id ?? runId;
+      metrics.run_id = runId;
+      metrics.run = latest;
+      metrics.run_terminal_status = latest?.status;
+      metrics.run_chain = chain.map(({ automaticWake, error: runError, id, queueOrder, status }) =>
+        ({ automatic_wake: Boolean(automaticWake), error: runError, id, queue_order: queueOrder, status }));
+      terminal = stopped.status === "stopped";
     }
     metrics.generation_duration_ms = Date.now() - started;
-    if (!terminal) {
-      await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers }).catch(() => undefined);
-    }
-    const delivery = await collectFinalDelivery(page, fixture.session.id, runId);
-    metrics.delivery = delivery;
-    metrics.integration = delivery.status;
     await save("team-metrics.json", metrics);
-    expect(delivery.status, "Main run must complete and reference a readable nonempty final artifact").toBe("passed");
+    const delivery = await collectFinalDelivery(page, fixture.session.id, runId, metrics.initial_run_id);
+    metrics.delivery = delivery;
+    metrics.integration = metrics.run_status === "budget_exhausted" && delivery.status === "passed" ? "partial" : delivery.status;
+    const required = requiredArtifacts(delivery.artifacts, ["evidence_brief.md"]);
+    metrics.required_outputs = { missing: required.missing };
+    if (required.missing.length && delivery.status === "passed") {
+      delivery.status = "failed";
+      delivery.errors.push("Missing required final output: evidence_brief.md");
+      metrics.integration = "failed";
+    }
+    await save("team-metrics.json", metrics);
+    children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
+    await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
+    expect(metrics.run_status, "A budget-expired generation is not a passed E2E, even if partial artifacts exist").not.toBe("budget_exhausted");
+    expect(delivery.status, "Main run must complete with readable, nonempty declared final artifacts").toBe("passed");
+    expect(required.missing, "The final handoff must include the audited evidence brief").toEqual([]);
     try {
       const catalog = await api<any[]>(`${prefix}/artifacts`);
       for (const a of catalog) {
@@ -152,7 +183,10 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     metrics.finished_at = new Date().toISOString();
     if (fixture) {
       const prefix = `/api/sessions/${fixture.session.id}`;
-      if (runId && !terminal) await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers }).catch(() => undefined);
+      if (runId && !terminal) {
+        metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
+        if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
+      }
       metrics.usage = await api(`${prefix}/usage`).catch(() => null);
       children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
     }
@@ -166,5 +200,6 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
       if (connector) await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${connector}`, { headers }).catch(() => undefined);
       await checker.stop();
     }
+    if (metrics.cleanup_error) throw new Error(metrics.cleanup_error);
   }
 });

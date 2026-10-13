@@ -95,8 +95,16 @@ records. Neither means a full quality assessment succeeded.
 
 ## Assertions and score semantics
 
-E2E success requires a completed main run whose final response references at least
-one readable, nonempty persisted artifact. Names and directories are unrestricted.
+E2E success requires a completed main Run chain with a readable, nonempty
+declared final report selected as the newest declaration of that Artifact
+name across the main Run chain. The requested `deepresearchbench-<id>.md`
+may be nested; a differently named Markdown/text report is accepted only when
+its producing Run explicitly hands it off as the final report. The official
+named report remains authoritative when a later wake merely mentions notes.
+An intermediate note alone cannot pass. A later wake declaring another file
+does not erase an earlier report; an unreadable newer declaration of the same
+name does not
+fall back to an older one. Broken supplementary files remain diagnostics.
 A failed or cancelled run with outputs is a partial delivery. Research activity,
 child counts, word counts, headings, URL counts and quality scores do not gate
 completion. Scoring uses the immutable report version selected by final delivery;

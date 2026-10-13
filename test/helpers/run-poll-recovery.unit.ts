@@ -16,6 +16,13 @@ test("run polling tolerates three transient errors, resets after success, and th
   assert.throws(() => budget.failed(error), /ReadError/);
 });
 
+test("Playwright read timeouts use the transient budget, including near the deadline", () => {
+  const budget = new RunPollRecovery();
+  assert.equal(budget.failed(new Error("apiRequestContext.fetch: Timeout 5000ms exceeded.")), 1);
+  budget.succeeded();
+  assert.equal(budget.failed(new Error("Timeout 1000ms exceeded.")), 1);
+});
+
 test("run polling does not hide auth, missing runs, or programming errors", () => {
   for (const text of ["GET /runs -> 401: denied", "GET /runs -> 404: missing", "Unexpected token"])
     assert.throws(() => new RunPollRecovery().failed(new Error(text)));

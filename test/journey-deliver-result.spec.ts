@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./helpers/e2e.ts";
+import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import {
   artifactTree,
   cleanupJourney,
@@ -24,7 +25,7 @@ import {
   openProjectSession,
   scriptedModel,
   sendUserMessage,
-  waitForRunTerminal,
+  waitForRunChainTerminal,
 } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
@@ -113,6 +114,7 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
   });
 
   let tree!: Awaited<ReturnType<typeof artifactTree>>;
+  let firstVersionId: string | undefined;
   try {
     await journey.step(
       "进入会话，确认还没有任何产物",
@@ -132,7 +134,12 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
           fixture.session.id,
           "Analyze the small measurement set, keep intermediate data private, and deliver a Markdown summary.",
         );
-        expect((await waitForRunTerminal(page, fixture.session.id, firstRun.id)).status).toBe("completed");
+        const firstChain = await waitForRunChainTerminal(page, fixture.session.id, firstRun.id);
+        expect(firstChain.run.status).toBe("completed");
+        const firstDelivery = await collectFinalDelivery(page, fixture.session.id, firstChain.run.id, firstRun.id);
+        expect(firstDelivery.status, firstDelivery.errors.join("; ")).toBe("passed");
+        expect(firstDelivery.artifacts[0]?.text).toContain("mean=42.0");
+        firstVersionId = firstDelivery.artifacts[0]?.version;
         expect(stub.calls.some(call => call.turn === 0
           && call.toolResults?.some(result => result.includes(firstMarker)))).toBe(true);
         const tool = await expandToolStep(page, { contains: firstMarker });
@@ -199,8 +206,12 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
           fixture.session.id,
           "Revise the existing summary with the updated measurements; keep it as the same deliverable.",
         );
-        const terminal = await waitForRunTerminal(page, fixture.session.id, secondRun.id);
-        expect(terminal.status, terminal.error).toBe("completed");
+        const secondChain = await waitForRunChainTerminal(page, fixture.session.id, secondRun.id);
+        expect(secondChain.run.status, secondChain.run.error).toBe("completed");
+        const secondDelivery = await collectFinalDelivery(page, fixture.session.id, secondChain.run.id, secondRun.id);
+        expect(secondDelivery.status, secondDelivery.errors.join("; ")).toBe("passed");
+        expect(secondDelivery.artifacts[0]?.text).toContain("mean=50.0");
+        expect(secondDelivery.artifacts[0]?.version).not.toBe(firstVersionId);
         expect(stub.calls.some(call => call.turn === 1 && call.tool === "execution_status")).toBe(true);
         expect(stub.calls.some(call => call.turn === 1
           && call.toolResults?.some(result => result.includes(secondMarker)))).toBe(true);
@@ -255,6 +266,87 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
     await cleanupJourney(page, fixture);
     await stub.stop();
   }
+});
+
+/**
+ * E2E-META
+ * Purpose: Declared Session output versions establish delivery even when the final chat reply omits the file name.
+ * Steps:
+ *   1. Use a local scripted model to write and declare one answer file.
+ *   2. Complete the Run with a short acknowledgement that does not mention the file.
+ *   3. Wait for the main Run chain and validate the versioned final output through the real API.
+ * Environment: Isolated local Web/API/Runner/Swarm stack with a journey-owned Project and Session.
+ * Type: mocked
+ * LLM: Local deterministic OpenAI-compatible HTTP stub.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none
+ * Credentials: Isolated E2E API token only.
+ * CostSideEffects: No external cost; temporary records are deleted in finally.
+ */
+test("declared output passes when the final reply only says done", { tag: "@mocked" }, async ({ page, journey }) => {
+  test.setTimeout(120_000);
+  journey.scenario({ goal: "Validate the declared report even when the last reply only acknowledges completion" });
+  const stub = await scriptedModel([[
+    { tool: "run_shell", arguments: { command: "mkdir -p results && printf 'Final answer\n' > results/answer.txt" } },
+    { tool: "declare_artifact", arguments: { path: "results/answer.txt" } },
+    { text: "Done." },
+  ]]);
+  const fixture = await createProjectAndSession(page, {
+    approvalMode: "always_allow",
+    model: { apiToken: stub.apiToken, baseUrl: stub.baseUrl, model: stub.model, name: `Delivery local model ${Date.now()}` },
+    projectName: `Versioned delivery ${Date.now()}`,
+    sessionTitle: "Versioned final output",
+  });
+  try {
+    await openProjectSession(page, fixture);
+    const root = await sendUserMessage(page, fixture.session.id, "Produce and declare results/answer.txt.");
+    const settled = await waitForRunChainTerminal(page, fixture.session.id, root.id);
+    expect(settled.run.status).toBe("completed");
+    const delivery = await collectFinalDelivery(page, fixture.session.id, settled.run.id, root.id);
+    expect(delivery.answer).toBe("Done.");
+    expect(delivery.status, delivery.errors.join("; ")).toBe("passed");
+    expect(delivery.artifacts[0]?.text).toBe("Final answer\n");
+  } finally {
+    await cleanupJourney(page, fixture);
+    await stub.stop();
+  }
+});
+
+/**
+ * E2E-META
+ * Purpose: A single Playwright API read timeout does not abort Run-chain settlement.
+ * Steps:
+ *   1. Make the first read of Session Runs fail with Playwright's timeout message.
+ *   2. Return a completed root Run and idle Agent activity on the next reads.
+ *   3. Verify settlement uses those reads and returns the root Run.
+ * Environment: Mocked E2E stack with the Playwright API reads stubbed locally.
+ * Type: mocked
+ * LLM: none
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: none
+ * OtherExternal: none
+ * Credentials: Isolated E2E API token only.
+ * CostSideEffects: No external cost or persistent records.
+ */
+test("run-chain polling retries a Playwright request timeout", { tag: "@mocked" }, async ({ journey }) => {
+  journey.scenario({ goal: "Settle the Run chain after one transient API read timeout" });
+  const reads: string[] = [];
+  const page = { request: { fetch: async (url: string, options: { timeout?: number; method?: string }) => {
+    const endpoint = url.endsWith("/runs") ? "runs" : "activity";
+    reads.push(endpoint);
+    expect(options.method).toBe("GET");
+    expect(options.timeout).toBe(5_000);
+    if (reads.length === 1) throw new Error("apiRequestContext.fetch: Timeout 5000ms exceeded.");
+    return { ok: () => true, json: async () => endpoint === "runs"
+      ? [{ id: "root", queueOrder: 1, status: "completed" }]
+      : { executions: [], timers: [] } };
+  } } } as unknown as Page;
+  const result = await waitForRunChainTerminal(page, "session", "root", { quietMs: 0, timeout: 10_000 });
+  expect(result.run.id).toBe("root");
+  expect(reads).toEqual(["runs", "runs", "activity"]);
 });
 
 });

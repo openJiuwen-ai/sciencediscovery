@@ -66,6 +66,8 @@ long-running literature searches are investigated. They remain manually
 runnable through the command above and never enter the PR gate; manual runs
 may enable rubric judging.
 Run timeout defaults to 30 minutes; override with `E2E_BIOMNI_RUN_TIMEOUT_MS`.
+The E2E follows deferred shell executions and automatic main-Agent wake Runs
+before checking final delivery.
 The runner cancels timed-out tasks; there is no automatic retry or monetary cap.
 
 ## Assertions and benchmark fidelity
@@ -75,13 +77,20 @@ appendix only maps `/app` paths to the actual workspace and asks for declaration
 of the two originally required artifacts, `trace.md` and `answer.txt`. It adds
 no analysis method, ranking convention, JSON schema or delegation restriction.
 
-- Require a completed main run and at least one readable, nonempty persisted
-  artifact referenced in its final response. Fixed names are not completion
-  assertions. Failed/cancelled runs with outputs are partial deliveries.
+- Require a completed main Run chain and readable, nonempty declared versions
+  of both required outputs, `trace.md` and `answer.txt` (nested paths are fine),
+  from its final output handoff. For each Artifact name, select its newest
+  declaration across the main Run chain, including child versions attributed
+  to their parent Run. A later wake declaring a different file does not erase
+  earlier required outputs; a broken newer version of the same name cannot
+  fall back to an older one. The final reply need not repeat an Artifact link.
+  Unreadable supplementary files are recorded as delivery errors but do not
+  fail the required output check. A draft or intermediate file alone does not
+  pass the E2E. Failed/cancelled runs with outputs are partial deliveries.
 - Scientific correctness and completeness are evaluated by the unchanged upstream
-  rubric. The scorer still consumes the officially required `trace.md` and
-  `answer.txt`; unavailable scoring inputs record an evaluation error without
-  changing delivery success. No local numerical assertion blocks scoring.
+  rubric. The scorer consumes the officially required `trace.md` and
+  `answer.txt`; scoring errors and low scores remain separate from the final
+  output presence check. No local numerical assertion blocks scoring.
 - Retain raw artifacts and trajectories for investigation when needed. The legacy
   numerical verifier is available offline and is not automatically run.
 - Do not execute Agent-generated scripts on the host verifier.
