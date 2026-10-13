@@ -30,6 +30,15 @@ import { startSwarm, withoutSwarm } from './swarm.mjs';
 import { availableParallelism, totalmem } from 'node:os';
 
 const root=fileURLToPath(new URL('../../../',import.meta.url));
+// Source-loaded JavaScript workspaces participate in V8 coverage as-is. Only
+// TypeScript projects need re-emission with source maps; retain pnpm's dependency
+// ordering and propagate compiler errors rather than making compilation optional.
+export function coverageSourceMapStep(repositoryRoot=root) {
+  const projects=globSync(['packages/*/tsconfig.json','services/*/tsconfig.json','config/tsconfig.json'],{cwd:repositoryRoot})
+    .map(file=>file.replace(/[/\\]tsconfig\.json$/,''))
+    .filter(directory=>existsSync(join(repositoryRoot,directory,'package.json'))).sort();
+  return projects.length ? ['pnpm',['--recursive',...projects.flatMap(directory=>['--filter',`./${directory}`]),'exec','tsc','-p','tsconfig.json','--sourceMap']] : undefined;
+}
 const json=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n');
 // The log always gets the child's output; `echo` also passes it through as it
 // arrives, for a step whose progress is what the reader of a job log waits for.
@@ -217,7 +226,7 @@ export async function main(args=process.argv.slice(2)) {
     if(needUT&&coverage)for(const project of pythonProjects)steps.push(['uv',['pip','install','--python',python(project),coverageRequirement]]);
     // The same compiler over the same sources, with maps beside the output, so
     // code a test reaches through `dist/` is credited to the file it came from.
-    if(coverage)steps.push(['pnpm',['--recursive','--filter','./packages/*','--filter','./services/*','--filter','./config','exec','tsc','-p','tsconfig.json','--sourceMap']]);
+    if(coverage){const sourceMaps=coverageSourceMapStep();if(sourceMaps)steps.push(sourceMaps);}
     if(needPW)steps.push(['node',['test/sync-e2e.mjs','--write']],['npm',['ci','--prefix','.e2e']],['.e2e/node_modules/.bin/playwright',['install','chromium']]);
     for(let i=0;i<steps.length;i++){const [cmd,argv]=steps[i];console.log(`Prepare: ${cmd} ${argv.join(' ')}`);if(await run(cmd,argv,env,join(outputDir,`prepare-${i}.log`)))throw new Error(`PREPARATION_FAILED: inspect ${join(outputDir,`prepare-${i}.log`)}`);}
   }
