@@ -1491,3 +1491,42 @@ test("a selected preset that disappears from the list falls back to the first pr
   assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, first!.id);
   assert.equal(hasCustomFields(renderer!), false);
 });
+
+test("clearing a custom name the user already typed does not yield automatic custom mode when presets arrive", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "本地网关" } });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "" } });
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-custom-name" }).props.value, "");
+});
+
+test("an API key entered before presets arrive keeps automatic custom mode and the key", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-kept" } });
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "sk-kept");
+});
