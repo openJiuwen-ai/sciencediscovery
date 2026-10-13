@@ -166,7 +166,7 @@ export async function testModelConnectivity(
 
   const probe = connectivityRequest(options.profile, apiToken);
   const controller = new AbortController();
-  const dispatcher = proxyDispatcher(proxy);
+  const dispatcher = proxyDispatcher(proxy, probe.url);
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;

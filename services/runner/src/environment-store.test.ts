@@ -116,6 +116,21 @@ async function fixture(
   return { commands, executions, executor, provisionerPath, root, store };
 }
 
+test("environment operations apply scoped proxy policy without changing process environment", async (context) => {
+  const { store, executions } = await fixture(context);
+  const original = process.env.HTTPS_PROXY;
+  await store.initialize();
+  await store.withNetworkProxy({ mode: "url", url: "http://proxy.example.test:8080", noProxy: "internal.test" }, () => store.setupManagedEnvironments());
+  assert.ok(executions.length > 0);
+  assert.ok(executions.every(item => item.environment?.HTTPS_PROXY === "http://proxy.example.test:8080"));
+  assert.ok(executions.every(item => item.environment?.NO_PROXY?.includes("localhost")));
+  executions.length = 0;
+  await store.withNetworkProxy({ mode: "direct" }, () => store.createTask("direct-task", "python"));
+  assert.ok(executions.length > 0);
+  assert.ok(executions.every(item => item.environment?.HTTPS_PROXY === undefined));
+  assert.equal(process.env.HTTPS_PROXY, original);
+});
+
 test("scientific environment lifecycle advances immutable revisions only after success", async (context) => {
   const { store } = await fixture(context);
   await store.initialize();
