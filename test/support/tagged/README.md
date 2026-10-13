@@ -202,9 +202,9 @@ and `release` mean L2, L3, L4 and L5. `pnpm test:policy` prints the exact rules.
 The default `pr` plan is credential-free. L3 adds nine real API cases: seven
 basic journeys and two Runner-recovery journeys. L4 adds all ten previously
 eligible nightly cases, for 19 real cases in total.
-L5 currently selects the same cases and evaluation modes as L4, retaining its
-separate extension row for future release-only coverage. Both record existing
-AI scores without a historical baseline gate. Existing
+L5 additionally selects all 132 DeepResearchBench II release benchmark tasks
+(151 real cases total), fetched at a pinned revision only at execution time.
+Complete rubric evaluation is required, without a historical quality baseline gate. Existing
 quarantined cases remain discoverable but outside automatic profiles.
 
 `l1`, `ut`, `st`, `e2e` and `e2e-real` partition the selected profile. L1 command

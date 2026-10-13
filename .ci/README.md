@@ -26,7 +26,7 @@ No workflow maintains its own list of case titles.
 | L2 (`pr`) | Every PR after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + all ten previously eligible nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
+| L5 (`release`) | Version tag push | L4 plus all 132 DeepResearchBench II tasks; complete rubric scoring required, no historical quality baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -274,7 +274,10 @@ Monthly usage is the sum of actual provider usage across queue attempts,
 approximately 30 daily runs and version candidates; provider rates and actual
 call counts, not timeout ceilings, determine money spent.
 
-`prepare-real-research.sh` runs only for research workers. It needs `HF_TOKEN`
+`prepare-real-research.sh` runs only for research workers. DRB II workers use a
+pinned sparse runtime checkout and only generator/Judge credentials; see the
+[DRB II runbook](../test/benchmarks/deepresearchbench-ii/README.md).
+Other research workers need `HF_TOKEN`
 even while the Biomni download is disabled. Both daily and release keep
 `CI_PREPARE_BIOMNI=0` while the two existing cases are quarantined. The DRB
 evaluator is pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs
@@ -290,10 +293,13 @@ quality baseline or apply a newly calibrated regression threshold. A green run
 certifies this selected suite, not measured capability non-regression or a
 complete upstream benchmark leaderboard.
 
-The real case counts are L3 **9**, L4 **19**, L5 **19**. L4 retains all ten
-previously eligible nightly cases and inherits the nine L3 cases. L5
-currently uses the same cases and evaluation modes as L4; its separate profile
-and `tier:l5` extension row remain available for future additions. Two Biomni cases and the seeded literature-review
+The real case counts are L3 **9**, L4 **19**, L5 **151**. L4 retains all ten
+previously eligible nightly cases and inherits the nine L3 cases. L5 adds all
+132 DRB II tasks with one isolated worker per task. Full release benchmarking
+is billable and can take tens of hours with the two-worker concurrency cap;
+complete delivery/evaluation gates publishing, but low valid scores are reported
+for exit review rather than compared against an uncalibrated threshold.
+Two Biomni cases and the seeded literature-review
 journey were already quarantined on main in commit `8bd4560d`; this change
 preserves their status and excludes them from all automatic profiles.
 Biomni needs scientific Python packages in the agent sandbox and citation
