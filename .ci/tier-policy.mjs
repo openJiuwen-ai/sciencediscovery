@@ -13,7 +13,7 @@ export function route(event, requested = 'pr', backend = 'jiuwenswarm') {
 }
 
 export function gate(profile, needs) {
-  const required = ['l1', 'ut', 'st', 'e2e-plan', 'e2e'];
+  const required = ['policy', 'l1', 'ut', 'st', 'e2e-plan', 'e2e'];
   if (profile !== 'pr') required.push('real-plan', 'real-e2e', 'real-report', 'binary', 'docker');
   const problems = required.filter(name => needs[name]?.result !== 'success').map(name => `${name}: ${needs[name]?.result ?? 'missing'}`);
   // A scheduled job may not quietly run (or fail) outside the selected policy.

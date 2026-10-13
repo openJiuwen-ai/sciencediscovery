@@ -110,7 +110,16 @@ The existing `merge-gate` reconciles all four artifacts against the parent
 plan, requires exactly one PASS for every identity and verifies all nine
 supplemental checks, including their order (`skills` before `skill-switch`).
 Missing artifacts, changed identities/backends, skips or failed drivers fail
-the gate. Before paid real jobs start, `real-plan` makes the same check.
+the gate. In L3 (`merge`), `real-plan` makes the same check before paid calls.
+In L4/L5 (`daily`/`release`), real planning and execution proceed after L1/L2
+finish even if a static check, UT, ST, mocked planning or mocked worker failed
+or was skipped. They do not download or reconcile mocked results as a prerequisite.
+A separate credential-free `policy` job selects the profile/backend before L1,
+so a failed L1 check cannot hide the requested real suite. Real workers still
+require a successfully frozen real plan and respect workflow cancellation.
+This changes execution eligibility, not the final verdict: `merge-gate` still
+requires every selected job and complete mocked/real accounting; any failure
+continues to block Release/assets publication.
 No extra accounting job or human approval is added. The combined `e2e-results`
 artifact preserves worker HTML/image links and the suite-level plan/summary.
 

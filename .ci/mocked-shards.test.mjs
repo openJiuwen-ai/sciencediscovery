@@ -123,10 +123,10 @@ test('supplemental checks must run once, in order, on their designated stack', t
   }
 });
 
-test('workflow freezes before dispatch and reconciles before paid calls and the merge gate', () => {
+test('workflow freezes before dispatch and reconciles before L3 paid calls and the merge gate', () => {
   const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
   const job = name => workflow.split(`  ${name}:\n`)[1].split(/\n  [a-z][a-z-]*:\n/)[0];
-  assert.match(job('e2e'), /needs: \[l1, e2e-plan\]/);
+  assert.match(job('e2e'), /needs: \[policy, l1, e2e-plan\]/);
   assert.match(job('e2e'), /max-parallel: 4/);
   assert.match(job('e2e'), /fail-fast: false/);
   assert.match(job('e2e'), /--shard \$\{\{ matrix.shard \}\}/);
