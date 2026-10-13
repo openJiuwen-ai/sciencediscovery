@@ -37,6 +37,8 @@ import {
 
 import micromambaManifest from "./micromamba-releases.json" with { type: "json" };
 import { EnvironmentAccess } from "./environment-access.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { withProxyFetch, proxyProcessEnvironment, redactNetworkError, type NetworkProxy } from "@sciencediscovery/network";
 
 const execFileAsync = promisify(execFile);
 const CATALOG_VERSION = 1;
@@ -194,10 +196,11 @@ export function describeFetchFailure(error: unknown): string {
 
 export async function installManagedMicromamba(
   destination: string,
-  fetcher: typeof fetch = fetch,
+  fetcher?: typeof fetch,
   architecture: string = process.arch,
   platform: string = process.platform,
 ): Promise<void> {
+  if (!fetcher) return withProxyFetch({ mode: "environment" }, fetcher => installManagedMicromamba(destination, fetcher, architecture, platform));
   const release = managedMicromambaRelease(architecture, platform);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MANAGED_PROVISIONER_TIMEOUT_MS);
@@ -305,14 +308,6 @@ function emptyCatalog(): EnvironmentCatalog {
   return { environments: [], revisions: [], version: CATALOG_VERSION };
 }
 
-/** External environment commands must fail before the gateway's default idle deadline. */
-export async function executeEnvironmentCommand(executable: string, args: string[], environment: NodeJS.ProcessEnv,
-  timeoutMs = 180_000): Promise<string> {
-  const result = await execFileAsync(executable, args, { encoding: "utf8", env: environment,
-    timeout: timeoutMs, killSignal: "SIGTERM", maxBuffer: 8 * 1024 * 1024 });
-  return result.stdout;
-}
-
 export class EnvironmentStore {
   private catalog = emptyCatalog();
   private initialized = false;
@@ -334,11 +329,20 @@ export class EnvironmentStore {
   private mutationTail: Promise<void> = Promise.resolve();
   private readonly runtimeAccess = new EnvironmentAccess();
   private lastSetupError?: string;
+  private readonly proxyContext = new AsyncLocalStorage<NetworkProxy>();
+  private get networkProxy(): NetworkProxy { return this.proxyContext.getStore() ?? { mode: "environment" }; }
+
+  /** Snapshot per operation, including background setup; never persist credentials. */
+  withNetworkProxy<T>(proxy: NetworkProxy | undefined, action: () => T): T {
+    const effective = proxy ?? { mode: "environment" } as const;
+    proxyProcessEnvironment(effective);
+    return this.proxyContext.run(effective, action);
+  }
 
   constructor(
     private readonly config: EnvironmentStoreConfig,
     provisioner?: ProvisionerExecutor,
-    provisionerInstaller: ProvisionerInstaller = installManagedMicromamba,
+    provisionerInstaller?: ProvisionerInstaller,
   ) {
     this.catalogPath = resolve(config.root, "catalog.json");
     this.revisionsRoot = resolve(config.root, "revisions");
@@ -364,13 +368,19 @@ export class EnvironmentStore {
         config.enabled ? "micromamba is waiting to be checked or installed" : "micromamba is disabled by configuration",
       ),
     };
-    this.provisionerInstaller = provisionerInstaller;
+    this.provisionerInstaller = provisionerInstaller ?? ((destination) => withProxyFetch(this.networkProxy,
+      fetcher => installManagedMicromamba(destination, fetcher)));
     this.provisioner = provisioner ?? (async (provisionerPath, arguments_, _jobId, environment) => {
-      return executeEnvironmentCommand(provisionerPath, arguments_, {
-        ...(environment ?? process.env),
-        MAMBA_ROOT_PREFIX: resolve(config.root, "provisioner"),
-        ...(config.packageCacheDir ? { CONDA_PKGS_DIRS: config.packageCacheDir } : {}),
+      const result = await execFileAsync(provisionerPath, arguments_, {
+        encoding: "utf8",
+        env: {
+          ...(environment ?? proxyProcessEnvironment(this.networkProxy)),
+          MAMBA_ROOT_PREFIX: resolve(config.root, "provisioner"),
+          ...(config.packageCacheDir ? { CONDA_PKGS_DIRS: config.packageCacheDir } : {}),
+        },
+        maxBuffer: 8 * 1024 * 1024,
       });
+      return result.stdout;
     });
   }
 
@@ -684,7 +694,7 @@ export class EnvironmentStore {
     if (indexUrl !== undefined && manager !== "pip") throw new Error("indexUrl can only be used with manager=pip");
     const normalizedIndexUrl = manager === "pip" && indexUrl !== undefined
       ? normalizePipIndexUrl(indexUrl)
-      : normalizePipIndexUrl(process.env.SCIENCE_AGENT_PYPI_INDEX?.trim() || externalUrl("package_indexes.pypi_simple"));
+      : externalUrl("package_indexes.pypi_simple");
     if (manager !== "conda") {
       const executable = manager === "pip" ? "python" : "R";
       await access(resolve(this.revisionPath(id, environment.runtimeRevisionId ?? environment.currentRevisionId), "bin", executable), constants.X_OK)
@@ -1139,7 +1149,7 @@ export class EnvironmentStore {
   }
 
   private failSetup(error: unknown, component: keyof ScientificEnvironmentSetup["components"]): void {
-    this.lastSetupError = error instanceof Error ? error.message : "Scientific environment setup failed";
+    this.lastSetupError = redactNetworkError(error);
     const micromambaFailure = component === "micromamba";
     const message = micromambaFailure ? "micromamba setup failed" : "Conda environment setup failed";
     const action = micromambaFailure
@@ -1181,11 +1191,12 @@ export class EnvironmentStore {
       this.provisionerPath,
       ["--no-rc", ...arguments_],
       jobId.replace(/[^a-zA-Z0-9-]/g, "-").slice(0, 128),
+      proxyProcessEnvironment(this.networkProxy),
     );
   }
 
   private async runManagedCommand(executable: string, arguments_: string[], jobId: string): Promise<string> {
-    const environment: NodeJS.ProcessEnv = { ...process.env, PIP_DEFAULT_TIMEOUT: process.env.PIP_DEFAULT_TIMEOUT || "20", PIP_RETRIES: process.env.PIP_RETRIES || "1" };
+    const environment = proxyProcessEnvironment(this.networkProxy);
     delete environment.PYTHONHOME;
     delete environment.PYTHONPATH;
     delete environment.PYTHONUSERBASE;

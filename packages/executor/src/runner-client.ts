@@ -49,7 +49,7 @@ import type {
   UninstallEnvironmentRequest,
 } from "@sciencediscovery/schema";
 
-export type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string };
+export type RunnerInstallEnvironmentRequest = InstallEnvironmentRequest & { workspaceRoot?: string; runnerWorkspaceKey?: string; networkProxy?: import("@sciencediscovery/schema").ResolvedProxy };
 
 /** HTTP adapter for the isolated execution service. */
 export class RunnerClient {
@@ -58,6 +58,7 @@ export class RunnerClient {
   constructor(
     private readonly baseUrl: string,
     private readonly token: string,
+    private readonly environmentProxy?: () => import("@sciencediscovery/schema").ResolvedProxy,
   ) {}
 
   /**
@@ -325,7 +326,7 @@ export class RunnerClient {
 
   async setupScientificEnvironments(): Promise<ScientificEnvironmentSetup> {
     return await this.request("/environment-setup", {
-      body: JSON.stringify({ confirmed: true }),
+      body: JSON.stringify({ confirmed: true, networkProxy: this.environmentProxy?.() }),
       method: "POST",
     });
   }
@@ -346,7 +347,7 @@ export class RunnerClient {
   }
 
   async createEnvironment(input: CreateEnvironmentRequest): Promise<Environment> {
-    return await this.request("/environments", { body: JSON.stringify(input), method: "POST" });
+    return await this.request("/environments", { body: JSON.stringify({ ...input, networkProxy: this.environmentProxy?.() }), method: "POST" });
   }
 
   async deleteEnvironment(environmentId: string): Promise<void> {
@@ -355,7 +356,7 @@ export class RunnerClient {
 
   async installEnvironment(environmentId: string, input: RunnerInstallEnvironmentRequest): Promise<EnvironmentRevision> {
     return await this.request(`/environments/${encodeURIComponent(environmentId)}/install`, {
-      body: JSON.stringify(input),
+      body: JSON.stringify({ ...input, networkProxy: input.networkProxy ?? this.environmentProxy?.() }),
       method: "POST",
     });
   }

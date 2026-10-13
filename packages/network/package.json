@@ -1,0 +1,8 @@
+{
+  "name": "@sciencediscovery/network",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { "types": "./src/index.d.mts", "default": "./src/index.mjs" },
+  "dependencies": { "undici": "8.9.0" }
+}

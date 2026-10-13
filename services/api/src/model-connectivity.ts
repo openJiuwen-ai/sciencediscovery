@@ -12,126 +12,215 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { completeChatRequest, normalizeUsage, ModelRequestError, streamModelTurn, type ModelEndpoint, type ModelTurn } from "@sciencediscovery/model";
-import type { ModelApiProtocol, ModelCompatibilityOutcome, ModelConnectivityTestCategory, ModelConnectivityTestResult, ModelProfile, ResolvedProxy } from "@sciencediscovery/schema";
+import { request } from "undici";
+
+import { isAnthropicEndpoint, proxyDispatcher } from "@sciencediscovery/model";
+import type {
+  ModelConnectivityTestCategory,
+  ModelConnectivityTestResult,
+  ModelProfile,
+  ResolvedProxy,
+} from "@sciencediscovery/schema";
+
+const CONNECTIVITY_TIMEOUT_MS = 10_000;
+const CONNECTIVITY_MAX_TOKENS = 8;
+const MAX_RESPONSE_BYTES = 64 * 1024;
 
 interface ModelConnectivityTestOptions {
   apiToken?: string;
   profile: ModelProfile;
   resolveProxy: () => ResolvedProxy;
   timeoutMs?: number;
-  compatibility?: boolean;
-}
-const PROTOCOLS: ModelApiProtocol[] = ["openai-chat-completions", "openai-responses", "anthropic-messages"];
-const SYSTEM = "This is a synthetic model compatibility check. Follow only these instructions.";
-const HISTORY = [{ role: "user", content: "Reply with OK." }];
-const TOOLS = [{ name: "compatibility_echo", description: "Echo the supplied synthetic value", parameters: { type: "object", properties: { value: { type: "string", enum: ["OK"] } }, required: ["value"], additionalProperties: false } }];
-function networkError(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
-  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-  return /^(UND_ERR_|E(?:CONN|HOST|NET|AI_|PIPE|TIMEDOUT))/.test(code)
-    || (error instanceof Error && error.message.startsWith("Model endpoint is unavailable:"));
 }
 
-function category(status: number): ModelConnectivityTestCategory {
-  if (status === 401 || status === 403) return "authorization";
-  if (status === 429) return "rate_limited";
-  if (status === 404) return "not_found";
-  return "provider_error";
+interface ConnectivityRequest {
+  body: string;
+  headers: Record<string, string>;
+  url: string;
+  validate: (payload: unknown) => boolean;
 }
-function providerFailure(status: number): ModelCompatibilityOutcome {
-  const kind = category(status);
-  const message = kind === "authorization" ? "API key is invalid or is not authorized"
-    : kind === "not_found" ? "Base URL or model ID was not found"
-    : kind === "rate_limited" ? "Provider is rate limiting requests or the account has insufficient quota"
-    : "The model provider rejected the request or is temporarily unavailable";
-  return { category: kind, ok: false, providerStatus: status, message };
-}
-function failure(error: unknown, signal: AbortSignal): ModelCompatibilityOutcome {
-  if (signal.aborted) return { category: "timeout", ok: false, message: "Compatibility check timed out; support is unknown" };
-  if (error instanceof ModelRequestError) return providerFailure(error.statusCode);
-  if (networkError(error)) return { category: "network", ok: false, message: "Could not connect to model provider; support is unknown" };
-  return { category: "invalid_response", ok: false, message: "No valid capability evidence; inspect the configured endpoint and retry explicitly" };
-}
-const unknown = (): ModelCompatibilityOutcome => ({ category: "invalid_response", ok: false, message: "Not measured; support is unknown" });
 
-export async function testModelConnectivity(options: ModelConnectivityTestOptions): Promise<ModelConnectivityTestResult> {
-  const started = Date.now();
-  const wrap = (outcome: ModelCompatibilityOutcome): ModelConnectivityTestResult => ({ ...outcome, latencyMs: Date.now() - started, testedAt: new Date().toISOString() });
-  if (!options.apiToken?.trim()) return wrap({ category: "missing_token", ok: false, message: "Save an API key before testing" });
-  let proxy: ResolvedProxy;
-  try { proxy = options.resolveProxy(); } catch { return wrap({ category: "network", ok: false, message: "Could not resolve configured model proxy" }); }
-  const selected = options.profile.apiProtocol ?? (options.profile.baseUrl.includes("/api/plan") ? "anthropic-messages" : "openai-chat-completions");
-  const protocols: NonNullable<ModelConnectivityTestResult["protocols"]> = [];
-  for (const apiProtocol of options.compatibility ? PROTOCOLS : [selected]) {
-    const endpoint: ModelEndpoint = { ...options.profile, apiProtocol, apiVariant: apiProtocol === selected ? options.profile.apiVariant : undefined,
-      apiToken: options.apiToken, proxy, thinkingMode: "auto" };
-    const signal = AbortSignal.timeout(options.timeoutMs ?? 10_000);
-    const policy = { maxTokens: 64, maxRetries: 0, requestTimeoutMs: options.timeoutMs ?? 10_000, maxResponseBytes: 64 * 1024 };
-    let basic = unknown(), streaming = unknown(), tools = unknown();
-    let usage: "available" | "unknown" = "unknown";
-    try {
-      const response = await completeChatRequest(endpoint, { messages: [{ role: "system", content: SYSTEM }, ...HISTORY], max_tokens: apiProtocol === "openai-responses" ? 16 : 8 }, signal, undefined, 64 * 1024);
-      if (!response.ok) basic = providerFailure(response.status);
-      else {
-        const payload = await response.json() as { usage?: unknown; choices?: Array<{ finish_reason?: string; message?: { content?: string; reasoning_content?: string; tool_calls?: unknown[]; anthropic_content?: unknown[]; response_items?: unknown[] } }> };
-        if (normalizeUsage(payload.usage, "openai-chat-completions")) usage = "available";
-        if (payload.choices?.[0]?.finish_reason === "length") {
-          // The probe asks for a reply of a handful of tokens. A reasoning
-          // model spends that budget thinking and comes back with
-          // `finish_reason: "length"` and no final text, which used to be
-          // reported as inconclusive — so configuring one failed a check that
-          // had already proved the thing it asks about. `completeChatRequest`
-          // has parsed and validated the envelope by the time this runs: the
-          // endpoint accepted the key, answered on the configured protocol,
-          // and stopped at a limit this check wrote. That the cut is ours is
-          // not evidence against the model.
-          basic = { category: "ok", ok: true, providerStatus: response.status, message: "Valid basic completion structure; the synthetic reply was cut at the probe's output limit" };
-        } else {
-          const message = payload.choices?.[0]?.message;
-          if (!message || !(message.content || message.reasoning_content || message.tool_calls?.length || message.anthropic_content?.length || message.response_items?.length)) throw new Error("No basic completion evidence");
-          basic = { category: "ok", ok: true, providerStatus: response.status, message: "Valid basic completion structure" };
-        }
-      }
-    } catch (error) {
-      basic = failure(error, signal);
-    }
-    if (options.compatibility) {
-      // Independent requests: a basic failure does not imply streaming or tool incompatibility.
-      const streamSignal = AbortSignal.timeout(options.timeoutMs ?? 10_000);
-      try {
-        let deltas = "";
-        const turn = await streamModelTurn(endpoint, SYSTEM, HISTORY, [], policy, streamSignal, { onTextDelta: d => { deltas += d; } });
-        streaming = validTurn(turn) && deltas ? { category: "ok", ok: true, message: "Observed streaming text and a complete response" } : unknown();
-        if (turn.usage) usage = "available";
-      } catch (error) { streaming = failure(error, streamSignal); }
-      const toolSignal = AbortSignal.timeout(options.timeoutMs ?? 10_000);
-      try {
-        const instruction = `${SYSTEM} Call compatibility_echo with value OK, then after the tool result reply OK.`;
-        const first = await streamModelTurn(endpoint, instruction, HISTORY, TOOLS, policy, toolSignal);
-        if (first.usage) usage = "available";
-        if (validTurn(first) && first.toolCalls.length === 1 && first.toolCalls[0]!.name === TOOLS[0]!.name && first.toolCalls[0]!.args.value === "OK" && !first.toolCalls[0]!.argsParseError) {
-          const final = await streamModelTurn(endpoint, instruction, [...HISTORY, first.assistantMessage, { role: "tool", tool_call_id: first.toolCalls[0]!.id, content: "OK" }], TOOLS, policy, toolSignal);
-          tools = validTurn(final) && typeof final.assistantMessage.content === "string" && /^OK[.!]?$/i.test(final.assistantMessage.content.trim()) && !final.toolCalls.length ? { category: "ok", ok: true, message: "Tool call ID, arguments and result completed a round-trip" } : unknown();
-          if (final.usage) usage = "available";
-        }
-      } catch (error) { tools = failure(error, toolSignal); }
-    }
-    protocols.push({ apiProtocol, basic, streaming, tools, usage });
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function elapsedSince(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt);
+}
+
+function result(
+  category: ModelConnectivityTestCategory,
+  startedAt: number,
+  message: string,
+  providerStatus?: number,
+): ModelConnectivityTestResult {
+  return {
+    category,
+    latencyMs: elapsedSince(startedAt),
+    message,
+    ok: category === "ok",
+    ...(providerStatus === undefined ? {} : { providerStatus }),
+    testedAt: new Date().toISOString(),
+  };
+}
+
+function classifyProviderStatus(status: number, startedAt: number): ModelConnectivityTestResult {
+  if (status === 401 || status === 403) {
+    return result("authorization", startedAt, "API key is invalid or is not authorized", status);
   }
-  const chosen = protocols.find(p => p.apiProtocol === selected)!;
-  return { ...wrap(chosen.basic), ...(options.compatibility ? { protocols } : {}) };
+  if (status === 404) {
+    return result("not_found", startedAt, "Base URL or model ID was not found", status);
+  }
+  if (status === 429) {
+    return result("rate_limited", startedAt, "Provider is rate limiting requests or the account has insufficient quota", status);
+  }
+  return result("provider_error", startedAt, "The model provider rejected the request or is temporarily unavailable", status);
 }
-function validTurn(turn: ModelTurn): boolean {
-  return turn.completionObserved === true && !turn.truncated && !turn.streamDiagnostics?.unparseableSsePayloads && (Boolean(turn.assistantMessage.content) || turn.toolCalls.length > 0);
+
+function validOpenAiCompletion(payload: unknown): boolean {
+  if (!isRecord(payload) || !Array.isArray(payload.choices) || payload.choices.length === 0) return false;
+  const choice = payload.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.message)) return false;
+  const { content, reasoning_content: reasoningContent, tool_calls: toolCalls } = choice.message;
+  return content === null
+    || typeof content === "string"
+    || typeof reasoningContent === "string"
+    || Array.isArray(toolCalls);
+}
+
+function validAnthropicMessage(payload: unknown): boolean {
+  return isRecord(payload)
+    && payload.type === "message"
+    && Array.isArray(payload.content);
+}
+
+function connectivityRequest(profile: ModelProfile, apiToken: string): ConnectivityRequest {
+  const baseUrl = profile.baseUrl.replace(/\/+$/, "");
+  if (isAnthropicEndpoint(profile.baseUrl)) {
+    return {
+      body: JSON.stringify({
+        max_tokens: CONNECTIVITY_MAX_TOKENS,
+        messages: [{ role: "user", content: "Reply with OK." }],
+        model: profile.model,
+        stream: false,
+        system: "This is a model connectivity test.",
+      }),
+      headers: {
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "x-api-key": apiToken,
+      },
+      url: `${baseUrl}/v1/messages`,
+      validate: validAnthropicMessage,
+    };
+  }
+  return {
+    body: JSON.stringify({
+      max_tokens: CONNECTIVITY_MAX_TOKENS,
+      messages: [
+        { role: "system", content: "This is a model connectivity test." },
+        { role: "user", content: "Reply with OK." },
+      ],
+      model: profile.model,
+      stream: false,
+    }),
+    headers: {
+      authorization: `Bearer ${apiToken}`,
+      "content-type": "application/json",
+    },
+    url: `${baseUrl}/chat/completions`,
+    validate: validOpenAiCompletion,
+  };
+}
+
+async function readBoundedResponse(
+  body: AsyncIterable<Uint8Array> & { dump(): Promise<void> },
+): Promise<string | undefined> {
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of body) {
+    text += decoder.decode(chunk, { stream: true });
+    if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
+      await body.dump().catch(() => undefined);
+      return undefined;
+    }
+  }
+  return text + decoder.decode();
+}
+
+export async function testModelConnectivity(
+  options: ModelConnectivityTestOptions,
+): Promise<ModelConnectivityTestResult> {
+  const startedAt = Date.now();
+  const apiToken = options.apiToken?.trim();
+  if (!apiToken) {
+    return result("missing_token", startedAt, "Save an API key before testing");
+  }
+
+  let proxy: ResolvedProxy;
+  try {
+    proxy = options.resolveProxy();
+  } catch {
+    return result("network", startedAt, "Could not resolve the configured model proxy");
+  }
+
+  const probe = connectivityRequest(options.profile, apiToken);
+  const controller = new AbortController();
+  const dispatcher = proxyDispatcher(proxy, probe.url);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, options.timeoutMs ?? CONNECTIVITY_TIMEOUT_MS);
+
+  try {
+    const response = await request(probe.url, {
+      body: probe.body,
+      bodyTimeout: 0,
+      headers: probe.headers,
+      headersTimeout: options.timeoutMs ?? CONNECTIVITY_TIMEOUT_MS,
+      method: "POST",
+      signal: controller.signal,
+      ...(dispatcher ? { dispatcher } : {}),
+    });
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      await response.body.dump().catch(() => undefined);
+      return classifyProviderStatus(response.statusCode, startedAt);
+    }
+    const raw = await readBoundedResponse(response.body);
+    if (raw === undefined) {
+      return result("invalid_response", startedAt, "The endpoint response exceeded the connectivity-test limit", response.statusCode);
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw) as unknown;
+    } catch {
+      return result("invalid_response", startedAt, "The endpoint did not return valid JSON", response.statusCode);
+    }
+    if (!probe.validate(payload)) {
+      return result("invalid_response", startedAt, "The endpoint response is not a supported model completion", response.statusCode);
+    }
+    return result("ok", startedAt, "Connection succeeded", response.statusCode);
+  } catch {
+    if (timedOut) {
+      return result("timeout", startedAt, "Connection to the model provider timed out");
+    }
+    return result("network", startedAt, "Could not connect to the model provider; check network and proxy settings");
+  } finally {
+    clearTimeout(timeout);
+    await dispatcher?.close().catch(() => undefined);
+  }
 }
 
 export class ModelConnectivityTestCoordinator {
   private readonly inFlight = new Map<string, Promise<ModelConnectivityTestResult>>();
+
   run(modelId: string, test: () => Promise<ModelConnectivityTestResult>): Promise<ModelConnectivityTestResult> {
     const existing = this.inFlight.get(modelId);
     if (existing) return existing;
-    const pending = test().finally(() => { if (this.inFlight.get(modelId) === pending) this.inFlight.delete(modelId); });
+    const pending = test().finally(() => {
+      if (this.inFlight.get(modelId) === pending) this.inFlight.delete(modelId);
+    });
     this.inFlight.set(modelId, pending);
     return pending;
   }
