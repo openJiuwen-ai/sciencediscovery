@@ -7,7 +7,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
-import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { allowRealEnvException, requireAgentStack, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, sessionExecutionRuns, waitForRunTerminal } from "./helpers/journeys.ts";
 import { drbApi, drbArticle, positiveNumber } from "./helpers/deepresearchbench.ts";
@@ -49,7 +49,7 @@ for (const sample of cases) {
     const budget = positiveNumber("E2E_BIOMNI_RUN_TIMEOUT_MS", 1_800_000);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
     test.setTimeout(budget + evaluationBudget + 360_000);
-    expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires isolated Swarm stack").toBe(false);
+    const stack = await requireAgentStack();
     const modelId = process.env.E2E_LLM_MODEL_ID?.trim();
     if (modelId) allowRealEnvException(testInfo, "Live model is already registered on the isolated stack.");
     const real = modelId ? undefined : requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
@@ -66,7 +66,7 @@ for (const sample of cases) {
     ]);
     await requireRealStack(testInfo);
     journey.scenario({ goal: `Execute ${sample.id} with real data and a real LLM.`, preconditions: ["isolated Swarm", "pinned input data", "Python scientific stack"] });
-    const metrics: Record<string, any> = { schema_version: 1, case_id: sample.id, backend: "jiuwenswarm",
+    const metrics: Record<string, any> = { schema_version: 1, case_id: sample.id, backend: stack.executor,
       started_at: new Date().toISOString(), data_bytes: data.length, data_sha256: createHash("sha256").update(data).digest("hex"),
       instruction_oid: sample.instructionOid, rubric_oid: sample.rubricOid, integration_status: "not_run",
       evaluation: { status: mode === "off" ? "disabled" : "not_run" }, resource_measurement: "not_collected", run_budget_ms: budget };

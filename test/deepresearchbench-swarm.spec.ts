@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License").
 import { writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
-import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { allowRealEnvException, requireAgentStack, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
@@ -43,11 +43,11 @@ for (const sample of drbSamples) {
       : positiveNumber(`E2E_DRB_${sample.id}_RUN_TIMEOUT_MS`, caseRunBudget);
     const judgeBudget = positiveNumber("E2E_DRB_EVAL_TIMEOUT_MS", 3_600_000);
     test.setTimeout(runBudget + judgeBudget + 240_000);
-    expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires isolated Swarm stack (E2E_SWARM_TASK=1)").toBe(false);
+    const stack = await requireAgentStack();
     journey.scenario({ goal: `Research DRB-${sample.id} and evaluate both delivery and report quality.`,
       preconditions: ["live generator", "isolated Swarm stack", "configured judges and source access"] });
     const metrics: Record<string, any> = {
-      schema_version: 1, case_id: sample.id, difficulty: sample.difficulty, difficulty_source: "local workload stratification", backend: "jiuwenswarm", started_at: new Date().toISOString(),
+      schema_version: 1, case_id: sample.id, difficulty: sample.difficulty, difficulty_source: "local workload stratification", backend: stack.executor, started_at: new Date().toISOString(),
       prompt: drbPrompt, run_budget_ms: runBudget, evaluation_budget_ms: judgeBudget,
       max_subagents_prompt_limit: process.env.E2E_DRB_MAX_SUBAGENTS === undefined ? null : Number(process.env.E2E_DRB_MAX_SUBAGENTS),
       integration_status: "not_run", evaluation: { status: "not_run" },

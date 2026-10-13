@@ -33,13 +33,13 @@ local access token, then run:
 
 ```bash
 node test/sync-e2e.mjs --write
-E2E_SWARM_TASK=1 npm --prefix .e2e run test:mocked -- \
+npm --prefix .e2e run test:mocked -- \
   swarm-research-mocked.spec.ts swarm-specialist-mcp-mocked.spec.ts \
   swarm-tool-failure-mocked.spec.ts --workers=1 --retries=0
 ```
 
-`E2E_SWARM_TASK` describes the actual backend; it does not switch a native stack
-to Swarm. These cases intentionally skip without that backend prerequisite.
+These cases read the stack's `/health` and report BLOCKED unless it runs
+JiuwenSwarm with platform `task` delegation; nothing switches a native stack to Swarm.
 The September 23 audit supplied it, and executed all three cases. Paid API
 credentials are not needed. Do not run fault injection against a shared user
 installation.

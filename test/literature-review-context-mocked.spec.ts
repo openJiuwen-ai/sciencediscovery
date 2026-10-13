@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect } from "@playwright/test";
-import { test } from "./helpers/e2e.ts";
+import { requireAgentStack, test } from "./helpers/e2e.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession, sendUserMessage, waitForRunTerminal, type JourneyFixture } from "./helpers/journeys.ts";
 import { researchModel, type ResearchScriptStep } from "./helpers/research-model.ts";
 
@@ -24,7 +24,7 @@ for (const id of ["LR-08", "LR-12"]) {
  */
 test(`${id} ${id === "LR-08" ? "actual Swarm compression retains recoverable evidence" : "single-line output supports bounded search, character ranges and duplicate-read advice"}`,
   { tag: ["@mocked","@category:e2e","@os:linux","@arch:amd64","@model:mock","@sandbox:bubblewrap","@fixture:research"] }, async ({ page, journey }, info) => {
-  expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires Swarm with platform tools").toBe(false);
+  await requireAgentStack({ executor: "jiuwenswarm" });
   expect(id === "LR-08" && process.env.E2E_SWARM_COMPACTION !== "1", "BLOCKED: requires isolated Swarm context-engine configuration; do not alter a live research instance").toBe(false);
   test.setTimeout(id === "LR-08" ? 600_000 : 180_000);
   journey.scenario({ goal: id, preconditions: ["real Swarm", "real output store", "local fixture model"] });

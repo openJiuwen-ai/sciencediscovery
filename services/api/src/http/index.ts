@@ -628,6 +628,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // loaded (a few tries, the adapter may still be starting) and again on every change.
   const jiuwenSwarm = jiuwenSwarmConfigFromEnv();
   const webBackend = jiuwenSwarm ? "jiuwenswarm" as const : "native" as const;
+  // How agent turns run, as /health reports it so a client or a journey can check the deployment instead of
+  // being told. The native loop always delegates sub-agents through the platform `task` tool.
+  const agentStack = { executor: webBackend, subagents: jiuwenSwarm?.subagents ?? "task" };
   if (jiuwenSwarm) store.useEverySkillEverywhere();
   // The UI's language as JiuwenSwarm's; remembered so that each page load does not rewrite JiuwenSwarm's config.
   let jiuwenSwarmLanguage: "en" | "zh" | undefined;
@@ -804,6 +807,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         };
         const sandboxNetworkSettings = store.getSandboxNetworkSettings();
         sendJson(response, 200, {
+          agent: agentStack,
           memoryGraph,
           milestone: "M4",
           sandboxNetwork: {
