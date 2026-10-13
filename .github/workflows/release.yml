@@ -76,7 +76,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
     with:
-      # L5 contains L4 plus the existing eligible release cases; quality calibration is deferred.
+      # L5 contains L4 plus all 132 DRB II tasks; quality threshold calibration is deferred.
       # Failure leaves the existing tag without publishing Release/assets.
       profile: release
       release-version: ${{ needs.version.outputs.version }}

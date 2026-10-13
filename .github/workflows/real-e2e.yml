@@ -111,7 +111,11 @@ jobs:
       JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       E2E_DRB_EVALUATION: full
       E2E_BIOMNI_EVALUATION: rubric
-      # Keep daily and release evaluation modes equal until L5 gains its own cases.
+      # DRB II is release-only; original DRB/PUCT modes remain unchanged.
+      DRB2_JUDGE_API_STYLE: ${{ vars.DRB2_JUDGE_API_STYLE || 'openai' }}
+      DRB2_JUDGE_MAX_OUTPUT_TOKENS: "32768"
+      E2E_DRB2_RUN_TIMEOUT_MS: "7200000"
+      E2E_DRB2_EVAL_TIMEOUT_MS: "1800000"
       E2E_PUCT_LLM_EVALUATION: "0"
       E2E_DRB_MAX_SUBAGENTS: "2"
       E2E_TEAM_CONCURRENCY_HINT: "2"

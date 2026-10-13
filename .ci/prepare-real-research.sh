@@ -2,6 +2,20 @@
 # Copyright (C) 2026 Huawei Technologies Co., Ltd
 # SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
+if [[ "${CI_REAL_SHARD:-}" == drb2-* ]]; then
+  for name in E2E_LLM_BASE_URL E2E_LLM_MODEL E2E_LLM_TOKEN E2E_JUDGE_BASE_URL E2E_JUDGE_MODEL E2E_JUDGE_TOKEN; do
+    [[ -n "${!name:-}" ]] || { echo "BLOCKED: missing $name" >&2; exit 2; }
+  done
+  [[ "${CI_ALLOW_REAL:-}" == 1 ]] || { echo 'BLOCKED: CI_ALLOW_REAL=1 required' >&2; exit 2; }
+  upstream="${CI_RUNTIME_DIR:?}/DeepResearchBench-II"
+  node test/benchmarks/deepresearchbench-ii/prepare.mjs "$upstream"
+  {
+    echo "DRB2_UPSTREAM_DIR=$upstream"
+    echo "DRB2_PYTHON=$upstream/.venv/bin/python"
+    echo "SCIENCE_AGENT_MEMORY_GRAPH_AVAILABLE=0"
+  } >> "${GITHUB_ENV:?}"
+  exit 0
+fi
 for name in E2E_LLM_BASE_URL E2E_LLM_MODEL E2E_LLM_TOKEN E2E_JUDGE_BASE_URL E2E_JUDGE_MODEL E2E_JUDGE_TOKEN JINA_API_KEY HF_TOKEN; do
   if [[ -z "${!name:-}" ]]; then echo "BLOCKED: missing $name" >&2; exit 2; fi
 done

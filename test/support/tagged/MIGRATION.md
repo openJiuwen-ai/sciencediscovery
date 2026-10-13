@@ -13,7 +13,7 @@ migration quietly drop something"; the mechanics are in
 Defined once, in [profiles.mjs](profiles.mjs), as the `pr` profile's tag
 dimensions; `pnpm test:policy` prints it and the selector derived from it:
 
-```
+```text
 (category:ut or category:st or category:e2e)
   and os:linux and arch:amd64
   and npu:none and (model:none or model:mock) and judge:none
@@ -26,8 +26,8 @@ against the single target `os=linux, arch=amd64`.
 partition it: `l1`, `ut` (excluding L1), `st` and mocked `e2e` cover it exactly once.
 The new tier dimension defaults to L2, preserving the existing hermetic scope.
 L3 adds seven basic real cases; L4 adds all ten previously eligible nightly
-cases. L5 currently matches L4 while retaining its extension point for future
-cases; see [CI operations](../../../.ci/README.md).
+cases. L5 adds the 132 release-only DeepResearchBench II tasks;
+see [CI operations](../../../.ci/README.md).
 
 Nothing in that selector can be satisfied or defeated by the machine a run
 happens on. The plan is frozen from source before anything looks at the host,

@@ -24,7 +24,8 @@ export function realShards(plan) {
   const research = plan.entries.filter(e => !e.tags.includes('tier:l3'));
   return [
     ...(basic.length ? [{ name: 'basic', keys: basic.map(e => e.key) }] : []),
-    ...research.map((e, i) => ({ name: `research-${i + 1}`, keys: [e.key] })),
+    ...research.map((e, i) => ({ name: e.source === 'test/deepresearchbench-ii.spec.ts'
+      ? `drb2-${i + 1}` : `research-${i + 1}`, keys: [e.key] })),
   ];
 }
 
