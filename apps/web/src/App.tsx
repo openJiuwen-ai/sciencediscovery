@@ -1443,9 +1443,17 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   useEffect(() => {
     if (!showConfig) return;
     let active = true;
+    // The provider registry loads on its own: an unrelated settings request
+    // failing must not leave the model wizard without its preset list.
+    void client.listProviders().then((registry) => {
+      if (!active) return;
+      setModelProviders(registry.providers);
+      setModelProviderPresets(registry.presets);
+    }).catch((reason: Error) => {
+      if (active) reportSystemSettingsError(reason);
+    });
     void Promise.all([
       client.listModels(),
-      client.listProviders(),
       client.listConnectors(),
       client.listSkills(),
       client.listSkillLibraries(),
@@ -1456,11 +1464,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
       client.getIdeaTreeSettings(),
-    ]).then(([modelItems, providerRegistry, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph, ideaTree]) => {
+    ]).then(([modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph, ideaTree]) => {
       if (!active) return;
       setModels(modelItems);
-      setModelProviders(providerRegistry.providers);
-      setModelProviderPresets(providerRegistry.presets);
       setConnectors(connectorItems);
       setSkills(skillItems);
       setSkillLibraries(skillLibraryItems);
@@ -1800,10 +1806,20 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   useEffect(() => {
     setError(undefined);
+    const reportStartupError = (reason: Error) => {
+      // A cold start directly into System settings is an explicit settings
+      // load operation, so its failure belongs to that dialog. Other startup
+      // failures remain global even if a dialog opens later.
+      if (initialView.settingsKind === "system") reportSystemSettingsError(reason);
+      else setError(reason);
+    };
+    void client.listProviders().then((registry) => {
+      setModelProviders(registry.providers);
+      setModelProviderPresets(registry.presets);
+    }).catch(reportStartupError);
     void Promise.all([
       client.listProjects(),
       client.listModels(),
-      client.listProviders(),
       client.getModelCatalog(),
       client.listConnectors(),
       client.listSkills(),
@@ -1818,11 +1834,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.getWebSettings(),
       client.getMemoryGraphSettings(),
       client.getIdeaTreeSettings(),
-    ]).then(([projectItems, modelItems, providerRegistry, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph, ideaTree]) => {
+    ]).then(([projectItems, modelItems, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph, ideaTree]) => {
       setProjects(projectItems);
       setModels(modelItems);
-      setModelProviders(providerRegistry.providers);
-      setModelProviderPresets(providerRegistry.presets);
       applyModelCatalog(catalog);
       setConnectors(connectorItems);
       setSkills(skillItems);
@@ -1857,13 +1871,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         if (target) void openScopedSettings(target);
       }
 
-    }).catch((reason: Error) => {
-      // A cold start directly into System settings is an explicit settings
-      // load operation, so its failure belongs to that dialog. Other startup
-      // failures remain global even if a dialog opens later.
-      if (initialView.settingsKind === "system") reportSystemSettingsError(reason);
-      else setError(reason);
-    }).finally(() => setProjectsLoaded(true));
+    }).catch(reportStartupError).finally(() => setProjectsLoaded(true));
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
 
   useEffect(() => {

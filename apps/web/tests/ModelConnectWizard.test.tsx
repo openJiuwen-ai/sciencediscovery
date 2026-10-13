@@ -1398,3 +1398,96 @@ test("fetch model list lives in the card's main area, reachable without opening 
   assert.equal(renderer!.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, true);
   assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
 });
+
+function renderWizard(presets: readonly (typeof MODEL_PROVIDER_PRESETS)[number][]) {
+  const client = createMockClient();
+  const element = (next: typeof presets) => createElement(
+    LocaleProvider,
+    { initialLocale: "zh-CN" },
+    createElement(ModelConnectWizard, { client, presets: next }),
+  );
+  return { client, element };
+}
+
+function hasCustomFields(renderer: ReactTestRenderer): boolean {
+  return renderer.root.findAll((node) => node.props.id === "wizard-custom-url").length > 0;
+}
+
+test("no presets offered: the card is in custom mode, so the select and the fields agree", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+
+  const select = renderer!.root.findByProps({ id: "wizard-provider-select" });
+  assert.deepEqual(select.findAllByType("option").map((option) => option.props.value), ["custom"]);
+  assert.equal(select.props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+});
+
+test("presets arriving after an empty list replace the automatic custom mode with the first preset", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, MODEL_PROVIDER_PRESETS[0]!.id);
+  assert.equal(hasCustomFields(renderer!), false);
+});
+
+test("presets arriving late keep the custom fields the user already started filling", async () => {
+  const { element } = renderWizard([]);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element([]));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://localhost:8000/v1" } });
+  });
+  await act(async () => {
+    renderer!.update(element(MODEL_PROVIDER_PRESETS));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(renderer!.root.findByProps({ id: "wizard-custom-url" }).props.value, "http://localhost:8000/v1");
+});
+
+test("a custom provider picked by the user survives a refreshed preset list", async () => {
+  const { element } = renderWizard(MODEL_PROVIDER_PRESETS);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element(MODEL_PROVIDER_PRESETS));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: "custom" } });
+  });
+  await act(async () => {
+    renderer!.update(element([...MODEL_PROVIDER_PRESETS]));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
+  assert.equal(hasCustomFields(renderer!), true);
+});
+
+test("a selected preset that disappears from the list falls back to the first preset still offered", async () => {
+  const [first, second] = MODEL_PROVIDER_PRESETS;
+  const { element } = renderWizard(MODEL_PROVIDER_PRESETS);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(element(MODEL_PROVIDER_PRESETS));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: second!.id } });
+  });
+  await act(async () => {
+    renderer!.update(element([first!]));
+  });
+
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, first!.id);
+  assert.equal(hasCustomFields(renderer!), false);
+});

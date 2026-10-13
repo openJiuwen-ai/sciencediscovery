@@ -88,6 +88,7 @@ export function ModelConnectWizard({
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customName, setCustomName] = useState("");
   const [customModelId, setCustomModelId] = useState("");
+  const autoCustomRef = useRef(false);
   // 「高级配置」在卡片内展开精细字段，永不收起向导本身。
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const footerRef = useRef<HTMLDivElement>(null);
@@ -172,6 +173,25 @@ export function ModelConnectWizard({
       setApiVariant(preset?.apiVariant ?? DEFAULT_MODEL_API_VARIANT[CUSTOM_PROTOCOL]);
     }
   }
+
+  // A preset that is no longer offered (the list arrived late, changed, or is
+  // empty) would leave the select showing one option while the card acts on
+  // another, and re-picking the shown option fires no change event. Custom
+  // mode entered only for lack of presets yields to the first preset once
+  // one arrives, unless the user has started filling the custom fields.
+  useEffect(() => {
+    if (isCustom) {
+      const untouched = !customName.trim() && !customBaseUrl.trim() && !customModelId.trim();
+      if (autoCustomRef.current && presets[0] && untouched) {
+        autoCustomRef.current = false;
+        handleProviderChange(presets[0].id);
+      }
+      return;
+    }
+    if (presets.some((preset) => preset.id === selectedPresetId)) return;
+    autoCustomRef.current = !presets[0];
+    handleProviderChange(presets[0]?.id ?? "custom");
+  }, [customBaseUrl, customModelId, customName, isCustom, presets, selectedPresetId]);
 
   function handleProtocolChange(value: string) {
     const nextProtocol = value as ModelApiProtocol;
@@ -483,7 +503,10 @@ export function ModelConnectWizard({
             <select
               disabled={busy}
               id="wizard-provider-select"
-              onChange={(e) => handleProviderChange(e.target.value)}
+              onChange={(e) => {
+                autoCustomRef.current = false;
+                handleProviderChange(e.target.value);
+              }}
               value={isCustom ? "custom" : selectedPresetId}
             >
               {presets.map((preset) => (
