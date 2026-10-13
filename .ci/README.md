@@ -110,10 +110,13 @@ The existing `merge-gate` reconciles all four artifacts against the parent
 plan, requires exactly one PASS for every identity and verifies all nine
 supplemental checks, including their order (`skills` before `skill-switch`).
 Missing artifacts, changed identities/backends, skips or failed drivers fail
-the gate. In L3 (`merge`), `real-plan` makes the same check before paid calls.
-In L4/L5 (`daily`/`release`), real planning and execution proceed after L1/L2
-finish even if a static check, UT, ST, mocked planning or mocked worker failed
-or was skipped. They do not download or reconcile mocked results as a prerequisite.
+the gate. The reusable `real-e2e.yml` owns real planning, workers and accounting.
+Its L3 (`merge`) caller waits for L1/L2 to succeed, then `real-plan` makes the
+same mocked-artifact check before paid calls. Its L4/L5 (`daily`/`release`)
+caller depends only on `policy`: real planning starts alongside L1, and real
+workers start as soon as their own plan is ready, without waiting for UT, ST
+or mocked E2E. They do not download or reconcile mocked results as a prerequisite.
+The two callers are mutually exclusive, so each run executes the real suite once.
 A separate credential-free `policy` job selects the profile/backend before L1,
 so a failed L1 check cannot hide the requested real suite. Real workers still
 require a successfully frozen real plan and respect workflow cancellation.
@@ -152,7 +155,7 @@ The credential-isolation regression checks every job that references a
 model token: it must declare an Environment and exclude pull-request events.
 The check intentionally does not pin Environment names. To change research
 endpoints, configure an Environment with the same variable/secret names and
-update the research Environment in both real-plan and real-e2e.
+update the research Environment in both real-plan and real-e2e in `real-e2e.yml`.
 
 Environment variables are also used by the credential-free real-plan job so
 its frozen configuration matches its workers. API secrets are injected only

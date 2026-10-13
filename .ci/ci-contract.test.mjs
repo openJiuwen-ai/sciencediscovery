@@ -431,7 +431,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
   const run = spawnSync(process.execPath, [join(defaultRepositoryRoot, ".ci", "prepare-real-e2e-results.mjs")], { cwd: root, encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /Staged 7 real E2E score\/plan files/);
-  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
+  const ci = await readFile(join(defaultRepositoryRoot, ".github", "workflows", "real-e2e.yml"), "utf8");
   const uploads = artifactUploads(workflowJobs(ci)["real-e2e"]);
   const scoreDirectory = join(root, uploads.find(upload => upload.artifact?.startsWith("real-e2e-results-")).paths[0]);
   const evidenceDirectory = join(root, uploads.find(upload => upload.artifact?.startsWith("real-e2e-evidence-")).paths[0]);

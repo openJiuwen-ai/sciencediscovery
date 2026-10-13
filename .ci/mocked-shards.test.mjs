@@ -130,8 +130,9 @@ test('workflow freezes before dispatch and reconciles before L3 paid calls and t
   assert.match(job('e2e'), /max-parallel: 4/);
   assert.match(job('e2e'), /fail-fast: false/);
   assert.match(job('e2e'), /--shard \$\{\{ matrix.shard \}\}/);
-  for (const name of ['real-plan', 'merge-gate']) {
-    assert.match(job(name), /path: \.ci-mocked-results\n/);
-    assert.match(job(name), /node \.ci\/mocked-report.mjs \.ci-mocked-plan\/plan.json \.ci-mocked-results/);
+  const real = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
+  for (const block of [real, job('merge-gate')]) {
+    assert.match(block, /path: \.ci-mocked-results\n/);
+    assert.match(block, /node \.ci\/mocked-report.mjs \.ci-mocked-plan\/plan.json \.ci-mocked-results/);
   }
 });
