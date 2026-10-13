@@ -375,6 +375,13 @@ node test/check-e2e-meta.mjs 2>&1 | tee -a "$test_log"
 metadata_status=${PIPESTATUS[0]}
 if [[ "$metadata_status" -ne 0 ]]; then exit "$metadata_status"; fi
 playwright_args=()
+if [[ -n "${CI_E2E_REPEAT_EACH:-}" ]]; then
+  if [[ ! "$CI_E2E_REPEAT_EACH" =~ ^[1-9][0-9]*$ ]]; then
+    echo 'CI_E2E_REPEAT_EACH must be a positive integer' >&2
+    exit 2
+  fi
+  playwright_args+=(--repeat-each "$CI_E2E_REPEAT_EACH")
+fi
 if [[ -n "${CI_E2E_SPEC:-}" ]]; then playwright_args+=("$CI_E2E_SPEC"); fi
 if [[ -n "${CI_E2E_GREP:-}" ]]; then playwright_args+=(--grep "$CI_E2E_GREP"); fi
 npm --prefix .e2e run "test:$group" -- "${playwright_args[@]}" 2>&1 | tee -a "$test_log"

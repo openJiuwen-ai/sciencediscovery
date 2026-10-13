@@ -35,6 +35,8 @@ Runner 是无 root 的代码执行器：Agent 的常规执行统一使用 `run_s
 
 Runner 设置保留能力状态与**重新检查**按钮。Agent 可调用 `check_runner(runner_id?)`，直接刷新目标 Runner 的同一份能力报告，不依赖沙箱。该工具只诊断，不执行代码、不挂起等待。执行前发现 Runner 不可用时，工具返回 `RUNNER_UNAVAILABLE`、`dispatched: false`、`operationId`、原因与修复建议；本次调用已结束，不进入执行队列。Agent 自行决定继续其他工作、说明阻塞并结束本轮，或显式调用 `wait_for_runner(operation_id)`。
 
+Agent 决定等待用户选择时，须调用等待工具；仅最终回复“已暂停”不会创建待处理操作。展示卡片不执行修复、安装、切换机器或代码，因此即使用户禁止这些操作，也无需为展示用户请求的选项再次确认。收到选择后仍须遵守用户约束。框架不会把每次 Runner 失败都强制变为等待状态。
+
 只有 `wait_for_runner` 才会创建对话卡片并暂停 Agent 的外部等待计时。卡片展示 Agent、待执行操作、原因和建议，提供修复后重检、选择可用且已授权的其他 Runner、取消本次操作（非整个任务）。不同操作的选择彼此独立。所有选择均返回 Agent；重试与切换会重新探测，但**绝不执行或重放旧调用**，须由 Agent 重新调用执行工具；换机器时先准备目标工作区、输入与环境。重检失败也返回诊断，是否再次等待仍由 Agent 决定，不自动轮询修复状态。任务取消、进程关闭或十分钟未决定会清理等待。刷新浏览器通过 `GET /api/sessions/{sessionId}/execution-blocks` 恢复卡片，响应经 `POST /api/sessions/{sessionId}/execution-blocks/{id}` 提交；重复或过期响应不会下发代码。等待存于内存，不提供 API 重启后的任务恢复。设置页定期读取能力缓存，也能反映 Agent 发起检查后的状态。
 
 Runner 自身也会在占用执行 ID 前，以 HTTP 503 和 `EXECUTION_UNAVAILABLE` 拒绝不可用的沙箱执行，读取/取消/管理接口仍可使用。**没有无沙箱兜底**，Always Allow 也不会关闭沙箱。探测成功仅证明沙箱可以构建，不保证每个科学依赖包或 GPU 配置正确。检查与受阻结果记录在工具轨迹中；API 操作日志记录 `runner_wait_requested`、`execution_decision`，Runner 记录 `execution_unavailable`。宿主机执行与扩大授权范围属于后续独立特性。

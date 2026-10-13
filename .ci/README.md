@@ -53,6 +53,14 @@ it does not add a native E2E run. Adapter live UT is also accounted separately.
 
 ### Backend selection and exact accounting
 
+For a targeted reliability check, set `CI_E2E_SPEC` and optionally
+`CI_E2E_GREP`, then run `.ci/run-e2e.sh real` with `CI_E2E_REPEAT_EACH=10`.
+This repeats each selected case ten times (not ten retries); the browser
+configuration uses one worker and zero retries. Real runs require
+`CI_ALLOW_REAL=1` and the `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, and
+`E2E_LLM_TOKEN` credentials, and every repetition incurs model usage.
+Omitting `CI_E2E_REPEAT_EACH` leaves normal gate execution unchanged.
+
 Use `--backend jiuwenswarm|legacy`, `CI_E2E_BACKEND`, or the workflow's `backend`
 input. `legacy` means the native loop; JiuwenSwarm is the default. The backend
 changes execution identity, not selection. Run each backend explicitly if both

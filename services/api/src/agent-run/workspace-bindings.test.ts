@@ -61,6 +61,10 @@ for (const action of ["retry", "cancel", "switch"] as const) {
     await assert.rejects(bindings.executePython("print('run once')"), (error: Error) => {
       const result = JSON.parse(error.message);
       assert.equal(result.code, "RUNNER_UNAVAILABLE"); assert.equal(result.dispatched, false);
+      assert.match(result.instruction, /call wait_for_runner\(operation_id\)/);
+      assert.match(result.instruction, /text saying.*does not create a pending operation/);
+      assert.match(result.instruction, /does not repair, install, switch machines or execute code/);
+      assert.match(result.instruction, /explain the blocker and finish/);
       operationId = result.operationId; return true;
     });
     assert.equal(waits, 0); assert.deepEqual(queue.list("session"), []);

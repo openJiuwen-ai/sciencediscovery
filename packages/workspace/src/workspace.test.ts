@@ -44,6 +44,25 @@ import {
 import type { AgentTool } from "@sciencediscovery/tools";
 import { Type } from "typebox";
 
+test("Runner waiting instructions distinguish a requested card from repair authorization", async () => {
+  const calls: string[] = [];
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => ({}) as PythonExecutionResult,
+    runnerReadiness: {
+      check: async () => { throw new Error("Displaying a wait must not implicitly probe or execute"); },
+      wait: async (operationId) => { calls.push(operationId); return { action: "cancel" }; },
+    },
+  });
+  const wait = tools.find(tool => tool.name === "wait_for_runner")!;
+  assert.match(wait.description, /does NOT create a pending operation/);
+  assert.match(wait.description, /does NOT repair the host/);
+  assert.match(wait.description, /do not ask for extra permission/);
+  assert.match(wait.description, /explain the blocker and finish/);
+  assert.deepEqual(calls, []);
+  await wait.execute("call", { operation_id: "blocked-operation" });
+  assert.deepEqual(calls, ["blocked-operation"]);
+});
+
 test("normalizeWorkspaceRelativePath preserves nested names within each agent writable root", () => {
   const sessionRoot = resolve(process.cwd(), ".tmp", "session-root");
   const subagentRoot = resolve(sessionRoot, "subagents", "subagent-1");
