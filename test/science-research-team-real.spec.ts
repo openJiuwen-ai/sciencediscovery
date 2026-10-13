@@ -11,12 +11,12 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
   sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
-import { startDeliverableChecker } from "./fixtures/deliverable-check.mjs";
+import { deliverableHeadingRule, startDeliverableChecker } from "./fixtures/deliverable-check.mjs";
 
 import { mainRunChain } from "./helpers/run-chain.ts";
 import { RunChainTimeoutError } from "./helpers/journeys.ts";
 
-const prompt = "综述 2020—2025 年 BRCA1 致病性或可能致病性胚系变异与女性乳腺癌风险的证据。提取可追溯的风险比或效应量，按指标类型及可比研究条件分组，进行小规模描述性统计，不进行合并效应估计；提供输入数据、可复现代码和结果。输出含 Methods、Results、References 章节的证据简报，并完成团队配置的交付审核。证据不足时明确说明，不得补造数据。";
+const prompt = "综述 2020—2025 年 BRCA1 致病性或可能致病性胚系变异与女性乳腺癌风险的证据。提取可追溯的风险比或效应量，按指标类型及可比研究条件分组，进行小规模描述性统计，不进行合并效应估计；提供输入数据、可复现代码和结果。输出证据简报：Methods、Results、References 三节都必须使用代码块之外的 Markdown ATX 标题，无编号的 `## Methods` 和带章节号的 `## 3. Methods` 都算，Results、References 同样。只允许去掉标题开头的一个数字章节号（例如 `3.`、`3.1`、`3.1.`、`4)`），章节号后必须有空白；剥掉行末标题标记 `#` 后，剩余文字忽略大小写必须正好是上述一个单词。`## Methods and materials`、`## 3. Methodology`、段落中的同名文字和代码块里的标题都不算。完成团队配置的交付审核。证据不足时明确说明，不得补造数据。";
 const roles = ["literature-searcher", "evidence-extractor", "code-engineer", "result-evaluator", "report-writer"];
 
 function extension(reviewer: string) {
@@ -31,7 +31,7 @@ For machine-readable delivery in this test, declare these final artifacts (norma
 - analysis_results.json: {groups:[{group_key,measure,observation_ids,count,mean,min,max}]} produced by executing the code. Means are descriptive, not pooled clinical effects.
 - evaluation-N.json (N=1..3 per branch): evaluator's original structured evaluation, including verdict or decision and revision_guidance if REVISE. The builtin evaluator uses verdict and may return CONDITIONAL; preserve it verbatim rather than fabricating decision. CONDITIONAL is an incomplete quality outcome, not unconditional acceptance. A formatting re-emission is not a new evaluation round.
 - analysis_summary.md: integrate actual analysis outputs, methods, caveats and reproducibility information.
-- evidence_brief.md: report-writer output consuming both summaries, with exact Markdown Methods, Results, References headings and source-linked citations. This is the report to audit.
+- evidence_brief.md: report-writer output consuming both summaries, with source-linked citations. Heading rule: ${deliverableHeadingRule} The coordinator must copy this heading rule verbatim into the Format Expectation delegated to report-writer; do not omit it or replace these three required sections with the default seven-section template. This is the report to audit.
 The reviewer must not rewrite the report. Explicitly name evidence_brief.md in the final response and append the audit's ok and missing values. No silent replacement of failed specialists or invented results.`;
 }
 

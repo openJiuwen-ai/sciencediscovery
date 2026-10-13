@@ -7,6 +7,12 @@ const { Server } = require("@modelcontextprotocol/sdk/server/index.js");
 const { StreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
 const { CallToolRequestSchema, ListToolsRequestSchema } = require("@modelcontextprotocol/sdk/types.js");
 
+export const deliverableHeadingRule = "Methods, Results, and References must each be Markdown ATX headings outside fenced code blocks. "
+  + "Both unnumbered headings such as `## Methods` and numbered headings such as `## 3. Methods` count; the same applies to Results and References. "
+  + "Remove at most one leading numeric section number (for example `3.`, `3.1`, `3.1.`, or `4)`) followed by whitespace, and strip trailing heading `#` markers. "
+  + "The remaining heading text must equal exactly Methods, Results, or References, case-insensitively. "
+  + "Longer names such as `Methods and materials` or `3. Methodology`, prose mentions, and headings inside fenced code blocks do not count.";
+
 export function checkDeliverable(text) {
   // Ignore fenced code: a sample heading is not a report section.
   let fence;
@@ -20,7 +26,8 @@ export function checkDeliverable(text) {
     }
     if (!fence) {
       const heading = line.match(/^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
-      if (heading) headings.push(heading[1].toLowerCase());
+      // A section number is optional; the rest must still be the exact section name.
+      if (heading) headings.push(heading[1].replace(/^\d+(?:\.\d+)*[.)]?\s+/, "").toLowerCase());
     }
   }
   const missing = ["Methods", "Results", "References"].filter(h => !headings.includes(h.toLowerCase()));
@@ -35,7 +42,7 @@ export async function startDeliverableChecker() {
     const server = new Server({ name: "deliverable-check", version: "1.0.0" }, { capabilities: { tools: {} } });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "deliverable_check",
-      description: "Check exact Markdown Methods, Results, References headings in the full final report. Do not summarize or alter report_text.",
+      description: `${deliverableHeadingRule} Check the full final report. Do not summarize or alter report_text.`,
       inputSchema: { type: "object", properties: { report_text: { type: "string", minLength: 1 } }, required: ["report_text"], additionalProperties: false } }] }));
     server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       if (params.name !== "deliverable_check" || typeof params.arguments?.report_text !== "string" || !params.arguments.report_text.trim())
