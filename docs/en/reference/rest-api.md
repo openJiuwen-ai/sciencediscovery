@@ -163,11 +163,14 @@ All routes below require bearer authentication. See [Configure the network proxy
 |---|---|---|
 | `GET /api/proxy/settings` | none | `200`, `{defaultPolicy, servers}`; authenticated settings include usable full proxy URLs |
 | `PUT /api/proxy/settings` | `{"defaultPolicy":"none"}` or `proxy:<id>` | `200`, updated settings |
+| `POST /api/proxy/test` | `{mode: "environment" \| "direct" \| "url", url?, noProxy?}` | Download-source connectivity diagnostic; does not save settings |
 | `POST /api/proxy/servers` | `{name, kind, url?}` | `201`, created proxy |
 | `PUT /api/proxy/servers/:id` | `{name?, kind?, url?}` | `200`, updated proxy |
 | `DELETE /api/proxy/servers/:id` | none | `200`, `{"deleted":"<id>"}`; `409` while referenced |
 | `GET /api/mcp/proxy-policies` | none | `200`, `{"policies":{...}}` |
 | `PUT /api/mcp/proxy-policies` | `{"policies":{"server-id":"inherit|none|proxy:<id>"}}` | `200`, normalized map |
+
+`GET/PUT /api/proxy/settings` also supports optional `noProxy` (comma-separated bypass hosts). Environment summaries mask proxy credentials.
 
 `kind` is `custom_url`, `environment`, or `system`; `custom_url` requires `url`:
 

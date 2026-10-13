@@ -74,6 +74,7 @@ interface ProxyServerDraft {
   name: string;
   url: string;
 }
+export interface ProxyFormDraft { editingId?: string; draft: ProxyServerDraft }
 
 const EMPTY_SERVER: ProxyServerDraft = { kind: "custom_url", name: "", url: "" };
 
@@ -258,6 +259,10 @@ export function ProxySettingsEditor({
   onMcpPolicyChange,
   onUpdate,
   onWebProxyPolicyChange,
+  onTest,
+  onNoProxyChange,
+  formDraft,
+  onFormDraftChange,
   settings,
   webProxyPolicy,
 }: {
@@ -271,13 +276,21 @@ export function ProxySettingsEditor({
   onWebProxyPolicyChange: (policy: ProxyPolicy) => void;
   settings: ProxySettingsDetails;
   webProxyPolicy: ProxyPolicy;
+  onTest?: (proxy: import("@sciencediscovery/schema").ResolvedProxy) => Promise<{ ok: boolean; message: string; elapsedMs: number }>;
+  onNoProxyChange?: (value: string) => void;
+  formDraft?: ProxyFormDraft;
+  onFormDraftChange?: (value: ProxyFormDraft | undefined) => void;
 }) {
   const { t } = useLocale();
-  const [editingId, setEditingId] = useState<string>();
-  const [formOpen, setFormOpen] = useState(false);
-  const [draft, setDraft] = useState<ProxyServerDraft>(EMPTY_SERVER);
+  const [editingId, setEditingId] = useState<string | undefined>(formDraft?.editingId);
+  const [formOpen, setFormOpen] = useState(Boolean(formDraft));
+  const [draft, setDraft] = useState<ProxyServerDraft>(formDraft?.draft ?? EMPTY_SERVER);
+  useEffect(() => { onFormDraftChange?.(formOpen ? { editingId, draft } : undefined); }, [formOpen, editingId, draft, onFormDraftChange]);
   const [formError, setFormError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [testResult, setTestResult] = useState<string>();
+  const selected = settings.servers.find(server => `proxy:${server.id}` === settings.defaultPolicy);
+  const environmentServer = settings.servers.find(server => server.kind === "environment");
   const proxyUrlInputId = useId();
 
   const editing = settings.servers.find((server) => server.id === editingId);
@@ -287,7 +300,7 @@ export function ProxySettingsEditor({
 
   function beginCreate(): void {
     setEditingId(undefined);
-    setDraft(EMPTY_SERVER);
+    setDraft({ ...EMPTY_SERVER, name: t("proxy.default.label") });
     setFormError(undefined);
     setFormOpen(true);
   }
@@ -346,16 +359,39 @@ export function ProxySettingsEditor({
         <span className="proxy-section-index">1</span>
         <div><h4 id="proxy-default-heading">{t("proxy.default.title")}</h4><p>{t("proxy.default.help")}</p></div>
       </div>
-      <ProxyPolicySelect
+      <label><span>{t("proxy.default.label")}</span><select
         id="proxy-global-default"
-        includeInherit={false}
-        label={t("proxy.default.label")}
-        onChange={(policy) => void onDefaultPolicyChange(policy as ProxyDefaultPolicy)}
-        settings={settings}
-        value={settings.defaultPolicy}
-      />
+        value={selected?.kind === "custom_url" ? "custom" : settings.defaultPolicy}
+        onChange={event => {
+          setTestResult(undefined);
+          if (event.target.value === "custom") {
+            const existing = settings.servers.find(server => server.kind === "custom_url");
+            if (existing) void onDefaultPolicyChange(`proxy:${existing.id}`); else beginCreate();
+          } else void onDefaultPolicyChange(event.target.value as ProxyDefaultPolicy);
+        }}>
+        {environmentServer ? <option value={`proxy:${environmentServer.id}`}>{t("proxy.kind.environment")}</option> : null}
+        <option value="custom">{t("proxy.kind.custom")}</option>
+        <option value="none">{t("proxy.policy.none")}</option>
+        {selected?.kind === "system" ? <option value={settings.defaultPolicy}>{selected.name}</option> : null}
+      </select></label>
+      {selected?.kind === "custom_url" ? <label><span>{t("proxy.form.url")}</span><input aria-label={t("proxy.form.url")} type="password" autoComplete="off" value={selected.url ?? ""} onChange={event => { setTestResult(undefined); void onUpdate(selected.id, { url: event.target.value }); }} /></label> : null}
+      {selected?.environment ? <EnvironmentStatus details={selected.environment} /> : null}
+      {onTest ? <button className="secondary-button" type="button" disabled={busy || formOpen} onClick={async () => {
+        setBusy(true); setTestResult(undefined);
+        try {
+          if (selected?.kind === "system") throw new Error(t("proxy.test.system"));
+          const policy = settings.defaultPolicy === "none" ? { mode: "direct" as const } : selected?.kind === "custom_url" ? { mode: "url" as const, url: selected.url ?? "" } : { mode: "environment" as const };
+          const result = await onTest({ ...policy, ...(settings.noProxy !== undefined ? { noProxy: settings.noProxy } : {}) });
+          setTestResult(`${result.ok ? t("proxy.test.ok") : t("proxy.test.failed")}: ${result.message} (${result.elapsedMs} ms)`);
+        } catch (error) { setTestResult(error instanceof Error ? error.message : t("proxy.test.failed")); }
+        finally { setBusy(false); }
+      }}>{busy ? t("proxy.test.running") : t("proxy.test.action")}</button> : null}
+      {testResult ? <p role="status">{testResult}</p> : null}
     </section>
 
+    <details>
+    <summary>{t("proxy.advanced")}</summary>
+    {onNoProxyChange ? <label><span>{t("proxy.noProxy")}</span><input value={settings.noProxy ?? ""} placeholder="internal.example.com,.corp.example.com" onChange={event => onNoProxyChange(event.target.value)} /></label> : null}
     <section className="proxy-server-section" aria-labelledby="proxy-servers-heading">
       <div className="proxy-section-heading">
         <span className="proxy-section-index">2</span>
@@ -370,13 +406,15 @@ export function ProxySettingsEditor({
               <button className="danger-button compact-button" type="button" onClick={() => void onDelete(server)}>{t("proxy.server.delete")}</button>
             </span>
           </div>
-          {server.kind === "custom_url" && server.url ? <code className="proxy-server-url">{server.url}</code> : null}
+          {server.kind === "custom_url" && server.url ? <code className="proxy-server-url">{server.url.replace(/\/\/[^/@]+@/, "//***:***@")}</code> : null}
           {server.kind === "environment" && server.environment ? <EnvironmentStatus details={server.environment} /> : null}
         </article>) : <p className="muted">{t("proxy.servers.empty")}</p>}
       </div>
     </section>
 
+    <ProxyPolicySelect includeInherit={false} label={t("proxy.default.label")} onChange={policy => void onDefaultPolicyChange(policy as ProxyDefaultPolicy)} settings={settings} value={settings.defaultPolicy} />
     {!formOpen ? <button className="secondary-button proxy-add-button" type="button" onClick={beginCreate}>{t("proxy.add.open")}</button> : null}
+    </details>
     {formOpen ? <form aria-label={editing ? t("proxy.form.editAria", { name: editing.name }) : t("proxy.form.addAria")} className="proxy-server-form" onSubmit={(event) => void submit(event)}>
       <div className="editor-heading"><strong>{editing ? t("proxy.form.editTitle", { name: editing.name }) : t("proxy.form.addTitle")}</strong><small>{t("proxy.form.help")}</small></div>
       <label><span>{t("proxy.form.name")}</span><input required maxLength={200} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
@@ -408,6 +446,7 @@ export function ProxySettingsEditor({
       </div>
     </form> : null}
 
+    <details><summary>{t("proxy.modules.title")}</summary>
     <section className="proxy-module-section" aria-labelledby="proxy-modules-heading">
       <div className="settings-detail-header proxy-module-heading">
         <span className="eyebrow">{t("proxy.modules.eyebrow")}</span>
@@ -432,7 +471,7 @@ export function ProxySettingsEditor({
           value={mcpPolicies[server.id] ?? "inherit"}
         />)}
       </div>
-    </section>
-    <div className="config-note">{t("proxy.systemNote")}</div>
+    </section></details>
+    <div className="config-note">{t("proxy.scopeNote")}</div>
   </div>;
 }

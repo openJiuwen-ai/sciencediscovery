@@ -28,8 +28,8 @@ from .agent_runs import AgentRunner, agent_router
 from .config import Settings
 from .llm_proxy import DEFAULT_ALIAS, LlmRoutes, llm_router
 from .mcp_server import ToolsetRegistry, mcp_router
-from .network import loopback_mounts
 from .proxy import proxy_to_legacy
+from .network import InternalClient
 
 
 async def forget_stale_aliases(runner) -> None:
@@ -52,22 +52,13 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
     async def lifespan(app: FastAPI):
         # No read timeout: SSE runs stay open for the whole agent run.
         timeout = httpx.Timeout(connect=5.0, read=None, write=60.0, pool=5.0)
-        # Bypass environment proxies only for the local service addresses.
-        # Keep trust_env enabled for remote proxies and custom CA certificates.
-        mounts = loopback_mounts(settings.legacy_url)
         async with (
-            # These clients connect to local companion services. Do not let an
-            # ambient HTTP(S)/SOCKS proxy intercept loopback traffic.
-            httpx.AsyncClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
-                              follow_redirects=False, mounts=mounts) as legacy,
-            httpx.AsyncClient(timeout=timeout, mounts=mounts) as bridge,
-            # Model routes are external destinations and must retain proxy
-            # support, including SOCKS configured through the environment.
-            httpx.AsyncClient(timeout=timeout, trust_env=True, mounts=mounts) as models,
+            InternalClient(base_url=settings.legacy_url, transport=transport, timeout=timeout) as legacy,
+            # Tool-bridge calls go to loopback URLs the caller names, not to the legacy base URL.
+            InternalClient(timeout=timeout) as bridge,
         ):
             app.state.legacy = legacy
             app.state.bridge = bridge
-            app.state.models = models
             await forget_stale_aliases(app.state.agent_runner)
             yield
 
@@ -76,7 +67,7 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
     registry = ToolsetRegistry()
     app.include_router(mcp_router(registry))
     routes = LlmRoutes()
-    app.include_router(llm_router(routes, lambda: app.state.models))
+    app.include_router(llm_router(routes, lambda: app.state.bridge))
     app.state.agent_runner = AgentRunner(settings, registry, lambda: app.state.bridge, routes)
     app.include_router(agent_router(app.state.agent_runner, settings))
     # Migrated routes are registered above this line, one router per domain.
