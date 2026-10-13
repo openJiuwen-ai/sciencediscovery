@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
+import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { handlePluginRequest } from "../plugins/http.js";
@@ -851,7 +852,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           runner: runner ?? { status: "unavailable" },
           service: "sciencediscovery-api",
-          status: runner ? "ok" : "degraded",
+          status: runner && runner.execution?.ready !== false ? "ok" : "degraded",
           workspace,
         });
         return;
@@ -877,6 +878,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
 
+      if (await handleExecutionReadiness(request, response, url, store, runnerClient, remoteCompute, () => readJson(request))) return;
       if (request.method === "GET" && url.pathname === "/api/projects") {
         sendJson(response, 200, store.listProjects());
         return;

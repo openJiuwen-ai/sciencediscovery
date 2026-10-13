@@ -38,6 +38,8 @@ mkdir -p "$state_dir"
 # would otherwise be re-resolved against services/adapter's cwd by the uv sync below, putting the
 # adapter's venv somewhere this script never looks for it again.
 state_dir="$(cd -- "$state_dir" && pwd)"
+export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-$state_dir/home}"
+[[ "$JIUWENSWARM_HOME" == /* ]] || export JIUWENSWARM_HOME="$repository_root/$JIUWENSWARM_HOME"
 log="$state_dir/jiuwenswarm-test.log"
 : > "$log"
 
@@ -60,10 +62,11 @@ blocked() {
 "$repository_root/scripts/jiuwenswarm.sh" setup >> "$log" 2>&1 || blocked "JiuwenSwarm could not be installed"
 eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || blocked "the JiuwenSwarm instance $JIUWENSWARM_INSTANCE is not set up"
 gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; gateway_port="${gateway_port%%/*}"
-if ! (exec 3<>"/dev/tcp/127.0.0.1/$gateway_port") 2>/dev/null; then
-  "$repository_root/scripts/jiuwenswarm.sh" start >> "$log" 2>&1 || blocked "JiuwenSwarm did not start"
+if ! "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
   jiuwenswarm_started=1
+  "$repository_root/scripts/jiuwenswarm.sh" start >> "$log" 2>&1 || blocked "JiuwenSwarm did not start"
 fi
+eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || blocked "the started instance has no endpoints"
 
 # The adapter's own environment, next to the state directory, so a test run never touches the one a stack uses.
 adapter_env="$state_dir/adapter-env"

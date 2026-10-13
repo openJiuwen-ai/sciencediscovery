@@ -32,6 +32,7 @@ import * as defaultCatalog from "./test-catalog.mjs";
 export const defaultRepositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const layerEntryPoints = {
+  "ci:l1": "node test/support/tagged/shared.mjs run --profile l1 --slice l1",
   "ci:e2e": "node test/support/tagged/shared.mjs run --slice e2e",
   "ci:st": "node .ci/run-layer.mjs st",
   "ci:ut": "node .ci/run-layer.mjs ut",

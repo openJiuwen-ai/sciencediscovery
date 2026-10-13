@@ -8,12 +8,13 @@ the model's ability to choose an effective research strategy.
 
 | ID | File | Contract |
 | --- | --- | --- |
-| LR-01 | `test/literature-review-lifecycle-mocked.spec.ts` | Invalid JSON produces a visible terminal error and no shell execution. Recovery is not implemented or claimed. |
+| LR-01 | `test/literature-review-lifecycle-mocked.spec.ts` | A finished response with invalid JSON arguments creates no shell execution; the model is told which call failed, re-issues it, and the run completes. |
 | LR-02 | Same | Interrupted argument stream cannot create a shell execution or silently complete. |
 | LR-03 | Same | Five children, two permits, real queued admission, all results returned, peak active lifecycle count at most two. |
 | LR-04 | Same | One child exhausts its turn budget; a sibling completes and both outcomes reach the parent. |
 | LR-05 | Same | A child waiting on its model expires; a queued healthy child starts afterward and returns. |
 | LR-06 | Same | Cancelling a parent cancels the active child and prevents pending children from starting. |
+| LR-17 | Same | Invalid JSON repeated through both recovery attempts fails the run with `invalid tool arguments … after 2 recovery attempts` and no shell execution. |
 | LR-13 | `test/literature-review-artifacts-mocked.spec.ts` | Independent child workspaces contain the same physical filename; logical artifacts and explicit versions retain distinct contents in parent LLM inputs. |
 | LR-15 | Same | Final report content/version and UI preview survive a browser reload. |
 

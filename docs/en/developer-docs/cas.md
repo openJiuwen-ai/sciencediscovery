@@ -54,7 +54,7 @@ Runner's environment store has a different revision-keyed lifecycle. It may vali
 
 ## Agent state versions
 
-`VersionStore.putRecord` hashes strict RFC 8785 JCS records with schema version and strong dependencies. `validateClosure` checks every reachable blob. Unknown record schema versions are rejected; there is no implicit in-place upgrade.
+`VersionStore.putRecord` hashes strict RFC 8785 JCS records with schema version and strong dependencies. `validateClosure` always rehashes every reachable blob. For ref commits, `validateClosureForCommit` still walks the full graph but reuses verified bytes and dependency edges when an object retains its device, inode, size, modification time and change time. New or changed objects are verified; a change during verification rejects the commit. Cache entries are published only after the whole closure passes and live in one `VersionStore` instance, so a new instance verifies the closure again. Unknown record schema versions are rejected; there is no implicit in-place upgrade.
 
 Production `createAgentRun` creates an AgentManifest (behavior plus content-derived harness build descriptor), an AgentRevision (lineage) and an initial state. Each model turn uses an awaited Runtime lifecycle: before state, actual context/model input, all settled tool results, after state, actions/event segments, then TrajectoryStep. State preserves full per-run transcript separately from compacted model history, raw observations, tool visibility/loop state, authoritative plans, artifacts, permissions, environments and child records. DurableContextStore is retained only as a context projection. ModelContextSnapshot records the exact `ProviderModelClient.invoke` input; transport authentication is excluded.
 

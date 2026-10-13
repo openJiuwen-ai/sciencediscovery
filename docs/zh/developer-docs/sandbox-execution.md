@@ -27,11 +27,25 @@ Runner 是无 root 的代码执行器：Agent 的常规执行统一使用 `run_s
 
 ## 3. 沙箱构造
 
-启动预检要求 bwrap 支持：`--cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user`，并实际运行一次探针。
+### 可用性与修复
+
+安装、构建和启动工作台不再要求本地沙箱可用。源码/Docker 启动脚本与二进制启动器在本地 Runner 不可用时仍保持 API/UI 可用。无需代码执行的 Agent 任务可以继续；本地 Runner 的状态不能代替远端执行能力的检查。
+
+每个 Runner 在自己的进程中探测可执行文件及沙箱配置。`GET /health` 的 `execution` 包含 `instanceId`、`checkedAt`、依赖可用性、沙箱可用性、就绪状态与原因。带鉴权的 `GET /execution-capability` 读取缓存；`POST` 在修复后刷新，同时刷新共用的沙箱配置缓存。API 对应入口为 `/api/runners/{runnerId}/execution-capability`。没有此接口的旧 Runner 视为能力未知，需要升级，不能直接视为安全可用。
+
+Runner 设置保留能力状态与**重新检查**按钮。Agent 可调用 `check_runner(runner_id?)`，直接刷新目标 Runner 的同一份能力报告，不依赖沙箱。该工具只诊断，不执行代码、不挂起等待。执行前发现 Runner 不可用时，工具返回 `RUNNER_UNAVAILABLE`、`dispatched: false`、`operationId`、原因与修复建议；本次调用已结束，不进入执行队列。Agent 自行决定继续其他工作、说明阻塞并结束本轮，或显式调用 `wait_for_runner(operation_id)`。
+
+只有 `wait_for_runner` 才会创建对话卡片并暂停 Agent 的外部等待计时。卡片展示 Agent、待执行操作、原因和建议，提供修复后重检、选择可用且已授权的其他 Runner、取消本次操作（非整个任务）。不同操作的选择彼此独立。所有选择均返回 Agent；重试与切换会重新探测，但**绝不执行或重放旧调用**，须由 Agent 重新调用执行工具；换机器时先准备目标工作区、输入与环境。重检失败也返回诊断，是否再次等待仍由 Agent 决定，不自动轮询修复状态。任务取消、进程关闭或十分钟未决定会清理等待。刷新浏览器通过 `GET /api/sessions/{sessionId}/execution-blocks` 恢复卡片，响应经 `POST /api/sessions/{sessionId}/execution-blocks/{id}` 提交；重复或过期响应不会下发代码。等待存于内存，不提供 API 重启后的任务恢复。设置页定期读取能力缓存，也能反映 Agent 发起检查后的状态。
+
+Runner 自身也会在占用执行 ID 前，以 HTTP 503 和 `EXECUTION_UNAVAILABLE` 拒绝不可用的沙箱执行，读取/取消/管理接口仍可使用。**没有无沙箱兜底**，Always Allow 也不会关闭沙箱。探测成功仅证明沙箱可以构建，不保证每个科学依赖包或 GPU 配置正确。检查与受阻结果记录在工具轨迹中；API 操作日志记录 `runner_wait_requested`、`execution_decision`，Runner 记录 `execution_unavailable`。宿主机执行与扩大授权范围属于后续独立特性。
+
+### 沙箱配置
+
+执行能力要求 bwrap 支持：`--cap-drop --die-with-parent --new-session --seccomp --unshare-all --unshare-user`，并实际运行一次探针；失败时标记计算不可用，不阻止管理服务启动。
 
 沙箱形态有两处会被环境拒绝，都由运行时实测决定，并按「先定 `/proc`，再定 `--disable-userns`」的顺序判定，
-避免两者互相误判。检测实现见 `packages/sandbox-capability`，按二进制路径缓存；launcher 的 `probeSandbox`
-与 runner 共用同一结论，避免出现「预检通过但工具全挂」。
+避免两者互相误判。检测实现见 `packages/sandbox-capability`，按二进制路径缓存；能力探测与执行共享该缓存。
+launcher 启动工作台不再强制通过沙箱预检，实际执行以目标 Runner 的能力为准。
 
 **其一，`/proc` 的提供方式。** 默认 `--proc /proc`，让沙箱拥有自己的 procfs，只看得见自己的进程。
 Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己的 pid 命名空间里挂载新的 procfs
@@ -191,6 +205,35 @@ HTTP `/execute`、`/execute-shell`、`/shell-executions` 在创建 Workspace 或
 持久解释器可能在一次调用返回后留下线程或子进程，越过 Workspace 写锁与快照提交边界继续写入。Linux ephemeral 执行在最终快照和释放租约前结束整个 Bubblewrap PID namespace。受管理后台 Execution 则在真实负载运行期间持续持有写入权；它不是可跨调用复用的交互式 Shell。
 
 历史 Session profile 不再注入。每次显式选择 cwd 与环境，需要的 export 和命令写在同一个脚本中。Python/R 内存不跨调用保留；Notebook 式共享内存不属于本次实现。
+
+## 8. Runner 恢复的真实模型 E2E
+
+[`test/journey-runner-recovery-real.spec.ts`](../../../test/journey-runner-recovery-real.spec.ts)
+包含两条 `tier:l3` 用例，由 merge queue 的 `merge` profile 选入串行 basic
+worker，每日与 release 测试也继承执行；普通 PR L2 不调用真实模型。
+
+- **等待分支**：自然语言要求实际执行，受阻时等待用户决定，不直接指定工具名或要求弹卡片。
+  检查模型主动调用 `wait_for_runner`，operation ID 对应失败操作，真实前端显示卡片且刷新后保留；
+  浏览器取消后，选择进入下一次模型输入，Agent 正常结束且不重新提交代码。
+- **结束分支**：用户明确要求环境不可用时解释原因并结束，不等待。
+  检查模型实际收到 Runner 故障、给出最终答复，且从未调用等待工具或遗留等待卡片。
+
+故障通过真实 Runner HTTP 服务指向临时目录中不存在的沙箱程序产生，不修改宿主机安全设置，
+不模拟模型、不插入卡片、不强制工具选择。Session 仅允许使用该 Runner，执行请求不得进入
+Runner 的执行端点。另有不使用模型的 ST 检查故障环境仍可连接、直接执行被拒绝。
+
+在隔离测试实例准备好后，配置 `E2E_API_TOKEN`、`E2E_BASE_URL`（或 `E2E_API_URL`）、
+`E2E_LLM_BASE_URL`、`E2E_LLM_MODEL`、`E2E_LLM_TOKEN`，执行：
+
+```bash
+cd .e2e
+E2E_REAL=1 npx playwright test ../test/journey-runner-recovery-real.spec.ts --project=real
+```
+
+每例限时四分钟，不自动重试。不使用 LLM Judge，保留标准 journey 报告、模型输入与工具协议、
+Runner 请求、执行时间和 Provider 返回的 token 用量，失败时也收集。
+单次通过不是对模型指令遵循能力的普遍保证；通过轨迹区分模型决策错误与工具未暴露、结果丢失、
+前端渲染等框架问题。证据记录所选后端，native 通过不能替代 Swarm 验证，反之亦然。
 
 ## 相关文档
 

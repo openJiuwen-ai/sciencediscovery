@@ -71,5 +71,39 @@ class PatchInstallationTests(unittest.TestCase):
             self.assertEqual(actual.read_text(), installed.read_text(), "Tests must exercise exactly the shipped client")
 
 
+    def test_setup_upgrades_a_source_checkout_whose_patches_were_revised_in_place(self):
+        helper = Path(__file__).resolve().parents[2] / "scripts/swarm-patches.py"
+        modify = "--- a/pkg/a.py\n+++ b/pkg/a.py\n@@ -1 +1 @@\n-one\n+{}\n"
+        create = "--- /dev/null\n+++ b/pkg/new.py\n@@ -0,0 +1 @@\n+{}\n"
+        with tempfile.TemporaryDirectory(prefix="sci-patch-upgrade-") as directory:
+            source = Path(directory) / "src"
+            (source / "pkg").mkdir(parents=True)
+            (source / "pkg/a.py").write_text("one\n")
+            git = ["git", "-C", str(source), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "pinned"], check=True)
+            subprocess.run(git + ["tag", "pinned"], check=True)
+
+            def apply(version, mode="apply"):
+                patches = Path(directory) / version
+                patches.mkdir(exist_ok=True)
+                (patches / "0001-modify.patch").write_text(modify.format(f"two-{version}"))
+                (patches / "0002-create.patch").write_text(create.format(f"new-{version}"))
+                # A relative patch directory must not be read relative to the checkout git runs in.
+                return subprocess.run([sys.executable, str(helper), mode, str(source), "pinned", "--patch-dir", version],
+                                      capture_output=True, text=True, cwd=directory)
+
+            self.assertEqual(apply("v1").returncode, 0)
+            # Both patches were revised in place: one edits a pinned file, one creates a file.
+            upgraded = apply("v2")
+            self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+            self.assertEqual((source / "pkg/a.py").read_text(), "two-v2\n")
+            self.assertEqual((source / "pkg/new.py").read_text(), "new-v2\n")
+            again = apply("v2")
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertEqual(apply("v2", "verify").returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

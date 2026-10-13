@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from openjiuwen.core.foundation.llm import AssistantMessage, ToolCall
-from jiuwenswarm.server.runtime.mcp.output_recovery import enable_output_recovery, OutputRecoveryExhausted
+from jiuwenswarm.server.runtime.mcp.output_recovery import enable_output_recovery, INVALID_TOOLS, OutputRecoveryExhausted
 
 
 class OutputRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +46,36 @@ class OutputRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.content, 'artifact: report.md')
                 self.assertIn(kind, context.add_messages.call_args.args[0].content)
                 self.assertNotIn('long private thought', context.add_messages.call_args.args[0].content)
+
+    async def test_invalid_arguments_are_reissued_with_their_own_guidance(self):
+        withheld = AssistantMessage(content=(
+            'Writing the report now.\n\n[invalid_tool_arguments:tool_calls_withheld] No tools from this response were executed. '
+            'Arguments that are not valid JSON: run_shell (Unterminated string in JSON at position 41).'), finish_reason='length')
+        reissued = AssistantMessage(content='', finish_reason='tool_calls', tool_calls=[
+            ToolCall(type='function', id='fixed', name='run_shell', arguments='{"command":"printf ok"}')])
+        call, original, context = self.setup_agent([withheld, reissued])
+        result = await call(None, context, [])
+        self.assertEqual([c.id for c in result.tool_calls], ['fixed'])
+        self.assertEqual(original.await_count, 2)
+        feedback = context.add_messages.call_args.args[0].content
+        self.assertTrue(feedback.startswith('[Tool argument recovery 1/2; invalid_tool_arguments]'))
+        self.assertIn('NO tools', feedback)
+        self.assertIn('not valid JSON', feedback)
+        self.assertIn('run_shell (Unterminated string in JSON at position 41)', feedback)
+        self.assertIn('Writing the report now.', feedback)
+        self.assertNotIn('output token limit', feedback)
+        self.assertEqual(feedback.count('No tools from this response were executed.'), 0)
+
+    async def test_repeated_invalid_arguments_exhaust_with_their_kind(self):
+        withheld = AssistantMessage(content='[invalid_tool_arguments:tool_calls_withheld] No tools from this response were executed. '
+                                            'Arguments that are not valid JSON: run_shell (bad).', finish_reason='length')
+        call, original, context = self.setup_agent([withheld] * 4)
+        with self.assertRaises(OutputRecoveryExhausted) as raised:
+            await call(None, context, [])
+        self.assertEqual(original.await_count, 3)
+        self.assertEqual(raised.exception.details['kind'], 'invalid_tool_arguments')
+        self.assertEqual(raised.exception.details['recoveryAttempts'], 2)
+        self.assertTrue(context.add_messages.call_args.args[0].content.startswith('[Tool argument recovery 2/2;'))
 
     async def test_exhaustion_is_bounded_and_structured(self):
         call, original, context = self.setup_agent([AssistantMessage(content='', finish_reason='length')] * 4)
@@ -112,3 +142,41 @@ class OutputRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executed, ['draft'])
         self.assertFalse(any(c.id == 'do-not-write' for m in history for c in getattr(m, 'tool_calls', []) or []))
         self.assertTrue(any('Output limit recovery' in str(getattr(m, 'content', '')) for m in history))
+
+    async def test_real_react_loop_reissues_after_invalid_arguments_and_completes(self):
+        from unittest.mock import MagicMock, patch
+        from openjiuwen.core.single_agent.agents.react_agent import ReActAgent, ReActAgentConfig
+        from openjiuwen.core.single_agent.schema.agent_card import AgentCard
+        from openjiuwen.core.foundation.llm import ToolMessage
+        react = ReActAgent(card=AgentCard(name='invalid-arguments-test', description='invalid argument recovery'))
+        react.configure(ReActAgentConfig().configure_model('mock').configure_max_iterations(5))
+        context = MagicMock()
+        history = []
+        async def add(message):
+            history.extend(message if isinstance(message, list) else [message])
+        context.add_messages = AsyncMock(side_effect=add)
+        context.get_messages.side_effect = lambda: list(history)
+        engine = MagicMock()
+        engine.create_context = AsyncMock(return_value=context)
+        engine.save_contexts = AsyncMock()
+        react.context_engine = engine
+        session = MagicMock()
+        session.get_state.return_value = None
+        session.write_stream = AsyncMock()
+        # What the gateway returns for a finished response whose arguments did not parse.
+        withheld = AssistantMessage(content='[invalid_tool_arguments:tool_calls_withheld] No tools from this response were executed. '
+                                            'Arguments that are not valid JSON: write (Unterminated string).', finish_reason='length')
+        fixed = AssistantMessage(content='', finish_reason='tool_calls', tool_calls=[
+            ToolCall(type='function', id='draft', name='write', arguments='{"text":"draft"}')])
+        executed = []
+        async def execute(**kwargs):
+            executed.extend(c.id for c in kwargs['tool_call'])
+            return [('saved', ToolMessage(content='saved', tool_call_id='draft'))]
+        enable_output_recovery(SimpleNamespace(_react_agent=react))
+        with patch.object(react, '_railed_model_call', AsyncMock(side_effect=[withheld, fixed, AssistantMessage(content='report.md saved', finish_reason='stop')])), \
+             patch.object(react.ability_manager, 'execute', AsyncMock(side_effect=execute)):
+            result = await react.invoke({'conversation_id': 'invalid-arguments-test', 'query': 'write report'}, session=session)
+        self.assertEqual(result['output'], 'report.md saved')
+        self.assertEqual(executed, ['draft'])
+        self.assertFalse(any(INVALID_TOOLS in str(getattr(m, 'content', '')) for m in history if getattr(m, 'role', '') == 'assistant'))
+        self.assertTrue(any('Tool argument recovery' in str(getattr(m, 'content', '')) for m in history))

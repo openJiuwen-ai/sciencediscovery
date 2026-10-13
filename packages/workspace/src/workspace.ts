@@ -14,6 +14,7 @@
 
 import { mkdir, readdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { RunnerUnavailableError } from "./runner-readiness.js";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AgentTool } from "@sciencediscovery/tools";
@@ -251,6 +252,10 @@ export interface WorkspaceToolOptions {
     remove: (id: string) => void;
     supersede: (id: string, content: string, category?: AgentMemoryCategory) => AgentMemoryEntry;
     list: (filter: { category?: AgentMemoryCategory; status?: AgentMemoryStatus }) => AgentMemoryEntry[];
+  };
+  runnerReadiness?: {
+    check(runnerId?: string, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").RunnerCheckResult>;
+    wait(operationId: string, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
   };
   timers?: {
     create(input: { afterMs?: number; at?: string; message: string; executionId?: string }): Promise<unknown>;
@@ -2110,6 +2115,27 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(traceProvenance);
   }
+  if (options.runnerReadiness) {
+    const checkParameters = Type.Object({ runner_id: Type.Optional(Type.String({ minLength: 1 })) });
+    const check: AgentTool<typeof checkParameters> = {
+      name: "check_runner", label: "Check Runner", parameters: checkParameters,
+      description: "Refresh execution readiness on an authorized Runner (default local) and update its capability report. Works without a usable sandbox. Reports connection, sandbox diagnostics and repair suggestions. Does not execute scientific code, repair the host, grant permission, or wait for user input.",
+      execute: async (_id, params, signal) => {
+        const value = await options.runnerReadiness!.check(params.runner_id, signal);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    const waitParameters = Type.Object({ operation_id: Type.String({ minLength: 1 }) });
+    const wait: AgentTool<typeof waitParameters> = {
+      name: "wait_for_runner", label: "Wait for Runner decision", parameters: waitParameters,
+      description: "Explicitly pause for user help with a RUNNER_UNAVAILABLE operation_id returned to this Agent. Shows a conversation card with diagnostics, repair/recheck, switch Runner and cancel-operation choices. Use only if you choose to wait rather than do other work or finish. Returns the user's choice and a fresh check; NEVER executes or replays the failed call. After return decide your next action and issue a new execution if appropriate. Do not combine with dependent execution calls in the same batch.",
+      execute: async (id, params, signal) => {
+        const value = await options.runnerReadiness!.wait(params.operation_id, signal, id);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(check, wait);
+  }
   if (options.executeShell) {
     const shellParameters = Type.Object({
       background: Type.Optional(Type.Boolean({ description: "Return after acceptance without waiting for completion." })),
@@ -2177,6 +2203,14 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       label: "Run shell",
       name: "run_shell",
       parameters: shellParameters,
+    };
+    const execute = runShell.execute;
+    runShell.execute = async (...args) => {
+      try { return await execute(...args); }
+      catch (error) {
+        if (!(error instanceof RunnerUnavailableError)) throw error;
+        return { isError: true, content: [{ type: "text", text: JSON.stringify(error.result) }], details: error.result };
+      }
     };
     tools.push(runShell);
   }

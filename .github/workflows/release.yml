@@ -74,9 +74,10 @@ jobs:
     name: Gate
     needs: version
     uses: ./.github/workflows/ci.yml
+    secrets: inherit
     with:
-      # A version tag is held to the nightly standard: `release` is defined as
-      # `daily`, so strengthening the nightly policy strengthens a release.
+      # L5 contains L4 plus the existing eligible release cases; quality calibration is deferred.
+      # Failure leaves the existing tag without publishing Release/assets.
       profile: release
       release-version: ${{ needs.version.outputs.version }}
 

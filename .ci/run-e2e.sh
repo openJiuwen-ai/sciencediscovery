@@ -81,7 +81,6 @@ fixture_pid=""
 fixture="${CI_E2E_FIXTURE:-standard}"
 case "$fixture" in standard|research|literature) ;; *) echo 'Unknown E2E fixture' >&2; exit 2;; esac
 if [[ "$fixture" != standard && "$group" != mocked ]]; then echo 'Offline fixtures must never reach real E2E' >&2; exit 2; fi
-test_started=0
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 mkdir -p "$results_root" "$runtime_root"
@@ -105,23 +104,16 @@ finish() {
   if [[ "$jiuwenswarm_started" -eq 1 ]]; then
     "$repository_root/scripts/jiuwenswarm.sh" stop >> "$stack_log" 2>&1 || true
     # Transport diagnostics already omit URLs, credentials, arguments and
-    # response bodies. Preserve them per fixture before the next Swarm start
-    # truncates its shared log; stack.log only contains the adapter's side.
-    local swarm_log="${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}/jiuwenswarm.log"
+    # response bodies. stack.log only contains the adapter's side; the Swarm
+    # log belongs to this run's isolated home and instance too.
+    local swarm_log="$JIUWENSWARM_HOME/jiuwenswarm-$JIUWENSWARM_INSTANCE.log"
     if [[ -f "$swarm_log" ]]; then
       grep -E 'platform_mcp_(request_failed|transport_failed|transport_open|transport_close|connect_ready|disconnect_requested|request_cancel)' \
         "$swarm_log" > "$results_root/platform-mcp-transport.log" || true
     fi
   fi
-  if [[ "$test_started" -eq 1 ]]; then
-    mkdir -p "$results_root/playwright-report" "$results_root/test-results"
-    if [[ -d "$repository_root/.e2e/playwright-report" ]]; then
-      cp -a "$repository_root/.e2e/playwright-report/." "$results_root/playwright-report/"
-    fi
-    if [[ -d "$repository_root/.e2e/test-results" ]]; then
-      cp -a "$repository_root/.e2e/test-results/." "$results_root/test-results/"
-    fi
-  fi
+  # Playwright writes both results and HTML directly into this worker's tree;
+  # concurrent local shards must never copy another worker's shared report.
   if [[ "$status" -eq 0 ]]; then
     result_status="passed"
     # A preparation run installed dependencies and ran no journey; calling that
@@ -234,6 +226,11 @@ export E2E_API_TOKEN="$auth_token"
 export E2E_BASE_URL="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
 export E2E_API_URL="$E2E_BASE_URL"
 export E2E_JOURNEY_REPORTS="$results_root/journey-reports"
+# Each test's traces, screenshots and metrics land in the results as that test
+# ends, rather than being copied when the run exits: a cancelled job is killed
+# within seconds, before any exit trap has finished.
+export E2E_OUTPUT_DIR="$results_root/test-results"
+export E2E_HTML_REPORT="$results_root/playwright-report"
 # This layer started the stack above, on a data directory it owns, and will kill
 # it again on the way out, so a journey may empty it to reach a first-run state.
 # Nothing else grants that: a suite merely pointed at an address — someone's own
@@ -256,8 +253,9 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     export SCIENCE_AGENT_JIUWENSWARM_PLANNING=update_plan
     export SCIENCE_AGENT_JIUWENSWARM_TOOLS=ours
   fi
-  # A JiuwenSwarm instance of this layer's own, so a run never shares skills, config or sessions with the
-  # instance a developer uses (the install itself, JIUWENSWARM_ROOT, is shared).
+  # Isolate the registry as well as workspaces: names alone collide across
+  # concurrent worktrees. Only the pinned installation may be shared.
+  export JIUWENSWARM_HOME="$(absolute_from_repository "${JIUWENSWARM_HOME:-$runtime_root/jiuwenswarm}")"
   export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-e2e}"
   # Install the pinned release when missing and create this layer's instance. A
   # prepared workspace is one whose host installed the Node dependencies and the
@@ -274,7 +272,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   }
   jiuwenswarm_gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; jiuwenswarm_gateway_port="${jiuwenswarm_gateway_port%%/*}"
   if [[ "$fixture" != standard ]]; then
-    if (exec 3<>"/dev/tcp/127.0.0.1/$jiuwenswarm_gateway_port") 2>/dev/null; then
+    if "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
       echo 'BLOCKED: research fixture refuses to modify a running Swarm instance' >&2; exit 2
     fi
     swarm_python="${JIUWENSWARM_SRC:-${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}/src}/.venv/bin/python"
@@ -309,13 +307,16 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
       export SCIENCE_AGENT_API_ENTRYPOINT="$repository_root/test/fixtures/literature-api.mjs"
     fi
   fi
-  if ! (exec 3<>"/dev/tcp/127.0.0.1/$jiuwenswarm_gateway_port") 2>/dev/null; then
+  if ! "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
+    jiuwenswarm_started=1
     "$repository_root/scripts/jiuwenswarm.sh" start >> "$stack_log" 2>&1 || {
       printf 'BLOCKED: JiuwenSwarm did not start; see %s.\n' "$stack_log" | tee -a "$test_log" >&2
       exit 2
     }
-    jiuwenswarm_started=1
   fi
+  # Startup can reallocate occupied ports. Re-read this root's actual endpoints
+  # instead of connecting to the sibling that held the originally planned port.
+  eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || exit 2
   export JIUWENSWARM_GATEWAY_URL JIUWENSWARM_MGMT_URL
 fi
 
@@ -373,7 +374,6 @@ fi
 node test/check-e2e-meta.mjs 2>&1 | tee -a "$test_log"
 metadata_status=${PIPESTATUS[0]}
 if [[ "$metadata_status" -ne 0 ]]; then exit "$metadata_status"; fi
-test_started=1
 playwright_args=()
 if [[ -n "${CI_E2E_SPEC:-}" ]]; then playwright_args+=("$CI_E2E_SPEC"); fi
 if [[ -n "${CI_E2E_GREP:-}" ]]; then playwright_args+=(--grep "$CI_E2E_GREP"); fi
@@ -388,10 +388,11 @@ journeys_status=${PIPESTATUS[0]}
 # journeys plan with update_plan), web-search (the internet), compression and
 # history-restart (a small context window, a JiuwenSwarm restart).
 live_status=0
-if [[ "$backend" == "jiuwenswarm" && "$group" == "mocked" && "$fixture" == standard ]]; then
+case "${CI_E2E_SWARM_CHECKS:-run}" in run|off) ;; *) echo 'Invalid CI_E2E_SWARM_CHECKS' >&2; exit 2;; esac
+if [[ "$backend" == "jiuwenswarm" && "$group" == "mocked" && "$fixture" == standard && "${CI_E2E_SWARM_CHECKS:-run}" == run ]]; then
   live_checks="${CI_E2E_JIUWENSWARM_CHECKS:-history history-names run-shell host-tools approvals skills skill-switch trajectory language}"
   # shellcheck disable=SC2086 # the list is words on purpose
-  node test/contract/jw-only/live.mjs $live_checks 2>&1 | tee "$results_root/jiuwenswarm-checks.log" | tee -a "$test_log"
+  CI_SWARM_CHECK_REPORT="$results_root/jiuwenswarm-checks.json" node test/contract/jw-only/live.mjs $live_checks 2>&1 | tee "$results_root/jiuwenswarm-checks.log" | tee -a "$test_log"
   live_status=${PIPESTATUS[0]}
   printf 'jiuwenswarm_checks=%s\n' "$([[ "$live_status" -eq 0 ]] && echo passed || echo failed)" >> "$results_root/jiuwenswarm-checks.log"
 fi

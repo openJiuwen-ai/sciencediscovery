@@ -21,7 +21,7 @@ import { TOOL_SEARCH_NAME, TOOL_SEARCH_SPEC, type AgentTool } from "@sciencedisc
 
 import { DurableContextStore } from "@sciencediscovery/context";
 
-import { startModelGateway, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
+import { startModelGateway, withoutWithheldNotice, type ModelGateway } from "./jiuwenswarm-model-gateway.js";
 import { importSkillsToJiuwenSwarm, skillLoadedBy } from "./jiuwenswarm-skills.js";
 import { JiuwenSwarmTrajectory, stateProvider } from "./jiuwenswarm-trajectory.js";
 import { waitForRecording } from "./recording-wait.js";
@@ -331,7 +331,9 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     }).catch((error: unknown) => console.warn(`[jiuwenswarm-agent] trajectory not recorded: ${error instanceof Error ? error.message : String(error)}`));
     const modelGateway = await startModelGateway(endpoint, policy, this.controller.signal, this.config.modelStreamer,
       trajectory.enabled ? { request: (input) => trajectory.modelRequest(input), completed: (turn, history) => trajectory.modelCompleted(turn, history) } : undefined,
-      { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }) });
+      { progress: () => this.markProgress("model:upstream"), beforeTurn: () => this.emit({ type: "turn_start" }),
+        // Only the run's own instance has the output-recovery boundary; JiuwenSwarm's sub-agents do not.
+        recoversWithheldCalls: !jiuwenSwarmSubagents });
     const deadlines = new RunDeadlines(this.options.runTimeoutMs ?? DEFAULT_AGENT_TURN_TIMEOUT_MS,
       this.options.runIdleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS, () => {
         this.logGatewayProgress(`${deadlines.expired ?? "unknown"}_deadline_expired`, modelGateway);
@@ -352,6 +354,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
         this.emit({ type: "turn_truncated" } as never);
         throw new Error("Swarm ended with an unrecovered output limit");
       }
+      // Nor may a run end on a response whose tool calls were withheld for invalid arguments.
+      if (modelGateway.lastFailure()) throw new Error("Swarm ended on withheld tool calls");
       return {
         finalMessages: [{ role: "user", content: text }, ...transcript.finish(finalText).map((message) => modelGateway.restore(message))] as never,
       };
@@ -362,8 +366,8 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
       if (this.controller.signal.aborted) throw new Error("Agent run cancelled");
       const modelFailure = modelGateway.lastFailure();
       if (modelFailure) throw new Error(
-        `Model returned invalid tool arguments (tools: ${modelFailure.tools.join(", ") || "unknown"})${modelFailure.truncated
-          ? ` after reaching max_tokens (${policy.maxTokens})` : ""}; gateway request ${modelFailure.requestId}`,
+        `Model returned invalid tool arguments (tools: ${modelFailure.tools.join(", ") || "unknown"})${modelFailure.recoveryAttempts
+          ? ` after ${modelFailure.recoveryAttempts} recovery attempts` : ""}; gateway request ${modelFailure.requestId}`,
         { cause: error },
       );
       const last = modelGateway.lastTurn();
@@ -817,13 +821,17 @@ class EventTranslator {
         this.emit({ type: "response_start", responseId: String(event.responseId), turn });
         break;
       }
-      case "assistant.delta":
-        this.transcript.delta(String(event.delta));
+      case "assistant.delta": {
+        // A withheld response's notice is for Swarm's recovery boundary, not the user or the transcript.
+        const delta = withoutWithheldNotice(String(event.delta));
+        if (!delta) break;
+        this.transcript.delta(delta);
         this.emit({
           type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: String(event.delta), responseId: String(event.responseId) },
+          assistantMessageEvent: { type: "text_delta", delta, responseId: String(event.responseId) },
         });
         break;
+      }
       case "assistant.thinking.delta":
         this.emit({
           type: "message_update",

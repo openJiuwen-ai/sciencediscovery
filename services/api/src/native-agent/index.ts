@@ -952,6 +952,7 @@ export function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.workspaceTransfers ? { workspaceTransfers: options.workspaceTransfers } : {}),
     ...(options.shellExecutions ? { shellExecutions: options.shellExecutions } : {}),
     ...(options.timers ? { timers: options.timers } : {}),
+    ...(options.runnerReadiness ? { runnerReadiness: options.runnerReadiness } : {}),
     specialists: options.specialists ?? [],
     toolPolicy: options.toolPolicy,
   });

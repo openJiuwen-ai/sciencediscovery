@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { execFile } from "node:child_process";
 import { createReadStream, rmSync } from "node:fs";
 import { chmod, link, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -21,18 +20,10 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { RunnerSkillPackages } from "./skill-packages.js";
 
 import { createOperationalLogger, shortErrorMessage } from "@sciencediscovery/operational-logging";
-import {
-  detectSandboxCapability,
-  detectSeatbeltCapability,
-  disableUsernsOmittedMessage,
-  procFallbackMessage,
-  sandboxUnusableMessage,
-  seatbeltUnusableMessage,
-} from "@sciencediscovery/sandbox-capability";
+import { RunnerReadiness } from "./readiness.js";
 
 import type {
   ApiError,
@@ -86,15 +77,6 @@ import { committedWorkspaceSnapshot, publishWorkspaceFile, RefStore, streamSnaps
   workspaceSnapshotFiles, type AgentStateRef, type SnapshotFile } from "@sciencediscovery/cas";
 import { HostNpuJobBroker } from "./npu-broker.js";
 
-const execFileAsync = promisify(execFile);
-const REQUIRED_BWRAP_OPTIONS = [
-  "--cap-drop",
-  "--die-with-parent",
-  "--new-session",
-  "--seccomp",
-  "--unshare-all",
-  "--unshare-user",
-] as const;
 
 export interface RunnerConfig extends ExecutorConfig {
   authToken: string;
@@ -429,7 +411,9 @@ export function createRunnerServer(
     workloadConfigPath: config.npuWorkloadConfigPath,
   }),
   egressGateways?: EgressGatewayRegistry,
+  readiness = new RunnerReadiness(executorSandboxKind(config), executorSandboxKind(config) === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath),
 ): Server {
+  const sandbox = executorSandboxKind(config);
   const skillPackages = new RunnerSkillPackages(config.dataDir);
   const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
   const profiles = envProfiles ?? new SessionEnvProfileStore();
@@ -550,6 +534,7 @@ export function createRunnerServer(
       const url = new URL(request.url ?? "/", "http://runner.local");
       if (request.method === "GET" && url.pathname === "/health") {
         sendJson(response, 200, {
+          execution: await readiness.get(),
           cgroupDelegated: false,
           cgroupMode: RESOURCE_LIMIT_MODE,
           cgroupRoot: "",
@@ -576,6 +561,19 @@ export function createRunnerServer(
       if (!authorized(request, config.authToken)) {
         sendJson(response, 401, { error: "Unauthorized" } satisfies ApiError);
         return;
+      }
+      if (url.pathname === "/execution-capability" && ["GET", "POST"].includes(request.method ?? "")) {
+        sendJson(response, 200, await readiness.get(request.method === "POST"));
+        return;
+      }
+      // Before accepting an execution, not before management/read/cancel calls.
+      // A rejected request has not consumed its execution identity or run code.
+      if (request.method === "POST" && ["/execute", "/execute-shell", "/shell-executions"].includes(url.pathname)) {
+        const capability = await readiness.get();
+        if (!capability.ready) {
+          sendJson(response, 503, { error: capability.detail ?? capability.reason, code: "EXECUTION_UNAVAILABLE", capability });
+          return;
+        }
       }
       if (request.method === "GET" && url.pathname === "/resources") {
         sendJson(response, 200, await collectRunnerResources(config.dataDir, {
@@ -1084,62 +1082,11 @@ async function sandboxNetworkCapability(sandbox: "bubblewrap" | "seatbelt"): Pro
 }
 
 export async function startRunnerServer(config = loadRunnerConfig()): Promise<Server> {
-  const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
   const sandbox = executorSandboxKind(config);
-  if (sandbox === "seatbelt") {
-    if (process.platform !== "darwin") throw new Error("Seatbelt sandbox is available only on macOS");
-    const capability = await detectSeatbeltCapability(config.seatbeltPath ?? "/usr/bin/sandbox-exec");
-    if (!capability.sandboxUsable) {
-      logger.error("sandbox_validation_failed", { detail: capability.detail, reason: capability.reason });
-      throw new Error(seatbeltUnusableMessage(config.seatbeltPath ?? "/usr/bin/sandbox-exec", capability));
-    }
-  } else {
-    let help: string;
-    try {
-      const result = await execFileAsync(config.bwrapPath, ["--help"], {
-        encoding: "utf8",
-        maxBuffer: 1024 * 1024,
-      });
-      help = `${result.stdout}\n${result.stderr}`;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error("sandbox_validation_failed", { errorMessage: shortErrorMessage(error) });
-      throw new Error(`Could not execute bubblewrap at "${config.bwrapPath}": ${message}`, { cause: error });
-    }
-    const missingOptions = REQUIRED_BWRAP_OPTIONS.filter((option) => !help.includes(option));
-    if (missingOptions.length) {
-      throw new Error(
-        `bubblewrap at "${config.bwrapPath}" lacks required sandbox options: ${missingOptions.join(", ")}`,
-      );
-    }
-    // Probe the exact Linux profile so startup and execution cannot disagree.
-    const capability = await detectSandboxCapability(config.bwrapPath);
-    if (!capability.sandboxUsable) {
-    // No sandbox builds here at all. The degradation warnings below both end in
-    // "executions still run", which would be false — and `disableUserns` is
-    // also false in this state, so reporting it would name the wrong cause.
-    logger.warn("sandbox_unusable", { detail: capability.detail, reason: capability.reason });
-    console.warn(sandboxUnusableMessage(config.bwrapPath, capability));
-    } else {
-    // The sandbox works but may be degraded on either axis, and both can be
-    // degraded at once, so report them independently rather than as a chain.
-    if (capability.procFallback) {
-      logger.warn("sandbox_proc_fallback", {
-        detail: capability.procDetail,
-        procMode: capability.procMode,
-      });
-      console.warn(procFallbackMessage(config.bwrapPath, capability));
-    }
-    if (!capability.disableUserns) {
-      logger.warn("sandbox_option_unavailable", {
-        detail: capability.detail,
-        option: "--disable-userns",
-        reason: capability.reason,
-      });
-      console.warn(disableUsernsOmittedMessage(config.bwrapPath, capability));
-    }
-    }
-  }
+  const logger = createOperationalLogger({ category: "runner", dataDir: config.dataDir, service: "runner" });
+  const readiness = new RunnerReadiness(sandbox, sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath);
+  const capability = await readiness.get();
+  if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
   const environmentStore = new EnvironmentStore({
     allowedChannels: config.scientificAllowedChannels ?? ["conda-forge"],
     enabled: config.scientificEnvsEnabled === true,
@@ -1184,6 +1131,7 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
     // `undefined` keeps the parameter default: the broker this server builds itself.
     undefined,
     egressGateways,
+    readiness,
   );
   server.once("close", () => { void kernelManager.close(); });
   if (config.socketPath) {

@@ -48,7 +48,7 @@ The reviewer must not rewrite the report. Explicitly name evidence_brief.md in t
  * JudgeCredentials: TEAM_JUDGE_BASE_URL, TEAM_JUDGE_API_KEY, TEAM_JUDGE_MODEL (OPENAI_BASE_URL/API_KEY and RACE_MODEL fallbacks).
  * CostSideEffects: Billable LLM calls; isolated temporary project, model, Specialist, skill and MCP server; private traces retained.
  */
-test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@sandbox:bubblewrap","@judge:llm"] }, async ({ page, journey }, info) => {
+test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real", "@tier:l4","@sandbox:bubblewrap","@judge:llm"] , annotation: { type: "capability", description: "swarm-task" } }, async ({ page, journey }, info) => {
   const budget = positiveNumber("E2E_TEAM_RUN_TIMEOUT_MS", 3_600_000);
   const judgeBudget = positiveNumber("E2E_TEAM_EVAL_TIMEOUT_MS", 900_000);
   test.setTimeout(budget + judgeBudget + 240_000);

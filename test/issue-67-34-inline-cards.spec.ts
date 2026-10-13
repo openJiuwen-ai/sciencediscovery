@@ -19,7 +19,7 @@ import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("issue-67-34-inline-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@sandbox:bubblewrap"] }, () => {
+test.describe("issue-67-34-inline-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l4", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * Verification for the current run activity layout: Plans live in Workspace

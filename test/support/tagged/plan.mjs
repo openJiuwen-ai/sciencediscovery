@@ -14,6 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import { normalizeTags, compileSelector, schema } from './tags.mjs';
+import { backendName } from './execution.mjs';
 
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -40,7 +41,7 @@ export function validateTarget(target) {
   }
   return { os: target.os, arch: target.arch };
 }
-export function instanceKey(id, target) { return `${id}@${target.os}/${target.arch}`; }
+export function instanceKey(id, target, backend) { return `${id}@${target.os}/${target.arch}${backend ? '/' + backendName(backend) : ''}`; }
 
 /**
  * The same plan narrowed to a subset of its own entries: same revision, same
@@ -55,7 +56,7 @@ export function subplan(plan, entries) {
 }
 
 /** Pure: NEVER reads process.env, the host OS, credentials, devices or services. */
-export function createPlan(catalog, { revision, selector = '', targets, profile } = {}) {
+export function createPlan(catalog, { revision, selector = '', targets, profile, execution } = {}) {
   if (typeof revision !== 'string' || !revision) throw new Error('A revision is required');
   if (!Array.isArray(targets) || !targets.length) throw new Error('An explicit target matrix is required');
   const matrix = targets.map(validateTarget);
@@ -78,8 +79,9 @@ export function createPlan(catalog, { revision, selector = '', targets, profile 
       const concrete = [...test.tags.filter(t => !/^(os|arch):/.test(t)),
         `os:${target.os}`, `arch:${target.arch}`];
       if (!match(concrete)) continue;
-      const key = instanceKey(test.id, target);
-      entries.set(key, { ...test, key, target, selectedTags: concrete.sort() });
+      const backend = test.runner === 'playwright' && execution ? backendName(execution.backend) : undefined;
+      const key = instanceKey(test.id, target, backend);
+      entries.set(key, { ...test, key, target, ...(backend ? { backend } : {}), selectedTags: concrete.sort() });
     }
   }
   if (!entries.size) throw new Error('EMPTY_SELECTION: no test instances selected');
@@ -88,6 +90,7 @@ export function createPlan(catalog, { revision, selector = '', targets, profile 
   // the same `<slice>/` directory, so the name cannot come from where it lies.
   const data = {
     version: 1, revision, selector, ...(profile === undefined ? {} : { profile }),
+    ...(execution ? { execution } : {}),
     targets: [...new Map(matrix.map(t => [canonical(t), t])).values()].sort((a,b) => (canonical(a) < canonical(b) ? -1 : canonical(a) > canonical(b) ? 1 : 0)),
     catalogDigest: digest([...byId.values()].sort((a,b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))),
     entries: [...entries.values()].sort((a,b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
@@ -105,7 +108,8 @@ export function validatePlan(plan) {
       || !['node', 'python', 'playwright', 'command'].includes(entry.runner)) throw new Error('Invalid source identity');
     normalizeTags(entry.tags);
     validateTarget(entry.target);
-    if (entry.key !== instanceKey(entry.id, entry.target) || keys.has(entry.key)) throw new Error('Invalid/duplicate execution identity');
+    if (entry.key !== instanceKey(entry.id, entry.target, entry.backend) || keys.has(entry.key)) throw new Error('Invalid/duplicate execution identity');
+    if (entry.backend && (entry.runner !== 'playwright' || entry.backend !== plan.execution?.backend)) throw new Error('Invalid backend identity');
     keys.add(entry.key);
   }
   return plan;
@@ -123,6 +127,7 @@ export function verifyResults(plan, results, errors = []) {
     seen.set(r.key, r);
     if (r.outcome !== 'PASS') problems.push(`${r.outcome || 'INVALID_OUTCOME'}: ${r.key}`);
     if (canonical(r.actualTarget) !== canonical(expected.get(r.key).target)) problems.push(`TARGET_MISMATCH: ${r.key}`);
+    if (expected.get(r.key).backend && r.actualBackend !== expected.get(r.key).backend) problems.push(`BACKEND_MISMATCH: ${r.key}`);
   }
   for (const key of expected.keys()) if (!seen.has(key)) problems.push(`NOT_RUN: ${key}`);
   return {
@@ -131,7 +136,8 @@ export function verifyResults(plan, results, errors = []) {
     executed: [...seen.values()].filter(r => ["PASS", "FAIL"].includes(r.outcome)).length,
     failed: [...seen.values()].filter(r => r.outcome === "FAIL").length,
     passed: new Set(results.filter(r => r.outcome === 'PASS' && expected.has(r.key)
-      && canonical(r.actualTarget) === canonical(expected.get(r.key).target)).map(r => r.key)).size,
+      && canonical(r.actualTarget) === canonical(expected.get(r.key).target)
+      && (!expected.get(r.key).backend || r.actualBackend === expected.get(r.key).backend)).map(r => r.key)).size,
     skipped: results.filter(r => ['SKIPPED', 'XFAIL', 'XPASS', 'TODO'].includes(r.outcome)).length,
     results, problems,
   };

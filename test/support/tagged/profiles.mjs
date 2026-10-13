@@ -19,30 +19,23 @@
  * them. The selector string every command runs is derived from these rows, so
  * this is the only place a policy is stated.
  *
- * `pr` is one rule today because the three categories differ in nothing but
- * their name. The shape is a list because `daily` will grow rows that `pr` does
- * not have — a live-model journey, a `judge:llm` case — as soon as there are
- * cases to put in them.
+ * Each test declares its first tier. Higher profiles include every lower row.
+ * Category, cost and execution backend are separate concerns.
  */
-const PR = [
-  { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' },
-];
-
-/**
- * Daily is PR plus eligible real browser journeys. Quarantined tests remain
- * discoverable for manual runs but are excluded before the plan is frozen.
- * Credentials are checked only after
- * this policy has frozen identities; a missing secret never removes a case.
- */
-const DAILY = [...PR,
-  { category: 'e2e', os: 'linux', arch: 'amd64', npu: 'none', model: 'real', judge: ['none', 'llm'], status: ['reviewed', 'external'] },
-];
+const hermetic = { category: ['ut', 'st', 'e2e'], os: 'linux', arch: 'amd64', npu: 'none', model: ['none', 'mock'], judge: 'none', status: 'reviewed' };
+const L1 = [{ ...hermetic, tier: 'l1' }];
+const L2 = [...L1, { ...hermetic, tier: 'l2' }];
+const real = { category: 'e2e', os: 'linux', arch: 'amd64', npu: 'none', model: 'real', judge: ['none', 'llm'], status: ['reviewed', 'external'] };
+const L3 = [...L2, { ...real, tier: 'l3', judge: 'none' }];
+const L4 = [...L3, { ...real, tier: 'l4' }];
+// All existing eligible real cases start at L3/L4, so L5 currently selects the
+// same cases as L4. Keep its extension row for future release-only coverage.
+// Quarantined cases remain excluded until their prerequisites are repaired.
+const L5 = [...L4, { ...real, tier: 'l5' }];
 
 const policies = {
-  pr: PR,
-  daily: DAILY,
-  // Paid research belongs to daily CI only. Releases keep all hermetic gates.
-  release: PR,
+  l1: L1, l2: L2, l3: L3, l4: L4, l5: L5,
+  pr: L2, merge: L3, daily: L4, release: L5,
 };
 
 /** One rule: a group with several values is OR, different groups are AND. */
@@ -82,9 +75,10 @@ export const shared = profiles.pr;
  */
 export const slices = Object.freeze({
   shared: '',
-  ut: 'category:ut',
-  st: 'category:st',
-  e2e: 'category:e2e and not model:real',
+  l1: 'tier:l1',
+  ut: 'category:ut and not tier:l1',
+  st: 'category:st and not tier:l1',
+  e2e: 'category:e2e and not model:real and not tier:l1',
   'e2e-real': 'category:e2e and model:real',
 });
 

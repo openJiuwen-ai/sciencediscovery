@@ -19,7 +19,7 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedModel, sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-compact-process.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-compact-process.spec", { tag: ["@isolation:fresh", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * E2E-META
@@ -235,7 +235,16 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(failed.locator(":scope > summary")).toContainText("失败");
         await expect(failed).toHaveCSS("border-top-width", "0px");
         await expect(failed.locator(":scope > summary svg:visible")).toHaveCount(0);
-        expect(await failed.locator(":scope > summary").evaluate((el) => getComputedStyle(el, "::after").width)).toBe("6px");
+        // The dot exists only on the collapsed failed record. Right after the
+        // run turns terminal, the live timeline is swapped for the replay one
+        // and the swap can briefly re-open or replace this card; a one-shot
+        // read can then catch a frame whose summary has no ::after at all.
+        // Poll so the width is only read once the card is settled-collapsed.
+        await expect.poll(() => failed.locator(":scope > summary").evaluate((el) => {
+          const card = el.closest("details");
+          if (!(card instanceof HTMLDetailsElement) || card.open) return "card not collapsed";
+          return getComputedStyle(el, "::after").width;
+        })).toBe("6px");
         await failed.locator(":scope > summary").click();
         await expect(failed).not.toHaveCSS("border-top-width", "0px");
         const error = failed.locator(".tool-io-section").filter({ hasText: "CARD_ERROR" }).last();
@@ -249,22 +258,24 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       await expect(failed).not.toHaveAttribute("open", "");
       await expect(failed.locator(":scope > summary .timeline-icon")).toBeHidden();
       await expect(failed.locator(":scope > summary .timeline-status")).toBeHidden();
-      const layout = await failed.locator(":scope > summary").evaluate((el) => {
+      // Same settling hazard as the dot width above: judge the whole collapsed
+      // failure layout from a single frame, and keep polling until that frame
+      // draws the dot next to the text. The expected values are the settled
+      // layout's own: label hugging its text, 8px flex gap, no dot margin,
+      // and a label that does not grow.
+      await expect.poll(() => failed.locator(":scope > summary").evaluate((el) => {
+        const card = el.closest("details");
+        if (!(card instanceof HTMLDetailsElement) || card.open) return "card not collapsed";
         const label = el.querySelector(".timeline-label")!;
         const range = document.createRange();
         range.selectNodeContents(label.querySelector("strong")!);
-        return {
-          labelRight: label.getBoundingClientRect().right,
-          textRight: range.getBoundingClientRect().right,
-          gap: getComputedStyle(el).columnGap,
-          dotMargin: getComputedStyle(el, "::after").marginLeft,
-          flexGrow: getComputedStyle(label).flexGrow,
-        };
-      });
-      expect(Math.abs(layout.labelRight - layout.textRight)).toBeLessThan(2);
-      expect(layout.gap).toBe("8px");
-      expect(layout.dotMargin).toBe("0px");
-      expect(layout.flexGrow).toBe("0");
+        const dot = getComputedStyle(el, "::after");
+        const flexGrow = getComputedStyle(label).flexGrow;
+        const gap = getComputedStyle(el).columnGap;
+        const hug = Math.abs(label.getBoundingClientRect().right - range.getBoundingClientRect().right);
+        if (dot.width === "6px" && dot.marginLeft === "0px" && gap === "8px" && flexGrow === "0" && hug < 2) return "settled";
+        return `dot ${dot.width || "absent"}/${dot.marginLeft || "absent"}, gap ${gap}, flexGrow ${flexGrow}, text-to-label gap ${hug.toFixed(2)}px`;
+      })).toBe("settled");
       await page.mouse.move(0, 0);
     });
     await journey.step("窄屏刷新后访问原文件", "历史权限卡不会回来，目录仍默认关闭，文件可以从工作区入口访问且页面不横向溢出。",

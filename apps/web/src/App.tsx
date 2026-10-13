@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { ExecutionBlockCards } from "./ExecutionReadiness.js";
 
 import {
   readRenamedStorageItem,
@@ -4724,6 +4725,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
                     </Fragment>
                   ))}
+                  <ExecutionBlockCards key={session.id} client={client} sessionId={session.id} />
                   <RunTimeline
                     subagentDisclosure={{ expandedCards: activityCardExpansion, onToggleCard: toggleActivityCard }}
                     artifactReviews={artifactReviews}

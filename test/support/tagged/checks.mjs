@@ -19,10 +19,12 @@ const host = ['category:ut', 'os:linux', 'arch:amd64'];
 export const checks = [
   { id: 'check:research-python-ut', command: ['bash', '.ci/run-research-python.sh', 'unit'], tags: host },
   { id: 'check:swarm-sdk-contract', command: ['bash', '.ci/run-research-python.sh', 'contract'], tags: ['category:st', 'os:linux', 'arch:amd64'] },
-  { id: 'check:architecture', command: ['node', 'scripts/check-architecture.mjs'], tags: host },
+  { id: 'check:architecture', command: ['node', 'scripts/check-architecture.mjs'], tags: [...host, 'tier:l1'] },
   { id: 'check:typecheck', command: ['pnpm', 'typecheck'], tags: host },
   // Markdown lint and every relative link in the documentation.
-  { id: 'check:docs', command: ['pnpm', 'docs:check'], tags: host },
+  { id: 'check:docs', command: ['pnpm', 'docs:check'], tags: [...host, 'tier:l1'] },
+  { id: 'check:catalog', command: ['pnpm', 'ci:catalog:check'], tags: [...host, 'tier:l1'] },
+  { id: 'check:e2e-metadata', command: ['node', 'test/check-e2e-meta.mjs'], tags: [...host, 'tier:l1'] },
   // The harness decides what every other case is, so its own regression suite
   // is planned with them rather than trusted.
   { id: 'check:tagged-selftest', command: ['node', 'test/support/tagged/selftest.mjs'], tags: host },

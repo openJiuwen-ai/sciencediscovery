@@ -12,34 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# UT / ST / E2E plus the two distribution gates (binary release, Docker image)
-# on GitHub-hosted Linux runners. The test jobs only call the repository entry
-# points documented in .ci/README.md, so CI cannot drift into a second,
-# GitHub-only test definition; the distribution jobs build the artifacts a user
-# actually receives and then exercise them. Every layer is hermetic: no model
-# credentials, no live endpoints, no NPU. The opt-in live layers
-# (ci:st:real, ci:e2e:real, ci:st:npu, ci:e2e:legacy) stay out of this file.
-#
-# The three test jobs below are three slices of one plan, not three suites.
-# `ci:ut`, `ci:st` and `ci:e2e` each run `test/support/tagged/shared.mjs`
-# against the single selector in `test/support/tagged/profiles.mjs`, narrowed
-# by `category`. Those three groups partition the plan,
-# so the three jobs together run exactly what `pnpm test:shared` runs on a
-# developer's machine — a case cannot be in two jobs or in none. Selection
-# reads source tags only; no job's environment, credential or installed
-# capability may add or remove a case. A missing capability fails the plan's
-# preflight, which fails the job.
-#
-# `node .ci/tagged-summary.mjs` reads each slice's frozen plan back and fails
-# the job unless planned == executed == passed with nothing skipped, including
-# when a layer stopped before producing any plan at all.
-#
-# This file is also the one definition of that gate for the scheduled and
-# tagged pipelines: nightly.yml and release.yml call it instead of restating
-# its jobs. When their coverage diverges from the merge gate, give this
-# workflow an input describing what to run and branch on it here — copying
-# jobs into those files is exactly the second test definition the CI contract
-# forbids.
+# Cumulative gates: PR L1/L2; merge_group L3; daily L4; release L5.
+# The shared source catalog owns selection. backend selects execution only.
+# Configure the stable merge-gate check as required on PRs and merge groups.
+# Reviewed queue candidates receive scoped test credentials without a second
+# Environment approval. Never add pull_request_target + PR checkout here.
 
 name: CI
 
@@ -51,7 +28,18 @@ on:
   # whenever new commits are pushed to it, and if it is reopened.
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        options: [pr, merge, daily, release]
+        default: pr
+      backend:
+        type: choice
+        options: [jiuwenswarm, legacy]
+        default: jiuwenswarm
   workflow_call:
     inputs:
       release-version:
@@ -65,16 +53,13 @@ on:
         type: string
         default: ""
       profile:
-        description: >-
-          Which CI policy the three test jobs select, from
-          `test/support/tagged/profiles.mjs`. `pr` is the merge gate. A
-          scheduled or tagged run passes `daily` or `release`, which is held to
-          the nightly standard rather than the merge one — today they select
-          the same set, and they diverge the moment a live-model or `judge:llm`
-          row lands, at which point the caller has to supply that row's
-          credentials or the plan fails its preflight.
+        description: "Cumulative policy: pr=L2, merge=L3, daily=L4, release=L5"
         type: string
         default: pr
+      backend:
+        description: "Independent E2E backend; legacy selects the native loop"
+        type: string
+        default: ""
 
 # Keyed on the calling workflow as well as the ref: a nightly run and a push
 # run land on refs/heads/main at the same time, and without the workflow name
@@ -92,17 +77,147 @@ defaults:
     shell: bash
 
 jobs:
-  real-e2e:
-    name: E2E (real, daily only)
-    if: ${{ inputs.profile == 'daily' && github.event_name != 'pull_request' }}
+  l1:
+    name: L1 (static checks)
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-    environment: nightly-research
+    timeout-minutes: 10
+    outputs:
+      profile: ${{ steps.policy.outputs.profile }}
+      backend: ${{ steps.policy.outputs.backend }}
+      real: ${{ steps.policy.outputs.real }}
+      distribution: ${{ steps.policy.outputs.distribution }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - id: policy
+        env:
+          CI_REQUESTED_PROFILE: ${{ inputs.profile || 'pr' }}
+          CI_REQUESTED_BACKEND: ${{ inputs.backend || vars.CI_E2E_BACKEND || 'jiuwenswarm' }}
+        run: node .ci/tier-policy.mjs
+      - name: Run the frozen L1 slice
+        env:
+          CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
+        run: pnpm ci:l1
+      - name: Upload L1 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: l1-results
+          path: .ci-results
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  e2e-plan:
+    name: Freeze mocked E2E matrix
+    needs: l1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    env:
+      CI_PROFILE: ${{ needs.l1.outputs.profile }}
+      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node test/sync-e2e.mjs --write
+      - run: npm ci --prefix .e2e
+      - run: node test/support/tagged/shared.mjs list --profile "$CI_PROFILE" --slice e2e --output .ci-mocked-plan
+      - id: matrix
+        run: node .ci/mocked-matrix.mjs .ci-mocked-plan/plan.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mocked-e2e-plan
+          path: .ci-mocked-plan
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  real-plan:
+    name: Freeze real E2E matrix
+    needs: [l1, ut, st, e2e-plan, e2e]
+    if: ${{ needs.l1.outputs.real == 'true' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: nightly-ci-ds
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    env:
+      CI_PROFILE: ${{ needs.l1.outputs.profile }}
+      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
+      E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
+      E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - uses: actions/download-artifact@v4
+        with:
+          name: mocked-e2e-plan
+          path: .ci-mocked-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mocked-e2e-results-*
+          path: .ci-mocked-results
+      - name: Require complete mocked results before real API calls
+        run: node .ci/mocked-report.mjs .ci-mocked-plan/plan.json .ci-mocked-results
+      # Node collection imports tsx from the workspace, not the Playwright install.
+      - run: pnpm install --frozen-lockfile
+      - run: node test/sync-e2e.mjs --write
+      - run: npm ci --prefix .e2e
+      # Collection makes no API/model call and needs no credential.
+      - run: node test/support/tagged/shared.mjs list --profile "$CI_PROFILE" --slice e2e-real --output .ci-real-plan
+      - id: matrix
+        run: node .ci/real-matrix.mjs .ci-real-plan/plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-plan
+          path: .ci-real-plan/plan.json
+          include-hidden-files: true
+          if-no-files-found: error
+      - name: Upload real E2E collection diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-collection-diagnostics
+          path: .ci-real-plan
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  real-e2e:
+    name: Real E2E (${{ matrix.shard }})
+    needs: [l1, real-plan]
+    if: ${{ needs.l1.outputs.real == 'true' && github.event_name != 'pull_request' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    environment: nightly-ci-ds
     env:
       CI_ALLOW_REAL: "1"
+      CI_PROFILE: ${{ needs.l1.outputs.profile }}
+      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
+      CI_REAL_SHARD: ${{ matrix.shard }}
+      E2E_COMMIT_SHA: ${{ github.sha }}
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
-      CI_PREPARE_BIOMNI: "0"
+      CI_PREPARE_BIOMNI: "0" # Existing Biomni cases remain quarantined.
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
@@ -113,6 +228,8 @@ jobs:
       JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       E2E_DRB_EVALUATION: full
       E2E_BIOMNI_EVALUATION: rubric
+      # Keep daily and release evaluation modes equal until L5 gains its own cases.
+      E2E_PUCT_LLM_EVALUATION: "0"
       E2E_DRB_MAX_SUBAGENTS: "2"
       E2E_TEAM_CONCURRENCY_HINT: "2"
       E2E_DRB_RUN_TIMEOUT_MS: "3600000"
@@ -139,6 +256,7 @@ jobs:
         with:
           enable-cache: true
       - name: Prepare real-research prerequisites (no model calls)
+        if: ${{ matrix.shard != 'basic' }}
         run: bash .ci/prepare-real-research.sh
       - name: Provision sandbox
         run: |
@@ -146,8 +264,8 @@ jobs:
           sudo apt-get install --yes --no-install-recommends bubblewrap
           sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --ro-bind / / --dev /dev true
-      - name: Run the frozen real-E2E daily slice
-        run: pnpm ci:e2e:real
+      - name: Run the frozen real E2E shard
+        run: pnpm ci:e2e:real -- --profile "$CI_PROFILE" --shard "$CI_REAL_SHARD"
       - name: Summarize actual planned and executed cases
         if: always()
         run: node .ci/tagged-summary.mjs
@@ -158,7 +276,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-e2e-results
+          name: real-e2e-results-${{ matrix.shard }}
           path: .tmp/real-e2e-results
           include-hidden-files: true
           if-no-files-found: warn
@@ -167,13 +285,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-e2e-evidence
+          name: real-e2e-evidence-${{ matrix.shard }}
           path: .ci-results
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
 
   ut:
+    needs: l1
     name: UT
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -225,7 +344,7 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:ut -- --profile ${{ inputs.profile || 'pr' }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+        run: pnpm ci:ut -- --profile ${{ needs.l1.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
         if: always()
@@ -344,6 +463,7 @@ jobs:
           if-no-files-found: warn
 
   st:
+    needs: l1
     name: ST
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -369,7 +489,7 @@ jobs:
         env:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
-        run: pnpm ci:st -- --profile ${{ inputs.profile || 'pr' }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
+        run: pnpm ci:st -- --profile ${{ needs.l1.outputs.profile }} ${{ github.workflow != 'Release' && '--coverage' || '' }}
 
       - name: Report the shared plan
         if: always()
@@ -403,7 +523,14 @@ jobs:
           if-no-files-found: ${{ job.status == 'success' && 'error' || 'warn' }}
 
   e2e:
-    name: E2E (mocked, JiuwenSwarm)
+    needs: [l1, e2e-plan]
+    name: L2 E2E (mocked, ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
+    env:
+      CI_E2E_BACKEND: ${{ needs.l1.outputs.backend }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -464,7 +591,7 @@ jobs:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-e2e
           E2E_COMMIT_SHA: ${{ github.sha }}
-        run: pnpm ci:e2e -- --profile ${{ inputs.profile || 'pr' }}
+        run: pnpm ci:e2e -- --profile ${{ needs.l1.outputs.profile }} --shard ${{ matrix.shard }}
 
       # Playwright exits 0 on skips and produces no results.json at all when
       # the stack never came up, so neither its exit code nor its report can be
@@ -500,7 +627,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-results
+          name: mocked-e2e-results-${{ matrix.shard }}
           path: .ci-results
           # .ci-results is itself a dot-directory; by default nothing is uploaded.
           include-hidden-files: true
@@ -515,6 +642,8 @@ jobs:
   # binary needs — the gate spawns the packaged bubblewrap runner and exercises
   # the four entry points end to end.
   binary:
+    needs: l1
+    if: ${{ needs.l1.outputs.distribution == 'true' }}
     name: Binary release (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -598,6 +727,8 @@ jobs:
   # the dependency install, the application build, and whether the image that
   # comes out actually serves.
   docker:
+    needs: l1
+    if: ${{ needs.l1.outputs.distribution == 'true' }}
     name: Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -758,3 +889,82 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose down
+
+  real-report:
+    name: Account for real cases
+    needs: [l1, real-plan, real-e2e]
+    if: ${{ always() && needs.l1.outputs.real == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: real-e2e-plan
+          path: .ci-real-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: real-e2e-results-*
+          path: .ci-real-results
+      - name: Reconcile every planned identity
+        run: node .ci/real-report.mjs .ci-real-plan/plan.json .ci-real-results
+      - name: Stage combined real E2E scores
+        if: always()
+        run: node .ci/prepare-real-e2e-results.mjs
+      - name: Upload combined real E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-results
+          path: .tmp/real-e2e-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload real suite verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-verdict
+          path: .ci-real-results/verdict.json
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  merge-gate:
+    name: merge-gate
+    needs: [l1, ut, st, e2e-plan, e2e, real-plan, real-e2e, real-report, binary, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: mocked-e2e-plan
+          path: .ci-mocked-plan
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mocked-e2e-results-*
+          path: .ci-mocked-results
+      - name: Reconcile mocked results
+        run: node .ci/mocked-report.mjs .ci-mocked-plan/plan.json .ci-mocked-results .ci-results
+      - name: Upload combined E2E results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: .ci-results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Require all jobs selected by this event
+        if: always()
+        env:
+          CI_PROFILE: ${{ needs.l1.outputs.profile }}
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: node .ci/tier-policy.mjs gate

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { effectiveRunnerIds } from "@sciencediscovery/schema";
+import { ExecutionBlocks } from "@sciencediscovery/governance";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open, readFile, readdir, realpath, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -445,6 +446,7 @@ export class SessionStoreHttpError extends Error {
 }
 
 export class SessionStore {
+  readonly executionBlocks = new ExecutionBlocks();
   readonly dataDir: string;
   // Catalog mutations replace Subagent objects. Cache by object identity so an
   // unchanged record is serialized once, without retaining superseded revisions.
@@ -1240,6 +1242,7 @@ export class SessionStore {
   }
 
   close(): void {
+    this.executionBlocks.close();
     this.database?.close();
     this.database = undefined;
     this.secretKey = undefined;

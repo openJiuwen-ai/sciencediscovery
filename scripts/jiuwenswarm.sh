@@ -26,8 +26,8 @@
 #
 # JiuwenSwarm is installed into its own directory and virtualenv; it is never
 # installed into the ScienceDiscovery environments. Its instance workspace is
-# created by JiuwenSwarm under ~/.jiuwenswarm-instances/<name> (it has no option to
-# place it elsewhere), separate from a default ~/.jiuwenswarm.
+# created under ${JIUWENSWARM_HOME:-$HOME}/.jiuwenswarm-instances/<name>.
+# JIUWENSWARM_HOME also relocates the instance registry without changing HOME.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,6 +47,14 @@ jw_src="${JIUWENSWARM_SRC:-$jw_root/src}"
 jw_bin="$jw_src/.venv/bin"
 jw_data_dir="$jw_root/data"
 jw_log="$jw_root/jiuwenswarm.log"
+if [[ -n "${JIUWENSWARM_HOME:-}" ]]; then
+  # JiuwenSwarm's early bootstrap and later path getters must see the same
+  # absolute root, including when a child changes its working directory.
+  [[ "$JIUWENSWARM_HOME" == /* ]] || JIUWENSWARM_HOME="$repository_root/$JIUWENSWARM_HOME"
+  export JIUWENSWARM_HOME
+  jw_data_dir="$JIUWENSWARM_HOME/.jiuwenswarm"
+  jw_log="$JIUWENSWARM_HOME/jiuwenswarm-$jw_instance.log"
+fi
 apply_compatibility_patches() {
   python3 "$script_dir/swarm-patches.py" apply "$jw_src" "$jw_tag"
 }
@@ -70,6 +78,9 @@ Environment:
                          read-only (the Docker image does this) and only the
                          instance's own state should live under the root
   JIUWENSWARM_INSTANCE   instance name (default sciencediscovery)
+  JIUWENSWARM_HOME       isolated runtime root for registry, named workspaces and logs
+                         (relative paths resolve from the repository root;
+                         unset preserves the existing user-home workspace)
   SCIENCE_AGENT_PYPI_INDEX  PyPI mirror for uv, as start-stack.sh uses it
   UV_HTTP_TIMEOUT        seconds uv waits on a download (default 300; the default 30 fails on slow links)
 EOT
@@ -79,12 +90,13 @@ require() {
   command -v "$1" >/dev/null 2>&1 || { echo "$1 is required: $2" >&2; exit 1; }
 }
 
-# JiuwenSwarm keeps its instance table under JIUWENSWARM_DATA_DIR.
+# JIUWENSWARM_HOME locates the registry; the named bootstrap then sets
+# JIUWENSWARM_DATA_DIR to that instance's workspace for its child services.
 jw() {
   JIUWENSWARM_DATA_DIR="$jw_data_dir" "$jw_bin/$1" "${@:2}"
 }
 
-instance_workspace() { echo "$HOME/.jiuwenswarm-instances/$jw_instance"; }
+instance_workspace() { echo "${JIUWENSWARM_HOME:-$HOME}/.jiuwenswarm-instances/$jw_instance"; }
 
 port_of() { # agent_server | web | gateway
   jw jiuwenswarm-start --status "$jw_instance" 2>/dev/null \
@@ -174,8 +186,12 @@ cmd_setup() {
 }
 
 is_up() {
-  local gateway
-  gateway="$(port_of gateway)"
+  local details gateway
+  details="$(jw jiuwenswarm-start --status "$jw_instance" 2>/dev/null)" || return 1
+  # A listening port may belong to a different root with the same instance
+  # name. Require this workspace's live PID record before checking readiness.
+  [[ "$details" =~ (^|$'\n')Status:[[:blank:]]+running($|$'\n') ]] || return 1
+  gateway="$(printf '%s\n' "$details" | sed -n 's/^  gateway: *//p' | head -n1)"
   [[ -n "$gateway" ]] && (exec 3<>"/dev/tcp/127.0.0.1/$gateway") 2>/dev/null
 }
 

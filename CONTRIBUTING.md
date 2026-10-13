@@ -207,14 +207,15 @@ Integration/E2E tests under `test/` are **not** part of `pnpm check`.
 
 ## CI layers
 
-There is one plan and three layer entry points that slice it. `pnpm test:shared`
+There is one plan with five cumulative tiers and disjoint job slices. `pnpm test:shared`
 runs the whole plan; each layer runs the group CI schedules as its own job, and
-the three groups together are exactly that plan:
+L1, UT, ST and mocked E2E together are exactly the default PR plan:
 
 ```bash
 pnpm test:shared   # all of it, in one process
 
-pnpm ci:ut    # category:ut
+pnpm ci:l1    # static checks, without stack/build preparation
+pnpm ci:ut    # category:ut excluding the L1 checks
 pnpm ci:st    # category:st
 pnpm ci:e2e   # category:e2e: starts its own isolated stack, runs the browser journeys
 ```
@@ -228,8 +229,8 @@ execute every planned case — `selected == 0`, a missing prerequisite, a skip,
 or `executed != planned` all fail it, so a layer cannot go green by running
 less.
 
-Live-model, NPU, legacy-quarantine and macOS work is deliberately not in that
-plan. It is tagged, collected and deselected, and keeps its own opt-in entry
+Live-model work joins L3/L4/L5; it is excluded from the default PR plan.
+NPU, legacy-quarantine and macOS work stays outside the default plan. It is tagged, collected and deselected, and keeps its own opt-in entry
 points. [test/support/tagged/MIGRATION.md](test/support/tagged/MIGRATION.md) is
 the ledger: what the shared plan covers, what is outside it, and why.
 
@@ -316,22 +317,24 @@ own regression tests, and the UT layer runs it.
 request and decides whether a change is ready. gitcode.com is a read-only
 mirror: nothing runs there.
 
-| Job | Runs |
+| Tier / profile | Trigger and added coverage |
 | --- | --- |
-| UT | `pnpm ci:ut` — the `category:ut` slice, including the tests that drive a real bubblewrap sandbox |
-| ST | `pnpm ci:st` — the `category:st` slice |
-| E2E (mocked) | `pnpm ci:e2e` — the `category:e2e` slice on an isolated stack |
-| Binary release | both architectures, each built and smoke-gated on its own runner |
-| Docker image | a cold `docker compose build`, then the deployment contract against the running container |
+| L1 | Every PR: light static/catalog/document checks |
+| L2 / `pr` | Every PR after L1: all hermetic UT, ST and mock E2E |
+| L3 / `merge` | Reviewed PR enters merge queue: rerun L1/L2 on group SHA, basic real APIs and distribution gates |
+| L4 / `daily` | Nightly at 16:00 UTC: L3 plus all ten previously eligible nightly cases (17 real cases total) |
+| L5 / `release` | Version tag: same current cases and evaluation modes as L4; independent profile for future additions; no historical baseline gate |
 
-`nightly.yml` (18:00 UTC) and `release.yml` (version tag) call `ci.yml` through
-`workflow_call`, so they run exactly the table above; they add only a version
-stamp and, for a release, the publishing step. They are not a second and third
-definition of the gate.
+`nightly.yml` and `release.yml` reuse `ci.yml`. The stable required check is
+`merge-gate`; queue success merges automatically, without Environment approval
+or a final approval job. Configure branch rules and scoped Environments as
+specified in [.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).
+L5 failure blocks Release/assets while leaving the already-created tag intact.
 
-The pipeline does not run the opt-in live layers — `ci:st:real`, `ci:e2e:real`,
-`ci:st:npu`, `ci:e2e:legacy` — which need credentials, live endpoints or an
-Ascend device. Run those deliberately, on a machine that has what they need.
+Backend selection (`--backend jiuwenswarm|legacy`, or `CI_E2E_BACKEND`) is
+independent of tiers and case selection. Native real ST and adapter live UT
+remain separate opt-in compatibility checks. NPU and unaudited legacy work
+retain their explicit opt-in entry points.
 
 ## Repositories
 
@@ -359,18 +362,19 @@ remote can look diverged when the trees are identical, so compare trees
 
 ## Opening a pull request
 
-**Run all three layers locally first.** GitHub Actions runs them again on the
+**Run the four hermetic slices locally first.** GitHub Actions runs them again on the
 pull request, so this is not the only check any more — it is the one that costs
 a reviewer nothing. A change pushed unexercised spends eleven minutes of CI and
 somebody's attention discovering what the local run would have said:
 
 ```bash
+pnpm ci:l1
 pnpm ci:ut
 pnpm ci:st
 pnpm ci:e2e
 ```
 
-`pnpm test:shared` is those three in one process, on the same plan. Either way,
+`pnpm test:shared` is those four in one process, on the same plan. Either way,
 report the numbers each slice's `summary.json` gives — `planned`, `executed`,
 `passed` — not "tests pass".
 
@@ -380,21 +384,13 @@ selector string, in
 `pnpm test:policy` prints them, each as the command that would ask the same
 question by hand:
 
-```text
-pr:
-  pnpm test:list --category ut --category st --category e2e --os linux --arch amd64 \
-    --npu none --model none --model mock --judge none --status reviewed
-  selector: (category:ut or category:st or category:e2e) and os:linux and …
-  run it:   pnpm test:run --profile pr
-```
-
-`--profile pr|daily|release` picks one and `pr` is the default. The three
-pipelines each name theirs: a pull request takes `pr`, `nightly.yml` takes
-`daily`, and `release.yml` takes `release`, which is *defined as* `daily` — a
-version tag is held to the nightly standard, not the merge one. All three
-select the same set today; they diverge the moment a live-model or `judge:llm`
-row lands, at which point the nightly and the tag need that row's credentials
-or their plan fails its preflight.
+`--profile l1|l2|l3|l4|l5` names a cumulative tier. The aliases are `pr` (L2,
+the default), `merge` (L3), `daily` (L4) and `release` (L5). Higher tiers contain
+all lower cases and can add their own; L5 currently has the same eligible cases
+as L4. Real calls require explicit opt-in and
+credentials after the source plan is frozen. See
+[the tier contract](.ci/README.md#five-cumulative-tiers-one-source-catalog),
+including backend identity, usage accounting and the initial release scope.
 
 CI names it as an argument (`pnpm ci:ut -- --profile release`) rather than an
 environment variable, so the same commit and the same command always mean the

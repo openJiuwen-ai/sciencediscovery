@@ -30,7 +30,7 @@ import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
  * CostSideEffects: Billable model calls and sandbox evaluations; temporary project, session and model; retained score and artifacts.
  */
 test("PUCT-COMPRESS documented text compression search", {
-  tag: ["@real", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@sandbox:bubblewrap"],
+  tag: ["@real", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l4", "@judge:llm", "@sandbox:bubblewrap"],
 }, async ({ page, journey }, info) => {
   const budget = positiveNumber("E2E_EVOLVE_RUN_TIMEOUT_MS", 7_200_000);
   const llmAudit = process.env.E2E_PUCT_LLM_EVALUATION === "1";

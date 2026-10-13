@@ -40,7 +40,7 @@ Runner/API 的 UI 变化投影仍比较 size:mtimeMs；版本化 WorkspaceTree �
 
 ## 生命周期与恢复
 
-VersionStore.putRecord 使用 RFC 8785 JCS、schemaVersion 和强引用依赖计算内容身份，validateClosure 检查全部可达字节。未知 schemaVersion 拒绝读取，不做隐式原地升级。
+VersionStore.putRecord 使用 RFC 8785 JCS、schemaVersion 和强引用依赖计算内容身份，validateClosure 始终重新哈希全部可达字节。ref 提交使用 validateClosureForCommit，仍遍历完整依赖图；当对象的设备号、inode、大小、修改时间和状态变更时间未变化时，复用已验证的字节及依赖边。新对象或变化对象重新校验，校验期间发生变化则拒绝提交。缓存只在完整闭包通过后发布，且仅存在于当前 `VersionStore` 实例中；新实例首次提交会重新校验闭包。未知 schemaVersion 拒绝读取，不做隐式原地升级。
 
 生产 createAgentRun 创建行为 AgentManifest、血缘 AgentRevision 和初始状态；每个模型 turn 通过可等待 Runtime lifecycle 顺序提交 before state、实际 context/model input、整批工具结果、after state、actions/eventSegments、TrajectoryStep。State 将完整运行 transcript 与压缩后的模型 history 分开，另保存原始观察、工具可见性/loop 状态，以及计划、Artifact、权限、环境和子 Agent 权威记录。DurableContextStore 仅作为上下文投影。ModelContextSnapshot 的精确边界为 ProviderModelClient.invoke 输入，不保存 HTTP 认证。
 

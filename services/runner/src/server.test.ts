@@ -221,24 +221,37 @@ test("runner mounts discovered local Python package directory", async (context) 
   assert.match(result.stdout, /^mounted-local-package$/m);
 });
 
-test("runner startup fails closed when the sandbox binary is missing", async () => {
-  await assert.rejects(startRunnerServer({
+test("runner starts but rejects execution when the sandbox binary is missing", async (context) => {
+  const server = await startRunnerServer({
     ...config(resolve(process.cwd(), ".tmp", "missing-sandbox")),
     bwrapPath: resolve(process.cwd(), ".tmp", "does-not-exist", "bwrap"),
-  }), /ENOENT/);
+  });
+  context.after(() => new Promise<void>(done => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const health = await fetch(`${origin}/health`).then(r => r.json()) as RunnerHealth;
+  assert.equal(health.execution?.ready, false);
+  assert.equal(health.execution?.reason, "dependency-unavailable");
+  const execution = await fetch(`${origin}/execute`, { method: "POST", headers: { authorization: "Bearer runner-test-token" }, body: "{}" });
+  assert.equal(execution.status, 503);
+  assert.equal((await execution.json() as {code:string}).code, "EXECUTION_UNAVAILABLE");
 });
 
-test("runner startup fails closed when bubblewrap lacks required security options", async (context) => {
+test("runner reports incompatible bubblewrap without preventing startup", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `old-bwrap-${process.pid}-${Date.now()}`);
   const fakeBwrap = resolve(root, "bwrap");
   await mkdir(root, { recursive: true });
   await writeFile(fakeBwrap, "#!/bin/sh\necho 'usage: bwrap --unshare-all --unshare-user'\n");
   await chmod(fakeBwrap, 0o755);
   context.after(() => rm(root, { force: true, recursive: true }));
-  await assert.rejects(startRunnerServer({
+  const server = await startRunnerServer({
     ...config(resolve(root, "data")),
     bwrapPath: fakeBwrap,
-  }), /lacks required sandbox options.*--seccomp/);
+  });
+  context.after(() => new Promise<void>(done => server.close(() => done())));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const health = await fetch(`${origin}/health`).then(r => r.json()) as RunnerHealth;
+  assert.equal(health.execution?.reason, "incompatible");
+  assert.match(health.execution?.detail ?? "", /--seccomp/);
 });
 
 /** Quote for a shell single-quoted string; bubblewrap messages contain apostrophes. */

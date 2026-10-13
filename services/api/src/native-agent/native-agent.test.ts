@@ -33,6 +33,50 @@ import {
   type NativeAgentOptions,
 } from "./index.js";
 import type { ModelTurn, WireToolSpec } from "@sciencediscovery/model";
+import { RunnerUnavailableError } from "@sciencediscovery/workspace";
+
+for (const shouldWait of [false, true]) {
+  test(`Runner failure leaves the loop decision to the model (wait=${shouldWait})`, async () => {
+    let executions = 0, waits = 0, checks = 0;
+    const runner = { runnerId: "local", checkedAt: "now", connected: true, ready: false,
+      reason: "sandbox unavailable", suggestions: ["Repair the sandbox"] };
+    const options = { ...workspace(),
+      executeShell: async () => {
+        executions++;
+        throw new RunnerUnavailableError({ code: "RUNNER_UNAVAILABLE", dispatched: false,
+          operationId: "op", runner, instruction: "Choose whether to wait" });
+      },
+      runnerReadiness: {
+        check: async () => { checks++; return runner; },
+        wait: async (id: string) => { assert.equal(id, "op"); waits++; return { action: "retry", runner: { ...runner, ready: true }, dispatched: false }; },
+      },
+    } as NativeAgentOptions;
+    const scripts: Array<(call: StreamerCall) => ModelTurn> = [
+      call => {
+        assert.ok(call.tools.some(x => x.name === "check_runner"));
+        assert.ok(call.tools.some(x => x.name === "wait_for_runner"));
+        return toolTurn("check_runner", {});
+      },
+      () => toolTurn("run_shell", { command: "echo science" }),
+      call => {
+        assert.match(JSON.stringify(call.history), /RUNNER_UNAVAILABLE/);
+        assert.equal(waits, 0, "failure must not suspend the loop");
+        return shouldWait ? toolTurn("wait_for_runner", { operation_id: "op" }) : textTurn("Execution blocked; I can stop here without waiting.");
+      },
+    ];
+    if (shouldWait) scripts.push(call => {
+      assert.match(JSON.stringify(call.history), /retry/);
+      assert.equal(executions, 1, "user input does not resurrect the old execution");
+      return textTurn("Runner repaired; I will reassess the next action.");
+    });
+    const restore = setModelTurnStreamerForTest(scriptStreamer(scripts).streamer);
+    try {
+      const result = await createNativeAgent(options).execute("Run the analysis, deciding whether user help is needed.");
+      assert.equal(checks, 1); assert.equal(executions, 1); assert.equal(waits, shouldWait ? 1 : 0);
+      assert.ok(result.finalMessages.some(message => message.role === "assistant"));
+    } finally { restore(); }
+  });
+}
 
 function workspace(): Pick<NativeAgentOptions, "config" | "enabledConnectorIds" | "executePython" | "executeShell" | "sessionId" | "workspaceRoot"> {
   const root = mkdtempSync(join(tmpdir(), "native-agent-"));

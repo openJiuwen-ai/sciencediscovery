@@ -246,6 +246,32 @@ test("translates the adapter's run events into agent events", async () => {
   }
 });
 
+test("a withheld response's notice reaches neither the user nor the transcript", async () => {
+  const adapter = await fakeAdapter((_request, response) => {
+    response.writeHead(200);
+    response.write(line({ event: { type: "assistant.response.started", responseId: "r1", turn: 1 } }));
+    response.write(line({ event: { type: "assistant.delta", delta: "Writing the report.", responseId: "r1" } }));
+    response.write(line({ event: { type: "assistant.delta", responseId: "r1", delta: "\n\n[invalid_tool_arguments:tool_calls_withheld] "
+      + "No tools from this response were executed. Arguments that are not valid JSON: run_shell (Unterminated string in JSON)." } }));
+    response.write(line({ event: { type: "assistant.response.settled", responseId: "r1", turn: 1 } }));
+    response.write(line({ event: { type: "assistant.response.started", responseId: "r2", turn: 2 } }));
+    response.write(line({ event: { type: "assistant.delta", delta: "[output_limit:tool_calls_withheld] No tools from this response were executed.", responseId: "r2" } }));
+    response.write(line({ event: { type: "assistant.response.settled", responseId: "r2", turn: 2 } }));
+    response.end(line({ done: { finalText: "done" } }));
+  });
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options());
+    const events = collect(agent);
+    const result = await agent.execute("go");
+    const text = events.flatMap((event) => event.type === "message_update" && event.assistantMessageEvent.type === "text_delta"
+      ? [event.assistantMessageEvent.delta] : []);
+    assert.deepEqual(text, ["Writing the report."]);
+    assert.doesNotMatch(JSON.stringify(result), /tool_calls_withheld/);
+  } finally {
+    await adapter.close();
+  }
+});
+
 test("plugin-contributed tools (update_plan) are offered to the adapter and run here", async () => {
   const updates: unknown[] = [];
   const planStore = {
@@ -1298,7 +1324,7 @@ function askTheModel(turn: unknown) {
 }
 
 for (const truncated of [false, true]) {
-  test(`invalid model arguments use recovery only when truncated (truncated=${truncated})`, async () => {
+  test(`invalid model arguments are withheld and an unrecovered run names why it failed (truncated=${truncated})`, async () => {
     const adapter = await fakeAdapter(async ({ body }, response) => {
       response.writeHead(200);
       await fetch(`${body.model.baseUrl}/chat/completions`, {
@@ -1330,6 +1356,70 @@ for (const truncated of [false, true]) {
     } finally { await adapter.close(); }
   });
 }
+
+/** A Swarm run whose model requests are given in order, each through the run's gateway. */
+function swarmAsking(requests: Array<Array<Record<string, unknown>>>, status: "completed" | "failed") {
+  const wires: string[] = [];
+  const adapter = fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    for (const messages of requests) {
+      wires.push(await fetch(`${body.model.baseUrl}/chat/completions`, {
+        method: "POST", headers: { authorization: `Bearer ${body.model.apiKey}` },
+        body: JSON.stringify({ stream: true, messages }),
+      }).then(reply => reply.text()));
+    }
+    response.end(line({ done: { finalText: status === "completed" ? "report.md saved" : "", status } }));
+  });
+  return { adapter, wires };
+}
+
+const invalidTurn = {
+  assistantMessage: { role: "assistant", content: "" },
+  toolCalls: [{ id: "bad-call", name: "run_shell", args: {}, argsParseError: "Unterminated string" }],
+};
+
+test("a run whose model re-issues an invalid call after recovery feedback completes", async () => {
+  const { adapter, wires } = swarmAsking([
+    [{ role: "user", content: "go" }],
+    [{ role: "user", content: "go" }, { role: "user", content: "[Tool argument recovery 1/2; invalid_tool_arguments] Re-issue it." }],
+  ], "completed");
+  const started = await adapter;
+  try {
+    let calls = 0;
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: started.url, modelStreamer: async () => ++calls === 1 ? invalidTurn : {
+      assistantMessage: { role: "assistant", content: "report.md saved" }, toolCalls: [],
+    } })(options());
+    await agent.execute("go");
+    assert.equal(wires.length, 2);
+    const [withheld = ""] = wires;
+    assert.match(withheld, /invalid_tool_arguments:tool_calls_withheld/);
+    assert.doesNotMatch(withheld, /"tool_calls"/);
+  } finally { await started.close(); }
+});
+
+test("with JiuwenSwarm's own sub-agents, which have no recovery boundary, an invalid call fails its request instead of being withheld", async () => {
+  const { adapter, wires } = swarmAsking([[{ role: "user", content: "go" }]], "failed");
+  const started = await adapter;
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: started.url, subagents: "jiuwenswarm", modelStreamer: async () => invalidTurn })(withRunSubagent());
+    await assert.rejects(agent.execute("go"), /^Error: Model returned invalid tool arguments \(tools: run_shell\); gateway request chatcmpl-/);
+    const [reply = ""] = wires;
+    assert.match(reply, /Model returned invalid tool arguments/);
+    assert.doesNotMatch(reply, /tool_calls_withheld/, "a sub-agent without the boundary would take this for its final answer");
+  } finally { await started.close(); }
+});
+
+test("Swarm ending on a withheld invalid call fails the run instead of completing it", async () => {
+  const { adapter } = swarmAsking([[{ role: "user", content: "[Tool argument recovery 2/2; invalid_tool_arguments] Re-issue it." }]], "completed");
+  const started = await adapter;
+  try {
+    const agent = createJiuwenSwarmAgentFactory({ adapterUrl: started.url, modelStreamer: async () => invalidTurn })(options());
+    await assert.rejects(agent.execute("go"), (error: Error) => {
+      assert.match(error.message, /^Model returned invalid tool arguments \(tools: run_shell\) after 2 recovery attempts; gateway request chatcmpl-/);
+      return true;
+    });
+  } finally { await started.close(); }
+});
 
 // Regression boundary: real run -> HTTP model gateway -> fake upstream model.
 // The adapter deliberately emits NO progress events while awaiting the model.

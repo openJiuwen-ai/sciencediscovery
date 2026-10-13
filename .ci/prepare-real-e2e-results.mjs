@@ -46,7 +46,7 @@ function scoreDocument(doc, name) {
   }
   if (name === "summary.json") {
     const out = pick(doc, ["status", "exitCode", "planDigest", "planned", "reported", "executed", "passed", "failed", "skipped"]);
-    if (Array.isArray(doc.results)) out.results = doc.results.map(result => pick(result, ["key", "outcome", "actualTarget"]));
+    if (Array.isArray(doc.results)) out.results = doc.results.map(result => pick(result, ["key", "outcome", "actualTarget", "actualBackend"]));
     return out; // Assertion errors/problems may contain model output or credentials.
   }
   // Frozen plan and structured preflight contain source identities/requirements,

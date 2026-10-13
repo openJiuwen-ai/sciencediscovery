@@ -24,11 +24,25 @@ Runner is a rootless executor. Ordinary Agent execution uses `run_shell`, includ
 
 ## 3. Sandbox construction
 
-Startup checks required Bubblewrap options and executes a probe. Two parts of the sandbox shape can be refused by the environment, and both are settled by probing rather than guessing. `/proc` is settled first and `--disable-userns` second, on whichever `/proc` shape was chosen, so neither can be misdiagnosed as the other.
+### Availability and repair
+
+Installation, building and starting the workbench do not require a usable local sandbox. Source/Docker startup and the binary launcher keep API/UI running if the local Runner is unavailable. Agent turns without code execution may continue; a missing local Runner does not select or validate remote execution on its behalf.
+
+Each Runner probes its own executable and sandbox profile. `GET /health` includes `execution` with `instanceId`, `checkedAt`, dependency availability, sandbox usability, readiness and a diagnostic reason. Authenticated `GET /execution-capability` reads the cached report; `POST` refreshes it after repair, including the shared sandbox profile cache. API exposes these operations at `/api/runners/{runnerId}/execution-capability`. Older Runners without this endpoint have unknown readiness and must be upgraded, not assumed safe.
+
+Runner settings show readiness and a **Recheck** button. The Agent can call `check_runner(runner_id?)` to refresh the same target-side capability report without using a sandbox. This tool is diagnostic only: it does not execute code or request user input. An unavailable pre-dispatch execution returns `RUNNER_UNAVAILABLE`, `dispatched: false`, an `operationId`, diagnostics and repair suggestions. The call is finished, not queued. The Agent chooses to continue other work, explain the blocker and finish, or explicitly call `wait_for_runner(operation_id)`.
+
+Only `wait_for_runner` creates a conversation card and pauses the Agent's external-wait deadlines. The card identifies the Agent and attempted operation and offers repair/recheck, an available authorized Runner, or cancel-operation. Each operation has its own decision. All choices return to the Agent; retry and switch perform a fresh check but **never execute or replay code**. The Agent must issue a new execution call, preparing inputs and environments if the Runner changed. A failed recheck returns diagnostics; waiting again requires another explicit Agent call. There is no automatic repair polling. Run cancellation, process shutdown or a ten-minute decision timeout clears the wait. Cards survive browser reloads via `GET /api/sessions/{sessionId}/execution-blocks`; responses use `POST /api/sessions/{sessionId}/execution-blocks/{id}`. These are in-memory waits, not recovery across API restarts. Repeated/stale responses cannot dispatch code. Runner settings periodically read the cached report so Agent-initiated checks are reflected there too.
+
+The Runner also rejects unavailable sandbox execution with HTTP 503 and `EXECUTION_UNAVAILABLE`, before reserving the execution ID. Read/cancel/management endpoints remain accessible. There is **no unsandboxed fallback**, and Always Allow does not disable sandboxing. A successful probe verifies sandbox construction, not every scientific package or GPU dependency. Tool trajectories record checks and blocked outcomes; API operational logs contain `runner_wait_requested` and `execution_decision`; Runner logs contain `execution_unavailable`. Host execution and expanding authorization are separate future work.
+
+### Sandbox profile
+
+Startup checks required Bubblewrap options and executes a probe; failure marks execution unavailable without preventing management startup. Two parts of the sandbox shape can be refused by the environment, and both are settled by probing rather than guessing. `/proc` is settled first and `--disable-userns` second, on whichever `/proc` shape was chosen, so neither can be misdiagnosed as the other.
 
 `/proc` defaults to `--proc /proc`, giving the sandbox its own procfs so it sees only its own processes. Docker's default readonlyPaths/maskedPaths make the kernel refuse that mount in the sandbox's own pid namespace (`Can't mount proc on /newroot/proc: Operation not permitted`); the runner then falls back to `--ro-bind /proc /proc` and warns. Executions still run, but the sandbox sees the container's process list. The official Compose file keeps the stronger shape with `systempaths=unconfined`; the fallback is never the default, and `privileged` is not the way to avoid it.
 
-`--disable-userns` is added only when a probe proves it usable here, not based on the version or on `--help`: the option works by writing `user.max_user_namespaces`, so under LXC and container runtimes that mount `/proc/sys` read-only it fails and aborts the whole launch even on Bubblewrap 0.8+. The probe runs a minimal sandbox with the option, then without it, which separates an old Bubblewrap that rejects the unknown option from an environment that refuses the sysctl write, and both from a host where no sandbox builds at all. Whenever the option is omitted the runner warns and every other protection — namespaces, seccomp, the mount allowlist — is unchanged, so executions still run. The launcher preflight and the runner share this detection (`packages/sandbox-capability`), so preflight cannot pass a sandbox the runner then fails to build.
+`--disable-userns` is added only when a probe proves it usable here, not based on the version or on `--help`: the option works by writing `user.max_user_namespaces`, so under LXC and container runtimes that mount `/proc/sys` read-only it fails and aborts the whole launch even on Bubblewrap 0.8+. The probe runs a minimal sandbox with the option, then without it, which separates an old Bubblewrap that rejects the unknown option from an environment that refuses the sysctl write, and both from a host where no sandbox builds at all. Whenever the option is omitted the runner warns and every other protection — namespaces, seccomp, the mount allowlist — is unchanged, so executions still run. Readiness and execution share this detection (`packages/sandbox-capability`). Workbench startup no longer requires launcher sandbox preflight to pass; the selected Runner reports execution readiness.
 
 ```text
 --die-with-parent --new-session --unshare-all --unshare-user [--disable-userns]
@@ -152,6 +166,45 @@ HTTP `/execute`, `/execute-shell` and `/shell-executions` reject `kernelMode=per
 A resident interpreter could otherwise leave a thread or subprocess writing after a call returned and the Workspace lease was released. On Linux, ephemeral executions end their Bubblewrap PID namespace before the final snapshot and lease release. A managed background Execution instead retains ownership while its workload runs; it is not a reusable interactive Shell.
 
 Historical Session profiles are not injected. Select cwd and environment on every call; put required exports and commands in the same script. Python/R memory is not retained between calls. Notebook-style shared memory is outside this implementation.
+
+## 8. Real-model Runner recovery E2E
+
+[`test/journey-runner-recovery-real.spec.ts`](../../../test/journey-runner-recovery-real.spec.ts)
+contains two `tier:l3` real-model journeys. The existing merge-queue `merge`
+profile selects both into the serialized basic worker; daily and release inherit
+them. Ordinary PR L2 does not make these paid model calls.
+
+- **Wait:** a natural-language task requires actual execution and asks to wait
+  for the user's decision if the environment blocks it. The model must choose
+  `wait_for_runner` itself. Assert that its operation ID matches the failed
+  execution, the real UI displays the card and preserves it across reload,
+  browser cancellation reaches the next model input, and the Agent completes
+  without resubmitting code.
+- **Finish:** the user asks for an explanation and explicitly does not want to
+  wait. Assert that the model observes the Runner failure, returns a final
+  answer, and never calls the waiting tool or leaves a pending card.
+
+The test runs the real Runner HTTP implementation with a nonexistent sandbox
+executable in a temporary directory. It does not change the host sandbox, mock
+the model, insert a waiting card, or override tool choice. A Session is restricted
+to that Runner; no code execution may reach its dispatch endpoints. A separate
+hermetic ST verifies the fault fixture's connectivity and fail-closed behavior.
+
+Run against an isolated prepared stack with `E2E_API_TOKEN`, `E2E_BASE_URL`
+(or `E2E_API_URL`), `E2E_LLM_BASE_URL`, `E2E_LLM_MODEL`, and `E2E_LLM_TOKEN`:
+
+```bash
+cd .e2e
+E2E_REAL=1 npx playwright test ../test/journey-runner-recovery-real.spec.ts --project=real
+```
+
+Each case has a four-minute deadline and no automatic retry. The standard journey
+report, model inputs/tool protocol, target Runner requests, elapsed time and
+provider-reported token ledger are attached, including on failure. No LLM judge
+is used. One pass demonstrates that model's behavior on this run, not universal
+instruction following; inspect the trace to distinguish a model decision error
+from a missing tool, lost result, or UI defect. The CI-selected backend is recorded;
+a native-backend pass does not certify Swarm, or vice versa.
 
 ## Related documentation
 

@@ -17,7 +17,7 @@ import { expect } from "@playwright/test";
 import { test } from "./helpers/e2e.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-npu-cards.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-npu-cards.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 test.use({ locale: "zh-CN", actionTimeout: 15_000 });
 

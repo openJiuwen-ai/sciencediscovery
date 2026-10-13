@@ -669,11 +669,13 @@ async function executeAgentRun(
       return result;
     },
   }));
-  let runnerHealth: RunnerHealth;
+  let runnerHealth: RunnerHealth | undefined;
   try {
     runnerHealth = await runnerClient.health();
   } catch (error) {
-    throw new ApiStatusError(503, error instanceof Error ? error.message : "Runner is unavailable");
+    // Non-compute turns and remote Runners do not depend on local execution.
+    // The selected target is checked when an execution is actually requested.
+    runnerHealth = undefined;
   }
   const emitIdeaTreePhase = async (
     phase: import("@sciencediscovery/schema").IdeaTreePhase,
@@ -874,7 +876,7 @@ async function executeAgentRun(
     version,
   }));
   let scientificEnvironments: Environment[] | undefined;
-  if (runnerHealth.scientificEnvs?.available) {
+  if (runnerHealth?.scientificEnvs?.available) {
     await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
     scientificEnvironments = store.listEnvironments();
   }
@@ -1376,13 +1378,17 @@ async function executeAgentRun(
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
     ...createWorkspaceExecutionBindings({
+      beginExternalWait: () => {
+        if (!mainExecution) throw new Error("No main AgentRun is active");
+        return mainExecution.beginExternalWait();
+      },
       agentId: "main",
       executionId: runId,
       executionTimeoutMs: timeoutSettings.runnerExecTimeoutMs,
       kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
       maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
       maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-      npuBrokerEnabled: runnerHealth.npuBroker.enabled,
+      npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
       permission: requestExecution.permission,
       permissionScopeLabel: "in the Session workspace",
       provenanceRecorder,
@@ -1931,13 +1937,17 @@ async function executeAgentRun(
             researchProjectRoot: agentOptions.researchProjectRoot,
             ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath, subagent.id),
             ...createWorkspaceExecutionBindings({
+              beginExternalWait: () => {
+                if (!subagentRunHandle) throw new Error("No subagent AgentRun is active");
+                return subagentRunHandle.beginExternalWait();
+              },
               agentId: `subagent:${subagent.id}`,
               executionId: childExecution.identity.executionId,
               executionTimeoutMs: timeoutSettings.runnerExecTimeoutMs,
               kernelIdleTimeoutMs: timeoutSettings.kernelIdleTimeoutMs,
               maxOutputBytes: quotaSettings.runnerMaxOutputBytes,
               maxWorkspaceBytes: quotaSettings.runnerMaxWorkspaceBytes,
-              npuBrokerEnabled: runnerHealth.npuBroker.enabled,
+              npuBrokerEnabled: runnerHealth?.npuBroker.enabled ?? false,
               permission: childExecution.permission,
               permissionScopeLabel: `in subagent ${subagent.id}`,
               artifactPathPrefix: handoff.privateWorkspacePath,
