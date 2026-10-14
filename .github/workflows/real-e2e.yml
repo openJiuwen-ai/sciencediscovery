@@ -29,7 +29,7 @@ jobs:
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: nightly-ci-ds
+    environment: nightly-research
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     env:
@@ -91,7 +91,7 @@ jobs:
       matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
-    environment: nightly-ci-ds
+    environment: nightly-research
     env:
       CI_ALLOW_REAL: "1"
       CI_PROFILE: ${{ inputs.profile }}
