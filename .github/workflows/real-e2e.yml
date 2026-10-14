@@ -69,6 +69,9 @@ jobs:
         with:
           name: real-e2e-plan
           path: .ci-real-plan/plan.json
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           include-hidden-files: true
           if-no-files-found: error
       - name: Upload real E2E collection diagnostics

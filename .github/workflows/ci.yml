@@ -151,6 +151,9 @@ jobs:
         with:
           name: mocked-e2e-plan
           path: .ci-mocked-plan
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
@@ -265,6 +268,9 @@ jobs:
         with:
           name: ut-coverage
           path: .ci-results/ut/tagged/coverage
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
           # A layer that passed has recorded its coverage: finding none means
@@ -407,6 +413,9 @@ jobs:
         with:
           name: st-coverage
           path: .ci-results/st/tagged/coverage
+          # A re-run keeps the previous attempt. Downloading this name can then
+          # return the older package, so replace it.
+          overwrite: true
           # upload-artifact drops dot-files by default; every file here is data.
           include-hidden-files: true
           # A layer that passed has recorded its coverage: finding none means

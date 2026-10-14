@@ -246,7 +246,16 @@ function artifactUploads(workflow) {
       paths: listed.filter((path) => !path.startsWith("!")),
       excluded: listed.filter((path) => path.startsWith("!")).map((path) => path.slice(1)),
       hidden: /^\s*include-hidden-files:\s*true\s*$/m.test(step),
+      overwrite: /^\s*overwrite:\s*true\s*$/m.test(step),
     };
+  });
+}
+
+/** Artifact names a workflow downloads exactly, not by pattern. */
+function exactArtifactDownloads(workflow) {
+  return workflow.split(/\n(?= *- )/).filter((step) => /uses: actions\/download-artifact@/.test(step)).flatMap((step) => {
+    const name = step.match(/^\s+name:\s*(.+)$/m)?.[1];
+    return name && !name.includes("${{") ? [name] : [];
   });
 }
 
@@ -299,6 +308,25 @@ test("each layer uploads the coverage its run wrote, whichever profile ran it", 
   }
   // The directory does not depend on the profile: the runner takes none.
   assert.equal(resultsLabel.length, 1);
+});
+
+test("a later job downloads the artifact from the latest attempt", async () => {
+  // Re-running a job leaves the previous attempt's artifact beside the new one.
+  // download-artifact resolves a name to one package, and that package can be
+  // the older attempt: Coverage then treats a passed re-run as incomplete
+  // because the manifest still says the first attempt failed. overwrite
+  // deletes the previous package before the new upload.
+  const directory = join(defaultRepositoryRoot, ".github", "workflows");
+  const uploads = [];
+  const downloads = new Set();
+  for (const file of (await readdir(directory)).filter((name) => name.endsWith(".yml"))) {
+    const workflow = await readFile(join(directory, file), "utf8");
+    for (const upload of artifactUploads(workflow)) uploads.push(upload);
+    for (const name of exactArtifactDownloads(workflow)) downloads.add(name);
+  }
+  assert.ok(downloads.has("ut-coverage") && downloads.has("st-coverage"));
+  const missing = [...downloads].filter((name) => !uploads.some((upload) => upload.artifact === name && upload.overwrite));
+  assert.deepEqual(missing, []);
 });
 
 const scoreUploadPath = ".tmp/real-e2e-results";
