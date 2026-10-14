@@ -116,7 +116,8 @@ jobs:
       E2E_DRB_MAX_SUBAGENTS: "2"
       E2E_TEAM_CONCURRENCY_HINT: "2"
       E2E_DRB_RUN_TIMEOUT_MS: "3600000"
-      E2E_DRB_EVAL_TIMEOUT_MS: "600000"
+      # RACE and FACT share this deadline. Forty minutes lets citation checking finish.
+      E2E_DRB_EVAL_TIMEOUT_MS: "2400000"
       E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
       E2E_BIOMNI_RUN_TIMEOUT_MS: "4800000"
       LLM_BACKEND: openai
