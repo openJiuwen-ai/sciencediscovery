@@ -1,212 +1,185 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
-import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
-  sessionExecutionRuns, waitForRunChainTerminal } from "./helpers/journeys.ts";
-import { drbApi, drbArticle, positiveNumber } from "./helpers/deepresearchbench.ts";
+import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
+import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { requiredArtifacts } from "./helpers/real-delivery.mjs";
-import { analysisPrompt, cases, researchTeamReference } from "./benchmarks/biomnibench-da/cases.ts";
-
 import { mainRunChain } from "./helpers/run-chain.ts";
-import { RunChainTimeoutError } from "./helpers/journeys.ts";
+import { loadAnalysisPrompt, cases, manifest, researchTeamReference } from "./benchmarks/biomnibench-da/cases.ts";
+import { generationTokens, judgeTokens, machineIdentity, MEASUREMENT_VERSION, settled, startMemorySampler, toolMetrics } from "./benchmarks/biomnibench-da/metrics.mjs";
+import { manifestHash, validateMetrics } from "../.ci/biomni-gate.mjs";
+import { biomniCase } from "./support/tagged/execution.mjs";
+import { validatePlan } from "./support/tagged/plan.mjs";
 
 const execute = promisify(execFile);
 const scripts = fileURLToPath(new URL("./benchmarks/biomnibench-da/", import.meta.url));
 const outputs = ["trace.md", "answer.txt"];
-const diagnosticOutputs = ["analysis.py", "analysis.json"];
 
-async function verifiedFile(path: string, oid: string) {
-  const data = await readFile(path);
-  const actual = createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
-  if (actual !== oid) throw new Error(`Benchmark input differs from pinned upstream blob: ${path}`);
-  return data;
+async function waitForResearch(page: any, sessionId: string, rootRunId: string, budget: number) {
+  const prefix = `/api/sessions/${sessionId}`, deadline = Date.now() + budget;
+  let previous = "", stableAt = Date.now();
+  while (Date.now() < deadline) {
+    const [runs, children, activity] = await Promise.all([
+      drbApi<any[]>(page, `${prefix}/runs`), drbApi<any[]>(page, `${prefix}/subagents`), drbApi<any>(page, `${prefix}/agent-activity`),
+    ]);
+    const snapshot = { runs, children, activity };
+    const last = mainRunChain(runs, rootRunId).at(-1);
+    if (settled(snapshot) && last?.status === "completed") {
+      // Terminal executions must precede the final answer, not complete after it.
+      const workFinished = [...activity.executions, ...activity.transfers, ...children]
+        .every((x: any) => !x.finishedAt || Date.parse(x.finishedAt) <= Date.parse(last.finishedAt));
+      const timersConsumed = activity.timers.every((x: any) => x.state !== "fired" || x.dueAt <= Date.parse(last.finishedAt));
+      if (workFinished && timersConsumed) {
+        const delivery = await collectFinalDelivery(page, sessionId, last.id, rootRunId, outputs);
+        const fingerprint = JSON.stringify([snapshot, delivery.artifacts.map(a => [a.id, a.version])]);
+        if (fingerprint !== previous) { previous = fingerprint; stableAt = Date.now(); }
+        if (delivery.status === "passed" && requiredArtifacts(delivery.artifacts, outputs).missing.length === 0
+            && Date.now() - stableAt >= 5_000) return { snapshot, delivery, runId: last.id };
+      } else { previous = ""; stableAt = Date.now(); }
+    } else {
+      previous = ""; stableAt = Date.now();
+      if (settled(snapshot) && last && ["failed", "cancelled"].includes(last.status)) throw new Error(`Final research run ${last.status}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  throw new Error("Research did not settle with trace.md and answer.txt within the end-to-end budget");
 }
 
 for (const sample of cases) {
 /**
  * E2E-META
- * Purpose: Execute two small BiomniBench-DA analyses on real Swarm and verify delivery and score analysis with the upstream rubric.
+ * Purpose: Run every public BiomniBench-DA task in L5 and require complete score and resource evidence.
  * Steps:
- *   1. Verify authorized local benchmark inputs before paid calls; upload the CSV through the workspace API.
- *   2. Attach the research-team Skill as a structured reference and submit the original task plus parameter and delivery appendices.
- *   3. Retain diagnostics, usage and optionally score the analysis using the upstream rubric with a local Judge adapter.
- * Environment: Opt-in isolated Swarm stack, local authorized BiomniBench task directories and Python scientific dependencies.
+ *   1. Verify pinned authorized input files; stage nested data in a disposable local session workspace.
+ *   2. Attach the research-team Skill as a structured reference, submit the original instruction with parameter and delivery appendices, and wait for final artifacts.
+ *   3. Score the trace and answer using the original rubric; validate and retain all required metrics.
+ * Environment: Isolated Linux Swarm stack, authorized pinned data, sufficient disk/RAM and product scientific runtime.
  * Type: real
- * LLM: Real configured generator and optional separately configured rubric judge.
+ * LLM: Real configured generator and separately configured rubric judge.
  * WebSearch: Disabled by a non-enforcing Skill parameter in the submitted prompt; original task restrictions apply.
- * PaperSources: Not required for numerical analysis.
- * MCP: Platform execution tools exposed through Swarm.
- * OtherExternal: Local API, Runner, browser and Artifact store; no dataset auto-download.
- * Credentials: E2E_API_TOKEN; E2E_LLM_MODEL_ID or E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN; optional BIOMNI_JUDGE_API_KEY.
- * CostSideEffects: Billable model calls; temporary projects and sessions; retained test diagnostics and reports. Not a PR gate.
+ * PaperSources: Original benchmark task data.
+ * MCP: Product execution tools and sandbox.
+ * OtherExternal: Gated Hugging Face data prepared before model calls; local API, Runner and artifact store.
+ * Credentials: E2E_API_TOKEN, E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN, BIOMNI_JUDGE_BASE_URL/BIOMNI_JUDGE_MODEL/BIOMNI_JUDGE_API_KEY.
+ * CostSideEffects: Billable generation/judging; temporary sessions; L5 full-public baseline candidate, not a PR default.
  */
-  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap","@status:reviewed","@tier:l4"] , annotation: { type: "capability", description: "swarm-task" } }, async ({ page, journey }, testInfo) => {
-    const budget = positiveNumber("E2E_BIOMNI_RUN_TIMEOUT_MS", 1_800_000);
+  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@judge:llm", "@sandbox:bubblewrap", "@status:external", "@tier:l5"], annotation: { type: "capability", description: "swarm-task" } }, async ({ page, journey }, testInfo) => {
+    const budget = positiveNumber("E2E_BIOMNI_RUN_TIMEOUT_MS", 10_800_000);
+    const workspaceBudget = positiveNumber("SCIENCE_AGENT_MAX_WORKSPACE_BYTES", 40 * 1024 ** 3);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
-    test.setTimeout(budget + evaluationBudget + 360_000);
-    expect(process.env.E2E_SWARM_TASK !== "1", "BLOCKED: requires isolated Swarm stack").toBe(false);
-    const modelId = process.env.E2E_LLM_MODEL_ID?.trim();
-    if (modelId) allowRealEnvException(testInfo, "Live model is already registered on the isolated stack.");
-    const real = modelId ? undefined : requireRealEnv(testInfo, "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN");
-    const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT");
-    const mode = process.env.E2E_BIOMNI_EVALUATION ?? "rubric";
-    if (!["off", "rubric"].includes(mode)) throw new Error("E2E_BIOMNI_EVALUATION must be off or rubric");
+    const preparationBudget = 1_800_000;
+    test.setTimeout(budget + evaluationBudget + 2 * preparationBudget + 360_000);
+    expect(process.env.E2E_SWARM_TASK, "BLOCKED: isolated Swarm stack required").toBe("1");
+    const env = requireRealEnv(testInfo, "BIOMNI_DATA_ROOT", "E2E_BIOMNI_FIXTURE_ROOT", "E2E_LLM_BASE_URL", "E2E_LLM_MODEL", "E2E_LLM_TOKEN", "BIOMNI_JUDGE_BASE_URL", "BIOMNI_JUDGE_MODEL", "BIOMNI_JUDGE_API_KEY", "SCIENCE_TAG_PLAN");
+    if ((process.env.E2E_BIOMNI_EVALUATION ?? "rubric") !== "rubric") throw new Error("L5 requires rubric scoring");
+    const plan = validatePlan(JSON.parse(await readFile(env.SCIENCE_TAG_PLAN!, "utf8")));
+    const entry = plan.entries.find((e: any) => biomniCase(e) === sample.id);
+    if (!entry) throw new Error("Benchmark task missing from frozen plan");
     const python = process.env.BIOMNI_PYTHON ?? "python3";
     const task = join(env.BIOMNI_DATA_ROOT!, sample.id);
-    const dataPath = join(task, "environment/data", sample.file);
-    const rubricPath = join(task, "tests/rubric.txt");
-    const [data, instruction] = await Promise.all([
-      verifiedFile(dataPath, sample.dataOid), verifiedFile(join(task, "instruction.md"), sample.instructionOid),
-      verifiedFile(rubricPath, sample.rubricOid),
-    ]);
-    await requireRealStack(testInfo);
-    journey.scenario({ goal: `Execute ${sample.id} with real data and a real LLM.`, preconditions: ["isolated Swarm", "pinned input data", "Python scientific stack"] });
-    const metrics: Record<string, any> = { schema_version: 1, case_id: sample.id, backend: "jiuwenswarm",
-      started_at: new Date().toISOString(), data_bytes: data.length, data_sha256: createHash("sha256").update(data).digest("hex"),
-      instruction_oid: sample.instructionOid, rubric_oid: sample.rubricOid, integration_status: "not_run",
-      evaluation: { status: mode === "off" ? "disabled" : "not_run" }, resource_measurement: "not_collected", run_budget_ms: budget };
+    const metrics: Record<string, any> = { schema_version: 2, benchmark: "biomnibench-da", case_id: sample.id,
+      key: entry.key, revision: plan.revision, integration_status: "not_run", evaluation: { status: "not_run", gating: true },
+      identity: { dataset_revision: manifest.revision, manifest_sha256: manifestHash, evaluator_revision: plan.evaluatorRevision,
+        measurement_version: MEASUREMENT_VERSION, generator_model: env.E2E_LLM_MODEL, judge_model: env.BIOMNI_JUDGE_MODEL,
+        backend: plan.execution.backend, run_budget_ms: budget, workspace_budget_bytes: workspaceBudget, machine: machineIdentity() } };
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
-    let runId: string | undefined;
-    let terminal = false;
-    let start: number | undefined;
+    let memory: Awaited<ReturnType<typeof startMemorySampler>> | undefined;
+    let completed = false;
+    journey.scenario({ goal: `Complete and score public task ${sample.id}; record score, tool rounds, memory, latency and tokens.`, preconditions: ["isolated Swarm", "pinned authorized inputs", "candidate baseline mode"] });
     try {
-      fixture = await createProjectAndSession(page, { approvalMode: "always_allow",
-        ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!, baseUrl: real!.E2E_LLM_BASE_URL!,
-          model: real!.E2E_LLM_MODEL!, name: `BiomniBench ${sample.id} ${Date.now()}` } }),
-        projectName: `BiomniBench ${sample.id} ${Date.now()}`, sessionTitle: sample.title });
-      const prefix = `/api/sessions/${fixture.session.id}`;
-      metrics.session_id = fixture.session.id;
-      metrics.generator_model_id = fixture.session.modelId ?? modelId;
-      const upload = await page.request.post(`${apiBaseUrl()}${prefix}/workspace/upload`, {
-        headers: authorizationHeader(), multipart: { files: { name: sample.file, mimeType: "text/csv", buffer: data } } });
-      expect(upload.status(), await upload.text()).toBe(201);
-      await openProjectSession(page, fixture);
-      const prompt = analysisPrompt(sample.id, instruction.toString("utf8"), sample.file);
-      await writeFile(testInfo.outputPath("prompt.txt"), prompt);
-      start = Date.now();
-      const runResponse = await page.request.post(`${apiBaseUrl()}${prefix}/runs`, {
-        data: { content: prompt, references: [researchTeamReference] },
-        headers: authorizationHeader(),
+      await journey.step("Prepare the scientific task", "Verify the pinned task and place only input data in the disposable workspace.", async () => {
+        await execute(python, [join(scripts, "prepare.py"), "verify", "--root", env.BIOMNI_DATA_ROOT!, "--case", sample.id], { timeout: preparationBudget });
+        await requireRealStack(testInfo);
+        fixture = await createProjectAndSession(page, { approvalMode: "always_allow",
+          model: { apiToken: env.E2E_LLM_TOKEN!, baseUrl: env.E2E_LLM_BASE_URL!, model: env.E2E_LLM_MODEL!, name: `BiomniBench ${sample.id} ${Date.now()}` },
+          projectName: `BiomniBench ${sample.id} ${Date.now()}`, sessionTitle: sample.title });
+        await execute(python, [join(scripts, "prepare.py"), "stage", "--root", env.BIOMNI_DATA_ROOT!, "--case", sample.id,
+          "--data-root", env.E2E_BIOMNI_FIXTURE_ROOT!, "--project", fixture.project.id, "--session", fixture.session.id], { timeout: preparationBudget });
+        await openProjectSession(page, fixture);
       });
-      const runBody = await runResponse.text();
-      expect(runResponse.status(), runBody).toBe(201);
-      const run = JSON.parse(runBody) as { id: string; references: Array<{ id: string; kind: string; label: string }>;
-        settingsSnapshot: { enabledSkillIds: string[] } };
-      expect(run.references).toContainEqual(researchTeamReference);
-      expect(run.settingsSnapshot.enabledSkillIds).toContain(researchTeamReference.id);
-      runId = run.id;
-      metrics.initial_run_id = runId;
-      metrics.run_id = runId;
-      await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
-      try {
-        const finished = await waitForRunChainTerminal(page, fixture.session.id, runId, { timeout: budget });
-        terminal = true;
-        runId = finished.run.id;
-        metrics.run_id = runId;
-        metrics.run_chain = finished.runs.map(({ automaticWake, error, id, queueOrder, status }) =>
-          ({ automatic_wake: Boolean(automaticWake), error, id, queue_order: queueOrder, status }));
-        metrics.run_status = finished.run.status;
-        metrics.run_error = finished.run.error;
-      } catch (error) {
-        if (!(error instanceof RunChainTimeoutError)) throw error;
-        metrics.run_status = "budget_exhausted";
-        metrics.run_error = error instanceof Error ? error.message : String(error);
-        // Stop every active Run in the chain. The root may already be complete while an automatic wake is running.
-        const stopped = await cancelActiveSessionRuns(page, fixture.session.id);
-        metrics.shutdown = { ...stopped, runs: undefined };
-        const chain = mainRunChain(stopped.runs ?? [], metrics.initial_run_id);
-        const latest = chain.at(-1);
-        runId = latest?.id ?? runId;
-        metrics.run_id = runId;
-        metrics.run_terminal_status = latest?.status;
-        metrics.run_chain = chain.map(({ automaticWake, error: runError, id, queueOrder, status }) =>
-          ({ automatic_wake: Boolean(automaticWake), error: runError, id, queue_order: queueOrder, status }));
-        terminal = stopped.status === "stopped";
-      }
-      metrics.generation_duration_ms = Date.now() - start;
-      const executions = await sessionExecutionRuns(page, fixture.session.id).catch(() => null);
-      await writeFile(testInfo.outputPath("execution-runs.json"), JSON.stringify(executions, null, 2));
-      metrics.execution_count = executions?.length ?? null;
-      metrics.children = await drbApi<any[]>(page, `${prefix}/subagents`).catch(() => null);
-      const delivery = await collectFinalDelivery(page, fixture.session.id, runId, metrics.initial_run_id);
-      metrics.delivery = delivery;
-      metrics.integration_status = metrics.run_status === "budget_exhausted" && delivery.status === "passed" ? "partial" : delivery.status;
-      const required = requiredArtifacts(delivery.artifacts, outputs);
-      metrics.required_outputs = { missing: required.missing };
-      if (required.missing.length && delivery.status === "passed") {
-        delivery.status = "failed";
-        delivery.errors.push(`Missing required final outputs: ${required.missing.join(", ")}`);
-        metrics.integration_status = "failed";
-      }
-      expect(metrics.run_status, "A budget-expired generation is not a passed E2E, even if partial artifacts exist").not.toBe("budget_exhausted");
-      expect(delivery.status, "Main run must complete with readable, nonempty declared final artifacts").toBe("passed");
-      expect(required.missing, "The final handoff must contain both required Biomni outputs").toEqual([]);
-      try {
-        // Official rubric consumes trace and answer; nesting does not change their meaning.
-        const scoringInputs: Record<string, string> = {};
+      const prefix = `/api/sessions/${fixture!.session.id}`;
+      let finished: Awaited<ReturnType<typeof waitForResearch>>;
+      await journey.step("Run the complete research task", "Wait for final delivery after tools, children and automatic wake-ups settle.", async () => {
+        const before = await drbApi<any>(page, `${prefix}/usage`);
+        const prompt = await loadAnalysisPrompt(env.BIOMNI_DATA_ROOT!, sample.id);
+        await writeFile(testInfo.outputPath("prompt.txt"), prompt);
+        memory = await startMemorySampler(env.E2E_BIOMNI_FIXTURE_ROOT!);
+        const start = performance.now();
+        const runResponse = await page.request.post(`${apiBaseUrl()}${prefix}/runs`, {
+          data: { content: prompt, references: [researchTeamReference] },
+          headers: authorizationHeader(),
+        });
+        const runBody = await runResponse.text();
+        expect(runResponse.status(), runBody).toBe(201);
+        const initialRun = JSON.parse(runBody) as { id: string; references: Array<{ id: string; kind: string; label: string }>;
+          settingsSnapshot: { enabledSkillIds: string[] } };
+        expect(initialRun.references).toContainEqual(researchTeamReference);
+        expect(initialRun.settingsSnapshot.enabledSkillIds).toContain(researchTeamReference.id);
+        metrics.initial_run_id = initialRun.id;
+        finished = await waitForResearch(page, fixture!.session.id, initialRun.id, Math.max(1, budget - (performance.now() - start)));
+        const e2eMs = performance.now() - start;
+        const measuredMemory = await memory.stop(); memory = undefined;
+        const usage = await drbApi<any>(page, `${prefix}/usage`);
+        const tokens = generationTokens(usage, before.invocations.map((x: any) => x.id));
+        const records: any[] = [];
+        for (const run of finished.snapshot.runs) {
+          records.push(...await drbApi<any[]>(page, `${prefix}/runs/${run.id}/events`));
+          for (const child of finished.snapshot.children) {
+            records.push(...await drbApi<any[]>(page, `${prefix}/runs/${run.id}/streams/${encodeURIComponent(`subagent-${child.id}`)}/events`));
+          }
+        }
+        for (const child of finished.snapshot.children) {
+          const recorded = new Set(records.filter(r => r.event.type === "subagent.step" && r.event.subagentId === child.id)
+            .map(r => r.event.step.toolCallId).filter(Boolean));
+          if (child.steps.some((s: any) => s.kind === "tool" && (!s.toolCallId || !recorded.has(s.toolCallId)))) throw new Error("Incomplete subagent tool stream");
+        }
+        metrics.measurements = { ...toolMetrics(records), peak_rss_bytes: measuredMemory.peak_rss_bytes,
+          memory_samples: measuredMemory.samples, memory_interval_ms: measuredMemory.interval_ms, memory_scope: measuredMemory.scope,
+          e2e_ms: e2eMs, generation_tokens: tokens.total, generation_input_tokens: tokens.input, generation_output_tokens: tokens.output };
+        metrics.integration_status = finished.delivery.status;
+        metrics.run_id = finished.runId;
+        await writeFile(testInfo.outputPath("research-evidence.json"), JSON.stringify({ ...finished, usage, records }, null, 2));
         for (const name of outputs) {
-          const content = required.found.get(name)?.text;
-          if (content?.trim()) {
-            scoringInputs[name] = content;
-            await writeFile(testInfo.outputPath(name), content);
-          }
+          const artifact = requiredArtifacts(finished.delivery.artifacts, outputs).found.get(name)!;
+          await writeFile(testInfo.outputPath(name), artifact.text);
         }
-        if (mode === "rubric") {
-          metrics.evaluation = { status: "running" };
-          const judgeStart = Date.now();
-          try {
-            if (outputs.some(name => !scoringInputs[name])) throw new Error("Official rubric input missing: trace.md or answer.txt; delivery remains passed");
-            await execute(python, [join(scripts, "judge.py"), "--rubric", rubricPath,
-              "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
-              "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: evaluationBudget });
-            metrics.evaluation = JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8"));
-            metrics.evaluation.duration_ms = Date.now() - judgeStart;
-            metrics.evaluation.gating = false;
-          } catch (error) {
-            metrics.evaluation = { status: "error", gating: false, duration_ms: Date.now() - judgeStart,
-              error: error instanceof Error ? error.message : String(error) };
-          }
-        }
-      } catch (error) {
-        metrics.evaluation = { status: "error", gating: false, error: error instanceof Error ? error.message : String(error) };
-      }
-
+      });
+      await journey.step("Score and validate the evidence", "Require a valid original-rubric score and complete generator/judge usage before publishing metrics.", async () => {
+        const judgeStart = performance.now();
+        metrics.evaluation = { status: "running", gating: true };
+        await execute(python, [join(scripts, "judge.py"), "--rubric", join(task, "tests/rubric.txt"),
+          "--trace", testInfo.outputPath("trace.md"), "--answer", testInfo.outputPath("answer.txt"),
+          "--output", testInfo.outputPath("quality-scorecard.json")], { timeout: evaluationBudget });
+        metrics.evaluation = { ...JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.json"), "utf8")), gating: true };
+        const tokens = judgeTokens(JSON.parse(await readFile(testInfo.outputPath("quality-scorecard.attempts", "attempts.json"), "utf8")));
+        Object.assign(metrics.measurements, { score: metrics.evaluation.score, judge_ms: performance.now() - judgeStart,
+          judge_tokens: tokens.total, judge_input_tokens: tokens.input, judge_output_tokens: tokens.output,
+          total_tokens: metrics.measurements.generation_tokens + tokens.total });
+        validateMetrics(metrics, entry, plan);
+        completed = true;
+      });
     } catch (error) {
+      metrics.integration_status = "failed";
       metrics.error = error instanceof Error ? error.message : String(error);
-      if (!["passed", "partial"].includes(metrics.integration_status)) metrics.integration_status = "failed";
-      if (metrics.evaluation.status === "running") metrics.evaluation = { status: "error" };
       throw error;
     } finally {
-      if (fixture) {
-        const prefix = `/api/sessions/${fixture.session.id}`;
-        if (runId && !terminal) {
-          metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
-          if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
-        }
-        metrics.generation_usage = await drbApi(page, `${prefix}/usage`).catch(() => null);
-        metrics.children = await drbApi(page, `${prefix}/subagents`).catch(() => null);
-        metrics.artifacts = await drbApi(page, `${prefix}/artifacts`).catch(() => null);
-        // Retain partial deliverables even when required deliverables are missing.
-        for (const name of [...outputs, ...diagnosticOutputs]) {
-          const content = await drbArticle(page, fixture.session.id, name).catch(() => null);
-          if (content && metrics.integration_status !== "passed") await writeFile(testInfo.outputPath(name), content.article);
-        }
-        await writeFile(testInfo.outputPath("assistant-messages.json"), JSON.stringify(await page.locator(".message.assistant").allTextContents().catch(() => []), null, 2));
+      if (memory) await memory.stop().then(value => { metrics.partial_memory = value; }).catch(() => undefined);
+      if (fixture && !completed) {
+        metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
+        if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
       }
-      metrics.generation_duration_ms ??= start ? Date.now() - start : null;
       metrics.finished_at = new Date().toISOString();
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
       await testInfo.attach("benchmark-metrics", { path: testInfo.outputPath("benchmark-metrics.json"), contentType: "application/json" });
-      if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
+      if (fixture) await cleanupJourney(page, fixture);
       if (metrics.cleanup_error) throw new Error(metrics.cleanup_error);
     }
   });

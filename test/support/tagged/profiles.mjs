@@ -28,9 +28,7 @@ const L2 = [...L1, { ...hermetic, tier: 'l2' }];
 const real = { category: 'e2e', os: 'linux', arch: 'amd64', npu: 'none', model: 'real', judge: ['none', 'llm'], status: ['reviewed', 'external'] };
 const L3 = [...L2, { ...real, tier: 'l3', judge: 'none' }];
 const L4 = [...L3, { ...real, tier: 'l4' }];
-// All existing eligible real cases start at L3/L4, so L5 currently selects the
-// same cases as L4. Keep its extension row for future release-only coverage.
-// Quarantined cases remain excluded until their prerequisites are repaired.
+// L5 adds the full public BiomniBench-DA corpus and its metrics gate.
 const L5 = [...L4, { ...real, tier: 'l5' }];
 
 const policies = {
