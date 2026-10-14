@@ -117,6 +117,8 @@ import {
 const EVOLVE_CARD_POLL_MS = 3_000;
 
 import { ApiClient, ApiRequestError, isAbortError } from "./api.js";
+import { replaceDefaultModelOverride } from "./default-model-override.js";
+import { settleLoads, startupLoads, systemSettingsLoads, workspaceCapabilitiesFromQuota } from "./settings-loads.js";
 import { isAuthFailure } from "./api/auth.js";
 import { TrajectoryViewer } from "@sciencediscovery/trajectory/web";
 import { createSessionActivity } from "./run-stream/session-activity.js";
@@ -1443,46 +1445,31 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   useEffect(() => {
     if (!showConfig) return;
     let active = true;
-    // The provider registry loads on its own: an unrelated settings request
-    // failing must not leave the model wizard without its preset list.
-    void client.listProviders().then((registry) => {
-      if (!active) return;
-      setModelProviders(registry.providers);
-      setModelProviderPresets(registry.presets);
-    }).catch((reason: Error) => {
-      if (active) reportSystemSettingsError(reason);
-    });
-    void Promise.all([
-      client.listModels(),
-      client.listConnectors(),
-      client.listSkills(),
-      client.listSkillLibraries(),
-      client.getGlobalSettings(),
-      client.getTimeoutSettings(),
-      client.getQuotaSettings(),
-      client.getSandboxNetworkSettings(),
-      client.getWebSettings(),
-      client.getMemoryGraphSettings(),
-      client.getIdeaTreeSettings(),
-    ]).then(([modelItems, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, web, memoryGraph, ideaTree]) => {
-      if (!active) return;
-      setModels(modelItems);
-      setConnectors(connectorItems);
-      setSkills(skillItems);
-      setSkillLibraries(skillLibraryItems);
-      setGlobalSettings(settings);
-      setTimeoutSettings(timeouts);
-      setQuotaSettings(quotas);
-      setSandboxNetworkSettings(sandboxNetwork);
-      setWebSettings(web);
-      setMemoryGraphSettings(memoryGraph);
-      setIdeaTreeSettings(ideaTree);
-      setWorkspaceCapabilities({
-        maxFileBytes: quotas.uploadMaxFileBytes,
-        maxRequestBytes: quotas.uploadMaxRequestBytes,
-        maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
-      });
-    }).catch((reason: Error) => {
+    // Each read settles on its own. One settings endpoint failing must not
+    // discard the provider presets, models, global defaults, or any other panel that loaded.
+    const whenActive = <T,>(apply: (value: T) => void) => (value: T) => {
+      if (active) apply(value);
+    };
+    void settleLoads(systemSettingsLoads(client, {
+      providers: whenActive((registry) => {
+        setModelProviders(registry.providers);
+        setModelProviderPresets(registry.presets);
+      }),
+      models: whenActive(setModels),
+      connectors: whenActive(setConnectors),
+      skills: whenActive(setSkills),
+      skillLibraries: whenActive(setSkillLibraries),
+      globalSettings: whenActive(setGlobalSettings),
+      timeouts: whenActive(setTimeoutSettings),
+      quotas: whenActive((quotas) => {
+        setQuotaSettings(quotas);
+        setWorkspaceCapabilities(workspaceCapabilitiesFromQuota(quotas));
+      }),
+      sandboxNetwork: whenActive(setSandboxNetworkSettings),
+      web: whenActive(setWebSettings),
+      memoryGraph: whenActive(setMemoryGraphSettings),
+      ideaTree: whenActive(setIdeaTreeSettings),
+    }), (reason) => {
       if (active) reportSystemSettingsError(reason);
     });
     return () => { active = false; };
@@ -1813,65 +1800,51 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       if (initialView.settingsKind === "system") reportSystemSettingsError(reason);
       else setError(reason);
     };
-    void client.listProviders().then((registry) => {
-      setModelProviders(registry.providers);
-      setModelProviderPresets(registry.presets);
-    }).catch(reportStartupError);
-    void Promise.all([
-      client.listProjects(),
-      client.listModels(),
-      client.getModelCatalog(),
-      client.listConnectors(),
-      client.listSkills(),
-      client.listSkillLibraries(),
-      client.getGlobalSettings(),
-      client.getTimeoutSettings(),
-      client.getQuotaSettings(),
-      client.getSandboxNetworkSettings(),
-      client.getProxySettings(),
-      client.getMcpProxyPolicies(),
-      client.listMcpSources(),
-      client.getWebSettings(),
-      client.getMemoryGraphSettings(),
-      client.getIdeaTreeSettings(),
-    ]).then(([projectItems, modelItems, catalog, connectorItems, skillItems, skillLibraryItems, settings, timeouts, quotas, sandboxNetwork, proxies, mcpPolicyDetails, mcpSourceDetails, web, memoryGraph, ideaTree]) => {
-      setProjects(projectItems);
-      setModels(modelItems);
-      applyModelCatalog(catalog);
-      setConnectors(connectorItems);
-      setSkills(skillItems);
-      setSkillLibraries(skillLibraryItems);
-      setGlobalSettings(settings);
-      setTimeoutSettings(timeouts);
-      setQuotaSettings(quotas);
-      setSandboxNetworkSettings(sandboxNetwork);
-      setProxySettings(proxies);
-      setMcpProxyPolicies(mcpPolicyDetails.policies);
-      setMcpSources(mcpSourceDetails.map((item) => item.manifest));
-      setWebSettings(web);
-      setMemoryGraphSettings(memoryGraph);
-      setIdeaTreeSettings(ideaTree);
-      setWorkspaceCapabilities({
-        maxFileBytes: quotas.uploadMaxFileBytes,
-        maxRequestBytes: quotas.uploadMaxRequestBytes,
-        maxWorkspaceBytes: quotas.runnerMaxWorkspaceBytes,
-      });
-      // A Project named by the URL wins over the "first item" default.
-      const pending = pendingSelectionRef.current;
-      const pendingProjectId = pending?.projectId && projectItems.some((item) => item.id === pending.projectId) ? pending.projectId : undefined;
-      if (pending?.projectId && !pendingProjectId) pendingSelectionRef.current = null; // URL Project is gone: drop its Session preference too
-      const nextProjectId = projectItems.some((item) => item.id === activeProjectIdRef.current) ? activeProjectIdRef.current : pendingProjectId ?? projectItems[0]?.id;
-      setActiveProjectId(nextProjectId);
-      // Project-scoped settings named by the URL open against this fresh list;
-      // a target that is not in it degrades to "dialog closed".
-      const pendingSettings = pendingSettingsRef.current;
-      if (pendingSettings?.kind === "project") {
-        pendingSettingsRef.current = null;
-        const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
-        if (target) void openScopedSettings(target);
-      }
-
-    }).catch(reportStartupError).finally(() => setProjectsLoaded(true));
+    void settleLoads(startupLoads(client, {
+      providers: (registry) => {
+        setModelProviders(registry.providers);
+        setModelProviderPresets(registry.presets);
+      },
+      projects: (projectItems) => {
+        setProjects(projectItems);
+        // A Project named by the URL wins over the "first item" default.
+        const pending = pendingSelectionRef.current;
+        const pendingProjectId = pending?.projectId && projectItems.some((item) => item.id === pending.projectId) ? pending.projectId : undefined;
+        if (pending?.projectId && !pendingProjectId) pendingSelectionRef.current = null; // URL Project is gone: drop its Session preference too
+        const nextProjectId = projectItems.some((item) => item.id === activeProjectIdRef.current) ? activeProjectIdRef.current : pendingProjectId ?? projectItems[0]?.id;
+        setActiveProjectId(nextProjectId);
+        // Project-scoped settings named by the URL open against this fresh list;
+        // a target that is not in it degrades to "dialog closed".
+        const pendingSettings = pendingSettingsRef.current;
+        if (pendingSettings?.kind === "project") {
+          pendingSettingsRef.current = null;
+          const target = findResourceTarget("project", pendingSettings.id ?? nextProjectId ?? "", projectItems, []);
+          if (target) void openScopedSettings(target);
+        }
+      },
+      models: setModels,
+      catalog: applyModelCatalog,
+      connectors: setConnectors,
+      skills: setSkills,
+      skillLibraries: setSkillLibraries,
+      globalSettings: setGlobalSettings,
+      timeouts: setTimeoutSettings,
+      quotas: (quotas) => {
+        setQuotaSettings(quotas);
+        setWorkspaceCapabilities(workspaceCapabilitiesFromQuota(quotas));
+      },
+      sandboxNetwork: setSandboxNetworkSettings,
+      proxies: setProxySettings,
+      mcpPolicies: (details) => setMcpProxyPolicies(details.policies),
+      mcpSources: (details) => setMcpSources(details.map((item) => item.manifest)),
+      web: setWebSettings,
+      memoryGraph: setMemoryGraphSettings,
+      ideaTree: setIdeaTreeSettings,
+      // The project sidebar and the address bar wait on this flag. It follows
+      // the project request alone, so a hung settings read cannot keep the
+      // sidebar on its skeleton after the project list has already arrived.
+      onProjectsSettled: () => setProjectsLoaded(true),
+    }), reportStartupError);
   }, [client, initialView.settingsKind, reportSystemSettingsError]);
 
   useEffect(() => {
@@ -5042,13 +5015,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   models={models}
                   onCatalogChange={applyModelCatalog}
                   onDefaultModelSet={async (modelId) => {
-                    // One setting, written from the wizard and from the
-                    // registry's default-model row alike; keep every other
-                    // global override instead of replacing the whole object.
-                    const overrides = { ...(globalSettings?.overrides ?? {}) };
-                    if (modelId) overrides.modelId = modelId;
-                    else delete overrides.modelId;
-                    const updated = await client.replaceGlobalSettings(overrides);
+                    // Read the stored overrides at save time. The in-memory
+                    // copy is empty when that load failed or has not returned,
+                    // and writing it would replace every other global override.
+                    const updated = await replaceDefaultModelOverride(client, modelId);
                     setGlobalSettings(updated);
                     if (activeProjectId) {
                       setProjectSettings(await client.getProjectSettings(activeProjectId));

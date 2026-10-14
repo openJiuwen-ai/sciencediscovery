@@ -537,3 +537,47 @@ test("注册表内的全局默认任务模型选择器与全局默认值页写�
   });
   assert.equal(setTo, undefined);
 });
+
+test("默认模型保存失败时把错误交给 onError，选中项保持不变", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const errors: unknown[] = [];
+  const client = {
+    listProviderModels: async (providerId: string) => ({
+      fetchedAt: "2026-09-20T00:00:00.000Z",
+      models: [],
+      providerId,
+      source: "remote" as const,
+    }),
+  } as unknown as SettingsApiClient;
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ProviderModelSettings, {
+          client,
+          defaultModelId: "m1",
+          models: [profile("m1", "p1")],
+          onDefaultModelSet: async () => { throw new Error("settings 500"); },
+          onError: (reason) => { errors.push(reason); },
+          onModelsChange: () => undefined,
+          onNotice: () => undefined,
+          onProvidersChange: () => undefined,
+          presets: PRESETS,
+          providers: [provider("p1", "DeepSeek")],
+        }),
+      ),
+    );
+  });
+
+  const select = renderer!.root.findByProps({ id: "registry-default-model" });
+  await act(async () => {
+    select.props.onChange({ target: { value: "" } });
+  });
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0] instanceof Error ? errors[0].message : errors[0], "settings 500");
+  assert.equal(renderer!.root.findByProps({ id: "registry-default-model" }).props.value, "m1");
+});

@@ -37,6 +37,7 @@ import {
 } from "@sciencediscovery/schema";
 
 import type { SettingsApiClient } from "./api/settings.js";
+import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
 import {
@@ -356,16 +357,33 @@ export function ModelConnectWizard({
 
     let createdProviderId: string | undefined;
     const createdModelIds: string[] = [];
-    let initialOverrides: RuntimeSettingsOverrides = {};
+    // Taken before any provider or model is created. The first model claims
+    // the global default on the server, so a later delete is rejected until
+    // this snapshot is written back. A failed read has no snapshot: stop
+    // before creating anything instead of leaving a row that cannot be deleted.
+    let savedOverrides: RuntimeSettingsOverrides | undefined;
+    const restoreSavedOverrides = async (): Promise<void> => {
+      if (savedOverrides === undefined || typeof client.replaceGlobalSettings !== "function") return;
+      try {
+        await client.replaceGlobalSettings(savedOverrides);
+      } catch { /* ignore */ }
+    };
 
     try {
-      try {
-        if (typeof client.getGlobalSettings === "function") {
-          const currentDetails = await client.getGlobalSettings();
-          initialOverrides = currentDetails.overrides ?? {};
-        }
-      } catch { /* ignore */ }
+      if (typeof client.getGlobalSettings !== "function") {
+        throw new Error(t("wizard.error.settingsRead"));
+      }
+      const currentDetails = await client.getGlobalSettings();
+      savedOverrides = { ...(currentDetails.overrides ?? {}) };
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setValidationError(message);
+      onError?.(reason instanceof Error ? reason : message);
+      setTesting(false);
+      return;
+    }
 
+    try {
       // Whether the system already has models BEFORE this connect decides the
       // default: only the first model ever becomes the global default. When
       // the list cannot be read, stay conservative and leave the default alone.
@@ -390,11 +408,7 @@ export function ModelConnectWizard({
       if (!testOutcome.ok) {
         // Failed: roll back everything this attempt created.
         // Restore settings first so deleteModel is not blocked by runtime settings.
-        try {
-          if (typeof client.replaceGlobalSettings === "function") {
-            await client.replaceGlobalSettings(initialOverrides);
-          }
-        } catch { /* ignore */ }
+        await restoreSavedOverrides();
         for (const id of createdModelIds) {
           try { await client.deleteModel(id); } catch { /* ignore */ }
         }
@@ -418,7 +432,7 @@ export function ModelConnectWizard({
         if (onDefaultModelSet) {
           await onDefaultModelSet(firstProfile.id);
         } else {
-          await client.replaceGlobalSettings({ modelId: firstProfile.id });
+          await replaceDefaultModelOverride(client, firstProfile.id);
         }
       }
 
@@ -451,11 +465,7 @@ export function ModelConnectWizard({
       onNotice?.(t("wizard.successTitle"), successDesc);
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
-      try {
-        if (typeof client.replaceGlobalSettings === "function") {
-          await client.replaceGlobalSettings(initialOverrides);
-        }
-      } catch { /* ignore */ }
+      await restoreSavedOverrides();
       for (const id of createdModelIds) {
         try { await client.deleteModel(id); } catch { /* ignore */ }
       }

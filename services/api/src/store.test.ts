@@ -3438,6 +3438,36 @@ test("model providers: preset creation, token fallback, sync, and lifecycle", as
   assert.equal(store.getProviderApiToken(provider.id), undefined);
 });
 
+test("rolling back the first provider model restores the previous global settings", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-rollback-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const before = { semanticReviewEnabled: true, thinkingEffort: "high" as const };
+  await store.replaceGlobalSettings(before);
+
+  const provider = await store.createProvider({ apiToken: "sk-rollback", presetId: "deepseek" });
+  const profile = await store.materializeProviderModel(provider.id, "deepseek-chat");
+  assert.equal(store.getGlobalSettings().overrides.modelId, profile.id);
+  await assert.rejects(store.deleteModel(profile.id), /referenced by runtime settings/);
+  await assert.rejects(store.deleteProvider(provider.id), /referenced by runtime settings/);
+
+  await store.replaceGlobalSettings(before);
+  await store.deleteModel(profile.id);
+  await store.deleteProvider(provider.id);
+
+  assert.deepEqual(store.getGlobalSettings().overrides, before);
+  assert.equal(store.listModels().length, 0);
+  assert.equal(store.listProviders().length, 0);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getGlobalSettings().overrides, before);
+  assert.equal(reopened.listModels().length, 0);
+  assert.equal(reopened.listProviders().length, 0);
+});
+
 test("provider models materialize exact Kimi, Responses, and Anthropic capabilities", async (context) => {
   installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-capabilities-${Date.now()}-${process.pid}`);
