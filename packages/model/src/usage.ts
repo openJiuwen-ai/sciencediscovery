@@ -46,14 +46,17 @@ export function normalizeUsage(raw: unknown, protocol?: ModelApiProtocol): Norma
     // with total. Never "repair" a reported count by subtracting from total.
     const matches = (a: number | undefined, b: number | undefined) =>
       a !== undefined && b !== undefined && totalTokens !== undefined && a + b === totalTokens;
-    if (!matches(input, output) && matches(prompt, completion)) {
-      inputTokens = prompt;
-      outputTokens = completion;
+    if (!matches(input, output)) {
+      if (matches(prompt, completion)) {
+        inputTokens = prompt;
+        outputTokens = completion;
+      } else {
+        // Only use the zero-fill heuristic when neither complete pair matches
+        // total. A matching pair's explicit zeros must remain authoritative.
+        if (inputTokens === 0) inputTokens = input || prompt || 0;
+        if (outputTokens === 0) outputTokens = output || completion || 0;
+      }
     }
-    // Zero-filled compatibility fields are common. Only unknown dialects
-    // use this heuristic: a known dialect's explicit zero is authoritative.
-    if (inputTokens === 0) inputTokens = input || prompt || 0;
-    if (outputTokens === 0) outputTokens = output || completion || 0;
   }
 
   let cacheReadTokens = count(raw, ["cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens"]);

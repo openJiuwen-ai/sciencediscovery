@@ -35,13 +35,33 @@ test("unknown protocol resolves positive aliases by a complete pair matching tot
   }
 });
 
+for (const { name, raw, expected } of [
+  { name: "Chat output zero", raw: { prompt_tokens: 10, completion_tokens: 0, input_tokens: 20, output_tokens: 9, total_tokens: 10 }, expected: [10, 0, 10] },
+  { name: "input/output output zero", raw: { prompt_tokens: 10, completion_tokens: 7, input_tokens: 20, output_tokens: 0, total_tokens: 20 }, expected: [20, 0, 20] },
+  { name: "Chat input zero", raw: { prompt_tokens: 0, completion_tokens: 7, input_tokens: 20, output_tokens: 9, total_tokens: 7 }, expected: [0, 7, 7] },
+  { name: "input/output input zero", raw: { prompt_tokens: 10, completion_tokens: 7, input_tokens: 0, output_tokens: 9, total_tokens: 9 }, expected: [0, 9, 9] },
+  { name: "Chat zero total", raw: { prompt_tokens: 0, completion_tokens: 0, input_tokens: 20, output_tokens: 9, total_tokens: 0 }, expected: [0, 0, 0] },
+  { name: "input/output zero total", raw: { prompt_tokens: 10, completion_tokens: 7, input_tokens: 0, output_tokens: 0, total_tokens: 0 }, expected: [0, 0, 0] },
+  { name: "input/output wins when both pairs match", raw: { prompt_tokens: 10, completion_tokens: 0, input_tokens: 0, output_tokens: 10, total_tokens: 10 }, expected: [0, 10, 10] },
+]) {
+  test(`unknown protocol preserves a total-matched pair: ${name}`, () => {
+    const { total_tokens, ...aliases } = raw;
+    const usage = normalizeUsage(raw);
+    assert.deepEqual([usage?.inputTokens, usage?.outputTokens, usage?.totalTokens], expected);
+    assert.deepEqual(usage?.aliasConflict, aliases);
+  });
+}
+
 test("unknown protocol does not let zero hide a positive alias in either direction", () => {
   for (const raw of [
-    { prompt_tokens: 100, completion_tokens: 7, input_tokens: 0, output_tokens: 0, total_tokens: 107 },
-    { prompt_tokens: 0, completion_tokens: 0, input_tokens: 100, output_tokens: 7, total_tokens: 107 },
+    { prompt_tokens: 100, completion_tokens: 7, input_tokens: 0, output_tokens: 0 },
+    { prompt_tokens: 0, completion_tokens: 0, input_tokens: 100, output_tokens: 7 },
   ]) {
-    const usage = normalizeUsage(raw);
-    assert.deepEqual([usage?.inputTokens, usage?.outputTokens], [100, 7]);
+    for (const total_tokens of [107, 999, undefined]) {
+      const usage = normalizeUsage({ ...raw, total_tokens });
+      assert.deepEqual([usage?.inputTokens, usage?.outputTokens, usage?.totalTokens], [100, 7, total_tokens ?? 107]);
+      assert.deepEqual(usage?.aliasConflict, raw);
+    }
   }
 });
 
