@@ -191,6 +191,25 @@ test("a provider that reports no usage is recorded as unknown, not as zero", asy
   assert.equal(recorded[0]?.totalTokens, null);
 });
 
+test("evolution persists Chat counts and cache details without adding aliases or reasoning", async () => {
+  const tokens = new RunTokenRegistry();
+  const { recorded, store } = fakeStore();
+  const samples = [
+    { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 0, output_tokens: 0, total_tokens: 30477, completion_tokens_details: { reasoning_tokens: 80 }, prompt_tokens_details: { cached_tokens: 12 } },
+    { input_tokens: 8, output_tokens: 5 },
+  ];
+  const { origin } = await mount({
+    fetchImpl: (async () => new Response(JSON.stringify({ choices: [], usage: samples.shift() }), { status: 200 })) as never,
+    store, tokens,
+  });
+  const token = tokens.issue("run-1", "s1", "model-1");
+  await completion(origin, "run-1", token);
+  await completion(origin, "run-1", token);
+  assert.deepEqual(recorded.map((usage) => [usage.inputTokens, usage.outputTokens, usage.totalTokens]), [[30393, 84, 30477], [8, 5, 13]]);
+  assert.equal(recorded[0]?.cacheReadTokens, 12);
+  assert.equal(recorded[1]?.usageStatus, "reported");
+});
+
 test("the provider's own error is forwarded rather than flattened", async () => {
   const tokens = new RunTokenRegistry();
   const { recorded, store } = fakeStore();

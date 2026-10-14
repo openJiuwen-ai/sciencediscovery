@@ -766,6 +766,32 @@ test("usage normalization tolerates provider spellings", () => {
   assert.equal(normalizeUsage(null), undefined);
 });
 
+for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
+  test(`${protocol} counts the last cumulative usage once using its own fields`, async () => {
+    const usage = { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 8, output_tokens: 5, total_tokens: protocol === "openai-chat-completions" ? 30477 : 13 };
+    const frames = protocol === "openai-chat-completions" ? [
+      { choices: [], usage: { prompt_tokens: 30393, completion_tokens: 2, input_tokens: 0, output_tokens: 0, total_tokens: 30395 } },
+      { choices: [], usage }, { choices: [], usage },
+    ] : protocol === "openai-responses" ? [
+      { type: "response.completed", response: { usage } },
+      { type: "response.completed", response: { usage } },
+    ] : [
+      { type: "message_start", message: { usage } },
+      { type: "message_delta", usage: { output_tokens: 2, completion_tokens: 84 } },
+      { type: "message_delta", usage }, { type: "message_delta", usage },
+    ];
+    await withServer(async (request, response) => {
+      await readBody(request);
+      sse(response, frames);
+    }, async (baseUrl) => {
+      const turn = await streamModelTurn({ apiProtocol: protocol, baseUrl, model: "stub" }, "s", [], [], policy, new AbortController().signal);
+      assert.equal(turn.usage?.inputTokens, protocol === "openai-chat-completions" ? 30393 : 8);
+      assert.equal(turn.usage?.outputTokens, protocol === "openai-chat-completions" ? 84 : 5);
+      assert.equal(turn.usage?.totalTokens, protocol === "openai-chat-completions" ? 30477 : 13);
+    });
+  });
+}
+
 test("model client policy env parsing validates values", () => {
   assert.equal(resolveModelClientPolicy({}).requestTimeoutMs, 600_000);
   assert.equal(resolveModelClientPolicy({ SCIENCE_AGENT_LLM_TIMEOUT_SECONDS: "30" }).requestTimeoutMs, 30_000);

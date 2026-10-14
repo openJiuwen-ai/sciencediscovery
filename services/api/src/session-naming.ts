@@ -136,7 +136,7 @@ function aggregateProviderUsage(attempts: ProviderUsageBreakdown[]): ProviderUsa
       usageStatus: "provider-not-reported",
     };
   }
-  const sum = (field: keyof Omit<ProviderUsageBreakdown, "usageStatus">): number | null => {
+  const sum = (field: keyof Omit<ProviderUsageBreakdown, "usageStatus" | "aliasConflict">): number | null => {
     const values = attempts.map((usage) => usage[field]);
     return values.every((value): value is number => value !== null)
       ? values.reduce((total, value) => total + value, 0)
@@ -201,7 +201,7 @@ export async function generateRefinedSessionTitle(options: {
   }
   if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
   let body = await response.json() as ChatCompletionBody;
-  const attemptUsages = [parseProviderUsage(body.usage)];
+  const attemptUsages = [parseProviderUsage(body.usage, "openai-chat-completions")];
   // Some compatible gateways accept unknown fields but silently ignore them.
   // If all limited output was still reasoning, retry once without a provider
   // limit and use only the visible content from that response.
@@ -210,7 +210,7 @@ export async function generateRefinedSessionTitle(options: {
     usedUnboundedFallback = true;
     if (!response.ok) throw new Error(`Session naming model failed with HTTP ${response.status}`);
     body = await response.json() as ChatCompletionBody;
-    attemptUsages.push(parseProviderUsage(body.usage));
+    attemptUsages.push(parseProviderUsage(body.usage, "openai-chat-completions"));
   }
 
   const choice = body.choices?.[0];
