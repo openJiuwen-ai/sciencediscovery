@@ -46,20 +46,29 @@ const server = createServer(async (incoming, outgoing) => {
     return;
   }
   const upstream = httpRequest(destination, {
+    // Each tool call can outlive the adapter's keep-alive window. Do not use
+    // Node's shared idle-socket pool: a peer closing a pooled socket can race
+    // the next parallel task and turn an undispatched call into HTTP 502.
+    // Never replay a tool POST, whose execution outcome may be unknown.
+    agent: false,
     method: incoming.method, headers: { ...incoming.headers, host: target.host },
   }, response => {
     outgoing.writeHead(response.statusCode ?? 502, response.headers);
     response.pipe(outgoing);
     response.on("error", () => outgoing.destroy());
   });
-  upstream.on("error", () => {
+  upstream.on("error", error => {
+    console.error("MCP fault fixture forwarding failed", {
+      method: incoming.method, path: destination.pathname, code: error.code,
+      reusedSocket: upstream.reusedSocket,
+    });
     if (!outgoing.headersSent) outgoing.writeHead(502);
     outgoing.end();
   });
   outgoing.on("close", () => { if (!outgoing.writableEnded) upstream.destroy(); });
   upstream.end(body);
 });
-server.listen(port, "127.0.0.1", () => console.log(`MCP fault fixture listening on 127.0.0.1:${port}`));
+server.listen(port, "127.0.0.1", () => console.log(`MCP fault fixture listening on 127.0.0.1:${server.address().port}`));
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => {
   server.close();
   server.closeAllConnections();

@@ -84,13 +84,12 @@ scripts/jiuwenswarm.sh setup
 
 ### 启动成功后
 
-在三个系统上，启动成功后终端或 Docker 日志会显示 `Open to sign in` 链接。
-用浏览器打开它即可进入 ScienceDiscovery。
+启动成功后，直接打开 <http://127.0.0.1:4310>。出现连接引导时，粘贴 `.sciencediscovery-data/secrets/auth-token`（Docker 宿主机为 `./data/secrets/auth-token`）中的本地服务访问令牌，或使用自定义数据目录 / `SCIENCE_AGENT_AUTH_TOKEN` 配置值，并保存。终端打印的 `Open to sign in` 链接只是快捷方式，无需查找启动日志。
 
 使用预编译版或源码模式时，不要关掉启动终端；关闭它或按 Ctrl-C 会停止服务。
 Docker 服务在后台运行。
 
-如果没有看到登录链接、浏览器无法进入界面，或启动过程报错，
+如果服务未能启动、浏览器无法进入界面，或启动过程报错，
 请按部署方式查看[二进制与源码模式排障](deployment.md#二进制与本地模式的首次启动排障)
 或 [Docker 常见问题](deployment.md#docker-常见问题)。
 
