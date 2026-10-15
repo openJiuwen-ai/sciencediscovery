@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The scheduled build of the default branch. It runs the merge gate — the same
-# layers, from the same ci.yml — and keeps the packaged binaries it produces,
-# stamped with the date and commit so a build can be traced back to what went
-# into it.
+# The scheduled build of the default branch. It keeps the packaged binaries it
+# produces, stamped with the date and commit so a build can be traced back to
+# what went into it. Any other branch runs this workflow only when it is
+# dispatched by hand at that ref.
 #
 # Daily adds real-model E2E to the hermetic merge gate. The reusable workflow
 # owns both jobs; the daily profile selects paid journeys from source tags.

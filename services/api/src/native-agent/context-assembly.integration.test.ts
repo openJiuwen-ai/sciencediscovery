@@ -148,7 +148,10 @@ test("real Node NativeAgent context contract covers modes, scopes, dynamic updat
   const previousPromptBudget = process.env.SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS;
   process.env.SCIENCE_AGENT_CONTEXT_TRACE = "1";
   process.env.SCIENCE_AGENT_CONTEXT_TRACE_DIR = traceRoot;
-  process.env.SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS = "5000";
+  // Exercise the complete context contract with the product's default budget.
+  // Budget rejection/truncation is covered by the context package's budget tests;
+  // a tiny fixed ceiling here breaks when required safety instructions grow.
+  delete process.env.SCIENCE_AGENT_CONTEXT_PROMPT_BUDGET_CHARS;
   try {
     const mainInput: StructuredExample = {
       constraints: ["Use selected literature skill", "Do not execute ungoverned tools"],

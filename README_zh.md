@@ -67,37 +67,15 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 | **复杂任务拆解** | 任务规划与多智能体协同将任务分发给子智能体和跨领域 Skill 库 | [子智能体编排](https://sciencediscovery.github.io/zh/docs/developer-docs/subagent-orchestration.html) · [Skill](https://sciencediscovery.github.io/zh/docs/developer-docs/skill-progressive-disclosure.html) |
 | **全链路溯源** | 代码、环境、日志与引用证据按产物记录；开启记忆图谱后整条链路可点击追溯 | [审阅与溯源](https://sciencediscovery.github.io/zh/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/zh/docs/advanced-setup/science-memory-setup.html) |
 
-## 命令行
-
-已启动的 `serve` 同样可以从终端驱动：
-
-```bash
-./ScienceDiscovery run "总结这些结果" > answer.md
-cat prompt.txt | ./ScienceDiscovery run --stdin --auto-approve | jq .
-```
-
-`run` 连接与浏览器相同的控制面，并从数据目录读取访问令牌，因此只要与 `serve` 共用 `--data-dir` 即无需额外配置。在终端中直接运行时，答案输出到 stdout、进度输出到 stderr；在管道中则输出 JSONL，且非交互运行必须显式传入 `--auto-approve`，因为此时无法响应权限询问。完整选项参见 `./ScienceDiscovery run --help`。
-
 ## 环境要求
 
 | 路径 | 运行环境要求 |
 |---|---|
-| **预打包二进制** | Linux x86_64/aarch64、Bubblewrap |
-| **本地源码模式** | Linux x86_64/aarch64 或 macOS x64/arm64；Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、Git；Linux 用 Bubblewrap，macOS 用系统内置 Seatbelt |
-| **Docker** | Linux x86_64/aarch64、Docker Engine 24+、Compose v2、可用的无特权用户命名空间 |
+| **预打包二进制** | Linux x86_64/aarch64（Windows x64 可通过 WSL 2 运行）、Bubblewrap |
+| **本地源码模式** | Linux（含 WSL 2）或 macOS；Node.js 22.19+、pnpm 11.1.2、Python 3、uv 0.9+、Git |
+| **Docker** | Linux、macOS 或 Windows 上的 Linux 容器；容器内需支持 Bubblewrap 和非特权用户命名空间 |
 
 托管科学环境基于固定版本的 micromamba 运行，无需在系统中安装 Python、R 或 conda。
-
-## 架构概览
-
-ScienceDiscovery 基于 [JiuwenSwarm](https://gitcode.com/openJiuwen/jiuwenswarm) 构建。所有部署
-方式中，浏览器 UI 都通过对外适配器访问服务，适配器将 Node 控制 API 反向代理在其后。JiuwenSwarm
-负责模型循环，并通过回调进入 API 执行 ScienceDiscovery 工具调用；工作区工具、沙箱执行、科研
-连接器、PDF 抽取、权限、溯源与审阅校验仍由 Node 控制面统一管控。[部署指南](https://sciencediscovery.github.io/zh/docs/getting-started/deployment.html)
-说明各部署方式的具体拓扑。
-
-> [!WARNING]
-> ScienceDiscovery 不是多用户生产服务。适配器与 API 默认只监听回环；访问使用一个 bearer token，且不终止 TLS。监听其他网卡必须是可信、受保护网络中的显式部署选择。Python、R 和 shell 命令在 fail-closed 的平台沙箱中运行（Linux 使用 Bubblewrap，macOS 源码模式使用 Seatbelt）；控制 API、适配器、JiuwenSwarm、PDF worker 以及发往已配置模型/数据提供方的请求在沙箱外作为受信任控制面操作执行。
 
 ## 文档
 
@@ -112,9 +90,13 @@ ScienceDiscovery 基于 [JiuwenSwarm](https://gitcode.com/openJiuwen/jiuwenswarm
 
 ## 加入社区
 
-欢迎加入 ScienceDiscovery 微信交流群，与社区交流使用体验。
+欢迎加入 ScienceDiscovery 社区，在 Slack 或飞书交流使用体验、分享想法。
 
-<img src="docs/images/wechat.jpg" alt="ScienceDiscovery 微信交流群二维码" width="320">
+| [Slack][slack-invite] | 飞书 |
+| :---: | :---: |
+| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack 社区邀请二维码" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery 飞书交流群二维码" width="200"> |
+
+[slack-invite]: https://join.slack.com/t/sciencediscovery-hq/shared_invite/zt-4avv6fbom-uLrBalsUBR45N9sC2mGO~A
 
 ## 许可证
 

@@ -477,6 +477,7 @@ export type RunStreamEvent = { evidence?: AgentEventEvidence } & (
  * the user still sees what the provider actually said.
  */
 export type RunFailureCode =
+  | "invalid-tool-call"
   | "rate-limited"
   | "semantic-error"
   | "server-error"

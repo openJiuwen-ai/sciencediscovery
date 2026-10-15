@@ -88,6 +88,14 @@ export function ModelConnectWizard({
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customName, setCustomName] = useState("");
   const [customModelId, setCustomModelId] = useState("");
+  const autoCustomRef = useRef(false);
+  // Automatic custom mode may yield to a preset only until the user edits a
+  // configuration field. Whether those fields are currently empty is the wrong
+  // signal: clearing one to retype it, or filling only the API key, is an edit.
+  const userConfiguredRef = useRef(false);
+  function noteUserConfigured() {
+    userConfiguredRef.current = true;
+  }
   // 「高级配置」在卡片内展开精细字段，永不收起向导本身。
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const footerRef = useRef<HTMLDivElement>(null);
@@ -172,6 +180,24 @@ export function ModelConnectWizard({
       setApiVariant(preset?.apiVariant ?? DEFAULT_MODEL_API_VARIANT[CUSTOM_PROTOCOL]);
     }
   }
+
+  // A preset that is no longer offered (the list arrived late, changed, or is
+  // empty) would leave the select showing one option while the card acts on
+  // another, and re-picking the shown option fires no change event. Custom
+  // mode entered only for lack of presets yields to the first preset once
+  // one arrives, unless the user has edited a configuration field.
+  useEffect(() => {
+    if (isCustom) {
+      if (autoCustomRef.current && presets[0] && !userConfiguredRef.current) {
+        autoCustomRef.current = false;
+        handleProviderChange(presets[0].id);
+      }
+      return;
+    }
+    if (presets.some((preset) => preset.id === selectedPresetId)) return;
+    autoCustomRef.current = !presets[0];
+    handleProviderChange(presets[0]?.id ?? "custom");
+  }, [isCustom, presets, selectedPresetId]);
 
   function handleProtocolChange(value: string) {
     const nextProtocol = value as ModelApiProtocol;
@@ -483,7 +509,10 @@ export function ModelConnectWizard({
             <select
               disabled={busy}
               id="wizard-provider-select"
-              onChange={(e) => handleProviderChange(e.target.value)}
+              onChange={(e) => {
+                autoCustomRef.current = false;
+                handleProviderChange(e.target.value);
+              }}
               value={isCustom ? "custom" : selectedPresetId}
             >
               {presets.map((preset) => (
@@ -503,6 +532,7 @@ export function ModelConnectWizard({
               disabled={busy}
               id="wizard-api-key"
               onChange={(e) => {
+                noteUserConfigured();
                 setApiKey(e.target.value);
                 setValidationError(undefined);
               }}
@@ -535,7 +565,10 @@ export function ModelConnectWizard({
               <input
                 disabled={busy}
                 id="wizard-custom-name"
-                onChange={(e) => setCustomName(e.target.value)}
+                onChange={(e) => {
+                  noteUserConfigured();
+                  setCustomName(e.target.value);
+                }}
                 placeholder={t("wizard.customNamePlaceholder")}
                 type="text"
                 value={customName}
@@ -546,7 +579,10 @@ export function ModelConnectWizard({
               <input
                 disabled={busy}
                 id="wizard-custom-url"
-                onChange={(e) => setCustomBaseUrl(e.target.value)}
+                onChange={(e) => {
+                  noteUserConfigured();
+                  setCustomBaseUrl(e.target.value);
+                }}
                 placeholder={t("wizard.customBaseUrlPlaceholder")}
                 type="url"
                 value={customBaseUrl}
@@ -557,7 +593,10 @@ export function ModelConnectWizard({
               <input
                 disabled={busy}
                 id="wizard-custom-model"
-                onChange={(e) => setCustomModelId(e.target.value)}
+                onChange={(e) => {
+                  noteUserConfigured();
+                  setCustomModelId(e.target.value);
+                }}
                 placeholder={t("wizard.customModelPlaceholder")}
                 type="text"
                 value={customModelId}
@@ -631,7 +670,10 @@ export function ModelConnectWizard({
                       <input
                         disabled={busy}
                         id="wizard-preset-name"
-                        onChange={(e) => setPresetNameOverride(e.target.value)}
+                        onChange={(e) => {
+                          noteUserConfigured();
+                          setPresetNameOverride(e.target.value);
+                        }}
                         placeholder={selectedPreset.name}
                         type="text"
                         value={presetNameOverride}
@@ -642,7 +684,10 @@ export function ModelConnectWizard({
                       <input
                         disabled={busy}
                         id="wizard-base-url-override"
-                        onChange={(e) => setBaseUrlOverride(e.target.value)}
+                        onChange={(e) => {
+                          noteUserConfigured();
+                          setBaseUrlOverride(e.target.value);
+                        }}
                         placeholder={selectedPreset.baseUrl}
                         type="url"
                         value={baseUrlOverride}
@@ -655,7 +700,10 @@ export function ModelConnectWizard({
                   <select
                     disabled={busy}
                     id="wizard-api-protocol"
-                    onChange={(e) => handleProtocolChange(e.target.value)}
+                    onChange={(e) => {
+                      noteUserConfigured();
+                      handleProtocolChange(e.target.value);
+                    }}
                     value={apiProtocol}
                   >
                     <option value="openai-chat-completions">{t("settings.apiProtocol.chatCompletions")}</option>
@@ -668,7 +716,10 @@ export function ModelConnectWizard({
                   <select
                     disabled={busy}
                     id="wizard-api-variant"
-                    onChange={(e) => setApiVariant(e.target.value as ModelApiVariant)}
+                    onChange={(e) => {
+                      noteUserConfigured();
+                      setApiVariant(e.target.value as ModelApiVariant);
+                    }}
                     value={apiVariant}
                   >
                     {MODEL_API_VARIANTS[apiProtocol].map((variant) => (
@@ -682,7 +733,10 @@ export function ModelConnectWizard({
                     <ProxyPolicySelect
                       disabled={busy}
                       id="wizard-proxy-policy"
-                      onChange={setProxyPolicy}
+                      onChange={(policy) => {
+                        noteUserConfigured();
+                        setProxyPolicy(policy);
+                      }}
                       settings={proxySettings}
                       value={proxyPolicy}
                     />
@@ -733,7 +787,10 @@ export function ModelConnectWizard({
                 <ManualModelFields
                   busy={busy}
                   form={manualForm}
-                  onChange={setManualForm}
+                  onChange={(form) => {
+                    noteUserConfigured();
+                    setManualForm(form);
+                  }}
                   onSubmit={addManualEntry}
                   presetId={selectedPreset?.id}
                   submitLabel={t("wizard.models.enqueue")}

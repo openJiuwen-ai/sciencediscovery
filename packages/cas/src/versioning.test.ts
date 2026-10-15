@@ -121,6 +121,39 @@ test("refs validate closure, rollback injected faults and retain every committed
     await rm(store.objectPath(leaf));
     await assert.rejects(refs.commit(store, "agent/broken", null, second));
     assert.equal(refs.head("agent/broken"), null);
+    assert.deepEqual(await store.put("data", "file"), leaf);
+    await writeFile(store.objectPath(leaf), "evil");
+    await assert.rejects(refs.commit(store, "agent/corrupt", null, second), /integrity/);
+    assert.equal(refs.head("agent/corrupt"), null);
+  } finally { refs.close(); }
+}));
+
+test("commit reuses verified unchanged objects while full audits still reread them", async () => fixture(async (store) => {
+  const leaf = await store.put("data", "file");
+  const root = await store.putRecord("Root", { leaf });
+  const refs = await RefStore.open(store);
+  try {
+    await refs.commit(store, "agent/first", null, root);
+    store.readRecord = async () => { throw new Error("unexpected record reread"); };
+    store.verifyRef = async () => { throw new Error("unexpected blob rehash"); };
+    await refs.commit(store, "agent/second", null, root);
+    assert.deepEqual(refs.head("agent/second"), root);
+    await assert.rejects(store.validateClosure(root), /unexpected record reread/);
+  } finally { refs.close(); }
+}));
+
+test("commit rejects an object changed during its first verification", async () => fixture(async (store) => {
+  const leaf = await store.put("data", "file");
+  const root = await store.putRecord("Root", { leaf });
+  const refs = await RefStore.open(store);
+  const verify = store.verifyRef.bind(store);
+  store.verifyRef = async (ref) => {
+    await verify(ref);
+    if (ref.pool === leaf.pool && ref.digest === leaf.digest) await writeFile(store.objectPath(leaf), "evil");
+  };
+  try {
+    await assert.rejects(refs.commit(store, "agent/race", null, root), /changed during validation/);
+    assert.equal(refs.head("agent/race"), null);
   } finally { refs.close(); }
 }));
 

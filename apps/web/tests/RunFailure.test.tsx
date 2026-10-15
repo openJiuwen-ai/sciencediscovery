@@ -42,7 +42,7 @@ test("the Chinese locale renders the plain cause in Chinese", () => {
 });
 
 test("every stable failure class has a zh-CN message", () => {
-  for (const code of ["rate-limited", "semantic-error", "server-error", "timeout", "transport-error", "unauthorized"] as const) {
+  for (const code of ["invalid-tool-call", "rate-limited", "semantic-error", "server-error", "timeout", "transport-error", "unauthorized"] as const) {
     const key = `runFailure.${code}` as const;
     assert.ok(zhCN[key], `${key} needs a zh-CN message`);
   }

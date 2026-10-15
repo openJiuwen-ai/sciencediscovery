@@ -1,0 +1,25 @@
+/* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+ * Licensed under the Apache License, Version 2.0 (the "License").
+ */
+.runner-readiness-card {
+  margin: 12px 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m, 12px);
+  background: var(--surface);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.runner-readiness-card strong { display: block; color: var(--text-heading); }
+.runner-readiness-card p { margin: 10px 0; line-height: 1.5; }
+.runner-readiness-card small { display: block; color: var(--text-secondary); margin-bottom: 8px; }
+.runner-readiness-card button {
+  margin: 6px 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s, 6px);
+  background: var(--surface-subtle);
+  cursor: pointer;
+}
+.runner-readiness-card button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--accent); }
+.runner-readiness-card button:disabled { opacity: .6; cursor: not-allowed; }

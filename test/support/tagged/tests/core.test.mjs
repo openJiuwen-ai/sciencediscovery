@@ -40,8 +40,8 @@ test('a group with a default is materialised on the identity, never on inheritan
   const declared = ['category:ut', 'os:linux', 'arch:amd64'];
   const complete = normalizeTags(declared);
   // The plan still carries a concrete value for every group.
-  assert.deepEqual(complete, ['arch:amd64', 'category:ut', 'fixture:standard', 'judge:none', 'model:none',
-    'npu:none', 'os:linux', 'sandbox:none', 'status:reviewed']);
+  assert.deepEqual(complete, ['arch:amd64', 'category:ut', 'fixture:standard', 'isolation:none', 'judge:none', 'model:none',
+    'npu:none', 'os:linux', 'sandbox:none', 'status:reviewed', 'tier:l2']);
   // An explicit value wins over the default, and only that group changes.
   assert.ok(normalizeTags([...declared, 'status:external']).includes('status:external'));
   assert.ok(!normalizeTags([...declared, 'status:external']).includes('status:reviewed'));

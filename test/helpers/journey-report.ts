@@ -37,6 +37,8 @@ import { fileURLToPath } from "node:url";
 
 import { test as playwrightTest, type Page, type TestInfo } from "@playwright/test";
 
+import { failureHeadline, plainText } from "./test-failure.ts";
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** Values that must never reach a published report, whatever produced them. */
@@ -138,6 +140,10 @@ export function redact(text: string): string {
 
 function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n… (truncated)`;
+}
+
+function errorSummary(raw: string): string {
+  return truncate(redact(plainText(raw)), MAX_ERROR_CHARS);
 }
 
 /** Readable, filesystem-safe, and still recognizable for CJK step titles. */
@@ -252,7 +258,7 @@ class Reporter implements JourneyReporter {
     } catch (caught) {
       status = "failed";
       const raw = caught instanceof Error ? (caught.stack ?? caught.message) : String(caught);
-      error = truncate(redact(raw), MAX_ERROR_CHARS);
+      error = errorSummary(raw);
       throw caught;
     } finally {
       const screenshot = await this.capture(index, title, status);
@@ -306,6 +312,10 @@ class Reporter implements JourneyReporter {
       const detail = error instanceof Error ? error.message : String(error);
       process.stderr.write(`journey report could not be written: ${redact(detail)}\n`);
     }
+    // The list reporter prints failure details only when the whole run ends,
+    // so a run cancelled or killed before then would log just a ✘ line.
+    const message = outcome === "FAIL" ? this.testInfo.errors.find((error) => error.message)?.message : undefined;
+    if (message) for (const line of failureHeadline(redact(plainText(message)))) process.stdout.write(`  ${line}\n`);
   }
 
   private attachPageListeners(): void {
@@ -372,6 +382,20 @@ class Reporter implements JourneyReporter {
     return line?.trim();
   }
 
+  /**
+   * The test's own error when no step recorded one. Specs that assert in
+   * their body rather than in `journey.step()` (the benchmark journeys do)
+   * would otherwise leave a FAIL report that does not say what failed.
+   */
+  private failure(outcome: JourneyOutcome): string | undefined {
+    if (outcome !== "FAIL" || this.steps.some((step) => step.error)) return undefined;
+    const raw = this.testInfo.errors
+      .map((error) => error.stack ?? error.message ?? error.value ?? "")
+      .filter(Boolean)
+      .join("\n\n");
+    return raw ? errorSummary(raw) : undefined;
+  }
+
   private goal(): string {
     return this.scenarioInfo?.goal ?? this.meta.purpose ?? "(未声明场景目标)";
   }
@@ -432,6 +456,8 @@ class Reporter implements JourneyReporter {
 
     const reason = outcome === "BLOCKED" ? this.blockedReason() : undefined;
     if (reason) lines.push("## 门禁原因", "", `> ${reason}`, "");
+    const failure = this.failure(outcome);
+    if (failure) lines.push("## 失败原因", "", "```text", failure, "```", "");
 
     lines.push("## 步骤总览", "");
     if (this.steps.length) {
@@ -495,6 +521,7 @@ class Reporter implements JourneyReporter {
       .map((item) => `<li>${escapeHtml(item)}</li>`)
       .join("\n");
     const reason = outcome === "BLOCKED" ? this.blockedReason() : undefined;
+    const failure = this.failure(outcome);
 
     const overview = this.steps.length
       ? `<table class="steps">
@@ -589,6 +616,7 @@ blockquote { margin: 8px 0; padding: 8px 14px; background: #fff4e0; border-left:
 <p>${escapeHtml(this.goal())}</p>
 ${preconditions ? `<h2>前置条件</h2><ul>${preconditions}</ul>` : ""}
 ${reason ? `<h2>门禁原因</h2><blockquote>${escapeHtml(reason)}</blockquote>` : ""}
+${failure ? `<h2>失败原因</h2><pre class="error">${escapeHtml(failure)}</pre>` : ""}
 <h2>步骤总览</h2>
 ${overview}
 ${this.steps.length ? `<h2>步骤详情</h2>${details}` : ""}

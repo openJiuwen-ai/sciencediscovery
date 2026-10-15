@@ -78,7 +78,7 @@ Each cell shows the correlation between two features. In this example, red means
 
 ### Hierarchical clustering dendrogram
 
-The dendrogram shows how features are progressively merged. Lower merges indicate greater similarity under the chosen distance. This example's title records average linkage and `d = 1 - r`; your own report should record these choices too.
+The dendrogram shows how features are progressively merged. Lower merges indicate greater similarity under the chosen distance. This example uses average linkage and `d = 1 - r`. The dashed line at distance 0.8 intersects four branches, so it gives four clusters (`k = 4`), not two. Your own report should record the distance, linkage method, and cut height used.
 
 ![Case-provided hierarchical clustering dendrogram of immune features](../../images/agent-team/dendrogram.png)
 

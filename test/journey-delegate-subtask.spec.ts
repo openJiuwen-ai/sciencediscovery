@@ -27,7 +27,7 @@ import {
 } from "./helpers/journeys.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
-test.describe("journey-delegate-subtask.spec", { tag: ["@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
+test.describe("journey-delegate-subtask.spec", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
 
 /**
  * E2E-META
@@ -143,7 +143,10 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         const card = subagentSection.locator("details.process-agent-record").first();
         await expect(card).toHaveClass(/process-agent-record.*completed/);
         await expect(subagentSection.locator(".subagent-list-heading")).toHaveCount(0);
-        expect(await card.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("0px");
+        // toHaveCSS retries: the run has just turned terminal, and the swap
+        // from the live timeline to the replay one can still replace this
+        // card, so a one-shot evaluate can catch a detached or mid-swap frame.
+        await expect(card).toHaveCSS("border-top-width", "0px");
         await expect(card.locator(":scope > summary svg")).toHaveCount(0);
         await expect(card).not.toHaveAttribute("open", "");
         await expect(card.locator(":scope > summary")).toHaveCSS("min-height", "28px");

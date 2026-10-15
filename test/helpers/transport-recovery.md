@@ -10,11 +10,13 @@
   are process-local: this does not provide restart recovery or end-to-end Swarm
   execution acknowledgements. An uncertain WebSocket send is never blindly replayed.
 - E2E terminal-state polling tolerates three consecutive transient read failures
-  (502/503/504 and selected connection errors). A successful read resets this
+  (502/503/504, selected connection errors, and Playwright read-request
+  timeouts). A successful read resets this
   allowance; the original overall polling timeout still applies. Writes are not
   retried. Authentication, missing-resource and parsing errors still fail promptly.
 - Recovery is observable via `approval transport retry` and `[run-poll]` logs.
   Retrying does not imply bypassing approval or marking an unfinished run complete.
 
 Focused tests: `jiuwenswarm-agent.test.ts` (approval cases), adapter
-`test_agent_runs.py` (approval cases), and `run-poll-recovery.unit.ts`.
+`test_agent_runs.py` (approval cases), `run-poll-recovery.unit.ts` (read-error
+classification), and `journey-deliver-result.spec.ts` (Playwright polling retry).

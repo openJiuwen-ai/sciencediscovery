@@ -141,7 +141,7 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
    * Credentials: E2E_LLM_BASE_URL, E2E_LLM_MODEL, E2E_LLM_TOKEN; seeded model key.
    * CostSideEffects: Billable tokens, PubMed traffic, local projects/sessions, screenshots.
  */
-  test("Linux Web工作台、模型配置与简单文献调研主路径", { tag: ["@real", "@model:real"] }, async ({ page }, testInfo) => {
+  test("Linux Web工作台、模型配置与简单文献调研主路径", { tag: ["@real", "@model:real", "@status:quarantined", "@tier:l5"] }, async ({ page }, testInfo) => {
     // The product allows progress-producing literature turns up to 600 s.
     // Keep the browser alive long enough to assert success or its explicit
     // product error instead of racing the application timeout.
@@ -284,7 +284,7 @@ test.describe("Wave0+1 Linux Web literature review E2E", () => {
    * Credentials: E2E_API_TOKEN for the isolated local API only.
    * CostSideEffects: No external cost; the journey's Project and model are removed in finally.
    */
-  test("Connector 未启用时的失败反馈", { tag: ["@mocked", "@model:mock"] }, async ({ journey, page }) => {
+  test("Connector 未启用时的失败反馈", { tag: ["@mocked", "@model:mock", "@isolation:global"] }, async ({ journey, page }) => {
     test.setTimeout(180_000);
     await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
     const stub = await scriptedModel([

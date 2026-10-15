@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { RemoteHostTarget } from "@sciencediscovery/schema";
 import type { ApiClient, RunnerWorkspaceBinding } from "./api/client.js";
 import { EnvironmentManager } from "./EnvironmentManager.js";
+import { RunnerReadinessPanel } from "./ExecutionReadiness.js";
 import { useLocale } from "./i18n/index.js";
 
 export function RunnerEnvironmentSettings({ client, onError, runnerId, runner, machine }: {
@@ -17,6 +18,7 @@ export function RunnerEnvironmentSettings({ client, onError, runnerId, runner, m
   const runnerName = runnerId === "local" ? t("remote.localRunner") : runner?.runnerName ?? runner?.alias ?? runnerId;
   const tabs = ["machine", "workspaces", "environments"] as const;
   return <div className="runner-environment-settings">
+    <RunnerReadinessPanel key={runnerId} client={client} runnerId={runnerId} />
     <div className="settings-detail-header"><span className="eyebrow">Runner</span><h3>{runnerName}</h3><p>{t("settings.runner.help")}</p></div>
     <div className="runner-management-tabs" role="tablist" aria-label={t("settings.runner.sections")}>
       {tabs.map((item) => <button key={item} id={`runner-tab-${item}`} type="button" role="tab" aria-selected={tab === item} aria-controls={`runner-panel-${item}`} tabIndex={tab === item ? 0 : -1}

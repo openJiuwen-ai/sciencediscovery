@@ -6,9 +6,12 @@ If this is your first time using ScienceDiscovery, start with the [Quick Start](
 
 | Mode | Supported platforms | Best for | Recommendation |
 | --- | --- | --- | --- |
-| Prepackaged single file | Linux x86_64 / aarch64 | Users who want the shortest startup path | **Recommended** |
-| Local source mode | Linux x86_64 / aarch64, macOS x64 / arm64 | macOS users, development, source changes | Recommended |
-| Docker | Linux x86_64 / aarch64 | Existing container environments and operational isolation | As needed |
+| Prepackaged single file | glibc-based Linux x86_64 / aarch64, Windows x64 (WSL 2 with a glibc-based distribution, experimental) | Users who want the shortest startup path | **Recommended on native Linux** |
+| Local source mode | Linux x86_64 / aarch64, macOS 13+ x64 / arm64, Windows x64 (WSL 2, experimental) | macOS users, development, source changes | Recommended on macOS |
+| Docker | Linux x86_64 / aarch64, macOS (Docker Desktop or an existing Docker engine, experimental), Windows (Docker Desktop, experimental) | Existing container environments and operational isolation | As needed |
+
+macOS Docker and all Windows installation paths are **experimental** because
+Agent behavior there has not been fully validated.
 
 The three paths are independent. Choose one. Once the service is running, return to the [Quick Start](quick-start.md) for model configuration and the first task.
 
@@ -18,10 +21,20 @@ The three paths are independent. Choose one. Once the service is running, return
 
 ### Prerequisites
 
-- Linux on x86_64 or aarch64;
-- Bubblewrap;
+- glibc-based Linux on x86_64 or aarch64, including a suitable WSL 2
+  distribution on Windows x64. The bundled Node.js runtime requires
+  glibc 2.28+ and a compatible libstdc++;
+- Bubblewrap and usable unprivileged user namespaces in the Linux environment;
 - network access for first-launch dependency preparation;
 - at least one model provider API key.
+
+This release binary does not run directly on musl-based distributions such as Alpine Linux.
+
+On Windows, run the commands in this section inside your WSL 2 Linux distribution.
+Keep the downloaded file in the distribution's Linux filesystem, such as your home directory.
+If you downloaded it in a Windows browser, open your WSL 2 Linux terminal
+(for example, Ubuntu) and run `cd ~ && explorer.exe .` there. Windows File
+Explorer opens your Linux home directory; copy the download into it.
 
 Install Bubblewrap:
 
@@ -40,10 +53,12 @@ ScienceDiscovery-<version>-linux-x86_64
 ScienceDiscovery-<version>-linux-aarch64
 ```
 
-You can run the downloaded file directly or rename it first:
+You can run the downloaded file directly or rename it first. In the directory
+containing the download, use the following commands if you have one matching
+binary for your architecture:
 
 ```bash
-mv ScienceDiscovery-<version>-linux-<architecture> ScienceDiscovery
+mv ScienceDiscovery-*-linux-"$(uname -m)" ScienceDiscovery
 chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
@@ -81,31 +96,44 @@ The service binds to the local machine by default. If you must expose it, config
 Use local source mode when:
 
 - you are on macOS;
+- you are on Windows and want to run the Linux source steps inside WSL 2;
 - you need to modify or debug the source;
 - you do not want the prepackaged Linux binary.
 
 ### Prerequisites
 
-Both platforms require:
+All supported local environments require:
 
 - Node.js 22.19+;
 - pnpm 11.1.2;
-- Python 3;
+- `python3` 3.9+;
 - uv 0.9+;
 - Git;
 - curl.
 
+The setup script calls `python3` before uv creates its Python 3.12 environment.
+
 Sandbox requirements differ:
 
-- Linux: Bubblewrap 0.6+, 0.8+ recommended;
+- Linux, including WSL 2: Bubblewrap 0.6+ and unprivileged user namespaces, 0.8+ recommended;
 - macOS: the built-in Seatbelt sandbox; Bubblewrap is not required.
 
+Debian 11's default Bubblewrap package is 0.4.1, below the listed Linux
+requirement. Use a newer package or distribution if it applies to you.
+
+On macOS, use version 13 or newer for local source mode, as required by the
+current [uv platform policy](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions).
+
 ### Clone and start
+
+On Windows, run these commands inside your WSL 2 Linux distribution.
+In WSL 2, clone into the distribution's Linux filesystem, such as your home directory,
+rather than under `/mnt/c`. Dependency installation is much faster there, and
+Linux file permissions behave as expected. Run `cd ~` before the commands below.
 
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
-git checkout feat/jiuwenswarm
 
 scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local
@@ -125,9 +153,7 @@ A successful startup prints the same `Open to sign in` URL.
 
 ### macOS notes
 
-macOS currently supports local source mode only. The Linux single-file binary and the Linux Docker path on this page do not run directly on macOS.
-
-If startup reports that Seatbelt is unavailable, check:
+If local source mode reports that Seatbelt is unavailable, check:
 
 ```bash
 test -x /usr/bin/sandbox-exec
@@ -137,23 +163,43 @@ If this fails, or your terminal is itself inside a stricter sandbox, fix the hos
 
 ---
 
-## Docker deployment (Linux)
+## Docker deployment (Linux containers)
 
 Docker is intended for users who already operate containerized services and want the runtime isolated from the host.
 
 ### Prerequisites
 
-- Linux on x86_64 or aarch64;
-- Docker Engine 24+;
-- Docker Compose v2;
+- Linux on x86_64 or aarch64, macOS with Docker Desktop (check its
+  [current macOS requirements](https://docs.docker.com/desktop/setup/install/mac-install/#system-requirements))
+  or an existing Docker engine,
+  or Windows with Docker Desktop;
+- Docker Engine 24+ and Docker Compose v2.15+ for non-Desktop setups;
+- Docker Desktop in Linux container mode on Windows;
+- support for Bubblewrap and unprivileged user namespaces inside the Linux container;
 - enough disk space for the image, build cache, and scientific environments;
-- build-time access to Docker Hub, npm, PyPI, and other dependency sources.
-
-> macOS and Windows Docker Desktop are not the supported path. Code execution depends on Linux kernel sandbox capabilities.
+- build-time access to Docker Hub, npm, PyPI, models.dev, and other dependency sources.
 
 ### 1. Prepare configuration and storage
 
-From the repository root:
+If you do not have a local checkout yet, clone the repository first:
+
+```bash
+git clone https://github.com/openJiuwen-ai/sciencediscovery.git
+cd sciencediscovery
+```
+
+On Windows, use PowerShell in the repository root:
+
+```powershell
+Copy-Item .env.docker.example .env
+New-Item -ItemType Directory -Force data
+```
+
+On Windows, Docker Desktop must be running Linux containers. Its WSL 2 engine is normally
+enabled by default; check [Docker's WSL 2 settings](https://docs.docker.com/desktop/features/wsl/)
+if Docker reports that it cannot start Linux containers.
+
+On Linux or macOS, use a Unix shell in the repository root:
 
 ```bash
 cp .env.docker.example .env
@@ -173,19 +219,23 @@ The `data/` directory stores projects, sessions, workspaces, credentials, and ot
 
 ### 2. Build and start
 
-```bash
+```text
 docker compose build
 docker compose up -d
 ```
 
 Check the service:
 
-```bash
+```text
 docker compose ps
-curl -fsS http://127.0.0.1:4310/health
+docker compose exec sciencediscovery curl -fsS http://127.0.0.1:4310/health
 ```
 
-A healthy installation reports top-level `status: ok`.
+You can also open <http://127.0.0.1:4310/health> in a browser.
+Top-level `status: ok` confirms that the API can reach the Runner. It does not
+prove that the code-execution sandbox works. After signing in, run the small
+Python calculation in the [Quick Start](quick-start.md#3-run-your-first-scientific-task)
+to check that part of the installation.
 
 If it reports `degraded`, inspect logs first:
 
@@ -195,10 +245,10 @@ docker compose logs --tail=200
 
 ### 3. Open the Web UI
 
-Find the sign-in URL in the logs:
+View the logs and find the `Open to sign in` URL:
 
-```bash
-docker compose logs | grep -A 2 'Open to sign in'
+```text
+docker compose logs -f
 ```
 
 Open the printed `Open to sign in` URL in your browser.
@@ -252,7 +302,10 @@ Run:
 curl -fsS http://127.0.0.1:4310/health
 ```
 
-A `degraded` status usually means the code-execution side did not start correctly. Check the startup log and confirm the sandbox prerequisites are available.
+A `degraded` status means the API cannot reach the Runner. Check the startup log.
+On Linux or WSL 2, a warning containing `could not build a sandbox` means code
+execution will fail, even when `/health` reports `ok`. Follow the sandbox steps
+below in that case.
 
 ### Linux reports missing `bwrap`
 
@@ -264,7 +317,30 @@ sudo apt-get install -y bubblewrap
 sudo dnf install -y bubblewrap
 ```
 
-If Bubblewrap is installed but still fails, the host may restrict unprivileged user namespaces. See [Sandbox execution](../developer-docs/sandbox-execution.md).
+If Bubblewrap is installed but still fails, follow the sandbox checks below.
+
+### Bubblewrap is installed, but code execution fails
+
+If the startup log says `could not build a sandbox`, check the error before
+changing system settings. On Linux or inside WSL 2, run:
+
+```bash
+bwrap --version
+sysctl kernel.unprivileged_userns_clone
+sysctl kernel.apparmor_restrict_unprivileged_userns
+```
+
+A missing sysctl key is normal on some kernels. If `kernel.unprivileged_userns_clone`
+exists and is `0`, unprivileged user namespaces are disabled on that host.
+Ask the host administrator to enable them before retrying.
+If the AppArmor key is `1` and the error is a permission denial, check whether
+AppArmor is active with `sudo aa-status`. On Ubuntu 24.04+, use a bwrap profile
+only when this restriction is present; see
+[Ubuntu's AppArmor guidance](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007#define-bwrap-profile).
+WSL 2 installations do not all use the same kernel policy. Enable systemd only
+if your chosen profile-loading method needs `systemctl` and it is unavailable;
+see [Microsoft's WSL instructions](https://learn.microsoft.com/en-us/windows/wsl/systemd/).
+See [Sandbox execution](../developer-docs/sandbox-execution.md) for the probe details.
 
 ### macOS reports Seatbelt is unavailable
 
@@ -284,15 +360,41 @@ Logs are stored under `logs/` in the data directory by default. See the [configu
 
 ## Docker FAQ
 
+### Compose rejects `systempaths=unconfined`
+
+Run `docker compose version`. This option requires Compose v2.15+.
+Update the Compose plugin, or update Docker Desktop if it supplies Compose.
+
+### macOS Docker Desktop cannot mount the project directory
+
+If Docker Desktop reports `Mounts denied` or `file is not shared from the host`,
+open **Settings → Resources → File sharing** and add the directory containing
+the checkout. See [Docker's file-sharing settings](https://docs.docker.com/desktop/settings-and-maintenance/settings/#file-sharing).
+
 ### `data/` is not writable
 
-Make sure the directory exists before `docker compose up` and that uid/gid match the `.env` configuration:
+Make sure `data/` exists before `docker compose up`.
+If the logs show a permission error, test the bind mount from inside a container:
+
+```text
+docker compose run --rm --entrypoint sh sciencediscovery -c 'id; ls -ld /app/data; touch /app/data/.write-test && rm /app/data/.write-test'
+```
+
+On Linux or macOS, use a Unix shell to check that uid/gid match the `.env` configuration:
 
 ```bash
 ls -ld data
 id -u
 id -g
 ```
+
+On Windows, check that your account can write to the host `data/` directory
+and that Docker Desktop can share it. Windows accounts do not have Linux uid/gid
+values to enter in `.env`. If the Windows bind mount remains unwritable, move the
+checkout into a WSL 2 distribution's Linux filesystem, enable Docker Desktop's
+[WSL integration](https://docs.docker.com/desktop/features/wsl/#enable-docker-in-a-wsl-2-distribution),
+and run Compose there. Then use that Linux user's `id -u` and `id -g` values
+in `.env` and create `data/` as that user.
 
 ### The container is running but `/health` is `degraded`
 
@@ -302,7 +404,12 @@ Inspect:
 docker compose logs --tail=200
 ```
 
-A common cause is missing host support for the sandbox capabilities required inside the container.
+Check the Runner startup error and the `data/` mount first. A sandbox failure
+can also occur while `/health` remains `ok`.
+
+If `/health` is `ok` but a code task fails, inspect the logs for
+`could not build a sandbox` and check the Linux-container requirements above.
+On Windows, check Docker Desktop and WSL updates if its sandbox probe fails.
 
 ### The model or external resources are unreachable
 

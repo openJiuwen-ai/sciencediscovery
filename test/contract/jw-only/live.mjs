@@ -27,6 +27,7 @@
 
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
+import { writeFileSync } from "node:fs";
 
 import { startStubModel } from "../stub-model.mjs";
 
@@ -588,10 +589,18 @@ const checks = {
 };
 
 const wanted = process.argv.slice(2);
+const outcomes = [];
+function recordChecks() {
+  if (process.env.CI_SWARM_CHECK_REPORT) writeFileSync(process.env.CI_SWARM_CHECK_REPORT, JSON.stringify(outcomes, null, 2));
+}
+recordChecks();
 try {
   for (const name of wanted.length ? wanted : Object.keys(checks)) {
     if (!checks[name]) throw new Error(`unknown check ${name}; known: ${Object.keys(checks).join(", ")}`);
+    const result = { name, outcome: 'FAIL' };
+    outcomes.push(result); recordChecks();
     await checks[name]();
+    result.outcome = 'PASS'; recordChecks();
   }
 } catch (error) {
   console.error(`FAILED: ${error instanceof Error ? error.message : error}${error?.cause?.message ? ` (${error.cause.message})` : ""}`);

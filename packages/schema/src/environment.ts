@@ -457,7 +457,56 @@ export interface SandboxNetworkCapability {
   unavailableReason?: string;
 }
 
+/** Reported by the Runner process, never inferred from its installation shell. */
+export interface RunnerExecutionCapability {
+  instanceId: string;
+  checkedAt: string;
+  sandbox: SandboxKind;
+  dependencyAvailable: boolean;
+  sandboxUsable: boolean;
+  ready: boolean;
+  reason: "ready" | "dependency-unavailable" | "incompatible" | "sandbox-unusable";
+  detail?: string;
+}
+
+export interface ExecutionBlock {
+  id: string;
+  sessionId: string;
+  executionId: string;
+  runnerId: string;
+  reason: string;
+  createdAt: string;
+  alternatives: Array<{ runnerId: string; label: string }>;
+  operationId?: string;
+  agentId?: string;
+  toolCallId?: string;
+  summary?: string;
+  suggestions?: string[];
+}
+
+export interface RunnerCheckResult {
+  runnerId: string;
+  checkedAt: string;
+  connected: boolean;
+  ready: boolean;
+  reason: string;
+  capability?: RunnerExecutionCapability;
+  suggestions: string[];
+}
+
+export interface RunnerBlockedResult {
+  code: "RUNNER_UNAVAILABLE";
+  dispatched: false;
+  operationId: string;
+  runner: RunnerCheckResult;
+  instruction: string;
+}
+
+export type ExecutionBlockDecision = { action: "retry" | "cancel" } | { action: "switch"; runnerId: string };
+
 export interface RunnerHealth {
+  /** Absent on older Runners: unknown, not proof that execution is ready. */
+  execution?: RunnerExecutionCapability;
   /** Always false: the runner no longer manages a cgroup v2 subtree. */
   cgroupDelegated: false;
   cgroupMode: "none";

@@ -33,6 +33,7 @@ import type {
   PythonExecutionRequest,
   PythonExecutionResult,
   RunnerHealth,
+  RunnerExecutionCapability,
   RunnerRuntimeStatus,
   RunnerResources,
   RemoteWorkspaceFile,
@@ -165,6 +166,13 @@ export class RunnerClient {
     this.observeClock(response.headers.get("date"), sentAt, Date.now());
     if (!response.ok) throw new Error(`Runner health check failed (${response.status})`);
     return await response.json() as RunnerHealth;
+  }
+
+  /** Authenticated probe in this Runner; POST explicitly invalidates its cache. */
+  async executionCapability(refresh = false, signal?: AbortSignal): Promise<RunnerExecutionCapability> {
+    return this.request("/execution-capability", {
+      method: refresh ? "POST" : "GET", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
+    });
   }
 
   async status(): Promise<RunnerRuntimeStatus> {

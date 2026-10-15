@@ -27,16 +27,22 @@ test('Docker and binaries build patched Swarm; service start only verifies it', 
   assert.doesNotMatch(start, /apply_compatibility_patches/);
 });
 
-test('PR gates hermetic UT/ST/mock and daily adds every real E2E; release spends no model tokens', () => {
-  for (const category of ['ut','st','e2e']) for (const model of ['none','mock','real']) {
-    const tags=normalizeTags([`category:${category}`,`model:${model}`,'os:linux','arch:amd64']);
-    assert.equal(compileSelector(profiles.pr.selector)(tags), model !== 'real');
-    assert.equal(compileSelector(profiles.daily.selector)(tags), model !== 'real' || category === 'e2e');
-    assert.equal(compileSelector(profiles.release.selector)(tags), model !== 'real');
-    const expected = model === 'real' ? 'e2e-real' : category;
-    const matches = Object.entries(slices).filter(([name,selector])=>name!=='shared'&&compileSelector(selector)(tags));
-    if(model !== 'real' || category === 'e2e') assert.deepEqual(matches.map(([name])=>name),[expected]);
+test('five cumulative policies partition into L1, UT, ST, mocked and real slices', () => {
+  for (let tier=1;tier<=5;tier++) for (const category of ['ut','st','e2e']) {
+    const tags=normalizeTags([`category:${category}`,`tier:l${tier}`,`model:${tier<=2?'mock':'real'}`,'os:linux','arch:amd64']);
+    for(let level=1;level<=5;level++) {
+      assert.equal(compileSelector(profiles[`l${level}`].selector)(tags), tier<=level&&(tier<=2||category==='e2e'));
+    }
+    const matches=Object.entries(slices).filter(([name,selector])=>name!=='shared'&&compileSelector(selector)(tags));
+    if(tier<=2||category==='e2e') assert.deepEqual(matches.map(([name])=>name),[tier===1?'l1':tier>2?'e2e-real':category]);
   }
+  for(const [alias,tier] of Object.entries({pr:2,merge:3,daily:4,release:5})) assert.equal(profiles[alias].selector,profiles[`l${tier}`].selector);
+});
+
+test('daily excludes quarantined real journeys before freezing the plan', () => {
+  const quarantined = normalizeTags(['category:e2e', 'model:real', 'judge:llm', 'os:linux', 'arch:amd64', 'status:quarantined']);
+  assert.equal(compileSelector(profiles.daily.selector)(quarantined), false);
+  assert.equal(compileSelector('category:e2e and model:real and status:quarantined')(quarantined), true);
 });
 
 test('OR-ed daily policy cannot leak UT identities into its real E2E slice', () => {
@@ -46,7 +52,7 @@ test('OR-ed daily policy cannot leak UT identities into its real E2E slice', () 
 
 test('real prerequisites fail closed, independent of catalog selection', async () => {
   const plan=createPlan([{id:'live',source:'test/live.spec.ts',sourceHash:'a'.repeat(64),runner:'playwright',
-    tags:['category:e2e','model:real','judge:llm','os:linux','arch:amd64']}],
+    tags:['category:e2e','model:real','judge:llm','tier:l4','os:linux','arch:amd64']}],
     {revision:'test',selector:profiles.daily.selector,targets:[{os:'linux',arch:'amd64'}]});
   const checked=await preflight(plan,{platform:'linux',arch:'x64',env:{}});
   assert.equal(checked.ok,false);
@@ -61,15 +67,37 @@ test('frozen Playwright title matches inherited tags but not unplanned sibling t
   assert.throws(()=>planGrep([]));
 });
 
-test('scheduled real credentials are isolated from pull request jobs', () => {
-  const text=readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8');
-  const live=text.slice(text.indexOf('  real-e2e:'),text.indexOf('\n  ut:'));
-  assert.match(live,/inputs.profile == 'daily' && github.event_name != 'pull_request'/);
-  assert.match(live,/environment: nightly-research/);
-  // runner is not available in jobs.<job_id>.env (it is available in step env).
-  const jobEnv = live.slice(live.indexOf('\n    env:'), live.indexOf('\n    steps:'));
-  assert.doesNotMatch(jobEnv, /\$\{\{[^}]*\brunner\./);
-  assert.match(jobEnv, /CI_RUNTIME_DIR: \$\{\{ github\.workspace \}\}\/\.ci-runtime\/real-e2e/);
-  assert.match(live,/run: pnpm ci:e2e:real/);
-  assert.doesNotMatch(text.slice(text.indexOf('\n  ut:')),/secrets\.E2E_LLM_TOKEN/);
+/** The jobs of a workflow file, keyed by the two-space-indented names under `jobs:`. */
+function workflowJobs(path) {
+  const text = readFileSync(new URL(path, import.meta.url), 'utf8');
+  const jobs = new Map();
+  let name;
+  for (const line of text.slice(text.indexOf('\njobs:\n') + 7).split('\n')) {
+    if (/^[A-Za-z]/.test(line)) break;
+    const key = /^  ([\w-]+):\s*$/.exec(line);
+    if (key) jobs.set(name = key[1], '');
+    else if (name) jobs.set(name, `${jobs.get(name)}${line}\n`);
+  }
+  return jobs;
+}
+
+const allJobs = () => ['ci.yml', 'real-e2e.yml'].flatMap(file =>
+  [...workflowJobs(`../.github/workflows/${file}`)].map(([name, job]) => [`${file}: ${name}`, job]));
+
+// Which environment supplies the credentials, and what it must hold, is .ci/README.md's job, not this test's.
+test('real-model credentials reach only jobs that take them from an environment and never run for pull requests', () => {
+  const credentialed = allJobs()
+    .filter(([, job]) => /\bsecrets\.E2E_(?:LLM|JUDGE)_TOKEN\b/.test(job));
+  assert.ok(credentialed.length, 'a job runs the real-model journeys');
+  for (const [name, job] of credentialed) {
+    assert.match(job, /^    environment: \S/m, `${name} takes its credentials from a GitHub environment`);
+    assert.match(job, /^    if: .*github\.event_name != 'pull_request'/m, `${name} never runs for a pull request`);
+  }
+});
+
+test('no job-level env uses the runner context, which GitHub provides only to steps', () => {
+  for (const [name, job] of allJobs()) {
+    const env = /^    env:\n(?:      .*\n|\s*\n)*/m.exec(job)?.[0] ?? '';
+    assert.doesNotMatch(env, /\$\{\{[^}]*\brunner\./, `${name}: jobs.<job_id>.env`);
+  }
 });

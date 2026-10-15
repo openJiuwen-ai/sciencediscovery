@@ -18,6 +18,8 @@ case "${1:-}" in
       python .ci/research-unittest.py test/benchmarks/deepresearchbench
     ;;
   contract)
+    export JIUWENSWARM_HOME="${JIUWENSWARM_HOME:-${CI_RUNTIME_DIR:-$PWD/.test-runs}/swarm-contract}"
+    [[ "$JIUWENSWARM_HOME" == /* ]] || export JIUWENSWARM_HOME="$PWD/$JIUWENSWARM_HOME"
     bash scripts/jiuwenswarm.sh setup
     swarm_python="${JIUWENSWARM_SRC:-${JIUWENSWARM_ROOT:-$PWD/.sciencediscovery-data/jiuwenswarm}/src}/.venv/bin/python"
     report_dir="${CI_RESULTS_DIR:-$PWD/.test-runs}/swarm-contract"

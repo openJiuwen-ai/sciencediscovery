@@ -8,18 +8,30 @@ workflow instructions are unchanged. The case remains opt-in, outside PR gates.
 
 All eight real research cases (five DRB, two BiomniBench, one TC) use two layers:
 
-1. **Delivery:** the main run completes and its final assistant message references
-   at least one persisted, readable, nonempty artifact. Names, nested paths,
-   artifact IDs and version links are supported. An unreferenced intermediate
-   file does not pass. A failed/cancelled run with an artifact is `partial`, not
-   `passed`. A referenced immutable version takes precedence over the latest head.
+1. **Delivery:** the main Run chain completes and its selected declaration of
+   `evidence_brief.md` is persisted, readable and nonempty. A main-workspace
+   declaration takes precedence over child copies; without one, the latest
+   producing Run's child declaration is used. A nested path is accepted.
+   Intermediate research files alone do not pass. A later wake declaring
+   another file does not erase the earlier brief; a broken newer declaration
+   of the same logical name never falls back to an older one.
+   Broken supplementary files remain diagnostics. An undeclared intermediate
+   file does not pass. A failed or cancelled Run with an Artifact is `partial`,
+   not `passed`.
 2. **Quality:** a separate evaluator scores the frozen deliverables. Low scores,
    missing judge credentials, malformed responses and evaluation timeouts never
    turn successful delivery into a failed E2E assertion. Errors remain visible as
    `evaluation.status=error` with no numeric score, not zero or success.
 
-There are no quality gates based on word count, number of citations, fixed file
-paths, literal handoff strings, specialist counts, numeric group shapes or UI
+The E2E waits for the foreground Run, main-Agent background executions,
+pending timers and automatic wake Runs to settle before checking delivery. If
+the generation budget expires, it records `run_status=budget_exhausted`, cancels
+active Session Runs,
+and captures any deliverables already persisted. Cancelled Runs with readable
+artifacts remain partial deliveries.
+
+There are no quality gates based on word count, number of citations, literal
+handoff strings, specialist counts, numeric group shapes or UI
 preview selectors. No additional Harness diagnostic scoring layer is introduced;
 use retained runtime logs when investigating failures. Existing mocked UI and
 unit tests are unaffected.
@@ -28,8 +40,8 @@ DRB still uses the pinned official RACE/FACT prompts, criteria and calculations.
 Its evaluator's legacy threshold status remains in the scorecard but is not an
 E2E assertion. BiomniBench still uses its unchanged, pinned official rubric via
 the existing local OpenAI-compatible adapter (not the upstream Gemini verifier).
-Biomni rubric inputs `trace.md` and `answer.txt` may be nested; missing scoring
-inputs produce a scoring error rather than changing delivery status.
+Biomni rubric inputs `trace.md` and `answer.txt` may be nested; both are required
+for its final output check. Missing inputs also produce a scoring error.
 
 ## TC rubric
 
@@ -84,7 +96,8 @@ E2E_RESEARCH=1 E2E_SWARM_TASK=1 npm --prefix .e2e run test:real -- science-resea
 `E2E_TEAM_EVALUATION=rubric` is the default; use `off` to disable paid judging.
 `TEAM_JUDGE_PYTHON` defaults to `python3` and needs only the standard library.
 `E2E_TEAM_EVAL_TIMEOUT_MS` defaults to 900,000 ms, separate from the existing
-`E2E_TEAM_RUN_TIMEOUT_MS` generation deadline. Biomni judging now defaults to
+`E2E_TEAM_RUN_TIMEOUT_MS` generation deadline. Daily CI sets that deadline to
+55 minutes; the test's local default remains one hour. Biomni judging now defaults to
 `rubric` (`E2E_BIOMNI_EVALUATION=off` disables it); DRB keeps its existing mode.
 Missing judge configuration is recorded as an evaluation error.
 
@@ -116,6 +129,6 @@ weights are unchanged.
 
 ```bash
 node --test scripts/real-e2e-scoring.test.mjs
-node --import tsx --test test/helpers/real-delivery.test.ts
+node --import tsx --test test/helpers/real-delivery.unit.ts
 python3 -m unittest discover -s test/benchmarks/research-team -p 'test_*.py'
 ```

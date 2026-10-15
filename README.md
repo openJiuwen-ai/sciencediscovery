@@ -73,38 +73,15 @@ workspace. For a step-by-step walkthrough, see the [Quick Start](https://science
 | **Task decomposition** | Planning and multi-agent orchestration distribute a task across sub-agents and a cross-domain skill library | [Subagent orchestration](https://sciencediscovery.github.io/docs/developer-docs/subagent-orchestration.html) · [Skills](https://sciencediscovery.github.io/docs/developer-docs/skill-progressive-disclosure.html) |
 | **End-to-end provenance** | Code, environment, logs and cited evidence are recorded per deliverable; the optional memory graph makes the chain navigable | [Review and provenance](https://sciencediscovery.github.io/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/docs/advanced-setup/science-memory-setup.html) |
 
-## Command line
-
-A running `serve` can also be driven from the terminal:
-
-```bash
-./ScienceDiscovery run "Summarize these results" > answer.md
-cat prompt.txt | ./ScienceDiscovery run --stdin --auto-approve | jq .
-```
-
-`run` connects to the same control plane as the browser and reads the access token from the data directory, so sharing a `--data-dir` with `serve` requires no further configuration. Run directly in a terminal, it writes the answer to stdout and progress to stderr; in a pipe it emits JSONL, and a non-interactive run must pass `--auto-approve`, since it cannot answer permission prompts. For the full option list, run `./ScienceDiscovery run --help`.
-
 ## Requirements
 
 | Path | System requirements |
 |---|---|
-| **Prepackaged binary** | Linux x86_64/aarch64, Bubblewrap |
-| **Local source mode** | Linux x86_64/aarch64 or macOS x64/arm64; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git; Bubblewrap on Linux, built-in Seatbelt on macOS |
-| **Docker** | Linux x86_64/aarch64, Docker Engine 24+, Compose v2, unprivileged user namespaces |
+| **Prepackaged binary** | Linux x86_64/aarch64 (Windows x64 via WSL 2), Bubblewrap |
+| **Local source mode** | Linux (including WSL 2) or macOS; Node.js 22.19+, pnpm 11.1.2, Python 3, uv 0.9+, Git |
+| **Docker** | Linux containers on Linux, macOS, or Windows; Bubblewrap and unprivileged user namespaces |
 
 Managed scientific environments run on a pinned micromamba, so no system Python, R or conda is required.
-
-## Architecture
-
-ScienceDiscovery is built on [JiuwenSwarm](https://gitcode.com/openJiuwen/jiuwenswarm). In every
-deployment path, a browser UI talks to an adapter on the public port, which reverse-proxies the Node
-control API behind it. JiuwenSwarm runs the model loop and calls back into the API for
-ScienceDiscovery tool calls, while workspace tools, sandbox execution, scientific connectors, PDF
-extraction, permissions, provenance, and review checks stay enforced by the Node control plane. The
-[deployment guide](https://sciencediscovery.github.io/docs/getting-started/deployment.html) explains the deployment-specific topology.
-
-> [!WARNING]
-> ScienceDiscovery is not a multi-user production service. The adapter and the API listen on loopback by default; access uses one bearer token and there is no TLS termination. Exposing either interface elsewhere must be an explicit deployment choice on a trusted, secured network. Python, R, and shell commands run in a fail-closed platform sandbox (Bubblewrap on Linux and Seatbelt in macOS source mode); the control API, the adapter, JiuwenSwarm, the PDF worker, and outbound model/provider calls run outside that sandbox as trusted control-plane operations.
 
 ## Documentation
 
@@ -119,11 +96,13 @@ The complete English and Chinese indexes are in the [documentation site](https:/
 
 ## Join the community
 
-Join the ScienceDiscovery community on [Slack][slack-invite] or scan this QR code:
+Join the ScienceDiscovery community on Slack or Feishu to discuss your work and share feedback.
+
+| [Slack][slack-invite] | Feishu |
+| :---: | :---: |
+| <img src="docs/images/slack.png" alt="ScienceDiscovery Slack community invite QR code" width="200"> | <img src="docs/images/feishu.jpg" alt="ScienceDiscovery Feishu community invite QR code" width="200"> |
 
 [slack-invite]: https://join.slack.com/t/sciencediscovery-hq/shared_invite/zt-4avv6fbom-uLrBalsUBR45N9sC2mGO~A
-
-<img src="docs/images/slack.png" alt="ScienceDiscovery Slack community invite QR code" width="200">
 
 ## License
 

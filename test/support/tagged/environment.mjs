@@ -40,6 +40,10 @@ export async function preflight(plan, {
     if (checked.get(name)) problems.push({ key: entry.key, code: 'UNVERIFIED_CAPABILITY', requirement: name });
   };
   for (const entry of plan.entries) {
+    if (entry.tags.includes('status:quarantined')) problems.push({ key: entry.key, code: 'QUARANTINED_REQUIRED_CASE' });
+    for (const capability of entry.requirements ?? []) {
+      if (capability !== 'swarm-task' || entry.backend !== 'jiuwenswarm') problems.push({ key:entry.key,code:'UNSUPPORTED_BACKEND_CAPABILITY',requirement:capability,backend:entry.backend });
+    }
     if (entry.target.os !== actualHost.os || entry.target.arch !== actualHost.arch) {
       problems.push({ key: entry.key, code: 'HOST_MISMATCH', required: entry.target, actual: actualHost });
     }

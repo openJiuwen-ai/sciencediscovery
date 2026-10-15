@@ -3,13 +3,12 @@
 import { writeFile } from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { cleanupJourney, createProjectAndSession, openProjectSession,
-  sendUserMessage, waitForRunTerminal } from "./helpers/journeys.ts";
-import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
+  sendUserMessage, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { researchPrompt, drbArticle, drbApi, positiveNumber,
   evaluationConfig, evaluationPreflight, evaluateReport } from "./helpers/deepresearchbench.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
-import { scoringArtifact } from "./helpers/real-delivery.mjs";
+import { finalReportArtifact } from "./helpers/real-delivery.mjs";
 import { drbSamples } from "./benchmarks/deepresearchbench/samples.ts";
 
 for (const sample of drbSamples) {
@@ -33,10 +32,11 @@ for (const sample of drbSamples) {
  * Credentials: E2E_API_TOKEN; E2E_LLM_MODEL_ID or E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN; Judge credentials and JINA_API_KEY.
  * CostSideEffects: Billable research and Judge calls; temporary application records deleted, local evaluation artifacts retained.
  */
-  test(`DRB-${sample.id} ${sample.difficulty} Swarm research integration`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap"] }, async ({ journey, page }, testInfo) => {
+  test(`DRB-${sample.id} ${sample.difficulty} Swarm research integration`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap","@tier:l4"] , annotation: { type: "capability", description: "swarm-task" } }, async ({ journey, page }, testInfo) => {
     // These evidence-heavy cases have reviewed generation budgets. Keep
     // their dedicated overrides ahead of the shorter suite-wide CI budget.
-    const caseRunBudget = sample.id === 58 ? 5_400_000 : (sample.id === 59 || sample.id === 64) ? 7_200_000 : undefined;
+    const caseRunBudget = (sample.id === 58 || sample.id === 62 || sample.id === 75) ? 5_400_000
+      : (sample.id === 59 || sample.id === 64) ? 7_200_000 : undefined;
     const runBudget = caseRunBudget === undefined
       ? positiveNumber("E2E_DRB_RUN_TIMEOUT_MS", 3_600_000)
       : positiveNumber(`E2E_DRB_${sample.id}_RUN_TIMEOUT_MS`, caseRunBudget);
@@ -83,18 +83,29 @@ for (const sample of drbSamples) {
       started = Date.now();
       const run = await sendUserMessage(page, fixture.session.id, drbPrompt);
       runId = run.id;
+      metrics.initial_run_id = runId;
       metrics.run_id = runId;
       metrics.session_id = fixture.session.id;
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
-      const finished = await waitForRunTerminal(page, fixture.session.id, runId, runBudget);
-      terminal = finished.status;
+      const finished = await waitForRunChainTerminal(page, fixture.session.id, runId, { timeout: runBudget });
+      runId = finished.run.id;
+      terminal = finished.run.status;
+      metrics.run_id = runId;
+      metrics.run_chain = finished.runs.map(({ automaticWake, error, id, queueOrder, status }) =>
+        ({ automatic_wake: Boolean(automaticWake), error, id, queue_order: queueOrder, status }));
       metrics.run_status = terminal;
       metrics.generation_duration_ms = Date.now() - started;
-      const delivery = await collectFinalDelivery(page, fixture.session.id, runId);
+      const delivery = await collectFinalDelivery(page, fixture.session.id, runId, metrics.initial_run_id);
       metrics.delivery = delivery;
       metrics.integration_status = delivery.status;
-      expect(delivery.status, "Main run must complete and reference a readable nonempty final artifact").toBe("passed");
-      const report = scoringArtifact(delivery.artifacts, drbOutput);
+      const report = finalReportArtifact(delivery.artifacts, drbOutput, delivery.producer_answer);
+      if (!report && delivery.status === "passed") {
+        delivery.status = "failed";
+        delivery.errors.push("No final report identified; declared intermediate files are insufficient");
+        metrics.integration_status = "failed";
+      }
+      expect(delivery.status, "Main run must complete and hand off a readable final report").toBe("passed");
+      expect(report, "The final handoff must identify a report, not only intermediate notes").toBeDefined();
       if (report) {
         const input = testInfo.outputPath(`deepresearchbench-${sample.id}.json`);
         await writeFile(input, JSON.stringify({ id: sample.id, prompt: drbQuestion, article: report.text }, null, 2));
@@ -116,9 +127,8 @@ for (const sample of drbSamples) {
       await writeFile(testInfo.outputPath("assistant-messages.json"), JSON.stringify(visibleAnswers, null, 2));
       if (fixture) {
         if (runId && !terminal) {
-          await page.request.post(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/runs/${runId}/cancel`,
-            { headers: authorizationHeader() }).catch(() => undefined);
-          await waitForRunTerminal(page, fixture.session.id, runId, 30_000).catch(() => undefined);
+          metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
+          if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
         }
         metrics.generation_usage = await drbApi(page, `/api/sessions/${fixture.session.id}/usage`).catch(() => null);
         const details = await drbApi<Array<any>>(page, `/api/sessions/${fixture.session.id}/subagents`).catch(() => []);
@@ -143,6 +153,7 @@ for (const sample of drbSamples) {
       await writeFile(path, JSON.stringify(metrics, null, 2));
       await testInfo.attach("benchmark-metrics", { path, contentType: "application/json" });
       if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
+      if (metrics.cleanup_error) throw new Error(metrics.cleanup_error);
     }
   });
 }

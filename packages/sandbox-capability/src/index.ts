@@ -206,13 +206,14 @@ const capabilityCache = new Map<string, Promise<SandboxCapability>>();
 const seatbeltCapabilityCache = new Map<string, Promise<SeatbeltCapability>>();
 
 /**
- * Detect once per binary per process and share the promise: every execution
- * asks for this, and the answer cannot change while the process runs.
+ * Cache per binary per process and share the promise. An explicit readiness
+ * refresh invalidates the entry after operators repair the execution host.
  */
 export function detectSandboxCapability(
   bwrapPath: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; refresh?: boolean } = {},
 ): Promise<SandboxCapability> {
+  if (options.refresh) capabilityCache.delete(bwrapPath);
   let pending = capabilityCache.get(bwrapPath);
   if (!pending) {
     pending = probeSandboxCapability(bwrapPath, options.timeoutMs ?? SANDBOX_PROBE_TIMEOUT_MS);
@@ -248,8 +249,9 @@ async function probeSeatbeltCapability(
 /** Detect and cache whether macOS Seatbelt can apply a real profile. */
 export function detectSeatbeltCapability(
   seatbeltPath: string,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; refresh?: boolean } = {},
 ): Promise<SeatbeltCapability> {
+  if (options.refresh) seatbeltCapabilityCache.delete(seatbeltPath);
   let pending = seatbeltCapabilityCache.get(seatbeltPath);
   if (!pending) {
     pending = probeSeatbeltCapability(

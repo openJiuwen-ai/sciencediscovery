@@ -8,12 +8,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
-import { cleanupJourney, createProjectAndSession, openProjectSession,
-  sendUserMessage, sessionExecutionRuns, waitForRunTerminal } from "./helpers/journeys.ts";
+import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
+  sendUserMessage, sessionExecutionRuns, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { drbApi, drbArticle, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
+import { requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { analysisPrompt, cases } from "./benchmarks/biomnibench-da/cases.ts";
+
+import { mainRunChain } from "./helpers/run-chain.ts";
+import { RunChainTimeoutError } from "./helpers/journeys.ts";
 
 const execute = promisify(execFile);
 const scripts = fileURLToPath(new URL("./benchmarks/biomnibench-da/", import.meta.url));
@@ -45,7 +49,7 @@ for (const sample of cases) {
  * Credentials: E2E_API_TOKEN; E2E_LLM_MODEL_ID or E2E_LLM_BASE_URL/E2E_LLM_MODEL/E2E_LLM_TOKEN; optional BIOMNI_JUDGE_API_KEY.
  * CostSideEffects: Billable model calls; temporary projects and sessions; retained test diagnostics and reports. Not a PR gate.
  */
-  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap"] }, async ({ page, journey }, testInfo) => {
+  test(`BiomniBench-${sample.id} ${sample.title}`, { tag: ["@real","@category:e2e","@os:linux","@arch:amd64","@model:real","@judge:llm","@sandbox:bubblewrap","@status:reviewed","@tier:l4"] , annotation: { type: "capability", description: "swarm-task" } }, async ({ page, journey }, testInfo) => {
     const budget = positiveNumber("E2E_BIOMNI_RUN_TIMEOUT_MS", 1_800_000);
     const evaluationBudget = positiveNumber("E2E_BIOMNI_EVAL_TIMEOUT_MS", 3_900_000);
     test.setTimeout(budget + evaluationBudget + 360_000);
@@ -91,40 +95,57 @@ for (const sample of cases) {
       start = Date.now();
       const run = await sendUserMessage(page, fixture.session.id, prompt);
       runId = run.id;
+      metrics.initial_run_id = runId;
       metrics.run_id = runId;
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
       try {
-        const finished = await waitForRunTerminal(page, fixture.session.id, runId, budget);
+        const finished = await waitForRunChainTerminal(page, fixture.session.id, runId, { timeout: budget });
         terminal = true;
-        metrics.run_status = finished.status;
-        metrics.run_error = finished.error;
+        runId = finished.run.id;
+        metrics.run_id = runId;
+        metrics.run_chain = finished.runs.map(({ automaticWake, error, id, queueOrder, status }) =>
+          ({ automatic_wake: Boolean(automaticWake), error, id, queue_order: queueOrder, status }));
+        metrics.run_status = finished.run.status;
+        metrics.run_error = finished.run.error;
       } catch (error) {
-        metrics.run_status = "wait_error";
+        if (!(error instanceof RunChainTimeoutError)) throw error;
+        metrics.run_status = "budget_exhausted";
         metrics.run_error = error instanceof Error ? error.message : String(error);
-        // Stop generation at the budget, then assess whatever was delivered.
-        await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers: authorizationHeader() });
-        const stopped = await waitForRunTerminal(page, fixture.session.id, runId, 30_000).catch(() => null);
-        terminal = stopped !== null;
-        if (stopped) metrics.run_status = stopped.status;
+        // Stop every active Run in the chain. The root may already be complete while an automatic wake is running.
+        const stopped = await cancelActiveSessionRuns(page, fixture.session.id);
+        metrics.shutdown = { ...stopped, runs: undefined };
+        const chain = mainRunChain(stopped.runs ?? [], metrics.initial_run_id);
+        const latest = chain.at(-1);
+        runId = latest?.id ?? runId;
+        metrics.run_id = runId;
+        metrics.run_terminal_status = latest?.status;
+        metrics.run_chain = chain.map(({ automaticWake, error: runError, id, queueOrder, status }) =>
+          ({ automatic_wake: Boolean(automaticWake), error: runError, id, queue_order: queueOrder, status }));
+        terminal = stopped.status === "stopped";
       }
       metrics.generation_duration_ms = Date.now() - start;
       const executions = await sessionExecutionRuns(page, fixture.session.id).catch(() => null);
       await writeFile(testInfo.outputPath("execution-runs.json"), JSON.stringify(executions, null, 2));
       metrics.execution_count = executions?.length ?? null;
       metrics.children = await drbApi<any[]>(page, `${prefix}/subagents`).catch(() => null);
-      const delivery = await collectFinalDelivery(page, fixture.session.id, runId);
+      const delivery = await collectFinalDelivery(page, fixture.session.id, runId, metrics.initial_run_id);
       metrics.delivery = delivery;
-      metrics.integration_status = delivery.status;
-      expect(delivery.status, "Main run must complete and reference a readable nonempty final artifact").toBe("passed");
+      metrics.integration_status = metrics.run_status === "budget_exhausted" && delivery.status === "passed" ? "partial" : delivery.status;
+      const required = requiredArtifacts(delivery.artifacts, outputs);
+      metrics.required_outputs = { missing: required.missing };
+      if (required.missing.length && delivery.status === "passed") {
+        delivery.status = "failed";
+        delivery.errors.push(`Missing required final outputs: ${required.missing.join(", ")}`);
+        metrics.integration_status = "failed";
+      }
+      expect(metrics.run_status, "A budget-expired generation is not a passed E2E, even if partial artifacts exist").not.toBe("budget_exhausted");
+      expect(delivery.status, "Main run must complete with readable, nonempty declared final artifacts").toBe("passed");
+      expect(required.missing, "The final handoff must contain both required Biomni outputs").toEqual([]);
       try {
         // Official rubric consumes trace and answer; nesting does not change their meaning.
         const scoringInputs: Record<string, string> = {};
-        const catalog = await drbApi<any[]>(page, `${prefix}/artifacts`);
         for (const name of outputs) {
-          const delivered = delivery.artifacts.filter(a => a.logicalName === name || a.logicalName.endsWith(`/${name}`));
-          const named = catalog.filter(a => a.logicalName === name || a.logicalName.endsWith(`/${name}`));
-          const content = delivered.length === 1 ? delivered[0]!.text : named.length === 1
-            ? (await drbArticle(page, fixture.session.id, named[0].logicalName).catch(() => null))?.article : undefined;
+          const content = required.found.get(name)?.text;
           if (content?.trim()) {
             scoringInputs[name] = content;
             await writeFile(testInfo.outputPath(name), content);
@@ -159,8 +180,8 @@ for (const sample of cases) {
       if (fixture) {
         const prefix = `/api/sessions/${fixture.session.id}`;
         if (runId && !terminal) {
-          await page.request.post(`${apiBaseUrl()}${prefix}/runs/${runId}/cancel`, { headers: authorizationHeader() }).catch(() => undefined);
-          await waitForRunTerminal(page, fixture.session.id, runId, 30_000).catch(() => undefined);
+          metrics.shutdown = { ...await cancelActiveSessionRuns(page, fixture.session.id), runs: undefined };
+          if (metrics.shutdown.status !== "stopped") metrics.cleanup_error = `Session cleanup ${metrics.shutdown.status}`;
         }
         metrics.generation_usage = await drbApi(page, `${prefix}/usage`).catch(() => null);
         metrics.children = await drbApi(page, `${prefix}/subagents`).catch(() => null);
@@ -177,6 +198,7 @@ for (const sample of cases) {
       await writeFile(testInfo.outputPath("benchmark-metrics.json"), JSON.stringify(metrics, null, 2));
       await testInfo.attach("benchmark-metrics", { path: testInfo.outputPath("benchmark-metrics.json"), contentType: "application/json" });
       if (fixture && process.env.E2E_KEEP_RESEARCH_RECORDS !== "1") await cleanupJourney(page, fixture);
+      if (metrics.cleanup_error) throw new Error(metrics.cleanup_error);
     }
   });
 }

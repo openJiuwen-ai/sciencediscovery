@@ -13,7 +13,8 @@
 
 ### Linux：使用预编译版本
 
-如果你使用 Linux x86_64 或 aarch64，这是最短路径。
+如果你使用 glibc 2.28+ 的 Linux x86_64 或 aarch64，这是最短路径。
+此发行包不能直接在 Alpine Linux 等使用 musl 的发行版上运行。
 
 你需要：
 
@@ -38,13 +39,15 @@ chmod +x ./ScienceDiscovery
 
 ### macOS：使用本地源码模式
 
-macOS x64 和 arm64 均受支持。当前 macOS 没有预编译单文件版本，使用本地源码模式即可；沙箱使用系统自带的 Seatbelt，不需要安装 Bubblewrap。
+macOS 13+ 的 x64 和 arm64 均受支持。当前没有 macOS 预编译单文件版本，
+本篇首次使用流程采用本地源码模式；沙箱使用系统自带的 Seatbelt，
+不需要安装 Bubblewrap。macOS Docker 为实验性路径，详见[部署指南](deployment.md)。
 
 先确认本机已有：
 
 - Node.js 22.19+；
 - pnpm 11.1.2；
-- Python 3；
+- `python3` 3.9+；
 - uv 0.9+；
 - Git；
 - curl；
@@ -55,7 +58,6 @@ macOS x64 和 arm64 均受支持。当前 macOS 没有预编译单文件版本�
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
-git checkout feat/jiuwenswarm
 
 scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local
@@ -71,13 +73,26 @@ scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
+### Windows：使用 WSL 2 或 Docker（实验性）
+
+所有 Windows 安装路径下的 Agent 运行效果尚未经过全面验证。
+
+可以在 WSL 2 Linux 发行版中运行 [Linux 预编译版](deployment.md#预编译单文件部署linux)
+或[本地源码模式](deployment.md#本地源码模式linux--macos)；
+也可以使用 Docker Desktop，按 [Docker 部署步骤](deployment.md#docker-部署linux-容器)
+运行 Linux 容器。服务启动后，继续阅读下文。
+
 ### 启动成功后
 
-无论使用 Linux 还是 macOS，启动完成后终端都会打印一个 `Open to sign in` 链接。用浏览器打开它即可进入 ScienceDiscovery。
+在三个系统上，启动成功后终端或 Docker 日志会显示 `Open to sign in` 链接。
+用浏览器打开它即可进入 ScienceDiscovery。
 
-先不要关掉启动终端；关闭它或按 Ctrl-C 会停止服务。
+使用预编译版或源码模式时，不要关掉启动终端；关闭它或按 Ctrl-C 会停止服务。
+Docker 服务在后台运行。
 
-如果没有看到登录链接、浏览器无法进入界面，或启动过程报错，请查看[首次启动排障](deployment.md#二进制与本地模式的首次启动排障)。
+如果没有看到登录链接、浏览器无法进入界面，或启动过程报错，
+请按部署方式查看[二进制与源码模式排障](deployment.md#二进制与本地模式的首次启动排障)
+或 [Docker 常见问题](deployment.md#docker-常见问题)。
 
 > Docker、离线环境、Linux 源码构建以及更完整的部署说明见[部署指南](deployment.md)。
 

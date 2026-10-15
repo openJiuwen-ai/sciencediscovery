@@ -15,6 +15,7 @@ uv pip install --python "$python" pandas==2.3.3 numpy==2.2.6 scipy==1.15.3 \
 upstream="$runtime/DeepResearchBench"
 git clone --no-checkout https://github.com/Ayanami0730/deep_research_bench.git "$upstream"
 git -C "$upstream" checkout --detach 852f4022d1f98fb707222e395405136e8f0e8d52
+if [[ "${CI_PREPARE_BIOMNI:-1}" == 1 ]]; then
 BIOMNI_DATA_ROOT="$runtime/biomnibench-da" "$python" - <<'PY'
 import os
 from huggingface_hub import snapshot_download
@@ -23,6 +24,7 @@ snapshot_download(repo_id="phylobio/BiomniBench-DA", repo_type="dataset",
                   allow_patterns=[f"{case}/{item}" for case in ("da-13-3", "da-14-1")
                                   for item in ("instruction.md", "tests/rubric.txt", "environment/data/*.csv")])
 PY
+fi
 # Paths, not credentials. The workflow already supplies credentials only to this job.
 {
   echo "DRB_PYTHON=$python"

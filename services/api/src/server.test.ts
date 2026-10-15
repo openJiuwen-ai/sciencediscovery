@@ -583,6 +583,10 @@ async function startScientificTestApi(
       });
       return;
     }
+    if (url.pathname === "/execution-capability") {
+      send(200, { instanceId: "test-runner", checkedAt: new Date().toISOString(), sandbox: "bubblewrap", dependencyAvailable: true, sandboxUsable: true, ready: true, reason: "ready" });
+      return;
+    }
     if (url.pathname === "/environment-setup") {
       const setup: ScientificEnvironmentSetup = {
         allowedChannels: ["conda-forge"],
@@ -1335,14 +1339,18 @@ async function startSubagentModel(
 
 async function startTextModel(context: TestContext, delayed = false): Promise<{
   baseUrl: string;
+  requested: Promise<void>;
   release: () => void;
 }> {
+  let signalRequested: () => void = () => undefined;
+  const requested = new Promise<void>((resolveRequested) => { signalRequested = resolveRequested; });
   let release: () => void = () => undefined;
   const gate = delayed ? new Promise<void>((resolveGate) => { release = resolveGate; }) : Promise.resolve();
   const modelServer = createHttpServer(async (request, response) => {
     for await (const _chunk of request) {
       // Consume the OpenAI-compatible request before streaming the fixture response.
     }
+    signalRequested();
     await gate;
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({
@@ -1362,9 +1370,14 @@ async function startTextModel(context: TestContext, delayed = false): Promise<{
     response.end("data: [DONE]\n\n");
   });
   await new Promise<void>((resolveListen) => modelServer.listen(0, "127.0.0.1", resolveListen));
-  context.after(() => new Promise<void>((resolveClose) => modelServer.close(() => resolveClose())));
+  context.after(() => new Promise<void>((resolveClose) => {
+    release();
+    modelServer.close(() => resolveClose());
+    modelServer.closeAllConnections();
+  }));
   return {
     baseUrl: `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`,
+    requested,
     release,
   };
 }
@@ -3218,7 +3231,7 @@ test("the built-in Runner answers setup queries before its scientific environmen
   assert.deepEqual(mirrored.body.map((item) => item.id), ["starter-python"]);
 });
 
-test("an active run keeps its effective settings snapshot while later runs use updates", async (context) => {
+test("an active run keeps its effective settings snapshot while later runs use updates", { timeout: 60_000 }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `settings-snapshot-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -3266,6 +3279,10 @@ test("an active run keeps its effective settings snapshot while later runs use u
     if (done) throw new Error(`run ended before reporting a running status:\n${firstStream}`);
     firstStream += firstDecoder.decode(value, { stream: true });
   }
+  // `running` includes asynchronous preparation (Runner health, skills, etc.).
+  // Wait for the model request to prove revision one is already in use before
+  // editing it; otherwise this test races context construction, not snapshots.
+  await delayedModel.requested;
   const archiveDuringRun = await fetch(`${origin}/api/sessions/${session.body.id}/archive`, {
     headers: authorization,
     method: "POST",

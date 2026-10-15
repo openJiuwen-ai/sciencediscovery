@@ -13,7 +13,9 @@ When you finish, you should be able to:
 
 ### Linux: use the prepackaged binary
 
-For Linux on x86_64 or aarch64, this is the shortest path.
+For glibc-based Linux on x86_64 or aarch64, this is the shortest path.
+The release binary requires glibc 2.28+ and does not run directly on Alpine
+Linux or other musl-based distributions.
 
 You need:
 
@@ -38,13 +40,16 @@ chmod +x ./ScienceDiscovery
 
 ### macOS: use local source mode
 
-Both macOS x64 and arm64 are supported. There is currently no prepackaged single-file macOS binary, so use local source mode. The sandbox uses the built-in Seatbelt mechanism; Bubblewrap is not required.
+Both macOS x64 and arm64 are supported on macOS 13+. There is no prepackaged
+single-file macOS binary, so this first-run path uses local source mode.
+The sandbox uses the built-in Seatbelt mechanism; Bubblewrap is not required.
+For the experimental Docker path on macOS, see the [deployment guide](deployment.md).
 
 Make sure the machine has:
 
 - Node.js 22.19+;
 - pnpm 11.1.2;
-- Python 3;
+- `python3` 3.9+;
 - uv 0.9+;
 - Git;
 - curl;
@@ -55,7 +60,6 @@ Then run:
 ```bash
 git clone https://github.com/openJiuwen-ai/sciencediscovery.git
 cd sciencediscovery
-git checkout feat/jiuwenswarm
 
 scripts/jiuwenswarm.sh setup
 ./scripts/start-stack.sh --mode local
@@ -71,13 +75,27 @@ After the project has already been built, later starts can use:
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
+### Windows: use WSL 2 or Docker (experimental)
+
+Agent behavior on all Windows installation paths has not been fully validated.
+
+Run the [Linux binary](deployment.md#prepackaged-single-file-deployment-linux)
+or [local source mode](deployment.md#local-source-mode-linux--macos) inside a
+WSL 2 Linux distribution. Or follow the
+[Docker deployment steps](deployment.md#docker-deployment-linux-containers)
+using Linux containers. Once the service starts, continue below.
+
 ### After startup
 
-On both Linux and macOS, a successful startup prints an `Open to sign in` URL in the terminal. Open it in your browser to enter ScienceDiscovery.
+On all three systems, a successful startup prints an `Open to sign in` URL
+in the terminal or Docker logs. Open it in your browser to enter ScienceDiscovery.
 
-Keep the startup terminal running. Closing it or pressing Ctrl-C stops the service.
+For binary and local source mode, keep the startup terminal running.
+Closing it or pressing Ctrl-C stops the service. Docker runs in the background.
 
-If no sign-in URL appears, the browser cannot connect, or startup reports an error, see [first-run troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode).
+If no sign-in URL appears, the browser cannot connect, or startup reports an error,
+see [binary and source troubleshooting](deployment.md#first-run-troubleshooting-for-binary-and-local-mode)
+or the [Docker FAQ](deployment.md#docker-faq), as appropriate.
 
 > For Docker, air-gapped environments, Linux source builds, and complete deployment details, see the [deployment guide](deployment.md).
 

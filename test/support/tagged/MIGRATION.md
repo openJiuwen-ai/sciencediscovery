@@ -17,14 +17,17 @@ dimensions; `pnpm test:policy` prints it and the selector derived from it:
 (category:ut or category:st or category:e2e)
   and os:linux and arch:amd64
   and npu:none and (model:none or model:mock) and judge:none
-  and status:reviewed
+  and status:reviewed and (tier:l1 or tier:l2)
 ```
 
 against the single target `os=linux, arch=amd64`.
 
 `pnpm test:shared` runs all of it. CI runs the same plan as slices that
-partition it — `category` is single-valued and required, so `ut`, `st` and
-`e2e` cover it exactly once each.
+partition it: `l1`, `ut` (excluding L1), `st` and mocked `e2e` cover it exactly once.
+The new tier dimension defaults to L2, preserving the existing hermetic scope.
+L3 adds seven basic real cases; L4 adds all ten previously eligible nightly
+cases. L5 currently matches L4 while retaining its extension point for future
+cases; see [CI operations](../../../.ci/README.md).
 
 Nothing in that selector can be satisfied or defeated by the machine a run
 happens on. The plan is frozen from source before anything looks at the host,
@@ -35,7 +38,7 @@ capability, a skip, or `executed != planned` are all failures of the run.
 
 | Before | Now |
 | --- | --- |
-| `ci:ut` → install, build, 9 pnpm workloads, then the sandbox package in a QEMU guest | `--slice ut` (`category:ut`) |
+| `ci:ut` → install, build, 9 pnpm workloads, then the sandbox package in a QEMU guest | `--slice ut` (`category:ut and not tier:l1`) |
 | `ci:st` → `bash test/api/run_m1_smoke.sh` | `--slice st` (`category:st`) |
 | `ci:e2e` → `bash .ci/run-e2e.sh mocked` | `--slice e2e` (`category:e2e`), which still drives `run-e2e.sh` for the stack lifecycle |
 
@@ -90,9 +93,10 @@ selected ones, and the difference is exactly this list.
 Everything else that `ci:ut` + `ci:st` + `ci:e2e` reached is in the shared
 plan. No assertion was weakened and no test was deleted to get there.
 
-## On `feat/jiuwenswarm`
+## JiuwenSwarm backend on `main`
 
-This branch runs agent turns on JiuwenSwarm, behind the adapter, and the plan
+The branch formerly named `feat/jiuwenswarm` is now `main`. It runs agent turns
+on JiuwenSwarm, behind the adapter, and the plan
 came to it with that as a fixed part of the layers rather than a choice of the
 machine: `pnpm ci:ut` wraps the shared runner in `scripts/with-jiuwenswarm.sh`,
 and the E2E slice drives `run-e2e.sh`, whose backend is JiuwenSwarm unless
