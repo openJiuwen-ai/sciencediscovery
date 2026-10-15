@@ -10,6 +10,7 @@ These pages are for developers and code agents modifying ScienceDiscovery core c
 - [Runtime architecture](architecture.md) — native/JiuwenSwarm executors, adapter, API, Runner, and sidecars.
 - [Repository layout](repository-layout.md) — service/package ownership, dependency rules, and entry points.
 - [Control plane](control-plane.md) — authoritative API state, Run lifecycle, and executor seam.
+- [Automatic Session titles](session-titles.md) — language budgets, complete summaries, safe fallback, and sidebar overflow.
 
 ## Agent Runtime
 

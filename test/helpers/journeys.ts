@@ -204,12 +204,13 @@ function userText(content: unknown): unknown {
 export function scriptedModel(
   mainSteps: ScriptedTurns,
   subagentSteps?: ScriptedTurns,
-  options: { captureContext?: boolean; waitForShellCompletion?: boolean } = {},
+  options: { captureContext?: boolean; waitForShellCompletion?: boolean; namingTitles?: string[] } = {},
 ): Promise<ScriptedModel> {
   const calls: ScriptedModelCall[] = [];
   const model = "journey-scripted-model";
   const apiToken = "journey-local-stub-token";
   let sequence = 0;
+  let namingIndex = 0;
   let mainStepIndex = 0;
   let mainTurn = 0;
   let subagentStepIndex = 0;
@@ -225,6 +226,16 @@ export function scriptedModel(
           tools?: Array<{ function?: { name?: string } }>;
         };
         const messages = body.messages ?? [];
+        if (String(messages[0]?.content).includes("Create a concise title for the research session")) {
+          const titles = options.namingTitles ?? ["Journey session"];
+          const title = titles[Math.min(namingIndex++, titles.length - 1)] ?? "";
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({
+            choices: [{ finish_reason: "stop", message: { content: title } }],
+            usage: { completion_tokens: 5, prompt_tokens: 10, total_tokens: 15 },
+          }));
+          return;
+        }
         if (!body.tools?.length) {
           sequence += 1;
           const id = `chatcmpl-journey-${sequence}`;
