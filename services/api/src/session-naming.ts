@@ -74,7 +74,11 @@ function stripWrappingQuotes(value: string): string {
 }
 
 export function sanitizeRefinedSessionTitle(value: string): string | undefined {
-  const lines = value
+  const withoutThinking = value
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think\s*>/gi, "")
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, "")
+    .replace(/<\/?think\b[^>]*>/gi, "");
+  const lines = withoutThinking
     .replace(/^```(?:text)?\s*/i, "")
     .replace(/\s*```$/i, "")
     .split(/\r?\n/)
