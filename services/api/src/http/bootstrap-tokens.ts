@@ -32,6 +32,10 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+// [windows-desktop] reason: F3.3 —— 0600/0700 在 Windows 无 POSIX 语义，
+// 统一走 platform/os 适配层（posix=chmod 透传，win32=icacls owner-only ACL）。
+import { restrictToOwnerSync } from "../platform/os/index.js";
+
 /** Where the token came from, so startup output can be honest about it. */
 export type BootstrapTokenSource = "environment" | "generated" | "stored";
 
@@ -78,10 +82,15 @@ export function resolveBootstrapToken(
   const stored = readStoredToken(path);
   if (stored) return { source: "stored", token: stored };
 
-  mkdirSync(resolve(dataDir, BOOTSTRAP_SECRETS_DIRECTORY), { mode: 0o700, recursive: true });
+  const secretsDir = resolve(dataDir, BOOTSTRAP_SECRETS_DIRECTORY);
+  mkdirSync(secretsDir, { mode: 0o700, recursive: true });
+  // [windows-desktop] reason: F3.3 —— 先收紧目录 ACL，随后写入的 token 文件
+  // 在 Windows 上自创建起即继承 owner-only ACL，无暴露窗口。
+  restrictToOwnerSync(secretsDir, { directory: true });
   const token = randomBytes(TOKEN_BYTES).toString("base64url");
   try {
     writeFileSync(path, `${token}\n`, { flag: "wx", mode: 0o600 });
+    restrictToOwnerSync(path);
     return { source: "generated", token };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -90,6 +99,7 @@ export function resolveBootstrapToken(
     if (winner) return { source: "stored", token: winner };
     // The file exists but is empty or blank: replace it rather than hand out "".
     writeFileSync(path, `${token}\n`, { mode: 0o600 });
+    restrictToOwnerSync(path);
     return { source: "generated", token };
   }
 }

@@ -27,6 +27,7 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import time
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
@@ -93,8 +94,29 @@ def _log_arxiv_http(
             os.write(descriptor, (json.dumps(event, separators=(",", ":")) + "\n").encode())
         finally:
             os.close(descriptor)
+        _restrict_to_owner(path)
     except OSError:
         # Diagnostics must never change the result of a provider call.
+        pass
+
+
+def _restrict_to_owner(path: Any) -> None:
+    """Best-effort 0600 equivalent; failures stay silent like the OSError guard above.
+
+    [windows-desktop] reason: F3.3 —— NTFS 无 POSIX 权限位，os.open 的 mode
+    参数在 Windows 只影响只读属性；等价物是去掉继承 + 仅当前用户的 ACL。
+    """
+    if os.name != "nt":
+        return  # os.open's mode already applied 0600 atomically on POSIX.
+    principal = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ.get('USERNAME', '')}".strip("\\")
+    if not principal:
+        return
+    try:
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{principal}:F"],
+            capture_output=True, timeout=10, check=False,
+        )
+    except Exception:
         pass
 
 

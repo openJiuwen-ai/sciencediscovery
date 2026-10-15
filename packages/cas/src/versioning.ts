@@ -7,6 +7,10 @@ import { link, lstat, mkdir, open, readdir, readFile, readlink, rm } from "node:
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+// [windows-desktop] reason: 炸点③-14 —— Windows 不能 fsync 目录句柄（EPERM 必现），
+// 目录持久化语义走 platform/ 适配层（posix=fsync 目录，win32=no-op）。
+import { syncDirectory } from "./platform/index.js";
+
 export type Pool = "data" | "agent-state";
 export interface ObjectRef<P extends Pool = Pool> {
   pool: P;
@@ -47,11 +51,6 @@ export function assertRef(ref: ObjectRef, pool?: Pool): void {
   if (!ref || (ref.pool !== "data" && ref.pool !== "agent-state") || (pool && ref.pool !== pool)
     || !/^sha256:[a-f0-9]{64}$/.test(ref.digest) || !Number.isSafeInteger(ref.size) || ref.size < 0
     || typeof ref.mediaType !== "string" || !ref.mediaType) throw new Error("Invalid or cross-pool reference");
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY);
-  try { await handle.sync(); } finally { await handle.close(); }
 }
 
 /** Publish without replacing existing bytes, including under concurrent writers. */

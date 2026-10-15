@@ -2,11 +2,13 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
+// [windows-desktop] 炸点③-15: shortened lock basename keeps the SQLite journal
+// path under Windows MAX_PATH (260).
+import { lockFileName } from "./platform/index.js";
 import type { VersionStore } from "./versioning.js";
 
 const held = new AsyncLocalStorage<Map<string, { active: boolean }>>();
@@ -41,7 +43,7 @@ function assertOpen(db: DatabaseSync, path: string) {
 
 async function locked<T>(directory: string, key: string, action: () => Promise<T>, signal?: AbortSignal,
   onBusy?: () => Promise<T>): Promise<T> {
-  const identity = join(directory, createHash("sha256").update(key).digest("hex"));
+  const identity = join(directory, lockFileName(key));
   if (held.getStore()?.get(identity)?.active) return action();
   const db = new DatabaseSync(`${identity}.sqlite`);
   const token = { active: true };
@@ -71,7 +73,7 @@ export async function withWorkspaceAdmission<T>(versions: VersionStore, root: st
   signal?: AbortSignal, onBusy?: () => Promise<T>): Promise<T> {
   const path = await canonicalWorkspacePath(root);
   const { db, directory } = await registry(versions);
-  const identity = join(directory, createHash("sha256").update(path).digest("hex"));
+  const identity = join(directory, lockFileName(path));
   try {
     if (held.getStore()?.get(identity)?.active) return await action();
     db.exec("BEGIN IMMEDIATE");
