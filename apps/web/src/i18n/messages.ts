@@ -3590,7 +3590,7 @@ export const zhCN: Partial<Record<MessageKey, string>> = {
   "settings.connectionHelp": "使用本地服务访问令牌连接 ScienceDiscovery。外部模型 API Key 请在「模型注册表」中配置。",
   "settings.localToken": "本地服务访问令牌",
   "settings.tokenRejectedTitle": "本地服务访问令牌被拒绝",
-  "settings.tokenHelp": "可直接打开登录链接，或粘贴本地服务访问令牌后点击「保存」。令牌保存在 `<data-dir>/secrets/auth-token`（Docker 中为 `/app/data/secrets/auth-token`），因此后台服务不需要保留原始启动日志。此处不要填写外部模型 API Key。",
+  "settings.tokenHelp": "可直接打开登录链接，或粘贴本地服务访问令牌后点击「保存」。令牌保存在 <data-dir>/secrets/auth-token（Docker 中为 /app/data/secrets/auth-token），因此后台服务不需要保留原始启动日志。此处不要填写外部模型 API Key。",
   "settings.tokenStorageHelp": "此令牌保存在当前浏览器中，用于访问本地 ScienceDiscovery 服务。",
   "settings.global": "全局",
   "settings.project": "项目",
