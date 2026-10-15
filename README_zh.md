@@ -36,7 +36,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-打开 `serve` 输出的 **`Open to sign in`** 链接，浏览器将自动保存本地服务访问令牌，无需手动复制。该令牌不同于模型 API Key；此链接可访问本机工作区，请勿外传。Web 界面位于 <http://127.0.0.1:4310>，终端窗口仅运行服务进程。
+打开 <http://127.0.0.1:4310>。若浏览器尚未连接，可在「连接」页面粘贴 `.sciencediscovery-data/secrets/auth-token` 中的本地服务访问令牌；即使服务在后台运行、启动输出不可用也能完成连接。终端输出的 **`Open to sign in`** 链接仍可作为自动登录的快捷方式。该令牌不同于模型 API Key，可访问本机工作区，请勿外传。
 
 运行预打包二进制时，唯一需要自行安装的依赖是 Bubblewrap。[部署指南](https://sciencediscovery.github.io/zh/docs/getting-started/deployment.html)
 说明如何从源码构建便携二进制、以本地源码模式进行开发，以及使用 Docker 完成高级容器运维。
