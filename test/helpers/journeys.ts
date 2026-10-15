@@ -414,12 +414,10 @@ export async function createProjectAndSession(
   page: Page,
   input: {
     approvalMode?: "always_allow" | "ask_for_dangerous";
-    enabledSkillIds?: string[];
     model?: { apiToken: string; baseUrl: string; model: string; name: string; vision?: boolean; apiVariant?: "deepseek" | "openai" };
     modelId?: string;
     projectName: string;
     sessionTitle: string;
-    skillSelectionMode?: "all" | "selected";
   },
 ): Promise<JourneyFixture> {
   const model = input.model ? await registerModel(page, input.model) : undefined;
@@ -433,9 +431,7 @@ export async function createProjectAndSession(
     project = created.project ?? created;
     let session = await apiJson<JourneySession>(page, `/api/sessions/${encodeURIComponent(created.firstSession.id)}`, {
       data: {
-        ...(input.enabledSkillIds ? { enabledSkillIds: input.enabledSkillIds } : {}),
         ...(model?.id || input.modelId ? { modelId: model?.id ?? input.modelId } : {}),
-        ...(input.skillSelectionMode ? { skillSelectionMode: input.skillSelectionMode } : {}),
         title: input.sessionTitle,
       },
       method: "PATCH",

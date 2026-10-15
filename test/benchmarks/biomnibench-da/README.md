@@ -70,12 +70,13 @@ A task that exceeds this budget is cancelled; there is no automatic retry or mon
 
 ## Assertions and benchmark fidelity
 
-The pinned original instruction text is preserved verbatim. Session creation uses
-`selected` Skill mode with `science-research-team` in its enabled list. The request
-also attaches that Skill using the same structured reference schema accepted by
-the Composer and validated by the API. The persisted Run must contain both the
-resolved reference and the selected Skill in its settings snapshot, so Skill
-selection does not depend on a natural-language request.
+The pinned original instruction text is preserved verbatim. JiuwenSwarm exposes
+its installed Skill catalog to every Session, so this journey does not require a
+per-Session `selected` mode. The request attaches `science-research-team` using
+the same structured reference schema accepted by the Composer and validated by
+the API. The persisted Run must contain the resolved reference, and its effective
+settings snapshot must include the Skill ID, so per-message Skill selection does
+not depend on a natural-language request.
 
 Both tasks append this parameter block before the platform delivery appendix:
 

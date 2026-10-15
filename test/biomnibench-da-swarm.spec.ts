@@ -80,7 +80,6 @@ for (const sample of cases) {
     let start: number | undefined;
     try {
       fixture = await createProjectAndSession(page, { approvalMode: "always_allow",
-        enabledSkillIds: [researchTeamReference.id], skillSelectionMode: "selected",
         ...(modelId ? { modelId } : { model: { apiToken: real!.E2E_LLM_TOKEN!, baseUrl: real!.E2E_LLM_BASE_URL!,
           model: real!.E2E_LLM_MODEL!, name: `BiomniBench ${sample.id} ${Date.now()}` } }),
         projectName: `BiomniBench ${sample.id} ${Date.now()}`, sessionTitle: sample.title });
@@ -101,9 +100,8 @@ for (const sample of cases) {
       const runBody = await runResponse.text();
       expect(runResponse.status(), runBody).toBe(201);
       const run = JSON.parse(runBody) as { id: string; references: Array<{ id: string; kind: string; label: string }>;
-        settingsSnapshot: { enabledSkillIds: string[]; skillSelectionMode: string } };
+        settingsSnapshot: { enabledSkillIds: string[] } };
       expect(run.references).toContainEqual(researchTeamReference);
-      expect(run.settingsSnapshot.skillSelectionMode).toBe("selected");
       expect(run.settingsSnapshot.enabledSkillIds).toContain(researchTeamReference.id);
       runId = run.id;
       metrics.initial_run_id = runId;
