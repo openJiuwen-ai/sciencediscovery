@@ -226,8 +226,8 @@ export function scriptedModel(
           tools?: Array<{ function?: { name?: string } }>;
         };
         const messages = body.messages ?? [];
-        if (String(messages[0]?.content).includes("Create a concise title for the research session")) {
-          const titles = options.namingTitles ?? ["Journey session"];
+        if (options.namingTitles && String(messages[0]?.content).includes("Create a concise title for the research session")) {
+          const titles = options.namingTitles;
           const title = titles[Math.min(namingIndex++, titles.length - 1)] ?? "";
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify({
