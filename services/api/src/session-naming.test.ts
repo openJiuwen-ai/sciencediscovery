@@ -81,7 +81,7 @@ test("Session title refinement uses an OpenAI-compatible model and records provi
       assert.equal(new Headers(init?.headers).get("authorization"), "Bearer secret");
       requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({
-        choices: [{ message: { content: "<think>First identify the research subject.</think>\\n标题：TP53 单细胞表达分析" } }],
+        choices: [{ message: { content: "<think>First identify the research subject.</think>\n标题：TP53 单细胞表达分析" } }],
         usage: { completion_tokens: 6, prompt_tokens: 18, input_tokens: 0, output_tokens: 0, total_tokens: 24 },
       }), {
         headers: { "content-type": "application/json" },
