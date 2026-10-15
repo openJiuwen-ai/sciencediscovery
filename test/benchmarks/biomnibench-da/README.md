@@ -70,11 +70,12 @@ A task that exceeds this budget is cancelled; there is no automatic retry or mon
 
 ## Assertions and benchmark fidelity
 
-The pinned original instruction text is preserved verbatim. The request attaches
-`science-research-team` using the same structured Skill reference schema accepted
-by the Composer and validated by the API. The persisted Run must contain this
-resolved reference, so Skill selection does not depend on a natural-language
-request.
+The pinned original instruction text is preserved verbatim. Session creation uses
+`selected` Skill mode with `science-research-team` in its enabled list. The request
+also attaches that Skill using the same structured reference schema accepted by
+the Composer and validated by the API. The persisted Run must contain both the
+resolved reference and the selected Skill in its settings snapshot, so Skill
+selection does not depend on a natural-language request.
 
 Both tasks append this parameter block before the platform delivery appendix:
 
