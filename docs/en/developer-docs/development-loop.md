@@ -1,22 +1,61 @@
 # Development loop: from issue to release evidence
 
-This is an operator-invoked workflow proposal for ScienceDiscovery. The
-[development-loop skill](../../../.agents/skills/development-loop/SKILL.md)
-turns a queue review into concrete next actions. It installs no daemon, webhook,
+This is an operator-invoked workflow proposal for ScienceDiscovery. The [agent entry](../../../AGENTS.md),
+[project configuration](../../../loop.project.json) and this guide define the
+local contract. The optional [skill](../../../.agents/skills/development-loop/SKILL.md)
+is a thin pointer, not a second policy source. It installs no daemon, webhook,
 schedule, credential, merge rule or CI trigger. Maintainers must approve any
 future deployment's cadence, capacity, recipients and write permissions.
 
-The design takes inspiration from Magpie's unified agent/model routing and
-reusable instruction library, described in its
-[pinned README](https://github.com/yetone/magpie/blob/35aa50cfb33a427681841ca2eb366b0cda5ebdc7/README.md).
-That source is not a ScienceDiscovery PR-review policy or an upstream PR-loop
-skill. This guide is adapted to ScienceDiscovery's actual contribution and CI
-contracts, without adding a dependency on Magpie.
+The primary reference is Magpie at
+[`9dd72f5`](https://github.com/yetone/magpie/tree/9dd72f5bce3ae4fd43ff482e4f72fd711d3911b6):
+its [agent entry](https://github.com/yetone/magpie/blob/9dd72f5bce3ae4fd43ff482e4f72fd711d3911b6/AGENTS.md)
+routes to architecture, engineering standards and durable lessons rather than
+repeating every rule. Its
+[review standards](https://github.com/yetone/magpie/blob/9dd72f5bce3ae4fd43ff482e4f72fd711d3911b6/docs/code-standards.md)
+connect regressions to tests that fail without the repair, inspect the complete
+user path, and bind review evidence to the actual revision. This proposal adapts
+those practices to ScienceDiscovery's existing documents and CI layers. It does
+not import Magpie's contributor exclusions, merge rules, resource access or
+claims about iteration speed. No Magpie runtime dependency is installed.
+
+For a bug fix, record both the original failing behavior and the repaired result
+of the same named regression test where feasible; a compile failure is not a
+behavioral negative control. If this cannot be demonstrated, record the gap.
+For architecture changes, extend the existing architecture checker or owning
+contract tests instead of adding a second prose-only boundary definition.
 
 Related work: [PR #231](https://github.com/openJiuwen-ai/sciencediscovery/pull/231)
 proposes a focused source-review skill. This loop coordinates queue handoffs and
 evidence; it does not replace source review. Until that proposal is accepted
 into a trusted revision, treat it as proposed material rather than active policy.
+
+## One read-only pass
+
+1. Establish repository, authenticated identity, trusted base, requested scope,
+   available persistent state and separately granted actions. If state is missing,
+   reconcile historical reviews/comments; do not infer a fresh daily allowance.
+2. Fully paginate the selected issue/PR queries. Keep drafts in inventory and
+   exclude them from approval candidates. Record exact query, pages and failures.
+3. Prioritize confirmed regressions and release blockers, then ready-to-progress
+   items; use age within comparable priority. Labels do not prove gate readiness.
+4. Read source, affected tests, live checks and discussion for selected items.
+   Reuse human review only with verified identity, current head, scope and concerns.
+5. Produce role-separated next actions. Refresh state/head, checks and discussion
+   before finalization and immediately before any separately authorized write.
+6. Read back authorized writes and record publication separately from completed
+   analysis and readiness. Changed heads invalidate dependent conclusions.
+
+Keep the last successfully reviewed full head SHA; failed attempts cannot erase
+it. New commits on an old PR are eligible. Unchanged heads may need readiness
+rechecks after CI, evidence or decisions change. Reuse immutable source by full
+repository/SHA/path and diffs by full base/head, never mutable cross-pass status.
+Same-pass read sharing must not replace final mutable refreshes.
+
+Deduplicate requests by repository, PR, relevant head, blocker and evidence
+requested; latest equivalent human requests also suppress duplicate feedback.
+A new head alone does not justify repeating the same unanswered request. Stop
+denied actions and honor rate limits without switching identities to evade them.
 
 ## Three queues
 
@@ -185,3 +224,80 @@ not a claim that an executable scheduler has been tested:
    acceptance remains distinct.
 8. A publication response is lost: read back before retrying, preserving the
    completed review even while publication is uncertain.
+
+## Architecture and subsystem routing
+
+Use existing design documentation instead of copying it into an agent prompt.
+Start with the [developer guide](developer-guide.md),
+[architecture](architecture.md) and [repository layout](repository-layout.md).
+Choose the affected boundary before selecting source or tests:
+
+| Change area | Existing reference | Review question |
+| --- | --- | --- |
+| API state and executor routing | [Control plane](control-plane.md), [runtime](runtime-core.md), [agent backends](../reference/agent-backends.md) | Does the change preserve authoritative state and executor contracts? |
+| Web interaction and lifecycle | [Web frontend](web-frontend.md), [session trajectory](session-trajectory.md) | Are interruption, repeated actions and final user outcomes tested? |
+| Runner and isolation | [Sandbox](sandbox-execution.md), [Runner inheritance](runner-inheritance.md) | Are permissions and execution boundaries preserved? |
+| Plugins and external tools | [Plugins](plugins.md), [MCP](mcp-tool-protocol.md), [connectors](science-connectors.md) | Are capability ownership and untrusted-input boundaries preserved? |
+| Memory, research and evolution | [Evolution](evolve-standalone.md), [provenance](review-provenance.md) | Are scientific claims and runtime results supported by traceable evidence? |
+| Distribution and startup | [Deployment](deployment-runtime.md), [binary packaging](binary-packaging.md) | Do supported startup and packaging paths remain compatible? |
+
+The mapping is navigation, not proof of a maintainer's ownership or full audit.
+Read the [complete subsystem index](README.md) for other affected areas.
+Architecture changes update the owning documents and corresponding tests.
+
+## Reusable template adapter and rollout
+
+This adaptation targets the proposed [think-loop v0.1 contract](https://github.com/ThinkFlowLab/think-loop/blob/121705d7aef37eb9299e2303bb397f0d85f74da9/docs/adapter-contract.md)
+at commit `121705d7aef37eb9299e2303bb397f0d85f74da9`, published in
+[template PR #1](https://github.com/ThinkFlowLab/think-loop/pull/1).
+The pin is a proposed version, not an assertion that template main has adopted it.
+The runtime is not vendored or installed by this change.
+
+For an offline replay, use a separately verified checkout at that exact pin and
+Python 3.11 or later. From that checkout, pass this repository's configuration,
+a complete normalized snapshot for `openJiuwen-ai/sciencediscovery`, and a state
+file outside either repository:
+
+```sh
+python -m think_loop --config /path/to/sciencediscovery/loop.project.json \
+  --snapshot /path/to/sd-snapshot.json --state /tmp/sd-loop.sqlite
+```
+
+Do not feed the template's synthetic example directly into this configuration:
+its repository and check names must match. `--now` is for deterministic synthetic
+replay only; real evidence must be evaluated against current time. The CLI
+creates local SQLite state and prints proposals; it performs no GitHub actions.
+A pending proposal is not a completed review or a confirmed publication.
+
+The project configuration describes candidate discovery and evidence inputs;
+it does not modify GitHub rules. `required_labels: []` imposes no new label
+filter. The configured `merge-gate` is a readiness input only: inspect its
+actual profile, revision and accounting before judging it. A PR result does
+not establish a merge-group or release result. An empty trusted-reviewer list
+is deliberate: obtain verified identities before making an approval assessment.
+Do not infer them from author names or general organization membership.
+
+A portable planner consumes an explicit complete snapshot and emits proposed
+TODOs. Missing pages, unavailable checks, malformed timestamps, stale evidence
+and head mismatches must remain unknown or pending. Keep its local state outside
+version control; immutable code review and mutable readiness remain separate.
+Its output does not authorize a comment, assignment, code change, CI run or merge.
+
+Before enabling a future issue-to-PR executor, maintainers must approve:
+
+1. Which issue scope and acceptance criteria permit implementation, and which
+   decisions must return to a human. Untrusted issue content cannot approve work.
+2. Isolated workspaces and dependency/resource budgets; no live credentials for
+   untrusted code, and no paid models or hardware without explicit authority.
+3. Exact-head tests and independent review, with bounded repair attempts and
+   stop conditions for repeated failures, missing resources or conflicting work.
+4. An idempotent, read-back-verified publication adapter with explicit action
+   grants, auditable receipts and refreshed state immediately before writing.
+5. Maintainer-controlled enqueue/release decisions and rollback handling under
+   the existing CI and repository trust boundary.
+
+The current change provides documentation/configuration, not those executors,
+a hosted service, a CI deployment or measured acceleration. Validate the
+planner with network-free fixtures before connecting it to live read adapters;
+then run report-only comparison before authorizing any writes. Feed only
+adjudicated, regression-tested outcomes into [LESSONS](../../../LESSONS.md).

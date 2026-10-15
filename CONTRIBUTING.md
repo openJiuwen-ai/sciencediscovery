@@ -528,6 +528,9 @@ otherwise unrelated pull request fail.
 
 For issue-to-release blocker triage and role-separated review TODOs, see the
 [development loop guide](docs/en/developer-docs/development-loop.md) and its
-[operator skill](.agents/skills/development-loop/SKILL.md). They document an
+[thin operator entry](.agents/skills/development-loop/SKILL.md). Start from
+[AGENTS](AGENTS.md); candidate/evidence settings live in
+[loop.project.json](loop.project.json), and adjudicated regressions belong in
+[LESSONS](LESSONS.md). These document an
 operator-invoked workflow; CI gates and action permissions remain governed by
 the current repository policy and explicit operator authorization.
