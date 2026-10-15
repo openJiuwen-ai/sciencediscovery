@@ -55,7 +55,7 @@ for (const locale of ["en", "zh-CN"] as const) {
     test(`首次连接可理解且错误令牌可恢复 ${locale}`, { tag: "@mocked" }, async ({ page, journey }) => {
       journey.scenario({ goal: "首次使用时按一处引导完成连接，并知道模型 Key 应填在哪里。", preconditions: ["独立本机栈", `界面语言 ${locale}`, "浏览器未保存令牌"] });
       const dialog = page.getByRole("dialog");
-      await journey.step("打开应用查看引导", "只有一处启动日志与保存说明，没有 Unauthorized 红字、Toast 或设置警示条。", async () => {
+      await journey.step("打开应用查看引导", "只有一处连接与保存说明，没有 Unauthorized 红字、Toast 或设置警示条。", async () => {
         await page.goto("/");
         await expect(dialog.getByLabel(tokenLabel, { exact: true })).toBeVisible();
         await expect(dialog.getByRole("status")).toContainText(tokenLocation);
