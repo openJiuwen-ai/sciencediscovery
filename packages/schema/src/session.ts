@@ -48,8 +48,9 @@ export function createLocalSessionTitle(
   if (!normalized) return fallbackSessionTitle(createdAt);
   const characters = Array.from(normalized);
   if (characters.length <= maxCharacters) return normalized;
-  if (maxCharacters <= 1) return characters.slice(0, Math.max(0, maxCharacters)).join("");
-  return `${characters.slice(0, maxCharacters - 1).join("")}…`;
+  // A prefix is not a summary. Keep a neutral provisional title until the
+  // background model can produce a complete phrase; never store UI ellipses.
+  return fallbackSessionTitle(createdAt);
 }
 
 export interface Session {

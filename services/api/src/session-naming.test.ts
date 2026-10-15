@@ -13,13 +13,12 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
 
 import {
   createLocalSessionTitle,
-  SESSION_TITLE_MAX_CHARACTERS,
   type ModelProfile,
 } from "@sciencediscovery/schema";
 
@@ -40,11 +39,12 @@ const model: ModelProfile = {
   vision: false,
 };
 
-test("local Session titles collapse whitespace and truncate by Unicode character", () => {
+test("local Session titles keep short messages and use a safe default instead of truncating", () => {
   assert.equal(createLocalSessionTitle("  Analyze\nTP53   expression  "), "Analyze TP53 expression");
-  const title = createLocalSessionTitle("研究单细胞数据中的肿瘤免疫微环境与细胞通讯变化及治疗响应机制");
-  assert.equal(Array.from(title).length, SESSION_TITLE_MAX_CHARACTERS);
-  assert.equal(title.endsWith("…"), true);
+  for (const message of [
+    "研究单细胞数据中的肿瘤免疫微环境与细胞通讯变化及治疗响应机制",
+    "Compare TP53 expression across treatment cohorts and identify cell-state-specific effects",
+  ]) assert.equal(createLocalSessionTitle(message, "2026-07-30T09:42:00.000Z"), "Session 07-30 09:42");
   assert.equal(createLocalSessionTitle(" \n ", "2026-07-30T09:42:00.000Z"), "Session 07-30 09:42");
 });
 
@@ -56,7 +56,7 @@ test("refined Session titles remove wrappers, labels, and terminal punctuation",
   assert.equal(sanitizeRefinedSessionTitle("```text\n# Protein structure comparison\n```"), "Protein structure comparison");
   assert.equal(
     sanitizeRefinedSessionTitle("A comprehensive analysis of TP53 expression across treatment cohorts and cell states…"),
-    "A comprehensive analysis of TP53 expression across treatment cohorts and cell states",
+    "A comprehensive analysis of TP53 expression across treatment cohorts and cell states…",
   );
   assert.equal(sanitizeRefinedSessionTitle("Title:\nTP53 cohort comparison"), "TP53 cohort comparison");
   assert.equal(sanitizeRefinedSessionTitle(" \n "), undefined);
@@ -71,6 +71,10 @@ test("refined Session titles exclude inline thinking tags and their contents", (
     sanitizeRefinedSessionTitle("<think>Reasoning that must never become visible in a title.</think>"),
     undefined,
   );
+  assert.equal(sanitizeRefinedSessionTitle("<think>outer<think>inner</think>secret</think>TP53 analysis"), "TP53 analysis");
+  assert.equal(sanitizeRefinedSessionTitle("<THINK mode='reason'>secret</THINK>TP53 analysis"), "TP53 analysis");
+  assert.equal(sanitizeRefinedSessionTitle("<think>unfinished reasoning"), undefined);
+  assert.equal(sanitizeRefinedSessionTitle("</think>TP53 analysis"), "TP53 analysis");
 });
 
 test("Session title refinement uses an OpenAI-compatible model and records provider usage", async () => {
@@ -97,7 +101,8 @@ test("Session title refinement uses an OpenAI-compatible model and records provi
   assert.equal(requestBody?.max_tokens, undefined);
   const messages = requestBody?.messages as Array<{ content: string; role: string }>;
   assert.equal(messages[0]?.role, "system");
-  assert.doesNotMatch(messages[0]?.content ?? "", /no more than|characters/i);
+  assert.match(messages[0]?.content ?? "", /24 Unicode characters/);
+  assert.match(messages[0]?.content ?? "", /8 whitespace-separated words and 80 Unicode characters/);
   assert.equal((requestBody?.messages as Array<{ role: string }>)[1]?.role, "user");
   // The message is framed as data to name, not handed over as a request to act on.
   assert.match(messages[1]?.content ?? "", /<first_message>\n分析单细胞数据中的 TP53 表达\n<\/first_message>/);
@@ -256,7 +261,7 @@ test("Session title refinement leaves the temperature to a model that takes only
 
 test("Session title refinement retries without a token limit when a gateway ignores thinking control", async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
-  const visibleAnswer = "A comprehensive analysis of TP53 expression across all treatment cohorts";
+  const visibleAnswer = "TP53 expression across treatment cohorts";
   const refined = await generateRefinedSessionTitle({
     apiToken: "secret",
     fetchImpl: async (_input, init) => {
@@ -295,8 +300,8 @@ test("Session title refinement retries without a token limit when a gateway igno
   assert.deepEqual(requestBodies[0]?.thinking, { type: "disabled" });
   assert.equal(requestBodies[1]?.max_tokens, undefined);
   assert.equal(requestBodies[1]?.thinking, undefined);
-  assert.equal(refined.title, createLocalSessionTitle(visibleAnswer));
-  assert.equal(Array.from(refined.title).length, SESSION_TITLE_MAX_CHARACTERS);
+  assert.equal(refined.title, visibleAnswer);
+  assert.ok(Array.from(refined.title).length > 24);
   assert.deepEqual(refined.usage, {
     cacheReadTokens: null,
     cacheWriteTokens: null,
@@ -307,13 +312,14 @@ test("Session title refinement retries without a token limit when a gateway igno
   });
 });
 
-test("Session title refinement keeps a usable provider-limited title", async () => {
+test("Session title refinement resummarizes a provider-truncated title", async () => {
+  let calls = 0;
   const refined = await generateRefinedSessionTitle({
     apiToken: "secret",
     fetchImpl: async () => new Response(JSON.stringify({
       choices: [{
-        finish_reason: "length",
-        message: { content: "A usable title" },
+        finish_reason: ++calls === 1 ? "length" : "stop",
+        message: { content: calls === 1 ? "An incomplete title about" : "TP53 cohort analysis" },
       }],
       usage: { completion_tokens: 64, prompt_tokens: 30, total_tokens: 94 },
     }), { status: 200 }),
@@ -321,7 +327,78 @@ test("Session title refinement keeps a usable provider-limited title", async () 
     model,
   });
 
-  assert.equal(refined.title, "A usable title");
+  assert.equal(refined.title, "TP53 cohort analysis");
+  assert.equal(calls, 2);
+});
+
+test("Session title refinement summarizes long Chinese and English responses instead of slicing them", async () => {
+  for (const scenario of [
+    {
+      firstMessage: "请比较多个治疗队列中不同细胞状态的TP53表达差异，并调查肿瘤免疫微环境及治疗响应机制",
+      longTitle: "多个治疗队列中不同细胞状态的TP53表达差异及肿瘤免疫微环境治疗响应机制研究",
+      shortTitle: "TP53表达与治疗响应",
+    },
+    {
+      firstMessage: "Compare TP53 expression across treatment cohorts and cell states, focusing on immune microenvironment changes and treatment response mechanisms",
+      longTitle: "A comprehensive comparison of TP53 expression across treatment cohorts and immune cell states",
+      shortTitle: "TP53 expression and treatment response",
+    },
+    { firstMessage: "Compare cohorts", longTitle: "TP53 cohort analysis…", shortTitle: "TP53 cohort analysis" },
+    { firstMessage: "Compare cohorts", longTitle: "TP53 cohort analysis...", shortTitle: "TP53 cohort analysis" },
+    { firstMessage: "Analyze genes", longTitle: "X".repeat(81), shortTitle: "Gene expression analysis" },
+  ]) {
+    const requests: Array<{ messages: Array<{ content: string }> }> = [];
+    const result = await generateRefinedSessionTitle({
+      apiToken: "secret", firstMessage: scenario.firstMessage, model,
+      fetchImpl: async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({
+          choices: [{ finish_reason: "stop", message: { content: requests.length === 1 ? scenario.longTitle : `<think>secret</think>${scenario.shortTitle}` } }],
+          usage: { completion_tokens: 5, prompt_tokens: 10, total_tokens: 15 },
+        }), { status: 200 });
+      },
+    });
+    assert.equal(result.title, scenario.shortTitle);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1]!.messages[1]!.content, /Summarize the original topic again/);
+    assert.ok(requests[1]!.messages[1]!.content.includes(scenario.firstMessage));
+    assert.deepEqual(result.usage, {
+      cacheReadTokens: null, cacheWriteTokens: null, inputTokens: 20, outputTokens: 10, totalTokens: 30, usageStatus: "reported",
+    });
+  }
+});
+
+test("Session title refinement preserves complete titles at the language budget", async () => {
+  for (const [firstMessage, title] of [
+    ["研究治疗响应", "中".repeat(24)],
+    ["Analyze genes", "X".repeat(80)],
+    ["Compare cohorts", "One two three four five six seven eight"],
+  ]) {
+    let calls = 0;
+    const result = await generateRefinedSessionTitle({
+      apiToken: "secret", firstMessage: firstMessage!, model,
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: title } }] }));
+      },
+    });
+    assert.equal(result.title, title);
+    assert.equal(calls, 1);
+  }
+});
+
+test("Session title refinement rejects unusable rewrites so the caller retains its safe title", async () => {
+  for (const secondTitle of ["one two three four five six seven eight nine", "Still incomplete…", "<think>reasoning only</think>"]) {
+    let calls = 0;
+    await assert.rejects(generateRefinedSessionTitle({
+      apiToken: "secret", firstMessage: "Compare cohorts", model,
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ choices: [{ message: { content: calls === 1 ? "one two three four five six seven eight nine" : secondTitle } }] }));
+      },
+    }), /over-budget or incomplete|no usable title/);
+    assert.equal(calls, 2);
+  }
 });
 
 test("Session title refinement rejects a provider-truncated empty title", async () => {
