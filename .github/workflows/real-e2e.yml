@@ -32,9 +32,12 @@ jobs:
     environment: nightly-ci-ds
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      attempts: ${{ steps.matrix.outputs.attempts }}
     env:
       CI_PROFILE: ${{ inputs.profile }}
       CI_E2E_BACKEND: ${{ inputs.backend }}
+      # L5 exit evidence: every real case runs three independent times.
+      CI_REAL_ATTEMPTS: "3"
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_JUDGE_MODEL: ${{ vars.E2E_JUDGE_MODEL }}
     steps:
@@ -85,12 +88,12 @@ jobs:
           retention-days: 7
 
   real-e2e:
-    name: Real E2E (${{ matrix.shard }})
+    name: Real E2E (${{ matrix.shard }}, attempt ${{ matrix.attempt }})
     needs: real-plan
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.real-plan.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 6
       matrix: ${{ fromJSON(needs.real-plan.outputs.matrix) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
@@ -114,8 +117,8 @@ jobs:
       JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       E2E_DRB_EVALUATION: full
       E2E_BIOMNI_EVALUATION: rubric
-      # Keep daily and release evaluation modes equal until L5 gains its own cases.
-      E2E_PUCT_LLM_EVALUATION: "0"
+      # The L5 exit report needs the puct-artifact-review-v1 score on every attempt.
+      E2E_PUCT_LLM_EVALUATION: "1"
       E2E_DRB_MAX_SUBAGENTS: "2"
       E2E_TEAM_CONCURRENCY_HINT: "2"
       E2E_DRB_RUN_TIMEOUT_MS: "3600000"
@@ -134,6 +137,17 @@ jobs:
       BIOMNI_JUDGE_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      # Observation only, for the exit report's memory column. Samples the VM's
+      # used memory (MemTotal - MemAvailable, so reclaimable cache is excluded)
+      # every 5 s for the whole worker, and keeps the steps' cgroup for its
+      # memory.peak, which does include page cache.
+      - name: Start the worker memory sampler
+        continue-on-error: true
+        run: |
+          mkdir -p .ci-memory
+          sed -n 's/^0:://p' /proc/self/cgroup > .ci-memory/cgroup.txt
+          nohup bash -c 'while :; do awk -v now="$(date +%s)" "/^MemTotal:/{t=\$2} /^MemAvailable:/{a=\$2} /^SwapTotal:/{st=\$2} /^SwapFree:/{sf=\$2} END{print now, t-a, st-sf}" /proc/meminfo; sleep 5; done' >> .ci-memory/samples.txt 2>/dev/null &
+          echo $! > .ci-memory/sampler.pid
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -159,11 +173,27 @@ jobs:
       - name: Stage real E2E scores
         if: always()
         run: node .ci/prepare-real-e2e-results.mjs
+      - name: Summarize worker memory
+        if: always()
+        continue-on-error: true
+        run: |
+          kill "$(cat .ci-memory/sampler.pid 2>/dev/null)" 2>/dev/null || true
+          cgroup="/sys/fs/cgroup$(cat .ci-memory/cgroup.txt 2>/dev/null)"
+          {
+            echo "cgroup=${cgroup}"
+            echo "cgroup_memory_peak_bytes=$(cat "${cgroup}/memory.peak" 2>/dev/null || echo unavailable)"
+            echo "cgroup_memory_events=$(tr '\n' ' ' < "${cgroup}/memory.events" 2>/dev/null || echo unavailable)"
+            echo "mem_total_kib=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
+            awk '{if ($2 > used) used = $2; if ($3 > swap) swap = $3} END {printf "vm_used_peak_kib=%d\nswap_used_peak_kib=%d\nsamples=%d\n", used, swap, NR}' .ci-memory/samples.txt || true
+          } | tee .ci-memory/summary.txt
+          { echo '### Worker memory'; echo; echo '```'; cat .ci-memory/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Names carry the attempt and the run attempt, so a re-run of a failed
+      # try adds its artifacts beside the earlier ones instead of hiding them.
       - name: Upload real E2E results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-e2e-results-${{ matrix.shard }}
+          name: real-e2e-results-a${{ matrix.attempt }}-${{ matrix.shard }}-r${{ github.run_attempt }}
           path: .tmp/real-e2e-results
           include-hidden-files: true
           if-no-files-found: warn
@@ -172,16 +202,29 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-e2e-evidence-${{ matrix.shard }}
+          name: real-e2e-evidence-a${{ matrix.attempt }}-${{ matrix.shard }}-r${{ github.run_attempt }}
           path: .ci-results
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      - name: Upload worker memory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-e2e-memory-a${{ matrix.attempt }}-${{ matrix.shard }}-r${{ github.run_attempt }}
+          path: .ci-memory
+          include-hidden-files: true
+          if-no-files-found: warn
 
   real-report:
-    name: Account for real cases
+    name: Account for real cases (attempt ${{ matrix.attempt }})
     needs: [real-plan, real-e2e]
     if: ${{ always() && github.event_name != 'pull_request' }}
+    # Each attempt is reconciled against the same frozen plan on its own.
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: ${{ fromJSON(needs.real-plan.outputs.attempts || '[1]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -195,28 +238,34 @@ jobs:
           path: .ci-real-plan
       - uses: actions/download-artifact@v4
         with:
-          pattern: real-e2e-results-*
-          path: .ci-real-results
+          pattern: real-e2e-results-a${{ matrix.attempt }}-*
+          path: .ci-real-download
+      - name: Keep the latest try of each shard
+        run: node .ci/real-attempt.mjs collect "${{ matrix.attempt }}" .ci-real-download .ci-real-results
       - name: Reconcile every planned identity
         run: node .ci/real-report.mjs .ci-real-plan/plan.json .ci-real-results
       - name: Stage combined real E2E scores
         if: always()
         run: node .ci/prepare-real-e2e-results.mjs
+      - name: Summarize attempt scores
+        if: always()
+        run: node .ci/real-attempt.mjs scores .tmp/real-e2e-results
       - name: Upload combined real E2E results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-e2e-results
+          name: real-e2e-attempt-${{ matrix.attempt }}-results
           path: .tmp/real-e2e-results
+          overwrite: true
           include-hidden-files: true
           if-no-files-found: warn
-          retention-days: 7
       - name: Upload real suite verdict
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-e2e-verdict
+          name: real-e2e-attempt-${{ matrix.attempt }}-verdict
           path: .ci-real-results/verdict.json
+          overwrite: true
           include-hidden-files: true
           if-no-files-found: warn
 
