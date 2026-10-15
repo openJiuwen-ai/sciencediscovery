@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-10-15",
+  "target": {
+    "repository": "openJiuwen-ai/sciencediscovery",
+    "inspected_commit": "cc974a14468cbdfd66c76f2720ebd751aefb1cdd"
+  },
+  "pin_type": "git-blob-content-id",
+  "runtime_upstream_fetch": false,
+  "upstreams": [
+    {
+      "id": "impeccable",
+      "repository": "pbakaus/impeccable",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": ".agents/skills/impeccable/reference/adapt.md",
+          "git_blob_sha": "85f7c022f5c65baebdd8df16b996898a4f520e3a",
+          "immutable_content_url": "https://api.github.com/repos/pbakaus/impeccable/git/blobs/85f7c022f5c65baebdd8df16b996898a4f520e3a"
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/harden.md",
+          "git_blob_sha": "124742e1cca3caff2c495009a8f408382e73e7d1",
+          "immutable_content_url": "https://api.github.com/repos/pbakaus/impeccable/git/blobs/124742e1cca3caff2c495009a8f408382e73e7d1"
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/layout.md",
+          "git_blob_sha": "aa547c742fc373bc459bdbb7977683441aa48ec0",
+          "immutable_content_url": "https://api.github.com/repos/pbakaus/impeccable/git/blobs/aa547c742fc373bc459bdbb7977683441aa48ec0"
+        },
+        {
+          "path": "LICENSE",
+          "git_blob_sha": "bb3f6d23b1f8025514a62a12b51b47d73e3c9aa9",
+          "immutable_content_url": "https://api.github.com/repos/pbakaus/impeccable/git/blobs/bb3f6d23b1f8025514a62a12b51b47d73e3c9aa9"
+        }
+      ],
+      "selection": "selected guidance, adapted and substantially rewritten; no executable implementation imported"
+    },
+    {
+      "id": "vercel-web-interface-guidelines",
+      "repository": "vercel-labs/web-interface-guidelines",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "command.md",
+          "git_blob_sha": "3eb3a212b7b89493922ea418489d4c6f67ae8bd5",
+          "immutable_content_url": "https://api.github.com/repos/vercel-labs/web-interface-guidelines/git/blobs/3eb3a212b7b89493922ea418489d4c6f67ae8bd5"
+        },
+        {
+          "path": "LICENSE",
+          "git_blob_sha": "b3575a3c1358eac4b9ee36a4c851872d81417760",
+          "immutable_content_url": "https://api.github.com/repos/vercel-labs/web-interface-guidelines/git/blobs/b3575a3c1358eac4b9ee36a4c851872d81417760"
+        }
+      ],
+      "selection": "selected guidance, adapted and substantially rewritten; no executable implementation imported"
+    }
+  ]
+}

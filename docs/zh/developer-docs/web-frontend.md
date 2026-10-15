@@ -86,3 +86,4 @@ React 浏览器 UI，构建后由控制 API 作为静态资源托管；开发时
 
 - [控制面](control-plane.md) — SSE 端点与事件来源
 - [整体运行时架构](architecture.md) — 前端在进程模型中的位置
+- [前端质量指导](frontend-quality.md) — 开发技能与布局验证。
