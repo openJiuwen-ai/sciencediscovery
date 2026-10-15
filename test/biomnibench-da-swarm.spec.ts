@@ -9,12 +9,12 @@ import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import { allowRealEnvException, requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openProjectSession,
-  sendUserMessage, sessionExecutionRuns, waitForRunChainTerminal } from "./helpers/journeys.ts";
+  sessionExecutionRuns, waitForRunChainTerminal } from "./helpers/journeys.ts";
 import { drbApi, drbArticle, positiveNumber } from "./helpers/deepresearchbench.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
 import { requiredArtifacts } from "./helpers/real-delivery.mjs";
-import { analysisPrompt, cases } from "./benchmarks/biomnibench-da/cases.ts";
+import { analysisPrompt, cases, researchTeamReference } from "./benchmarks/biomnibench-da/cases.ts";
 
 import { mainRunChain } from "./helpers/run-chain.ts";
 import { RunChainTimeoutError } from "./helpers/journeys.ts";
@@ -37,12 +37,12 @@ for (const sample of cases) {
  * Purpose: Execute two small BiomniBench-DA analyses on real Swarm and verify delivery and score analysis with the upstream rubric.
  * Steps:
  *   1. Verify authorized local benchmark inputs before paid calls; upload the CSV through the workspace API.
- *   2. Submit the original task plus platform delivery contract; verify the two required nonempty deliverables.
+ *   2. Attach the research-team Skill as a structured reference and submit the original task plus parameter and delivery appendices.
  *   3. Retain diagnostics, usage and optionally score the analysis using the upstream rubric with a local Judge adapter.
  * Environment: Opt-in isolated Swarm stack, local authorized BiomniBench task directories and Python scientific dependencies.
  * Type: real
  * LLM: Real configured generator and optional separately configured rubric judge.
- * WebSearch: Live if the model needs general background references; source-paper answer lookup prohibited by original task.
+ * WebSearch: Disabled by a non-enforcing Skill parameter in the submitted prompt; original task restrictions apply.
  * PaperSources: Not required for numerical analysis.
  * MCP: Platform execution tools exposed through Swarm.
  * OtherExternal: Local API, Runner, browser and Artifact store; no dataset auto-download.
@@ -93,7 +93,14 @@ for (const sample of cases) {
       const prompt = analysisPrompt(sample.id, instruction.toString("utf8"), sample.file);
       await writeFile(testInfo.outputPath("prompt.txt"), prompt);
       start = Date.now();
-      const run = await sendUserMessage(page, fixture.session.id, prompt);
+      const runResponse = await page.request.post(`${apiBaseUrl()}${prefix}/runs`, {
+        data: { content: prompt, references: [researchTeamReference] },
+        headers: authorizationHeader(),
+      });
+      const runBody = await runResponse.text();
+      expect(runResponse.status(), runBody).toBe(201);
+      const run = JSON.parse(runBody) as { id: string; references: Array<{ id: string; kind: string; label: string }> };
+      expect(run.references).toContainEqual(researchTeamReference);
       runId = run.id;
       metrics.initial_run_id = runId;
       metrics.run_id = runId;

@@ -34,7 +34,8 @@ The hashes were checked against the official repository metadata on 2026-09-23.
 Preflight rejects changed/missing inputs before spending generator tokens. Only
 the instruction and CSV enter the Agent's workspace/context. Rubrics remain on
 the evaluation side. Source-paper answer lookup is prohibited by the original
-instructions; general background references remain allowed.
+instructions. Prompt-only Skill parameters request no knowledge-domain branch
+or web search.
 
 ## Run
 
@@ -69,7 +70,24 @@ A task that exceeds this budget is cancelled; there is no automatic retry or mon
 
 ## Assertions and benchmark fidelity
 
-The pinned original instruction text is preserved verbatim. A platform delivery
+The pinned original instruction text is preserved verbatim. The request attaches
+`science-research-team` using the same structured Skill reference schema accepted
+by the Composer and validated by the API. The persisted Run must contain this
+resolved reference, so Skill selection does not depend on a natural-language
+request.
+
+Both tasks append this parameter block before the platform delivery appendix:
+
+```text
+<skill_invocation_parameters skill_id="science-research-team">
+knowledge_domain: disabled
+web_search: disabled
+</skill_invocation_parameters>
+```
+
+These are prompt-only Skill parameters. They guide orchestration but do not
+enforce a network boundary and do not make the benchmark fail merely because a
+knowledge-domain branch is observed. A platform delivery
 appendix only maps `/app` paths to the actual workspace and asks for declaration
 of the two originally required artifacts, `trace.md` and `answer.txt`. It adds
 no analysis method, ranking convention, JSON schema or delegation restriction.
