@@ -23,7 +23,8 @@ const policy = { mode: 'candidate', baseline: null, score_drop_points: 0, resour
 const documents = () => plan.entries.map(e => ({ schema_version: 2, benchmark: 'biomnibench-da', case_id: biomniCase(e), key: e.key, revision: plan.revision,
   integration_status: 'passed', evaluation: { status: 'scored', score: 80, gating: true },
   identity: { dataset_revision: dataset.revision, manifest_sha256: manifestHash, evaluator_revision: plan.evaluatorRevision,
-    measurement_version: MEASUREMENT_VERSION, generator_model: 'generator', judge_model: 'judge', backend: 'jiuwenswarm', run_budget_ms: 1000,
+    measurement_version: MEASUREMENT_VERSION, generator_model: 'generator', judge_model: 'judge', backend: 'jiuwenswarm',
+    run_budget_ms: 1000, workspace_budget_bytes: 40 * 1024 ** 3,
     machine: { os: 'linux', arch: 'x64', cpu: 'cpu', cores: 8, memory_bytes: 64000, kernel: 'kernel', node: 'v22' } },
   measurements: { score: 80, tool_calls: 12, tool_rounds: 5, peak_rss_bytes: 10000, e2e_ms: 1000, generation_tokens: 100,
     judge_tokens: 20, total_tokens: 120, generation_input_tokens: 80, generation_output_tokens: 20,
@@ -34,6 +35,15 @@ test('all 50 public cases are L5-only, partitioned exactly once', () => {
   for (const profile of ['pr','merge','daily']) assert.throws(() => createPlan(catalog, { revision: 'test', targets: [{os:'linux',arch:'amd64'}], selector: profiles[profile].selector }), /EMPTY_SELECTION/);
   assert.equal(realShards(plan).length, 50);
   assert.equal(new Set(realShards(plan).flatMap(s => s.keys)).size, 50);
+});
+
+test('Biomni workers receive the 40 GiB workspace and three-hour run budgets', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/real-e2e.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /SCIENCE_AGENT_MAX_WORKSPACE_BYTES:.*'42949672960'/);
+  assert.match(workflow, /E2E_BIOMNI_RUN_TIMEOUT_MS:.*'10800000'/);
+  const journey = readFileSync(new URL('../test/biomnibench-da-swarm.spec.ts', import.meta.url), 'utf8');
+  assert.match(journey, /E2E_BIOMNI_RUN_TIMEOUT_MS", 10_800_000/);
+  assert.match(journey, /SCIENCE_AGENT_MAX_WORKSPACE_BYTES", 40 \* 1024 \*\* 3/);
 });
 
 test('complete evidence creates an unapproved candidate, including a valid zero score', () => {
@@ -48,7 +58,8 @@ test('missing, duplicate, foreign, incomplete and non-finite metrics fail closed
   for (const mutate of [d => d.pop(), d => d.push(d[0]), d => d[0].case_id = 'foreign', d => delete d[0].measurements,
     d => d[0].measurements.peak_rss_bytes = null, d => d[0].measurements.e2e_ms = Infinity, d => d[0].evaluation.status = 'error',
     d => d[0].evaluation.gating = false, d => d[0].measurements.total_tokens++, d => d[0].revision = 'other',
-    d => d[0].identity.evaluator_revision = 'other', d => d[0].identity.generator_model = 'other']) {
+    d => d[0].identity.evaluator_revision = 'other', d => d[0].identity.generator_model = 'other',
+    d => delete d[0].identity.workspace_budget_bytes]) {
     const docs = documents(); mutate(docs); assert.equal(evaluateSuite(plan, docs, policy).status, 'failed');
   }
   assert.equal(evaluateSuite({ ...plan, entries: plan.entries.slice(1) }, documents().slice(1), policy).status, 'failed');

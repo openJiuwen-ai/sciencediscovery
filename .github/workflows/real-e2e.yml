@@ -103,7 +103,10 @@ jobs:
       E2E_COMMIT_SHA: ${{ github.sha }}
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
       CI_RUNTIME_DIR: ${{ github.workspace }}/.ci-runtime/real-e2e
-      CI_PREPARE_BIOMNI: ${{ matrix.prepareBiomni && '1' || '0' }}
+      CI_BIOMNI_CASE_ID: ${{ matrix.biomni_case }}
+      # Biomni inputs exceed the product's 10 GiB default workspace quota.
+      # Forty GiB covers the largest pinned input plus the required output reserve.
+      SCIENCE_AGENT_MAX_WORKSPACE_BYTES: ${{ matrix.biomni_case != '' && '42949672960' || '' }}
       E2E_LLM_BASE_URL: ${{ vars.E2E_LLM_BASE_URL }}
       E2E_LLM_MODEL: ${{ vars.E2E_LLM_MODEL }}
       E2E_LLM_TOKEN: ${{ secrets.E2E_LLM_TOKEN }}
@@ -114,7 +117,7 @@ jobs:
       JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
       E2E_DRB_EVALUATION: full
       E2E_BIOMNI_EVALUATION: rubric
-      # Keep daily and release evaluation modes equal until L5 gains its own cases.
+      # Biomni is selected only by the L5 source tags.
       E2E_PUCT_LLM_EVALUATION: "0"
       E2E_DRB_MAX_SUBAGENTS: "2"
       E2E_TEAM_CONCURRENCY_HINT: "2"
@@ -122,7 +125,7 @@ jobs:
       # RACE and FACT share this deadline. Forty minutes lets citation checking finish.
       E2E_DRB_EVAL_TIMEOUT_MS: "2400000"
       E2E_TEAM_RUN_TIMEOUT_MS: "3300000"
-      E2E_BIOMNI_RUN_TIMEOUT_MS: "4800000"
+      E2E_BIOMNI_RUN_TIMEOUT_MS: ${{ vars.E2E_BIOMNI_RUN_TIMEOUT_MS || '10800000' }}
       LLM_BACKEND: openai
       OPENAI_BASE_URL: ${{ vars.E2E_JUDGE_BASE_URL }}
       OPENAI_API_KEY: ${{ secrets.E2E_JUDGE_TOKEN }}

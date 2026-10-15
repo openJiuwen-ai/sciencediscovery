@@ -18,7 +18,7 @@ const pick = (doc, keys) => Object.fromEntries(keys.filter(k => doc?.[k] !== und
 // copy arbitrary diagnostics, prompts, judge explanations or provider objects.
 export function projectMetrics(doc) {
   const out = pick(doc, ['schema_version', 'benchmark', 'case_id', 'key', 'revision', 'integration_status']);
-  out.identity = pick(doc.identity, ['dataset_revision', 'manifest_sha256', 'evaluator_revision', 'measurement_version', 'generator_model', 'judge_model', 'backend', 'run_budget_ms']);
+  out.identity = pick(doc.identity, ['dataset_revision', 'manifest_sha256', 'evaluator_revision', 'measurement_version', 'generator_model', 'judge_model', 'backend', 'run_budget_ms', 'workspace_budget_bytes']);
   out.identity.machine = pick(doc.identity?.machine, ['os', 'arch', 'kernel', 'cpu', 'cores', 'memory_bytes', 'node']);
   out.measurements = pick(doc.measurements, ['score', ...resourceKeys, 'memory_samples', 'memory_interval_ms', 'memory_scope', 'judge_ms', 'generation_input_tokens', 'generation_output_tokens', 'judge_input_tokens', 'judge_output_tokens']);
   out.evaluation = pick(doc.evaluation, ['status', 'score', 'gating']);
@@ -32,7 +32,7 @@ export function validateMetrics(doc, entry, plan) {
   if (id?.dataset_revision !== dataset.revision || id.manifest_sha256 !== manifestHash || id.measurement_version !== MEASUREMENT_VERSION
       || id.evaluator_revision !== plan.evaluatorRevision || id.backend !== plan.execution?.backend
       || !id.generator_model || id.generator_model !== plan.execution?.model || !id.judge_model || id.judge_model !== plan.execution?.judge
-      || !positive(id.run_budget_ms) || !positive(id.machine?.memory_bytes) || !positive(id.machine?.cores)
+      || !positive(id.run_budget_ms) || !positive(id.workspace_budget_bytes) || !positive(id.machine?.memory_bytes) || !positive(id.machine?.cores)
       || id.machine.os !== 'linux' || id.machine.arch !== 'x64' || !id.machine.cpu || !id.machine.kernel || !id.machine.node) throw new Error('METRIC_CONFIGURATION');
   if (doc.evaluation?.status !== 'scored' || doc.evaluation.gating !== true || typeof m?.score !== 'number' || !Number.isFinite(m.score)
       || m.score < 0 || m.score > 100 || doc.evaluation.score !== m.score) throw new Error('MISSING_VALID_SCORE');
