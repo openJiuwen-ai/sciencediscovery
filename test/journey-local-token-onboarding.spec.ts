@@ -33,12 +33,13 @@ for (const locale of ["en", "zh-CN"] as const) {
     const save = zh ? "保存" : "Save";
     const saveClose = zh ? "保存并关闭" : "Save and close";
     const rejected = zh ? "本地服务访问令牌被拒绝" : "Local service access token rejected";
+    const tokenLocation = zh ? "令牌保存在 <data-dir>/secrets/auth-token" : "The token is stored in <data-dir>/secrets/auth-token";
 
     /**
      * E2E-META
      * Purpose: A first-time user finds one clear local-token prompt, recovers from wrong credentials, and distinguishes model keys.
      * Steps:
-     *   1. Open a fresh browser and follow the startup-log guidance.
+     *   1. Open a fresh browser and read the local-token recovery guidance.
      *   2. Try a wrong token twice and see a single rejection without toasts.
      *   3. Save the correct token, refresh, and open model credentials.
      * Environment: Isolated stack at E2E_BASE_URL; empty browser storage except locale.
@@ -57,7 +58,7 @@ for (const locale of ["en", "zh-CN"] as const) {
       await journey.step("打开应用查看引导", "只有一处启动日志与保存说明，没有 Unauthorized 红字、Toast 或设置警示条。", async () => {
         await page.goto("/");
         await expect(dialog.getByLabel(tokenLabel, { exact: true })).toBeVisible();
-        await expect(dialog.getByRole("status")).toContainText("Open to sign in");
+        await expect(dialog.getByRole("status")).toContainText(tokenLocation);
         await expect(dialog.getByRole("status")).toContainText(zh ? "保存" : "Save");
         await expect(page.getByRole("alert")).toHaveCount(0);
         await expect(page.getByText("Unauthorized", { exact: false })).toHaveCount(0);
