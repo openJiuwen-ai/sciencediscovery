@@ -32,7 +32,7 @@ async function dismissAllToasts(page: import("@playwright/test").Page): Promise<
   while ((await dismiss.count()) > 0) {
     await dismiss.first().click();
   }
-  await expect(page.locator("[role='status']")).toHaveCount(0);
+  await expect(page.locator(".toast-viewport")).toHaveCount(0);
 }
 
 /**

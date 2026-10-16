@@ -4660,7 +4660,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <button
                       aria-checked={Boolean(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled)}
                       aria-label={t("reviewer.automaticReview")}
-                      className="approval-mode-toggle"
+                      className="automatic-review-toggle"
                       disabled={sessionArchived || reviewerSessionSettingsBusy || !reviewerSpecialistSettings}
                       onClick={() => reviewerSpecialistSettings?.enabled
                         ? void updateSessionReviewerSpecialistSettings({
