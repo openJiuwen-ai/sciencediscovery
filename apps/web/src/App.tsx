@@ -4472,9 +4472,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     <div className="session-intro">
                       <span className="eyebrow">{t("empty.sessionReady")}</span>
                       <h2>{t("empty.investigate")}</h2>
-                      <p>{session.enabledConnectorIds.includes("pubmed") && session.enabledConnectorIds.includes("uniprot")
-                        ? t("app.sessionIntroPrompt")
-                        : t("empty.sessionCsvHelp")}</p>
                     </div>
                   ) : null}
                   {conversationBlocks.map((block) => block.kind === "message" ? (
