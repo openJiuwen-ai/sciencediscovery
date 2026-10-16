@@ -8,7 +8,11 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedMo
 /**
  * E2E-META
  * Purpose: Keep a conversation identifiable as its main topic changes without losing a manual title.
- * Steps: 1. Create an Untitled session and ask a first question. 2. Change topic. 3. Manually rename and continue. 4. Request a rename.
+ * Steps:
+ * 1. Create an Untitled session and ask a first question.
+ * 2. Change topic.
+ * 3. Manually rename and continue.
+ * 4. Request a rename.
  * Environment: Isolated local API, Runner and JiuwenSwarm stack.
  * Type: mocked
  * LLM: Local scripted model emits rename_session calls.
