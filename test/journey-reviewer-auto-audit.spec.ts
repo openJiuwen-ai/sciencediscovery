@@ -20,6 +20,7 @@ test.describe("journey-reviewer-auto-audit.spec", { tag: ["@isolation:global", "
  *   2. Deliver a Markdown report and wait for the main run to finish.
  *   3. Observe the independent automatic audit complete and expose its read-only result.
  *   4. Run a manual review and verify a disabled global capability is explained beside the composer.
+ *   5. Deliver another report with the capability off and observe a neutral skip reason in the conversation.
  * Environment: Isolated API/Runner with its own ports and data directory.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible stub only.
@@ -31,16 +32,20 @@ test.describe("journey-reviewer-auto-audit.spec", { tag: ["@isolation:global", "
  * CostSideEffects: Creates and deletes one isolated Project/Session; restores the temporary global Reviewer switch; no external calls.
  */
 test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mocked" }, async ({ journey, page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(270_000);
   journey.scenario({
     goal: "研究员交付一份报告后，主任务立即完成；Reviewer Specialist 在后台完成只读 Quick 审核并显示结果。",
     preconditions: ["隔离 API 与 Runner 已启动", "本地模型 stub 不访问网络", "Reviewer Specialist 已启用"],
   });
-  const stub = await scriptedModel([
+  const stub = await scriptedModel([[
     { arguments: { command: "mkdir -p results && printf '# Report\\n\\nA concise result.\\n' > results/report.md" }, tool: "run_shell" },
     { arguments: { path: "results/report.md" }, tool: "declare_artifact" },
     { text: "The report is ready." },
-  ]);
+  ], [
+    { arguments: { command: "printf '# Second report\\n\\nAnother result.\\n' > results/second-report.md" }, tool: "run_shell" },
+    { arguments: { path: "results/second-report.md" }, tool: "declare_artifact" },
+    { text: "The second report is ready." },
+  ]]);
   const fixture = await createProjectAndSession(page, {
     approvalMode: "always_allow",
     model: { apiToken: stub.apiToken, baseUrl: stub.baseUrl, model: stub.model, name: `Reviewer audit ${Date.now()}` },
@@ -127,6 +132,17 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
       await page.reload();
       await expect(page.getByRole("status").filter({ hasText: "Automatic review is unavailable" })).toBeVisible();
       await expect(page.locator(".composer-footer").getByRole("switch", { name: "Automatic review", exact: true })).not.toBeChecked();
+    });
+    await journey.step("查看未执行审核的原因", "系统能力关闭后交付的报告显示中性跳过记录，刷新后仍可见。", async () => {
+      const run = await sendUserMessage(page, fixture.session.id, "Deliver another Markdown report.");
+      expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
+      const reason = "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists.";
+      const skipPanel = page.locator(".reviewer-specialist-panel").filter({ hasText: reason });
+      await expect(skipPanel.locator(".reviewer-specialist-panel-heading small")).toHaveText(reason, { timeout: 90_000 });
+      await expect(skipPanel).not.toHaveClass(/failed/);
+      await page.reload();
+      await expect(skipPanel.locator(".reviewer-specialist-panel-heading small")).toBeVisible();
+      await expect(skipPanel).not.toHaveClass(/failed/);
     });
   } finally {
     await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
