@@ -129,6 +129,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(page.locator(".permission-card")).toHaveCount(0);
         const tool = page.locator(".timeline-disclosure.tool.running").first();
         await expect(tool).toBeVisible();
+        await expect(tool).not.toHaveAttribute("open", "");
+        await expect(tool.locator(".tool-content")).toBeHidden();
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const authorization = (await tool.locator(".tool-authorization").boundingBox())!;

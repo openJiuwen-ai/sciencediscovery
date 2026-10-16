@@ -192,7 +192,7 @@ test("subagent cards link to a page-level view without embedding their process",
 
   assert.match(html, /Method A/);
   assert.match(html, /completed/);
-  assert.match(html, /general-purpose · 2\/300 turns · 150 tokens/);
+  assert.doesNotMatch(html, /150 tokens|2\/300 turns/);
   assert.match(html, /class="subagent-open-icon"/);
   assert.doesNotMatch(html, /aria-expanded=/);
   assert.doesNotMatch(html, /Created method-a\.json/);
@@ -208,6 +208,7 @@ test("a running subagent card shows the current streamed step", () => {
       createdAt: timestamp,
       id: "step-running",
       input: "vitamin C randomized trials",
+      args: { query: "vitamin C randomized trials" },
       kind: "tool",
       status: "running",
       toolName: "search_papers",
@@ -219,11 +220,11 @@ test("a running subagent card shows the current streamed step", () => {
   }));
 
   assert.match(html, /1 running · 1 total/);
-  assert.match(html, /Current: search_papers · vitamin C randomized trials/);
+  assert.match(html, /vitamin C randomized trials/);
   assert.doesNotMatch(html, /Subagent steps/);
 });
 
-test("a running subagent without a step reports that it is starting", () => {
+test("a running subagent without a step reports its status", () => {
   const running = buildSubagent({ id: "subagent-running", status: "running", steps: [], turnCount: 0 });
   const html = renderToStaticMarkup(createElement(SubagentCards, {
     onOpenSubagent: () => undefined,
@@ -231,10 +232,10 @@ test("a running subagent without a step reports that it is starting", () => {
   }));
 
   assert.match(html, /1 running · 1 total/);
-  assert.match(html, /Starting…/);
+  assert.match(html, /running/);
 });
 
-test("a running subagent whose snapshot carries turns but no step reports its turn, not a start", () => {
+test("a running subagent whose snapshot carries turns but no step keeps turn telemetry out of the card", () => {
   // The main stream's snapshot omits steps; a child on its second turn has
   // clearly started, and the card must say so.
   const running = buildSubagent({ id: "subagent-running", status: "running", steps: [], turnCount: 2 });
@@ -243,7 +244,8 @@ test("a running subagent whose snapshot carries turns but no step reports its tu
     subagents: [running],
   }));
 
-  assert.match(html, /Current: Turn 2 · Started/);
+  assert.match(html, /running/);
+  assert.doesNotMatch(html, /Turn 2/);
   assert.doesNotMatch(html, /Starting…/);
 });
 
@@ -277,4 +279,22 @@ test("specialist editor starts collapsed behind the specialist list", () => {
   assert.match(html, />＋ New specialist</);
   assert.doesNotMatch(html, /specialist-form-card/);
   assert.doesNotMatch(html, /specialist-description-card/);
+});
+
+test("parallel research lanes expose a source failure without prompts or telemetry", () => {
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent() {},
+    subagents: [
+      buildSubagent({ id: "clinical", status: "running",
+        input: { description: "Clinical CRISPR evidence", prompt: "LONG_PRIVATE_PROMPT" },
+        steps: [{ id: "search", createdAt: timestamp, kind: "tool", toolName: "pubmed_search",
+          status: "failed", content: "PubMed source unavailable: network denied", input: "subagents/uuid" }] }),
+      buildSubagent({ id: "mechanism", status: "running",
+        input: { description: "Mechanism evidence", prompt: "LONG_PRIVATE_PROMPT" }, steps: [] }),
+    ],
+  }));
+  assert.match(html, /Clinical CRISPR evidence/);
+  assert.match(html, /Mechanism evidence/);
+  assert.match(html, /<small>PubMed source unavailable: network denied<\/small>/);
+  assert.doesNotMatch(html, /LONG_PRIVATE_PROMPT|subagents\/uuid|150 tokens|2\/300 turns/);
 });

@@ -32,7 +32,7 @@ A typical Agent run includes:
 4. Adjust based on execution results;
 5. Deliver an answer and research artifacts.
 
-The execution timeline shows what actually happened during a task.
+The execution timeline shows what actually happened during a task. Tool cards start collapsed and lead with the task description or search query when available. Expand a card to inspect its full input and output; open a SubAgent to inspect its detailed process and usage. Parallel branches show their descriptions and current status, including reported source failures. The run header’s Details control reveals the model name.
 
 ## What capabilities can an Agent use?
 

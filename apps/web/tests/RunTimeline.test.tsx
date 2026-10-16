@@ -240,7 +240,7 @@ test("renders completed activity as collapsible disclosures", () => {
   // completion, plus the tool card's I/O section disclosures which default closed.
   assert.match(html, /<details class="timeline-disclosure thinking completed process-record">/);
   assert.match(html, /<details class="timeline-disclosure tool completed process-record">/);
-  assert.equal((html.match(/<details/g) ?? []).length, 3);
+  assert.equal((html.match(/<details/g) ?? []).length, 4);
   assert.match(html, /<details class="tool-io-section">/);
   assert.match(html, /Thought process · turn 1/);
   assert.match(html, /run_python/);
@@ -1076,4 +1076,23 @@ test("legacy snapshots keep one answer and a cursor across repeated approval swi
   assert.deepEqual(entries.map((entry) => entry.type), ["assistant", "approval-mode", "approval-mode"]);
   assert.equal(entries[0]?.type === "assistant" && entries[0].content, "Complete");
   assert.match(renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle: () => undefined })), /class="cursor"/);
+});
+
+
+test("research task headers stay concise, collapsed, and retain explicit expansion", () => {
+  const trace = { id: "clinical", name: "task", status: "running" as const,
+    args: { description: "PubMed search: CRISPR SCD clinical", prompt: "PRIVATE_LONG_PROMPT subagents/uuid" } };
+  const entries = apply([{ type: "tool.started", trace }]);
+  assert.equal(entries[0]?.type === "tool" && entries[0].expanded, false);
+  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: true, onToggle() {} }));
+  const header = html.match(/<summary[^>]*>([\s\S]*?)<\/summary>/)?.[1] ?? "";
+  assert.match(header, /PubMed search: CRISPR SCD clinical/);
+  assert.doesNotMatch(header, /PRIVATE_LONG_PROMPT|subagents/);
+  const expanded = entries.map(entry => entry.type === "tool" ? { ...entry, expanded: true, userExpanded: true } : entry);
+  const failed = reduceRunTimeline(expanded, { type: "tool.completed",
+    trace: { id: trace.id, name: trace.name, status: "failed", summary: "PubMed source unavailable: network denied" } });
+  assert.equal(failed[0]?.type === "tool" && failed[0].expanded, true);
+  const failedHtml = renderToStaticMarkup(createElement(RunTimeline, { entries: failed, isRunning: false, onToggle() {} }));
+  assert.match(failedHtml, /timeline-failure-summary">PubMed source unavailable: network denied/);
+  assert.match(failedHtml, /PubMed search: CRISPR SCD clinical/);
 });

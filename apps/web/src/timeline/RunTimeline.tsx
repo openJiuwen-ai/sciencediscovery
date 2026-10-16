@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { compactStatus, researchLabel } from "./research-label.js";
 import type {
   ApprovalMode,
   ArtifactReviewRun,
@@ -505,7 +506,7 @@ export function reduceRunTimeline(
         : entry);
     }
     return [...finished, {
-      expanded: true,
+      expanded: false,
       id: `tool-${event.trace.id}`,
       trace: event.trace,
       type: "tool",
@@ -835,7 +836,7 @@ export function RunTimeline({
     <section className="run-timeline" aria-label={t("timeline.activity")} aria-live="polite">
       <header className="message assistant run-identity">
         <div className="avatar"><BrandIcon size={19} /></div>
-        <div><span className="message-role">{agentLabel}{modelName ? ` · ${modelName}` : ""}</span></div>
+        <div><span className="message-role">{agentLabel}</span>{modelName ? <details className="run-model-details"><summary>{t("timeline.details")}</summary>{modelName}</details> : null}</div>
       </header>
       {entries.map((entry) => {
         if (entry.type === "idea-research") {
@@ -989,6 +990,8 @@ export function RunTimeline({
           if (entry.trace.status !== "failed") return null;
         }
 
+        const label = researchLabel(entry.trace);
+        const failure = entry.trace.status === "failed" && entry.trace.summary ? compactStatus(entry.trace.summary) : undefined;
         const outputText = entry.trace.output ?? toolOutputs[entry.trace.id] ?? entry.trace.summary;
 
         return (
@@ -1008,7 +1011,7 @@ export function RunTimeline({
             }}>
               <span className="timeline-chevron"><ChevronRightIcon size={16} /></span>
               <span className="timeline-icon">{statusIcon(entry.trace.status)}</span>
-              <span className="timeline-label"><strong>{entry.trace.status === "running" ? entry.trace.name : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: entry.trace.name })}</strong><small>{t("timeline.toolCall")}</small></span>
+              <span className="timeline-label"><strong>{entry.trace.status === "running" ? label : t(entry.trace.status === "failed" ? "record.toolFailed" : "record.toolCompleted", { name: label })}</strong><small>{entry.trace.name}</small>{failure ? <span className="timeline-failure-summary">{failure}</span> : null}</span>
               {(entry.trace.status === "running" || entry.expanded) && entries.some((candidate) => candidate.type === "permission" && candidate.request.state === "allowed" && candidate.request.toolCallId === entry.trace.id) ? <small className="tool-authorization">{t("record.authorized")}</small> : null}
               <span className={`timeline-status ${entry.trace.status}`}>{entry.trace.status}</span>
             </summary>

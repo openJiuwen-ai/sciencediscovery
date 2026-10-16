@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { compactStatus, researchLabel } from "./timeline/research-label.js";
 import { ProjectRecordSlot } from "./plugins/project-views.js";
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -19,7 +20,6 @@ import type {
   ConnectorManifest,
   ReviewerSpecialistLevel,
   Subagent,
-  SubagentStep,
   SkillDescriptor,
   Specialist,
 } from "@sciencediscovery/schema";
@@ -49,34 +49,14 @@ export function OrchestrationPanel(props: ActivityCardDisclosure & { plans:RunPl
 }
 
 function subagentSummary(subagent: Subagent, t: Translate): string {
-  if (subagent.status === "running") {
-    const step = subagent.steps.findLast((candidate) => candidate.status === "running") ?? subagent.steps.at(-1);
-    if (step) return t("subagent.current", { label: subagentStepLabel(step, t), preview: subagentStepPreview(step, t) });
-    // A snapshot that carries no step still says how far the work has come:
-    // a child on its second turn is running, not starting.
-    return subagent.turnCount > 0
-      ? t("subagent.current", { label: t("subagent.step.turn", { turn: subagent.turnCount }), preview: t("subagent.step.started") })
-      : t("subagent.starting");
+  const step = subagent.steps.at(-1);
+  if (subagent.error) return compactStatus(subagent.error);
+  if (step?.status === "failed") return compactStatus(step.content);
+  if (subagent.status === "running" && step?.kind === "assistant") return compactStatus(step.content);
+  if (subagent.status === "running" && step?.kind === "tool") {
+    return researchLabel({ name: step.toolName ?? t("subagent.step.tool"), args: step.args, input: step.input });
   }
-  const parts = [subagent.input.subagentType ?? "general-purpose", t("subagent.turns", { count: subagent.turnCount, max: subagent.maxTurns })];
-  parts.push(subagent.usage ? t("subagent.tokens", { count: subagent.usage.totalTokens.toLocaleString() }) : t("subagent.summaryUsageUnavailable"));
-  return parts.join(" · ");
-}
-
-function subagentStepLabel(step: SubagentStep, t: Translate): string {
-  if (step.kind === "tool") return step.toolName ?? t("subagent.step.tool");
-  if (step.kind === "thinking") return t("subagent.step.reasoning");
-  if (step.kind === "assistant") return t("subagent.step.response");
-  const turn = /^Turn (\d+) started$/i.exec(step.content.trim());
-  return turn ? t("subagent.step.turn", { turn: turn[1]! }) : t("subagent.step.setup");
-}
-
-function subagentStepPreview(step: SubagentStep, t: Translate): string {
-  const source = step.kind === "tool" ? step.input ?? step.content : step.content;
-  const compact = source.replace(/\s+/g, " ").trim();
-  if (!compact) return t("subagent.step.noDetails");
-  if (step.kind === "system" && /^Turn \d+ started$/i.test(compact)) return t("subagent.step.started");
-  return compact;
+  return subagentStatusLabel(t, subagent.status);
 }
 
 const SUBAGENT_STATUS_KEYS: Record<Subagent["status"], MessageKey> = {
@@ -120,7 +100,7 @@ export function SubagentCards({
         expanded={expandedCards ? expandedCards[activityCardId("subagent", subagent.id)] ?? false : undefined}
         onExpandedChange={onToggleCard ? (expanded) => onToggleCard(activityCardId("subagent", subagent.id), expanded) : undefined}
         failed={subagent.status === "failed" || subagent.status === "timed_out"}
-        key={subagent.id} label={`${subagent.input.description} · ${statusLabel}`}>
+        key={subagent.id} label={`${subagent.input.description} · ${statusLabel}${subagent.error ? ` · ${compactStatus(subagent.error)}` : ""}`}>
         <article className={`subagent-card ${subagent.status}`}>
         <button aria-label={t("subagent.openAria", { description: subagent.input.description })} type="button" onClick={() => onOpenSubagent(subagent)} title={`${subagent.input.description} · ${statusLabel}\n${summary}`}><i /><span><strong>{subagent.input.description}{subagent.status !== "running" ? ` · ${statusLabel}` : ""}</strong><small>{summary}</small></span><em>{statusLabel}</em><ChevronRightIcon className="subagent-open-icon" size={15} /></button>
         </article>
