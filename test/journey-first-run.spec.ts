@@ -255,8 +255,10 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
             const response = await api.patch(sessionPath, { data: { enabledConnectorIds } });
             expect(response.ok()).toBeTruthy();
             expect((await response.json()).enabledConnectorIds).toEqual(enabledConnectorIds);
+            // Reload retains the selected session. Its default title is localized
+            // in this zh-CN journey, unlike the raw title returned by the API.
             await page.reload();
-            await openProjectSession(page, fixture!);
+            await expect(page.getByRole("heading", { name: "未命名会话", exact: true })).toBeVisible();
             const intro = page.locator(".session-intro");
             await expect(intro.getByRole("heading")).toBeVisible();
             await expect(intro).not.toContainText(/CSV|TP53/);
@@ -271,7 +273,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
           expect(response.ok()).toBeTruthy();
         }
         await page.reload();
-        await openProjectSession(page, fixture!);
+        await expect(page.getByRole("heading", { name: "未命名会话", exact: true })).toBeVisible();
       },
     );
 
