@@ -119,7 +119,7 @@ test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async (
       "文件夹入口禁用，并明确引导使用 ZIP 或 Git；恢复支持后文件夹入口重新可用。",
       async () => {
         await page.evaluate(() => sessionStorage.setItem("test-disable-folder-picker", "1"));
-        await page.reload();
+        await page.goto("/");
         await page.getByRole("button", { name: /^系统设置/ }).click();
         await page.getByRole("dialog", { name: "系统设置", exact: true })
           .getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^Skills/ }).click();
@@ -129,7 +129,7 @@ test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async (
         await expect(manager.locator(".skill-import-menu button").filter({ hasText: "SKILL.md" })).toBeEnabled();
         await expect(manager.locator(".skill-import-menu button").filter({ hasText: "Git 仓库" })).toBeEnabled();
         await page.evaluate(() => sessionStorage.removeItem("test-disable-folder-picker"));
-        await page.reload();
+        await page.goto("/");
         await page.getByRole("button", { name: /^系统设置/ }).click();
         await page.getByRole("dialog", { name: "系统设置", exact: true })
           .getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^Skills/ }).click();
