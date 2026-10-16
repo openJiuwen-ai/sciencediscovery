@@ -1300,6 +1300,10 @@ async function executeAgentRun(
       });
       return await skillLibraryCatalog.publishProposals(input.proposalIds);
     },
+    // Do not expose graph-only tools when their backing service is disabled:
+    // a registered callback otherwise turns a normal tool call into a
+    // memory_graph_disabled error visible to the user.
+    ...(memoryGraphSink.enabled ? {
     queryGraph: async (query: string) => {
       // Degraded when the toggle is off or the sidecar is unreachable —
       // matches getSubgraph's contract so the agent loop never breaks.
@@ -1388,6 +1392,7 @@ async function executeAgentRun(
       }
       return result;
     },
+    } : {}),
     ...(reviewerSpecialistAvailable(reviewerSpecialistSettings.enabled, modelContent)
       && reviewerSpecialistSupportsLevel(sessionReviewerSpecialistSettings.level, "quick") ? {
       reviewCheckpoint: async (input, signal, toolCallId) => {
