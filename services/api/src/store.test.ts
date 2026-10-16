@@ -2275,6 +2275,41 @@ test("SessionStore defaults the global task model to the first configured model"
   assert.equal(store.getGlobalSettings().overrides.modelId, second.id);
 });
 
+test("SessionStore clears an auto-default only while the attempted model still owns it", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `catalog-conditional-model-clear-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const attempted = await store.createModel({
+    apiToken: "token-attempted", baseUrl: "https://models.example.test/v1", model: "attempted", name: "Attempted model",
+  });
+  await store.replaceGlobalSettings({
+    enabledConnectorIds: [], modelId: attempted.id, semanticReviewEnabled: true, thinkingEffort: "low",
+  });
+
+  const cleared = await store.clearGlobalModelIfCurrent(attempted.id);
+  assert.equal(cleared.cleared, true);
+  assert.deepEqual(store.getGlobalSettings().overrides, {
+    enabledConnectorIds: [], semanticReviewEnabled: true, thinkingEffort: "low",
+  });
+
+  const replacement = await store.createModel({
+    apiToken: "token-replacement", baseUrl: "https://models.example.test/v1", model: "replacement", name: "Replacement model",
+  });
+  await store.replaceGlobalSettings({ enabledConnectorIds: [], modelId: replacement.id, thinkingEffort: "high" });
+  const notOwner = await store.clearGlobalModelIfCurrent(attempted.id);
+  assert.equal(notOwner.cleared, false);
+  assert.deepEqual(store.getGlobalSettings().overrides, {
+    enabledConnectorIds: [], modelId: replacement.id, thinkingEffort: "high",
+  });
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getGlobalSettings().overrides, store.getGlobalSettings().overrides);
+});
+
 test("SessionStore persists validated Project and Session renames", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `catalog-rename-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

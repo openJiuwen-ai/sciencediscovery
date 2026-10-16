@@ -107,6 +107,7 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
     getGlobalSettings: async () => ({ effective: {}, overrides: {} } as any),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
+    clearGlobalModelIfCurrent: async () => ({ cleared: true }),
     testModel: async () => successResult,
     updateProvider: async (id: string, body: any) => ({
       id,
