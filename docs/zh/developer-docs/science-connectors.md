@@ -50,6 +50,8 @@ Agent 并不能直接看到全部 MCP 工具。从 connector 定义到进入模�
 | 4. 标记 deferred | `packages/workspace/src/workspace.ts` | `createWorkspaceTools` 把每个 MCP 工具包成 `AgentTool` 时统一打 `deferred: true` 并携带 `routing`(keywords/mode/priority);内置工作区工具不打此标记 |
 | 5. 绑定给模型 | `packages/tools/src/registry.ts`、`services/api/src/native-agent/index.ts` | `ToolRegistry.visibleSpecs()` 把当前可见工具(name/description/schema)随模型请求下发;工具执行时直接在进程内 `await` 同一个处理器,治理链路不变 |
 
+已启用的来源若目录状态为 `unavailable` 或 `degraded`（或无可用工具），运行初始化会失败，并显示来源 ID、状态及缺失工具 ID。运行错误引导用户检查 `/api/mcp/sources`：修复服务器并刷新目录，或关闭受影响的会话连接器后重试。未选中的来源不会阻止运行；子智能体工具构造也执行此检查。
+
 ### 3.2 模型可见性(Node 原生 loop 侧)
 
 延迟工具的目录与晋升状态由 `packages/tools/src/deferred-tools.ts` 和 `registry.ts` 实现；下表描述 **native loop** 如何延迟披露，细节见

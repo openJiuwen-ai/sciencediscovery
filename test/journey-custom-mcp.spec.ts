@@ -189,7 +189,7 @@ test("Custom MCP and Inspector user journey", { tag: "@mocked" }, async ({ page,
  * Steps:
  *   1. Select the first custom connector and call its echo tool.
  *   2. Add a second connector to the Session and call its echo tool in a new run.
- *   3. Assert persisted successful MCP invocations and final responses; clean up.
+ *   3. Disable a selected server, verify an actionable failed Run, re-enable and recover; clean up.
  * Environment: Isolated local stack and data directory, current local working tree.
  * Type: mocked
  * LLM: Local deterministic OpenAI-compatible stub; no provider API is called.
@@ -228,6 +228,11 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       { tool: "tool_search", arguments: { query: `select:${second.toolName}` } },
       { tool: second.toolName, arguments: { text: "second mcp verified" } },
       { text: "SECOND MCP VERIFIED" },
+    ],
+    [
+      { tool: "tool_search", arguments: { query: `select:${second.toolName}` } },
+      { tool: second.toolName, arguments: { text: "mcp recovered" } },
+      { text: "MCP RECOVERED" },
     ],
   ]);
   const fixture = await createProjectAndSession(page, {
@@ -269,6 +274,36 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       expect(saved.some((item) => item.sourceId === first.id && item.status === "succeeded")).toBe(true);
       expect(saved.some((item) => item.sourceId === second.id && item.status === "succeeded")).toBe(true);
       await expect(page.locator(".message").filter({ hasText: "SECOND MCP VERIFIED" }).last()).toBeVisible();
+    });
+    await journey.step("停用已选择的 MCP 服务器", "运行失败并显示来源状态和恢复操作，不静默回退", async () => {
+      const response = await page.request.put(`${apiBaseUrl()}/api/mcp/servers/${second.id}`, {
+        headers: authorizationHeader(), data: {
+          name: second.name, command: process.execPath,
+          args: [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url))], enabled: false,
+        },
+      });
+      expect(response.ok()).toBe(true);
+      const run = await sendUserMessage(page, fixture.session.id, "Use the selected MCP source again.");
+      const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
+      expect(terminal.status).toBe("failed");
+      expect(terminal.error).toContain(`${second.id}: unavailable`);
+      expect(terminal.error).toContain("Check /api/mcp/sources");
+      expect(terminal.error).toContain("disable these connectors");
+    });
+    await journey.step("恢复 MCP 服务器后重试", "同一会话恢复成功调用并完成运行", async () => {
+      const response = await page.request.put(`${apiBaseUrl()}/api/mcp/servers/${second.id}`, {
+        headers: authorizationHeader(), data: {
+          name: second.name, command: process.execPath,
+          args: [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url))], enabled: true,
+        },
+      });
+      expect(response.ok()).toBe(true);
+      const before = (await invocations()).length;
+      const run = await sendUserMessage(page, fixture.session.id, "Use the restored MCP tool with mcp recovered.");
+      const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
+      expect(terminal.status, terminal.error).toBe("completed");
+      expect((await invocations()).length).toBeGreaterThan(before);
+      await expect(page.locator(".message").filter({ hasText: "MCP RECOVERED" }).last()).toBeVisible();
     });
   } finally {
     await cleanupJourney(page, fixture);

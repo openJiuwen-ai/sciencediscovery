@@ -31,6 +31,8 @@ Three filters precede deferred model visibility.
 4. `createWorkspaceTools` marks MCP tools `deferred:true` with keyword/mode/priority routing; built-ins are not deferred.
 5. The native loop's `visibleToolSpecs()` sends name/description/schema with each model request; execution `await`s the same handler in-process.
 
+An enabled source whose catalog status is `unavailable` or `degraded` (or has no available tools) now fails run setup with the source ID, status, and missing tool IDs. The run error directs users to `/api/mcp/sources`: repair the server and refresh the catalog, or disable the affected Session connector before retrying. Unselected sources do not block a run. This check also applies when constructing subagent tools.
+
 ### 3.2 Model visibility (native loop)
 
 Deferred-tool registration lives in `packages/tools/src/deferred-tools.ts` and `registry.ts`; see [Agent backend](agent-backend.md) §6. In the native loop, a catalog adds synthetic `tool_search` and a name-only `<available-deferred-tools>` prompt section. Unpromoted schemas stay out of the model's tool table; direct calls to them return a retryable search-first error. Promotions are run-scoped, and keyword `prefer` routing can promote the three highest-priority matches before the first model call.

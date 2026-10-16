@@ -100,6 +100,21 @@ function unprefixedWorkspacePath(path: string | undefined, prefix: string | unde
 
 export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWorkspaceTools {
   const enabledSourceIds = new Set(options.enabledSourceIds);
+  // Validate the effective Session selection before constructing any tools. The
+  // run scheduler persists this error and emits run.failed, so missing tools
+  // cannot silently turn a requested MCP workflow into a web-only run.
+  const unavailableSources = options.registry.list()
+    .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
+    .map((adapter) => options.catalog.getStatus(adapter.manifest.id))
+    .filter((status) => status.status !== "ready" || status.availableTools.length === 0);
+  if (unavailableSources.length) {
+    const details = unavailableSources.map((status) =>
+      `${status.sourceId}: ${status.status}; available tools: ${status.availableTools.length}; missing tools: ${status.missingTools.join(", ") || "none"}`);
+    throw new Error(
+      `Enabled MCP sources are not ready: ${details.join("; ")}. `
+      + "Check /api/mcp/sources, repair and refresh the MCP catalog, or disable these connectors in the Session before retrying.",
+    );
+  }
   const mcpTools: NonNullable<WorkspaceAgentOptions["mcpTools"]> = options.registry.list()
     .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
     .flatMap((adapter) => {
