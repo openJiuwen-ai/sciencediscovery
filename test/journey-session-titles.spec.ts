@@ -27,9 +27,12 @@ import { cleanupJourney, createProjectAndSession, openProjectSession, scriptedMo
 test("session titles follow topics and respect manual edits", { tag: ["@isolation:session", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap", "@mocked"] }, async ({ page, journey }) => {
   test.setTimeout(180_000);
   await page.addInitScript(() => localStorage.setItem("sciencediscovery-locale", "en-US"));
+  // The scripted model serves SSE, while background title refinement expects
+  // JSON. This fixture therefore retains the local first-message title.
+  const firstQuestion = "Help analyze Iris data.";
   const stub = await scriptedModel([
     [{ text: "I can help analyze Iris data." }],
-    [{ tool: "rename_session", arguments: { title: "Enzyme kinetics", expected_title: "Journey session", reason: "topic_change" } }, { text: "Let us discuss enzyme kinetics." }],
+    [{ tool: "rename_session", arguments: { title: "Enzyme kinetics", expected_title: firstQuestion, reason: "topic_change" } }, { text: "Let us discuss enzyme kinetics." }],
     [{ tool: "rename_session", arguments: { title: "Unwanted replacement", expected_title: "My lab notebook", reason: "initial_topic" } }, { text: "Continuing the same discussion." }],
     [{ tool: "rename_session", arguments: { title: "Kinetics report", expected_title: "My lab notebook", reason: "user_request" } }, { text: "Renamed as requested." }],
   ]);
@@ -39,9 +42,9 @@ test("session titles follow topics and respect manual edits", { tag: ["@isolatio
     await journey.step("Create a session and ask a question", "Untitled becomes a short automatic title after the first question.", async () => {
       fixture = await createProjectAndSession(page, { projectName: `Session titles ${Date.now()}`, sessionTitle: "Untitled session", model: { ...stub, name: `Title model ${Date.now()}` } });
       await openProjectSession(page, fixture);
-      const run = await sendUserMessage(page, fixture.session.id, "Help analyze Iris data.");
+      const run = await sendUserMessage(page, fixture.session.id, firstQuestion);
       expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
-      await expect(page.getByRole("heading", { name: "Journey session", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: firstQuestion, exact: true })).toBeVisible();
     });
     await journey.step("Change the primary topic", "The agent tool updates the visible session title.", async () => {
       const run = await sendUserMessage(page, fixture!.session.id, "Switch topics to enzyme kinetics.");
@@ -63,7 +66,10 @@ test("session titles follow topics and respect manual edits", { tag: ["@isolatio
       await expect(page.getByRole("heading", { name: "Kinetics report", exact: true })).toBeVisible();
     });
   } finally {
-    if (fixture) await cleanupJourney(page, fixture);
-    await stub.close();
+    try {
+      if (fixture) await cleanupJourney(page, fixture);
+    } finally {
+      await stub.stop();
+    }
   }
 });
