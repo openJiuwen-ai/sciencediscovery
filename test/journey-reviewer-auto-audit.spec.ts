@@ -138,11 +138,18 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
       expect((await waitForRunTerminal(page, fixture.session.id, run.id)).status).toBe("completed");
       const reason = "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists.";
       const skipPanel = page.locator(".reviewer-specialist-panel").filter({ hasText: reason });
-      await expect(skipPanel.locator(".reviewer-specialist-panel-heading small")).toHaveText(reason, { timeout: 90_000 });
+      // Collapsed process records hide the subtitle; the visible heading
+      // carries the skip reason, and expansion exposes the full body.
+      const skipHeading = skipPanel.locator(".reviewer-specialist-panel-heading strong");
+      await expect(skipHeading).toContainText(reason, { timeout: 90_000 });
+      await expect(skipHeading).toBeVisible();
       await expect(skipPanel).not.toHaveClass(/failed/);
       await page.reload();
-      await expect(skipPanel.locator(".reviewer-specialist-panel-heading small")).toBeVisible();
+      await expect(skipHeading).toBeVisible();
+      await expect(skipHeading).toContainText(reason);
       await expect(skipPanel).not.toHaveClass(/failed/);
+      await skipPanel.locator("summary").click();
+      await expect(skipPanel.locator(".reviewer-specialist-results").getByText(reason, { exact: true })).toBeVisible();
     });
   } finally {
     await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
