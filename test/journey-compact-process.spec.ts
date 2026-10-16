@@ -89,7 +89,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       const upload = files.locator(".drop-zone");
       await expect(upload).toHaveCSS("background-color", "rgb(255, 255, 255)");
       await expect(upload).toHaveCSS("border-top-style", "dashed");
-      await expect(upload.locator("small")).toHaveText("每个最大 1 GiB");
+      await expect(upload.locator("small")).toContainText("每个最大 1 GiB");
+      await expect(upload.locator("small")).toContainText("PDF 会作为文件保存，不会自动按论文解析");
       await expect(files.locator(".artifact-catalog-section")).toHaveCount(0);
       await expect(files.locator(".physical-files")).toHaveCount(0);
     });
