@@ -16,9 +16,10 @@ test.describe("journey-reviewer-auto-audit.spec", { tag: ["@isolation:global", "
  * E2E-META
  * Purpose: A delivered report is automatically reviewed without blocking the researcher, and the completed review is visible in the Session.
  * Steps:
- *   1. Enable Reviewer Specialist in an isolated Session.
+ *   1. Verify automatic review is on and toggle it beside the composer in an isolated Session.
  *   2. Deliver a Markdown report and wait for the main run to finish.
  *   3. Observe the independent automatic audit complete and expose its read-only result.
+ *   4. Run a manual review and verify a disabled global capability is explained beside the composer.
  * Environment: Isolated API/Runner with its own ports and data directory.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible stub only.
@@ -27,7 +28,7 @@ test.describe("journey-reviewer-auto-audit.spec", { tag: ["@isolation:global", "
  * MCP: none
  * OtherExternal: none — non-local browser requests are aborted.
  * Credentials: E2E_API_TOKEN
- * CostSideEffects: Creates and deletes one isolated Project/Session; no external calls.
+ * CostSideEffects: Creates and deletes one isolated Project/Session; restores the temporary global Reviewer switch; no external calls.
  */
 test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(180_000);
@@ -46,19 +47,26 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
     projectName: `Reviewer auto audit ${Date.now()}`,
     sessionTitle: "Automatic review",
   });
+  const originalReviewer = await (await page.request.get(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
+    headers: authorizationHeader(),
+  })).json() as { enabled: boolean };
   try {
-    await journey.step("启用自动审核并进入会话", "右侧显示 Reviewer Specialist 控制卡，自动审核处于开启状态。", async () => {
-      const response = await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
-        data: { enabled: true }, headers: authorizationHeader(),
-      });
-      expect(response.ok()).toBeTruthy();
+    // Other global-isolation journeys can change this shared test catalog.
+    // Fresh-install defaults are asserted by the store and coordinator tests.
+    const enabled = await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
+      data: { enabled: true }, headers: authorizationHeader(),
+    });
+    expect(enabled.ok()).toBeTruthy();
+    await journey.step("在输入框旁配置自动审核", "自动审核默认开启，关闭状态在刷新后保留，并可再次开启。", async () => {
       await openProjectSession(page, fixture);
-      // The controls live in a workspace fold, collapsed like its neighbours,
-      // so a user opens the disclosure before reading them. Asserting the card
-      // straight after entering the Session finds it in the DOM but hidden.
-      const fold = page.locator("details.workspace-fold").filter({ hasText: "Reviewer Specialist" });
-      await fold.locator("summary").click();
-      await expect(fold.locator(".reviewer-control-card")).toBeVisible();
+      const toggle = page.locator(".composer-footer").getByRole("switch", { name: "Automatic review", exact: true });
+      await expect(toggle).toBeChecked();
+      await toggle.click();
+      await expect(toggle).not.toBeChecked();
+      await page.reload();
+      await expect(toggle).not.toBeChecked();
+      await toggle.click();
+      await expect(toggle).toBeChecked();
     });
     await journey.step("交付报告而不中断主任务", "主任务正常完成，报告出现在产物区。", async () => {
       const run = await sendUserMessage(page, fixture.session.id, "Deliver a short Markdown report.");
@@ -101,8 +109,29 @@ test("研究员交付报告后可看到独立完成的自动审核", { tag: "@mo
       await expect(auditCard).toContainText("results/report.md");
       await expect(auditCard).toContainText("Quick");
     });
+    await journey.step("手动复核仍然可用", "Run review 完成一次独立的手动审核。", async () => {
+      const fold = page.locator("details.workspace-fold").filter({ hasText: "Reviewer Specialist" });
+      await fold.locator("summary").click();
+      await fold.getByRole("button", { name: "Run review", exact: true }).click();
+      await expect.poll(async () => {
+        const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/reviewer-audit-tasks`, { headers: authorizationHeader() });
+        const tasks = await response.json() as Array<{ origin: string; status: string }>;
+        return tasks.some((task) => task.origin === "manual" && task.status === "completed");
+      }).toBe(true);
+    });
+    await journey.step("系统关闭时显示原因", "输入框旁明确说明自动审核不可用。", async () => {
+      const response = await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
+        data: { enabled: false }, headers: authorizationHeader(),
+      });
+      expect(response.ok()).toBeTruthy();
+      await page.reload();
+      await expect(page.getByRole("status").filter({ hasText: "Automatic review is unavailable" })).toBeVisible();
+      await expect(page.locator(".composer-footer").getByRole("switch", { name: "Automatic review", exact: true })).not.toBeChecked();
+    });
   } finally {
-    await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, { data: { enabled: false }, headers: authorizationHeader() }).catch(() => undefined);
+    await page.request.put(`${apiBaseUrl()}/api/reviewer-specialist/settings`, {
+      data: { enabled: originalReviewer.enabled }, headers: authorizationHeader(),
+    });
     await cleanupJourney(page, fixture);
     await stub.stop();
   }

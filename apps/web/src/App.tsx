@@ -4625,6 +4625,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
+                  {reviewerSpecialistSettings && !reviewerSpecialistSettings.enabled && session.reviewerAutomaticReviewEnabled
+                    ? <div className="composer-thinking-notice" role="status">{t("reviewer.automaticUnavailable")}</div>
+                    : null}
                   <div className="composer-footer">
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
@@ -4654,6 +4657,23 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       mode={session.approvalMode}
                       onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
                     />
+                    <button
+                      aria-checked={Boolean(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled)}
+                      aria-label={t("reviewer.automaticReview")}
+                      className="approval-mode-toggle"
+                      disabled={sessionArchived || reviewerSessionSettingsBusy || !reviewerSpecialistSettings}
+                      onClick={() => reviewerSpecialistSettings?.enabled
+                        ? void updateSessionReviewerSpecialistSettings({
+                          automaticReviewEnabled: !session.reviewerAutomaticReviewEnabled,
+                          level: session.reviewerSpecialistLevel,
+                        })
+                        : openSystemSettings("specialists")}
+                      role="switch"
+                      title={t(reviewerSpecialistSettings?.enabled ? "reviewer.automaticReview" : "reviewer.automaticUnavailable")}
+                      type="button"
+                    >
+                      {t("reviewer.automaticReview")}: {t(reviewerSpecialistSettings?.enabled && session.reviewerAutomaticReviewEnabled ? "common.on" : "common.off")}
+                    </button>
                     <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
                   </div>
                 </form>

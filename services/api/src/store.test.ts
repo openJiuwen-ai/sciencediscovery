@@ -517,7 +517,7 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
 
   const store = new SessionStore(tempRoot);
   await store.load();
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "record" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "record" });
 
   await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest" });
   assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest" });
@@ -550,6 +550,9 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
   });
   await reopened.updateReviewerSpecialistSettings({ enabled: false });
   assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "suggest" });
+  const disabledReload = new SessionStore(tempRoot);
+  await disabledReload.load();
+  assert.equal(disabledReload.getReviewerSpecialistSettings().enabled, false);
   await assert.rejects(
     store.updateReviewerSpecialistSettings({ enabled: "yes" }),
     /enabled must be a boolean/,
@@ -562,6 +565,21 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
     store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "unsafe" }),
     /feedback policy must be record, explain, suggest, or repair/,
   );
+});
+
+test("catalogs without a Reviewer switch enable automatic review on migration", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-default-migration-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const catalog = await readPersistedCatalog(tempRoot);
+  delete catalog.reviewerSpecialistEnabled;
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  database.close();
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, true);
 });
 
 test("SessionStore appends run events losslessly and survives reload", async (context) => {
