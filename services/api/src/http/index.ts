@@ -1007,6 +1007,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, await store.replaceGlobalSettings(await readJson<RuntimeSettingsOverrides>(request)));
         return;
       }
+      if (url.pathname === "/api/settings/clear-model-if-current" && request.method === "POST") {
+        const body = await readJson<{ modelId?: unknown }>(request);
+        if (typeof body.modelId !== "string" || !body.modelId) throw new Error("modelId is required");
+        sendJson(response, 200, await store.clearGlobalModelIfCurrent(body.modelId));
+        return;
+      }
       if (url.pathname === "/api/reviewer-specialist/settings" && request.method === "GET") {
         sendJson(response, 200, store.getReviewerSpecialistSettings());
         return;
