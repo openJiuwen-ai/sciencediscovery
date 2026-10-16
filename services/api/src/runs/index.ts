@@ -749,10 +749,15 @@ async function executeAgentRun(
   // Bound knowledge-base scope (V2-C1): validate the configured ids against
   // the knowledge engine — unknown ids drop with a disclosed note rather
   // than failing the run. The tool layer enforces the scope; the prompt
-  // explains it. A KE that is absent or erroring degrades the scope to
-  // unbound-with-disclosure, never to a run-start 500 (review P3).
+  // explains it. When a scope is configured it must FAIL CLOSED: a KE that
+  // is erroring at run start, or a scope whose ids all name nonexistent
+  // KBs, enforces an EMPTY scope (every kbId rejected, the listing filters
+  // to nothing) with prompt disclosure — silently degrading to unbound
+  // would leak cross-KB tool access and resident summaries. Still never a
+  // run-start 500 (review P3; fail-open flagged in review).
   let kbToolScope: { kbIds: string[]; singleKbId?: string } | undefined;
   let kbScopePrompt: {
+    blockedReason?: "invalid" | "validation-failed";
     droppedKbIds: string[];
     kbLabels: string[];
     singleKbId?: string;
@@ -765,7 +770,7 @@ async function executeAgentRun(
       known = new Map(
         (await knowledgeEngineTools.listKnowledgeBases()).map((kb) => [kb.id, kb.name] as const),
       );
-    } catch { /* fall through to the degraded path below */ }
+    } catch { /* fall through to the fail-closed path below */ }
     if (known) {
       const valid = configuredKbScope.filter((id) => known!.has(id));
       const dropped = configuredKbScope.filter((id) => !known!.has(id));
@@ -779,18 +784,30 @@ async function executeAgentRun(
           webSearchEnabled: settingsSnapshot.kbScopeWebSearch !== false,
         };
       } else {
-        // Every configured id named a nonexistent KB — disclose instead of
-        // silently degrading to unbound (review P3).
+        // Every configured id named a nonexistent KB — fail closed (empty
+        // scope rejects every kbId) with disclosure, never silently unbound.
+        kbToolScope = { kbIds: [] };
         kbScopePrompt = {
+          blockedReason: "invalid",
           droppedKbIds: dropped,
           kbLabels: [],
           webSearchEnabled: settingsSnapshot.kbScopeWebSearch !== false,
         };
       }
     } else {
+      // Validation itself failed — fail closed the same way: the session
+      // asked for a scope, and an unverifiable scope must not degrade to
+      // unbound (that would leak cross-KB tool access and summaries).
+      kbToolScope = { kbIds: [] };
+      kbScopePrompt = {
+        blockedReason: "validation-failed",
+        droppedKbIds: [...configuredKbScope],
+        kbLabels: [],
+        webSearchEnabled: settingsSnapshot.kbScopeWebSearch !== false,
+      };
       apiLog.warn("knowledge_engine", {
         text: "kb_scope_validation_degraded",
-        reason: "list_knowledge_bases failed at run start; scope left unenforced",
+        reason: "list_knowledge_bases failed at run start; scope enforced as empty (fail-closed)",
       });
     }
   } else if (configuredKbScope.length && !knowledgeEngineTools) {

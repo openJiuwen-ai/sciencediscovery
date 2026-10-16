@@ -294,3 +294,18 @@ test("bound kb-scope governance appends context self-management guidance; unboun
   assert.doesNotMatch(unbound.content, /Context self-management/);
   assert.match(unbound.content, /UNBOUND/);
 });
+
+test("a configured scope with no usable binding fails closed in the prompt (never 'unbound')", () => {
+  const invalid = buildWorkspacePromptParts([], false, {
+    knowledgeBaseScope: { blockedReason: "invalid", droppedKbIds: ["ghost"], kbLabels: [], webSearchEnabled: true },
+  }).find((part) => part.id === "kb-scope.governance")!;
+  assert.match(invalid.content, /FAIL-CLOSED/);
+  assert.match(invalid.content, /reject every kbId/);
+  assert.doesNotMatch(invalid.content, /UNBOUND/);
+  const validationFailed = buildWorkspacePromptParts([], false, {
+    knowledgeBaseScope: { blockedReason: "validation-failed", droppedKbIds: ["kb-x"], kbLabels: [], webSearchEnabled: true },
+  }).find((part) => part.id === "kb-scope.governance")!;
+  assert.match(validationFailed.content, /FAIL-CLOSED/);
+  assert.match(validationFailed.content, /could not validate/);
+  assert.doesNotMatch(validationFailed.content, /UNBOUND/);
+});

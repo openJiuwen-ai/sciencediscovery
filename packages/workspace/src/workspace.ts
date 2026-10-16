@@ -1602,8 +1602,10 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           claim: Type.String({ minLength: 1, maxLength: 1000, description: "The candidate novelty claim, verbatim" }),
         }),
         (params) => knowledgeEngine.noveltyCheck(params.kbId, params.claim),
-        // Anti-hallucination trust anchor (collision verdicts).
-        { trusted: true },
+        // NOT a trust anchor: passageHits[].snippet and relationHits[].quote
+        // echo ingested corpus, so the result must stay nonce-fenced like
+        // kb_search — an unfenced verdict channel would let hostile PDF/JATS
+        // content reach the model with full authority.
       ),
       keTool(
         "verify_citation",

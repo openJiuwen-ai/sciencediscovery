@@ -249,20 +249,45 @@ async function fetchPdf(
 // SSRF guard — downloads must target public HTTP(S) hosts only
 // ---------------------------------------------------------------------------
 
+function isPrivateIpv4(ip: string): boolean {
+  const parts = ip.split(".").map(Number);
+  return (
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    parts[0] === 0
+  );
+}
+
+/**
+ * Extract the embedded IPv4 of an IPv4-mapped IPv6 address, in either the
+ * dotted (`::ffff:127.0.0.1`) or the hex-tail (`::ffff:7f00:1`, also the
+ * uncompressed `0:0:0:0:0:ffff:…` spelling) form. WHATWG URL serializes
+ * mapped addresses to the compressed hex form, so both must be recognized.
+ */
+function ipv4MappedToIpv4(ip: string): string | undefined {
+  const rest = ip.replace(/^(?:::|(?:0{1,4}:){5})ffff:/, "");
+  if (rest === ip) return undefined;
+  if (isIP(rest) === 4) return rest;
+  const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(rest);
+  if (!hex) return undefined;
+  const hi = parseInt(hex[1]!, 16);
+  const lo = parseInt(hex[2]!, 16);
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+}
+
 function isPrivateIp(ip: string): boolean {
-  if (isIP(ip) === 4) {
-    const parts = ip.split(".").map(Number);
-    return (
-      parts[0] === 10 ||
-      parts[0] === 127 ||
-      (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
-      (parts[0] === 192 && parts[1] === 168) ||
-      (parts[0] === 169 && parts[1] === 254) ||
-      parts[0] === 0
-    );
-  }
-  const lower = ip.toLowerCase();
-  return lower === "::1" || lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd");
+  // URL hostnames keep the IPv6 brackets ("[::1]"); dns.lookup results do not.
+  const bare = ip.startsWith("[") && ip.endsWith("]") ? ip.slice(1, -1) : ip;
+  if (isIP(bare) === 4) return isPrivateIpv4(bare);
+  const lower = bare.toLowerCase();
+  // IPv4-mapped IPv6 reuses the IPv4 private ranges — check the embedded
+  // address instead of letting `::ffff:127.0.0.1` slip past the IPv4 rules.
+  const mapped = ipv4MappedToIpv4(lower);
+  if (mapped) return isPrivateIpv4(mapped);
+  return lower === "::" || lower === "::1" || lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd");
 }
 
 /** Reject non-HTTP(S) URLs and URLs resolving to private/loopback addresses. */
@@ -276,7 +301,10 @@ export async function assertSafeUrl(url: string): Promise<void> {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error(`Refusing non-HTTP(S) download URL scheme: ${parsed.protocol}`);
   }
-  const hostname = parsed.hostname;
+  // WHATWG URL keeps IPv6 literals bracketed ("[::1]") — strip the brackets
+  // before the IP check or every IPv6 literal would fall through to a DNS
+  // lookup of a bracketed name (which fails open).
+  const hostname = parsed.hostname.replace(/^\[(.*)\]$/, "$1");
   if (isIP(hostname)) {
     if (isPrivateIp(hostname)) throw new Error(`Refusing download from private address: ${hostname}`);
     return;

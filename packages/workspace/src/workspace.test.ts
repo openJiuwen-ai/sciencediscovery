@@ -2185,13 +2185,15 @@ test("knowledge-engine tools register when the port is wired, absent otherwise",
   }
 
   // Corpus-passage tools are nonce-fenced as untrusted ingested-corpus data
-  // (the evidence ledger echoes recorded verbatim quotes — corpus too);
-  // the anti-hallucination trust anchors and config listings stay unfenced.
+  // (the evidence ledger echoes recorded verbatim quotes — corpus too;
+  // novelty_check returns passageHits[].snippet / relationHits[].quote —
+  // corpus too). Only the trust anchors whose verdicts never carry corpus
+  // passages and the config listing stay unfenced.
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  for (const corpusTool of ["concept_explore", "deep_dive", "entity_unified_search", "gap_candidates", "kb_search", "kb_expand", "doc_grep", "evidence_ledger", "polish_report"]) {
+  for (const corpusTool of ["concept_explore", "deep_dive", "entity_unified_search", "gap_candidates", "kb_search", "kb_expand", "doc_grep", "novelty_check", "evidence_ledger", "polish_report"]) {
     assert.equal(byName.get(corpusTool)!.untrustedCategory, "knowledge-base", `${corpusTool} must be fenced as corpus data`);
   }
-  for (const anchor of ["list_knowledge_bases", "validate_entities", "novelty_check", "verify_citation"]) {
+  for (const anchor of ["list_knowledge_bases", "validate_entities", "verify_citation"]) {
     assert.equal(byName.get(anchor)!.untrustedCategory, undefined, `${anchor} is a trust anchor and stays unfenced`);
   }
 
@@ -2290,6 +2292,40 @@ test("knowledge-engine tools enforce a bound KB scope: default fill, optional sc
   const unscopedSearch = unscoped.find((tool) => tool.name === "kb_search")!;
   const unscopedRequired = (unscopedSearch.parameters as { required?: string[] }).required ?? [];
   assert.ok(unscopedRequired.includes("kbId"), "kbId must stay required without a scope");
+});
+
+test("an empty knowledgeEngineScope fails closed: every kbId rejected, listing empty", async () => {
+  // The run layer degrades an unvalidatable configured scope to kbIds: []
+  // (fail-closed) — the tool layer must turn that into a hard wall, not a
+  // no-op scope.
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [{ id: "kb1", name: "Leaky KB" }],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async () => ({ hits: [] }),
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineScope: { kbIds: [] },
+  });
+  const search = tools.find((tool) => tool.name === "kb_search")!;
+  await assert.rejects(
+    search.execute("ke-call", { kbId: "kb1", query: "escape" }),
+    /outside this session's bound knowledge-base scope/,
+  );
+  const list = tools.find((tool) => tool.name === "list_knowledge_bases")!;
+  const listed = await list.execute("ke-call", {});
+  assert.deepEqual(JSON.parse(listed.content[0]!.text), [], "the listing must not leak KBs outside the empty scope");
 });
 
 test("knowledge-engine observer fires on success with the scope-filled kbId, never on failure", async () => {

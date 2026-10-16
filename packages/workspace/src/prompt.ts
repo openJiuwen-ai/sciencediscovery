@@ -228,6 +228,15 @@ export interface WorkspacePromptGovernance {
    * KBs — disclosed so the model does not claim coverage it does not have.
    */
   knowledgeBaseScope?: {
+    /**
+     * Fail-closed marker set when a configured scope could not produce any
+     * usable binding: "invalid" = every configured id named a nonexistent
+     * KB; "validation-failed" = the engine could not list KBs at run start.
+     * In both cases the tool layer enforces an EMPTY scope (all kbId calls
+     * rejected) and the prompt must say so — never tell the model the
+     * conversation is unbound.
+     */
+    blockedReason?: "invalid" | "validation-failed";
     droppedKbIds: string[];
     kbLabels: string[];
     singleKbId?: string;
@@ -305,7 +314,11 @@ function buildWorkspacePromptValues(
     governance?.knowledgeBaseScope
       ? (governance.knowledgeBaseScope.kbLabels.length
         ? `\nKnowledge-base scope: this conversation is bound to ${governance.knowledgeBaseScope.kbLabels.map(escapePromptTagText).join(", ")}. Answer from ${governance.knowledgeBaseScope.singleKbId ? "this knowledge base" : "these knowledge bases"} — knowledge tools only accept the bound kbId${governance.knowledgeBaseScope.singleKbId ? " (it is the default and may be omitted)" : "s"}.${governance.knowledgeBaseScope.webSearchEnabled ? "" : " Web search and fetch tools are DISABLED for this conversation (they are not in your tool list; MCP scientific connectors stay available): if the bound knowledge base does not contain the answer, say that explicitly — and what you searched — instead of filling the gap from general model knowledge."}${governance.knowledgeBaseScope.droppedKbIds.length ? ` Scope entries ignored because no such knowledge base exists: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")} — do not claim coverage of them.` : ""} Context self-management (guidance, not hard rules): load on demand — locate with kb_search/doc_grep first and expand only the blocks the current step needs; save intermediate findings as workspace files you can re-read instead of carrying them in context; with many documents, advance one question or section at a time rather than reading everything.`
-        : `\nKnowledge-base scope: the configured scope named no existing knowledge base (ignored entries: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")}). The conversation is therefore UNBOUND — answer normally, but do not claim coverage of those entries.`)
+        : governance.knowledgeBaseScope.blockedReason === "validation-failed"
+          ? `\nKnowledge-base scope: this conversation has a configured knowledge-base scope, but the knowledge engine could not validate it at run start. FAIL-CLOSED: the scope is enforced as EMPTY — knowledge-base tools reject every kbId and list no knowledge bases. Do not call knowledge tools or claim coverage of the configured entries; say the bound scope is temporarily unreachable and answer from what is already in context.`
+          : governance.knowledgeBaseScope.blockedReason === "invalid"
+            ? `\nKnowledge-base scope: the configured scope named no existing knowledge base (ignored entries: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")}). FAIL-CLOSED: the scope is enforced as EMPTY — knowledge-base tools reject every kbId and list no knowledge bases. Do not call knowledge tools or claim coverage of those entries; answer from what is already in context.`
+            : `\nKnowledge-base scope: the configured scope named no existing knowledge base (ignored entries: ${governance.knowledgeBaseScope.droppedKbIds.map(escapePromptTagText).join(", ")}). The conversation is therefore UNBOUND — answer normally, but do not claim coverage of those entries.`)
       : "",
     governance?.agentMemories?.length
       ? `\nWorking-method memory (experiential notes reviewed and approved by a human; reliability label per entry — treat 参考/低置信 entries as hints to verify, not rules):\n${governance.agentMemories.map((memory) => `- [${escapePromptTagText(memory.category)}]${memory.reliabilityLabel} ${escapePromptTagText(memory.content)}`).join("\n")}`

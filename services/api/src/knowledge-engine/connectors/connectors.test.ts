@@ -23,7 +23,7 @@ import { deinvertAbstract, openAlexToRef, createOpenAlexConnector } from "./open
 import { parsePubmedArticles } from "./pubmed.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { s2ToRef, createSemanticScholarConnector } from "./semantic-scholar.js";
-import { downloadPaperPdf, searchAcrossChain } from "./source-chain.js";
+import { assertSafeUrl, downloadPaperPdf, searchAcrossChain } from "./source-chain.js";
 import { FixtureScholarlyTransport, fixtureFileName, type ScholarlyResponse, type ScholarlyTransport } from "./transport.js";
 import { NotFoundError, RateLimitError, paperDedupKey, type PaperConnector, type PaperRef } from "./types.js";
 
@@ -396,6 +396,32 @@ test("europepmc resolveFullTextXml returns jats for OA and null for 404", async 
 test("RateLimitError carries the retry delay", () => {
   const error = new RateLimitError("slow down", 5000);
   assert.equal(error.retryAfterMs, 5000);
+});
+
+test("assertSafeUrl rejects IPv4-mapped IPv6 and bracketed IPv6 literals (SSRF guard)", async () => {
+  // WHATWG URL normalizes dotted mapped addresses to the compressed hex
+  // form and keeps the brackets — both shapes must still hit the guard.
+  const rejected = [
+    "http://[::ffff:127.0.0.1]/p.pdf", // dotted mapped, loopback
+    "http://[::ffff:7f00:1]/p.pdf", // hex mapped, loopback
+    "http://[::ffff:a9fe:a9fe]/p.pdf", // hex mapped, link-local / cloud metadata
+    "http://[::ffff:169.254.169.254]/p.pdf", // dotted mapped, cloud metadata
+    "http://[::ffff:10.0.0.1]/p.pdf", // dotted mapped, RFC1918
+    "http://[::ffff:c0a8:101]/p.pdf", // hex mapped, 192.168.1.1
+    "http://[::1]/p.pdf", // IPv6 loopback literal
+    "http://[::]/p.pdf", // IPv6 unspecified
+    "http://[fe80::1]/p.pdf", // link-local literal
+    "http://[fd00::1]/p.pdf", // ULA literal
+    "http://127.0.0.1/p.pdf", // plain IPv4 loopback still rejected
+  ];
+  for (const url of rejected) {
+    await assert.rejects(assertSafeUrl(url), /Refusing download from private address/, url);
+  }
+});
+
+test("assertSafeUrl allows public IPv4 and IPv6 literals", async () => {
+  await assertSafeUrl("http://8.8.8.8/p.pdf");
+  await assertSafeUrl("http://[2606:4700:4700::1111]/p.pdf");
 });
 
 test("fetchPdf follows redirects manually and re-validates every hop", async () => {
