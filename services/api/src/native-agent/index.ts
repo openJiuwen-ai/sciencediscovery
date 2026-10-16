@@ -44,6 +44,8 @@ import {
   resolveContextBudget,
   resolveContextAssemblyMode,
   registerContextContributorFactories,
+  SearchIndexContributor,
+  SearchResultIndex,
   type AgentScope,
   type ContextAssemblyMode,
   type ContextContributorFactory,
@@ -61,6 +63,10 @@ import {
 } from "@sciencediscovery/model";
 import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 import type { PlanStore } from "@sciencediscovery/plan";
+import {
+  createPlanLifecycleTools,
+  type PlanRepository,
+} from "@sciencediscovery/plan-mode";
 import type { EvolveToolRuntime } from "@sciencediscovery/evolve";
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
@@ -81,6 +87,7 @@ import {
 import {
   buildWorkspacePromptParts,
   buildWorkspaceSystemPrompt,
+  createResearchStatePort,
   createWorkspaceTools,
   normalizeLegacyEnvironmentToolName,
   type WorkspaceAgentOptions,
@@ -92,9 +99,18 @@ import { composeRuntime } from "../bootstrap/runtime.js";
 import { runLog } from "../logging.js";
 import { AgentVersionRecorder, jsonValue, type AgentVersioningOptions } from "./versioning.js";
 import { createRuntimePluginScope } from "../plugins/runtime.js";
+import { FINISH_GATE_REVIEW_TOOL, FinishGateLifecycle } from "./finish-gate.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
+
+/** Stall-guard idle window (V2-C6): a model call with no progress for this
+ *  long gets its attempt kicked. Defaults to half the outer idle watchdog so
+ *  a kick always lands before the watchdog would kill the run. */
+export function configuredStallIdleMs(raw = process.env.SCIENCE_AGENT_STALL_IDLE_MS): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 10_000 ? Math.floor(value) : 120_000;
+}
 
 /** Hard safety net against a runaway model loop; time budgets remain the
  *  primary bound (`runTimeoutMs` / `runIdleTimeoutMs`). */
@@ -138,6 +154,8 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
    *  none. One object instead of two forwarded callbacks and a deps bundle
    *  threaded through three run-loop entry points. */
   evolve?: EvolveToolRuntime;
+  /** Approval-gated plan lifecycle repository (V3-C2, plan-mode package). */
+  planRepository?: PlanRepository;
   planStore?: PlanStore;
 }
 
@@ -257,9 +275,24 @@ export function createToolRegistry(
   options: NativeAgentOptions,
   plugins: Awaited<ReturnType<typeof startPluginScope>>,
   durable: DurableContextStore,
-  hooks: { recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void> } = {},
+  hooks: {
+    recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void>;
+    /** Per-agent search-result index (native loop only; the swarm executor records via its model gateway instead). */
+    searchIndex?: SearchResultIndex;
+  } = {},
 ): ToolRegistry<WireMessage> {
   const executionTools = buildTools(options);
+  // Approval-gated plan lifecycle (V3-C2, plan-mode): composed directly.
+  // The model-declared snapshot tool (update_plan) comes from the plan
+  // plugin scope above, so both capabilities still coexist per run.
+  const planTools = [
+    ...(options.planRepository
+      ? createPlanLifecycleTools({
+          approvalMayBlock: options.approvalMode === "ask_for_dangerous",
+          repository: options.planRepository,
+        })
+      : []),
+  ];
   // Retained per Session, not per AgentRun: a bounded result stays in the
   // replayed history of later runs, so its ref has to keep resolving for as
   // long as that history does. Session deletion removes this directory.
@@ -268,7 +301,7 @@ export function createToolRegistry(
   });
   const toolOutputSettings = resolveToolOutputSettings();
   return new ToolRegistry([
-    ...executionTools, ...plugins.contributions.flatMap((item) => item.tools),
+    ...executionTools, ...planTools, ...plugins.contributions.flatMap((item) => item.tools),
     ...createToolOutputTools(toolOutputStore, {
       tracker: new ToolOutputReadTracker(toolOutputSettings.readPolicy),
     }),
@@ -280,6 +313,17 @@ export function createToolRegistry(
     }),
     commitResult: async ({ call, content, isError, sequence }) => {
       durable.observe(call, { content, isError }, sequence);
+      hooks.searchIndex?.observe(call, content, isError);
+      if (call.name === "read_skill" && !isError && typeof call.args.skillId === "string") {
+        const skill = options.skills?.find((item) => item.id === call.args.skillId);
+        if (skill) durable.registerSkill({
+          description: skill.description,
+          hash: skill.hash,
+          id: skill.id,
+          revision: skill.revision,
+          version: skill.version,
+        });
+      }
       for (const contribution of plugins.contributions) {
         await contribution.commitResult?.({ call, content, isError, sequence });
       }
@@ -316,6 +360,8 @@ export function composeSystemPrompt(
       : {}),
     ...(options.subagent ? { subagent: options.subagent } : {}),
     ...(toolNames.has("task") && !options.subagent ? { subagentOrchestration: true } : {}),
+    ...(options.knowledgeBaseScope ? { knowledgeBaseScope: options.knowledgeBaseScope } : {}),
+    ...(options.agentMemories?.length ? { agentMemories: options.agentMemories } : {}),
   };
   const baseSystemPrompt = buildWorkspaceSystemPrompt(promptSkills, Boolean(options.environments), governance);
   return {
@@ -338,6 +384,7 @@ class NativeAgent implements NativeAgentHandle {
   private policy!: ModelClientPolicy;
   private readonly waitController = new ExternalWaitController();
   private readonly durableContext: DurableContextStore;
+  private readonly searchIndex = new SearchResultIndex();
   private history: WireMessage[] = [];
   private controller: AbortController | undefined;
   private externalWaitCount = 0;
@@ -369,6 +416,7 @@ class NativeAgent implements NativeAgentHandle {
     } : undefined);
     this.toolRegistry = createToolRegistry(options, this.plugins, this.durableContext, {
       recordResult: options.versioning ? async (input) => { await this.versionRecorder?.recordObservation(input); } : undefined,
+      searchIndex: this.searchIndex,
     });
     const toolNames = new Set(this.toolRegistry.values().map((tool) => tool.name));
     this.promptSkills = toolNames.has("read_skill")
@@ -622,6 +670,26 @@ class NativeAgent implements NativeAgentHandle {
           tools: () => this.inputState!.read<{ specs: ReturnType<ToolRegistry<WireMessage>["visibleSpecs"]> }>("tools").specs,
         });
       const modelClient = new ProviderModelClient<WireMessage>(this.endpoint, this.policy, modelTurnStreamer);
+      const finishGate = new FinishGateLifecycle<WireMessage, ModelInput<WireMessage>, ModelUsage>({
+        inner: this.versionRecorder,
+        // Termination-intervention probe (V2-C6): the run's unfinished
+        // research_state plan items, read straight from the workspace file.
+        pendingPlanItems: async () => {
+          try {
+            const full = await createResearchStatePort().get({ workspaceRoot: this.options.workspaceRoot });
+            const items = full.state.plan
+              .filter((item) => item.status === "pending" || item.status === "in_progress")
+              .slice(0, 5)
+              .map((item) => ({ id: item.id, text: item.text }));
+            return items.length ? items : undefined;
+          } catch {
+            return undefined;
+          }
+        },
+        quoteVerificationAvailable: this.toolRegistry.values().some((tool) => tool.name === "verify_citation" || tool.name === "evidence_ledger"),
+        reviewCheckpointAvailable: this.toolRegistry.values().some((tool) => tool.name === FINISH_GATE_REVIEW_TOOL),
+        skills: this.promptSkills,
+      });
       let reportedModelUsage = false;
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
         maxModelTurns: MAX_MODEL_TURNS,
@@ -670,7 +738,23 @@ class NativeAgent implements NativeAgentHandle {
           this.emitRuntimeEvent(event, this.versionRecorder?.event(event));
           if (event.type === "model_usage") reportedModelUsage = true;
         },
-        turnLifecycle: this.versionRecorder,
+        // Stall guard (V2-C6): a model call with no progress for the idle
+        // window gets its attempt kicked (run history/budget survive); three
+        // kicks bound the failure. The outer idle watchdog (runIdleTimeoutMs)
+        // stays as the final backstop and covers tool-batch stalls.
+        stallGuard: (() => {
+          const idleMs = configuredStallIdleMs();
+          const idleSeconds = Math.round(idleMs / 1000);
+          return {
+            createKickMessage: (kick: number, maxKicks: number) => ({
+              content: `Stall guard: the previous model call produced no progress for ${idleSeconds} seconds and was restarted (kick ${kick}/${maxKicks}). Continue from your current state — do not restart the task; if a call stalls again, switch to a different tool or approach.`,
+              role: "user",
+            }) as unknown as WireMessage,
+            idleMs,
+            maxKicks: 3,
+          };
+        })(),
+        turnLifecycle: finishGate,
         waitController: this.waitController,
       });
       const result = await loop.run(this.history, controller.signal, markProgress)
@@ -752,6 +836,7 @@ class NativeAgent implements NativeAgentHandle {
     for (const contributor of createDurableDomainContributors<WireMessage>(this.durableContext, [scope])) {
       registry.register(contributor);
     }
+    registry.register(new SearchIndexContributor(this.searchIndex, [scope]));
     registerContextContributorFactories(
       registry,
       [
@@ -813,6 +898,12 @@ class NativeAgent implements NativeAgentHandle {
       case "completed":
         if (event.truncated) emit({ type: "turn_truncated" });
         break;
+      case "finish_gate":
+        this.emit({ action: event.action, turn: event.turn, type: "finish_gate" });
+        break;
+      case "stall_kick":
+        this.emit({ kick: event.kick, turn: event.turn, type: "stall_kick" });
+        break;
       case "context_recovery":
       case "state_changed":
         break;
@@ -848,6 +939,11 @@ export function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.webFetch ? { webFetch: options.webFetch } : {}),
     ...(options.webSearch ? { webSearch: options.webSearch } : {}),
     ...(options.queryGraph ? { queryGraph: options.queryGraph } : {}),
+    ...(options.knowledgeEngine ? { knowledgeEngine: options.knowledgeEngine } : {}),
+    ...(options.knowledgeEngineScope ? { knowledgeEngineScope: options.knowledgeEngineScope } : {}),
+    ...(options.knowledgeEngineObserver ? { knowledgeEngineObserver: options.knowledgeEngineObserver } : {}),
+    ...(options.researchProjectRoot ? { researchProjectRoot: options.researchProjectRoot } : {}),
+    ...(options.agentMemory ? { agentMemory: options.agentMemory } : {}),
     ...(options.declareEvidence ? { declareEvidence: options.declareEvidence } : {}),
     ...(options.declareClaim ? { declareClaim: options.declareClaim } : {}),
     ...(options.reviewCheckpoint ? { reviewCheckpoint: options.reviewCheckpoint } : {}),

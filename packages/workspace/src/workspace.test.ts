@@ -15,8 +15,9 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { Check } from "typebox/value";
 
@@ -879,6 +880,8 @@ test("artifact download and PDF extraction are separate tools", async () => {
   assert.ok(download);
   assert.ok(extract);
   assert.match(download.description, /does not extract/i);
+  // Extracted PDF text is attacker-influenceable document content — fenced.
+  assert.equal(extract.untrustedCategory, "document");
   await download.execute("download-call", { candidateId: "candidate", mcpInvocationId: "invocation" });
   assert.deepEqual(calls, ["download"]);
   await extract.execute("extract-call", { artifactJobId: "job" });
@@ -2136,4 +2139,436 @@ test("review_checkpoint exposes only versions and reason to its callback", async
     reason: "Stage complete",
   });
   assert.equal((result.details as { checkpoint: { status: string } }).checkpoint.status, "completed");
+});
+
+test("knowledge-engine tools register when the port is wired, absent otherwise", async () => {
+  const calls: string[] = [];
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [],
+    conceptExplore: async (kbId: string, entity: string) => {
+      calls.push(`concept_explore:${kbId}:${entity}`);
+      return { found: false, hops: 1 };
+    },
+    deepDive: async () => ({ found: false }),
+    entityUnifiedSearch: async () => ({ sources: {} }),
+    validateEntities: async () => ({ found: 1, ambiguous: 0, unknown: 0, results: [] }),
+    gapCandidates: async () => ({ holes: [], conflicts: [], transfers: [] }),
+    kbSearch: async (kbId: string, query: string) => {
+      calls.push(`kb_search:${kbId}:${query}`);
+      return { hits: [], truncated: false };
+    },
+    kbExpand: async (kbId: string, anchorId: string) => {
+      calls.push(`kb_expand:${kbId}:${anchorId}`);
+      return { found: false, reason: "anchor-not-found" };
+    },
+    docGrep: async (kbId: string, pattern: string) => {
+      calls.push(`doc_grep:${kbId}:${pattern}`);
+      return { matches: [], scannedDocs: 0, truncated: false };
+    },
+    noveltyCheck: async (kbId: string, claim: string) => {
+      calls.push(`novelty_check:${kbId}:${claim}`);
+      return { verdict: "no-collision", entityHits: [], relationHits: [], passageHits: [], note: "" };
+    },
+    verifyCitation: async (kbId: string, quote: string) => {
+      calls.push(`verify_citation:${kbId}:${quote}`);
+      return { state: "verbatim", verifiedIn: [], scannedDocs: 0 };
+    },
+    driftSearch: async (kbId: string, query: string) => {
+      calls.push(`drift_search:${kbId}:${query}`);
+      return { status: "ok", communities: [] };
+    },
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+  });
+  const names = tools.map((tool) => tool.name);
+  for (const expected of [
+    "list_knowledge_bases",
+    "concept_explore",
+    "deep_dive",
+    "entity_unified_search",
+    "validate_entities",
+    "gap_candidates",
+    "kb_search",
+    "kb_expand",
+    "doc_grep",
+    "drift_search",
+    "novelty_check",
+    "verify_citation",
+    "evidence_ledger",
+    "polish_report",
+  ]) {
+    assert.ok(names.includes(expected), `${expected} should be registered`);
+  }
+
+  // Corpus-passage tools are nonce-fenced as untrusted ingested-corpus data
+  // (the evidence ledger echoes recorded verbatim quotes — corpus too;
+  // novelty_check returns passageHits[].snippet / relationHits[].quote —
+  // corpus too). Only the trust anchors whose verdicts never carry corpus
+  // passages and the config listing stay unfenced.
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  for (const corpusTool of ["concept_explore", "deep_dive", "entity_unified_search", "gap_candidates", "kb_search", "kb_expand", "doc_grep", "novelty_check", "evidence_ledger", "polish_report"]) {
+    assert.equal(byName.get(corpusTool)!.untrustedCategory, "knowledge-base", `${corpusTool} must be fenced as corpus data`);
+  }
+  for (const anchor of ["list_knowledge_bases", "validate_entities", "verify_citation"]) {
+    assert.equal(byName.get(anchor)!.untrustedCategory, undefined, `${anchor} is a trust anchor and stays unfenced`);
+  }
+
+  // The port is invoked with the tool parameters.
+  const explore = tools.find((tool) => tool.name === "concept_explore")!;
+  const result = await explore.execute("ke-call", { kbId: "kb1", entity: "mAb114", hops: 1 });
+  assert.deepEqual(calls, ["concept_explore:kb1:mAb114"]);
+  assert.equal((result.details as { found: boolean }).found, false);
+
+  // kb_search forwards the query to the port and returns its payload.
+  const search = tools.find((tool) => tool.name === "kb_search")!;
+  const searchResult = await search.execute("ke-call", { kbId: "kb1", query: "neutralization assay" });
+  assert.deepEqual(calls, ["concept_explore:kb1:mAb114", "kb_search:kb1:neutralization assay"]);
+  assert.equal((searchResult.details as { truncated: boolean }).truncated, false);
+
+  // kb_expand / doc_grep forward their parameters and surface the payload.
+  const expand = tools.find((tool) => tool.name === "kb_expand")!;
+  const expandResult = await expand.execute("ke-call", { kbId: "kb1", anchorId: "doc1:paragraph:0" });
+  assert.deepEqual(calls, [
+    "concept_explore:kb1:mAb114",
+    "kb_search:kb1:neutralization assay",
+    "kb_expand:kb1:doc1:paragraph:0",
+  ]);
+  assert.equal((expandResult.details as { reason: string }).reason, "anchor-not-found");
+  const grep = tools.find((tool) => tool.name === "doc_grep")!;
+  const grepResult = await grep.execute("ke-call", { kbId: "kb1", pattern: "IC50" });
+  assert.deepEqual(calls.at(-1), "doc_grep:kb1:IC50");
+  assert.equal((grepResult.details as { truncated: boolean }).truncated, false);
+
+  // Anti-hallucination tools forward and surface the payload.
+  const novelty = tools.find((tool) => tool.name === "novelty_check")!;
+  await novelty.execute("ke-call", { kbId: "kb1", claim: "first ever report" });
+  assert.deepEqual(calls.at(-1), "novelty_check:kb1:first ever report");
+  const cite = tools.find((tool) => tool.name === "verify_citation")!;
+  const citeResult = await cite.execute("ke-call", { kbId: "kb1", quote: "a real quote from a paper" });
+  assert.deepEqual(calls.at(-1), "verify_citation:kb1:a real quote from a paper");
+  assert.equal((citeResult.details as { state: string }).state, "verbatim");
+
+  // Without the port, none of the tools exist.
+  const bare = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const bareNames = new Set(bare.map((tool) => tool.name));
+  for (const absent of ["concept_explore", "deep_dive", "entity_unified_search", "validate_entities", "gap_candidates", "list_knowledge_bases", "kb_search", "kb_expand", "doc_grep", "novelty_check", "verify_citation", "evidence_ledger", "polish_report"]) {
+    assert.equal(bareNames.has(absent), false, `${absent} must not register without the port`);
+  }
+});
+
+test("knowledge-engine tools enforce a bound KB scope: default fill, optional schema, out-of-scope rejection", async () => {
+  const calls: string[] = [];
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [{ id: "kb1", name: "Bound KB", stats: { documents: 1, entities: 1, edges: 1 } }],
+    conceptExplore: async (kbId: string, entity: string) => { calls.push(`concept_explore:${kbId}:${entity}`); return { found: true }; },
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async (kbId: string, query: string) => { calls.push(`kb_search:${kbId}:${query}`); return { hits: [] }; },
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineScope: { kbIds: ["kb1"], singleKbId: "kb1" },
+  });
+  const search = tools.find((tool) => tool.name === "kb_search")!;
+
+  // The scope turns kbId into an optional schema parameter …
+  const required = (search.parameters as { required?: string[] }).required ?? [];
+  assert.ok(!required.includes("kbId"), "kbId must be optional when a single KB is bound");
+  // … fills the default when omitted …
+  await search.execute("ke-call", { query: "helical parameters" });
+  assert.deepEqual(calls, ["kb_search:kb1:helical parameters"]);
+  // … honours an explicit in-scope kbId …
+  await search.execute("ke-call", { kbId: "kb1", query: "explicit" });
+  assert.deepEqual(calls.at(-1), "kb_search:kb1:explicit");
+  // … and rejects out-of-scope ids at the tool layer.
+  await assert.rejects(
+    search.execute("ke-call", { kbId: "kb-other", query: "escape" }),
+    /outside this session's bound knowledge-base scope/,
+  );
+  assert.equal(calls.length, 2, "the rejected call must not reach the port");
+
+  // Without a scope, kbId stays required (schema-level contract unchanged).
+  const unscoped = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+  });
+  const unscopedSearch = unscoped.find((tool) => tool.name === "kb_search")!;
+  const unscopedRequired = (unscopedSearch.parameters as { required?: string[] }).required ?? [];
+  assert.ok(unscopedRequired.includes("kbId"), "kbId must stay required without a scope");
+});
+
+test("an empty knowledgeEngineScope fails closed: every kbId rejected, listing empty", async () => {
+  // The run layer degrades an unvalidatable configured scope to kbIds: []
+  // (fail-closed) — the tool layer must turn that into a hard wall, not a
+  // no-op scope.
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [{ id: "kb1", name: "Leaky KB" }],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async () => ({ hits: [] }),
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineScope: { kbIds: [] },
+  });
+  const search = tools.find((tool) => tool.name === "kb_search")!;
+  await assert.rejects(
+    search.execute("ke-call", { kbId: "kb1", query: "escape" }),
+    /outside this session's bound knowledge-base scope/,
+  );
+  const list = tools.find((tool) => tool.name === "list_knowledge_bases")!;
+  const listed = await list.execute("ke-call", {});
+  assert.deepEqual(JSON.parse(listed.content[0]!.text), [], "the listing must not leak KBs outside the empty scope");
+});
+
+test("knowledge-engine observer fires on success with the scope-filled kbId, never on failure", async () => {
+  const activities: Array<{ toolName: string; kbId?: string; result: unknown }> = [];
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async (kbId: string, query: string) => ({ kbId, query, hits: [{ docId: "doc1" }], truncated: false }),
+    kbExpand: async () => { throw new Error("store exploded"); },
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+    driftSearch: async () => ({}),
+  };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineScope: { kbIds: ["kb1"], singleKbId: "kb1" },
+    knowledgeEngineObserver: (activity) => activities.push(activity),
+  });
+
+  // Scope-filled kbId rides along, and the raw result is the tool's payload.
+  const search = tools.find((tool) => tool.name === "kb_search")!;
+  await search.execute("ke-call", { query: "mAb114" });
+  assert.equal(activities.length, 1);
+  assert.equal(activities[0]!.toolName, "kb_search");
+  assert.equal(activities[0]!.kbId, "kb1");
+  assert.deepEqual((activities[0]!.result as { hits: unknown[] }).hits, [{ docId: "doc1" }]);
+
+  // A throwing invoke reports nothing (the broker rule: failed calls never mirror).
+  const expand = tools.find((tool) => tool.name === "kb_expand")!;
+  await assert.rejects(expand.execute("ke-call", { anchorId: "doc1:paragraph:0" }), /store exploded/);
+  assert.equal(activities.length, 1, "failed invokes must not be observed");
+
+  // A throwing observer must not break the tool.
+  const guarded = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+    knowledgeEngineObserver: () => { throw new Error("observer exploded"); },
+  });
+  const guardedSearch = guarded.find((tool) => tool.name === "kb_search")!;
+  const outcome = await guardedSearch.execute("ke-call", { kbId: "kb1", query: "mAb114" });
+  assert.equal((outcome.details as { truncated: boolean }).truncated, false);
+
+  // kbId-less tools (list_knowledge_bases) still report the scope-filled kbId —
+  // the fill is uniform, and the services-side registry gate decides what
+  // mirrors, so the activity just reports what was effective.
+  const before = activities.length;
+  const list = tools.find((tool) => tool.name === "list_knowledge_bases")!;
+  await list.execute("ke-call", {});
+  assert.equal(activities.length, before + 1);
+  assert.equal(activities.at(-1)!.toolName, "list_knowledge_bases");
+  assert.equal(activities.at(-1)!.kbId, "kb1");
+});
+
+test("list_knowledge_bases filters to the bound scope: no site-wide ids to probe with", async () => {
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [
+      { id: "kb1", name: "Bound KB", stats: { documents: 1, entities: 1, edges: 1 } },
+      { id: "kb2", name: "Someone else's KB", stats: { documents: 9, entities: 9, edges: 9 } },
+    ],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async () => ({}),
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async () => ({}),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
+  };
+  const base = { enabledConnectorIds: [] as string[], executePython: async () => { throw new Error("not used"); }, knowledgeEngine };
+  const scoped = createWorkspaceTools(process.cwd(), { ...base, knowledgeEngineScope: { kbIds: ["kb1"], singleKbId: "kb1" } });
+  const scopedListing = await scoped.find((tool) => tool.name === "list_knowledge_bases")!.execute("ke-call", {});
+  assert.deepEqual(
+    (scopedListing.details as Array<{ id: string }>).map((kb) => kb.id),
+    ["kb1"],
+    "a bound session must not see other KBs' ids/names/stats",
+  );
+
+  const unscoped = createWorkspaceTools(process.cwd(), base);
+  const unscopedListing = await unscoped.find((tool) => tool.name === "list_knowledge_bases")!.execute("ke-call", {});
+  assert.equal((unscopedListing.details as Array<{ id: string }>).length, 2, "without a scope the listing stays site-wide");
+});
+
+test("polish_report verifies fragments via verifyCitation and rewrites the file in place", async (context) => {
+  const root = await mkdtemp(join(tmpdir(), "polish-report-"));
+  context.after(() => rm(root, { force: true, recursive: true }));
+  const quote = "The nucleocapsid helix condenses upon incorporation into the progeny virion";
+  await mkdir(join(root, "reports"), { recursive: true });
+  await writeFile(
+    join(root, "reports", "final.md"),
+    `Based on the documents, findings follow.\n# Report\n# Section\nClaim: “${quote}”.\nInvented: “a fabricated quote that exists nowhere in the corpus”.\n`,
+    "utf8",
+  );
+  const knowledgeEngine = {
+    listKnowledgeBases: async () => [],
+    conceptExplore: async () => ({}),
+    deepDive: async () => ({}),
+    entityUnifiedSearch: async () => ({}),
+    validateEntities: async () => ({}),
+    gapCandidates: async () => ({}),
+    kbSearch: async () => ({}),
+    kbExpand: async () => ({}),
+    docGrep: async () => ({}),
+    noveltyCheck: async () => ({}),
+    verifyCitation: async (kbId: string, text: string) => ({
+      scannedDocs: 3,
+      state: text === quote ? "verbatim" : "not-found",
+      verifiedIn: text === quote ? [{ docId: "doc-9", docTitle: "Cryo-ET paper", state: "verbatim" }] : [],
+    }),
+    driftSearch: async () => ({ status: "no-reports", communities: [] }),
+  };
+  const tools = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+    knowledgeEngine,
+  });
+  const polish = tools.find((tool) => tool.name === "polish_report")!;
+  // Non-markdown paths are rejected before any IO.
+  await assert.rejects(polish.execute("c", { kbId: "kb1", path: "reports/final.pdf" }), /markdown/);
+  const result = await polish.execute("c", { kbId: "kb1", path: "reports/final.md" });
+  const details = result.details as { citations: Array<{ docId: string; marker: number }>; rewritten: boolean; stats: { citationsMarked: number } };
+  assert.equal(details.rewritten, true);
+  assert.equal(details.stats.citationsMarked, 1);
+  assert.deepEqual(details.citations, [{ docId: "doc-9", docTitle: "Cryo-ET paper", marker: 1 }]);
+  const polishedText = await readFile(join(root, "reports", "final.md"), "utf8");
+  assert.ok(polishedText.includes(`${quote}” [1]`), "the verified quote is marked after the closing quote");
+  assert.ok(polishedText.includes("a fabricated quote that exists nowhere in the corpus”"), "the unverifiable quote is untouched");
+  assert.ok(!polishedText.includes("Based on the documents"), "boilerplate is stripped");
+  assert.ok(polishedText.includes("## Section"), "headings are normalized");
+});
+
+test("agent_memory is registered only with a port and routes every action through it", async () => {
+  const root = process.cwd();
+  const withoutPort = createWorkspaceTools(root, {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  assert.equal(withoutPort.find((tool) => tool.name === "agent_memory"), undefined);
+
+  const calls: Array<{ action: string; args: unknown }> = [];
+  const entry = { id: "m1", category: "workflow", content: "先检索后综合" };
+  const tools = createWorkspaceTools(root, {
+    agentMemory: {
+      add: (input) => {
+        calls.push({ action: "add", args: input });
+        return entry as never;
+      },
+      list: (filter) => {
+        calls.push({ action: "list", args: filter });
+        return [entry] as never;
+      },
+      remove: (id) => calls.push({ action: "remove", args: id }),
+      replace: (id, content) => {
+        calls.push({ action: "replace", args: { content, id } });
+        return entry as never;
+      },
+      supersede: (id, content, category) => {
+        calls.push({ action: "supersede", args: { category, content, id } });
+        return entry as never;
+      },
+    },
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const tool = tools.find((candidate) => candidate.name === "agent_memory")!;
+
+  await tool.execute("c", { action: "add", category: "workflow", content: "先检索后综合" });
+  assert.deepEqual(calls.at(-1), { action: "add", args: { category: "workflow", content: "先检索后综合" } });
+  await tool.execute("c", { action: "replace", content: "改写", id: "m1" });
+  assert.deepEqual(calls.at(-1), { action: "replace", args: { content: "改写", id: "m1" } });
+  await tool.execute("c", { action: "supersede", content: "新版", id: "m1" });
+  assert.deepEqual(calls.at(-1), { action: "supersede", args: { category: undefined, content: "新版", id: "m1" } });
+  await tool.execute("c", { action: "remove", id: "m1" });
+  assert.deepEqual(calls.at(-1), { action: "remove", args: "m1" });
+  const list = await tool.execute("c", { action: "list", status: "active" });
+  assert.deepEqual(calls.at(-1), { action: "list", args: { status: "active" } });
+  assert.match(list.content[0]?.type === "text" ? list.content[0].text : "", /先检索后综合/);
+  await assert.rejects(tool.execute("c", { action: "nuke" }), /Unknown action/);
+});
+
+test("agent_memory add surfaces deduplication honestly", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    agentMemory: {
+      add: () => null,
+      list: () => [],
+      remove: () => undefined,
+      replace: () => { throw new Error("not used"); },
+      supersede: () => { throw new Error("not used"); },
+    },
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const tool = tools.find((candidate) => candidate.name === "agent_memory")!;
+  const result = await tool.execute("c", { action: "add", category: "convention", content: "重复条目" });
+  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /deduplicated/);
+});
+
+test("tournament_rank proximity returns collapse suspects with caller-array indices", async () => {
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [],
+    executePython: async () => { throw new Error("not used"); },
+  });
+  const tool = tools.find((candidate) => candidate.name === "tournament_rank")!;
+  const texts = [
+    "IL-6 抑制剂通过阻断下游信号缓解细胞因子风暴",
+    " ", // blank entry: indices must NOT shift (review P1)
+    "IL-6 抑制剂通过阻断下游信号缓解细胞因子风暴反应",
+    "表观遗传重编程可能逆转 T 细胞耗竭状态",
+  ];
+  const result = await tool.execute("c", { action: "proximity", texts });
+  const details = result.details as { count: number; meanDivergence: number; mostSimilar: Array<{ a: number; b: number; similarity: number }> };
+  assert.equal(details.count, 4, "blank entries stay in the index space");
+  assert.deepEqual([details.mostSimilar[0]!.a, details.mostSimilar[0]!.b], [0, 2], "indices refer to the caller's array");
+  assert.ok(details.mostSimilar[0]!.similarity > 0.7);
+  const tooFew = await tool.execute("c", { action: "proximity", texts: ["only one"] });
+  assert.match(tooFew.content[0]?.type === "text" ? tooFew.content[0].text : "", /at least 2/);
 });

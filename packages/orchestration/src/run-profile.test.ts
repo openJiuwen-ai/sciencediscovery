@@ -43,6 +43,10 @@ test("main and subagent profiles encode policy symmetrically without live runtim
 
   assert.equal(main.kind, "main");
   assert.deepEqual(main.historyPolicy, { inputPolicy: "outer-session", kind: "session" });
+  assert.deepEqual(main.toolPolicy, { deniedToolNames: [] }, "main defaults to no denials");
+  // The bound-KB scope's web ban rides the main profile's deniedToolNames.
+  const bannedMain = createMainAgentProfile({ ...shared, deniedToolNames: ["web_search", "web_fetch"] });
+  assert.deepEqual(bannedMain.toolPolicy, { deniedToolNames: ["web_search", "web_fetch"] });
   assert.equal(subagent.kind, "subagent");
   assert.deepEqual(subagent.historyPolicy, { inputPolicy: "orchestrator-only", kind: "isolated" });
   assert.deepEqual(subagent.budget, { maxModelTurns: DEFAULT_SUBAGENT_MAX_TURNS, runTimeoutMs: 30_000 });

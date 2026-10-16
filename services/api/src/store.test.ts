@@ -1660,6 +1660,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       enabledConnectorIds: ["pubmed", "uniprot"],
       enabledSkillLibraries: [],
       enabledSkillIds: ["life-science-evidence-brief", "managed-skill"],
+      kbScopeKbIds: [],
       modelId: "configured-model",
       reviewModelId: "configured-model",
       semanticReviewEnabled: false,
@@ -1676,6 +1677,9 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       enabledConnectorIds: "session",
       enabledSkillLibraries: "unset",
       enabledSkillIds: "unset",
+      agentMemoryBackgroundReview: "unset",
+      kbScopeKbIds: "unset",
+      kbScopeWebSearch: "unset",
       modelId: "session",
       reviewModelId: "session",
       semanticReviewEnabled: "session",
@@ -1766,6 +1770,7 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
       enabledConnectorIds: [],
       enabledSkillLibraries: [],
       enabledSkillIds: ["life-science-evidence-brief"],
+      kbScopeKbIds: [],
       modelId: modelB.id,
       reviewModelId: modelB.id,
       semanticReviewEnabled: true,
@@ -1777,6 +1782,9 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
       enabledConnectorIds: "project",
       enabledSkillLibraries: "unset",
       enabledSkillIds: "project",
+      agentMemoryBackgroundReview: "unset",
+      kbScopeKbIds: "unset",
+      kbScopeWebSearch: "unset",
       modelId: "project",
       reviewModelId: "session",
       semanticReviewEnabled: "global",
@@ -1789,6 +1797,21 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
   await store.replaceProjectSettings(project.id, { modelId: modelA.id });
   assert.equal(store.resolveRuntimeSettings(session.id).effective.modelId, modelA.id);
   assert.equal(store.getSession(session.id)?.modelId, modelA.id);
+
+  // KB scope fields merge with the same layering rules (session over project
+  // over global) and dedupe on normalize.
+  await store.replaceProjectSettings(project.id, { kbScopeKbIds: ["kb-a", "kb-b"], kbScopeWebSearch: false });
+  let scoped = store.getSessionSettings(session.id);
+  assert.deepEqual(scoped.effective.kbScopeKbIds, ["kb-a", "kb-b"]);
+  assert.equal(scoped.effective.kbScopeWebSearch, false);
+  assert.equal(scoped.sources.kbScopeKbIds, "project");
+  await store.replaceSessionSettings(session.id, { kbScopeKbIds: ["kb-c"] });
+  scoped = store.getSessionSettings(session.id);
+  assert.deepEqual(scoped.effective.kbScopeKbIds, ["kb-c"]);
+  assert.equal(scoped.effective.kbScopeWebSearch, false, "web flag still inherits from the project layer");
+  assert.equal(scoped.sources.kbScopeKbIds, "session");
+  await store.replaceSessionSettings(session.id, { kbScopeKbIds: [] });
+  assert.deepEqual(store.getSessionSettings(session.id).effective.kbScopeKbIds, [], "empty array clears the scope explicitly");
 
   await store.replaceSessionSettings(session.id, {
     enabledConnectorIds: [],

@@ -205,6 +205,7 @@ export class McpNodeClient {
   private readonly sessions = new Map<string, ServerSession>();
   private readonly connecting = new Map<string, Promise<Client>>();
   private proxies: Record<string, ResolvedProxy> = {};
+  private configSignature: string | undefined;
 
   constructor(
     private readonly loadConfig: () => ExtensionsConfigFile = loadExtensionsConfig,
@@ -213,7 +214,13 @@ export class McpNodeClient {
   ) {}
 
   private currentConfig(): ExtensionsConfigFile {
-    return this.loadConfig();
+    const config = this.loadConfig();
+    if (this.configSignature !== undefined && config.signature !== this.configSignature) {
+      // Config content changed: rebuild every session on next use.
+      void this.closeAll("config_changed");
+    }
+    this.configSignature = config.signature;
+    return config;
   }
 
   private proxySignature(serverId: string): string {
@@ -433,6 +440,7 @@ export class McpNodeClient {
       });
     }
     await this.closeAll("catalog_reload");
+    this.configSignature = undefined;
     return this.catalog();
   }
 
@@ -576,8 +584,14 @@ export class McpNodeClient {
     };
   }
 
-  /** Close every cached session (shutdown hook). */
+  /**
+   * Close every cached session, killing the stdio MCP subprocesses the
+   * platform warm-up spawned — their stdio pipes otherwise keep the process
+   * alive forever after a server shutdown. The HTTP server hooks this on
+   * "close"; sessions rebuild lazily if the client is reused afterwards.
+   */
   async close(): Promise<void> {
     await this.closeAll("shutdown");
+    this.configSignature = undefined;
   }
 }

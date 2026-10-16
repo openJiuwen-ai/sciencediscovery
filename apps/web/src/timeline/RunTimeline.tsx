@@ -121,6 +121,23 @@ export type RunTimelineEntry =
       type: "approval-mode";
     }
   | {
+      /** C2 finish gate verdict on a no-tool answer: continue = an audit
+       *  directive was injected; denied = the gate wanted another round but
+       *  the continuation cap stopped it; finish = the gate let it pass. */
+      action: "continue" | "denied" | "finish";
+      id: string;
+      turn: number;
+      type: "finish-gate";
+    }
+  | {
+      actor: "auto" | "user";
+      decision: "approved" | "rejected";
+      id: string;
+      planVersion: number;
+      reason?: string;
+      type: "plan-decision";
+    }
+  | {
       id: string;
       subagents: Subagent[];
       type: "subagents";
@@ -625,6 +642,34 @@ export function reduceRunTimeline(
     }];
   }
 
+  // One badge per gate verdict, keyed by (turn, action) so stream replays
+  // rebuild idempotently instead of stacking duplicates.
+  if (event.type === "finish_gate") {
+    const finished = finishThinking(entries);
+    const id = `finish-gate-${event.turn}-${event.action}`;
+    if (finished.some((entry) => entry.id === id)) return finished;
+    return [...finished, {
+      action: event.action,
+      id,
+      turn: event.turn,
+      type: "finish-gate",
+    }];
+  }
+
+  if (event.type === "plan.approval_decided") {
+    const finished = finishThinking(entries);
+    const id = `plan-decision-${event.decision.id}`;
+    if (finished.some((entry) => entry.id === id)) return finished;
+    return [...finished, {
+      actor: event.decision.actor,
+      decision: event.decision.decision,
+      id,
+      planVersion: event.decision.planVersion,
+      ...(event.decision.reason ? { reason: event.decision.reason } : {}),
+      type: "plan-decision",
+    }];
+  }
+
   if (event.type === "run.history.truncated") {
     const existing = entries.findIndex((entry) => entry.type === "history-truncated");
     if (existing >= 0) {
@@ -868,6 +913,38 @@ export function RunTimeline({
                 from: t(approvalModeLabelKey(entry.previousApprovalMode)),
                 to: t(approvalModeLabelKey(entry.approvalMode)),
               })}</p>
+            </aside>
+          );
+        }
+
+        if (entry.type === "finish-gate") {
+          return (
+            <aside className="boundary-note" key={entry.id}>
+              <span><WarningIcon size={15} /></span>
+              <p>{t(
+                entry.action === "continue"
+                  ? "timeline.finishGateContinue"
+                  : entry.action === "denied"
+                    ? "timeline.finishGateDenied"
+                    : "timeline.finishGateFinish",
+                { turn: entry.turn },
+              )}</p>
+            </aside>
+          );
+        }
+
+        if (entry.type === "plan-decision") {
+          return (
+            <aside className="boundary-note" key={entry.id}>
+              <span><WarningIcon size={15} /></span>
+              <p>{t(
+                entry.decision === "approved" ? "timeline.planDecisionApproved" : "timeline.planDecisionRejected",
+                {
+                  actor: entry.actor === "auto" ? t("timeline.planDecisionAuto") : "",
+                  reason: entry.reason ? `: ${entry.reason}` : "",
+                  version: entry.planVersion,
+                },
+              )}</p>
             </aside>
           );
         }

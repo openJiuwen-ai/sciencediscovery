@@ -149,6 +149,10 @@ import type {
   WorkspaceFileRevision,
   WorkspaceFileRevisionInput,
   ResolvedModelPricing,
+  SessionPlan,
+  PlanStep,
+  ProposePlanRequest,
+  RevisePlanRequest,
 } from "@sciencediscovery/schema";
 import {
   LOCAL_RUNNER_ID,
@@ -172,6 +176,14 @@ import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
 } from "@sciencediscovery/orchestration";
+import type {
+  AgentMemoryCategory,
+  AgentMemoryEntry,
+  AgentMemoryProvenance,
+  AgentMemoryStatus,
+  DecidePlanApprovalRequest,
+  PlanApprovalDecision,
+} from "@sciencediscovery/schema";
 
 import { SCIENTIFIC_ARTIFACT_KIND_SET, resolveScientificArtifactKind } from "@sciencediscovery/schema";
 import {
@@ -408,6 +420,24 @@ function savedWorkspaceFileRevision(value: unknown): WorkspaceFileRevision | und
   } as WorkspaceFileRevision;
 }
 
+function mapAgentMemoryRow(row: Record<string, unknown>): AgentMemoryEntry {
+  return {
+    category: row["category"] as AgentMemoryEntry["category"],
+    confidence: Number(row["confidence"]),
+    content: String(row["content"]),
+    createdAt: String(row["created_at"]),
+    id: String(row["id"]),
+    provenance: row["provenance"] ? (JSON.parse(String(row["provenance"])) as AgentMemoryProvenance) : null,
+    relevance: Number(row["relevance"]),
+    reviewedAt: row["reviewed_at"] ? String(row["reviewed_at"]) : null,
+    source: String(row["source"]),
+    status: row["status"] as AgentMemoryEntry["status"],
+    supersedesId: row["supersedes_id"] ? String(row["supersedes_id"]) : null,
+    updatedAt: String(row["updated_at"]),
+    useCount: Number(row["use_count"]),
+  };
+}
+
 export class SessionStoreHttpError extends Error {
   constructor(message: string, readonly statusCode: 400 | 404 | 409) {
     super(message);
@@ -591,6 +621,28 @@ export class SessionStore {
         ON permission_authorizations(session_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS permission_authorizations_execution
         ON permission_authorizations(execution_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS agent_memory (
+        id TEXT PRIMARY KEY,
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT NOT NULL,
+        relevance INTEGER NOT NULL DEFAULT 5,
+        use_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        supersedes_id TEXT,
+        confidence REAL NOT NULL DEFAULT 0.7,
+        provenance TEXT,
+        reviewed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (category, content)
+      );
+      CREATE INDEX IF NOT EXISTS agent_memory_status_category
+        ON agent_memory(status, category);
+      CREATE TABLE IF NOT EXISTS agent_memory_meta (
+        id TEXT PRIMARY KEY,
+        json TEXT NOT NULL
+      );
     `);
     this.pluginControl = new PluginControl(this.database, this, (value) => this.normalizeSettings(value));
     this.notificationStore = new AgentNotifications(this.database, (sessionId) => {
@@ -874,6 +926,18 @@ export class SessionStore {
     ];
     const migratedSpecialists = JSON.stringify(specialists) !== JSON.stringify(savedSpecialists);
     const specialistIds = new Set(specialists.map((specialist) => specialist.id));
+    const savedSessionPlans = Array.isArray(saved.sessionPlans) ? saved.sessionPlans : [];
+    const sessionPlans = savedSessionPlans.map((plan) => ({
+      ...plan,
+      mode: "recorded" as const,
+      state: plan.state === "completed" || plan.state === "abandoned" || plan.state === "awaiting_user"
+        ? plan.state
+        : "recorded" as const,
+    }));
+    const migratedSessionPlans = JSON.stringify(sessionPlans) !== JSON.stringify(savedSessionPlans);
+    // Plan approval decision log (V3-C2) — append-only, capped like other
+    // catalog logs; missing on pre-V3 catalogs.
+    const savedPlanApprovalDecisions = Array.isArray(saved.planApprovalDecisions) ? saved.planApprovalDecisions : [];
     const savedSubagents = Array.isArray(saved.subagents)
       ? saved.subagents
       : Array.isArray(saved.delegationTracks) ? saved.delegationTracks : [];
@@ -1117,6 +1181,8 @@ export class SessionStore {
       remoteHosts,
       remoteJobs,
       remoteWorkspaceSyncs,
+      sessionPlans,
+      planApprovalDecisions: savedPlanApprovalDecisions,
       sessions,
       specialists,
       timeoutSettings,
@@ -1641,6 +1707,7 @@ export class SessionStore {
       enabledConnectorIds: [],
       enabledSkillLibraries: [],
       enabledSkillIds: [],
+      kbScopeKbIds: [],
       semanticReviewEnabled: true,
       skillSelectionMode: DEFAULT_SKILL_SELECTION_MODE,
     };
@@ -1659,6 +1726,9 @@ export class SessionStore {
         else if (field === "enabledConnectorIds") effective.enabledConnectorIds = [...value as ConnectorId[]];
         else if (field === "enabledSkillLibraries") effective.enabledSkillLibraries = structuredClone(value) as EffectiveRuntimeSettings["enabledSkillLibraries"];
         else if (field === "enabledSkillIds") effective.enabledSkillIds = [...value as string[]];
+        else if (field === "kbScopeKbIds") effective.kbScopeKbIds = [...value as string[]];
+        else if (field === "kbScopeWebSearch") effective.kbScopeWebSearch = value as boolean;
+        else if (field === "agentMemoryBackgroundReview") effective.agentMemoryBackgroundReview = value as boolean;
         else if (field === "semanticReviewEnabled") effective.semanticReviewEnabled = value as boolean;
         else if (field === "skillSelectionMode") effective.skillSelectionMode = value as SkillSelectionMode;
         else if (field === "thinkingMode") effective.thinkingMode = value as ModelThinkingMode;
@@ -2891,6 +2961,211 @@ export class SessionStore {
     }
     this.catalog.specialists = this.catalog.specialists.filter((candidate) => candidate.id !== specialistId);
     await this.saveCatalog();
+  }
+
+  listSessionPlans(sessionId: string): SessionPlan[] {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return structuredClone(this.catalog.sessionPlans.filter((plan) => plan.sessionId === sessionId))
+      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  latestSessionPlan(sessionId: string, runId?: string): SessionPlan | undefined {
+    const plans = this.listSessionPlans(sessionId);
+    return (runId ? plans.filter((plan) => plan.runId === runId) : plans).at(-1);
+  }
+
+  private normalizePlanInput(input: ProposePlanRequest): Pick<SessionPlan, "caveats" | "feasibilityConfidence" | "scope" | "steps"> {
+    const scope = input.scope?.trim();
+    if (!scope || scope.length > 2_000) throw new Error("Plan scope must be 1-2000 characters");
+    if (!(["high", "medium", "low"] as const).includes(input.feasibilityConfidence)) throw new Error("Invalid feasibility confidence");
+    const descriptions = input.steps?.map((step) => step.trim()).filter(Boolean) ?? [];
+    if (!descriptions.length || descriptions.length > 20 || descriptions.some((step) => step.length > 1_000)) {
+      throw new Error("Plan must contain 1-20 steps of at most 1000 characters each");
+    }
+    const caveats = (input.caveats ?? []).map((caveat) => caveat.trim()).filter(Boolean);
+    if (caveats.length > 10 || caveats.some((caveat) => caveat.length > 1_000)) {
+      throw new Error("Plan supports at most 10 caveats of 1000 characters each");
+    }
+    return {
+      caveats,
+      feasibilityConfidence: input.feasibilityConfidence,
+      scope,
+      steps: descriptions.map((description) => ({ id: randomUUID(), description, status: "pending" })),
+    };
+  }
+
+  async proposeSessionPlan(
+    sessionId: string,
+    input: ProposePlanRequest,
+    runId?: string,
+    options: { awaitingUser?: boolean } = {},
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const normalized = this.normalizePlanInput(input);
+    const now = new Date().toISOString();
+    const plan: SessionPlan = {
+      ...normalized,
+      createdAt: now,
+      id: randomUUID(),
+      mode: "recorded",
+      ...(runId ? { runId } : {}),
+      sessionId,
+      // V3-C2: approval-gated sessions park the plan for a human decision.
+      state: options.awaitingUser ? "awaiting_user" : "recorded",
+      updatedAt: now,
+      version: 1,
+    };
+    this.catalog.sessionPlans.push(plan);
+    await this.saveCatalog();
+    return structuredClone(plan);
+  }
+
+  async reviseSessionPlan(
+    sessionId: string,
+    planId: string,
+    input: RevisePlanRequest,
+    options: { markAwaitingUser?: boolean } = {},
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === planId && candidate.sessionId === sessionId);
+    if (!plan) throw new Error("Plan not found");
+    if (plan.state !== "recorded" && plan.state !== "awaiting_user") {
+      throw new Error("Only a recorded or awaiting-approval plan can be revised");
+    }
+    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before revising");
+    Object.assign(plan, this.normalizePlanInput(input), { updatedAt: new Date().toISOString(), version: plan.version + 1 });
+    // V3-C2: an agent revision under an approval-gated session re-enters
+    // review — approving version N never approves version N+1. User edits
+    // via REST keep the current state (they ARE the reviewer).
+    if (options.markAwaitingUser) plan.state = "awaiting_user";
+    await this.saveCatalog();
+    return structuredClone(plan);
+  }
+
+  // -------------------------------------------------- plan approval (V3-C2)
+
+  private appendPlanApprovalDecision(decision: PlanApprovalDecision): void {
+    this.catalog.planApprovalDecisions.push(decision);
+    // Append-only but bounded — same retention spirit as other catalog logs.
+    if (this.catalog.planApprovalDecisions.length > 500) {
+      this.catalog.planApprovalDecisions.splice(0, this.catalog.planApprovalDecisions.length - 500);
+    }
+  }
+
+  /** Record an automatic approval (always_allow sessions) — the decision
+   *  log is mode-agnostic: auto-approvals are logged too, with actor auto. */
+  async recordAutoPlanApproval(plan: SessionPlan): Promise<PlanApprovalDecision> {
+    const decision: PlanApprovalDecision = {
+      actor: "auto",
+      approvalMode: this.getSession(plan.sessionId)?.approvalMode ?? "always_allow",
+      createdAt: new Date().toISOString(),
+      decision: "approved",
+      id: randomUUID(),
+      planId: plan.id,
+      planVersion: plan.version,
+      ...(plan.runId ? { runId: plan.runId } : {}),
+      sessionId: plan.sessionId,
+    };
+    this.appendPlanApprovalDecision(decision);
+    await this.saveCatalog();
+    return structuredClone(decision);
+  }
+
+  /** Human decision on an awaiting_user plan. Binds the CURRENT version:
+   *  approve → recorded; reject → abandoned (reason preserved). */
+  async decideSessionPlanApproval(
+    sessionId: string,
+    planId: string,
+    input: DecidePlanApprovalRequest,
+  ): Promise<{ decision: PlanApprovalDecision; plan: SessionPlan }> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === planId && candidate.sessionId === sessionId);
+    if (!plan) throw new SessionStoreHttpError("Plan not found", 404);
+    if (plan.state !== "awaiting_user") {
+      throw new SessionStoreHttpError("Plan is not awaiting a decision", 409);
+    }
+    if (input.decision !== "approve" && input.decision !== "reject") {
+      throw new SessionStoreHttpError("Invalid plan decision", 400);
+    }
+    if (input.expectedVersion !== undefined && plan.version !== input.expectedVersion) {
+      throw new SessionStoreHttpError("Plan version changed; refresh before deciding", 409);
+    }
+    const reason = input.reason?.trim();
+    if (reason && reason.length > 2_000) throw new SessionStoreHttpError("Plan decision reason must not exceed 2000 characters", 400);
+    const now = new Date().toISOString();
+    plan.state = input.decision === "approve" ? "recorded" : "abandoned";
+    if (input.decision === "reject" && reason) plan.abandonmentReason = reason;
+    plan.updatedAt = now;
+    const decision: PlanApprovalDecision = {
+      actor: "user",
+      approvalMode: this.getSession(sessionId)?.approvalMode ?? "ask_for_dangerous",
+      createdAt: now,
+      decision: input.decision === "approve" ? "approved" : "rejected",
+      id: randomUUID(),
+      planId: plan.id,
+      planVersion: plan.version,
+      ...(reason ? { reason } : {}),
+      ...(plan.runId ? { runId: plan.runId } : {}),
+      sessionId,
+    };
+    this.appendPlanApprovalDecision(decision);
+    await this.saveCatalog();
+    return { decision: structuredClone(decision), plan: structuredClone(plan) };
+  }
+
+  listPlanApprovalDecisions(sessionId: string, planId?: string): PlanApprovalDecision[] {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    return structuredClone(
+      this.catalog.planApprovalDecisions.filter(
+        (decision) => decision.sessionId === sessionId && (!planId || decision.planId === planId),
+      ),
+    );
+  }
+
+  /** Read-side state probe for the run's blocking wait. */
+  getSessionPlan(sessionId: string, planId: string): SessionPlan | undefined {
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === planId && candidate.sessionId === sessionId);
+    return plan ? structuredClone(plan) : undefined;
+  }
+
+  async updateSessionPlanStep(
+    sessionId: string,
+    input: { expectedVersion: number; planId: string; status: PlanStep["status"]; stepId: string },
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
+    if (!plan) throw new Error("Plan not found");
+    if (plan.state !== "recorded") throw new Error("Only a recorded plan can update step progress");
+    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before updating a step");
+    const step = plan.steps.find((candidate) => candidate.id === input.stepId);
+    if (!step) throw new Error("Plan step not found");
+    step.status = input.status;
+    plan.state = plan.steps.every((candidate) => candidate.status === "completed") ? "completed" : "recorded";
+    plan.updatedAt = new Date().toISOString();
+    plan.version += 1;
+    await this.saveCatalog();
+    return structuredClone(plan);
+  }
+
+  async abandonSessionPlan(
+    sessionId: string,
+    input: { expectedVersion: number; planId: string; reason?: string },
+  ): Promise<SessionPlan> {
+    this.assertSessionWritable(sessionId);
+    const plan = this.catalog.sessionPlans.find((candidate) => candidate.id === input.planId && candidate.sessionId === sessionId);
+    if (!plan) throw new Error("Plan not found");
+    // Awaiting-user plans are abandonable too (run-interrupt sweep, user
+    // withdrawing a pending proposal); completed/abandoned are terminal.
+    if (plan.state !== "recorded" && plan.state !== "awaiting_user") throw new Error("Only a recorded or awaiting-approval plan can be abandoned");
+    if (plan.version !== input.expectedVersion) throw new Error("Plan version changed; refresh before abandoning");
+    const reason = input.reason?.trim();
+    if (reason && reason.length > 2_000) throw new Error("Plan abandonment reason must not exceed 2000 characters");
+    plan.state = "abandoned";
+    if (reason) plan.abandonmentReason = reason;
+    plan.updatedAt = new Date().toISOString();
+    plan.version += 1;
+    await this.saveCatalog();
+    return structuredClone(plan);
   }
 
   listSubagents(sessionId: string): Subagent[] {
@@ -5683,6 +5958,212 @@ export class SessionStore {
     if (!session) throw new Error("Session not found");
     return resolve(this.dataDir, "projects", session.projectId, "sessions", session.id, "workspace");
   }
+
+  // ------------------------------------------------------------ agent memory
+  // V3-C1 (DeepAnalyze agent_memory port). The machine never self-certifies:
+  // every agent/background-review write lands as a candidate whose provenance
+  // carries requiresReview; only a human promote() clears that flag and lifts
+  // confidence to the verified band. Prompt injection reads reviewed entries
+  // only (listDiverseAgentMemories callers decide the policy).
+
+  addAgentMemory(input: {
+    category: AgentMemoryCategory;
+    content: string;
+    source: string;
+    relevance?: number;
+    confidence?: number;
+    provenance?: AgentMemoryProvenance | null;
+  }): AgentMemoryEntry | null {
+    const timestamp = new Date().toISOString();
+    const id = randomUUID();
+    const inserted = this.database!
+      .prepare(
+        `INSERT INTO agent_memory
+           (id, category, content, source, relevance, use_count, status,
+            supersedes_id, confidence, provenance, reviewed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 0, 'active', NULL, ?, ?, NULL, ?, ?)
+         ON CONFLICT (category, content) DO NOTHING`,
+      )
+      .run(
+        id,
+        input.category,
+        input.content.trim(),
+        input.source,
+        input.relevance ?? 5,
+        input.confidence ?? 0.7,
+        input.provenance ? JSON.stringify(input.provenance) : null,
+        timestamp,
+        timestamp,
+      );
+    return Number(inserted.changes) > 0 ? this.getAgentMemory(id) : null;
+  }
+
+  getAgentMemory(id: string): AgentMemoryEntry | null {
+    const row = this.database!.prepare("SELECT * FROM agent_memory WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? mapAgentMemoryRow(row) : null;
+  }
+
+  listAgentMemories(
+    filter: { category?: AgentMemoryCategory; status?: AgentMemoryStatus } = {},
+  ): AgentMemoryEntry[] {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (filter.category) {
+      clauses.push("category = ?");
+      params.push(filter.category);
+    }
+    if (filter.status) {
+      clauses.push("status = ?");
+      params.push(filter.status);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.database!
+      .prepare(`SELECT * FROM agent_memory${where} ORDER BY updated_at DESC`)
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map(mapAgentMemoryRow);
+  }
+
+  /** Pareto-diverse selection (DeepAnalyze parity): the top-scored entry of
+   *  each category first, then fill by score — one hot category cannot
+   *  crowd out the whole prompt budget. `reviewedOnly` drops candidates
+   *  still awaiting human promote (the SEAL-safe default for prompt use). */
+  listDiverseAgentMemories(limit: number, options: { reviewedOnly?: boolean } = {}): AgentMemoryEntry[] {
+    const reviewedOnly = options.reviewedOnly !== false;
+    // Fail-CLOSED (review P1): only an explicit requiresReview:false passes —
+    // a null provenance must never slip an unreviewed note into the prompt.
+    const pool = this.listAgentMemories({ status: "active" }).filter(
+      (entry) => !reviewedOnly || entry.provenance?.requiresReview === false,
+    );
+    const score = (entry: AgentMemoryEntry) =>
+      entry.relevance * 2 + entry.confidence * 10 + Math.min(entry.useCount, 10);
+    const byCategory = new Map<AgentMemoryCategory, AgentMemoryEntry[]>();
+    for (const entry of pool) {
+      const bucket = byCategory.get(entry.category) ?? [];
+      bucket.push(entry);
+      byCategory.set(entry.category, bucket);
+    }
+    const picked: AgentMemoryEntry[] = [];
+    const rest: AgentMemoryEntry[] = [];
+    for (const bucket of byCategory.values()) {
+      bucket.sort((a, b) => score(b) - score(a) || b.updatedAt.localeCompare(a.updatedAt));
+      const [top, ...others] = bucket;
+      if (top) picked.push(top);
+      rest.push(...others);
+    }
+    rest.sort((a, b) => score(b) - score(a) || b.updatedAt.localeCompare(a.updatedAt));
+    return [...picked, ...rest].slice(0, Math.max(0, limit));
+  }
+
+  /** Replace content in place. A previously verified memory does NOT keep
+   *  its verified label — the edit lands as a fresh candidate. */
+  replaceAgentMemoryContent(
+    id: string,
+    content: string,
+    provenance: AgentMemoryProvenance,
+  ): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    const timestamp = new Date().toISOString();
+    const updated = this.database!
+      .prepare(
+        `UPDATE agent_memory SET content = ?, provenance = ?, reviewed_at = NULL, updated_at = ?
+         WHERE id = ? AND NOT EXISTS (
+           SELECT 1 FROM agent_memory other
+           WHERE other.category = ? AND other.content = ? AND other.id != ?)`,
+      )
+      .run(content.trim(), JSON.stringify(provenance), timestamp, id, existing.category, content.trim(), id);
+    if (Number(updated.changes) === 0) {
+      throw new Error("Agent memory replace conflicts with an existing entry");
+    }
+    return this.getAgentMemory(id)!;
+  }
+
+  /** Human review: promote to verified. Clears requiresReview, lifts
+   *  confidence into the verified band, stamps reviewed_at. */
+  promoteAgentMemory(id: string): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    // Promoting an archived (superseded) entry would resurrect an outdated
+    // version alongside its replacement (review P2).
+    if (existing.status === "archived") throw new Error("Agent memory is archived (superseded) — promote the replacement instead");
+    const provenance: AgentMemoryProvenance = { ...(existing.provenance ?? { kind: "manual" }), requiresReview: false };
+    const timestamp = new Date().toISOString();
+    this.database!
+      .prepare(
+        `UPDATE agent_memory SET status = 'active', confidence = MAX(confidence, 0.8),
+           provenance = ?, reviewed_at = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(JSON.stringify(provenance), timestamp, timestamp, id);
+    return this.getAgentMemory(id)!;
+  }
+
+  markAgentMemoryStale(id: string): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    const timestamp = new Date().toISOString();
+    this.database!
+      .prepare("UPDATE agent_memory SET status = 'stale', updated_at = ? WHERE id = ?")
+      .run(timestamp, id);
+    return this.getAgentMemory(id)!;
+  }
+
+  removeAgentMemory(id: string): void {
+    this.database!.prepare("DELETE FROM agent_memory WHERE id = ?").run(id);
+  }
+
+  /** Atomic supersede: old entry archived, replacement created active with
+   *  supersedes_id pointing back. The replacement is always a candidate —
+   *  superseding never inherits verification. */
+  supersedeAgentMemory(
+    id: string,
+    input: { content: string; category?: AgentMemoryCategory; provenance: AgentMemoryProvenance },
+  ): AgentMemoryEntry {
+    const existing = this.getAgentMemory(id);
+    if (!existing) throw new Error("Agent memory not found");
+    let begun = false;
+    this.database!.exec("BEGIN IMMEDIATE");
+    begun = true;
+    try {
+      const created = this.addAgentMemory({
+        category: input.category ?? existing.category,
+        content: input.content,
+        source: existing.source,
+        relevance: existing.relevance,
+        confidence: 0.7,
+        provenance: input.provenance,
+      });
+      if (!created) throw new Error("Agent memory supersede conflicts with an existing entry");
+      const timestamp = new Date().toISOString();
+      this.database!
+        .prepare("UPDATE agent_memory SET status = 'archived', updated_at = ? WHERE id = ?")
+        .run(timestamp, id);
+      this.database!
+        .prepare("UPDATE agent_memory SET supersedes_id = ? WHERE id = ?")
+        .run(id, created.id);
+      this.database!.exec("COMMIT");
+      return this.getAgentMemory(created.id)!;
+    } catch (error) {
+      if (begun) this.database!.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Small KV for background-review bookkeeping (review cadence state). */
+  getAgentMemoryMeta<T>(id: string): T | null {
+    const row = this.database!.prepare("SELECT json FROM agent_memory_meta WHERE id = ?").get(id) as
+      | { json: string }
+      | undefined;
+    return row ? (JSON.parse(row.json) as T) : null;
+  }
+
+  setAgentMemoryMeta(id: string, value: unknown): void {
+    this.database!
+      .prepare("INSERT INTO agent_memory_meta (id, json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json")
+      .run(id, JSON.stringify(value));
+  }
+
 
   /** Stable Agent-instance × Runner identity. Paths are never used as an authorization grant. */
   workspaceIdentity(sessionId: string, agentId = "main", runnerId = "local") {

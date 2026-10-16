@@ -1,0 +1,441 @@
+// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { EvolveApiClient } from "./evolve.js";
+
+export interface KeKbStats {
+  documents: number;
+  documentsReady: number;
+  documentsError: number;
+  entities: number;
+  edges: number;
+}
+
+export interface KeKb {
+  id: string;
+  name: string;
+  description: string;
+  engineState: unknown;
+  createdAt: string;
+  stats?: KeKbStats;
+}
+
+/** A scholarly search hit / picked seed candidate (search-preview & paperRefs seed). */
+export interface KePaperRef {
+  title: string;
+  authors?: string[];
+  year?: number | null;
+  doi?: string | null;
+  arxivId?: string | null;
+  abstract?: string | null;
+  pdfUrl?: string | null;
+  citationCount?: number | null;
+  source?: string;
+  sourceId?: string;
+  venue?: string | null;
+}
+
+export interface KeDocument {
+  id: string;
+  kbId: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  venue: string | null;
+  abstract: string | null;
+  status: "pending" | "ready" | "error";
+  sourceUri: string | null;
+  ingestChannel: string | null;
+  extractedAt: string | null;
+  createdAt: string;
+}
+
+export interface KeJob {
+  id: string;
+  type: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "dead";
+  attempts: number;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KeGraphEntity {
+  id: string;
+  name: string;
+  type: string;
+  supportCount: number;
+  trustLevel: string;
+  communityId: number | null;
+}
+
+export interface KeGraphEdge {
+  id: string;
+  srcId: string;
+  dstId: string;
+  type: string;
+  supportCount: number;
+}
+
+export interface KeGraph {
+  entities: KeGraphEntity[];
+  edges: KeGraphEdge[];
+}
+
+export interface KeCrawlBudget {
+  maxPapers: number;
+  maxDepth: number;
+  maxPerPaper: number;
+}
+
+export interface KeGrowHandle {
+  jobId: string;
+  cycleId: string;
+  reused: boolean;
+}
+
+export interface KeFrontierCounts {
+  total: number;
+  pending: number;
+  done: number;
+  failed: number;
+  skipped: number;
+}
+
+/** Engine state persisted at the end of each grow cycle (convergence). */
+export interface KeEngineState {
+  converged?: boolean;
+  cycleId?: string;
+  query?: string;
+  updatedAt?: string;
+  counts?: KeFrontierCounts;
+  signals?: {
+    conceptSaturation: { met: boolean; newEntities: number; newEdges: number; window: number; insufficientData: boolean };
+    citationCoverage: { met: boolean; processed: number; total: number; ratio: number };
+    frontierExhaustion: { met: boolean; pending: number; budgetExhausted: boolean };
+    boundaryCoverage: {
+      met: boolean;
+      observed: number;
+      f1: number;
+      f2: number;
+      estimatedTotal: number | null;
+      coverage: number | null;
+      insufficientData: boolean;
+      recallEstimate: { recall: number | null; estimatedTotal: number | null; insufficientData: boolean } | null;
+    };
+  };
+}
+
+export interface KeGrowStatus {
+  engineState: KeEngineState;
+  activeCycle: { jobId: string; cycleId: string; status: string } | null;
+  frontier: KeFrontierCounts | null;
+}
+
+export interface KeEntityDetail {
+  entity: KeGraphEntity & {
+    description: string | null;
+    aliases: string[];
+    hasEmbedding: boolean;
+    firstSeenDoc: string | null;
+    createdAt: string;
+  };
+  edges: Array<KeGraphEdge & { evidenceQuote: string | null }>;
+  neighbors: KeGraphEntity[];
+  evidence: Array<{
+    edgeId: string;
+    type: string;
+    otherId: string;
+    quote: string | null;
+    docId: string | null;
+    docTitle: string | null;
+  }>;
+}
+
+/** W7 three-level document read. `level` defaults to L0 server-side. */
+export type KeDocumentLevel = "L0" | "L1" | "L2";
+
+export interface KeDocumentL0 {
+  summary: string;
+  tags: string[];
+  source: "abstract" | "body" | "title";
+}
+
+export interface KeDocumentBlock {
+  anchorId: string;
+  type: "heading" | "paragraph" | "formula" | "table" | "list" | "figure" | "reference" | "code";
+  text: string;
+  section: string | null;
+  lineStart: number;
+  preview: string;
+}
+
+export interface KeDocumentRead {
+  docId: string;
+  kbId: string;
+  title: string;
+  level: KeDocumentLevel;
+  status: string;
+  abstract?: string | null;
+  fulltext?: string;
+  l0?: KeDocumentL0;
+  year?: number | null;
+  venue?: string | null;
+  blockCount?: number;
+  blocks?: KeDocumentBlock[];
+}
+
+export interface KeDocumentAnchorContext {
+  docId: string;
+  kbId: string;
+  title: string;
+  anchor: KeDocumentBlock;
+  context: {
+    before: KeDocumentBlock | null;
+    after: KeDocumentBlock | null;
+  };
+}
+
+/** W10 citation row (both ends' titles joined). */
+export interface KeCitation {
+  id: string;
+  srcDocId: string;
+  srcTitle: string | null;
+  dstDocId: string | null;
+  dstTitle: string | null;
+  dstKey: string;
+  sentence: string;
+  section: string | null;
+  intent: string | null;
+  confidence: number | null;
+}
+
+export type KeCitationIntent = "uses" | "extends" | "contrasts_with" | "baseline_for" | "motivated_by" | "mentions";
+
+/** W10 formula row (display-math LaTeX with retrieval context). */
+export interface KeFormula {
+  id: string;
+  docId: string;
+  docTitle: string | null;
+  latex: string;
+  displayLatex: string;
+  context: string;
+  label: string | null;
+}
+
+/** `/api/knowledge-engine` — knowledge base graph, seeding and job status. */
+export class KnowledgeEngineApiClient extends EvolveApiClient {
+
+  listKeKbs(): Promise<{ kbs: KeKb[] }> {
+    return this.request("/api/knowledge-engine/kbs");
+  }
+
+  createKeKb(name: string, description?: string): Promise<KeKb> {
+    return this.request("/api/knowledge-engine/kbs", {
+      method: "POST",
+      body: JSON.stringify({ name, description }),
+    });
+  }
+
+  getKeKb(kbId: string): Promise<KeKb> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}`);
+  }
+
+  seedKeKb(kbId: string, query: string, maxPapers = 10): Promise<{ jobId: string; enqueued: boolean }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/seed`, {
+      method: "POST",
+      body: JSON.stringify({ query, maxPapers }),
+    });
+  }
+
+  /** Search the source chain WITHOUT downloading (pick-then-seed preview). */
+  searchKePapers(kbId: string, query: string, maxPapers = 10): Promise<{ papers: KePaperRef[] }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/search-preview`, {
+      method: "POST",
+      body: JSON.stringify({ query, maxPapers }),
+    });
+  }
+
+  /** Seed an explicit operator-picked ref list (no new search is issued). */
+  seedKeKbRefs(kbId: string, paperRefs: KePaperRef[]): Promise<{ enqueued: number }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/seed`, {
+      method: "POST",
+      body: JSON.stringify({ paperRefs }),
+    });
+  }
+
+  /** Upload a local PDF straight into the KB ingestion pipeline. */
+  uploadKePdf(kbId: string, file: File): Promise<{ alreadyComplete: boolean; dedupKey: string; documentId: string }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/upload?title=${encodeURIComponent(file.name)}`, {
+      body: file,
+      headers: { "content-type": "application/pdf" },
+      method: "POST",
+    });
+  }
+
+  listKeDocuments(kbId: string): Promise<{ documents: KeDocument[] }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents`);
+  }
+
+  /** Three-level read: L0 deterministic abstract, L1 anchored blocks, L2 fulltext. */
+  getKeDocument(kbId: string, docId: string, level: KeDocumentLevel): Promise<KeDocumentRead> {
+    return this.request(
+      `/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}?level=${level}`,
+    );
+  }
+
+  /** Resolve a `{docId}:{type}:{index}` anchor to its block + neighbors. */
+  getKeDocumentAnchor(kbId: string, docId: string, anchorId: string): Promise<KeDocumentAnchorContext> {
+    return this.request(
+      `/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/anchors/${encodeURIComponent(anchorId)}`,
+    );
+  }
+
+  /** W10: citation rows, filterable by intent / src / dst document. */
+  listKeCitations(kbId: string, filter: { intent?: string; srcDocId?: string; dstDocId?: string; limit?: number } = {}): Promise<{ citations: KeCitation[] }> {
+    const params = new URLSearchParams();
+    if (filter.intent) params.set("intent", filter.intent);
+    if (filter.srcDocId) params.set("srcDocId", filter.srcDocId);
+    if (filter.dstDocId) params.set("dstDocId", filter.dstDocId);
+    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/citations${query ? `?${query}` : ""}`);
+  }
+
+  /** W10: formula rows, filterable by document and LaTeX/label substring. */
+  listKeFormulae(kbId: string, filter: { docId?: string; q?: string; limit?: number } = {}): Promise<{ formulae: KeFormula[] }> {
+    const params = new URLSearchParams();
+    if (filter.docId) params.set("docId", filter.docId);
+    if (filter.q) params.set("q", filter.q);
+    if (filter.limit !== undefined) params.set("limit", String(filter.limit));
+    const query = params.toString();
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/formulae${query ? `?${query}` : ""}`);
+  }
+
+  /** W10: similar documents by shared-entity count. */
+  getKeSimilarDocuments(kbId: string, docId: string): Promise<{ docId: string; similar: Array<{ docId: string; title: string; sharedEntities: number }> }> {
+    return this.request(
+      `/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(docId)}/similar`,
+    );
+  }
+
+  listKeJobs(kbId: string): Promise<{ jobs: KeJob[] }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/jobs`);
+  }
+
+  getKeGraph(kbId: string): Promise<KeGraph> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/graph`);
+  }
+
+  startKeGrow(kbId: string, query?: string, budget?: Partial<KeCrawlBudget>): Promise<KeGrowHandle> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/grow`, {
+      method: "POST",
+      body: JSON.stringify({ query, budget }),
+    });
+  }
+
+  getKeGrow(kbId: string): Promise<KeGrowStatus> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/grow`);
+  }
+
+  getKeEntity(entityId: string): Promise<KeEntityDetail> {
+    return this.request(`/api/knowledge-engine/entities/${encodeURIComponent(entityId)}`);
+  }
+
+  getKeGraphRoots(kbId: string): Promise<KeGraphRoots> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/roots`);
+  }
+
+  startKeResolution(kbId: string): Promise<{ jobId: string; enqueued: boolean }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/resolution`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+
+  getKeReports(kbId: string): Promise<KeReportsStatus> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/reports`);
+  }
+
+  startKeReports(kbId: string): Promise<{ fingerprint: string; enqueued: number; skipped: number; jobIds: string[] }> {
+    return this.request(`/api/knowledge-engine/kbs/${encodeURIComponent(kbId)}/reports/generate`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  }
+}
+
+export interface KeCommunityEntity {
+  id: string;
+  name: string;
+  type: string;
+  supportCount: number;
+}
+
+export interface KeCommunity {
+  id: number;
+  name: string;
+  size: number;
+  repEntity: KeCommunityEntity;
+  topEntities: KeCommunityEntity[];
+}
+
+export interface KeCommunityEdge {
+  source: number;
+  target: number;
+  weight: number;
+  count: number;
+}
+
+export interface KeGraphRoots {
+  communities: KeCommunity[];
+  communityEdges: KeCommunityEdge[];
+  method: "louvain" | "entity-type";
+  fingerprint: string;
+  entityCount: number;
+  edgeCount: number;
+}
+
+export interface KeReportFinding {
+  summary: string;
+  explanation: string;
+  evidence?: string;
+}
+
+export interface KeCommunityReport {
+  id: string;
+  communityId: number;
+  title: string;
+  summary: string;
+  rating: number | null;
+  ratingExplanation: string | null;
+  findings: KeReportFinding[];
+  status: "ready" | "error";
+  error?: string;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** GET /kbs/:id/reports payload: current-fingerprint reports + coverage +
+ * community → report map (null = not generated yet). */
+export interface KeReportsStatus {
+  kbId: string;
+  fingerprint: string;
+  method: "louvain" | "entity-type";
+  totalCommunities: number;
+  readyReports: number;
+  reports: KeCommunityReport[];
+  communities: Array<{ id: number; name: string; size: number; reportId: string | null }>;
+}

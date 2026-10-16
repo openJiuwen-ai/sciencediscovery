@@ -93,3 +93,8 @@ data-*/
 # Frozen test plans and execution evidence
 .test-runs/
 .ci-results/
+
+# Local dev scratch: QA handoffs/analysis and recorded scholarly HTTP fixtures
+# stay on the developer machine (see CONTRIBUTING); never commit them.
+qa/
+test/fixtures/scholarly/

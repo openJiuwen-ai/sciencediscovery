@@ -18,10 +18,13 @@ import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
+  | "agentMemoryBackgroundReview"
   | "plugins"
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
   | "enabledSkillIds"
+  | "kbScopeKbIds"
+  | "kbScopeWebSearch"
   | "modelId"
   | "reviewModelId"
   | "semanticReviewEnabled"
@@ -50,11 +53,27 @@ export function isSkillSelectionMode(value: unknown): value is SkillSelectionMod
 }
 
 export interface RuntimeSettingsOverrides {
+  /** V3-C1: offline extraction of experiential notes from completed runs into
+   *  agent-memory candidates (human review gate before prompt use). Default
+   *  false — opt-in, DeepAnalyze parity. */
+  agentMemoryBackgroundReview?: boolean;
   /** Per-plugin overrides. Changes affect newly queued runs, never an active composition. */
   plugins?: Record<string, { enabled?: boolean; config?: Record<string, import("./mcp-result.js").JsonValue> }>;
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];
+  /**
+   * Knowledge-base scope (phase V, V2-C1): bind the conversation to these
+   * knowledge bases. When exactly one id is bound, knowledge tools treat it
+   * as the default kbId; ids outside the scope are rejected at the tool
+   * layer. Empty/unset = no restriction.
+   */
+  kbScopeKbIds?: string[];
+  /**
+   * Only meaningful with kbScopeKbIds: false bans web_search/web_fetch so
+   * answers come from the bound knowledge bases alone. Default true.
+   */
+  kbScopeWebSearch?: boolean;
   modelId?: string;
   reviewModelId?: string;
   semanticReviewEnabled?: boolean;
@@ -67,12 +86,17 @@ export interface RuntimeSettingsOverrides {
 }
 
 export interface EffectiveRuntimeSettings {
+  agentMemoryBackgroundReview?: boolean;
   plugins?: RuntimeSettingsOverrides["plugins"];
   enabledConnectorIds: ConnectorId[];
   /** Versioned skill libraries searched at run creation/execution time. */
   enabledSkillLibraries: EnabledSkillLibrary[];
   /** Resolved skill set: the whole catalog in `all` mode, the whitelist in `selected`. */
   enabledSkillIds: string[];
+  /** Bound knowledge bases (see RuntimeSettingsOverrides.kbScopeKbIds). */
+  kbScopeKbIds: string[];
+  /** False bans web tools when a KB scope is bound; default true. */
+  kbScopeWebSearch?: boolean;
   modelId?: string;
   reviewModelId?: string;
   semanticReviewEnabled: boolean;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ChatMessage, RemoteWorkspaceSyncRecord } from "@sciencediscovery/schema";
+import type { AgentMemoryCategory, AgentMemoryEntry, ChatMessage, RemoteWorkspaceSyncRecord } from "@sciencediscovery/schema";
 
 import { ApiRequestError } from "./auth.js";
 import { WebApiClient } from "./web.js";
@@ -56,6 +56,31 @@ export class ApiClient extends WebApiClient {
 
   deleteRunnerWorkspace(runnerId: string, sessionId: string): Promise<{ deleted: boolean }> {
     return this.request(`/api/runners/${encodeURIComponent(runnerId)}/workspaces/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  }
+
+  // Agent memory (V3-C1): the human review gate over experiential candidates.
+  listAgentMemories(filter: { category?: string; status?: string } = {}): Promise<AgentMemoryEntry[]> {
+    const params = new URLSearchParams();
+    if (filter.category) params.set("category", filter.category);
+    if (filter.status) params.set("status", filter.status);
+    const suffix = params.size ? `?${params}` : "";
+    return this.request(`/api/agent-memories${suffix}`);
+  }
+
+  promoteAgentMemory(id: string): Promise<AgentMemoryEntry> {
+    return this.request(`/api/agent-memories/${encodeURIComponent(id)}/promote`, { method: "POST" });
+  }
+
+  markAgentMemoryStale(id: string): Promise<AgentMemoryEntry> {
+    return this.request(`/api/agent-memories/${encodeURIComponent(id)}/stale`, { method: "POST" });
+  }
+
+  supersedeAgentMemory(id: string, body: { category?: AgentMemoryCategory; content: string }): Promise<AgentMemoryEntry> {
+    return this.request(`/api/agent-memories/${encodeURIComponent(id)}/supersede`, { body: JSON.stringify(body), method: "POST" });
+  }
+
+  deleteAgentMemory(id: string): Promise<{ removed: string }> {
+    return this.request(`/api/agent-memories/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 }
 

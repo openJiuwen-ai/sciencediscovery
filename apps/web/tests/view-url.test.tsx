@@ -96,6 +96,26 @@ test("artifact keeps slashes readable and round-trips nested paths", () => {
   assert.equal(parseViewState("/", "?artifact=figures/chart.svg").artifact, "figures/chart.svg");
 });
 
+test("knowledge-base deep links own a reserved path and round-trip", () => {
+  assert.equal(serializeViewState({ kbId: "kb1" }).pathname, "/kbs/kb1");
+  assert.equal(serializeViewState({ kbId: "kb1", kbDocId: "doc-9" }).pathname, "/kbs/kb1/documents/doc-9");
+  assert.deepEqual(parseViewState("/kbs/kb1", ""), { kbId: "kb1" });
+  assert.deepEqual(parseViewState("/kbs/kb1/documents/doc-9", ""), { kbId: "kb1", kbDocId: "doc-9" });
+  // Unknown trailing segments degrade to the KB itself.
+  assert.deepEqual(parseViewState("/kbs/kb1/unknown/deep", ""), { kbId: "kb1" });
+  // A doc id without a documents segment is not guessed.
+  assert.deepEqual(parseViewState("/kbs/kb1/doc-9", ""), { kbId: "kb1" });
+  // Ids are URI-decoded/encoded like every other segment.
+  assertRoundTrip({ kbId: "kb 1", kbDocId: "doc/9" });
+  // The settings layer still wins the path; the kb layer wins over session/project.
+  assert.equal(serializeViewState({ kbId: "kb1", settingsKind: "system", settingsGroup: "global" }).pathname, "/settings/global");
+  assert.equal(serializeViewState({ kbId: "kb1", projectId: "p1", sessionId: "s1" }).pathname, "/kbs/kb1");
+  // kb targets are main-view boundaries for the back stack.
+  const base: ViewState = { projectId: "p1", sessionId: "s1" };
+  assert.equal(isPrimaryViewChange(base, { ...base, kbId: "kb1" }), true);
+  assert.equal(isPrimaryViewChange({ kbId: "kb1" }, { kbId: "kb1", kbDocId: "doc-9" }), true);
+});
+
 test("unknown paths and legacy query-only links land on the default view", () => {
   assert.deepEqual(parseViewState("/no-such-page", ""), {});
   assert.deepEqual(parseViewState("/settings", ""), {});

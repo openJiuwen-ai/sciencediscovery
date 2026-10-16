@@ -310,6 +310,15 @@ export function inferDomain(text: string): string {
   return "";
 }
 
+export interface ObserveSessionPlanPayload {
+  domain?: string;
+  goalId: string;
+  planId: string;
+  scope: string;
+  sessionId: string;
+  steps: Array<{ description: string; id: string }>;
+}
+
 export class MemoryGraphClient {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
@@ -533,6 +542,27 @@ export class MemoryGraphClient {
    *  physically delete its private nodes. Called by the sink after
    *  deleteSession commits on the store. Mirrors observe*'s contract — a
    *  degraded/unreachable graph returns without erroring. */
+  async observeSessionPlan(payload: ObserveSessionPlanPayload): Promise<void> {
+    mgLog.info('observeSessionPlan in: session=%s plan=%s goal=%s steps=%d',
+      payload.sessionId, payload.planId, payload.goalId, payload.steps.length);
+    try {
+      await this.post('/observe/session-plan', {
+        session_id: payload.sessionId,
+        goal_id: payload.goalId,
+        plan_id: payload.planId,
+        scope: payload.scope,
+        domain: payload.domain || null,
+        steps: payload.steps.map((step) => ({ id: step.id, description: step.description })),
+      });
+      mgLog.info('observeSessionPlan done: session=%s plan=%s (goal corrected from plan.scope)',
+        payload.sessionId, payload.planId);
+    } catch (error) {
+      mgLog.warn('observeSessionPlan failed: session=%s plan=%s, error %s',
+        payload.sessionId, payload.planId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
   async cleanupSession(sessionId: string): Promise<void> {
     mgLog.info("cleanupSession in: session=%s", sessionId);
     try {
@@ -1346,6 +1376,21 @@ export class MemoryGraphSink {
       .catch((error: unknown) => {
         mgLog.warn("mirror failed: upload session=%s file=%s, error %s",
           payload.sessionId, payload.fileId,
+          error instanceof Error ? error.message : String(error));
+      });
+  }
+
+  /** Mirror a proposed session plan (goal correction + step skeleton).
+   * Fire-and-forget like the other observers: plan approval must never
+   * block on a degraded or disabled graph. */
+  observeSessionPlan(payload: ObserveSessionPlanPayload): void {
+    if (!this.enabled || !this.client) return;
+    void this.client
+      .observeSessionPlan(payload)
+      .then(() => undefined)
+      .catch((error) => {
+        mgLog.warn("mirror failed: session plan session=%s plan=%s, error %s",
+          payload.sessionId, payload.planId,
           error instanceof Error ? error.message : String(error));
       });
   }
