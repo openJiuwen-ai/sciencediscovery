@@ -243,4 +243,5 @@ test("memory graph prompt lays out the citation-chain flow in order", () => {
 test("memory graph prompt is absent when the feature is disabled", () => {
   const prompt = buildWorkspaceSystemPrompt([], false, { memoryGraphEnabled: false });
   assert.doesNotMatch(prompt, /Citation chain/i);
+  assert.doesNotMatch(prompt, /declare_claim|declare_evidence/i);
 });
