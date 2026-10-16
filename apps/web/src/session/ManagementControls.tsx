@@ -85,7 +85,7 @@ export function SidebarSectionHeader({
 }: {
   addDisabled?: boolean;
   addLabel: string;
-  count: number;
+  count?: number;
   expanded: boolean;
   headerAction?: ReactNode;
   label: string;
@@ -105,7 +105,7 @@ export function SidebarSectionHeader({
       <span>{label}</span>
     </button>
     {headerAction}
-    <span className="sidebar-section-count">{count}</span>
+    {count === undefined ? null : <span className="sidebar-section-count">{count}</span>}
     <button aria-label={addLabel} className="icon-button sidebar-add-button" disabled={addDisabled} onClick={onAdd} title={addLabel} type="button"><PlusIcon size={16} /></button>
   </div>;
 }
