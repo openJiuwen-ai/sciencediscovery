@@ -247,7 +247,7 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
   const invocations = async () => {
     const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/mcp/invocations`, { headers: authorizationHeader() });
     expect(response.ok()).toBe(true);
-    return await response.json() as Array<{ sourceId: string; status: string }>;
+    return await response.json() as Array<{ sourceId: string; status: string; turnId: string }>;
   };
   try {
     await openProjectSession(page, fixture);
@@ -310,7 +310,9 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       await card.getByRole("button", { name: "已修复，重新检查" }).click();
       const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
       expect(terminal.status, terminal.error).toBe("completed");
-      expect((await invocations()).length).toBeGreaterThan(before);
+      const recovered = await invocations();
+      expect(recovered.length).toBeGreaterThan(before);
+      expect(recovered.some(item => item.sourceId === second.id && item.turnId === run.id && item.status === "succeeded")).toBe(true);
       await expect(page.locator(".message").filter({ hasText: "MCP RECOVERED" }).last()).toBeVisible();
     });
   } finally {

@@ -45,7 +45,7 @@ test("enabled literature sources expose diagnostics before the catalog is refres
   options.reportReadiness = summary => reports.push(summary);
   const result = createMcpWorkspaceTools(options);
   assert.equal(reports.length, 1);
-  assert.match(reports[0]!, /omittedTools.*search/);
+  assert.match(reports[0]!, /omitted tools:.*search/);
   assert.deepEqual(result.mcpTools, []);
   assert.match(result.mcpReadiness!.summary, /arxiv.*unavailable.*pubmed.*unavailable/);
 });
@@ -96,6 +96,7 @@ test("a selected ready source remains usable when an unselected source is degrad
   options.enabledSourceIds = ["arxiv", "pubmed"];
   assert.match(createMcpWorkspaceTools(options).mcpReadiness!.summary, /degraded/);
   assert.ok(createMcpWorkspaceTools(options).mcpTools!.some(tool => tool.name === "mcp__pubmed__search"));
+  await assert.rejects(createMcpWorkspaceTools(options).mcpReadiness!.invoke("pubmed", "search", {}, undefined, "already-mounted"), /not a recovered/);
 });
 
 test("subagent construction checks the same enabled literature source readiness", async () => {
@@ -174,4 +175,52 @@ test("cancelled repair does not refresh or invoke; persistent failure remains vi
   await assert.rejects(readiness.decide("wait", "Required", ["foreign"]), /Choose enabled/);
   const controller = new AbortController(); controller.abort();
   await assert.rejects(readiness.decide("wait", "Required", ["arxiv"], controller.signal), /abort/i);
+});
+
+
+test("timeline readiness lists only unhealthy sources while model diagnostics retain all statuses", async () => {
+  const { options, catalog, remote } = fixture();
+  remote.servers[0]!.tools = remote.servers[0]!.tools.filter(tool => tool.name !== "arxiv_search");
+  await catalog.refresh();
+  const reports: string[] = [];
+  options.reportReadiness = summary => reports.push(summary);
+  const result = createMcpWorkspaceTools(options);
+  assert.deepEqual(reports, ["arxiv: degraded; omitted tools: search."]);
+  assert.match(result.mcpReadiness!.summary, /pubmed/);
+  assert.match(result.mcpReadiness!.summary, /\/api\/mcp\/sources/);
+  remote.servers[0]!.tools = [];
+  await catalog.refresh();
+  createMcpWorkspaceTools(options);
+  assert.match(reports[1]!, /arxiv:.*\npubmed:/);
+});
+
+test("repair discovers tools absent from the initial manifest without expanding source selection", async () => {
+  const { options, catalog } = fixture();
+  const original = options.registry.get("arxiv");
+  // Disabled custom servers publish an empty manifest until repaired/discovered.
+  options.registry.upsert({ ...original, manifest: { ...original.manifest, tools: {} } });
+  options.enabledSourceIds = ["arxiv"];
+  const reports: string[] = [];
+  options.reportReadiness = summary => reports.push(summary);
+  const calls: Array<Parameters<McpWorkspaceToolOptions["broker"]["invoke"]>[0]> = [];
+  options.broker = { invoke: async (input: Parameters<McpWorkspaceToolOptions["broker"]["invoke"]>[0]) => {
+    calls.push(input); return { result: {}, invocation: { id: "repaired-audit" } };
+  } } as unknown as McpWorkspaceToolOptions["broker"];
+  const result = createMcpWorkspaceTools(options);
+  assert.deepEqual(result.mcpTools, []);
+  assert.match(reports[0]!, /tool list unavailable/);
+  const readiness = result.mcpReadiness!;
+  await assert.rejects(readiness.invoke("arxiv", "search", {}, undefined, "early"), /not a recovered/);
+  options.registry.upsert(original);
+  const checked = await readiness.decide("check", "Server repaired", []);
+  assert.match(JSON.stringify(checked), /recoveredTools.*search/);
+  await readiness.invoke("arxiv", "search", { query: "recovered" }, undefined, "recovered-call");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0]!.allowedSourceIds, ["arxiv"]);
+  assert.equal(calls[0]!.toolCallId, "recovered-call");
+  assert.equal(typeof calls[0]!.authorize, "function");
+  await assert.rejects(readiness.invoke("pubmed", "search", {}, undefined, "foreign"), /not a recovered/);
+  options.registry.upsert({ ...original, manifest: { ...original.manifest, tools: {} } });
+  await catalog.refresh();
+  await assert.rejects(readiness.invoke("arxiv", "search", {}, undefined, "removed"), /not a recovered/);
 });

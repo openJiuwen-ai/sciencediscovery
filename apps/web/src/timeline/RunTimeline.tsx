@@ -859,7 +859,7 @@ export function RunTimeline({
 
         if (entry.type === "mcp-readiness") {
           return <aside className="boundary-note process-notice" key={entry.id}>
-            <span><WarningIcon size={15} /></span><p>{entry.content}</p>
+            <span><WarningIcon size={15} /></span><p style={{ whiteSpace: "pre-line" }}>{entry.content}</p>
           </aside>;
         }
 

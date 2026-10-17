@@ -109,7 +109,7 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
   const guidance = "Inspect MCP settings and /api/mcp/sources. Repair or enable the configured server, then reload the catalog via POST /api/mcp/sources/reload. Host changes require user authorization; sandbox scripts cannot repair control-plane MCP.";
   const diagnostics = () => ({ sources: statuses(), guidance,
     omittedTools: unhealthy().map(status => ({ sourceId: status.sourceId, tools: status.missingTools })) });
-  const allTools: NonNullable<WorkspaceAgentOptions["mcpTools"]> = options.registry.list()
+  const buildTools = (): NonNullable<WorkspaceAgentOptions["mcpTools"]> => options.registry.list()
     .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
     .flatMap((adapter) => {
       return Object.values(adapter.manifest.tools)
@@ -162,9 +162,18 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
         }));
     });
 
-  if (unhealthy().length) options.reportReadiness?.(JSON.stringify(diagnostics()));
-  const mcpTools = allTools.filter(tool => options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId));
-  const omitted = allTools.filter(tool => !mcpTools.includes(tool));
+  const initiallyUnhealthy = new Set(unhealthy().map(status => status.sourceId));
+  if (initiallyUnhealthy.size) options.reportReadiness?.(unhealthy().map(status =>
+    `${status.sourceId}: ${status.status}; ${status.missingTools.length
+      ? `omitted tools: ${status.missingTools.join(", ")}`
+      : "no tools injected; tool list unavailable until discovery succeeds"}.`).join("\n"));
+  const mcpTools = buildTools().filter(tool => options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId));
+  // Custom servers can have no manifest tools at setup. Rebuild from discovery
+  // after repair, but never expand beyond the initially affected source selection
+  // or expose an already mounted tool through the recovery entry point.
+  const recoveredTools = () => buildTools().filter(tool => initiallyUnhealthy.has(tool.sourceId)
+    && !mcpTools.some(mounted => mounted.sourceId === tool.sourceId && mounted.toolId === tool.toolId)
+    && options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId));
   return {
     ...(unhealthy().length ? { mcpReadiness: {
       summary: JSON.stringify(diagnostics()),
@@ -192,13 +201,13 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
           }
         }
         return { ...diagnostics(), action, reason,
-          recoveredTools: omitted.filter(tool => options.catalog.getStatus(tool.sourceId).availableTools.includes(tool.toolId))
+          recoveredTools: recoveredTools()
             .map(({ sourceId, toolId, inputSchema }) => ({ sourceId, toolId, inputSchema })),
           instruction: "Assess current status. If an important source is still unavailable, wait again or explain and stop. Recovered omitted tools can be invoked with mcp_recovered_call; normal permissions apply. Never claim an omitted tool ran." };
       },
       invoke: async (sourceId, toolId, input, signal, toolCallId) => {
-        const tool = omitted.find(tool => tool.sourceId === sourceId && tool.toolId === toolId);
-        if (!tool || !options.catalog.getStatus(sourceId).availableTools.includes(toolId)) throw new Error("Tool is not a recovered MCP tool from this run's selection");
+        const tool = recoveredTools().find(tool => tool.sourceId === sourceId && tool.toolId === toolId);
+        if (!tool) throw new Error("Tool is not a recovered MCP tool from this run's selection");
         return tool.execute(toolCallId, input, signal);
       },
     } satisfies NonNullable<WorkspaceAgentOptions["mcpReadiness"]> } : {}),
