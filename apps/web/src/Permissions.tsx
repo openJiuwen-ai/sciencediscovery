@@ -23,6 +23,7 @@ import { activityCardId, type ActivityCardDisclosure } from "./session/run-activ
 import { useLocale, type MessageKey } from "./i18n/index.js";
 
 const ACTION_LABELS: Record<PermissionRequest["action"], MessageKey> = {
+  sandbox_network: "permissions.sandboxNetwork",
   artifact_download: "permissions.download",
   code: "permissions.code",
   direct_code: "permissions.directExecution",

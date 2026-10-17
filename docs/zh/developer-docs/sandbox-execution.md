@@ -123,6 +123,30 @@ Docker 默认的 readonlyPaths / maskedPaths 会让内核拒绝在沙箱自己�
 - 策略变更会轮换 Permission Epoch；新执行使用新的策略快照。
 - 科学环境 install 的网络（conda 频道 / pip index / 离线缓存）与本策略互不影响。
 
+#### 对话内网络授权
+
+Skill 脚本或命令需要 HTTP 访问前，Agent 调用 `request_sandbox_network`，显式提供准确的
+`hosts`（可带端口）、简短 `purpose` 和目标 `runner_id`。询问模式会暂停并展示包含主机及用途的
+对话权限卡。批准返回一次性 `authorizationId`，需在新的 `run_shell` 调用中作为
+`network_authorization_id` 传入；始终允许模式同样要求显式声明，且只放行声明的主机集合。
+本路径不接受通配符、URL 或 IP 地址。
+
+令牌仅属于当前 Agent、运行和 Runner，提交前即消耗，提交结果不明时也不能重用。同类授权
+仅匹配本次 Agent 运行的相同目标和主机集合，撤销后未用令牌失效；不能继承给子 Agent、
+其他 Runner 或后续运行。执行使用独立白名单 Epoch，保留部署的私网过滤和出口路由，
+不修改全局配置或共享会话 Epoch。未携带令牌的调用仍遵循原有策略。
+
+白名单模式下，每次 Shell 执行的网关独立归属该执行。未放行域名通过 `networkDeniedHosts`
+返回，即使脚本吞掉 HTTP 错误也标记托管执行失败；所属运行仍活动时会弹出同一对话权限卡。
+`networkPermission` 返回决定及批准后的新调用令牌，绝不自动重放。重试前先核对输出、文件及
+远端副作用；结果不明的执行必须先查明。私网地址过滤或出口路由错误不会通过此卡绕过。
+
+拒绝、取消、关闭或超时保持离线。必需的检索应明确显示阻塞/未完成及原因，禁止静默退化成
+看似完成的 web_search 报告。默认 `none` 保留原有 socket 过滤、独立网络命名空间且无桥接；
+不透明脚本失败不能可靠揭示主机，因此不保证自动弹出带具体域名的卡片。Agent/Skill 必须显式
+声明已知主机；Skill 作者应写明所需主机并要求执行前申请。MCP/Web 的宿主访问和系统配置的
+持久网络白名单独立管理；预检横幅只是辅助，不能替代执行时的对话授权。
+
 ### 3.2 沙箱内的 Ascend NPU
 
 选中的昇腾芯片会被交进沙箱。这份文档早先写的是做不到——因为在 bwrap namespace 里探测会报 `Container ID verify failed (session ct_id=0; device ct_id=...)`。那次测量是在宿主整个 `/dev` 都可见的情况下做的，这个报错是驱动在那种情况下的正常反应，而不是设备直通的限制：进入 mount namespace 后，驱动按调用者 `/dev` 里可见的卡枚举，且是 all-or-nothing，只要有一张卡被别的租户占着，整次调用就对所有卡失败。只暴露选中的芯片就不再满足这个条件，910B3 上沙箱内的 `npu-smi info` 与 MindSpore 都能正常跑。

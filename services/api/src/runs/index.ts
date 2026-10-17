@@ -1078,7 +1078,7 @@ async function executeAgentRun(
     readEpoch: () => store.getSessionPermissionEpoch(sessionId),
     readAuthorization: (authorizationId) => store.getPermissionAuthorization(authorizationId),
     // With the JiuwenSwarm backend its permission engine decides before a tool runs; ScienceDiscovery records that.
-    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm && action !== "direct_code"
+    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm && action !== "direct_code" && action !== "sandbox_network"
       ? store.authorizeByJiuwenSwarm(sessionId, action, resource, context)
       : store.requestPermission(sessionId, action, resource, summary, context),
     waitForDecision: (permissionRequest, signal) =>

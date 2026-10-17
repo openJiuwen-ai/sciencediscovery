@@ -31,12 +31,13 @@ import type { RunnerClient } from "@sciencediscovery/executor";
 import type { SessionStore } from "../store.js";
 import { resolveEnvironmentInstallRequest } from "../environment-sources.js";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
+import { createSandboxNetworkConsent } from "./sandbox-network-consent.js";
 import { syncScientificEnvironmentCatalog } from "../scientific-environment-catalog.js";
 import { readPreparedSkillBundle, readPreparedSkillManifest } from "../skill-sandbox.js";
 
 type ExecutionBindings = Pick<
   WorkspaceAgentOptions,
-  "directExecution" | "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "observeNpuJob" | "workspaceTransfers" | "shellExecutions" | "timers" | "runnerReadiness"
+  "sandboxNetwork" | "directExecution" | "environmentManagement" | "executePython" | "executeScientific" | "executeShell" | "npuBroker" | "observeNpuJob" | "workspaceTransfers" | "shellExecutions" | "timers" | "runnerReadiness"
 >;
 
 /**
@@ -227,13 +228,16 @@ export function createWorkspaceExecutionBindings(
     signal?.throwIfAborted();
     return target;
   };
+  const networkConsent = createSandboxNetworkConsent({ ...options,
+    assertRunner: (runnerId) => { resolveExecutionTarget(runnerId); },
+  });
   const prepareShell = async (
       code: string,
       kernelMode: KernelMode,
       signal?: AbortSignal,
       toolCallId?: string,
       machine?: string,
-      environment?: { environmentId?: string; cwd?: string },
+      environment?: { environmentId?: string; cwd?: string; networkAuthorizationId?: string },
     ) => {
       options.store.assertSessionWritable(options.sessionId);
       let target = resolveExecutionTarget(machine);
@@ -246,6 +250,7 @@ export function createWorkspaceExecutionBindings(
         summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
       });
       target = await prepareExecutionTarget(machine, signal, toolCallId, "Run shell: " + code);
+      const permissionEpoch = await networkConsent.consume(environment?.networkAuthorizationId, target.runnerId, signal);
       return {
         agentId: options.agentId,
         code,
@@ -257,7 +262,7 @@ export function createWorkspaceExecutionBindings(
         kernelMode,
         maxOutputBytes: options.maxOutputBytes,
         maxWorkspaceBytes: options.maxWorkspaceBytes,
-        permissionEpoch: options.permission.getEpoch(),
+        permissionEpoch,
         ...(options.readOnlyWorkspaceRoot ? { readOnlyWorkspaceRoot: options.readOnlyWorkspaceRoot } : {}),
         ...(target.skillPackagesRoot ? { skillPackagesRoot: target.skillPackagesRoot } : {}),
         runnerId: target.runnerId,
@@ -319,6 +324,7 @@ export function createWorkspaceExecutionBindings(
     return { cwd, workspaceRoot, target: capability.target, account: capability.account };
   };
   const common: ExecutionBindings = {
+    sandboxNetwork: { request: networkConsent.request },
     directExecution: {
       request: async (input, signal, toolCallId) => {
         const blocked = blockedOperations.get(input.operationId);
@@ -573,7 +579,10 @@ export function createWorkspaceExecutionBindings(
         parentSubagentId: options.parentSubagentId,
       });
     },
-    executeShell: async (...args) => options.provenanceRecorder.executeShell(await prepareShell(...args)),
+    executeShell: async (...args) => {
+      const prepared = await prepareShell(...args);
+      return networkConsent.observe(await options.provenanceRecorder.executeShell(prepared), prepared.runnerId, args[2]);
+    },
     shellExecutions: {
       start: async (code, environment, signal, toolCallId, runnerId) => {
         const prepared = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
@@ -581,7 +590,7 @@ export function createWorkspaceExecutionBindings(
           runnerId: prepared.runnerId!, turnId: options.executionId,
           workspaceId: options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id,
         }, () => resolveExecutionTarget(runnerId).runnerClient,
-        (id, dispatch, completionStatus) => options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus })));
+        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId)));
       },
       wait: async (id, waitMs, signal) => {
         const record = await options.store.shellExecutions.get(id, executionOwner);

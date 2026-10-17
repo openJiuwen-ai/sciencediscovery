@@ -50,7 +50,7 @@ export function epochSandboxNetworkAccess(epoch: Pick<PermissionEpoch, "networkA
   return NO_SANDBOX_NETWORK_ACCESS;
 }
 
-export type PermissionAction = "direct_code" | "artifact_download" | "code" | "connector" | "directory" | "host" | "remote_job";
+export type PermissionAction = "sandbox_network" | "direct_code" | "artifact_download" | "code" | "connector" | "directory" | "host" | "remote_job";
 
 export type PermissionGrantScope = "once" | "conversation" | "project" | "global" | "session";
 
