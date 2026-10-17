@@ -10,6 +10,7 @@ export async function recordInvalidArguments(turn: ModelTurn, requestId: string)
     event: "model.invalid_tool_arguments", timestamp: new Date().toISOString(), requestId,
     truncated: turn.truncated === true, usage: turn.usage,
     invalidCount: invalid.length,
+    streamDiagnostics: turn.streamDiagnostics,
     calls: invalid.slice(0, 20).map((call) => ({ toolCallId: call.id.slice(0, 128), tool: call.name.slice(0, 128) })),
   };
   // JSON.parse error messages can quote user content: keep them out of ordinary logs.

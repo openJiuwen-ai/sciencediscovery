@@ -28,6 +28,7 @@ test("argument diagnostics are opt-in, bounded, rotated and safe for concurrent 
     const lines = (await readFile(file, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     assert.deepEqual(lines.map((line) => line.requestId), ["first", "second"]);
     assert.equal((await readFile(`${file}.1`)).length, 5 * 1024 * 1024);
+    assert.equal(lines[0].streamDiagnostics, undefined, "unmeasured diagnostics must not become zero counters");
     assert.equal(lines[0].calls[0].clipped, true);
     assert.equal(lines[0].calls[0].argumentChars, raw.length);
     assert.equal(lines[0].calls[0].rawArguments, undefined);

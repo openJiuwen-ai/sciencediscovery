@@ -65,6 +65,7 @@ test("invalid arguments retain private diagnostics without leaking payload into 
   const raw = '{"secret":"private-payload"';
   const { streamer } = fakeStreamer(answer({
     truncated: false,
+    streamDiagnostics: { protocol: "openai-chat-completions", unparseableSsePayloads: 1, toolCallDeltasWithoutIndex: 2 },
     assistantMessage: { role: "assistant", content: "", tool_calls: [{ id: "bad-call", type: "function", function: { name: "task", arguments: raw } }] },
     toolCalls: [{ id: "bad-call", name: "task", args: {}, argsParseError: "Unexpected private-payload" }],
   }));
@@ -76,6 +77,11 @@ test("invalid arguments retain private diagnostics without leaking payload into 
     assert.equal(entry.calls[0].rawArguments, raw);
     assert.equal(entry.calls[0].error, "Unexpected private-payload");
     assert.equal(entry.truncated, false);
+    assert.deepEqual(entry.streamDiagnostics, {
+      protocol: "openai-chat-completions", unparseableSsePayloads: 1, toolCallDeltasWithoutIndex: 2,
+    });
+    const warning = warnings.find(line => line.startsWith("[model-arguments] "))!;
+    assert.deepEqual(JSON.parse(warning.slice("[model-arguments] ".length)).streamDiagnostics, entry.streamDiagnostics);
     assert.equal(entry.calls[0].toolCallId, "bad-call");
     assert.match(entry.requestId, /^chatcmpl-/);
     assert.equal((await stat(file)).mode & 0o777, 0o600);

@@ -296,6 +296,13 @@ response for their final answer.
 Invalid model tool arguments produce a `[model-arguments]` warning with the gateway
 request ID, tool-call IDs, tool names, token usage and truncation flag. Ordinary logs
 exclude raw arguments and parser messages (which may quote private input).
+`streamDiagnostics` records the protocol and the number of unparseable SSE payloads
+skipped during that request; OpenAI Chat also records tool-call deltas without an
+`index`. An absent diagnostics object means unmeasured, not zero. Nonzero counts
+identify assembly anomalies, but do not prove they caused the invalid arguments;
+zero counts do not rule out other assembly or upstream errors.
+Nightly real E2E enables the file below at `.ci-results/model-invalid-arguments.jsonl`.
+It and its rotation backup are retained in `real-e2e-evidence-*`, outside the score artifact.
 For reproduction, set `SCIENCE_AGENT_INVALID_TOOL_ARGUMENTS_FILE=/private/path/invalid-arguments.jsonl`
 on the Node API process before startup. The parent directory must exist and should
 be private. This opt-in file includes parser errors and assembled raw arguments,

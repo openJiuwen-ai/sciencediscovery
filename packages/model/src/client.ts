@@ -66,6 +66,12 @@ export interface ModelTurn {
   /** Wire-format assistant message appended verbatim to history. */
   assistantMessage: AgentHistoryMessage;
   toolCalls: NormalizedToolCall[];
+  /** Request-local evidence of stream assembly anomalies; absent means unmeasured. */
+  streamDiagnostics?: {
+    protocol: ModelApiProtocol;
+    unparseableSsePayloads: number;
+    toolCallDeltasWithoutIndex?: number;
+  };
   usage?: AgentModelUsage;
   /**
    * The turn hit `max_tokens` and was cut mid-sentence.
@@ -531,11 +537,13 @@ async function streamOpenAiTurn(
   let truncated = false;
   const buffersInlineThinking = variant === "minimax" || variant === "ollama";
 
+  const streamDiagnostics = { protocol: "openai-chat-completions" as const, unparseableSsePayloads: 0, toolCallDeltasWithoutIndex: 0 };
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let chunk: Record<string, unknown>;
     try {
       chunk = JSON.parse(payload) as Record<string, unknown>;
     } catch {
+      streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
     const chunkUsage = normalizeUsage(chunk.usage);
@@ -584,6 +592,7 @@ async function streamOpenAiTurn(
     if (Array.isArray(delta.tool_calls)) {
       for (const raw of delta.tool_calls) {
         if (!isRecord(raw)) continue;
+        if (typeof raw.index !== "number") streamDiagnostics.toolCallDeltasWithoutIndex += 1;
         const index = typeof raw.index === "number" ? raw.index : fragments.size;
         const existing = fragments.get(index) ?? { function: { arguments: "", name: "" } };
         for (const [key, value] of Object.entries(raw)) {
@@ -631,7 +640,7 @@ async function streamOpenAiTurn(
     ...(variant === "qwen" && qwenReasoning !== undefined ? { reasoning: qwenReasoning } : {}),
     ...(variant === "minimax" && minimaxReasoning.length ? { reasoning_details: minimaxReasoning } : {}),
   };
-  return { assistantMessage, toolCalls, ...(usage ? { usage } : {}), ...(truncated ? { truncated } : {}) };
+  return { assistantMessage, toolCalls, streamDiagnostics, ...(usage ? { usage } : {}), ...(truncated ? { truncated } : {}) };
 }
 
 function responsesInput(history: AgentHistoryMessage[]): unknown[] {
@@ -698,11 +707,13 @@ async function streamResponsesTurn(
   const items = new Map<number, Record<string, unknown>>();
   const partialItems = new Map<number, Record<string, unknown>>();
   const emitTool = toolDeltaEmitter(callbacks);
+  const streamDiagnostics = { protocol: "openai-responses" as const, unparseableSsePayloads: 0 };
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
+      streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
     if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
@@ -761,6 +772,7 @@ async function streamResponsesTurn(
       ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
     },
     toolCalls,
+    streamDiagnostics,
     ...(usage ? { usage } : {}),
   };
 }
@@ -861,11 +873,13 @@ async function streamAnthropicTurn(
   const blocks = new Map<number, AnthropicBlock>();
   const toolJson = new Map<number, string>();
   const emitTool = toolDeltaEmitter(callbacks);
+  const streamDiagnostics = { protocol: "anthropic-messages" as const, unparseableSsePayloads: 0 };
   for await (const payload of sseData(body, callbacks.onProgress)) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
     } catch {
+      streamDiagnostics.unparseableSsePayloads += 1;
       continue;
     }
     if (event.type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
@@ -933,6 +947,7 @@ async function streamAnthropicTurn(
       ...(wireToolCalls.length ? { tool_calls: wireToolCalls } : {}),
     },
     toolCalls,
+    streamDiagnostics,
     usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cacheReadTokens, cacheWriteTokens },
     ...(truncated ? { truncated } : {}),
   };

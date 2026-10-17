@@ -397,6 +397,7 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     "e2e-real/tagged/preflight.json",
   ].sort();
   const diagnostics = [
+    "model-invalid-arguments.jsonl", "model-invalid-arguments.jsonl.1",
     "real-research/e2e/test-results/benchmark-case/trace.zip",
     "real-research/e2e/playwright-report/data/trace.zip",
     "real-research/e2e/playwright-report/index.html",

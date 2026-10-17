@@ -67,6 +67,46 @@ for (const protocol of ["openai-chat-completions", "openai-responses", "anthropi
       assert.deepEqual(deltas.filter((d) => d.id).map((d) => d.id), ["c1"]);
       assert.deepEqual(deltas.filter((d) => d.name).map((d) => d.name), ["write"]);
       assert.deepEqual(turn.toolCalls[0]?.args, { text: "report" });
+      assert.deepEqual(turn.streamDiagnostics, {
+        protocol, unparseableSsePayloads: 0,
+        ...(protocol === "openai-chat-completions" ? { toolCallDeltasWithoutIndex: 0 } : {}),
+      });
+    });
+  });
+}
+
+for (const protocol of ["openai-chat-completions", "openai-responses", "anthropic-messages"] as const) {
+  test(`${protocol} counts skipped payloads per request without changing argument handling`, async () => {
+    let requests = 0;
+    await withServer(async (request, response) => {
+      await readBody(request);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      if (requests++ === 0) {
+        response.write('data: {invalid JSON\n\n');
+        if (protocol === "openai-chat-completions") {
+          response.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+            { id: "bad", function: { name: "write", arguments: '{"text":' } },
+            { function: { arguments: '"report"}' } },
+          ] } }] })}\n\n`);
+        }
+      }
+      response.end("data: [DONE]\n\n");
+    }, async (baseUrl) => {
+      const run = () => streamModelTurn({ apiProtocol: protocol, baseUrl, model: "stub" }, "s", [], [], policy,
+        new AbortController().signal);
+      const first = await run();
+      assert.deepEqual(first.streamDiagnostics, {
+        protocol, unparseableSsePayloads: 1,
+        ...(protocol === "openai-chat-completions" ? { toolCallDeltasWithoutIndex: 2 } : {}),
+      });
+      if (protocol === "openai-chat-completions") {
+        assert.ok(first.toolCalls[0]?.argsParseError);
+        assert.equal(first.toolCalls.length, 1, "index-less fragments retain existing assembly behavior");
+      }
+      assert.deepEqual((await run()).streamDiagnostics, {
+        protocol, unparseableSsePayloads: 0,
+        ...(protocol === "openai-chat-completions" ? { toolCallDeltasWithoutIndex: 0 } : {}),
+      });
     });
   });
 }
