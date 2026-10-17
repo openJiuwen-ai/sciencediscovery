@@ -39,6 +39,7 @@ import type {
   ExecutionRun,
   EvidenceLink,
   McpProxyPolicies,
+  McpSourceStatus,
   McpInvocation,
   McpSourceManifest,
   ModelProfile,
@@ -1158,6 +1159,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [proxySettings, setProxySettings] = useState<ProxySettingsDetails>();
   const [mcpProxyPolicies, setMcpProxyPolicies] = useState<McpProxyPolicies>({});
   const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
+  const [mcpSourceStatuses, setMcpSourceStatuses] = useState<Record<string, McpSourceStatus>>({});
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
   const [memoryGraphSettings, setMemoryGraphSettings] = useState<MemoryGraphSettingsDetails>();
   const [ideaTreeSettings, setIdeaTreeSettings] = useState<IdeaTreeSettingsDetails>();
@@ -1848,6 +1850,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       setProxySettings(proxies);
       setMcpProxyPolicies(mcpPolicyDetails.policies);
       setMcpSources(mcpSourceDetails.map((item) => item.manifest));
+      setMcpSourceStatuses(Object.fromEntries(mcpSourceDetails.map((item) => [item.manifest.id, item.status])));
       setWebSettings(web);
       setMemoryGraphSettings(memoryGraph);
       setIdeaTreeSettings(ideaTree);
@@ -4646,6 +4649,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         disabled={isRunning || sessionArchived}
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
+                        sourceStatuses={mcpSourceStatuses}
                       />
                       <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
@@ -5070,6 +5074,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 const [items, sourceDetails] = await Promise.all([client.listConnectors(), client.listMcpSources()]);
                 setConnectors(items);
                 setMcpSources(sourceDetails.map((item) => item.manifest));
+                setMcpSourceStatuses(Object.fromEntries(sourceDetails.map((item) => [item.manifest.id, item.status])));
               }} /> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings

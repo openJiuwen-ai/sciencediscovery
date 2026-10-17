@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { ConnectorManifest } from "@sciencediscovery/schema";
+import type { ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -99,6 +99,22 @@ test("lists every connector with its checked state and policy link when open", (
   assert.equal(checked.length, 1);
   assert.match(markup, /href="https:\/\/www\.uniprot\.org\/help\/license"/);
   assert.match(markup, /aria-label="UniProt provider policy"/);
+});
+
+test("surfaces catalog readiness when an enabled connector has no injectable tools", () => {
+  const unavailable: McpSourceStatus = {
+    availableTools: [], error: "MCP catalog has not been refreshed", lastCheckedAt: "2026-10-17T00:00:00.000Z",
+    missingTools: ["search"], sourceId: "pubmed", status: "unavailable",
+  };
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors,
+    defaultOpen: true,
+    enabledIds: ["pubmed"],
+    onToggle: () => undefined,
+    sourceStatuses: { pubmed: unavailable },
+  }));
+  assert.match(markup, /connector-picker-status/);
+  assert.match(markup, /MCP unavailable: MCP catalog has not been refreshed/);
 });
 
 test("disables the checkboxes but keeps the list readable while a run is active", () => {
