@@ -14,8 +14,8 @@ export interface JsonPreviewInput {
 export function JsonPreview({ parsed, source, truncated, labels }: JsonPreviewInput) {
   return <div className="json-source-preview">
     {parsed ? null : <p className="artifact-empty compact">{labels.invalidJson}</p>}
-    <pre className="artifact-source-preview">{source}</pre>
     {truncated ? <p className="dataset-table-meta">{labels.truncated}</p> : null}
+    <pre className="artifact-source-preview">{source}</pre>
   </div>;
 }
 export const jsonViewer: ViewContribution<JsonPreviewInput, ReactNode> = {

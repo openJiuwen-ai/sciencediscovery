@@ -92,6 +92,14 @@ test("JSON preview labels unparseable documents and still shows the raw text", (
   assert.match(html, /not valid JSON/);
   assert.match(html, /&quot;truncated&quot;: tru/);
   assert.match(html, /Preview truncated/);
+  assert.ok(html.indexOf("Preview truncated") < html.indexOf("artifact-source-preview"));
+});
+
+test("JSON fallback does not silently cap the locally loaded source", () => {
+  const source = readFileSync(new URL("../src/ScientificArtifacts.tsx", import.meta.url), "utf8");
+  const jsonFallback = source.slice(source.indexOf('artifact?.kind === "json"'), source.indexOf('artifact?.kind === "notebook"'));
+  assert.match(jsonFallback, /<pre className="artifact-source-preview">\{source \|\| t\("artifact\.loadingJson"\)\}<\/pre>/);
+  assert.doesNotMatch(jsonFallback, /source\.slice\(0, 100_000\)/);
 });
 
 test("JSON preview keeps long unbreakable values complete in the DOM", () => {
