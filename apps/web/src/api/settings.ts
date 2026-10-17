@@ -127,6 +127,10 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/proxy/settings");
   }
 
+  testProxy(body: import("@sciencediscovery/schema").ResolvedProxy): Promise<{ ok: boolean; message: string; elapsedMs: number }> {
+    return this.request("/api/proxy/test", { method: "POST", body: JSON.stringify(body) });
+  }
+
   updateProxySettings(body: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
     return this.request("/api/proxy/settings", { body: JSON.stringify(body), method: "PUT" });
   }

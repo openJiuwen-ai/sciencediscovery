@@ -29,6 +29,7 @@ from .config import Settings
 from .llm_proxy import DEFAULT_ALIAS, LlmRoutes, llm_router
 from .mcp_server import ToolsetRegistry, mcp_router
 from .proxy import proxy_to_legacy
+from .network import InternalClient
 
 
 async def forget_stale_aliases(runner) -> None:
@@ -52,10 +53,9 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
         # No read timeout: SSE runs stay open for the whole agent run.
         timeout = httpx.Timeout(connect=5.0, read=None, write=60.0, pool=5.0)
         async with (
-            httpx.AsyncClient(base_url=settings.legacy_url, transport=transport, timeout=timeout,
-                              follow_redirects=False) as legacy,
+            InternalClient(base_url=settings.legacy_url, transport=transport, timeout=timeout) as legacy,
             # Tool-bridge calls go to loopback URLs the caller names, not to the legacy base URL.
-            httpx.AsyncClient(timeout=timeout) as bridge,
+            InternalClient(timeout=timeout) as bridge,
         ):
             app.state.legacy = legacy
             app.state.bridge = bridge

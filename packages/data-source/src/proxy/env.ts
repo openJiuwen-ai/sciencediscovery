@@ -18,6 +18,7 @@ import type {
   ProxyEnvironmentVariableDetails,
   ResolvedProxy,
 } from "@sciencediscovery/schema";
+import { resolveRoute } from "@sciencediscovery/network";
 
 export const PROXY_ENV_VARS = [
   "HTTP_PROXY",
@@ -93,22 +94,6 @@ export function resolveProxyEnvironment(baseEnv: ProxyEnvironment = process.env)
   };
 }
 
-function targetBypassesProxy(target: URL, noProxy: string | undefined): boolean {
-  if (!noProxy) return false;
-  if (noProxy.trim() === "*") return true;
-  const hostname = target.hostname.toLowerCase();
-  const port = Number(target.port) || (target.protocol === "https:" ? 443 : 80);
-  for (const rawEntry of noProxy.split(/[,\s]/)) {
-    if (!rawEntry) continue;
-    const match = rawEntry.match(/^(.+):(\d+)$/);
-    const entryHost = (match?.[1] ?? rawEntry).replace(/^\*?\./, "").toLowerCase();
-    const entryPort = match ? Number(match[2]) : 0;
-    if (entryPort && entryPort !== port) continue;
-    if (hostname === entryHost || hostname.endsWith(`.${entryHost}`)) return true;
-  }
-  return false;
-}
-
 /** Resolve an environment policy for one outbound HTTP(S) target.
  *
  * This removes consumer-specific environment fallbacks: HTTP uses HTTP_PROXY
@@ -121,19 +106,7 @@ export function resolveProxyForUrl(
   target: string | URL,
   baseEnv: ProxyEnvironment = process.env,
 ): Exclude<ResolvedProxy, { mode: "environment" }> {
-  if (resolved.mode !== "environment") return resolved;
-  const url = typeof target === "string" ? new URL(target) : target;
-  if (!["http:", "https:"].includes(url.protocol)) {
-    throw new Error(`Proxy target must use HTTP or HTTPS: ${url.protocol}`);
-  }
-  const snapshot = resolveProxyEnvironment(baseEnv);
-  assertValidProxyEnvironment(snapshot);
-  const noProxy = snapshot.variables[3]?.value;
-  if (targetBypassesProxy(url, noProxy)) return { mode: "direct" };
-  const protocolProxy = snapshot.variables[url.protocol === "https:" ? 1 : 0]?.value;
-  const allProxy = snapshot.variables[2]?.value;
-  const proxy = protocolProxy || allProxy;
-  return proxy ? { mode: "url", url: proxy } : { mode: "direct" };
+  return resolveRoute(target, resolved, baseEnv);
 }
 
 export function assertValidProxyEnvironment(snapshot: ProxyEnvironmentSnapshot): void {
@@ -142,15 +115,13 @@ export function assertValidProxyEnvironment(snapshot: ProxyEnvironmentSnapshot):
   }
 }
 
-/** Convert a runtime snapshot into the authenticated settings payload.
- *  Valid values are intentionally shown in full; invalid source strings remain
- *  omitted so validation errors cannot echo credentials. */
+/** Convert a runtime snapshot into a credential-redacted settings payload. */
 export function proxyEnvironmentDetails(
   snapshot: ProxyEnvironmentSnapshot = resolveProxyEnvironment(),
 ): ProxyEnvironmentDetails {
   const variables: ProxyEnvironmentVariableDetails[] = snapshot.variables.map((variable) => ({
     ...(variable.effectiveName ? { effectiveName: variable.effectiveName } : {}),
-    ...(variable.value ? { effectiveValue: variable.value } : {}),
+    ...(variable.value ? { effectiveValue: variable.names[0] === "no_proxy" ? variable.value : redactProxyUrl(variable.value) } : {}),
     names: [...variable.names],
     ...(variable.reason ? { reason: variable.reason } : {}),
     status: variable.status,
@@ -160,6 +131,13 @@ export function proxyEnvironmentDetails(
     status: snapshot.status,
     variables,
   };
+}
+
+function redactProxyUrl(value: string): string {
+  const url = new URL(value);
+  if (url.username || url.password) { url.username = "***"; url.password = "***"; }
+  url.search = ""; url.hash = "";
+  return url.href;
 }
 
 /**
@@ -186,6 +164,7 @@ export function proxyEnvOverlay(
     for (const [index, variable] of snapshot.variables.entries()) {
       if (variable.value) overlay[canonicalNames[index]!] = variable.value;
     }
+    if (resolved.noProxy !== undefined) overlay.NO_PROXY = resolved.noProxy;
     return overlay;
   }
   const overlay: Record<string, string> = {
@@ -197,7 +176,7 @@ export function proxyEnvOverlay(
     https_proxy: resolved.url,
   };
   for (const name of ["NO_PROXY", "no_proxy"] as const) {
-    const value = baseEnv[name];
+    const value = resolved.noProxy ?? baseEnv[name];
     if (value) overlay[name] = value;
   }
   return overlay;

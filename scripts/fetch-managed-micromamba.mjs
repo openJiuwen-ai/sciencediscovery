@@ -19,6 +19,7 @@ import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { withProxyFetch, redactNetworkError } from "../packages/network/src/index.mjs";
 
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
 const DOWNLOAD_ATTEMPTS = 3;
@@ -158,7 +159,7 @@ function retryableStatus(status) {
 }
 
 function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
+  return redactNetworkError(error);
 }
 
 function binaryCacheOnlyFromEnvironment() {
@@ -178,10 +179,12 @@ function retryableError(error) {
 
 export async function downloadBytesWithRetry(url, {
   attempts = DOWNLOAD_ATTEMPTS,
-  fetchImplementation = fetch,
+  fetchImplementation,
   retryDelayMs = RETRY_DELAY_MS,
   timeoutMs = DOWNLOAD_TIMEOUT_MS,
 } = {}) {
+  if (!fetchImplementation) return withProxyFetch({ mode: "environment" }, fetchImplementation =>
+    downloadBytesWithRetry(url, { attempts, fetchImplementation, retryDelayMs, timeoutMs }));
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await fetchImplementation(url, {

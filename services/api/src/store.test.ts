@@ -923,6 +923,22 @@ test("SessionStore manages registry defaults and independent module policies", a
   );
 });
 
+test("proxy bypass settings survive reload and reject invalid input", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `proxy-bypass-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const defaultPolicy = store.getProxySettings().defaultPolicy;
+  await store.updateProxySettings({ defaultPolicy, noProxy: "internal.test,[::1]" });
+  const reloaded = new SessionStore(tempRoot);
+  await reloaded.load();
+  assert.equal(reloaded.getProxySettings().noProxy, "internal.test,[::1]");
+  assert.equal(reloaded.resolveProxy().noProxy, "internal.test,[::1]");
+  await assert.rejects(reloaded.updateProxySettings({ defaultPolicy, noProxy: "host\ninvalid" }));
+  assert.equal(reloaded.getProxySettings().noProxy, "internal.test,[::1]");
+});
+
 test("SessionStore migrates legacy web proxy modes into the authenticated settings projection", async (context) => {
   for (const mode of ["environment", "direct", "custom"] as const) {
     const tempRoot = resolve(process.cwd(), ".tmp", `proxy-migration-${mode}-${Date.now()}-${process.pid}`);

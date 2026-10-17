@@ -224,7 +224,7 @@ import {
   type WorkspaceFileTreeEntry,
 } from "./artifactTree.js";
 import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type WebSettingsDraft } from "./WebSettingsEditor.js";
-import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
+import { ProxyPolicySelect, ProxySettingsEditor, type ProxyFormDraft } from "./ProxySettingsEditor.js";
 import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
@@ -1158,6 +1158,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [quotaSettings, setQuotaSettings] = useState<SystemQuotaSettings>();
   const [sandboxNetworkSettings, setSandboxNetworkSettings] = useState<SandboxNetworkSettings>();
   const [proxySettings, setProxySettings] = useState<ProxySettingsDetails>();
+  const [proxySettingsEdit, setProxySettingsEdit] = useState<ProxySettingsDetails>();
+  const [mcpProxyPoliciesEdit, setMcpProxyPoliciesEdit] = useState<McpProxyPolicies>();
+  const [proxyFormEdit, setProxyFormEdit] = useState<ProxyFormDraft>();
+  const [proxyEditorRevision, setProxyEditorRevision] = useState(0);
   const [mcpProxyPolicies, setMcpProxyPolicies] = useState<McpProxyPolicies>({});
   const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
@@ -2438,66 +2442,103 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function createProxyServer(input: CreateProxyServerRequest): Promise<void> {
-    try {
-      await client.createProxyServer(input);
-      setProxySettings(await client.getProxySettings());
-      setError(undefined);
-      pushToast("success", t("app.proxyServerAdded"), input.name.trim());
-    } catch (reason) {
-      setError(reason instanceof Error ? reason : t("error.addProxyServer"));
-      throw reason;
-    }
+    const now = new Date().toISOString();
+    setProxySettingsEdit(current => {
+      const base = current ?? proxySettings!;
+      const server = { ...input, id: `draft-${crypto.randomUUID()}`, createdAt: now, updatedAt: now, hasUrl: Boolean(input.url) };
+      return { ...base, defaultPolicy: `proxy:${server.id}`, servers: [...base.servers, server] };
+    });
   }
 
   async function updateProxyServer(serverId: string, input: UpdateProxyServerRequest): Promise<void> {
-    try {
-      const saved = await client.updateProxyServer(serverId, input);
-      // Reload the display projection because environment runtime details are
-      // intentionally computed on GET and are not part of mutation responses.
-      setProxySettings(await client.getProxySettings());
-      setError(undefined);
-      pushToast("success", t("app.proxyServerUpdated"), saved.name);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason : t("error.updateProxyServer"));
-      throw reason;
-    }
+    setProxySettingsEdit(current => {
+      const base = current ?? proxySettings!;
+      return { ...base, servers: base.servers.map(server => server.id === serverId ? { ...server, ...input } : server) };
+    });
   }
 
   async function deleteProxyServer(server: ProxyServer): Promise<void> {
     if (!window.confirm(t("proxy.server.deleteConfirm", { name: server.name }))) return;
-    try {
-      await client.deleteProxyServer(server.id);
-      setProxySettings((current) => current ? {
-        ...current,
-        servers: current.servers.filter((item) => item.id !== server.id),
-      } : current);
-      setError(undefined);
-      pushToast("success", t("app.proxyServerDeleted"), server.name);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason : t("error.deleteProxyServer"));
-    }
+    setProxySettingsEdit(current => {
+      const base = current ?? proxySettings!;
+      return { ...base, servers: base.servers.filter(item => item.id !== server.id) };
+    });
   }
 
   async function updateDefaultProxyPolicy(defaultPolicy: Exclude<ProxyPolicy, "inherit">): Promise<void> {
-    try {
-      setProxySettings(await client.updateProxySettings({ defaultPolicy }));
-      setError(undefined);
-      pushToast("success", t("app.proxyDefaultUpdated"));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason : t("error.updateProxyDefault"));
-    }
+    setProxySettingsEdit(current => ({ ...(current ?? proxySettings!), defaultPolicy }));
   }
 
   async function updateMcpProxyPolicy(serverId: string, policy: ProxyPolicy): Promise<void> {
-    const policies = { ...mcpProxyPolicies, [serverId]: policy };
+    const policies = { ...(mcpProxyPoliciesEdit ?? mcpProxyPolicies), [serverId]: policy };
     if (policy === "inherit") delete policies[serverId];
+    setMcpProxyPoliciesEdit(policies);
+  }
+
+  async function saveProxyDraft(): Promise<WebSettingsDraft | undefined> {
+    let draft = proxySettingsEdit;
+    let webDraft = webSettingsEdit;
+    let policies = mcpProxyPoliciesEdit ?? mcpProxyPolicies;
     try {
-      const saved = await client.updateMcpProxyPolicies({ policies });
-      setMcpProxyPolicies(saved.policies);
-      setError(undefined);
-      pushToast("success", t("app.mcpProxyPolicyUpdated"), serverId);
+      if (proxyFormEdit) {
+        const { editingId, draft: form } = proxyFormEdit;
+        if (!form.name.trim() || (form.kind === "custom_url" && !form.url.trim())) throw new Error(t("proxy.form.required"));
+        const base = draft ?? proxySettings!;
+        if (editingId) draft = { ...base, servers: base.servers.map(server => server.id === editingId ? { ...server, ...form } : server) };
+        else {
+          const id = `draft-${crypto.randomUUID()}`, now = new Date().toISOString();
+          draft = { ...base, defaultPolicy: `proxy:${id}`, servers: [...base.servers, { ...form, id, createdAt: now, updatedAt: now, hasUrl: Boolean(form.url) }] };
+        }
+        setProxySettingsEdit(draft); setProxyFormEdit(undefined); setProxyEditorRevision(value => value + 1);
+      }
+      if (draft) {
+        for (const server of draft.servers) {
+          if (!server.name.trim()) throw new Error(t("proxy.form.required"));
+          if (server.kind === "custom_url") {
+            let url: URL;
+            try { url = new URL(server.url ?? ""); } catch { throw new Error(t("proxy.form.invalid")); }
+            if (!["http:", "https:", "socks5:"].includes(url.protocol) || url.search || url.hash) throw new Error(t("proxy.form.invalid"));
+          }
+        }
+        for (const server of [...draft.servers]) {
+          if (server.id.startsWith("draft-")) {
+            const saved = await client.createProxyServer(server);
+            const remap = (policy: ProxyPolicy) => policy === `proxy:${server.id}` ? `proxy:${saved.id}` as const : policy;
+            draft = { ...draft, defaultPolicy: remap(draft.defaultPolicy) as ProxySettingsDetails["defaultPolicy"], servers: draft.servers.map(item => item.id === server.id ? saved : item) };
+            policies = Object.fromEntries(Object.entries(policies).map(([id, policy]) => [id, remap(policy)]));
+            setProxySettingsEdit(draft); setMcpProxyPoliciesEdit(policies);
+            if (webDraft) {
+              webDraft = { ...webDraft, values: { ...webDraft.values, proxyPolicy: remap(webDraft.values.proxyPolicy) } };
+              setWebSettingsEdit(webDraft);
+            }
+          } else {
+            const previous = proxySettings?.servers.find(item => item.id === server.id);
+            if (previous && (previous.name !== server.name || previous.kind !== server.kind || previous.url !== server.url)) {
+              await client.updateProxyServer(server.id, { name: server.name, kind: server.kind, ...(server.url !== undefined ? { url: server.url } : {}) });
+            }
+          }
+        }
+        await client.updateProxySettings({ defaultPolicy: draft.defaultPolicy, ...(draft.noProxy !== undefined ? { noProxy: draft.noProxy } : {}) });
+      }
+      if (mcpProxyPoliciesEdit || draft) {
+        setMcpProxyPolicies((await client.updateMcpProxyPolicies({ policies })).policies);
+      }
+      if (draft) {
+        // Update Web references before deleting their former proxy entries.
+        if (webDraft) {
+          await saveWebSettings(webSettingsRequest(webDraft));
+          webDraft = undefined;
+          setWebSettingsEdit(undefined);
+        }
+        // References are checked by the server; an in-use registry entry cannot be deleted.
+        for (const server of proxySettings?.servers ?? []) if (!draft.servers.some(item => item.id === server.id)) await client.deleteProxyServer(server.id);
+        setProxySettings(await client.getProxySettings());
+      }
+      setProxySettingsEdit(undefined); setMcpProxyPoliciesEdit(undefined);
+      return webDraft;
     } catch (reason) {
-      setError(reason instanceof Error ? reason : t("error.updateMcpProxyPolicy"));
+      reportSystemSettingsError(reason instanceof Error ? reason : t("error.updateProxyDefault"));
+      throw reason;
     }
   }
 
@@ -2547,6 +2588,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   function clearSystemSettingsDrafts(): void {
+    setProxySettingsEdit(undefined);
+    setMcpProxyPoliciesEdit(undefined);
+    setProxyFormEdit(undefined); setProxyEditorRevision(value => value + 1);
     setGlobalSettingsEdit(undefined);
     setTimeoutSettingsEdit(undefined);
     setQuotaSettingsEdit(undefined);
@@ -2635,11 +2679,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       // Persist every edited section, including drafts retained while the user
       // navigated elsewhere in the dialog. A failed request keeps the dialog
       // and remaining drafts open so the user can retry.
+      const webDraft = proxySettingsEdit || mcpProxyPoliciesEdit || proxyFormEdit ? await saveProxyDraft() : webSettingsEdit;
       if (globalSettingsEdit) await saveGlobalSettings(globalSettingsEdit);
       if (timeoutSettingsEdit) await saveTimeoutSettings(timeoutSettingsEdit);
       if (quotaSettingsEdit) await saveQuotaSettings(quotaSettingsEdit);
       if (sandboxNetworkSettingsEdit) await saveSandboxNetworkSettings(sandboxNetworkSettingsEdit);
-      if (webSettingsEdit) await saveWebSettings(webSettingsRequest(webSettingsEdit));
+      if (webDraft) await saveWebSettings(webSettingsRequest(webDraft));
       if (memoryGraphSettingsEdit) await saveMemoryGraphSettings(memoryGraphSettingsRequest(memoryGraphSettingsEdit));
       if (ideaTreeSettingsEdit && ideaTreeWeightsValid(ideaTreeSettingsEdit)) await saveIdeaTreeSettings(ideaTreeSettingsRequest(ideaTreeSettingsEdit));
       if (providerSettingsRef.current?.hasUnsavedDraft()) {
@@ -5066,7 +5111,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
               {systemSettingsGroup === "proxies" ? (
                 proxySettings
                   ? <ProxySettingsEditor
-                      mcpPolicies={mcpProxyPolicies}
+                      key={proxyEditorRevision}
+                      formDraft={proxyFormEdit}
+                      onFormDraftChange={setProxyFormEdit}
+                      mcpPolicies={mcpProxyPoliciesEdit ?? mcpProxyPolicies}
                       mcpServers={proxyMcpServers(mcpSources)}
                       onCreate={createProxyServer}
                       onDefaultPolicyChange={updateDefaultProxyPolicy}
@@ -5074,7 +5122,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       onMcpPolicyChange={updateMcpProxyPolicy}
                       onUpdate={updateProxyServer}
                       onWebProxyPolicyChange={updateWebProxyPolicy}
-                      settings={proxySettings}
+                      settings={proxySettingsEdit ?? proxySettings}
+                      onTest={(proxy) => client.testProxy(proxy)}
+                      onNoProxyChange={noProxy => setProxySettingsEdit(current => ({ ...(current ?? proxySettings), noProxy }))}
                       webProxyPolicy={(webSettingsEdit?.values ?? webSettings)?.proxyPolicy ?? "inherit"}
                     />
                    : <p className="muted">{t("settings.loadingProxies")}</p>
