@@ -46,7 +46,7 @@ run is defined by the profiles below.
 
 | Tier / profile | Trigger | Cumulative coverage and gate |
 | --- | --- | --- |
-| L1 / `l1` | Every CI run except draft PRs; required before L2 | Lightweight architecture, docs, catalog and E2E metadata checks, without starting services or browsers; required before L2 |
+| L1 / `l1` | Every CI run, including draft PRs; required before L2 | Lightweight architecture, docs, catalog and E2E metadata checks, without starting services or browsers; required before L2 |
 | L2 / `pr` | Non-draft PR opened, synchronized, reopened or marked ready for review; push to `main` or `master`; default manual dispatch | L1 + hermetic UT/ST and mocked browser E2E; no model credentials or distribution jobs |
 | L3 / `merge` | `merge_group: checks_requested`, after maintainer review and enqueue | Rerun L1/L2 on the group SHA + basic real API journeys, x86_64/aarch64 binary smoke and Docker deployment checks; required before automatic merge |
 | L4 / `daily` | `nightly.yml`, 16:00 UTC daily or manual | L3 + all eligible nightly research journeys and their declared judging; records the nightly outcome and artifacts |

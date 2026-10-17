@@ -210,10 +210,11 @@ gh pr ready <n> --repo openJiuwen-ai/sciencediscovery
 
 ## Its Actions run
 
-Drafts do not run the PR gate jobs in `.github/workflows/ci.yml`; GitHub may
-still create a workflow run with all jobs skipped. Marking ready for review
-(`ready_for_review`) starts L1 and then L2; later pushes and non-draft
-open/reopen events run them too. Binary and Docker gates run only on the
+Drafts run policy and L1 in `.github/workflows/ci.yml` for lightweight static
+feedback; UT, ST, mocked E2E, Coverage and `merge-gate` wait until the PR is
+ready. Marking ready for review (`ready_for_review`) reruns L1 and starts L2;
+later pushes and non-draft open/reopen events run them too. Binary and Docker
+gates run only on the
 non-PR profiles described in the [CI skill](../ci/SKILL.md#what-runs-where).
 
 ```bash

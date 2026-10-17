@@ -106,9 +106,10 @@ Keep the braces in `"${login}:<branch>"`: zsh reads `$login:chore/…` as
 GitHub a head that is not your branch. The symptom and both of its causes are
 in the create-github-pr skill's *Troubleshooting*, under `No commits between`.
 
-Keep it a draft while preparing the change. Once it is ready, mark it ready
-for review to start the PR gates, then request review from a code owner listed
-in [.github/CODEOWNERS](../../../.github/CODEOWNERS). An automated review also
+Keep it a draft while preparing the change. Drafts already run L1. Once it
+is ready, mark it ready for review to start UT, ST and mocked E2E, then
+request review from a code owner listed in
+[.github/CODEOWNERS](../../../.github/CODEOWNERS). An automated review also
 runs on the pull request.
 
 ```bash

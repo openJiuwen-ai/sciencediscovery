@@ -319,8 +319,8 @@ mirror: nothing runs there.
 
 | Tier / profile | Trigger and added coverage |
 | --- | --- |
-| L1 | Non-draft PR opened, updated, reopened or marked ready for review: light static/catalog/document checks |
-| L2 / `pr` | Same non-draft PR events, after L1: all hermetic UT, ST and mock E2E |
+| L1 | Every PR, including drafts, on open, update, reopen and ready for review: light static/catalog/document checks |
+| L2 / `pr` | Non-draft PR opened, updated, reopened or marked ready for review, after L1: all hermetic UT, ST and mock E2E |
 | L3 / `merge` | Reviewed PR enters merge queue: rerun L1/L2 on group SHA, basic real APIs and distribution gates |
 | L4 / `daily` | Nightly at 16:00 UTC: L3 plus all ten previously eligible nightly cases (17 real cases total) |
 | L5 / `release` | Version tag: same current cases and evaluation modes as L4; independent profile for future additions; no historical baseline gate |
@@ -462,11 +462,11 @@ config, no private notes.
 The `gh pr create` above opens the pull request as a draft (`--draft`); keep
 it a draft until it is ready. From there, the path into `main` is:
 
-1. Opening or pushing to a draft does not run the PR gate jobs. GitHub may
-   still create a workflow run with all jobs skipped. GitHub Actions runs
-   L1 and then L2 / `pr` — the four local slices above, run again on the PR
-   head — when a PR is opened as non-draft, marked ready for review, pushed
-   to after becoming ready, or reopened as non-draft (see
+1. Opening or pushing to a draft runs L1 for lightweight static feedback;
+   L2 / `pr` (UT, ST and mocked E2E) waits until the PR is ready. GitHub
+   Actions runs L1 and then L2 — the four local slices above, run again on
+   the PR head — when a PR is opened as non-draft, marked ready for review,
+   pushed to after becoming ready, or reopened as non-draft (see
    [What the pipeline covers](#what-the-pipeline-covers)).
 2. When the pull request is ready, mark it ready for review
    (`gh pr ready <number>`). This is the step that requests review from the

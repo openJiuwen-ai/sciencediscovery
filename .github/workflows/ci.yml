@@ -23,8 +23,9 @@ name: CI
 on:
   push:
     branches: [main, master]
-  # Check non-draft pull requests when opened, updated, reopened or marked
-  # ready for review. GitHub may create a run for a draft; all jobs skip it.
+  # Drafts run policy and L1. UT/ST, mocked E2E, coverage, binary, Docker and
+  # merge-gate skip drafts; ready_for_review and non-draft open/update/reopen
+  # events enable the remaining jobs according to the selected profile.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
@@ -79,7 +80,6 @@ jobs:
   # Routing must survive a failing L1 check so L4/L5 can still collect real evidence.
   policy:
     name: Select CI policy
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -101,7 +101,6 @@ jobs:
   l1:
     name: L1 (static checks)
     needs: policy
-    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
