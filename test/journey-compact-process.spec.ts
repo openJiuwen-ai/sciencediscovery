@@ -276,7 +276,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         if (!(card instanceof HTMLDetailsElement) || card.open) return "card not collapsed";
         const label = el.querySelector(".timeline-label > strong")!;
         const range = document.createRange();
-        range.selectNodeContents(label);
+        range.selectNodeContents(label.querySelector(".timeline-title-text")!);
         if (getComputedStyle(el, "::after").display !== "none") return "duplicate summary dot";
         const dot = getComputedStyle(label, "::after");
         const flexGrow = getComputedStyle(label).flexGrow;
@@ -285,6 +285,25 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         if (dot.width === "6px" && dot.marginLeft === "0px" && gap === "8px" && flexGrow === "0" && Math.abs(hug - 14) < 2) return "settled";
         return `dot ${dot.width || "absent"}/${dot.marginLeft || "absent"}, gap ${gap}, flexGrow ${flexGrow}, text-to-label gap ${hug.toFixed(2)}px`;
       })).toBe("settled");
+      // Exercise the same collapsed record with a long research title at both
+      // widths; keep its full text available while reserving space for the dot.
+      const title = failed.locator(".timeline-title-text");
+      const originalTitle = await title.textContent();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        await title.evaluate((el) => { el.textContent = "Call failed: " + "Searching clinical CRISPR literature ".repeat(12); });
+        await expect.poll(() => title.evaluate((el) => {
+          const text = el as HTMLElement;
+          const label = text.parentElement!;
+          const dot = getComputedStyle(label, "::after");
+          const style = getComputedStyle(text);
+          const rightSpace = label.getBoundingClientRect().right - text.getBoundingClientRect().right;
+          return text.scrollWidth > text.clientWidth && style.textOverflow === "ellipsis"
+            && style.overflow === "hidden" && dot.width === "6px"
+            && Math.abs(rightSpace - 14) < 2;
+        })).toBe(true);
+      }
+      await title.evaluate((el, value) => { el.textContent = value; }, originalTitle);
       await page.mouse.move(0, 0);
     });
     await journey.step("窄屏刷新后访问原文件", "历史权限卡不会回来，目录仍默认关闭，文件可以从工作区入口访问且页面不横向溢出。",
