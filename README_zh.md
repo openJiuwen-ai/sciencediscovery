@@ -66,6 +66,25 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 | **沙箱内代码执行** | 智能体在 fail-closed 沙箱中编写、调试并运行 Python、R 与 Shell | [沙箱执行](https://sciencediscovery.github.io/zh/docs/developer-docs/sandbox-execution.html) |
 | **复杂任务拆解** | 任务规划与多智能体协同将任务分发给子智能体和跨领域 Skill 库 | [子智能体编排](https://sciencediscovery.github.io/zh/docs/developer-docs/subagent-orchestration.html) · [Skill](https://sciencediscovery.github.io/zh/docs/developer-docs/skill-progressive-disclosure.html) |
 | **全链路溯源** | 代码、环境、日志与引用证据按产物记录；开启记忆图谱后整条链路可点击追溯 | [审阅与溯源](https://sciencediscovery.github.io/zh/docs/developer-docs/review-provenance.html) · [ScienceMemory](https://sciencediscovery.github.io/zh/docs/advanced-setup/science-memory-setup.html) |
+| **脚本化与批量运行** | `ScienceDiscovery run` 从终端或作业脚本向运行中的 `serve` 提交任务，并以文本或 JSONL 流式输出结果 | [命令行](#命令行) · [CLI 参考](https://sciencediscovery.github.io/zh/docs/reference/cli.html) |
+
+## 命令行
+
+除浏览器外，运行中的 `serve` 也接受来自终端的任务。请在运行 `serve` 的目录中执行 `run`，使其读取同一数据目录和访问令牌；如果 `serve` 使用了 `--data-dir` 或 `--port`，请给 `run` 传入相同选项。
+
+```bash
+# 在终端中：答案流式写入 stdout，权限请求在终端中询问
+./ScienceDiscovery run "用三句话解释配对 t 检验和独立样本 t 检验的区别"
+
+# 在管道中：每行一个 JSON 事件；只保留最终答案
+./ScienceDiscovery run --auto-approve "列出 RNA-seq 读数计数的三种常用标准化方法，每种一行" \
+  | jq -r 'select(.type == "result") | .content'
+
+# 只把答案写入文件
+./ScienceDiscovery run --auto-approve --output text "用一段话解释 p 值能说明什么、不能说明什么" > answer.md
+```
+
+在终端中，`run` 把答案写入 stdout、进度写入 stderr，并逐一询问权限请求。stdout 被管道或重定向时，默认输出 JSONL（错误也是 JSON 行），且无法询问审批，因此必须传入 `--auto-approve`，否则拒绝启动。该选项会让本次运行所在会话的所有工具操作无需询问即获批准，请只用于你本来就会批准的任务和数据。全部命令与选项参见 [CLI 参考](https://sciencediscovery.github.io/zh/docs/reference/cli.html)。
 
 ## 环境要求
 
@@ -83,7 +102,7 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 |---|---|
 | **快速开始** | [快速开始](https://sciencediscovery.github.io/zh/docs/getting-started/quick-start.html) · [部署](https://sciencediscovery.github.io/zh/docs/getting-started/deployment.html) |
 | **进阶设置** | [自定义 MCP](https://sciencediscovery.github.io/zh/docs/advanced-setup/configure-custom-mcp.html) · [网络代理](https://sciencediscovery.github.io/zh/docs/advanced-setup/configure-network-proxy.html) · [ScienceMemory](https://sciencediscovery.github.io/zh/docs/advanced-setup/science-memory-setup.html) |
-| **参考** | [配置](https://sciencediscovery.github.io/zh/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/zh/docs/reference/rest-api.html) · [内置工具](https://sciencediscovery.github.io/zh/docs/reference/builtin-tools.html) · [运行时行为](https://sciencediscovery.github.io/zh/docs/reference/runtime-behavior.html) |
+| **参考** | [CLI](https://sciencediscovery.github.io/zh/docs/reference/cli.html) · [配置](https://sciencediscovery.github.io/zh/docs/reference/configuration.html) · [REST API](https://sciencediscovery.github.io/zh/docs/reference/rest-api.html) · [内置工具](https://sciencediscovery.github.io/zh/docs/reference/builtin-tools.html) · [运行时行为](https://sciencediscovery.github.io/zh/docs/reference/runtime-behavior.html) |
 | **开发者文档** | [整体架构](https://sciencediscovery.github.io/zh/docs/developer-docs/architecture.html) 及[开发者文档导航](https://sciencediscovery.github.io/zh/docs/developer-docs/) |
 
 完整中文导航参见[文档站](https://sciencediscovery.github.io/zh/docs/)；开发环境与测试命令参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
