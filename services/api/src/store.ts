@@ -3179,11 +3179,9 @@ export class SessionStore {
       undefined,
       this.currentSandboxNetworkAccess(),
     );
-    // A new Session starts with the most recently chosen policy in this
-    // Project, while an explicit creation request remains authoritative.
-    const inheritedApprovalMode = this.catalog.sessions
-      .filter((candidate) => candidate.projectId === projectId && !candidate.archivedAt)
-      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.approvalMode;
+    // This value changes only when a user explicitly selects an approval
+    // policy, rather than when an unrelated Session happens to be active.
+    const inheritedApprovalMode = this.getProject(projectId)?.approvalMode;
     const session: Session = {
       approvalMode: governance.approvalMode
         ?? inheritedApprovalMode
@@ -5227,6 +5225,8 @@ export class SessionStore {
       this.currentSandboxNetworkAccess(),
     );
     session.approvalMode = approvalMode;
+    const project = this.getProject(session.projectId);
+    if (project) project.approvalMode = approvalMode;
     session.permissionEpochId = permissionEpoch.id;
     session.updatedAt = permissionEpoch.createdAt;
     this.catalog.permissionEpochs.push(permissionEpoch);

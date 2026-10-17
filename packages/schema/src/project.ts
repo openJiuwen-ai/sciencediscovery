@@ -14,6 +14,7 @@
 
 import type { RuntimeSettingsOverrides } from "./runtime-settings.js";
 import type { Session } from "./session.js";
+import type { ApprovalMode } from "./plan.js";
 
 /** The one Project that holds standalone conversations. */
 export const INBOX_PROJECT_KIND = "inbox";
@@ -26,6 +27,8 @@ export const INBOX_PROJECT_KIND = "inbox";
 export const INBOX_PROJECT_NAME = "Recent sessions";
 
 export interface Project {
+  /** Last approval policy explicitly selected in this Project. */
+  approvalMode?: ApprovalMode;
   createdAt: string;
   /** Optional free-form research description. */
   description?: string;
