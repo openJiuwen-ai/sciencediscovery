@@ -247,7 +247,7 @@ test("completed traces retain bounded authoritative evidence and actual per-resp
     result:{content:text===undefined?[]:[{type:"text",text}]},
   });
   assert.equal(trace().preview,undefined);
-  assert.equal(trace("").preview,"");
+  assert.equal(trace("").preview,undefined,"empty tool text is omitted by the existing text aggregator");
   assert.equal(trace("a\nb\nc\nd\ne").preview,"a\nb\nc\nd\ne");
   assert.equal(trace("a\nb\nc\nd\ne\nf").preview,"a\nb\n…\ne\nf");
   const long="h".repeat(100)+"t".repeat(100);

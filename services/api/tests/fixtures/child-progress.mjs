@@ -43,6 +43,11 @@ mock.module(new URL('../../src/agent-run/create-agent-run.ts',import.meta.url).h
   createAgentRun(profile,bindings,input) {
     return {abort(){},beginExternalWait(){return ()=>{};},async execute(){
       if (profile.kind === 'main') {
+        const value=JSON.stringify({sourceId:'pubmed',toolId:'search',records:[{},{}]});
+        bindings.observer({type:'tool_execution_start',toolCallId:'main-tool',toolName:'search_pubmed',args:{query:'Clinical evidence'}});
+        bindings.observer({type:'tool_execution_progress',toolCallId:'main-tool',toolName:'search_pubmed',chunk:'main live evidence\n'});
+        bindings.observer({type:'tool_execution_end',toolCallId:'main-tool',toolName:'search_pubmed',isError:false,result:{content:[{type:'text',text:value}]}});
+
         const normal=await bindings.workspace.runSubagent({description:'normal',prompt:'normal'});
         assert.equal(normal.status,'completed');
         const abort=new AbortController(); cancelledSignal=abort;
@@ -57,10 +62,11 @@ mock.module(new URL('../../src/agent-run/create-agent-run.ts',import.meta.url).h
       // actual closures assembled by runs/index.ts, including persistence.
       if (!cancelledSignal) { mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()}); trackClockTimers(); }
       const emit=bindings.observer;
+      const evidence={agentId:`subagent:${profile.gatewayThreadId}`,agentRunId:input.agentRunId,requestExecutionId:input.requestExecutionId,recordedAt:new Date().toISOString(),turn:1};
       const offset=liveSteps.length;
       emit({type:'tool_execution_progress',toolCallId:'absent',toolName:'search_pubmed',chunk:'must never appear'});
       emit({type:'tool_execution_start',toolCallId:'tool',toolName:'search_pubmed',args:{query:'CRISPR'}});
-      emit({type:'tool_execution_progress',toolCallId:'tool',toolName:'search_pubmed',chunk:'first evidence\n'});
+      emit({type:'tool_execution_progress',toolCallId:'tool',toolName:'search_pubmed',chunk:'first evidence\n',evidence});
       await drainUntil(()=>liveSteps.length===offset+2);
       assert.equal(liveSteps.at(-1).step.content,'first evidence\n','first transient snapshot is immediate');
       emit({type:'tool_execution_progress',toolCallId:'tool',toolName:'search_pubmed',chunk:'second\n'});
@@ -77,7 +83,7 @@ mock.module(new URL('../../src/agent-run/create-agent-run.ts',import.meta.url).h
       assert.equal(liveSteps.at(-1).step.content,'first evidence\nsecond\nnewest\n');
       emit({type:'tool_execution_progress',toolCallId:'tool',toolName:'search_pubmed',chunk:'x'.repeat(20000)+'tail evidence'});
       assert.equal(pendingTimers.size,2,'the new burst has catalog and trailing timers');
-      emit({type:'tool_execution_end',toolCallId:'tool',toolName:'search_pubmed',isError:false,result:{content:[{type:'text',text:terminal}]}});
+      emit({type:'tool_execution_end',toolCallId:'tool',toolName:'search_pubmed',isError:false,result:{content:[{type:'text',text:terminal}]},evidence});
       assert.equal(pendingTimers.size,1,'terminal completion cancels the trailing timer immediately');
       mock.timers.tick(500); // Terminal must cancel the pending trailing timer.
       // A delayed adapter packet after terminal completion is not a new phase.
@@ -132,6 +138,7 @@ try {
   assert.deepEqual(normalSteps.slice(0,3).map(s=>s.content),['CRISPR','first evidence\n','first evidence\nsecond\nnewest\n']);
   assert.equal(normal.steps.find(s=>s.id==='tool').content,terminal,'late progress cannot replace the terminal catalog result');
   assert.deepEqual(normalSteps.map(s=>s.status),['running','running','running','completed']);
+  assert.equal(events.find(e=>e.type==='subagent.step'&&e.subagentId===normal.id&&e.step.progress==='first evidence\n').evidence.agentId,`subagent:${normal.id}`);
   const completed=normalSteps.at(-1);
   assert.equal(completed.progress.length,16384);
   assert.ok(completed.progress.startsWith('first evidence\n'));
@@ -140,6 +147,13 @@ try {
   const cancelSteps=events.filter(e=>e.type==='subagent.step'&&e.subagentId===cancelled.id&&e.step.id==='tool').map(e=>e.step);
   assert.deepEqual(cancelSteps.map(s=>s.content),['CRISPR','first evidence\n'],'no trailing snapshot after cancellation');
   const runs=await (await request(`/api/sessions/${session.id}/runs`)).json();
+  const mainOutput=await (await request(`/api/sessions/${session.id}/runs/${runs[0].id}/streams/tool-main-tool/events`)).json();
+  assert.deepEqual(mainOutput.map(r=>r.event.progress===true),[true,false]);
+  assert.equal(mainOutput[0].event.chunk,'main live evidence\n');
+  assert.equal(JSON.parse(mainOutput[1].event.chunk).records.length,2);
+  const mainTrace=events.find(e=>e.type==='tool.completed'&&e.trace.id==='main-tool').trace;
+  assert.equal(mainTrace.paperCount,2);
+  assert.equal(mainTrace.output,undefined);
   const persisted=await (await request(`/api/sessions/${session.id}/runs/${runs[0].id}/streams/subagent-${normal.id}/events`)).json();
   const tools=persisted.filter(r=>r.event.type==='subagent.step'&&r.event.step.id==='tool').map(r=>r.event.step);
   assert.deepEqual(tools.map(s=>s.status),['running','completed'],'only start/terminal records persist');

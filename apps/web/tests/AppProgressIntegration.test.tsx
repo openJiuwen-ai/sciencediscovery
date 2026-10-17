@@ -153,6 +153,7 @@ test("mounted App loads canonical full transcripts for empty, progress-only, res
   assert.equal(await load({...trace,outputStream:undefined}),undefined);
   assert.equal(streams.mock.callCount(),0);
   assert.equal(await load(trace),undefined);
+  assert.equal(await load({...trace,outputStream:"main"}),undefined,"legacy mixed streams never render unrelated control records as output");
   const append=async (chunk:string,progress=false) => publishRunEvent(store,session.id,run.id,{type:"tool.output",toolCallId:"search",chunk,...(progress?{progress:true}:{})});
   await append("searching",true);
   assert.equal(await load(trace),"searching");
