@@ -16,6 +16,7 @@
  * Run: node test/api/sandbox-network-consent-journey.mjs
  */
 import assert from "node:assert/strict";
+import { lookup } from "node:dns/promises";
 import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -43,7 +44,8 @@ const stub = createServer(async (request, response) => {
     const messages = input.messages ?? [], lastUser = messages.findLastIndex(x => x.role === "user");
     const history = messages.slice(lastUser + 1), toolCalls = history.flatMap(x => x.tool_calls ?? []);
     const previous = toolCalls.at(-1)?.function?.name;
-    const content = history.filter(x => x.role === "tool").at(-1)?.content;
+    const content = String(history.filter(x => x.role === "tool").at(-1)?.content ?? "").replaceAll('\\"', '"');
+    if (previous) console.log(`Model observed ${previous}: ${redact(content).slice(0, 1400)}`);
     const gateway = String(messages[lastUser]?.content).includes("gateway recovery");
     let call;
     const command = `python3 -c 'import urllib.request; print(urllib.request.urlopen("http://localhost.localdomain:${target.address().port}/records",timeout=3).read().decode())'`;
@@ -51,10 +53,10 @@ const stub = createServer(async (request, response) => {
       if (!previous) call = gateway
         ? { name: "run_shell", arguments: { command: "printf 'initial-side-effect\\n' >> attempt.txt; " + command } }
         : { name: "request_sandbox_network", arguments: { hosts: ["pubmed.ncbi.nlm.nih.gov:443"], purpose: "Retrieve requested PubMed records" } };
-      else if (previous === "request_sandbox_network" && String(content).includes('"state":"allowed"')) {
+      else if (previous === "request_sandbox_network" && /"state"\s*:\s*"allowed"/.test(content)) {
         call = { name: "run_shell", arguments: { command: "printf CONSENT_OK", network_authorization_id: field(content, "authorizationId") } };
       } else if (["run_shell", "execution_status"].includes(previous)) {
-        if (String(content).includes('"state":"running"') || String(content).includes('"state":"queued"')) {
+        if (/"state"\s*:\s*"(?:running|queued)"/.test(content)) {
           call = { name: "execution_status", arguments: { execution_id: field(content, "id"), wait_ms: 10000 } };
         } else if (gateway && toolCalls.filter(x => x.function?.name === "run_shell").length === 1 && String(content).includes('"authorizationId"')) {
           call = { name: "run_shell", arguments: { command, network_authorization_id: field(content, "authorizationId") } };
@@ -63,7 +65,7 @@ const stub = createServer(async (request, response) => {
     }
     response.writeHead(200, { "content-type": "text/event-stream" });
     const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: `call-${randomUUID()}`, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] }
-      : { role: "assistant", content: String(content).includes('"state":"blocked"') ? "Required retrieval is blocked and incomplete; no web-search fallback." : "Decision handled. Inspect the recorded retrieval outcome; no automatic replay." };
+      : { role: "assistant", content: /"state"\s*:\s*"blocked"/.test(content) ? "Required retrieval is blocked and incomplete; no web-search fallback." : "Decision handled. Inspect the recorded retrieval outcome; no automatic replay." };
     const frame = (value, finish_reason) => ({ id: "network-journey", object: "chat.completion.chunk", created: 1, model: "network-journey", choices: [{ index: 0, delta: value, finish_reason }] });
     response.write(`data: ${JSON.stringify(frame(delta, null))}\n\n`);
     response.write(`data: ${JSON.stringify(frame({}, call ? "tool_calls" : "stop"))}\n\n`);
@@ -114,7 +116,9 @@ async function step(name, expected, operation) {
 let outcome = "FAIL";
 try {
   await new Promise(done => stub.listen(0, "127.0.0.1", done));
-  await new Promise(done => target.listen(0, "127.0.0.1", done));
+  const local = await lookup("localhost.localdomain");
+  assert.ok(["::1", "127.0.0.1"].includes(local.address), "Fixture host must resolve locally");
+  await new Promise(done => target.listen(0, local.address, done));
   await step("1. Start isolated production API/Runner", "Sandbox is usable; default policy is none.", async () => {
     const runner = await start("runner"); api = await start("api", { SCIENCE_AGENT_RUNNER_URL: runner });
     assert.equal((await json("/api/sandbox-network-settings")).mode, "none"); return "Production services started; default none confirmed";
