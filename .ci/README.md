@@ -25,8 +25,8 @@ No workflow maintains its own list of case titles.
 | L1 | PR opened, synchronized or reopened (including drafts), or marked ready for review | Architecture, docs, test catalog and E2E metadata checks; no service or browser startup | Required before L2; 10 minutes |
 | L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
-| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
+| L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + all ten previously eligible nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys | Daily failure signal; each research worker 240 minutes including setup |
+| L5 (`release`) | Version tag push or explicit dispatch | L4 + all 50 public BiomniBench-DA tasks with score, tool rounds, RSS, time and token metrics; first full run produces an unapproved baseline candidate | Blocks Release/assets, not the already-created tag; Biomni workers 360 minutes, other research workers 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -245,8 +245,8 @@ echo, ordered-addition and numeric-argument probes; there is no external MCP
 server or AI judge. Each case owns its Project, Session, model and files. The
 basic Project disables optional skill, planning and delegation plugins through
 the public API. `--backend jiuwenswarm|legacy` changes execution only; the case
-list and assertions remain identical. L4/L5 inherit these seven basic cases and
-two Runner-recovery cases, then add twelve nightly cases.
+list and assertions remain identical. L4/L5 inherit these seven cases and keep
+the ten existing nightly cases unchanged.
 
 `journey-runner-recovery-real.spec.ts` adds two real API cases: the Agent chooses
 to wait after Runner execution is blocked, or explains the failure and finishes
@@ -265,8 +265,7 @@ These are failure bounds, not monetary limits.
 
 Research cost is separate and has not yet been measured. DRB-58/62/75 allow 90
 minutes generation; DRB-59/64 allow 120 minutes. Nightly judge timeout is 10
-minutes. Biomni generation allows 80 minutes, with up to 65 minutes for rubric
-evaluation. Team generation allows 55 minutes; PUCT generation 120 minutes.
+minutes. Team generation allows 55 minutes; PUCT generation 120 minutes.
 Its optional AI audit allows up to 65 more minutes when explicitly enabled
 locally; both daily and release leave that audit disabled. Job setup counts toward the four-hour worker
 ceiling. `fail-fast: false` retains evidence from independent workers; there
@@ -275,32 +274,39 @@ Monthly usage is the sum of actual provider usage across queue attempts,
 approximately 30 daily runs and version candidates; provider rates and actual
 call counts, not timeout ceilings, determine money spent.
 
-`prepare-real-research.sh` runs only for research workers. Daily and release
-set `CI_PREPARE_BIOMNI=1` only in the two Biomni shards and use
-`HF_TOKEN` to download their pinned inputs. The DRB evaluator is pinned to
-`852f4022d1f98fb707222e395405136e8f0e8d52`; Biomni inputs have
-committed blob checksums. Missing prerequisites for selected cases fail;
-they do not filter selection.
+`prepare-real-research.sh` runs only for research workers. Biomni workers
+prepare one task selected by the frozen plan, at dataset revision
+`e1c8ca5e11a620087bc48d97888eb69176a1f235`, using approved `HF_TOKEN` access.
+The DRB evaluator remains pinned to `852f4022d1f98fb707222e395405136e8f0e8d52`.
+Missing prerequisites fail before model calls; they do not filter selection.
 
-### Initial release scope and future quality calibration
+### L5 full-public benchmark and baseline candidate
 
-L5 runs the existing eligible cases and their current assertions, including AI
-judging where declared, and preserves scores/usage for later comparison. It
-requires every selected identity to pass, but does not require a historical
-quality baseline or apply a newly calibrated regression threshold. A green run
-certifies this selected suite, not measured capability non-regression or a
-complete upstream benchmark leaderboard.
+The real case counts are L3 **9**, L4 **19**, L5 **69**. L5 includes all 50
+public BiomniBench-DA tasks, with one task per isolated worker, at most two
+concurrent workers and a six-hour worker ceiling including preparation. The
+other 50 upstream tasks remain private. The seeded literature-review journey
+remains quarantined pending its saved models, connector and skill setup.
 
-The real case counts are L3 **9**, L4 **21**, L5 **21**. L4 includes
-twelve nightly cases and inherits the nine L3 cases. L5 currently uses the
-same cases and evaluation modes as L4; its separate profile and `tier:l5`
-extension row remain available for future additions. The two Biomni cases
-return to daily and release; the seeded literature-review journey remains
-quarantined pending its CI prerequisites.
+Biomni measures each task's rubric score, tool-call count and rounds, sampled
+worker RSS, end-to-end time and generation/Judge tokens. Every field is required;
+missing, duplicate or mismatched metrics fail the aggregate. All original data
+formats and nested paths are retained; large inputs are streamed into local
+fixtures rather than sent through the buffered HTTP upload endpoint.
 
-Broader cases and measured quality regression thresholds are follow-up work.
-Stored scores retain generator, backend, judge and evaluator/input fingerprints
-so a future reference dataset can use comparable executions.
+The checked-in `biomni-gate.json` starts in candidate mode. Only a complete,
+passing run can publish `biomni-baseline-candidate.json`; it is explicitly
+unapproved and does not certify capability non-regression. After reviewing a
+measured baseline and tolerances, compare mode enforces per-task quality and
+resource bounds with compatible dataset, evaluator, model and machine identity.
+No run automatically approves or replaces a baseline.
+
+Set `CI_BIOMNI_RUNNER` to a Linux x64 runner with adequate storage and RAM.
+The public data total is approximately 83 GB counting copies across tasks;
+workers download only their selected task and reserve room for a separate
+workspace copy. Ordinary runners can fail disk preflight on large tasks.
+See [BiomniBench-DA gate](../test/benchmarks/biomnibench-da/README.md) for exact
+metric scopes, runtime prerequisites, baseline approval and retained artifacts.
 
 ### Results and dashboard compatibility
 

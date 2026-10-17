@@ -19,6 +19,13 @@ export function executionConfig(env = process.env, backend = env.CI_E2E_BACKEND 
 // Keep short API scenarios in one serialized worker; long research cases each
 // receive an isolated job. The source plan, never a workflow case list, owns
 // this partition. Even a quarantined required case gets a worker and a verdict.
+export function biomniCase(entry) {
+  if (entry.source !== 'test/biomnibench-da-swarm.spec.ts') return undefined;
+  const id = decodeURIComponent(entry.id).match(/BiomniBench-(da-\d+-\d+)\b/)?.[1];
+  if (!id) throw new Error('INVALID_BIOMNI_CASE_IDENTITY');
+  return id;
+}
+
 export function realShards(plan) {
   const basic = plan.entries.filter(e => e.tags.includes('tier:l3'));
   const research = plan.entries.filter(e => !e.tags.includes('tier:l3'));

@@ -192,6 +192,11 @@ export function normalizeUsage(raw: unknown): AgentModelUsage | undefined {
   if (!isRecord(raw)) return undefined;
   let inputTokens = numberField(raw, ["input_tokens", "prompt_tokens"]);
   let outputTokens = numberField(raw, ["output_tokens", "completion_tokens"]);
+  // Some OpenAI-compatible gateways include zero-valued aliases alongside the real Chat usage fields.
+  const promptTokens = numberField(raw, ["prompt_tokens"]);
+  const completionTokens = numberField(raw, ["completion_tokens"]);
+  if (inputTokens === 0 && promptTokens !== undefined && promptTokens > 0) inputTokens = promptTokens;
+  if (outputTokens === 0 && completionTokens !== undefined && completionTokens > 0) outputTokens = completionTokens;
   let totalTokens = numberField(raw, ["total_tokens"]);
   let cacheReadTokens = numberField(raw, ["cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens"]);
   const cacheWriteTokens = numberField(raw, ["cache_creation_input_tokens", "cache_write_tokens", "prompt_cache_miss_tokens"]);
