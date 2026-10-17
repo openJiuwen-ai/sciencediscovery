@@ -46,6 +46,7 @@
 - [内容寻址存储](cas.md) — CAS、版本对象和 workspace change detection。
 - [PDF worker](paper-worker.md) — PDF 抽取 worker 协议和限制。
 - [Web 前端](web-frontend.md) — Web host、事件映射和前端开发入口。
+- [前端质量指导](frontend-quality.md) — 开发技能、响应式布局和可选诊断。
 
 ## 文档维护规则
 

@@ -46,6 +46,7 @@ These pages are for developers and code agents modifying ScienceDiscovery core c
 - [Content-addressable storage](cas.md) — CAS, version objects, workspace change detection.
 - [PDF worker](paper-worker.md) — PDF extraction protocol and limits.
 - [Web frontend](web-frontend.md) — Web host, event mapping, frontend development entry points.
+- [Frontend quality guidance](frontend-quality.md) — Development skill, responsive layout, and optional diagnostics.
 
 ## Documentation maintenance rules
 
