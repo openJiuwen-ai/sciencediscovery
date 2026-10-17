@@ -43,3 +43,15 @@ for (const managed of [true, false]) for (const token of [undefined, "token"]) t
   assert.equal(submissions, 1); assert.equal(result.isError, true, "caught HTTP denial must not become success");
   assert.match(JSON.stringify(result.content), /Inspect files before retry/);
 });
+
+test("a completed legacy execution carrying a caught network denial is still a tool error", async () => {
+  const terminal = { id: "legacy", state: "completed", result: { exitCode: 0, networkDeniedHosts: ["pypi.org:443"] } } as AgentShellExecution;
+  const tools = createWorkspaceTools(process.cwd(), { enabledConnectorIds: [], executePython: async () => { throw Error("unused"); },
+    executeShell: async () => { throw Error("managed path only"); },
+    shellExecutions: { start: async () => terminal, wait: async () => terminal, list: () => [terminal],
+      get: async () => terminal, cancel: async () => terminal, logs: async () => { throw Error("unused"); } },
+  });
+  const result = await tools.find(t => t.name === "run_shell")!.execute("legacy", { command: "printf partial" });
+  assert.equal(result.isError, true); assert.equal(result.details, terminal);
+  assert.match(JSON.stringify(result.content), /pypi.org:443/);
+});
