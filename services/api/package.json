@@ -14,7 +14,7 @@
     "@sciencediscovery/trajectory": "workspace:*",
     "@sciencediscovery/plugin-sdk": "workspace:*",
     "@sciencediscovery/artifact-manager": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@sciencediscovery/cas": "workspace:*",
     "@sciencediscovery/context": "workspace:*",
     "@sciencediscovery/data-source": "workspace:*",
