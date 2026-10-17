@@ -636,3 +636,22 @@ test("execution gateways attribute only their own policy denials, without DNS, a
     await assert.rejects(stat(first.socketPath));
   } finally { await registry.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("TCP gateway denial attribution and cleanup failure preserve fail-closed release", async () => {
+  const directory = await scratchDirectory();
+  const registry = new EgressGatewayRegistry(directory, undefined, async () => { throw new Error("No DNS for denied target"); });
+  try {
+    const gateway = await registry.acquireTcp(access({ revision: "tcp-execution" }));
+    const { request } = await import("node:http");
+    await new Promise<void>((done, reject) => {
+      const call = request(gateway.proxyUrl(), { method: "CONNECT", path: "blocked.example.org:443" });
+      call.on("connect", (response, socket) => { socket.destroy(); assert.equal(response.statusCode, 403); done(); });
+      call.on("error", reject); call.end();
+    });
+    assert.deepEqual(await registry.deniedHosts("tcp-execution"), ["blocked.example.org:443"]);
+    const close = gateway.close.bind(gateway);
+    gateway.close = async () => { await close(); throw new Error("Simulated post-close unlink failure"); };
+    await registry.release("tcp-execution");
+    assert.deepEqual(await registry.deniedHosts("tcp-execution"), []);
+  } finally { await registry.close(); }
+});

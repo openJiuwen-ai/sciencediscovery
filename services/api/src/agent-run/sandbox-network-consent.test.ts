@@ -4,7 +4,7 @@ import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { NO_SANDBOX_NETWORK_ACCESS, type PermissionEpoch } from "@sciencediscovery/schema";
+import { NO_SANDBOX_NETWORK_ACCESS, type PermissionAuthorization, type PermissionEpoch } from "@sciencediscovery/schema";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
 import { createSandboxNetworkConsent } from "./sandbox-network-consent.js";
@@ -22,7 +22,7 @@ function fixture() {
   } } as unknown as AgentPermissionRuntime;
   const make = (agentId = "main", executionId = "run") => createSandboxNetworkConsent({ store, permission,
     sessionId: "s", agentId, executionId, rootRunId: "root", assertRunner(runnerId) { if (runnerId === "foreign") throw new Error("Runner forbidden"); } });
-  return { epoch, make, requests, consent: make(), revoke: () => { granted = false; }, end: () => { active = false; }, deny: () => { allowed = false; } };
+  return { store, permission, epoch, make, requests, consent: make(), revoke: () => { granted = false; }, end: () => { active = false; }, deny: () => { allowed = false; } };
 }
 const input = { hosts: ["eutils.ncbi.nlm.nih.gov:443"], purpose: "Retrieve requested PubMed records" };
 
@@ -106,4 +106,94 @@ test("consent unavailable after execution preserves its known terminal output", 
   assert.equal(result.networkPermission?.state, "blocked");
   assert.equal(result.exitCode, 1); assert.equal(result.stdout, "partial output");
   assert.equal(f.requests.length, 0);
+});
+
+
+for (const mode of ["domain-allowlist", "open"] as const) test(`scoped retry preserves configured ${mode} capability and private filtering`, async () => {
+  const f = fixture();
+  f.epoch.networkPolicy = mode;
+  f.epoch.networkAccess = { ...NO_SANDBOX_NETWORK_ACCESS, mode, allowedDomains: mode === "open" ? [] : ["configured.example.org:443"], revision: "configured" };
+  const { EgressGateway } = await import("../../../runner/src/egress-gateway.js");
+  const decision = await f.consent.request(input);
+  const epoch = await f.consent.consume(decision.authorizationId, "local");
+  const gateway = new EgressGateway(epoch.networkAccess!, "", { resolveAddresses: async host => [{ address: host === "private.example.org" ? "127.0.0.1" : "93.184.216.34", family: 4 }] });
+  assert.equal((await gateway.decide("configured.example.org", 443)).allowed, true);
+  assert.equal((await gateway.decide("eutils.ncbi.nlm.nih.gov", 443)).allowed, true);
+  assert.equal((await gateway.decide("unrelated.example.org", 443)).allowed, mode === "open");
+  assert.equal((await gateway.decide("private.example.org", 443)).allowed, false);
+  assert.equal((await gateway.decide("127.0.0.1", 443)).allowed, false);
+  assert.equal(epoch.networkAccess!.allowPrivateNetwork, false);
+  assert.deepEqual(f.epoch.networkAccess.allowedDomains, mode === "open" ? [] : ["configured.example.org:443"]);
+});
+
+for (const invalid of ["localhost:8080", "bad_name.example.org:443", "127.0.0.1:80", "*.example.org"]) test(`mixed denial keeps ${invalid} blocked but asks about valid host`, async () => {
+  const f = fixture();
+  const result = await f.consent.observe({ networkDeniedHosts: [invalid, "pypi.org:443"], exitCode: 1, stdout: "partial" }, "local");
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(result.networkPermission?.hosts, ["pypi.org:443"]);
+  assert.equal(result.networkPermission?.state, "allowed");
+  assert.equal(result.networkPermission?.blockedHosts?.[0]?.host, invalid);
+  assert.ok(result.networkPermission!.blockedHosts![0]!.reason);
+  assert.match(result.networkPermission!.instruction, /remain blocked.*incomplete/);
+  assert.equal(result.stdout, "partial"); assert.equal(result.exitCode, 1);
+  const epoch = await f.consent.consume(result.networkPermission!.authorizationId, "local");
+  assert.deepEqual(epoch.networkAccess?.allowedDomains, ["pypi.org:443"]);
+});
+
+test("unsupported-only and absent denials ask for no permission and never imply successful retrieval", async () => {
+  const f = fixture(); const original = { networkDeniedHosts: undefined, exitCode: 0 };
+  assert.equal(await f.consent.observe(original, "local"), original);
+  const result = await f.consent.observe({ networkDeniedHosts: ["localhost:8080", "bad_name.example.org:443"] }, "local");
+  assert.equal(result.networkPermission?.state, "blocked");
+  assert.deepEqual(result.networkPermission?.hosts, []);
+  assert.equal(result.networkPermission?.authorizationId, undefined);
+  assert.equal(result.networkPermission?.blockedHosts?.length, 2);
+  assert.equal(f.requests.length, 0);
+});
+
+test("network declaration validates purpose, bounded hosts and owning run before creating a card", async () => {
+  const f = fixture();
+  for (const purpose of [" ", "x".repeat(101)]) await assert.rejects(f.consent.request({ ...input, purpose }), /purpose/);
+  await assert.rejects(f.consent.request({ ...input, hosts: ["a".repeat(4201) + ".org"] }), /4200/);
+  await assert.rejects(f.consent.request({ ...input, runnerId: "foreign" }), /forbidden/);
+  const unowned = createSandboxNetworkConsent({ sessionId: "s", agentId: "main", executionId: "r", store: f.store, permission: f.permission, assertRunner() {} });
+  await assert.rejects(unowned.request(input), /owning run/);
+  f.store.getSessionRun = async () => undefined;
+  await assert.rejects(f.consent.request(input), /ended with its run/);
+  assert.equal(f.requests.length, 0);
+});
+
+for (const mismatch of ["action", "outcome", "resource"] as const) test(`authorization ${mismatch} mismatch never issues an executable token`, async () => {
+  const f = fixture();
+  f.permission.requirePrivilege = async request => ({ id: "bad", action: request.action, resource: request.resource,
+    outcome: "allowed", [mismatch]: "mismatch" } as unknown as PermissionAuthorization);
+  await assert.rejects(f.consent.request(input), /scope mismatch/);
+  await assert.rejects(f.consent.consume("bad", "local"), /foreign/);
+});
+
+test("one-use authorization without a standing grant is consumed and pending approvals are bounded", async () => {
+  const f = fixture();
+  f.permission.requirePrivilege = async request => ({ id: randomUUID(), action: request.action, resource: request.resource, outcome: "allowed" } as PermissionAuthorization);
+  const once = await f.consent.request(input);
+  await f.consent.consume(once.authorizationId, "local");
+  await assert.rejects(f.consent.consume(once.authorizationId, "local"), /consumed/);
+  for (let i = 0; i < 128; i++) await f.consent.request(input);
+  await assert.rejects(f.consent.request(input), /Too many unused/);
+});
+
+test("cancellation during decision and run termination after approval issue no usable token", async () => {
+  const f = fixture(); const controller = new AbortController();
+  f.permission.requirePrivilege = async () => { controller.abort(); throw new Error("wait cancelled"); };
+  await assert.rejects(f.consent.request(input, controller.signal), /abort/i);
+  f.permission.requirePrivilege = async request => { f.end(); return { id: "ended", action: request.action, resource: request.resource, outcome: "allowed" } as PermissionAuthorization; };
+  await assert.rejects(f.consent.request(input), /ended with its run/);
+});
+
+test("transport errors and observed rejection preserve incomplete outcomes, including non-Error failures", async () => {
+  const f = fixture(); f.permission.requirePrivilege = async () => { throw "connection lost"; };
+  const blocked = await f.consent.request(input);
+  assert.equal(blocked.state, "blocked"); assert.match(blocked.instruction, /permission unavailable.*incomplete/);
+  f.deny(); f.permission.requirePrivilege = async () => { throw new Error("user denied"); };
+  const result = await f.consent.observe({ networkDeniedHosts: input.hosts }, "local");
+  assert.equal(result.networkPermission?.state, "blocked"); assert.match(result.networkPermission!.instruction, /user denied/);
 });

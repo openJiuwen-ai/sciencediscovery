@@ -180,9 +180,12 @@ test("network consent names hosts and purpose in the conversation without expand
     expandedCards: {}, onToggleCard: noopToggle, onDecision: async () => {},
     requests: [{ action: "sandbox_network", createdAt: "2026-10-18T00:00:00Z", id: "network",
       sessionId: "s", resource: "sandbox-network:scoped-digest", state: "pending",
-      summary: "Sandbox network on local: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records. Approval does not replay code." }],
+      summary: "Sandbox network on local for this Agent run: eutils.ncbi.nlm.nih.gov:443. Purpose: Retrieve requested PubMed records." }],
   }));
   assert.match(html, /Sandbox network access/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.doesNotMatch(html, /sandbox-network:scoped-digest/);
+  assert.match(html, /for this Agent run/);
   assert.match(html, /eutils.ncbi.nlm.nih.gov:443/);
   assert.match(html, /Retrieve requested PubMed records/);
   assert.match(html, /Allow once/); assert.match(html, /Deny/);

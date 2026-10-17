@@ -148,6 +148,8 @@ export const SYSTEM_PYTHON_ENVIRONMENT_REVISION_ID = "system-python3-bwrap-v1";
 export const SYSTEM_PYTHON_SEATBELT_ENVIRONMENT_REVISION_ID = "system-python3-seatbelt-v1";
 
 export interface SandboxNetworkPermissionResult {
+  /** Observed targets this consent path cannot authorize; they stay blocked. */
+  blockedHosts?: Array<{ host: string; reason: string }>;
   state: "allowed" | "blocked";
   authorizationId?: string;
   hosts: string[];

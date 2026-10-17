@@ -98,8 +98,12 @@ Before a Skill script or command needs HTTP access, the Agent calls
 `purpose`, and the intended `runner_id`. In Ask mode this pauses on a
 conversation permission card showing the hosts and purpose. Allow once or
 Allow same type returns a one-use `authorizationId`; pass it as
-`network_authorization_id` on a **new** `run_shell` call. Always Allow also
-requires this explicit declaration and grants only that host set. Wildcards,
+`network_authorization_id` on a **new** `run_shell` call. Always Allow
+automatically approves these exact-host permission requests.
+An explicit tool request declares hosts up front; an attributed allowlist denial
+can also create that request after the failed execution. It returns a token
+without replaying the execution. Only newly approved hosts are added; configured
+allowlist entries remain allowed, and configured `open` remains open. Wildcards,
 URLs and IP literals are not accepted by this consent path.
 
 The token belongs to this Agent, run and Runner. It is consumed before
@@ -107,7 +111,8 @@ submission, including when the submission outcome is uncertain. Matching
 consent covers the identical host set and scope during that Agent run;
 revoking its grant invalidates unused tokens. It cannot pass to children,
 another Runner or a later run. The execution receives a separate immutable
-allowlist epoch, with the deployment's existing private-address filter and
+network epoch preserving configured access and adding approved hosts, with
+the deployment's private-address filter and
 outbound route. Neither the global setting nor the shared Session epoch is
 expanded, and calls without a token retain their normal policy.
 
@@ -117,8 +122,10 @@ a script catches the HTTP error, and open the same permission card while the
 owning run is active. The resulting `networkPermission` contains a decision
 and, when approved, a token for a new call. **Nothing replays automatically**:
 inspect output, files and remote effects before deciding whether a new call is
-safe. Reconcile unknown execution outcomes before resubmitting. Private-address
-or outbound-route failures do not authorize a bypass through this card.
+safe. Reconcile unknown execution outcomes before resubmitting. Unsupported
+observed host names stay blocked with per-host reasons in
+`networkPermission.blockedHosts`; they do not suppress cards for valid denied hosts.
+Private-address or outbound-route failures do not authorize a bypass through this card.
 
 Deny, cancellation or dismissal/expiry leaves egress blocked. Required
 retrieval must be reported as blocked/incomplete with its reason; do not

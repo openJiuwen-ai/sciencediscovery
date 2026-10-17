@@ -344,3 +344,45 @@ test("scoped network permission decisions never change global or session network
   assert.equal(automatic.allowed, true);
   assert.equal(store.getSessionPermissionEpoch(session.id)?.networkPolicy, "none");
 });
+
+test("Always Allow observed denials use an exact scoped request and do not replay or change configured policy", async t => {
+  const store = await scratchStore("observed-always-allow", t.after.bind(t));
+  const project = await store.createProject("Observed grant");
+  const session = await store.createSession(project.id, "Network", {}, {}, { allowUnconfiguredModel: true });
+  await store.setApprovalMode(session.id, "always_allow");
+  const run = await store.createSessionRun({ sessionId: session.id, prompt: "Retrieve PubMed", settingsSnapshot: store.resolveRuntimeSettings(session.id).effective });
+  await store.updateSessionRunStatus(session.id, run.id, "running");
+  const { createAgentPermissionRuntime } = await import("@sciencediscovery/governance");
+  const { createSandboxNetworkConsent } = await import("./agent-run/sandbox-network-consent.js");
+  let cards = 0;
+  const permission = createAgentPermissionRuntime(store.getSessionPermissionEpoch(session.id)!, {
+    requestPermission: (action, resource, summary, context) => store.requestPermission(session.id, action, resource, summary, context),
+    readEpoch: () => store.getSessionPermissionEpoch(session.id), readAuthorization: id => store.getPermissionAuthorization(id),
+    emitRequired: () => { cards++; }, waitForDecision: async () => { throw new Error("Always Allow must not wait"); },
+  });
+  const consent = createSandboxNetworkConsent({ sessionId: session.id, agentId: "main", executionId: run.id, rootRunId: run.id, store, permission, assertRunner() {} });
+  const observed = await consent.observe({ networkDeniedHosts: ["pubmed.ncbi.nlm.nih.gov:443"], exitCode: 1, stdout: "partial" }, "local");
+  assert.equal(observed.networkPermission?.state, "allowed");
+  assert.equal(observed.exitCode, 1); assert.equal(observed.stdout, "partial"); assert.equal(cards, 0);
+  assert.match(observed.networkPermission!.instruction, /safe NEW run_shell.*Never replay/);
+  const authorized = store.listPermissionAuthorizations(session.id, { executionId: run.id });
+  assert.equal(authorized.length, 1); assert.equal(authorized[0]!.source, "always_allow");
+  assert.equal(authorized[0]!.action, "sandbox_network");
+  const epoch = await consent.consume(observed.networkPermission!.authorizationId, "local");
+  assert.deepEqual(epoch.networkAccess?.allowedDomains, ["pubmed.ncbi.nlm.nih.gov:443"]);
+  assert.equal(store.getSessionPermissionEpoch(session.id)!.networkPolicy, "none");
+});
+
+test("network summary support preserves other permission validation and direct-command whitespace", async t => {
+  const store = await scratchStore("permission-summary-boundary", t.after.bind(t));
+  const project = await store.createProject("Summary boundary");
+  const session = await store.createSession(project.id, "Ask", {}, {}, { allowUnconfiguredModel: true });
+  await store.setApprovalMode(session.id, "ask_for_dangerous");
+  await assert.rejects(store.requestPermission(session.id, "unsupported" as never, "r", "s"), /Unsupported permission action/);
+  const summary = "a  b\n" + "c".repeat(700);
+  for (const action of ["direct_code", "code", "sandbox_network"] as const) {
+    const result = await store.requestPermission(session.id, action, "test-summary", summary);
+    assert.equal(result.allowed, false); if (result.allowed) throw new Error("Expected prompt");
+    assert.equal(result.request.summary, action === "direct_code" ? summary : summary.replace(/\s+/g, " ").slice(0, action === "code" ? 500 : 6000));
+  }
+});
