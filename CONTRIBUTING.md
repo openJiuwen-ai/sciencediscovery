@@ -360,6 +360,19 @@ GitCode and `625d7e0` on GitHub, and neither resolves on the other. And a GitHub
 remote can look diverged when the trees are identical, so compare trees
 (`git diff --stat`) rather than SHAs before concluding that work is missing.
 
+## Working on an issue
+
+When you start implementing an existing issue, assign it to your current
+GitHub account without removing other assignees; skip assignment only if you
+are already an assignee. If others are assigned, add yourself and say in a
+comment that you are also working on it. Then post an English comment with
+the plan and completion criteria, and add progress
+comments when a PR opens, work is blocked or the plan changes. Leave other
+people's titles, bodies and comments unchanged. Reading, a brief reply or
+creating an issue does not require assignment. Follow
+[the GitHub skill](.agents/skills/github/SKILL.md#work-on-an-existing-issue)
+for commands and assignee verification.
+
 ## Opening a pull request
 
 **Run the four hermetic slices locally first.** GitHub Actions runs them again on the
