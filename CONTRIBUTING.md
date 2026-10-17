@@ -362,14 +362,16 @@ remote can look diverged when the trees are identical, so compare trees
 
 ## Working on an issue
 
-When you start implementing an existing issue, assign it to your current
+When you start implementing an existing issue, try to assign it to your current
 GitHub account without removing other assignees; skip assignment only if you
 are already an assignee. If others are assigned, add yourself and say in a
-comment that you are also working on it. Then post an English comment with
-the plan and completion criteria, and add progress
-comments when a PR opens, work is blocked or the plan changes. Leave other
-people's titles, bodies and comments unchanged. Reading, a brief reply or
-creating an issue does not require assignment. Follow
+comment that you are also working on it. Post an English comment with the
+plan and completion criteria even if assignment does not persist. In that
+case, do not retry or report it as assigned; say you are working on it and
+ask a maintainer to assign you. Add progress comments when a PR opens, work
+is blocked or the plan changes. Leave other people's titles, bodies and
+comments unchanged. Reading, a brief reply or creating an issue does not
+require assignment. Follow
 [the GitHub skill](.agents/skills/github/SKILL.md#work-on-an-existing-issue)
 for commands and assignee verification.
 

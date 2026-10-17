@@ -114,16 +114,21 @@ giving a brief answer, or creating a new issue alone does not claim the work.
    gh issue edit <n> --repo openJiuwen-ai/sciencediscovery --add-assignee "$login"
    ```
 
-3. Read the issue back and confirm that `assignees` contains your login:
+3. Read the issue back and check whether `assignees` contains your login:
 
    ```bash
    gh issue view <n> --repo openJiuwen-ai/sciencediscovery \
      --json number,assignees
    ```
 
-4. After assignment, post an English plan describing what you intend to change
-   and how completion will be judged. If other assignees are present, say that
-   you are also working on it. Add a new English progress comment when a PR
+   If your login is missing, do not retry assignment or report it as assigned.
+   Still post the plan comment in step 4, say you are working on the issue,
+   and ask a maintainer to assign it to you. The `"$login"` fallback above only
+   covers `@me` being unavailable; it does not grant assignment permissions.
+
+4. Post an English plan whether or not assignment persisted, describing what
+   you intend to change and how completion will be judged. If other assignees
+   are present, say that you are also working on it. Add a new English progress comment when a PR
    opens, work is blocked or the plan changes. Leave other people's titles,
    bodies and comments unchanged:
 
