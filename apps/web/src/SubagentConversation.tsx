@@ -61,7 +61,7 @@ export function subagentTimelineEntries(subagent: Subagent): RunTimelineEntry[] 
           id: `${subagent.id}:${step.toolCallId ?? step.id}`,
           ...(step.input !== undefined ? { input: step.input } : {}),
           name: step.toolName ?? "tool",
-          ...(output !== undefined ? { output: status !== "running" && step.progress ? `${step.progress}\n${output}` : output } : {}),
+          ...(output !== undefined ? { output: status !== "running" && step.progress ? `${step.progress}\n\n---\n\n${output}` : output } : {}),
           ...(step.args ? { args: step.args } : {}),
           status,
         },

@@ -22,6 +22,7 @@ import { join } from "node:path";
 
 import { parseInvocation, USAGE } from "./cli-options.js";
 import { runCommand } from "./run.js";
+import { ControlPlaneClient } from "./control-plane-client.js";
 import type { ServeSettings } from "./serve.js";
 
 const cwd = "/opt/sciencediscovery";
@@ -187,4 +188,42 @@ describe("run command against an unreachable serve", () => {
       process.stdout.write = originalWrite;
     }
   });
+});
+
+
+describe("tool progress rendering", () => {
+  for (const output of ["text", "jsonl"] as const) {
+    test(`${output} keeps final output and JSONL preserves progress`, async (t) => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      t.mock.method(process.stdout, "write", (chunk: unknown) => { stdout.push(String(chunk)); return true; });
+      t.mock.method(process.stderr, "write", (chunk: unknown) => { stderr.push(String(chunk)); return true; });
+      t.mock.method(ControlPlaneClient.prototype, "health", async () => true);
+      t.mock.method(ControlPlaneClient.prototype, "updateSession", async () => ({}));
+      t.mock.method(ControlPlaneClient.prototype, "createRun", async () => ({ id: "run", status: "running" }));
+      t.mock.method(ControlPlaneClient.prototype, "getSessionUsage", async () => ({}));
+      const events = [
+        { type: "tool.output", toolCallId: "shell", chunk: "evidence", progress: true },
+        { type: "tool.output", toolCallId: "shell", chunk: '{"stdout":"evidence","exitCode":0}' },
+        { type: "tool.output", toolCallId: "silent", chunk: "silent tool result" },
+        { type: "run.completed", message: { content: "answer" } },
+      ];
+      t.mock.method(ControlPlaneClient.prototype, "subscribeRunEvents", async (
+        _session: string, _run: string, _after: number, onEvent: (event: unknown) => void,
+      ) => { events.forEach(onEvent); });
+      const result = await runCommand({
+        settings: baseSettings(), baseEnv: {},
+        runSettings: { stdin: false, autoApprove: true, input: "inspect evidence", output, token: "test-token", sessionId: "session" },
+      }, () => {});
+      assert.equal(result.exitCode, 0);
+      if (output === "text") {
+        assert.equal(stderr.join(""), '{"stdout":"evidence","exitCode":0}silent tool result');
+      } else {
+        const toolEvents = stdout.join("").trim().split("\n").map(line => JSON.parse(line))
+          .filter(event => event.type === "tool.output");
+        assert.deepEqual(toolEvents, events.slice(0, 3));
+        assert.equal(stderr.join(""), "");
+      }
+    });
+  }
 });

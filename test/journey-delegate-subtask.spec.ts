@@ -186,7 +186,12 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         const execution = conversation.locator(".run-timeline details.timeline-disclosure.tool").first();
         await execution.locator(":scope > summary").click();
         const result = execution.locator(".tool-io-section").filter({ has: page.locator(".tool-io-label", { hasText: /^Result$/ }) }).locator("pre");
-        const completed = JSON.parse(await result.textContent() ?? "{}");
+        const transcript = await result.textContent() ?? "";
+        const boundary = "\n\n---\n\n";
+        const boundaryIndex = transcript.lastIndexOf(boundary);
+        expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+        expect(transcript.slice(0, boundaryIndex)).toContain("PRIVATE-FILE-VERIFIED");
+        const completed = JSON.parse(transcript.slice(boundaryIndex + boundary.length));
         expect(completed.state).toBe("completed");
         expect(completed.result.exitCode).toBe(0);
         expect(completed.result.stdout).toContain("PRIVATE-FILE-VERIFIED");

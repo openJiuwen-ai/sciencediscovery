@@ -162,6 +162,6 @@ test("completed child tool details retain progress without keeping a live failur
   }] }));
   const entry = entries[0];
   assert.ok(entry?.type === "tool");
-  assert.match(entry.trace.output!, /Error: retrying[\s\S]*5 papers/);
+  assert.equal(entry.trace.output, "Error: retrying\n\n\n---\n\n5 papers");
   assert.equal(entry.liveFailure, undefined);
 });

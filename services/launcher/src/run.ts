@@ -316,7 +316,10 @@ export async function runCommand(context: RunContext, log: (message: string) => 
         else process.stdout.write(JSON.stringify(event) + "\n");
         break;
       case "tool.output":
-        if (outputMode === "text") process.stderr.write(`${String(event.chunk)}`);
+        if (outputMode === "text") {
+          // Progress can repeat the final result; text mode keeps its final-output contract.
+          if (!event.progress) process.stderr.write(`${String(event.chunk)}`);
+        }
         else process.stdout.write(JSON.stringify(event) + "\n");
         break;
       case "artifact.upserted":
