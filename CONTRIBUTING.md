@@ -442,7 +442,7 @@ git fetch github && git checkout -b <type>/<short-topic> github/main
 git push -u github-fork <branch>
 gh pr create --repo openJiuwen-ai/sciencediscovery \
   --head <github-login>:<branch> --base main \
-  --title "<type>: <what changed>" --body-file <file>
+  --draft --title "<type>: <what changed>" --body-file <file>
 ```
 
 Apply exactly one `release:*` label so the release note can group the change;
@@ -459,14 +459,18 @@ config, no private notes.
 
 ### From pull request to merge
 
-The steps above end with an open pull request. From there, the path into
-`main` is:
+The `gh pr create` above opens the pull request as a draft (`--draft`); keep
+it a draft until it is ready. From there, the path into `main` is:
 
 1. GitHub Actions runs the L1 gate and then the L2 / `pr` gate on the pull
-   request — the four local slices above, run again on the PR head.
-2. Request review from the code owners listed in
-   [.github/CODEOWNERS](.github/CODEOWNERS). While you wait, an automated
-   review also runs on the pull request.
+   request — the four local slices above, run again on the PR head. This
+   starts when the pull request is opened and repeats on every push,
+   including while it is still a draft; marking it ready does not trigger
+   these gates again (see [What the pipeline covers](#what-the-pipeline-covers)).
+2. When the pull request is ready, mark it ready for review
+   (`gh pr ready <number>`). This is the step that requests review from the
+   code owners listed in [.github/CODEOWNERS](.github/CODEOWNERS). While you
+   wait, an automated review also runs on the pull request.
 3. Ask a maintainer to add the pull request to the merge queue, or wait for
    the automation to accept it. A pull request enters the queue only when its
    gates have passed and no code review comments are still open.
