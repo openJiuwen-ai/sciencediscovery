@@ -4190,11 +4190,16 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
         <div className={sidebarResourceClass} style={{ "--sidebar-split": `${sidebarSplit}%` } as CSSProperties}>
           <div className={projectsExpanded ? "sidebar-section projects" : "sidebar-section projects collapsed"}>
             <SidebarSectionHeader
+              addDisabled={!projectsLoaded || !globalSettings}
               addLabel={t("sidebar.addProject")}
-              count={projects.length}
+              count={projectsLoaded ? projects.length : undefined}
               expanded={projectsExpanded}
               label={t("sidebar.projects")}
-              onAdd={() => { setProjectsExpanded(true); setProjectCreationOpen(true); }}
+              onAdd={() => {
+                if (!projectsLoaded || !globalSettings) return;
+                setProjectsExpanded(true);
+                setProjectCreationOpen(true);
+              }}
               onToggle={() => { setOpenProjectMenuId(undefined); setProjectsExpanded((current) => !current); }}
               panelId="projects-panel-content"
             />
