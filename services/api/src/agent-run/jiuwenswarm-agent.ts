@@ -143,7 +143,8 @@ export const JIUWENSWARM_ASK_TOOLS: ReadonlySet<string> = new Set([
   "pdb_prepare_structure_download",
 ]);
 
-export const approvalFor = (name: string): "allow" | "ask" => JIUWENSWARM_ASK_TOOLS.has(name) || name === "mcp_recovered_call" || name.startsWith("mcp__") ? "ask" : "allow";
+// mcp_recovered_call enforces concrete source/tool approval inside its bridge callback.
+export const approvalFor = (name: string): "allow" | "ask" => JIUWENSWARM_ASK_TOOLS.has(name) || name.startsWith("mcp__") ? "ask" : "allow";
 
 /**
  * The resource a JiuwenSwarm approval question is checked against, for the tools whose native equivalent
@@ -283,7 +284,28 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     this.trajectory = trajectory;
     // The same registry the native loop dispatches through: output guard, detail sanitisation,
     // neutralised untrusted content, loop protection, the standard error shape.
-    const registry = createToolRegistry(this.options, plugins, durable, {
+    // Recovery multiplexes several source/tool identities through one tool. Enforce
+    // approval at dispatch with the concrete identity, never an adapter-wide
+    // remembered grant for the generic mcp_recovered_call name.
+    const registryOptions: NativeAgentOptions = this.options.mcpReadiness ? {
+      ...this.options,
+      mcpReadiness: {
+        ...this.options.mcpReadiness,
+        invoke: async (sourceId, toolId, input, signal, toolCallId) => {
+          signal?.throwIfAborted();
+          const resource = `mcp__${sourceId.replace(/[^A-Za-z0-9_-]/g, "_")}__${toolId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+          const release = this.beginExternalWait();
+          let decision: "allow_once" | "allow_matching" | "deny";
+          try {
+            decision = await this.options.requestApproval?.({ resource, summary: `Call repaired MCP tool ${sourceId}/${toolId}`, toolCallId }, signal) ?? "deny";
+          } finally { release(); }
+          signal?.throwIfAborted();
+          if (decision === "deny") throw new Error(`MCP recovery approval denied: ${sourceId}/${toolId}`);
+          return this.options.mcpReadiness!.invoke(sourceId, toolId, input, signal, toolCallId);
+        },
+      },
+    } : this.options;
+    const registry = createToolRegistry(registryOptions, plugins, durable, {
       ...(trajectory.enabled ? { recordResult: (input) => trajectory.observe(input as never) } : {}),
     });
     const tools = new Map(registry.values().map((tool) => [tool.name, tool]));
@@ -435,7 +457,9 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
    * send the answer back. The run waits in JiuwenSwarm meanwhile. Without a way to ask, the call is denied.
    */
   private answerApproval(question: ApprovalQuestion): void {
-    const ask = this.options.requestApproval;
+    // A stale adapter must not mint a generic recovery grant. Concrete recovery
+    // approval is checked inside the bridge even if its engine caches a decision.
+    const ask = question.toolName === "mcp_recovered_call" ? undefined : this.options.requestApproval;
     // A stable resource for a tool whose native equivalent always checks one fixed resource (run_shell and
     // the rest of JIUWENSWARM_APPROVAL_RESOURCE), so a standing grant applies here too. Any other tool the
     // adapter matched to its call is named by the tool itself: JiuwenSwarm's own question text ("mcp_sci_…

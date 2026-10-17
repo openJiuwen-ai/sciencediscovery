@@ -272,7 +272,7 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
       await expect(page.locator(".message").filter({ hasText: "FIRST MCP VERIFIED" }).last()).toBeVisible();
     });
     await journey.step("选择挂载第二个 MCP 的专家", "专家来源自动选中且显示挂载原因，不能单独取消", async () => {
-      await page.getByLabel("专家", { exact: true }).selectOption(specialist.id);
+      await page.getByRole("combobox", { name: "专家", exact: true }).selectOption(specialist.id);
       await page.locator(".connector-picker-trigger").click();
       const source = page.locator(".connector-picker-popover li").filter({ hasText: second.name });
       await expect(source).toContainText("由当前专家挂载");

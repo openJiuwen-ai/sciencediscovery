@@ -35,6 +35,8 @@ Unavailable or degraded effective sources (including Specialist additions) produ
 
 The connector picker shows catalog errors and omitted tool IDs for selected unavailable or degraded sources, keeping partial availability distinct from total failure. Sources mounted by the selected Specialist are checked and labelled separately; change the Specialist to remove those sources. Plugin-disabled sources stay excluded. Opening the picker checks current status, and Reload MCP catalog retries discovery without changing server configuration or granting permission. MCP settings changes and completed runs also refresh readiness. A failed status request is shown as unknown, never as ready.
 
+JiuwenSwarm checks recovered-call approval at bridge dispatch using the concrete `mcp__<source>__<tool>` resource. Remembering one recovered tool does not authorize another source or tool; the generic recovery entry point never receives a standing grant.
+
 ### 3.2 Model visibility (native loop)
 
 Deferred-tool registration lives in `packages/tools/src/deferred-tools.ts` and `registry.ts`; see [Agent backend](agent-backend.md) §6. In the native loop, a catalog adds synthetic `tool_search` and a name-only `<available-deferred-tools>` prompt section. Unpromoted schemas stay out of the model's tool table; direct calls to them return a retryable search-first error. Promotions are run-scoped, and keyword `prefer` routing can promote the three highest-priority matches before the first model call.

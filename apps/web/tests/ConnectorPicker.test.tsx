@@ -172,3 +172,12 @@ test("catalog reload stays available during a run and refresh failures are visib
   assert.match(markup, /role="alert">Could not check MCP readiness: catalog offline/);
   assert.match(markup, /<button type="button">Reload MCP catalog<\/button>/);
 });
+
+test("ready source without discovered tools reports no tools without claiming server unavailability", () => {
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, enabledIds: ["pubmed"], onToggle: () => undefined,
+    sourceStatuses: { pubmed: sourceStatus({ status: "ready", availableTools: [], missingTools: [], error: undefined }) },
+  }));
+  assert.match(markup, /No MCP tools discovered/);
+  assert.doesNotMatch(markup, /MCP unavailable|tool list unavailable until discovery succeeds/);
+});

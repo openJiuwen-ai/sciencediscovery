@@ -15,7 +15,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ConnectorId, ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded"|"connectors.catalogUnknown"|"connectors.omittedTools"|"connectors.unknownTools"|"connectors.specialist"|"connectors.reload"|"connectors.refreshing"|"connectors.refreshFailed",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded"|"connectors.catalogEmpty"|"connectors.catalogUnknown"|"connectors.omittedTools"|"connectors.unknownTools"|"connectors.specialist"|"connectors.reload"|"connectors.refreshing"|"connectors.refreshFailed",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -128,8 +128,8 @@ export function ConnectorPicker({
                 <span><strong>{name}</strong><small>{connector.publisher}</small>
                   {inherited ? <small>{t("connectors.specialist")}</small> : null}
                   {unavailable ? <small className="connector-picker-status" role="status">
-                    {!status ? t("connectors.catalogUnknown") : t(status.status === "degraded" ? "connectors.catalogDegraded" : "connectors.catalogUnavailable", { error: status.error ?? "" })}
-                    {status ? <> {status.missingTools.length ? t("connectors.omittedTools", { tools: status.missingTools.join(", ") }) : t("connectors.unknownTools")}</> : null}
+                    {!status ? t("connectors.catalogUnknown") : status.status === "ready" ? t("connectors.catalogEmpty") : t(status.status === "degraded" ? "connectors.catalogDegraded" : "connectors.catalogUnavailable", { error: status.error ?? "" })}
+                    {status && status.status !== "ready" ? <> {status.missingTools.length ? t("connectors.omittedTools", { tools: status.missingTools.join(", ") }) : t("connectors.unknownTools")}</> : null}
                   </small> : null}
                 </span>
               </label>

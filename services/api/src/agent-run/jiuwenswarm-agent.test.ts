@@ -2008,6 +2008,54 @@ test("MCP readiness and governed recovery tools are offered to JiuwenSwarm", asy
     } })).execute("go");
     const tools = adapter.requests[0].body.tools;
     assert.match(tools.find((tool: { name: string }) => tool.name === "mcp_readiness").description, /arxiv unavailable/);
-    assert.equal(tools.find((tool: { name: string }) => tool.name === "mcp_recovered_call").approval, "ask");
+    assert.equal(tools.find((tool: { name: string }) => tool.name === "mcp_recovered_call").approval, "allow", "the bridge enforces concrete source/tool approval instead of a generic remembered grant");
+  } finally { await adapter.close(); }
+});
+
+test("recovered MCP approval is checked per source and tool even when the adapter calls the bridge directly", async () => {
+  const resources: string[] = [], invoked: string[] = [];
+  const results: Array<{ isError: boolean; text: string }> = [];
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    for (const [index, [sourceId, toolId]] of [["arxiv", "search"], ["pubmed", "search"], ["arxiv", "download"]].entries()) {
+      const args = { sourceId, toolId, input: {} };
+      response.write(line({ event: { type: "tool.started", trace: { id: `recovered-${index}`, name: "mcp_recovered_call", args, status: "running" } } }));
+      const reply = await fetch(body.bridge.url, { method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` },
+        body: JSON.stringify({ name: "mcp_recovered_call", arguments: args }) });
+      results.push(await reply.json() as { isError: boolean; text: string });
+    }
+    response.end(line({ done: { finalText: "checked" } }));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({
+      requestApproval: async ({ resource }) => { resources.push(resource); return resource === "mcp__arxiv__search" ? "allow_matching" : "deny"; },
+      mcpReadiness: { summary: "sources repaired", decide: async () => ({}),
+        invoke: async (sourceId, toolId) => { invoked.push(`${sourceId}/${toolId}`); return { records: [] }; } },
+    })).execute("call repaired sources");
+    assert.deepEqual(resources, ["mcp__arxiv__search", "mcp__pubmed__search", "mcp__arxiv__download"]);
+    assert.deepEqual(invoked, ["arxiv/search"], "remembering one recovered tool does not authorize another source or tool");
+    assert.deepEqual(results.map(result => result.isError), [false, true, true]);
+  } finally { await adapter.close(); }
+});
+
+test("recovered MCP calls without an approval port never invoke the broker", async () => {
+  let invoked = false;
+  let result: any;
+  const adapter = await fakeAdapter(async ({ body }, response) => {
+    response.writeHead(200);
+    const args = { sourceId: "arxiv", toolId: "search", input: {} };
+    response.write(line({ event: { type: "tool.started", trace: { id: "no-approver", name: "mcp_recovered_call", args, status: "running" } } }));
+    const reply = await fetch(body.bridge.url, { method: "POST", headers: { authorization: `Bearer ${body.bridge.token}` },
+      body: JSON.stringify({ name: "mcp_recovered_call", arguments: args }) });
+    result = await reply.json();
+    response.end(line({ done: { finalText: "denied" } }));
+  });
+  try {
+    await createJiuwenSwarmAgentFactory({ adapterUrl: adapter.url })(options({ mcpReadiness: {
+      summary: "source repaired", decide: async () => ({}), invoke: async () => { invoked = true; return {}; },
+    } })).execute("go");
+    assert.equal(invoked, false);
+    assert.equal(result.isError, true);
+    assert.match(result.text, /approval denied/);
   } finally { await adapter.close(); }
 });
