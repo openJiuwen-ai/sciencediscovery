@@ -10,6 +10,14 @@ This is the complete English documentation set.
 - [Basic concepts](getting-started/concepts.md) — understand Agent loops, Tools, Skills, Specialists, Workspaces, and Artifacts.
 - [Deployment](getting-started/deployment.md) — choose a prepackaged single file, local source mode, or Docker, with long-running operation and first-run troubleshooting.
 
+After the quick start, the learning path continues with five short lessons, each with a concrete input, the prompt to send, and the result to look for:
+
+1. [Analyze a dataset](getting-started/analyze-a-dataset.md) — upload the bundled sample CSV, approve code execution, and find a chart and a report among the Artifacts.
+2. [Search the literature and write a cited summary](getting-started/literature-search-and-report.md) — use the PubMed and Europe PMC connectors with the literature Skills.
+3. [Use and write Skills](getting-started/use-and-write-skills.md) — run a bundled Skill, create one with `skill-creator`, publish it, and use it.
+4. [Connect a tool](getting-started/connect-a-tool.md) — add an MCP server, test it, and use it in a Session.
+5. [Trace a result](getting-started/trace-a-result.md) — follow an Artifact back to its code and environment, act on Reviewer findings, and compare versions.
+
 ## Core capabilities
 
 - [Core capability overview](core/README.md) — the research capabilities ScienceDiscovery adds on top of a general Agent.
