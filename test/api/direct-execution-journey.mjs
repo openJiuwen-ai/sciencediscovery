@@ -51,6 +51,15 @@ const stub = createServer(async (request, response) => {
   try {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const input = JSON.parse(Buffer.concat(chunks).toString()); calls++;
+    // Check the actual model-facing catalog, not only the tool factory: the
+    // Agent needs interpreter guidance before proposing the consent command.
+    for (const name of ["request_direct_execution", "run_direct_shell"]) {
+      const tool = input.tools?.find(item => item.function?.name === name);
+      assert.ok(tool, `Missing model-facing tool: ${name}`);
+      assert.match(tool.function.description, /PATH=\/usr\/bin:\/bin/);
+      assert.match(tool.function.description, /absolute interpreter path/);
+      assert.match(tool.function.description, /new consent/);
+    }
     const messages = input.messages ?? [];
     const lastUser = messages.findLastIndex(message => message.role === "user");
     const history = messages.slice(lastUser + 1);
