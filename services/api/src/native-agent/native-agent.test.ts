@@ -1155,3 +1155,50 @@ for (const action of ["continue", "wait"] as const) {
     finally { restore(); }
   });
 }
+
+test("MCP recovery and scoped direct execution coexist in the native agent", async () => {
+  const calls: string[] = [];
+  const command = "printf science";
+  const scope = { authorizationId: "consent", command, cwd: "", target: "local", account: "test" };
+  const options: NativeAgentOptions = {
+    ...workspace(),
+    mcpReadiness: {
+      summary: "arxiv unavailable; omitted tools: search",
+      decide: async action => { calls.push(action); return { recovered: true }; },
+      invoke: async (sourceId, toolId, input) => {
+        assert.equal(sourceId, "arxiv"); assert.equal(toolId, "search");
+        assert.deepEqual(input, { query: "science" });
+        calls.push("recovered"); return { records: [] };
+      },
+    },
+    directExecution: {
+      request: async input => {
+        assert.deepEqual(input, { operationId: "failed-op", command, cwd: "" });
+        calls.push("consent"); return scope;
+      },
+      start: async input => {
+        assert.deepEqual(input, scope); calls.push("direct"); return { executionId: "exec" };
+      },
+    },
+  };
+  const scripts: Array<(call: StreamerCall) => ModelTurn> = [
+    call => {
+      for (const name of ["mcp_readiness", "mcp_recovered_call", "request_direct_execution", "run_direct_shell"]) {
+        assert.ok(call.tools.some(tool => tool.name === name), `${name} reaches the model`);
+      }
+      return toolTurn("mcp_readiness", { action: "check", reason: "Source repaired", sourceIds: ["arxiv"] });
+    },
+    () => toolTurn("mcp_recovered_call", { sourceId: "arxiv", toolId: "search", input: { query: "science" } }),
+    () => toolTurn("request_direct_execution", { operation_id: "failed-op", command, cwd: "" }),
+    () => {
+      assert.deepEqual(calls, ["check", "recovered", "consent"], "consent does not dispatch execution");
+      return toolTurn("run_direct_shell", { authorization_id: "consent", command, cwd: "", target: "local", account: "test" });
+    },
+    () => textTurn("Both operations completed."),
+  ];
+  const restore = setModelTurnStreamerForTest(scriptStreamer(scripts).streamer);
+  try {
+    await createNativeAgent(options).execute("Use the repaired source and the separately approved command");
+    assert.deepEqual(calls, ["check", "recovered", "consent", "direct"]);
+  } finally { restore(); }
+});

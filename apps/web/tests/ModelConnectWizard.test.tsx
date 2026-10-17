@@ -104,6 +104,7 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
       providerId,
       source: "remote" as const,
     }),
+    getGlobalSettings: async () => ({ effective: {}, overrides: {} } as any),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
     testModel: async () => successResult,
@@ -1529,4 +1530,87 @@ test("an API key entered before presets arrive keeps automatic custom mode and t
   assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.value, "custom");
   assert.equal(hasCustomFields(renderer!), true);
   assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "sk-kept");
+});
+
+test("a failed settings read stops before creating a provider or model", async () => {
+  let replaceCalls = 0;
+  let createCalls = 0;
+  const errors: unknown[] = [];
+  const client = createMockClient({
+    createProvider: async () => {
+      createCalls += 1;
+      throw new Error("should not create a provider");
+    },
+    getGlobalSettings: async () => { throw new Error("settings 500"); },
+    replaceGlobalSettings: async () => {
+      replaceCalls += 1;
+      return {} as any;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, {
+          client,
+          onError: (reason) => { errors.push(reason); },
+          presets: MODEL_PROVIDER_PRESETS,
+        }),
+      ),
+    );
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-invalid-key" } });
+  });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.equal(createCalls, 0);
+  assert.equal(replaceCalls, 0);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0] instanceof Error ? errors[0].message : errors[0], "settings 500");
+  const alert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
+  assert.match(extractText(alert), /settings 500/);
+});
+
+test("the first model merges into the settings read at save time when no callback is passed", async () => {
+  const writes: unknown[] = [];
+  const client = createMockClient({
+    getGlobalSettings: async () => ({
+      effective: {},
+      overrides: { enabledConnectorIds: [], semanticReviewEnabled: true, thinkingEffort: "high" },
+    } as any),
+    replaceGlobalSettings: async (body: unknown) => {
+      writes.push(body);
+      return { effective: {}, overrides: body } as any;
+    },
+  });
+
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "zh-CN" },
+        createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS }),
+      ),
+    );
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-deepseek-test-123" } });
+  });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+
+  assert.deepEqual(writes, [{
+    enabledConnectorIds: [],
+    modelId: "profile-created-provider-1-listed-model-first",
+    semanticReviewEnabled: true,
+    thinkingEffort: "high",
+  }]);
 });

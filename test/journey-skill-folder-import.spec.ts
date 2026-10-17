@@ -34,14 +34,21 @@ async function writeSkillFolder(root: string, files: Record<string, string>): Pr
   return root;
 }
 
+// Coverage boundary for #339: removing webkitdirectory below models a browser
+// without native directory selection. A host/automation picker can still reject
+// directory paths even when that property exists; this journey does not reproduce
+// or repair that external-picker limitation. Use ZIP/Git for complete packages in
+// those hosts. Conversational Skill installation does not use the Folder picker.
+// Accepted scope: https://github.com/openJiuwen-ai/sciencediscovery/pull/352#issuecomment-6221140031
 /**
  * E2E-META
  * Purpose: A user can hand the product a local Skill folder and find that Skill installed with its supporting files, and gets a readable reason when the folder is not one.
  * Steps:
  *   1. Open System settings and the Skills group; the Skill is not installed yet.
- *   2. Pick a folder without SKILL.md and read the refusal; nothing is installed.
- *   3. Pick the prepared Skill folder; the Skills Explorer opens on it and its file tree carries both packaged files.
- *   4. Close the Explorer and find the Skill card in the list with its description, and the installed count one higher.
+ *   2. Simulate unavailable directory selection and verify disabled Folder plus ZIP/Git guidance; restore browser support.
+ *   3. Pick a folder without SKILL.md and read the refusal; nothing is installed.
+ *   4. Pick the prepared Skill folder; the Skills Explorer opens on it and its file tree carries both packaged files.
+ *   5. Close the Explorer and find the Skill card in the list with its description, and the installed count one higher.
  * Environment: Isolated local stack at E2E_BASE_URL; folders are written into a temporary directory and uploaded through the browser.
  * Type: mocked
  * LLM: none — importing a Skill package never calls a model.
@@ -55,6 +62,11 @@ async function writeSkillFolder(root: string, files: Record<string, string>): Pr
 test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async ({ journey, page }) => {
   test.setTimeout(120_000);
   await page.addInitScript(() => window.localStorage.setItem("sciencediscovery-locale", "zh-CN"));
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("test-disable-folder-picker") === "1") {
+      delete (HTMLInputElement.prototype as Partial<HTMLInputElement>).webkitdirectory;
+    }
+  });
   const skillName = `folder-import-${Date.now()}`;
   const description = "Imported from a local folder by the J11 journey.";
   const noteText = "# Field notes\n\nStep two reads this supporting file.\n";
@@ -106,6 +118,29 @@ test("J11 本地 Skill 文件夹可以直接导入", { tag: "@mocked" }, async (
         await expect(skillCard).toHaveCount(0);
         installedBefore = Number(await installedStat.innerText());
         expect(Number.isInteger(installedBefore)).toBe(true);
+      },
+    );
+
+    await journey.step(
+      "检查不支持文件夹选择的浏览器中的替代入口",
+      "文件夹入口禁用，并明确引导使用 ZIP 或 Git；恢复支持后文件夹入口重新可用。",
+      async () => {
+        await page.evaluate(() => sessionStorage.setItem("test-disable-folder-picker", "1"));
+        await page.goto("/");
+        await page.getByRole("button", { name: /^系统设置/ }).click();
+        await page.getByRole("dialog", { name: "系统设置", exact: true })
+          .getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^Skills/ }).click();
+        await manager.locator(".skill-import-menu summary").click();
+        await expect(manager.locator(".skill-import-menu button").filter({ hasText: "当前浏览器不支持选择文件夹" })).toBeDisabled();
+        await expect(manager.locator(".skill-import-menu")).toContainText("请使用 ZIP 或 Git 保留全部包文件");
+        await expect(manager.locator(".skill-import-menu button").filter({ hasText: "SKILL.md" })).toBeEnabled();
+        await expect(manager.locator(".skill-import-menu button").filter({ hasText: "Git 仓库" })).toBeEnabled();
+        await page.evaluate(() => sessionStorage.removeItem("test-disable-folder-picker"));
+        await page.goto("/");
+        await page.getByRole("button", { name: /^系统设置/ }).click();
+        await page.getByRole("dialog", { name: "系统设置", exact: true })
+          .getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^Skills/ }).click();
+        await expect(importFolderInput).toBeEnabled();
       },
     );
 

@@ -40,5 +40,5 @@ export async function collectFinalDelivery(page: Page, sessionId: string, runId:
   }
   // A broken supplementary file remains diagnostic; required output checks decide whether it blocks the E2E.
   const status = deliveryStatus(run.status, artifacts);
-  return { status, run_status: run.status, answer, producer_answer: producerAnswer, artifacts, errors };
+  return { status, run_status: run.status, run_error: run.error ?? null, answer, producer_answer: producerAnswer, artifacts, errors };
 }

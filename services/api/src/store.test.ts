@@ -517,7 +517,7 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
 
   const store = new SessionStore(tempRoot);
   await store.load();
-  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "record" });
+  assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "record" });
 
   await store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "suggest" });
   assert.deepEqual(store.getReviewerSpecialistSettings(), { enabled: true, feedbackPolicy: "suggest" });
@@ -550,6 +550,9 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
   });
   await reopened.updateReviewerSpecialistSettings({ enabled: false });
   assert.deepEqual(reopened.getReviewerSpecialistSettings(), { enabled: false, feedbackPolicy: "suggest" });
+  const disabledReload = new SessionStore(tempRoot);
+  await disabledReload.load();
+  assert.equal(disabledReload.getReviewerSpecialistSettings().enabled, false);
   await assert.rejects(
     store.updateReviewerSpecialistSettings({ enabled: "yes" }),
     /enabled must be a boolean/,
@@ -562,6 +565,21 @@ test("SessionStore persists the global Reviewer switch and per-Session automatic
     store.updateReviewerSpecialistSettings({ enabled: true, feedbackPolicy: "unsafe" }),
     /feedback policy must be record, explain, suggest, or repair/,
   );
+});
+
+test("catalogs without a Reviewer switch enable automatic review on migration", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-default-migration-${Date.now()}-${process.pid}`);
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const catalog = await readPersistedCatalog(tempRoot);
+  delete catalog.reviewerSpecialistEnabled;
+  const database = new DatabaseSync(resolve(tempRoot, "catalog.sqlite"));
+  database.prepare("UPDATE catalog_state SET json = ? WHERE id = 1").run(JSON.stringify(catalog));
+  database.close();
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.equal(reopened.getReviewerSpecialistSettings().enabled, true);
 });
 
 test("SessionStore appends run events losslessly and survives reload", async (context) => {
@@ -3438,6 +3456,36 @@ test("model providers: preset creation, token fallback, sync, and lifecycle", as
   assert.equal(store.getProviderApiToken(provider.id), undefined);
 });
 
+test("rolling back the first provider model restores the previous global settings", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `provider-rollback-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const before = { semanticReviewEnabled: true, thinkingEffort: "high" as const };
+  await store.replaceGlobalSettings(before);
+
+  const provider = await store.createProvider({ apiToken: "sk-rollback", presetId: "deepseek" });
+  const profile = await store.materializeProviderModel(provider.id, "deepseek-chat");
+  assert.equal(store.getGlobalSettings().overrides.modelId, profile.id);
+  await assert.rejects(store.deleteModel(profile.id), /referenced by runtime settings/);
+  await assert.rejects(store.deleteProvider(provider.id), /referenced by runtime settings/);
+
+  await store.replaceGlobalSettings(before);
+  await store.deleteModel(profile.id);
+  await store.deleteProvider(provider.id);
+
+  assert.deepEqual(store.getGlobalSettings().overrides, before);
+  assert.equal(store.listModels().length, 0);
+  assert.equal(store.listProviders().length, 0);
+
+  const reopened = new SessionStore(tempRoot);
+  await reopened.load();
+  assert.deepEqual(reopened.getGlobalSettings().overrides, before);
+  assert.equal(reopened.listModels().length, 0);
+  assert.equal(reopened.listProviders().length, 0);
+});
+
 test("provider models materialize exact Kimi, Responses, and Anthropic capabilities", async (context) => {
   installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-capabilities-${Date.now()}-${process.pid}`);
@@ -4413,4 +4461,25 @@ test("an action JiuwenSwarm's permission engine let through is allowed and recor
   assert.equal(authorization.source, "jiuwenswarm");
   assert.equal(authorization.outcome, "allowed");
   assert.equal(store.getPermissionAuthorization(authorization.id)?.toolCallId, "c1");
+});
+
+
+test("direct consent is separate from sandbox Always Allow and matching grants are revocable", async context => {
+  const root = resolve(process.cwd(), ".tmp", `direct-permissions-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Direct permissions");
+  const session = await store.createSession(project.id, "Direct", {}, {}, { allowUnconfiguredModel: true });
+  const request = await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Host command", { executionId: "run" });
+  assert.equal(request.allowed, false);
+  if (request.allowed) throw new Error("Expected consent");
+  await store.setApprovalMode(session.id, "always_allow");
+  assert.equal(store.getPermissionRequest(request.request.id)?.state, "pending");
+  assert.equal((await store.requestPermission(session.id, "code", "workspace-code", "Sandbox")).allowed, true);
+  const decision = await store.decidePermissionRequest(request.request.id, "allow_matching");
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Same scope", { executionId: "run" })).allowed, true);
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-b", "Changed scope", { executionId: "run" })).allowed, false);
+  await store.revokePermissionGrant(decision.grant!.id);
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Revoked", { executionId: "run" })).allowed, false);
 });

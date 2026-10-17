@@ -368,7 +368,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       const footerRect = node.getBoundingClientRect();
       const groupSelectors = [
         { group: "model", selector: ".model-picker-trigger" },
-        { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button, .composer-footer .approval-mode-toggle" },
+        { group: "orchestration", selector: ".orchestration-controls select, .orchestration-controls button, .composer-footer .approval-mode-toggle, .composer-footer .automatic-review-toggle" },
         { group: "run", selector: ".composer-run-actions button" },
       ];
       const controls = groupSelectors.flatMap(({ group, selector }) => (
@@ -440,7 +440,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       expect(geometry.approvalToggleHeight).toBeGreaterThanOrEqual(24);
       expect(geometry.approvalToggleHeight).toBeLessThanOrEqual(48);
     }
-    for (const label of labels) await expect(page.getByLabel(label)).toBeVisible();
+    for (const label of labels) await expect(page.locator(".composer-footer").getByLabel(label)).toBeVisible();
     await expect(page.getByRole("button", { name: runButton })).toBeVisible();
     return geometry;
   };

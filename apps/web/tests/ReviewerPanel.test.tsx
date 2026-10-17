@@ -304,3 +304,21 @@ test("ReviewerPanel keeps a checkpoint failure beside partial Artifact results",
   assert.match(html, /Second Artifact could not be read/);
   assert.match(html, /Quick review passed/);
 });
+
+for (const reason of [
+  "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists.",
+  "Automatic review skipped: automatic review was turned off for this session.",
+]) {
+  test(`ReviewerPanel displays a neutral automatic skip: ${reason}`, () => {
+    const html = renderToStaticMarkup(createElement(ReviewerPanel, {
+      checkpointError: reason,
+      checkpointStatus: "failed",
+      reviews: [],
+      toolCallId: "automatic-review:disabled-task",
+    }));
+
+    assert.match(html, /class="reviewer-specialist-panel process-record"/);
+    assert.ok(html.includes(`<small>${reason}</small>`), "reason is visible in the collapsed heading");
+    assert.doesNotMatch(html, /Review failed|Review passed|process-record failed/);
+  });
+}

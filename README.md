@@ -37,7 +37,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-Open the **`Open to sign in`** URL that `serve` prints. The browser stores the local service access token automatically, so there is nothing to copy. That token is distinct from a model API key, and the URL grants access to this machine's workspace — keep it private. The web interface is served at <http://127.0.0.1:4310>; the terminal window only runs the service.
+Open <http://127.0.0.1:4310>. When the browser has not connected yet, use the Connection page to paste the local service access token from `.sciencediscovery-data/secrets/auth-token`; this works even when the service runs in the background and its startup output is unavailable. The printed **`Open to sign in`** URL remains a convenient automatic sign-in shortcut. That token is distinct from a model API key and grants access to this machine's workspace — keep it private.
 
 For the prepackaged binary, Bubblewrap is the only system dependency. The
 [deployment guide](https://sciencediscovery.github.io/docs/getting-started/deployment.html) covers building a portable binary

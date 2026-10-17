@@ -63,7 +63,7 @@ chmod +x ./ScienceDiscovery
 ./ScienceDiscovery serve
 ```
 
-A successful startup prints an `Open to sign in` URL. Open it in your browser.
+Open <http://127.0.0.1:4310> after startup. If prompted, paste the local service access token from `<data-dir>/secrets/auth-token` (default `.sciencediscovery-data/secrets/auth-token`) into Connection and save. If `SCIENCE_AGENT_AUTH_TOKEN` is set, use that configured value. The printed `Open to sign in` URL is an optional shortcut; startup logs are not required.
 
 ### What happens on first launch
 
@@ -149,7 +149,7 @@ After a successful build, later starts can use:
 ./scripts/start-stack.sh --mode local --no-build
 ```
 
-A successful startup prints the same `Open to sign in` URL.
+Open <http://127.0.0.1:4310> after startup and follow the Connection prompt using the token in `.sciencediscovery-data/secrets/auth-token` (or your configured data directory / `SCIENCE_AGENT_AUTH_TOKEN`). This also works for background services without the original terminal output.
 
 ### macOS notes
 
@@ -245,15 +245,7 @@ docker compose logs --tail=200
 
 ### 3. Open the Web UI
 
-View the logs and find the `Open to sign in` URL:
-
-```text
-docker compose logs -f
-```
-
-Open the printed `Open to sign in` URL in your browser.
-
-You can also open <http://127.0.0.1:4310> directly and paste the local service access token when prompted.
+Open <http://127.0.0.1:4310> directly. When Connection asks for a local service access token, read `./data/secrets/auth-token` on the host (container: `/app/data/secrets/auth-token`), paste it and save. If `SCIENCE_AGENT_AUTH_TOKEN` is set, use that configured value. The sign-in URL in the logs is an optional shortcut.
 
 Treat the sign-in URL and token like a password.
 
@@ -284,13 +276,13 @@ Then open <http://127.0.0.1:4310> locally.
 
 ## First-run troubleshooting for binary and local mode
 
-### No `Open to sign in` URL appears
+### The service does not start
 
 Read the earliest startup error first. Later failures are often consequences of the first one.
 
 ### The browser rejects the token
 
-Open the `Open to sign in` URL from the latest startup output again.
+Read the current token from `<data-dir>/secrets/auth-token` (Docker host: `./data/secrets/auth-token`) or your configured `SCIENCE_AGENT_AUTH_TOKEN`, then paste it into Connection and save. Startup logs are not required.
 
 If entering a token manually, use the **local service access token**, not the model provider API key.
 

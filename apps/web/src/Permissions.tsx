@@ -25,6 +25,7 @@ import { useLocale, type MessageKey } from "./i18n/index.js";
 const ACTION_LABELS: Record<PermissionRequest["action"], MessageKey> = {
   artifact_download: "permissions.download",
   code: "permissions.code",
+  direct_code: "permissions.directExecution",
   connector: "permissions.connector",
   directory: "permissions.directory",
   host: "permissions.host",
@@ -67,7 +68,7 @@ export function PermissionCards({
       return <article className="permission-card" key={request.id}>
         <button aria-expanded={expanded} className="permission-card-heading" onClick={() => onToggleCard(cardId, !expanded)} type="button">
           <span className="card-chevron"><ChevronRightIcon size={15} /></span>
-          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4>{request.summary}</h4></span>
+          <span><span className="eyebrow">{t(ACTION_LABELS[request.action])}</span><h4 style={request.action === "direct_code" ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } : undefined}>{request.summary}</h4></span>
         </button>
         {expanded ? <div className="permission-card-body">
           <code>{request.resource}</code>

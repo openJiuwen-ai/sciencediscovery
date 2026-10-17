@@ -888,3 +888,86 @@ test("NPU broker bindings omit observeNpuJob when the broker is disabled", () =>
   assert.equal(bindings.observeNpuJob, undefined);
   assert.equal(bindings.npuBroker, undefined);
 });
+
+async function directBindingFixture(t: TestContext) {
+  const root = await mkdtemp(resolve(tmpdir(), "direct-binding-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let allowed = true, connected = true, active = true, unknown = false, revoked = false;
+  let target = "machine:instance", account = "user:1000:1000", submissions = 0, grants = 0;
+  const resources: string[] = [];
+  const runnerClient = {
+    executionCapability: async () => { if (!connected) throw new Error("Disconnected"); return { ready: false }; },
+    directExecutionCapability: async () => ({ available: true, target, account }),
+  } as unknown as RunnerClient;
+  const store = {
+    assertSessionWritable() {}, assertSessionAllowsRunner() {},
+    getSessionRun: async () => ({ status: active ? "running" : "completed" }),
+    getPermissionGrant: () => ({ state: revoked ? "revoked" : "active" }),
+    workspaceIdentity: () => ({ id: "workspace" }),
+    notifications: { markRead() {} },
+    shellExecutions: { list: () => unknown ? [{ runnerId: "local", state: "unknown" }] : [],
+      start: async () => { submissions++; return { id: "execution", state: "running" }; } },
+  } as unknown as SessionStore;
+  const permission = { getEpoch: () => ({ id: "epoch" }), requirePrivilege: async (request: { action: string; resource: string }) => {
+    if (request.action === "direct_code") {
+      resources.push(request.resource);
+      if (!allowed) throw new Error("Permission denied");
+    }
+    return { id: `authorization-${++grants}`, action: request.action, outcome: "allowed", resource: request.resource, permissionGrantId: "grant" };
+  } } as unknown as AgentPermissionRuntime;
+  const make = (agentId = "main", executionId = "run") => createWorkspaceExecutionBindings({
+    rootRunId: "run", agentId, executionId, sessionId: "session", workspaceRoot: root,
+    store, runnerClient, permission, permissionScopeLabel: "test", provenanceRecorder: {} as ProvenanceRecorder,
+  });
+  const binding = make();
+  let operationId = "";
+  await assert.rejects(binding.executeShell!("printf hello", "ephemeral"), (error: Error) => {
+    operationId = JSON.parse(error.message).operationId; return Boolean(operationId);
+  });
+  const consent = async () => binding.directExecution!.request({ operationId, command: "printf hello", cwd: "" }) as Promise<{
+    authorizationId: string; command: string; cwd: string; target: string; account: string; dispatched: boolean;
+  }>;
+  return { binding, make, consent, operationId, resources, submissions: () => submissions,
+    deny: () => { allowed = false; }, disconnect: () => { connected = false; }, end: () => { active = false; },
+    uncertain: () => { unknown = true; }, revoke: () => { revoked = true; },
+    changeTarget: () => { target = "replacement"; }, changeAccount: () => { account = "other"; } };
+}
+
+test("direct approval never dispatches; a new confirmed submission consumes it atomically", async t => {
+  const f = await directBindingFixture(t);
+  const consent = await f.consent();
+  assert.equal(consent.dispatched, false); assert.equal(f.submissions(), 0);
+  const results = await Promise.allSettled([f.binding.directExecution!.start(consent), f.binding.directExecution!.start(consent)]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(f.submissions(), 1);
+  await assert.rejects(f.binding.directExecution!.start(consent), /consumed/);
+});
+
+for (const failure of ["deny", "disconnect", "end", "uncertain"] as const) {
+  test(`direct consent ${failure} produces no dispatch`, async t => {
+    const f = await directBindingFixture(t); f[failure]();
+    await assert.rejects(f.consent()); assert.equal(f.submissions(), 0);
+  });
+}
+for (const failure of ["changeTarget", "changeAccount", "end", "uncertain", "revoke", "disconnect"] as const) {
+  test(`direct approved operation rejects ${failure} before dispatch`, async t => {
+    const f = await directBindingFixture(t); const consent = await f.consent(); f[failure]();
+    await assert.rejects(f.binding.directExecution!.start(consent)); assert.equal(f.submissions(), 0);
+  });
+}
+
+test("direct authorization cannot cross command, child agent or later run", async t => {
+  const f = await directBindingFixture(t); const consent = await f.consent();
+  await assert.rejects(f.binding.directExecution!.start({ ...consent, command: "echo changed" }), /mismatched/);
+  await assert.rejects(f.make("child").directExecution!.start(consent), /Missing/);
+  await assert.rejects(f.make("main", "next-run").directExecution!.start(consent), /Missing/);
+  await assert.rejects(f.make("child").directExecution!.request({ operationId: f.operationId, command: "printf hello", cwd: "" }), /failed/);
+  assert.equal(f.submissions(), 0);
+});
+
+test("direct authorization cancelled after consent does not dispatch", async t => {
+  const f = await directBindingFixture(t); const consent = await f.consent();
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(f.binding.directExecution!.start(consent, controller.signal));
+  assert.equal(f.submissions(), 0);
+});

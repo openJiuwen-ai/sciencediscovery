@@ -61,7 +61,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
   ]);
   let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
   try {
-    await journey.step("有内容的一级分区默认展开", "文件与可用的科学记忆默认展开；没有任务内容时任务分区隐藏。",
+    await journey.step("有内容的一级分区默认展开", "文件、评审设置与可用的科学记忆默认展开。",
       async () => {
         fixture = await createProjectAndSession(page, { approvalMode: "ask_for_dangerous",
           model: { ...stub, apiVariant: "deepseek", name: `卡片本地测试 ${Date.now()}` }, projectName: `卡片验收 ${Date.now()}`, sessionTitle: "卡片生命周期" });
@@ -70,7 +70,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         const memory = page.locator('[data-folder="memory"]');
         await expect(files).toBeVisible();
         await expect(memory).toBeVisible();
-        await expect(page.locator('[data-folder="tasks"]')).toBeHidden();
+        await expect(page.locator('[data-folder="tasks"]')).toBeVisible();
+        await expect(page.locator('[data-folder="tasks"]')).toHaveAttribute("open", "");
         await expect(files).toHaveAttribute("open", "");
         await expect(memory).toHaveAttribute("open", "");
         await expect(page.locator(".workspace-folder .workspace-fold[open]")).toHaveCount(0);
@@ -81,7 +82,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
           await expect(heading).toHaveCSS("border-top-width", "1px");
           await expect(heading).toHaveCSS("background-color", "rgb(250, 251, 252)");
         }
-        await expect(page.locator('[data-folder="tasks"] .workspace-fold')).toHaveCount(0);
+        await expect(page.locator('[data-folder="tasks"] .workspace-fold')).toHaveCount(1);
+        await expect(page.locator('[data-folder="tasks"] .workspace-fold > summary')).toHaveText("Reviewer Specialist");
       });
     await journey.step("空列表隐藏，上传仍可用", "没有文件或产物时不显示空入口，拖放文件保留白底与虚线框以及大小限制。", async () => {
       const files = page.locator('[data-folder="files"]');
@@ -89,7 +91,8 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       const upload = files.locator(".drop-zone");
       await expect(upload).toHaveCSS("background-color", "rgb(255, 255, 255)");
       await expect(upload).toHaveCSS("border-top-style", "dashed");
-      await expect(upload.locator("small")).toHaveText("每个最大 1 GiB");
+      await expect(upload.locator("small")).toContainText("每个最大 1 GiB");
+      await expect(upload.locator("small")).toContainText("PDF 会作为文件保存，不会自动按论文解析");
       await expect(files.locator(".artifact-catalog-section")).toHaveCount(0);
       await expect(files.locator(".physical-files")).toHaveCount(0);
     });

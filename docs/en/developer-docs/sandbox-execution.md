@@ -36,7 +36,7 @@ When the Agent chooses to wait for the user's decision, it must call the waiting
 
 Only `wait_for_runner` creates a conversation card and pauses the Agent's external-wait deadlines. The card identifies the Agent and attempted operation and offers repair/recheck, an available authorized Runner, or cancel-operation. Each operation has its own decision. All choices return to the Agent; retry and switch perform a fresh check but **never execute or replay code**. The Agent must issue a new execution call, preparing inputs and environments if the Runner changed. A failed recheck returns diagnostics; waiting again requires another explicit Agent call. There is no automatic repair polling. Run cancellation, process shutdown or a ten-minute decision timeout clears the wait. Cards survive browser reloads via `GET /api/sessions/{sessionId}/execution-blocks`; responses use `POST /api/sessions/{sessionId}/execution-blocks/{id}`. These are in-memory waits, not recovery across API restarts. Repeated/stale responses cannot dispatch code. Runner settings periodically read the cached report so Agent-initiated checks are reflected there too.
 
-The Runner also rejects unavailable sandbox execution with HTTP 503 and `EXECUTION_UNAVAILABLE`, before reserving the execution ID. Read/cancel/management endpoints remain accessible. There is **no unsandboxed fallback**, and Always Allow does not disable sandboxing. A successful probe verifies sandbox construction, not every scientific package or GPU dependency. Tool trajectories record checks and blocked outcomes; API operational logs contain `runner_wait_requested` and `execution_decision`; Runner logs contain `execution_unavailable`. Host execution and expanding authorization are separate future work.
+The Runner also rejects unavailable sandbox execution with HTTP 503 and `EXECUTION_UNAVAILABLE`, before reserving the execution ID. Read/cancel/management endpoints remain accessible. There is **no unsandboxed fallback**, and Always Allow does not disable sandboxing. A successful probe verifies sandbox construction, not every scientific package or GPU dependency. Tool trajectories record checks and blocked outcomes; API operational logs contain `runner_wait_requested` and `execution_decision`; Runner logs contain `execution_unavailable`. Local host recovery requires the separate explicit consent flow described below; remote host execution remains future work.
 
 ### Sandbox profile
 
@@ -215,3 +215,55 @@ a native-backend pass does not certify Swarm, or vice versa.
 - [Runtime architecture](architecture.md)
 - [Configuration reference](../reference/configuration.md)
 - [Ascend NPU Host Broker](ascend-npu-runner.md)
+
+## Explicit local direct-execution recovery
+
+When the local Runner is reachable but its sandbox is unavailable, the Agent can
+call `request_direct_execution` with its failed operation ID, an exact shell
+command and a workspace-relative working directory. The conversation displays
+separate host-execution consent, including the target Runner instance, OS account,
+workspace, command and loss of isolation. Declining executes nothing. Approval
+returns a decision only: the Agent must confirm the returned scope in a new
+`run_direct_shell` call. Python is available through the system shell.
+
+The direct shell starts with `PATH=/usr/bin:/bin` and does not load shell startup
+profiles or inherit an activated conda environment. For Homebrew or conda Python,
+include the installed interpreter's absolute path in the command submitted for
+consent, for example `/opt/homebrew/bin/python3 -c 'print(42)'` or
+`/usr/local/bin/python3 -c 'print(42)'` when that interpreter exists on the target.
+For conda, use the absolute path to the intended environment's `bin/python`.
+Bare `python3` only searches the minimal PATH; on macOS it may select the system
+stub or fail instead of using the intended installation. Changing the interpreter
+changes the command and requires matching direct-execution consent.
+
+Sandbox Always Allow and JiuwenSwarm's normal tool authorization cannot grant this
+permission. Allow matching covers only the exact command, target instance,
+account, workspace/cwd, Session, Agent and run. There is no fixed TTL. Grants can
+be revoked through the existing permission controls; they cannot authorize a
+later run or a child Agent. Each returned authorization is consumed before
+submission, including unsuccessful submissions. Run completion/cancellation
+invalidates unused consent. A Runner restart changes its target instance identity
+and requires new consent. Direct execution is recovery-only and uses the existing
+OS account without elevation.
+
+The normal Execution ID, logs, cancellation, timeout, workspace publication and
+artifact provenance remain available. Execution records identify `sandbox: none`,
+`networkPolicy: host`, and the authorization/target/account/run/Agent scope.
+Unknown dispatch outcomes must be reconciled before further host execution; neither
+approval nor recovery replays a command. Use `execution_status`, `execution_logs`
+and `execution_cancel` to observe or cancel accepted work.
+
+This is **not equivalent to sandbox execution**: host files, processes, credentials
+and network can be accessed; CPU, memory and network isolation are unavailable.
+The shell receives a minimal environment without injected Runner credentials, but
+this does not protect credentials stored on the host. Workspace quotas and artifact
+tracking cover only the workspace, not all host effects. Cancellation kills the
+process group; descendants that escape it are not guaranteed to terminate. Host
+changes cannot generally be rolled back.
+
+Delivered scope for issue #276 is local ephemeral system-shell recovery. Managed
+environment selection, remote Runner direct execution, independent SSH maintenance
+and pre-failure direct execution are unavailable. Remote reachability and uncertain
+remote outcomes remain unfinished acceptance scope; #276 must remain open. The
+API journey is `node test/api/direct-execution-journey.mjs` after committing and
+building the candidate; it uses only isolated local services and a scripted model.

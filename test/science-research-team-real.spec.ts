@@ -3,7 +3,7 @@
 import { writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
-import { requiredArtifacts } from "./helpers/real-delivery.mjs";
+import { deliveryFailureMessage, requiredArtifacts } from "./helpers/real-delivery.mjs";
 import { evaluateTeam } from "./helpers/research-team.ts";
 import { expect } from "@playwright/test";
 import { test, allowRealEnvException, requireRealEnv, requireRealStack } from "./helpers/e2e.ts";
@@ -154,7 +154,7 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     children = await api<any[]>(`${prefix}/subagents`).catch(() => children);
     await save("team-children.json", children); await save("signoff-calls.json", checker.calls);
     expect(metrics.run_status, "A budget-expired generation is not a passed E2E, even if partial artifacts exist").not.toBe("budget_exhausted");
-    expect(delivery.status, "Main run must complete with readable, nonempty declared final artifacts").toBe("passed");
+    expect(delivery.status, deliveryFailureMessage(delivery)).toBe("passed");
     expect(required.missing, "The final handoff must include the audited evidence brief").toEqual([]);
     try {
       const catalog = await api<any[]>(`${prefix}/artifacts`);
@@ -179,6 +179,9 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     metrics.quality = metrics.evaluation.status;
     await info.attach("quality-scorecard", { contentType: "application/json", body: JSON.stringify(metrics.evaluation, null, 2) });
 
+  } catch (error) {
+    metrics.error = error instanceof Error ? error.message : String(error);
+    throw error;
   } finally {
     metrics.finished_at = new Date().toISOString();
     if (fixture) {

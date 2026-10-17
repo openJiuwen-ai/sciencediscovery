@@ -268,7 +268,13 @@ export function ReviewerPanel({
 }) {
   const { t } = useLocale();
   const scopedReviews = reviews.filter((review) => review.toolCallId === toolCallId);
-  const summary = batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
+  // Capability/session opt-outs use a terminal failed checkpoint for storage,
+  // but are intentional skips rather than failed verification.
+  const automaticSkip = !scopedReviews.length
+    && toolCallId.startsWith("automatic-review:")
+    && checkpointStatus === "failed"
+    && checkpointError?.startsWith("Automatic review skipped:");
+  const summary = automaticSkip ? checkpointError : batchSummary(scopedReviews, checkpointStatus, checkpointProgress, t);
   const [expanded, setExpanded] = useState(checkpointStatus === "running");
   const userExpanded = useRef<boolean | undefined>(undefined);
   useEffect(() => { userExpanded.current = undefined; setExpanded(checkpointStatus === "running"); }, [toolCallId]);
@@ -276,7 +282,7 @@ export function ReviewerPanel({
   if (!scopedReviews.length && !checkpointStatus) return null;
   // Automatic work is non-intrusive. A stale/deleted Artifact from an older
   // task must never leave a red failure card in the research conversation.
-  if (!scopedReviews.length && toolCallId.startsWith("automatic-review:") && checkpointStatus !== "running") return null;
+  if (!scopedReviews.length && toolCallId.startsWith("automatic-review:") && checkpointStatus !== "running" && !automaticSkip) return null;
   // Older versions could create checkpoints for code/data Artifacts. The API
   // now omits those records; suppress their empty completed shell as well so a
   // researcher only sees report-quality review activity.
@@ -285,7 +291,7 @@ export function ReviewerPanel({
     <details
       aria-label={t("reviewer.panelAria")}
       aria-live="polite"
-      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : " process-record"}${checkpointStatus === "failed" || scopedReviews.some((review) => review.status === "failed") ? " failed" : ""}`}
+      className={`reviewer-specialist-panel${checkpointStatus === "running" ? " running" : " process-record"}${(checkpointStatus === "failed" && !automaticSkip) || scopedReviews.some((review) => review.status === "failed") ? " failed" : ""}`}
       onToggle={(event) => { if (event.currentTarget.open !== expanded) { userExpanded.current = event.currentTarget.open; setExpanded(event.currentTarget.open); } }}
       open={expanded}
     >
@@ -303,7 +309,7 @@ export function ReviewerPanel({
         {checkpointStatus === "running" && scopedReviews.length > 0 && checkpointProgress
           ? <ReviewProgress progress={checkpointProgress} />
           : null}
-        {checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
+        {automaticSkip ? <p>{checkpointError}</p> : checkpointStatus === "failed" || (!scopedReviews.length && checkpointStatus)
           ? <CheckpointOnlyReview error={checkpointError} progress={checkpointProgress} reviewLevel={reviewLevel} status={checkpointStatus} />
           : null}
         {scopedReviews.map((review) => <CompletedReview key={review.id} review={review} />)}

@@ -418,6 +418,9 @@ export class SessionStoreHttpError extends Error {
 export class SessionStore {
   readonly executionBlocks = new ExecutionBlocks();
   readonly dataDir: string;
+  // Ephemeral provenance: after a restart, stale rename requests fail closed.
+  // Weak keys avoid retaining deleted sessions solely for title tracking.
+  private readonly refinedSessionTitles = new WeakMap<Session, { previous: string; title: string }>();
   // Catalog mutations replace Subagent objects. Cache by object identity so an
   // unchanged record is serialized once, without retaining superseded revisions.
   private readonly subagentAuthorityRefs = new WeakMap<Subagent, Promise<AgentStateRef>>();
@@ -1111,7 +1114,7 @@ export class SessionStore {
       proxyServers,
       quotaSettings,
       sandboxNetworkSettings,
-      reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled === true,
+      reviewerSpecialistEnabled: saved.reviewerSpecialistEnabled ?? true,
       reviewerSpecialistFeedbackPolicy,
       reviewerSpecialistLevel,
       remoteHosts,
@@ -4330,6 +4333,7 @@ export class SessionStore {
         ? undefined
         : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
       session.settingsOverrides = nextSettings;
+      if (hasOwn(changes, "title")) this.refinedSessionTitles.delete(session);
       session.title = nextTitle;
       if (reviewMode) session.reviewMode = reviewMode;
       if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
@@ -4360,11 +4364,20 @@ export class SessionStore {
     sessionId: string,
     expectedTitle: string,
     nextTitle: string,
+    source?: "refinement" | "user_request",
   ): Promise<Session | undefined> {
     const session = this.assertSessionWritable(sessionId);
-    if (session.title !== expectedTitle) return undefined;
+    const refinement = this.refinedSessionTitles.get(session);
+    const replacesRefinement = source === "user_request"
+      && refinement?.previous === expectedTitle && refinement.title === session.title;
+    if (session.title !== expectedTitle && !replacesRefinement) return undefined;
     const normalizedTitle = nextTitle.trim().replace(/\s+/gu, " ");
     if (!normalizedTitle) throw new Error("Session title is required");
+    if (source === "refinement") {
+      this.refinedSessionTitles.set(session, { previous: expectedTitle, title: normalizedTitle });
+    } else {
+      this.refinedSessionTitles.delete(session);
+    }
     session.title = normalizedTitle;
     session.updatedAt = new Date().toISOString();
     await this.saveCatalog();
@@ -4564,11 +4577,11 @@ export class SessionStore {
     | { allowed: false; request: PermissionRequest }
   > {
     const session = this.assertSessionWritable(sessionId);
-    if (!new Set<PermissionAction>(["artifact_download", "code", "connector", "directory", "host", "remote_job"]).has(action)) {
+    if (!new Set<PermissionAction>(["direct_code", "artifact_download", "code", "connector", "directory", "host", "remote_job"]).has(action)) {
       throw new Error("Unsupported permission action");
     }
     const resource = resourceValue.trim().slice(0, 500);
-    const summary = summaryValue.trim().replace(/\s+/g, " ").slice(0, 500);
+    const summary = action === "direct_code" ? summaryValue.trim() : summaryValue.trim().replace(/\s+/g, " ").slice(0, 500);
     if (!resource || !summary) throw new Error("Permission resource and summary are required");
     if (!context.executionId) {
       const approvedPreflight = this.catalog.permissionRequests.findLast((request) =>
@@ -4589,7 +4602,7 @@ export class SessionStore {
         }
       }
     }
-    if (session.approvalMode === "always_allow") {
+    if (session.approvalMode === "always_allow" && action !== "direct_code") {
       const authorization = this.createPermissionAuthorization({
         action,
         ...context,
@@ -4804,7 +4817,7 @@ export class SessionStore {
     this.catalog.permissionEpochs.push(permissionEpoch);
     const resolvedPendingRequests = approvalMode === "always_allow"
       ? this.catalog.permissionRequests.filter((request) =>
-          request.sessionId === session.id && request.state === "pending")
+          request.sessionId === session.id && request.state === "pending" && request.action !== "direct_code")
       : [];
     const authorizations = resolvedPendingRequests.map((request) => {
       request.decidedAt = permissionEpoch.createdAt;

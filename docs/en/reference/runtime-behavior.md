@@ -49,7 +49,7 @@ Each Runner owns an environment catalog shared by its Projects. Python/R bases a
 
 Enabling a connector or runtime does not authorize its execution. The first matching code or connector action pauses for a permission card unless a non-revoked grant exists. Persistent grants are managed under **System configuration → Permissions**. Directory tools remain inside the workspace; permission never disables Bubblewrap isolation and never changes the effective sandbox network policy, which only the system setting decides.
 
-Reviewer Specialist is off by default. Once enabled, **Run review** or an explicit request reviews an Artifact. Quick review checks citation format and computation provenance, persists a separate card, and supplies it to later main-agent context without blocking the current conversation. Text versions expose a diff while both immutable versions remain stored.
+Reviewer Specialist and session automatic review are on by default for new installs; explicit opt-outs are preserved. Eligible report artifacts automatically receive a background review in the same workflow. **Automatic review** beside Approval mode controls the session; **Run review** and Quick/Deep settings remain in the workspace. A disabled system capability is visible beside the composer and produces a skipped reason on eligible report reviews. Legacy `reviewMode` / `semanticReviewEnabled` are not the live switches. Quick review checks citation format and computation provenance, persists a separate card, and supplies it to later main-agent context without blocking the current conversation. Text versions expose a diff while both immutable versions remain stored.
 
 ## Timeouts and run status
 
@@ -58,6 +58,8 @@ Reviewer Specialist is off by default. Once enabled, **Run review** or an explic
 **System configuration → Runtime status** auto-refreshes active Session runs, runner queue/running tasks, and persistent kernels. A timeout reports its reason and duration in the stream and Session history. **Stop run** cancels the run through gateway and callbacks, kills in-flight Bubblewrap execution, and removes queued runner work. Runtime status can **Teardown** a kernel by ID. Downstream HTTP guards for reviewer, paper worker, and connector IO are separate from these product settings.
 
 ## Session lifecycle and deletion
+
+New sessions start as **Untitled session** and receive a short automatic topic title after the first question. The lead agent can call `rename_session` during a run when the primary topic clearly changes or you explicitly request a new name. Agent titles are limited to 24 Unicode characters. Manual rename remains available; initial naming preserves an existing title, and stale tool calls cannot overwrite a newer manual edit. An explicit rename request can supersede a background automatic refinement that completed after the agent read the title.
 
 Use **Active**, **Archived**, or **All** filters. Archiving preserves messages, files, papers, and audit history but makes a Session read-only until restored: runs, settings, uploads, connector calls, paper changes, and permission changes are rejected.
 

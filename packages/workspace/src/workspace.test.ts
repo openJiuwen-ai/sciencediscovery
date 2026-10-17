@@ -1752,8 +1752,11 @@ test("subagent tools preserve structured governance inputs", async () => {
   assert.match(task.description, /id: specialist-code; description: Builds and debugs analysis code/);
   assert.doesNotMatch(task.description, /Code implementer/);
   assert.match(task.description, /semantic match against specialist descriptions/);
+  assert.match(task.description, /Always include both description \(a short label\) and prompt/);
   assert.match(task.description, /Do not also request the complete report or source package/);
   assert.match(JSON.stringify(taskProperties.prompt), /concise handoff with its ID\/version/);
+  assert.match(JSON.stringify(taskProperties.prompt), /description is only a short label and never substitutes for prompt/);
+  assert.equal(Check(task.parameters, { description: "Compare method A" }), false, "prompt remains required by the task schema");
   const result = await task.execute("task-call", {
     brief: {
       collaborationRules: ["Work independently", "Return one final JSON object"],

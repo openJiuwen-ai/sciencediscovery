@@ -881,7 +881,13 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           <select
             disabled={!onDefaultModelSet}
             id="registry-default-model"
-            onChange={(event) => { void onDefaultModelSet?.(event.target.value || undefined); }}
+            onChange={(event) => {
+              const pending = onDefaultModelSet?.(event.target.value || undefined);
+              if (!pending) return;
+              void pending.catch((reason: unknown) => {
+                onError(reason instanceof Error ? reason : String(reason));
+              });
+            }}
             value={defaultModelId ?? ""}
           >
             <option value="">{t("common.notConfigured")}</option>

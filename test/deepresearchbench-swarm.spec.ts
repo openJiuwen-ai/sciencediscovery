@@ -8,7 +8,7 @@ import { cancelActiveSessionRuns, cleanupJourney, createProjectAndSession, openP
 import { researchPrompt, drbArticle, drbApi, positiveNumber,
   evaluationConfig, evaluationPreflight, evaluateReport } from "./helpers/deepresearchbench.ts";
 import { collectFinalDelivery } from "./helpers/real-delivery.ts";
-import { finalReportArtifact } from "./helpers/real-delivery.mjs";
+import { deliveryFailureMessage, finalReportArtifact } from "./helpers/real-delivery.mjs";
 import { drbSamples } from "./benchmarks/deepresearchbench/samples.ts";
 
 for (const sample of drbSamples) {
@@ -97,6 +97,7 @@ for (const sample of drbSamples) {
       metrics.generation_duration_ms = Date.now() - started;
       const delivery = await collectFinalDelivery(page, fixture.session.id, runId, metrics.initial_run_id);
       metrics.delivery = delivery;
+      metrics.run_error = delivery.run_error;
       metrics.integration_status = delivery.status;
       const report = finalReportArtifact(delivery.artifacts, drbOutput, delivery.producer_answer);
       if (!report && delivery.status === "passed") {
@@ -104,7 +105,7 @@ for (const sample of drbSamples) {
         delivery.errors.push("No final report identified; declared intermediate files are insufficient");
         metrics.integration_status = "failed";
       }
-      expect(delivery.status, "Main run must complete and hand off a readable final report").toBe("passed");
+      expect(delivery.status, deliveryFailureMessage(delivery)).toBe("passed");
       expect(report, "The final handoff must identify a report, not only intermediate notes").toBeDefined();
       if (report) {
         const input = testInfo.outputPath(`deepresearchbench-${sample.id}.json`);

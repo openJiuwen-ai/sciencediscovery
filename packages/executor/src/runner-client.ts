@@ -175,6 +175,10 @@ export class RunnerClient {
     });
   }
 
+  async directExecutionCapability(signal?: AbortSignal): Promise<import("@sciencediscovery/schema").DirectExecutionCapability> {
+    return this.request("/direct-execution-capability", { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000) });
+  }
+
   async status(): Promise<RunnerRuntimeStatus> {
     return await this.request("/status");
   }
@@ -482,7 +486,7 @@ export class RunnerClient {
   async startShellExecution(request: ShellExecutionRequest, signal?: AbortSignal): Promise<ManagedExecution> {
     const body = JSON.stringify(request);
     const timestamp = this.signingTimestamp();
-    return this.managedExecutionTimes(await this.request<ManagedExecution>("/shell-executions", {
+    return this.managedExecutionTimes(await this.request<ManagedExecution>(request.directAuthorization ? "/direct-shell-executions" : "/shell-executions", {
       method: "POST", body, signal,
       headers: {
         [EXECUTION_SIGNATURE_HEADER]: createExecutionSignature(this.token, timestamp, body),

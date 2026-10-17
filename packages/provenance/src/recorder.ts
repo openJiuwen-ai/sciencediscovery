@@ -193,6 +193,7 @@ export type RecordShellExecutionOptions = Omit<RecordExecutionOptions, "environm
   /** Trusted coordinator supplies a durable identity and joins the Runner result. */
   executionId?: string;
   dispatch?: RunnerClient["executeShell"];
+  directAuthorization?: import("@sciencediscovery/schema").DirectExecutionAuthorization;
   completionStatus?: () => "succeeded" | "failed" | "cancelled";
 };
 
@@ -572,7 +573,7 @@ export class ProvenanceRecorder {
     parentSubagentId?: string;
     sessionId: string;
     toolCallId?: string;
-    toolName: "run_python" | "run_r" | "run_shell";
+    toolName: "run_python" | "run_r" | "run_shell" | "run_direct_shell";
     turnId: string;
     workspaceRoot: string;
     workspaceSnapshot?: AgentStateRef;
@@ -774,6 +775,7 @@ export class ProvenanceRecorder {
     try {
       result = await (options.dispatch ?? options.runnerClient.executeShell.bind(options.runnerClient))({
         agentId: options.agentId,
+        ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
         code: options.code,
         ...(options.environmentId ? { environmentId: options.environmentId } : {}),
         ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
@@ -807,18 +809,19 @@ export class ProvenanceRecorder {
         language: "shell",
         modifiedFiles: [],
         networkAccessRevision: epochSandboxNetworkAccess(options.permissionEpoch).revision,
-        networkPolicy: options.permissionEpoch.networkPolicy,
+        networkPolicy: options.directAuthorization ? "host" : options.permissionEpoch.networkPolicy,
         permissionEpochId: options.permissionEpoch.id,
         ...(options.remoteHostAlias ? { remoteHostAlias: options.remoteHostAlias } : {}),
         ...(options.runnerId ? { runnerId: options.runnerId } : {}),
         runnerVersion: "unavailable",
-        sandbox,
+        sandbox: options.directAuthorization ? "none" : sandbox,
+        ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
         sessionId: options.sessionId,
         startedAt: timestamp,
         status: options.completionStatus?.() ?? interruptedExecutionStatus(options.signal),
         stderr: await this.cas.put(error instanceof Error ? error.message : "Runner shell execution failed"),
         stdout: await this.cas.put(""),
-        tool: "run_shell",
+        tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
         ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
         toolVersion: "1.1.0",
         turnId: options.turnId,
@@ -864,12 +867,13 @@ export class ProvenanceRecorder {
       ...(options.runnerId ? { runnerId: options.runnerId } : {}),
       runnerVersion: result.runnerVersion,
       sandbox: result.sandbox,
+      ...(options.directAuthorization ? { directAuthorization: options.directAuthorization } : {}),
       sessionId: options.sessionId,
       startedAt: result.startedAt,
       status: options.completionStatus?.() ?? (result.exitCode === 0 ? "succeeded" : "failed"),
       stderr,
       stdout,
-      tool: "run_shell",
+      tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
       ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
       toolVersion: "1.1.0",
       turnId: options.turnId,
@@ -888,7 +892,7 @@ export class ProvenanceRecorder {
         parentSubagentId: options.parentSubagentId,
         sessionId: options.sessionId,
         toolCallId: options.toolCallId,
-        toolName: "run_shell",
+        toolName: options.directAuthorization ? "run_direct_shell" : "run_shell",
         turnId: options.turnId,
         workspaceRoot: options.workspaceRoot,
         workspaceSnapshot: result.workspaceSnapshot,
@@ -900,8 +904,8 @@ export class ProvenanceRecorder {
       executionId,
       sessionId: options.sessionId,
       turnId: options.turnId,
-      tool: "run_shell",
-      toolName: "run_shell",
+      tool: options.directAuthorization ? "run_direct_shell" : "run_shell",
+      toolName: options.directAuthorization ? "run_direct_shell" : "run_shell",
       language: null,
       codeHash: code.hash,
       exitCode: result.exitCode,

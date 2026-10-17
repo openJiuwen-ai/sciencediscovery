@@ -187,11 +187,11 @@ git push -u <fork-remote> HEAD:<branch>
 # Keep the braces: in zsh, `$login:chore/…` reads `:c` as a modifier on $login
 # (likewise :h, :t, :r, :e), and the head GitHub receives is no longer the branch.
 gh pr create --repo openJiuwen-ai/sciencediscovery \
-  --base main --head "${login}:<branch>" \
+  --draft --base main --head "${login}:<branch>" \
   --title '<type>(<scope>): …' --body-file <file>
 
 gh pr view <n> --repo openJiuwen-ai/sciencediscovery \
-  --json number,state,baseRefName,headRefName,headRefOid,labels,url
+  --json number,state,isDraft,baseRefName,headRefName,headRefOid,labels,url
 gh pr edit <n> --repo openJiuwen-ai/sciencediscovery --add-label release:<category>
 ```
 
@@ -200,10 +200,22 @@ branch GitHub deleted when an earlier pull request merged, that the base is not
 what you meant, or that the diff is empty because the head is already contained
 in the base.
 
+Keep the pull request as a draft until it is ready. Then mark it ready for
+review and request review from a code owner listed in
+[.github/CODEOWNERS](../../../.github/CODEOWNERS); an automated review also runs.
+
+```bash
+gh pr ready <n> --repo openJiuwen-ai/sciencediscovery
+```
+
 ## Its Actions run
 
-The pull request starts the six jobs in `.github/workflows/ci.yml`: UT, ST,
-E2E (mocked), Binary release ×2, Docker image.
+Drafts run policy and L1 in `.github/workflows/ci.yml` for lightweight static
+feedback; UT, ST, mocked E2E, Coverage and `merge-gate` wait until the PR is
+ready. Marking ready for review (`ready_for_review`) reruns L1 and starts L2;
+later pushes and non-draft open/reopen events run them too. Binary and Docker
+gates run only on the
+non-PR profiles described in the [CI skill](../ci/SKILL.md#what-runs-where).
 
 ```bash
 gh run list --repo openJiuwen-ai/sciencediscovery --branch <branch> --limit 5

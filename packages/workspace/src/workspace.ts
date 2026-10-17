@@ -230,6 +230,10 @@ export interface WorkspaceToolOptions {
     decide(action: "continue" | "wait" | "check", reason: string, sourceIds: string[], signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
     invoke(sourceId: string, toolId: string, input: JsonValue, signal: AbortSignal | undefined, toolCallId: string): Promise<unknown>;
   };
+  directExecution?: {
+    request(input: { operationId: string; command: string; cwd: string }, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
+    start(input: { authorizationId: string; command: string; cwd: string; target: string; account: string }, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
+  };
   runnerReadiness?: {
     check(runnerId?: string, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").RunnerCheckResult>;
     wait(operationId: string, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
@@ -1384,6 +1388,27 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     };
     tools.push(readiness, recovered);
   }
+  if (options.directExecution) {
+    const consentParameters = Type.Object({ operation_id: Type.String(), command: Type.String({ minLength: 1, maxLength: 20000 }), cwd: Type.String() });
+    const consent: AgentTool<typeof consentParameters> = {
+      name: "request_direct_execution", label: "Request host execution consent", parameters: consentParameters,
+      description: "After a local RUNNER_UNAVAILABLE failure, request separate consent for an exact host shell command and workspace-relative cwd. Explain its purpose. Shows target/account and loss of isolation. Sandbox Always Allow does not apply. Matching consent is limited to this command, target, account, workspace, Agent and run, without a fixed TTL. Returns a decision only; NEVER executes. Do not batch with dependent execution. Direct shell uses PATH=/usr/bin:/bin, loads no shell startup profiles and does not inherit conda activation. For Homebrew or conda Python, include the installed absolute interpreter path in the command submitted for consent. Changing that path requires new consent. Remote execution is unsupported.",
+      execute: async (id, params, signal) => {
+        const value = await options.directExecution!.request({ operationId: params.operation_id, command: params.command, cwd: params.cwd }, signal, id);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    const directParameters = Type.Object({ authorization_id: Type.String(), command: Type.String(), cwd: Type.String(), target: Type.String(), account: Type.String() });
+    const direct: AgentTool<typeof directParameters> = {
+      name: "run_direct_shell", label: "Run approved host command", parameters: directParameters,
+      description: "Submit a NEW execution after request_direct_execution returned approval. Confirm the exact command, cwd, target and account from that decision. The authorization is consumed once, even if dispatch fails. Retain the Execution ID and use execution_status/logs/cancel; reconcile unknown outcomes and never blindly replay side effects. Host filesystem/network access is unrestricted; artifact tracking covers workspace files only. Python can be invoked through the shell. PATH=/usr/bin:/bin; no shell startup profiles or inherited conda activation. Use the installed absolute interpreter path for Homebrew or conda Python, exactly as approved; changing it requires new consent.",
+      execute: async (id, params, signal) => {
+        const value = await options.directExecution!.start({ authorizationId: params.authorization_id, command: params.command, cwd: params.cwd, target: params.target, account: params.account }, signal, id);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(consent, direct);
+  }
   if (options.runnerReadiness) {
     const checkParameters = Type.Object({ runner_id: Type.Optional(Type.String({ minLength: 1 })) });
     const check: AgentTool<typeof checkParameters> = {
@@ -2036,7 +2061,7 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
         minimum: 1,
       })),
       prompt: Type.String({
-        description: "Self-contained instructions. For long deliverables, request an Artifact plus a concise handoff with its ID/version and coverage, not a full copy of the file in the final reply.",
+        description: "Required self-contained instructions; description is only a short label and never substitutes for prompt. For long deliverables, request an Artifact plus a concise handoff with its ID/version and coverage, not a full copy of the file in the final reply.",
         maxLength: 20_000, minLength: 1,
       }),
       specialistId: Type.Optional(specialistIdSchema),
@@ -2054,7 +2079,7 @@ export function createSubagentTools(options: Pick<WorkspaceToolOptions, "runSuba
     });
     const task: AgentTool<typeof taskParameters> = {
       description: [
-        "Run one focused task in a subagent. The subagent has an independent workspace: set inputPaths to every parent workspace file it must read, including files named in prompt. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
+        "Run one focused task in a subagent. Always include both description (a short label) and prompt (the required self-contained instructions); description never substitutes for prompt. The subagent has an independent workspace: set inputPaths to every parent workspace file it must read, including files named in prompt. Call this tool multiple times in the same turn when independent tasks should run concurrently. For unusually deep tasks, pass max_turns and timeout_seconds explicitly. Prefer passing brief for Brief v1: goal, constraints, outputRequirements, collaborationRules, optional outputJsonSchema, and version. When outputJsonSchema is present, instruct the subagent to finish with JSON matching that schema.",
         "Subagents have isolated workspaces: their file paths are NOT local files in your workspace. Ask them to declare deliverables with declare_artifact and return a concise handoff with the artifact ID/version, key findings and gaps. Do not also request the complete report or source package in the subagent's final reply unless the end user explicitly needs it inline; read the returned artifact with read_artifact using artifact_id and version, or use workspace_transfer when you need a local copy. An undeclared file mentioned in prose is not an artifact reference.",
         specialistSummary ? `Choose specialistId by semantic match against specialist descriptions. Set specialistId so the specialist's instructions, skills, and connectors are applied. Available specialists: ${specialistSummary}` : "",
       ].filter(Boolean).join(" "),
