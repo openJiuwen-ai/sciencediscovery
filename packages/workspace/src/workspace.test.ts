@@ -892,6 +892,7 @@ test("artifact download and PDF extraction are separate tools", async () => {
 
 test("project artifact tools declare, list, and read catalog entries", async () => {
   const calls: unknown[] = [];
+  const aliasWorkspace = resolve(process.cwd(), ".tmp", `artifact-alias-${Date.now()}`);
   const artifact = {
     createdAt: "2026-01-01T00:00:00.000Z",
     createdInSessionId: "session-1",
@@ -922,6 +923,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   const tools = createWorkspaceTools(process.cwd(), {
     declareArtifact: async (input) => {
       calls.push(input);
+      if (input.path === "outputs/alias") assert.equal(await readFile(resolve(aliasWorkspace, input.path), "utf8"), "existing output");
       if (input.path === "outputs/missing") throw new Error("missing file");
       return { artifact, version };
     },
@@ -949,7 +951,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     properties: Record<string, unknown>;
     required?: string[];
   };
-  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "base_version_id", "description", "name", "path", "paths"]);
+  assert.deepEqual(Object.keys(declareSchema.properties).sort(), ["artifact_id", "artifacts", "base_version_id", "description", "name", "path", "paths"]);
   assert.deepEqual(declareSchema.required ?? [], []);
   assert.deepEqual(
     declareSchema.properties.paths,
@@ -988,6 +990,26 @@ test("project artifact tools declare, list, and read catalog entries", async () 
     { error: "missing file", ok: false, path: "outputs/missing" },
     { artifact_id: "artifact-1", name: "result", ok: true, origin: "llm_declared", path: "outputs/last", version: 1, version_id: "version-1" },
   ]);
+  const alias = { artifacts: [{ path: "outputs/alias", name: "ignored", description: "ignored" }] };
+  assert.ok(Check(declare.parameters, alias), "the alias must survive tool schema validation before execute");
+  await mkdir(resolve(aliasWorkspace, "outputs"), { recursive: true });
+  await writeFile(resolve(aliasWorkspace, "outputs/alias"), "existing output");
+  let aliased;
+  try {
+    aliased = await declare.execute("declare-alias", alias);
+  } finally {
+    await rm(aliasWorkspace, { recursive: true, force: true });
+  }
+  assert.deepEqual(calls.at(-1), { path: "outputs/alias" }, "alias items keep paths batch storage semantics");
+  assert.equal((aliased.details as typeof batchPayload).artifacts[0]?.path, "outputs/alias");
+  await declare.execute("declare-paths-priority", { ...alias, paths: ["outputs/priority"] });
+  assert.deepEqual(calls.at(-1), { path: "outputs/priority" });
+  const callCount = calls.length;
+  for (const artifacts of [null, {}, "result.md", [], [null], ["result.md"], [{}], [{ path: 42 }], [{ path: "" }], [{ path: "  " }], [{ path: "valid" }, {}]]) {
+    assert.ok(Check(declare.parameters, { artifacts }), "malformed aliases reach actionable runtime validation");
+    await assert.rejects(declare.execute("declare-bad-alias", { artifacts }), /path.*paths.*artifacts\[\]\.path/);
+  }
+  assert.equal(calls.length, callCount, "validate the complete alias before declaring any files");
   await assert.rejects(declare.execute("declare-empty", {}), /path or paths is required/);
   await assert.rejects(declare.execute("declare-empty-paths", { paths: [] }), /at least one path/);
   await assert.rejects(
@@ -996,6 +1018,7 @@ test("project artifact tools declare, list, and read catalog entries", async () 
   );
   await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", path: "edit.dat" }), /required together/);
   await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", paths: ["edit.dat"] }), /cannot rename or batch/);
+  await assert.rejects(declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", ...alias }), /cannot rename or batch/);
   await declare.execute("revision", { artifact_id: "artifact-1", base_version_id: "version-1", path: "edit.dat" });
   assert.deepEqual(calls.at(-1), { artifactId: "artifact-1", baseVersionId: "version-1", toolCallId: "revision", path: "edit.dat" });
   const listed = await list.execute("list", {});
