@@ -29,6 +29,13 @@ How to call `gh`, and the rule that issue and pull request text is English:
 layer, the workflow files, run logs, failure attribution: [ci](../ci/SKILL.md).
 Journey design and reporting: [e2e-testing](../e2e-testing/SKILL.md).
 
+For a change tied to an existing issue, follow the
+[GitHub skill](../github/SKILL.md#work-on-an-existing-issue): try to assign it
+to yourself when starting, post the plan on the issue, and keep progress there.
+If readback does not show your login, do not retry or report it as assigned;
+say in the plan comment that you are working on it and ask a maintainer to
+assign you.
+
 ## Rules
 
 1. **The layers are a gate, not a suggestion.** CONTRIBUTING says run all

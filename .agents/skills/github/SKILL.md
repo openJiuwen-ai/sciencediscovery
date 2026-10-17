@@ -37,7 +37,9 @@ Chinese by mistake, fix it with `gh issue edit` or `gh pr edit` before calling
 it done.
 
 Edit only items you created. On someone else's issue or pull request, add a
-comment. Do not rewrite their title or body.
+comment; do not rewrite their title, body or comments. The one exception is
+adding yourself as an assignee to an issue you start implementing, under
+[Issues](#issues).
 
 ## Setup
 
@@ -84,6 +86,59 @@ gh issue edit <n> --repo openJiuwen-ai/sciencediscovery \
   --body-file .tmp/issue.md \
   --attach '.tmp/screen.png#What the screen shows'
 ```
+
+### Work on an existing issue
+
+These steps apply when you start implementing an existing issue. Reading it,
+giving a brief answer, or creating a new issue alone does not claim the work.
+
+1. Resolve the current `gh` login and inspect the issue's assignees:
+
+   ```bash
+   login=$(gh api user --jq .login)
+   gh issue view <n> --repo openJiuwen-ai/sciencediscovery \
+     --json number,title,assignees
+   ```
+
+2. If you are already assigned, skip the assignment. Otherwise add yourself;
+   `--add-assignee` preserves everyone already assigned:
+
+   ```bash
+   gh issue edit <n> --repo openJiuwen-ai/sciencediscovery --add-assignee @me
+   ```
+
+   If `@me` is unavailable, use the resolved login instead; never hard-code a
+   person's login:
+
+   ```bash
+   gh issue edit <n> --repo openJiuwen-ai/sciencediscovery --add-assignee "$login"
+   ```
+
+3. Read the issue back and check whether `assignees` contains your login:
+
+   ```bash
+   gh issue view <n> --repo openJiuwen-ai/sciencediscovery \
+     --json number,assignees
+   ```
+
+   If your login is missing, do not retry assignment or report it as assigned.
+   Still post the plan comment in step 4, say you are working on the issue,
+   and ask a maintainer to assign it to you. The `"$login"` fallback above only
+   covers `@me` being unavailable; it does not grant assignment permissions.
+
+4. Post an English plan whether or not assignment persisted, describing what
+   you intend to change and how completion will be judged. If other assignees
+   are present, say that you are also working on it. Add a new English progress comment when a PR
+   opens, work is blocked or the plan changes. Leave other people's titles,
+   bodies and comments unchanged:
+
+   ```bash
+   gh issue comment <n> --repo openJiuwen-ai/sciencediscovery \
+     --body-file .tmp/issue-plan.md
+   # When there is progress:
+   gh issue comment <n> --repo openJiuwen-ai/sciencediscovery \
+     --body-file .tmp/issue-progress.md
+   ```
 
 ## Pull requests
 
