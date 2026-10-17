@@ -418,6 +418,9 @@ export class SessionStoreHttpError extends Error {
 export class SessionStore {
   readonly executionBlocks = new ExecutionBlocks();
   readonly dataDir: string;
+  // Ephemeral provenance: after a restart, stale rename requests fail closed.
+  // Weak keys avoid retaining deleted sessions solely for title tracking.
+  private readonly refinedSessionTitles = new WeakMap<Session, { previous: string; title: string }>();
   // Catalog mutations replace Subagent objects. Cache by object identity so an
   // unchanged record is serialized once, without retaining superseded revisions.
   private readonly subagentAuthorityRefs = new WeakMap<Subagent, Promise<AgentStateRef>>();
@@ -4330,6 +4333,7 @@ export class SessionStore {
         ? undefined
         : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
       session.settingsOverrides = nextSettings;
+      if (hasOwn(changes, "title")) this.refinedSessionTitles.delete(session);
       session.title = nextTitle;
       if (reviewMode) session.reviewMode = reviewMode;
       if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
@@ -4360,11 +4364,20 @@ export class SessionStore {
     sessionId: string,
     expectedTitle: string,
     nextTitle: string,
+    source?: "refinement" | "user_request",
   ): Promise<Session | undefined> {
     const session = this.assertSessionWritable(sessionId);
-    if (session.title !== expectedTitle) return undefined;
+    const refinement = this.refinedSessionTitles.get(session);
+    const replacesRefinement = source === "user_request"
+      && refinement?.previous === expectedTitle && refinement.title === session.title;
+    if (session.title !== expectedTitle && !replacesRefinement) return undefined;
     const normalizedTitle = nextTitle.trim().replace(/\s+/gu, " ");
     if (!normalizedTitle) throw new Error("Session title is required");
+    if (source === "refinement") {
+      this.refinedSessionTitles.set(session, { previous: expectedTitle, title: normalizedTitle });
+    } else {
+      this.refinedSessionTitles.delete(session);
+    }
     session.title = normalizedTitle;
     session.updatedAt = new Date().toISOString();
     await this.saveCatalog();

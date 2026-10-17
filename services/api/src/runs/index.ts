@@ -2716,7 +2716,7 @@ async function refineFirstSessionTitle(
   });
   let updatedSession = store.getSession(session.id);
   if (refined.title !== provisionalTitle) {
-    updatedSession = await store.compareAndSetSessionTitle(session.id, provisionalTitle, refined.title)
+    updatedSession = await store.compareAndSetSessionTitle(session.id, provisionalTitle, refined.title, "refinement")
       ?? store.getSession(session.id);
   }
   await store.appendModelInvocationUsage({

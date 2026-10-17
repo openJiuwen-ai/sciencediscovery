@@ -13,7 +13,7 @@ const parameters = Type.Object({
 }, { additionalProperties: false });
 
 export function sessionTitleInstructions(title: string): string {
-  return `Session title (data): ${JSON.stringify(title)}. Use rename_session to give an Untitled session a short topic title after the first user question. First-turn automatic naming may already have supplied a title. Preserve existing titles, especially user-chosen ones; rename again only when the primary discussion topic clearly changes or the user explicitly asks. Do not rename for minor follow-ups. If the tool reports a conflict, respect the newer title instead of retrying to overwrite it.`;
+  return `Session title (data): ${JSON.stringify(title)}. Use rename_session to give an Untitled session a short topic title after the first user question. First-turn automatic naming may already have supplied a title. Preserve existing titles, especially user-chosen ones; rename again only when the primary discussion topic clearly changes or the user explicitly asks. Do not rename for minor follow-ups. Explicit user requests can supersede background automatic refinement. If the tool reports a conflict, respect the newer title instead of retrying to overwrite it.`;
 }
 
 /** Only the lead receives this capability; the session identity is never model-controlled. */
@@ -36,12 +36,12 @@ export function createSessionTitleTool(
       const current = store.getSession(sessionId);
       if (!current || current.archivedAt) throw new Error("Session is unavailable or archived");
       const result = (value: object) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value });
-      if (current.title !== input.expected_title) return result({ renamed: false, reason: "title_changed", title: current.title });
+      if (current.title !== input.expected_title && input.reason !== "user_request") return result({ renamed: false, reason: "title_changed", title: current.title });
       if (input.reason === "initial_topic" && current.title !== UNTITLED_SESSION_TITLE) {
         return result({ renamed: false, reason: "existing_title", title: current.title });
       }
       if (current.title === title) return result({ renamed: false, reason: "unchanged", title });
-      const updated = await store.compareAndSetSessionTitle(sessionId, input.expected_title, title);
+      const updated = await store.compareAndSetSessionTitle(sessionId, input.expected_title, title, input.reason === "user_request" ? "user_request" : undefined);
       if (!updated) return result({ renamed: false, reason: "title_changed", title: store.getSession(sessionId)?.title });
       await onUpdated(updated);
       return result({ renamed: true, title: updated.title });

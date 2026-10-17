@@ -59,7 +59,7 @@ Reviewer Specialist is off by default. Once enabled, **Run review** or an explic
 
 ## Session lifecycle and deletion
 
-New sessions start as **Untitled session** and receive a short automatic topic title after the first question. The lead agent can call `rename_session` during a run when the primary topic clearly changes or you explicitly request a new name. Agent titles are limited to 24 Unicode characters. Manual rename remains available; initial naming preserves an existing title, and stale tool calls cannot overwrite a newer title.
+New sessions start as **Untitled session** and receive a short automatic topic title after the first question. The lead agent can call `rename_session` during a run when the primary topic clearly changes or you explicitly request a new name. Agent titles are limited to 24 Unicode characters. Manual rename remains available; initial naming preserves an existing title, and stale tool calls cannot overwrite a newer manual edit. An explicit rename request can supersede a background automatic refinement that completed after the agent read the title.
 
 Use **Active**, **Archived**, or **All** filters. Archiving preserves messages, files, papers, and audit history but makes a Session read-only until restored: runs, settings, uploads, connector calls, paper changes, and permission changes are rejected.
 
