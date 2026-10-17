@@ -2779,8 +2779,11 @@ export class SessionStore {
       undefined,
       this.currentSandboxNetworkAccess(),
     );
+    // This value changes only when a user explicitly selects an approval
+    // policy, rather than when an unrelated Session happens to be active.
+    const inheritedApprovalMode = this.getProject(projectId)?.approvalMode;
     const session: Session = {
-      approvalMode: governance.approvalMode ?? "ask_for_dangerous",
+      approvalMode: governance.approvalMode ?? inheritedApprovalMode ?? "ask_for_dangerous",
       createdAt: now,
       enabledConnectorIds: [...resolved.effective.enabledConnectorIds],
       enabledSkillIds: [...resolved.effective.enabledSkillIds],
@@ -4812,6 +4815,8 @@ export class SessionStore {
       this.currentSandboxNetworkAccess(),
     );
     session.approvalMode = approvalMode;
+    const project = this.getProject(session.projectId);
+    if (project) project.approvalMode = approvalMode;
     session.permissionEpochId = permissionEpoch.id;
     session.updatedAt = permissionEpoch.createdAt;
     this.catalog.permissionEpochs.push(permissionEpoch);
