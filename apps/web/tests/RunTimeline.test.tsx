@@ -243,7 +243,7 @@ test("renders completed activity as collapsible disclosures", () => {
   assert.match(html, /<details class="timeline-disclosure tool completed process-record">/);
   assert.equal((html.match(/<details/g) ?? []).length, 4);
   assert.match(html, /<details class="tool-io-section">/);
-  assert.match(html, /Thinking/);
+  assert.match(html, /Thought process · turn 1/);
   assert.match(html, /run_python/);
   assert.match(html, /<strong>Answer:<\/strong> 42/);
 });
@@ -1170,4 +1170,39 @@ test("expanded live tools load the full child transcript and refresh it on compl
   assert.deepEqual(loads, ["running", "completed"]);
   assert.match(JSON.stringify(renderer!.toJSON()), /full final transcript/);
   await act(async () => { renderer!.unmount(); });
+});
+
+
+test("successful tools clear output keyword warnings and rejoin exploration", () => {
+  for (const name of ["read_file", "search_pubmed", "run_shell"]) {
+    let entries = apply([
+      { type: "tool.started", trace: { id: "a", name: "read_file", status: "running" } },
+      { type: "tool.completed", trace: { id: "a", name: "read_file", status: "completed" } },
+      { type: "tool.started", trace: { id: "b", name, status: "running" } },
+      { type: "tool.output", toolCallId: "b", chunk: "Error: quoted log contents" },
+      { type: "tool.completed", trace: { id: "b", name, status: "completed" } },
+    ]);
+    // Late output must not override a successful terminal status either.
+    entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "b", chunk: "\nFailed to converge: quoted paper" });
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "en" }, createElement(RunTimeline, { entries, isRunning: false, onToggle() {} })));
+    assert.doesNotMatch(html, /timeline-failure-summary/);
+    assert.match(html, /quoted log contents/);
+    if (name !== "run_shell") assert.match(html, /Explored · 2 activities/);
+    const failed = reduceRunTimeline(entries, { type: "tool.completed", trace: { id: "b", name, status: "failed", summary: "Source unavailable" } });
+    const failedHtml = renderToStaticMarkup(createElement(RunTimeline, { entries: failed, isRunning: false, onToggle() {} }));
+    assert.match(failedHtml, /timeline-failure-summary">Source unavailable/);
+  }
+});
+
+test("plain reasoning uses a finished fallback after its response closes", () => {
+  for (const locale of ["en", "zh-CN"] as const) {
+    let entries = apply([{ type: "assistant.thinking.delta", turn: 2, delta: "Plain private reasoning" }]);
+    const render = () => renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: locale }, createElement(RunTimeline, { entries, isRunning: true, onToggle() {} })));
+    assert.match(render(), locale === "en" ? /Thinking/ : /思考中/);
+    entries = reduceRunTimeline(entries, { type: "assistant.delta", delta: "Research complete" });
+    const html = render();
+    assert.match(html, locale === "en" ? /Thought process · turn 2/ : /思考过程 · 第 2 轮/);
+    assert.doesNotMatch(html, locale === "en" ? />Thinking</ : /思考中/);
+    assert.doesNotMatch(html, /<details[^>]* open/);
+  }
 });

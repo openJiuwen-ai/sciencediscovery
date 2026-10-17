@@ -521,7 +521,8 @@ export function reduceRunTimeline(
       ? { ...entry, trace: { ...entry.trace, outputStream: entry.trace.outputStream ?? `tool-${event.toolCallId}`, outputChars: (entry.trace.outputChars ?? 0) + event.chunk.length },
           preview: evidencePreview((entry.preview ?? "") + event.chunk),
           paperCount: returnedPaperCount(event.chunk) ?? entry.paperCount,
-          liveFailure: reportedFailure((entry.preview ?? "") + event.chunk) ?? entry.liveFailure }
+          liveFailure: entry.trace.status === "completed" ? undefined
+            : reportedFailure((entry.preview ?? "") + event.chunk) ?? entry.liveFailure }
       : entry);
   }
 
@@ -542,6 +543,8 @@ export function reduceRunTimeline(
       ? {
           ...entry,
           expanded: entry.userExpanded ?? false,
+          // Completion is authoritative; output keywords may just be file contents.
+          liveFailure: event.trace.status === "completed" ? undefined : entry.liveFailure,
           trace: {
             ...(entry.trace.args !== undefined ? { args: entry.trace.args } : {}),
             ...(entry.trace.input !== undefined
@@ -968,7 +971,8 @@ export function RunTimeline({
         }
 
         if (entry.type === "thinking") {
-          const label = reasoningStatus(entry.content) ?? t("timeline.thinking");
+          const label = reasoningStatus(entry.content) ?? (entry.status === "running"
+            ? t("timeline.thinking") : t("timeline.thoughtTurn", { turn: entry.turn }));
           return (
             <details
               className={`timeline-disclosure thinking ${entry.status}${entry.status !== "running" ? " process-record" : ""}`}

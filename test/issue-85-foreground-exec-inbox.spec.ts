@@ -150,7 +150,7 @@ test("全部前台执行的会话空闲后不会被已交付的结果再次唤�
       const run = await sendUserMessage(page, fixture!.session.id, "把两条检查命令交给助手在前台跑完，再跑一条主命令，然后总结。");
       const card = page.locator("section[aria-label='Subagent 活动'] article.subagent-card.running").first();
       await expect(card).toBeVisible({ timeout: 60_000 });
-      await expect(card.locator("small")).toContainText(/当前：/, { timeout: 10_000 });
+      await expect(card.locator("small")).toContainText(/run_shell|FG-/, { timeout: 10_000 });
       await expect(card.locator("small")).not.toContainText("正在启动");
       expect((await waitForRunTerminal(page, fixture!.session.id, run.id)).status).toBe("completed");
     });

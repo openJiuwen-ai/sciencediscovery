@@ -49,7 +49,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
   const stub = await scriptedModel([
     [
       { tool: "run_shell", text: "我会先生成报告，再核对产物。", reasoning: "**先生成一个可核对的本地报告**\n完整内部推理仅供展开查看。", delayMs: 7000,
-        arguments: { command: "sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK" } },
+        arguments: { command: "sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK; echo 'Error: quoted log contents'" } },
       { tool: "declare_artifact", arguments: { path: "results/report.md" } },
       { text: "报告已生成，内容是 CARD_OK。" },
     ],
@@ -147,6 +147,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         expect((await waitForRunTerminal(page, fixture!.session.id, runId)).status).toBe("completed");
         const tool = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
         await expect(tool).toHaveClass(/process-record/);
+        await expect(tool.locator(".timeline-failure-summary")).toHaveCount(0);
         await expect(tool).not.toHaveAttribute("open", "");
         await expect(tool).toHaveCSS("border-top-width", "0px");
         const timeline = tool.locator("xpath=..");
@@ -237,6 +238,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         const run = await sendUserMessage(page, fixture!.session.id, "执行一次受控的失败命令，保留错误。");
         await waitForRunTerminal(page, fixture!.session.id, run.id);
         const failed = page.locator(".timeline-disclosure.tool.failed");
+        await expect(page.locator(".timeline-disclosure.thinking.completed").last().locator(":scope > summary")).toContainText("思考过程");
         await expect(failed).toHaveClass(/process-record/);
         await expect(failed.locator(":scope > summary")).toContainText("失败");
         await expect(failed).toHaveCSS("border-top-width", "0px");

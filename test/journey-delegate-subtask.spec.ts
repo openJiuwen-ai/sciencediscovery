@@ -152,7 +152,7 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         await expect(card.locator(":scope > summary")).toHaveCSS("min-height", "28px");
         await expect(subagentSection).toHaveCSS("margin-bottom", "4px");
         await expect(card).toContainText("Review the analysis workspace");
-        await expect(card).toContainText("general-purpose");
+        await expect(card.locator(":scope > summary")).not.toContainText("general-purpose");
         await expect(card).toContainText("completed");
         await card.locator(":scope > summary").scrollIntoViewIfNeeded();
       },
