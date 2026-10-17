@@ -105,8 +105,8 @@ export function createWorkspaceExecutionBindings(
    * Spread into the recorder options, which keeps the field absent — rather
    * than explicitly undefined — for a sandbox with no network.
    */
-  const sandboxEgressProxy = (): { sandboxEgressProxy?: ResolvedProxy } => {
-    const resolved = options.store.resolveSandboxEgressProxy(options.permission.getEpoch());
+  const sandboxEgressProxy = (epoch = options.permission.getEpoch()): { sandboxEgressProxy?: ResolvedProxy } => {
+    const resolved = options.store.resolveSandboxEgressProxy(epoch);
     return resolved ? { sandboxEgressProxy: resolved } : {};
   };
   /**
@@ -268,7 +268,7 @@ export function createWorkspaceExecutionBindings(
         ...npuDevices(target.runnerId),
         ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
         ...(target.runnerWorkspaceKey ? { runnerWorkspaceKey: target.runnerWorkspaceKey } : {}),
-        ...sandboxEgressProxy(),
+        ...sandboxEgressProxy(permissionEpoch),
         sessionId: options.sessionId,
         signal,
         ...(toolCallId ? { toolCallId } : {}),
