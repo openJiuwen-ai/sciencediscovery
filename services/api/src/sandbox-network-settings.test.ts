@@ -327,9 +327,10 @@ test("scoped network permission decisions never change global or session network
   const session = await store.createSession(project.id, "Consent", {}, {}, { allowUnconfiguredModel: true });
   await store.setApprovalMode(session.id, "ask_for_dangerous");
   const context = { executionId: "owned-run", toolCallId: "network-call" };
-  const first = await store.requestPermission(session.id, "sandbox_network", "sandbox-network:run-agent-target-hosts", "Retrieve PubMed", context);
+  const first = await store.requestPermission(session.id, "sandbox_network", "sandbox-network:run-agent-target-hosts", "Retrieve PubMed " + "h".repeat(700), context);
   assert.equal(first.allowed, false); if (first.allowed) throw Error("Expected card");
   const decision = await store.decidePermissionRequest(first.request.id, "allow_matching");
+  assert.equal(decision.request.summary, "Retrieve PubMed " + "h".repeat(700), "all declared hosts and purpose remain visible on the card");
   assert.equal(decision.authorization.action, "sandbox_network");
   assert.equal(decision.permissionEpoch.networkPolicy, "none");
   assert.equal(store.getSandboxNetworkSettings().mode, "none");

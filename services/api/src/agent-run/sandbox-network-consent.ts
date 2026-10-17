@@ -30,7 +30,7 @@ export function createSandboxNetworkConsent(options: {
     await active(runnerId, signal);
     if (!Array.isArray(input.hosts) || !input.hosts.length || input.hosts.length > 16) throw new Error("Declare 1–16 exact hosts");
     const hosts = normalizeAllowedDomains(input.hosts);
-    if (hosts.some(host => parseAllowedDomain(host).wildcard) || hosts.join(", ").length > 300) throw new Error("Declare exact hosts, at most 300 characters in total; no wildcards");
+    if (hosts.some(host => parseAllowedDomain(host).wildcard) || hosts.join(", ").length > 4200) throw new Error("Declare exact hosts, at most 4200 characters in total; no wildcards");
     const purpose = input.purpose.trim().replace(/\s+/g, " ");
     if (!purpose || purpose.length > 100) throw new Error("Network purpose must be 1–100 characters");
     const resource = "sandbox-network:" + createHash("sha256").update(JSON.stringify({ session: options.sessionId,
@@ -38,7 +38,7 @@ export function createSandboxNetworkConsent(options: {
     let authorization;
     try {
       authorization = await options.permission.requirePrivilege({ action: "sandbox_network", executionId: options.executionId,
-        resource, signal, toolCallId, summary: `Sandbox network on ${runnerId}: ${hosts.join(", ")}. Purpose: ${purpose}.` });
+        resource, signal, toolCallId, summary: `Sandbox network on ${runnerId} for this Agent run: ${hosts.join(", ")}. Purpose: ${purpose}.` });
     } catch (error) {
       signal?.throwIfAborted();
       // A denial/dismissal is a visible result, not a successful retrieval.

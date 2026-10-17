@@ -88,3 +88,22 @@ test("matching resources include exact hosts, run, Agent and target", async () =
   await f.make("child").request(input); await f.make("main", "next-run").request(input);
   assert.equal(new Set(f.requests.map(x => x.resource)).size, 5);
 });
+
+
+test("a multi-host gateway denial still opens a complete card above ordinary summary length", async () => {
+  const f = fixture();
+  const hosts = Array.from({ length: 16 }, (_, i) => `research-service-${i}.long-scientific-domain.example.org:443`);
+  const observed = await f.consent.observe({ networkDeniedHosts: hosts }, "local");
+  assert.equal(observed.networkPermission?.state, "allowed");
+  assert.equal(f.requests.length, 1);
+  for (const host of hosts) assert.ok(f.requests[0]!.summary.includes(host));
+  assert.ok(f.requests[0]!.summary.includes("Purpose:"));
+});
+
+test("consent unavailable after execution preserves its known terminal output", async () => {
+  const f = fixture(); f.end();
+  const result = await f.consent.observe({ networkDeniedHosts: input.hosts, exitCode: 1, stdout: "partial output" }, "local");
+  assert.equal(result.networkPermission?.state, "blocked");
+  assert.equal(result.exitCode, 1); assert.equal(result.stdout, "partial output");
+  assert.equal(f.requests.length, 0);
+});
