@@ -22,12 +22,12 @@ import { apiBaseUrl, authorizationHeader } from './e2e-auth.js';
  * Credentials: E2E_API_TOKEN for isolated local API.
  * CostSideEffects: No paid calls; journey Projects deleted and global settings restored in finally.
  */
-test('approval defaults are explicit and affect only new sessions', { tag: ['@mocked', '@isolation:instance', '@category:e2e', '@os:linux', '@arch:amd64', '@model:mock', '@sandbox:bubblewrap'] }, async ({page, journey}) => {
+test('approval defaults are explicit and affect only new sessions', { tag: ['@mocked', '@isolation:global', '@category:e2e', '@os:linux', '@arch:amd64', '@model:mock', '@sandbox:bubblewrap'] }, async ({page, journey}) => {
   test.setTimeout(120_000);
   await page.addInitScript(() => localStorage.setItem('sciencediscovery-locale', 'en'));
   journey.scenario({goal:'Set defaults for new sessions while retaining control over existing sessions.', preconditions:['Isolated API/Web with no models or Runs required']});
   const api = async (path:string, method='GET', data?:unknown) => {
-    const response = await page.request.fetch(apiBaseUrl()+path, {method, headers:authorizationHeader(), ...(data === undefined ? {} : {data})});
+    const response = await page.request.fetch(apiBaseUrl()+path, {method, timeout:10_000, headers:authorizationHeader(), ...(data === undefined ? {} : {data})});
     expect(response.ok(), await response.text()).toBe(true);
     return response.json();
   };
