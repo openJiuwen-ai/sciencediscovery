@@ -70,6 +70,16 @@
   content: ""; display: block; flex: 0 0 6px; width: 6px; height: 6px;
   margin-left: 0; border-radius: 50%; background: var(--danger-bright);
 }
+/* Tool evidence can be much wider than its title. Keep the failure marker
+   beside that title instead of at the far edge of the evidence block. */
+.messages .process-record.tool:not([open]):not(:has(> button[aria-expanded="true"])).failed:not(:has(> summary > .record-failure-dot)) > :is(summary, button[aria-expanded])::after { display: none; }
+.messages .process-record.tool.failed:not([open]) > summary .timeline-label > strong {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+}
+.messages .process-record.tool.failed:not([open]) > summary .timeline-label > strong::after {
+  content: ""; flex: 0 0 6px; width: 6px; height: 6px;
+  margin-left: 0; border-radius: 50%; background: var(--danger-bright);
+}
 .record-chevron { flex: 0 0 auto; }
 details[open] > summary > .record-chevron { transform: rotate(90deg); }
 .process-record-body { padding: 0 12px 12px; }

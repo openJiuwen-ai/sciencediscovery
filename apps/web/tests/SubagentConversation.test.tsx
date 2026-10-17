@@ -91,7 +91,8 @@ test("the page-level SubAgent view reuses conversation and timeline UI without a
   assert.match(html, /Vitamin C study/);
   assert.match(html, /Evidence review/);
   assert.match(html, /Run method A and return the evidence/);
-  assert.match(html, /SUBAGENT · CODE-ENGINEER · SCIENCE MODEL/i);
+  assert.match(html, /<span class="message-role">SUBAGENT · CODE-ENGINEER<\/span>/i);
+  assert.match(html, /<details class="run-model-details"><summary>Details<\/summary>Science model<\/details>/);
   assert.match(html, /Thought process · turn 2/);
   assert.match(html, /run_python/);
   assert.match(html, /Method A completed successfully/);

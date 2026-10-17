@@ -251,7 +251,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect.poll(() => failed.locator(":scope > summary").evaluate((el) => {
           const card = el.closest("details");
           if (!(card instanceof HTMLDetailsElement) || card.open) return "card not collapsed";
-          return getComputedStyle(el, "::after").width;
+          return getComputedStyle(el.querySelector(".timeline-label > strong")!, "::after").width;
         })).toBe("6px");
         await failed.locator(":scope > summary").click();
         await expect(failed).not.toHaveCSS("border-top-width", "0px");
@@ -269,19 +269,20 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       // Same settling hazard as the dot width above: judge the whole collapsed
       // failure layout from a single frame, and keep polling until that frame
       // draws the dot next to the text. The expected values are the settled
-      // layout's own: label hugging its text, 8px flex gap, no dot margin,
-      // and a label that does not grow.
+      // layout's own: title hugging its text plus the 8px gap and 6px dot,
+      // no dot margin, and a title that does not grow.
       await expect.poll(() => failed.locator(":scope > summary").evaluate((el) => {
         const card = el.closest("details");
         if (!(card instanceof HTMLDetailsElement) || card.open) return "card not collapsed";
-        const label = el.querySelector(".timeline-label")!;
+        const label = el.querySelector(".timeline-label > strong")!;
         const range = document.createRange();
-        range.selectNodeContents(label.querySelector("strong")!);
-        const dot = getComputedStyle(el, "::after");
+        range.selectNodeContents(label);
+        if (getComputedStyle(el, "::after").display !== "none") return "duplicate summary dot";
+        const dot = getComputedStyle(label, "::after");
         const flexGrow = getComputedStyle(label).flexGrow;
-        const gap = getComputedStyle(el).columnGap;
+        const gap = getComputedStyle(label).columnGap;
         const hug = Math.abs(label.getBoundingClientRect().right - range.getBoundingClientRect().right);
-        if (dot.width === "6px" && dot.marginLeft === "0px" && gap === "8px" && flexGrow === "0" && hug < 2) return "settled";
+        if (dot.width === "6px" && dot.marginLeft === "0px" && gap === "8px" && flexGrow === "0" && Math.abs(hug - 14) < 2) return "settled";
         return `dot ${dot.width || "absent"}/${dot.marginLeft || "absent"}, gap ${gap}, flexGrow ${flexGrow}, text-to-label gap ${hug.toFixed(2)}px`;
       })).toBe("settled");
       await page.mouse.move(0, 0);
