@@ -3179,8 +3179,16 @@ export class SessionStore {
       undefined,
       this.currentSandboxNetworkAccess(),
     );
+    // A new Session starts with the most recently chosen policy in this
+    // Project, while an explicit creation request remains authoritative.
+    const inheritedApprovalMode = this.catalog.sessions
+      .filter((candidate) => candidate.projectId === projectId && !candidate.archivedAt)
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.approvalMode;
     const session: Session = {
-      approvalMode: governance.approvalMode ?? resolved.effective.defaultApprovalMode ?? "ask_for_dangerous",
+      approvalMode: governance.approvalMode
+        ?? inheritedApprovalMode
+        ?? resolved.effective.defaultApprovalMode
+        ?? "ask_for_dangerous",
       createdAt: now,
       enabledConnectorIds: [...resolved.effective.enabledConnectorIds],
       enabledSkillIds: [...resolved.effective.enabledSkillIds],
