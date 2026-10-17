@@ -42,7 +42,7 @@ export interface ExecutionRun {
   language: ExecutionLanguage | null;
   modifiedFiles: string[];
   /** Sandbox network mode of this run; historical rows always carry `"none"`. */
-  networkPolicy: SandboxNetworkMode;
+  networkPolicy: SandboxNetworkMode | "host";
   /** Sandbox network policy revision, when the run had a policy snapshot. */
   networkAccessRevision?: string;
   permissionEpochId: string;
@@ -64,7 +64,8 @@ export interface ExecutionRun {
   /** Historical runs recorded the compute resource profile they ran under. */
   resourceProfile?: Record<string, unknown>;
   runnerVersion: string;
-  sandbox: SandboxKind;
+  sandbox: SandboxKind | "none";
+  directAuthorization?: import("./environment.js").DirectExecutionAuthorization;
   sessionId: string;
   startedAt: string;
   /**
@@ -75,7 +76,7 @@ export interface ExecutionRun {
   status: "cancelled" | "failed" | "succeeded";
   stderr: CasObjectRef;
   stdout: CasObjectRef;
-  tool: "run_python" | "run_r" | "run_shell";
+  tool: "run_python" | "run_r" | "run_shell" | "run_direct_shell";
   /** Agent tool-call identifier that initiated this execution, when available. */
   toolCallId?: string;
   toolVersion: string;

@@ -1067,7 +1067,7 @@ async function executeAgentRun(
     readEpoch: () => store.getSessionPermissionEpoch(sessionId),
     readAuthorization: (authorizationId) => store.getPermissionAuthorization(authorizationId),
     // With the JiuwenSwarm backend its permission engine decides before a tool runs; ScienceDiscovery records that.
-    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm
+    requestPermission: (action, resource, summary, context) => approvalsByJiuwenSwarm && action !== "direct_code"
       ? store.authorizeByJiuwenSwarm(sessionId, action, resource, context)
       : store.requestPermission(sessionId, action, resource, summary, context),
     waitForDecision: (permissionRequest, signal) =>
@@ -1218,6 +1218,7 @@ async function executeAgentRun(
     ...createArtifactBindings(store.workspacePath(sessionId), runId),
     ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
     ...createWorkspaceExecutionBindings({
+      rootRunId: runId,
       beginExternalWait: () => {
         if (!mainExecution) throw new Error("No main AgentRun is active");
         return mainExecution.beginExternalWait();
@@ -1722,6 +1723,7 @@ async function executeAgentRun(
             ...(scientificEnvironments ? { environments: scientificEnvironments } : {}),
             ...createArtifactBindings(subagentWorkspaceRoot, childExecution.identity.executionId, handoff.privateWorkspacePath, subagent.id),
             ...createWorkspaceExecutionBindings({
+              rootRunId: runId,
               beginExternalWait: () => {
                 if (!subagentRunHandle) throw new Error("No subagent AgentRun is active");
                 return subagentRunHandle.beginExternalWait();

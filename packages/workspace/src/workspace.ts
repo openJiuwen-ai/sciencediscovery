@@ -225,6 +225,10 @@ function summarizeSubagentResult(subagent: Subagent): {
 }
 
 export interface WorkspaceToolOptions {
+  directExecution?: {
+    request(input: { operationId: string; command: string; cwd: string }, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
+    start(input: { authorizationId: string; command: string; cwd: string; target: string; account: string }, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
+  };
   runnerReadiness?: {
     check(runnerId?: string, signal?: AbortSignal): Promise<import("@sciencediscovery/schema").RunnerCheckResult>;
     wait(operationId: string, signal?: AbortSignal, toolCallId?: string): Promise<unknown>;
@@ -1353,6 +1357,27 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       parameters: traceProvenanceParameters,
     };
     tools.push(traceProvenance);
+  }
+  if (options.directExecution) {
+    const consentParameters = Type.Object({ operation_id: Type.String(), command: Type.String({ minLength: 1, maxLength: 20000 }), cwd: Type.String() });
+    const consent: AgentTool<typeof consentParameters> = {
+      name: "request_direct_execution", label: "Request host execution consent", parameters: consentParameters,
+      description: "After a local RUNNER_UNAVAILABLE failure, request separate consent for an exact host shell command and workspace-relative cwd. Explain its purpose. Shows target/account and loss of isolation. Sandbox Always Allow does not apply. Matching consent is limited to this command, target, account, workspace, Agent and run, without a fixed TTL. Returns a decision only; NEVER executes. Do not batch with dependent execution. Remote execution is unsupported.",
+      execute: async (id, params, signal) => {
+        const value = await options.directExecution!.request({ operationId: params.operation_id, command: params.command, cwd: params.cwd }, signal, id);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    const directParameters = Type.Object({ authorization_id: Type.String(), command: Type.String(), cwd: Type.String(), target: Type.String(), account: Type.String() });
+    const direct: AgentTool<typeof directParameters> = {
+      name: "run_direct_shell", label: "Run approved host command", parameters: directParameters,
+      description: "Submit a NEW execution after request_direct_execution returned approval. Confirm the exact command, cwd, target and account from that decision. The authorization is consumed once, even if dispatch fails. Retain the Execution ID and use execution_status/logs/cancel; reconcile unknown outcomes and never blindly replay side effects. Host filesystem/network access is unrestricted; artifact tracking covers workspace files only. Python can be invoked through the shell.",
+      execute: async (id, params, signal) => {
+        const value = await options.directExecution!.start({ authorizationId: params.authorization_id, command: params.command, cwd: params.cwd, target: params.target, account: params.account }, signal, id);
+        return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
+      },
+    };
+    tools.push(consent, direct);
   }
   if (options.runnerReadiness) {
     const checkParameters = Type.Object({ runner_id: Type.Optional(Type.String({ minLength: 1 })) });

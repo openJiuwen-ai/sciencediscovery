@@ -244,3 +244,32 @@ Runner 请求、执行时间和 Provider 返回的 token 用量，失败时也�
 - [architecture.md](architecture.md) — 进程模型与端口
 - [配置参考](../reference/configuration.md) — 相关环境变量、配额与数据落点
 - [Ascend NPU 宿主 Broker](ascend-npu-runner.md) — Ascend NPU Broker 设计背景
+
+## 显式授权的本机直执恢复
+
+本机 Runner 可达但沙箱不可用时，Agent 可通过 `request_direct_execution`
+提交失败操作 ID、确切 Shell 命令和工作区相对目录。对话中的独立授权卡展示目标
+Runner 实例、OS 账号、工作区、命令及失去隔离的影响。拒绝不执行任何命令；批准
+只返回决策，Agent 必须用新的 `run_direct_shell` 调用确认返回的范围再执行。
+系统 Shell 可以调用 Python，不会自动提升权限。
+
+沙箱的 Always Allow 和 JiuwenSwarm 普通工具授权不包含直执许可。“允许匹配”仅
+覆盖当前 Session、Agent、run、目标实例、账号、工作区/目录及完全相同的命令。
+不设固定 TTL；可通过现有权限管理撤销，run 结束或取消后不可继续使用，也不会
+传给子 Agent 或后续 run。每个返回的授权在提交前即被消耗，即使提交失败也不可
+重用。Runner 重启会改变实例标识，需要重新授权。当前仅支持沙箱故障后的恢复。
+
+执行仍使用 Execution ID、日志、取消、超时、工作区版本和产物溯源；记录包含
+`sandbox: none`、`networkPolicy: host`、授权引用及目标/账号/run/Agent。
+结果未知时须先核实，不会自动重放命令。通过 `execution_status`、
+`execution_logs` 和 `execution_cancel` 观察或取消任务。
+
+直执不等同于沙箱：可访问主机文件、进程、网络和主机存储的凭据，没有 CPU、
+内存或网络隔离。Shell 仅注入最小环境而不注入 Runner 服务凭据，但不能保护主机
+文件中的凭据。工作区配额和产物记录不代表完整主机审计，主机副作用通常不可回滚。
+取消会终止进程组，无法保证终止已逃离该进程组的后代进程。
+
+#276 当前交付范围仅为本机临时系统 Shell 恢复，不包括托管环境选择、远程 Runner
+直执、独立 SSH 运维或故障前直执。远程相关验收仍未完成，不能关闭 #276。
+提交并构建后可运行 `node test/api/direct-execution-journey.mjs` 验证本机流程，
+该旅程只使用隔离的本地服务和脚本模型，不调用付费服务。

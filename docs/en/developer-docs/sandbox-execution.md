@@ -215,3 +215,45 @@ a native-backend pass does not certify Swarm, or vice versa.
 - [Runtime architecture](architecture.md)
 - [Configuration reference](../reference/configuration.md)
 - [Ascend NPU Host Broker](ascend-npu-runner.md)
+
+## Explicit local direct-execution recovery
+
+When the local Runner is reachable but its sandbox is unavailable, the Agent can
+call `request_direct_execution` with its failed operation ID, an exact shell
+command and a workspace-relative working directory. The conversation displays
+separate host-execution consent, including the target Runner instance, OS account,
+workspace, command and loss of isolation. Declining executes nothing. Approval
+returns a decision only: the Agent must confirm the returned scope in a new
+`run_direct_shell` call. Python is available through the system shell.
+
+Sandbox Always Allow and JiuwenSwarm's normal tool authorization cannot grant this
+permission. Allow matching covers only the exact command, target instance,
+account, workspace/cwd, Session, Agent and run. There is no fixed TTL. Grants can
+be revoked through the existing permission controls; they cannot authorize a
+later run or a child Agent. Each returned authorization is consumed before
+submission, including unsuccessful submissions. Run completion/cancellation
+invalidates unused consent. A Runner restart changes its target instance identity
+and requires new consent. Direct execution is recovery-only and uses the existing
+OS account without elevation.
+
+The normal Execution ID, logs, cancellation, timeout, workspace publication and
+artifact provenance remain available. Execution records identify `sandbox: none`,
+`networkPolicy: host`, and the authorization/target/account/run/Agent scope.
+Unknown dispatch outcomes must be reconciled before further host execution; neither
+approval nor recovery replays a command. Use `execution_status`, `execution_logs`
+and `execution_cancel` to observe or cancel accepted work.
+
+This is **not equivalent to sandbox execution**: host files, processes, credentials
+and network can be accessed; CPU, memory and network isolation are unavailable.
+The shell receives a minimal environment without injected Runner credentials, but
+this does not protect credentials stored on the host. Workspace quotas and artifact
+tracking cover only the workspace, not all host effects. Cancellation kills the
+process group; descendants that escape it are not guaranteed to terminate. Host
+changes cannot generally be rolled back.
+
+Delivered scope for issue #276 is local ephemeral system-shell recovery. Managed
+environment selection, remote Runner direct execution, independent SSH maintenance
+and pre-failure direct execution are unavailable. Remote reachability and uncertain
+remote outcomes remain unfinished acceptance scope; #276 must remain open. The
+API journey is `node test/api/direct-execution-journey.mjs` after committing and
+building the candidate; it uses only isolated local services and a scripted model.

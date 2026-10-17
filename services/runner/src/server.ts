@@ -47,6 +47,8 @@ import {
   DEFAULT_EXECUTION_TIMEOUT_MS,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_WORKSPACE_BYTES,
+  directExecutionCapability,
+  executeDirectShell,
   executePython,
   executeShell,
   executorSandboxKind,
@@ -562,6 +564,10 @@ export function createRunnerServer(
         sendJson(response, 401, { error: "Unauthorized" } satisfies ApiError);
         return;
       }
+      if (url.pathname === "/direct-execution-capability" && request.method === "GET") {
+        sendJson(response, 200, await directExecutionCapability());
+        return;
+      }
       if (url.pathname === "/execution-capability" && ["GET", "POST"].includes(request.method ?? "")) {
         sendJson(response, 200, await readiness.get(request.method === "POST"));
         return;
@@ -955,7 +961,7 @@ export function createRunnerServer(
           return;
         }
       }
-      if (request.method === "POST" && url.pathname === "/shell-executions") {
+      if (request.method === "POST" && ["/shell-executions", "/direct-shell-executions"].includes(url.pathname)) {
         const body = await readBody(request);
         if (!verifyExecutionSignature(config.authToken, request.headers[EXECUTION_TIMESTAMP_HEADER] as string | undefined,
           body, request.headers[EXECUTION_SIGNATURE_HEADER] as string | undefined)) {
@@ -965,9 +971,14 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as ShellExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
-        execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
+        const direct = url.pathname === "/direct-shell-executions";
+        if (direct !== Boolean(execution.directAuthorization)) throw new Error("Execution mode does not match endpoint");
+        if (direct && (await readiness.get()).ready) throw new Error("Direct execution is available only during sandbox recovery");
+        if (!direct) execution.executionTimeoutMs = 0; // waiting deadlines are a client concern, not process lifetime
         execution.maxOutputBytes ??= config.maxOutputBytes;
-        const accepted = managedExecutions.start(execution, (signal, log) => execution.environmentId
+        const accepted = managedExecutions.start(execution, (signal, log) => direct
+          ? executeDirectShell(executorConfig, execution, signal, log)
+          : execution.environmentId
           ? environmentStore?.withRuntime(execution.environmentId, (runtime) => {
               if (signal.aborted) throw new Error("Execution cancelled before environment admission");
               return executeShell(executorConfig, execution, signal, undefined, gateways, runtime, log);
@@ -987,6 +998,7 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as ShellExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
+        if ("directAuthorization" in execution) throw new Error("Direct execution requires its dedicated endpoint");
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);
@@ -1021,6 +1033,7 @@ export function createRunnerServer(
         const execution = JSON.parse(body) as PythonExecutionRequest;
         requireEphemeralExecution(execution);
         await resolveExecutionWorkspace(config, execution);
+        if ("directAuthorization" in execution) throw new Error("Direct execution requires its dedicated endpoint");
         const now = Date.now();
         for (const [id, seenAt] of seenExecutions) {
           if (now - seenAt > 60_000) seenExecutions.delete(id);

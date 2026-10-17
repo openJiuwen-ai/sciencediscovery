@@ -4414,3 +4414,24 @@ test("an action JiuwenSwarm's permission engine let through is allowed and recor
   assert.equal(authorization.outcome, "allowed");
   assert.equal(store.getPermissionAuthorization(authorization.id)?.toolCallId, "c1");
 });
+
+
+test("direct consent is separate from sandbox Always Allow and matching grants are revocable", async context => {
+  const root = resolve(process.cwd(), ".tmp", `direct-permissions-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Direct permissions");
+  const session = await store.createSession(project.id, "Direct", {}, {}, { allowUnconfiguredModel: true });
+  const request = await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Host command", { executionId: "run" });
+  assert.equal(request.allowed, false);
+  if (request.allowed) throw new Error("Expected consent");
+  await store.setApprovalMode(session.id, "always_allow");
+  assert.equal(store.getPermissionRequest(request.request.id)?.state, "pending");
+  assert.equal((await store.requestPermission(session.id, "code", "workspace-code", "Sandbox")).allowed, true);
+  const decision = await store.decidePermissionRequest(request.request.id, "allow_matching");
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Same scope", { executionId: "run" })).allowed, true);
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-b", "Changed scope", { executionId: "run" })).allowed, false);
+  await store.revokePermissionGrant(decision.grant!.id);
+  assert.equal((await store.requestPermission(session.id, "direct_code", "direct:scope-a", "Revoked", { executionId: "run" })).allowed, false);
+});

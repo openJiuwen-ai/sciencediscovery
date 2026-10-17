@@ -169,8 +169,8 @@ export interface ScientificExecutionResult {
   language: ScientificLanguage;
   memoryStateLost?: string;
   modifiedFiles: string[];
-  /** Sandbox network mode this execution actually ran under. */
-  networkPolicy: SandboxNetworkMode;
+  /** Effective network mode; host means unrestricted direct execution. */
+  networkPolicy: SandboxNetworkMode | "host";
   /** Revision of the sandbox network policy snapshot this execution ran under. */
   networkAccessRevision?: string;
   /**
@@ -181,7 +181,8 @@ export interface ScientificExecutionResult {
    */
   producedArtifacts?: ProducedArtifactInfo[];
   runnerVersion: string;
-  sandbox: SandboxKind;
+  sandbox: SandboxKind | "none";
+  directAuthorization?: DirectExecutionAuthorization;
   startedAt: string;
   stderr: string;
   stdout: string;
@@ -196,7 +197,25 @@ export interface ScientificExecutionResult {
 export const SYSTEM_SHELL_ENVIRONMENT_REVISION_ID = "system-shell-bwrap-v1";
 export const SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID = "system-shell-seatbelt-v1";
 
+/** Explicit direct-path consent, carried only by the authenticated control plane. */
+export interface DirectExecutionAuthorization {
+  authorizationId: string;
+  target: string;
+  account: string;
+  runId: string;
+  agentId: string;
+  workspaceRoot: string;
+  cwd: string;
+}
+
+export interface DirectExecutionCapability {
+  available: boolean;
+  target: string;
+  account: string;
+}
+
 export interface ShellExecutionRequest {
+  directAuthorization?: DirectExecutionAuthorization;
   /** Stable Agent identity within the Session; assigned by the trusted API binding. */
   agentId: string;
   code: string;

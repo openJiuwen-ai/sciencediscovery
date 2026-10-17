@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { randomUUID } from "node:crypto";
+import { hostname, userInfo } from "node:os";
+import { constants } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { userInfo } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -542,6 +544,7 @@ async function runSandboxed(
   maxOutputBytes: number,
   seccompVariant: SeccompVariant = "baseline",
   onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
+  spawnProcess = () => spawnSandboxProcess(config, launch, commandArguments, seccompVariant),
 ): Promise<{ exitCode: number; stderr: string; stdout: string }> {
   try {
     return await new Promise<{ exitCode: number; stderr: string; stdout: string }>((resolveRun, reject) => {
@@ -591,7 +594,7 @@ async function runSandboxed(
           }, 100)
         : undefined;
 
-      void spawnSandboxProcess(config, launch, commandArguments, seccompVariant).then((started) => {
+      void spawnProcess().then((started) => {
         child = started;
         if (stopError) killSandboxProcess(child);
         if (!child.stdin || !child.stdout || !child.stderr) {
@@ -1261,4 +1264,66 @@ export async function executeShell(
     startedAt,
     workingDirectory: launch.chdir,
   };
+}
+
+
+const directTargetIdentity = `${hostname()}:${randomUUID()}`;
+
+/** Probe the host shell independently of sandbox readiness; no command is run. */
+export async function directExecutionCapability(): Promise<import("@sciencediscovery/schema").DirectExecutionCapability> {
+  let available = process.platform === "linux" || process.platform === "darwin";
+  try { await access("/bin/bash", constants.X_OK); } catch { available = false; }
+  const user = userInfo();
+  return { available, target: directTargetIdentity, account: `${user.username}:${user.uid}:${user.gid}` };
+}
+
+/** Only called through the separately authenticated direct-execution endpoint. */
+export async function executeDirectShell(
+  config: ExecutorConfig, request: ShellExecutionRequest, signal: AbortSignal,
+  onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void,
+): Promise<ShellExecutionResult> {
+  signal.throwIfAborted();
+  if (!request.code.trim() || !request.executionId?.trim()) throw new Error("Direct code and execution ID are required");
+  const capability = await directExecutionCapability();
+  const authorization = request.directAuthorization;
+  if (!capability.available || !authorization?.authorizationId || !authorization.runId
+    || authorization.target !== capability.target || authorization.account !== capability.account
+    || authorization.agentId !== request.agentId || (request.cwd ?? "") !== authorization.cwd || request.runnerWorkspaceKey
+    || request.environmentId || request.kernelMode === "persistent") {
+    throw new Error("Direct execution requires current target/account authorization and an ephemeral local shell");
+  }
+  const workspaceRoot = await validatedWorkspace(config.dataDir, request.workspaceRoot);
+  if (authorization.workspaceRoot !== workspaceRoot || isAbsolute(authorization.cwd)) throw new Error("Direct workspace scope changed");
+  const cwd = await realpath(resolve(workspaceRoot, authorization.cwd));
+  const within = relative(workspaceRoot, cwd);
+  if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within) || !(await stat(cwd)).isDirectory()) {
+    throw new Error("Direct cwd must be inside the approved workspace");
+  }
+  const maxWorkspaceBytes = resolveQuotaBytes(request.maxWorkspaceBytes, config.maxWorkspaceBytes, "maxWorkspaceBytes");
+  const maxOutputBytes = resolveQuotaBytes(request.maxOutputBytes, config.maxOutputBytes, "maxOutputBytes");
+  await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
+  const before = await workspaceSnapshot(workspaceRoot);
+  const startedAt = new Date().toISOString();
+  // Do not inject Runner service credentials into the process environment. Host
+  // filesystem/network access is still unrestricted and is disclosed at consent.
+  const env = { PATH: "/usr/bin:/bin", HOME: userInfo().homedir, LANG: "C.UTF-8" };
+  const launch: SandboxLaunch = { args: [], chdir: cwd, commandPrefix: [], env };
+  const result = await runSandboxed(config, launch, [], request.code,
+    executionTimeoutMs(request.executionTimeoutMs, config.execTimeoutMs), workspaceRoot, signal,
+    "Direct shell execution", maxWorkspaceBytes, maxOutputBytes, "baseline", onOutput, async () => {
+      signal.throwIfAborted();
+      const child = spawn("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-s"],
+        { cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+      sandboxProcessGroups.add(child);
+      child.once("close", () => sandboxProcessGroups.delete(child));
+      return child;
+    });
+  await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);
+  const after = await workspaceSnapshot(workspaceRoot);
+  return { ...result, cgroupMode: "none", createdFiles: [...after.keys()].filter(path => !before.has(path)).sort(),
+    modifiedFiles: [...after.keys()].filter(path => before.has(path) && before.get(path) !== after.get(path)).sort(),
+    environmentRevisionId: "system-shell-direct-v1", environmentVariables: env, executionId: request.executionId,
+    finishedAt: new Date().toISOString(), kernelId: `ephemeral:${request.executionId}`, kernelMode: "ephemeral",
+    language: "shell", networkPolicy: "host", runnerVersion: RUNNER_VERSION, sandbox: "none",
+    directAuthorization: authorization, startedAt, workingDirectory: cwd };
 }
