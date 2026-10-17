@@ -2223,6 +2223,19 @@ export class SessionStore {
     });
   }
 
+  /** Remove a model default only when this caller still owns that slot. */
+  async clearGlobalModelIfCurrent(modelId: string): Promise<{ cleared: boolean }> {
+    return this.withSettingsMutation(async () => {
+      if (this.catalog.globalSettings.modelId !== modelId) return { cleared: false };
+      const { modelId: _removed, ...remaining } = this.catalog.globalSettings;
+      this.catalog.globalSettings = remaining;
+      this.syncSessionCompatibilityForProject();
+      await this.saveCatalog();
+      this.pluginControl?.changed();
+      return { cleared: true };
+    });
+  }
+
   async replaceProjectSettings(projectId: string, value: unknown, assertCurrent?: () => void): Promise<RuntimeSettingsDetails> {
     return this.withSettingsMutation(async () => {
       assertCurrent?.();

@@ -106,6 +106,7 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
     }),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
+    clearGlobalModelIfCurrent: async () => ({ cleared: true }),
     testModel: async () => successResult,
     updateProvider: async (id: string, body: any) => ({
       id,
@@ -334,6 +335,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   let deletedModelId: string | undefined;
   let deletedProviderId: string | undefined;
   let defaultModelSetCalled = false;
+  const rollbackCalls: string[] = [];
 
   const client = createMockClient({
     addProviderModel: async (providerId: string, body: any) => ({
@@ -357,12 +359,20 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
       updatedAt: "2026-09-17T00:00:00.000Z",
     } as ModelProvider),
     deleteModel: async (modelId: string) => {
+      rollbackCalls.push(`delete:${modelId}`);
       deletedModelId = modelId;
       return { deleted: modelId };
     },
     deleteProvider: async (providerId: string) => {
       deletedProviderId = providerId;
       return { deleted: providerId };
+    },
+    clearGlobalModelIfCurrent: async (modelId: string) => {
+      rollbackCalls.push(`clear:${modelId}`);
+      return { cleared: true };
+    },
+    replaceGlobalSettings: async () => {
+      throw new Error("failed connections must not restore a stale settings snapshot");
     },
     testModel: async () => authFailResult,
   });
@@ -399,6 +409,7 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   // Temporary objects rolled back
   assert.equal(deletedModelId, "temp-profile-to-delete");
   assert.equal(deletedProviderId, "temp-provider-to-delete");
+  assert.deepEqual(rollbackCalls, ["clear:temp-profile-to-delete", "delete:temp-profile-to-delete"]);
 
   // Default model was NOT changed
   assert.equal(defaultModelSetCalled, false);

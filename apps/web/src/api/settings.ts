@@ -279,6 +279,10 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request("/api/settings", { body: JSON.stringify(body), method: "PUT" });
   }
 
+  clearGlobalModelIfCurrent(modelId: string): Promise<{ cleared: boolean }> {
+    return this.request("/api/settings/clear-model-if-current", { body: JSON.stringify({ modelId }), method: "POST" });
+  }
+
   getReviewerSpecialistSettings(): Promise<ReviewerSpecialistSettings> {
     return this.request("/api/reviewer-specialist/settings");
   }

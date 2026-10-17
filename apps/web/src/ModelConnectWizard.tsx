@@ -28,7 +28,6 @@ import type {
   ProviderModelPreview,
   ProxyPolicy,
   ProxySettingsDetails,
-  RuntimeSettingsOverrides,
 } from "@sciencediscovery/schema";
 import {
   DEFAULT_MODEL_API_VARIANT,
@@ -356,16 +355,13 @@ export function ModelConnectWizard({
 
     let createdProviderId: string | undefined;
     const createdModelIds: string[] = [];
-    let initialOverrides: RuntimeSettingsOverrides = {};
+    const clearAttemptDefault = async (): Promise<void> => {
+      for (const id of createdModelIds) {
+        try { await client.clearGlobalModelIfCurrent(id); } catch { /* ignore */ }
+      }
+    };
 
     try {
-      try {
-        if (typeof client.getGlobalSettings === "function") {
-          const currentDetails = await client.getGlobalSettings();
-          initialOverrides = currentDetails.overrides ?? {};
-        }
-      } catch { /* ignore */ }
-
       // Whether the system already has models BEFORE this connect decides the
       // default: only the first model ever becomes the global default. When
       // the list cannot be read, stay conservative and leave the default alone.
@@ -389,12 +385,9 @@ export function ModelConnectWizard({
 
       if (!testOutcome.ok) {
         // Failed: roll back everything this attempt created.
-        // Restore settings first so deleteModel is not blocked by runtime settings.
-        try {
-          if (typeof client.replaceGlobalSettings === "function") {
-            await client.replaceGlobalSettings(initialOverrides);
-          }
-        } catch { /* ignore */ }
+        // Remove only this attempt's auto-default; unrelated concurrent
+        // settings edits and newer default selections must remain intact.
+        await clearAttemptDefault();
         for (const id of createdModelIds) {
           try { await client.deleteModel(id); } catch { /* ignore */ }
         }
@@ -451,11 +444,7 @@ export function ModelConnectWizard({
       onNotice?.(t("wizard.successTitle"), successDesc);
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
-      try {
-        if (typeof client.replaceGlobalSettings === "function") {
-          await client.replaceGlobalSettings(initialOverrides);
-        }
-      } catch { /* ignore */ }
+      await clearAttemptDefault();
       for (const id of createdModelIds) {
         try { await client.deleteModel(id); } catch { /* ignore */ }
       }
