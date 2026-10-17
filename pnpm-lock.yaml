@@ -244,8 +244,8 @@ importers:
         specifier: workspace:*
         version: link:../schema
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.12.2
+        version: 8.12.2
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -384,8 +384,8 @@ importers:
         specifier: workspace:*
         version: link:../schema
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.12.2
+        version: 8.12.2
     devDependencies:
       '@types/node':
         specifier: 26.1.1
@@ -738,8 +738,8 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       undici:
-        specifier: 8.9.0
-        version: 8.9.0
+        specifier: 8.12.2
+        version: 8.12.2
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -2585,8 +2585,8 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@8.9.0:
-    resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
+  undici@8.12.2:
+    resolution: {integrity: sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.4.0:
@@ -4703,7 +4703,7 @@ snapshots:
 
   undici-types@8.3.0: {}
 
-  undici@8.9.0: {}
+  undici@8.12.2: {}
 
   unicorn-magic@0.4.0: {}
 

@@ -39,7 +39,7 @@
     "ajv": "8.18.0",
     "fflate": "0.8.3",
     "typebox": "1.1.38",
-    "undici": "8.9.0",
+    "undici": "8.12.2",
     "yaml": "2.9.0",
     "@sciencediscovery/skill": "workspace:*",
     "@sciencediscovery/mcp": "workspace:*",
