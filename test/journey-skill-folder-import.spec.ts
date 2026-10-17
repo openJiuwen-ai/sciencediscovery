@@ -34,6 +34,12 @@ async function writeSkillFolder(root: string, files: Record<string, string>): Pr
   return root;
 }
 
+// Coverage boundary for #339: removing webkitdirectory below models a browser
+// without native directory selection. A host/automation picker can still reject
+// directory paths even when that property exists; this journey does not reproduce
+// or repair that external-picker limitation. Use ZIP/Git for complete packages in
+// those hosts. Conversational Skill installation does not use the Folder picker.
+// Accepted scope: https://github.com/openJiuwen-ai/sciencediscovery/pull/352#issuecomment-6221140031
 /**
  * E2E-META
  * Purpose: A user can hand the product a local Skill folder and find that Skill installed with its supporting files, and gets a readable reason when the folder is not one.
