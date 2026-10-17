@@ -489,6 +489,8 @@ export interface RunnerExecutionCapability {
 }
 
 export interface ExecutionBlock {
+  /** Absent for existing Runner blocks. */
+  kind?: "mcp";
   id: string;
   sessionId: string;
   executionId: string;

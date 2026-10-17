@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useMcpReadiness } from "./composer/useMcpReadiness.js";
 import { ExecutionBlockCards } from "./ExecutionReadiness.js";
 
 import {
@@ -1159,7 +1160,6 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sandboxNetworkSettings, setSandboxNetworkSettings] = useState<SandboxNetworkSettings>();
   const [proxySettings, setProxySettings] = useState<ProxySettingsDetails>();
   const [mcpProxyPolicies, setMcpProxyPolicies] = useState<McpProxyPolicies>({});
-  const [mcpSources, setMcpSources] = useState<McpSourceManifest[]>([]);
   const [webSettings, setWebSettings] = useState<WebSettingsDetails>();
   const [memoryGraphSettings, setMemoryGraphSettings] = useState<MemoryGraphSettingsDetails>();
   const [ideaTreeSettings, setIdeaTreeSettings] = useState<IdeaTreeSettingsDetails>();
@@ -1289,6 +1289,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setShowConfig(true);
   }, [token]);
   const client = useMemo(() => new ApiClient(token, promptForToken), [promptForToken, token]);
+  const mcpReadiness = useMcpReadiness(client);
+  const mcpSources = mcpReadiness.sources;
+
   // With the JiuwenSwarm backend its language follows the UI's: on load, and whenever the user switches.
   useEffect(() => {
     if (webSettings?.backend !== "jiuwenswarm") return;
@@ -1836,7 +1839,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       sandboxNetwork: setSandboxNetworkSettings,
       proxies: setProxySettings,
       mcpPolicies: (details) => setMcpProxyPolicies(details.policies),
-      mcpSources: (details) => setMcpSources(details.map((item) => item.manifest)),
+      mcpSources: mcpReadiness.applyListing,
       web: setWebSettings,
       memoryGraph: setMemoryGraphSettings,
       ideaTree: setIdeaTreeSettings,
@@ -3194,6 +3197,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
     if (!routing.updatesSessionView) return;
     if (streamEvent.type === "run.status" && isTerminalRunStatus(streamEvent.status)) {
+      mcpReadiness.check();
       void refreshArtifactOutputs(sessionId).catch(() => undefined);
     }
     if (streamEvent.type === "artifact_review.completed") {
@@ -4624,6 +4628,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         disabled={isRunning || sessionArchived}
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
+                        specialistIds={specialists.find(item => item.id === session.specialistId)?.connectorIds ?? []}
+                        sourceStatuses={mcpReadiness.sourceStatuses}
+                        onOpen={mcpReadiness.check}
+                        onReload={mcpReadiness.reload}
+                        refreshing={mcpReadiness.refreshing}
+                        refreshError={mcpReadiness.error}
                       />
                       <label><span>{t("composer.specialist")}</span><select value={session.specialistId ?? ""} disabled={isRunning || sessionArchived} onChange={(event) => void updateSessionSettings({ specialistId: event.target.value || null })}><option value="">{t("composer.coordinator")}</option>{specialists.map((specialist) => <option key={specialist.id} value={specialist.id}>{specialist.name}</option>)}</select></label>
                     </div>
@@ -5059,9 +5069,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 />
               </> : null}
               {systemSettingsGroup === "mcp" ? <McpServerSettings client={client} sources={mcpSources} sessionId={activeSessionId || undefined} sessionTitle={session?.title} onChanged={async () => {
-                const [items, sourceDetails] = await Promise.all([client.listConnectors(), client.listMcpSources()]);
+                const [items] = await Promise.all([client.listConnectors(), mcpReadiness.refresh()]);
                 setConnectors(items);
-                setMcpSources(sourceDetails.map((item) => item.manifest));
               }} /> : null}
               {systemSettingsGroup === "proxies" ? (
                 proxySettings

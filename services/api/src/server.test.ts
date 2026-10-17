@@ -116,6 +116,9 @@ import {
   type ServerConfig,
 } from "./server.js";
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
+import { createJiuwenSwarmAgentFactory } from "./agent-run/jiuwenswarm-agent.js";
+import type { NativeAgentOptions } from "./native-agent/index.js";
+import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import { SessionStore } from "./store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
 import type { McpTransportClient } from "@sciencediscovery/data-source";
@@ -7820,4 +7823,77 @@ test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", asy
   const response = await fetch(`${origin}/api/sessions/${sessionId}/web-pages/wp-anything/content`, { headers: authorization });
   assert.equal(response.status, 502);
   assert.match((await response.json() as { error?: string }).error ?? "", /memory graph unreachable/);
+});
+
+test("deep checkpoint forwards selected MCP readiness without duplicating main notices", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `reviewer-mcp-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, {recursive: true});
+  context.after(() => removeTestRoot(tempRoot));
+  const pubmed = createPublicBiomedSources(["pubmed"])[0]!;
+  const catalog: McpCatalog = {revision: "reviewer", loadedAt: "now", servers: [{id: "biomed", enabled: true, transport: "stdio",
+    tools: Object.values(pubmed.manifest.tools).map(tool => ({name: tool.mcpToolName!, inputSchema: tool.inputSchema, description: tool.description, schemaHash: "fixture"})),
+  }]};
+  let sourceCalls = 0;
+  const transport: McpTransportClient = {catalog: async () => catalog, reload: async () => catalog, invoke: async () => {
+    sourceCalls++;
+    return {requestId: "search", serverId: "biomed", toolName: "pubmed_search", isError: false, attempts: [], durationMs: 1,
+      content: [{type: "json", value: {sourceId: "pubmed", toolId: "search", retrievedAt: "now", untrusted: true, attribution: "NLM", license: "NCBI", warnings: [],
+        records: [{identifier: "12524540", citations: [], primaryCitation: {source: "pubmed", identifier: "12524540", url: "https://pubmed.ncbi.nlm.nih.gov/12524540/"}, title: "Fixture study", url: "https://pubmed.ncbi.nlm.nih.gov/12524540/", abstract: "Observed result", source: "pubmed", warnings: []}],
+      }}]} as unknown as McpInvokeResponse;
+  }};
+  const {origin} = await startTestApi(context, tempRoot, transport);
+  const model = await createTestModel(origin);
+  const project = await jsonRequest<CreateProjectResponse>(`${origin}/api/projects`, {headers: authorization, method: "POST", body: JSON.stringify({name: "Review MCP"})});
+  const session = await jsonRequest<Session>(`${origin}/api/projects/${project.body.id}/sessions`, {headers: authorization, method: "POST",
+    body: JSON.stringify({title: "Review", modelId: model.id, settingsOverrides: {enabledConnectorIds: ["arxiv", "pubmed"]}, approvalMode: "always_allow"})});
+  await jsonRequest(`${origin}/api/reviewer-specialist/settings`, {headers: authorization, method: "PUT", body: JSON.stringify({enabled: true})});
+  await jsonRequest(`${origin}/api/sessions/${session.body.id}/reviewer-specialist/settings`, {headers: authorization, method: "PUT", body: JSON.stringify({automaticReviewEnabled: false, level: "deep"})});
+  const form = new FormData();
+  form.append("files", new Blob(["Observed result [1].\n[1] Fixture study. PMID: 12524540"], {type: "text/markdown"}), "report.md");
+  const upload = await fetch(`${origin}/api/sessions/${session.body.id}/workspace/upload`, {headers: authorization, method: "POST", body: form});
+  assert.equal(upload.status, 201);
+  const artifacts = await jsonRequest<ScientificArtifact[]>(`${origin}/api/sessions/${session.body.id}/artifacts`, {headers: authorization});
+  const versions = await jsonRequest<ScientificArtifactVersion[]>(`${origin}/api/sessions/${session.body.id}/artifacts/${artifacts.body[0]!.id}/versions`, {headers: authorization});
+  const versionId = versions.body[0]!.id;
+  const previousExecutor = process.env.SCIENCE_AGENT_EXECUTOR, previousAdapter = process.env.SCIENCE_AGENT_ADAPTER_URL;
+  process.env.SCIENCE_AGENT_EXECUTOR = "jiuwenswarm";
+  process.env.SCIENCE_AGENT_ADAPTER_URL = "http://unused.test";
+  context.after(() => {
+    if (previousExecutor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR; else process.env.SCIENCE_AGENT_EXECUTOR = previousExecutor;
+    if (previousAdapter === undefined) delete process.env.SCIENCE_AGENT_ADAPTER_URL; else process.env.SCIENCE_AGENT_ADAPTER_URL = previousAdapter;
+  });
+  // Replace only model execution at the existing AgentHandle boundary; run setup,
+  // checkpoint construction, catalog, broker and semantic review stay production.
+  const prototype = Object.getPrototypeOf(createJiuwenSwarmAgentFactory({adapterUrl: "http://unused.test"})({} as NativeAgentOptions));
+  let checkpoints = 0;
+  const deepOptions: NativeAgentOptions[] = [];
+  context.mock.method(prototype, "execute", async function(this: {options: NativeAgentOptions}) {
+    const options = this.options;
+    assert.ok(options.mcpReadiness, "the real run setup must forward unhealthy selection diagnostics");
+    assert.match(options.mcpReadiness.summary, /arxiv.*degraded/);
+    const decision = await options.mcpReadiness.decide("continue", "PubMed is sufficient for this review", []);
+    assert.match(JSON.stringify(decision), /arxiv.*search/);
+    if (options.contextScope === "reviewer") {
+      deepOptions.push(options);
+      return {finalMessages: [{role: "assistant", content: JSON.stringify({citation: {status: "INCONCLUSIVE", findings: [], assessment: "INCONCLUSIVE", locatorIds: [], rationale: "Fixture"}})}]};
+    }
+    assert.ok(options.mcpTools?.some(tool => tool.sourceId === "pubmed"));
+    for (let i = 0; i < 2; i++) {
+      await options.reviewCheckpoint!({artifactVersionIds: [versionId], reason: "Validate evidence"}, undefined, `checkpoint-${i}`);
+      checkpoints++;
+    }
+    return {finalMessages: [{role: "assistant", content: "Reviewed"}]};
+  });
+  const response = await fetch(`${origin}/api/sessions/${session.body.id}/messages`, {headers: authorization, method: "POST", body: JSON.stringify({content: "Ask Reviewer Specialist to review the report"})});
+  const stream = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(checkpoints, 2, stream);
+  assert.ok(deepOptions.length > 0, "checkpoint must enter the real semantic Reviewer composition");
+  for (const options of deepOptions) {
+    assert.ok(options.mcpReadiness);
+    assert.match(options.mcpReadiness.summary, /arxiv.*degraded/);
+    assert.deepEqual(options.toolPolicy?.allowed, [], "Deep reviewer remains read-only despite receiving readiness metadata");
+  }
+  assert.ok(sourceCalls > 0, "Reviewer uses the healthy selected source through the broker");
+  assert.equal((stream.match(/"type":"mcp.readiness"/g) ?? []).length, 1, "repeated checkpoints do not duplicate main diagnostics");
 });

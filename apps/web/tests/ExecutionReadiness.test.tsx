@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { ExecutionBlockCards, RunnerReadinessPanel } from "../src/ExecutionReadiness.js";
+import { LocaleProvider } from "../src/i18n/index.js";
 import type { ApiClient } from "../src/api/client.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -39,3 +40,35 @@ test("Runner settings refresh probes the selected Runner instead of the API host
     assert.deepEqual(probes, [["lab", false], ["lab", true]]);
   } finally { await act(async () => renderer.unmount()); }
 });
+
+test("MCP repair card shows source diagnostics and rechecks without a Runner switch", async () => {
+  const decisions: unknown[] = [];
+  const client = { listExecutionBlocks: async () => [{ id: "mcp-block", kind: "mcp", runnerId: "MCP", reason: "arxiv: unavailable; omitted tools: search", suggestions: ["Repair and reload the catalog"], alternatives: [] }],
+    decideExecutionBlock: async (...args: unknown[]) => { decisions.push(args); },
+  } as unknown as ApiClient;
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(ExecutionBlockCards, { client, sessionId: "s" })); });
+  try {
+    assert.match(JSON.stringify(renderer.toJSON()), /arxiv: unavailable/);
+    assert.match(JSON.stringify(renderer.toJSON()), /Repair and reload the catalog/);
+    const buttons = renderer.root.findAllByType("button");
+    assert.equal(buttons.length, 2);
+    await act(async () => { await buttons[0]!.props.onClick(); });
+    assert.deepEqual(decisions, [["s", "mcp-block", { action: "retry" }]]);
+  } finally { await act(async () => renderer.unmount()); }
+});
+
+for (const locale of ["en", "zh-CN"] as const) {
+  for (const kind of [undefined, "mcp"] as const) {
+    test(`repair card distinguishes ${kind ?? "runner"} consent from MCP recheck in ${locale}`, async () => {
+      const client = {listExecutionBlocks: async () => [{id: "b", kind, runnerId: "target", reason: "offline", alternatives: []}]} as unknown as ApiClient;
+      let view!: ReactTestRenderer;
+      await act(async () => {view = create(createElement(LocaleProvider, {initialLocale: locale}, createElement(ExecutionBlockCards, {client, sessionId: "s"})));});
+      try {
+        const text = JSON.stringify(view.toJSON());
+        assert.match(text, kind === "mcp" ? (locale === "en" ? /Waiting for MCP repair/ : /等待 MCP 修复/) : (locale === "en" ? /code has not executed/ : /代码尚未执行/));
+        assert.match(text, kind === "mcp" ? (locale === "en" ? /does not grant permission/ : /此操作不授予权限/) : (locale === "en" ? /never executes code automatically/ : /不会自动执行代码/));
+      } finally {await act(async () => view.unmount());}
+    });
+  }
+}

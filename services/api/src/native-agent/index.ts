@@ -857,6 +857,7 @@ export function buildTools(options: NativeAgentOptions): AgentTool[] {
     ...(options.shellExecutions ? { shellExecutions: options.shellExecutions } : {}),
     ...(options.timers ? { timers: options.timers } : {}),
     ...(options.runnerReadiness ? { runnerReadiness: options.runnerReadiness } : {}),
+    ...(options.mcpReadiness ? { mcpReadiness: options.mcpReadiness } : {}),
     ...(options.directExecution ? { directExecution: options.directExecution } : {}),
     specialists: options.specialists ?? [],
     toolPolicy: options.toolPolicy,

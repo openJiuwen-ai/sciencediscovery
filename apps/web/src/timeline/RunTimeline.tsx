@@ -52,6 +52,7 @@ function isGraphToolTrace(trace: ToolTrace): boolean {
 }
 
 export type RunTimelineEntry =
+  | { id: string; type: "mcp-readiness"; content: string }
   | {
       id: string;
       researchId: string;
@@ -596,6 +597,11 @@ export function reduceRunTimeline(
     return [...finished, { id: nextAnswerId(finished), type: "assistant", ...snapshotFields }];
   }
 
+  if (event.type === "mcp.readiness") {
+    return [...entries, { id: `mcp-readiness-${entries.length}`, type: "mcp-readiness",
+      content: `MCP (${event.agentId ?? "main"}): ${event.summary}` }];
+  }
+
   if (event.type === "permission.required" || event.type === "permission.resolved") {
     const finished = finishThinking(entries);
     const index = finished.findIndex((entry) => entry.type === "permission" && entry.request.id === event.request.id);
@@ -849,6 +855,12 @@ export function RunTimeline({
               <p><strong>{label}</strong>{entry.nodeId ? ` · ${entry.nodeId}` : ""}</p>
             </aside>
           );
+        }
+
+        if (entry.type === "mcp-readiness") {
+          return <aside className="boundary-note process-notice" key={entry.id}>
+            <span><WarningIcon size={15} /></span><p style={{ whiteSpace: "pre-line" }}>{entry.content}</p>
+          </aside>;
         }
 
         if (entry.type === "history-truncated") {
