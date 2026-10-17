@@ -55,3 +55,14 @@ test("a completed legacy execution carrying a caught network denial is still a t
   assert.equal(result.isError, true); assert.equal(result.details, terminal);
   assert.match(JSON.stringify(result.content), /pypi.org:443/);
 });
+
+test("an ordinary offline shell result needs no network permission and remains successful", async () => {
+  const terminal: ShellExecutionResult = { executionId: "offline", environmentRevisionId: "system", language: "shell", networkPolicy: "none",
+    exitCode: 0, stdout: "local result", stderr: "", createdFiles: [], modifiedFiles: [], kernelMode: "ephemeral", kernelId: "ephemeral:offline",
+    cgroupMode: "none", sandbox: "bubblewrap", environmentVariables: {}, runnerVersion: "test", workingDirectory: "/workspace", startedAt: "now", finishedAt: "now" };
+  const tools = createWorkspaceTools(process.cwd(), { enabledConnectorIds: [], executePython: async () => { throw Error("unused"); }, executeShell: async () => terminal });
+  const result = await tools.find(t => t.name === "run_shell")!.execute("offline", { command: "printf local" });
+  assert.equal(result.isError, false); assert.equal(result.details, terminal);
+  assert.match(JSON.stringify(result.content), /local result/);
+  assert.doesNotMatch(JSON.stringify(result.content), /authorizationId|networkPermission/);
+});
