@@ -288,6 +288,12 @@ export function buildCompletedToolTrace(event: ToolExecutionEndRunEvent, text = 
   };
 }
 
+/** Bounded head/tail snapshot; full main-tool transcripts remain delta streams. */
+export function appendToolProgress(previous: string, chunk: string): string {
+  const text = previous + chunk;
+  return text.length <= 16384 ? text : text.slice(0, 8192) + "\n…\n" + text.slice(-8189);
+}
+
 export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningStep?: SubagentStep): SubagentStep {
   return {
     content: aggregateToolText(event.result) ?? (event.isError ? "Tool failed" : "Tool completed"),
@@ -1610,10 +1616,30 @@ async function executeAgentRun(
           void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(liveMessageEvidence ? { evidence: liveMessageEvidence } : {}) });
           liveMessageEvidence = undefined;
         };
-        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence) => {
+        const progressBroadcastAt = new Map<string, number>();
+        const progressTimers = new Map<string, ReturnType<typeof setTimeout>>();
+        const publishStep = (step: SubagentStep, evidence?: import("@sciencediscovery/schema").AgentEventEvidence, transient = false) => {
           recordStep(step);
           finalizeMessageStep();
-          void emit({ step, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) });
+          const broadcast = (current: SubagentStep) => {
+            if (transient) progressBroadcastAt.set(step.id, Date.now());
+            void emit({ step: current, subagentId: subagent.id, type: "subagent.step", ...(evidence ? { evidence } : {}) }, { transient });
+          };
+          if (!transient) {
+            clearTimeout(progressTimers.get(step.id));
+            progressTimers.delete(step.id);
+            broadcast(step);
+          } else {
+            const delay = 250 - (Date.now() - (progressBroadcastAt.get(step.id) ?? -Infinity));
+            if (delay <= 0) broadcast(step);
+            else if (!progressTimers.has(step.id)) {
+              progressTimers.set(step.id, setTimeout(() => {
+                progressTimers.delete(step.id);
+                const latest = steps.find(candidate => candidate.id === step.id);
+                if (latest?.status === "running") broadcast(latest);
+              }, delay));
+            }
+          }
           scheduleProgressFlush();
         };
         const publishMessageDelta = (
@@ -1937,8 +1963,8 @@ async function executeAgentRun(
           if (event.type === "tool_execution_progress") {
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
             if (runningStep) {
-              const progress = (runningStep.progress ?? "") + event.chunk;
-              publishStep({ ...runningStep, content: progress, progress }, event.evidence);
+              const progress = appendToolProgress(runningStep.progress ?? "", event.chunk);
+              publishStep({ ...runningStep, content: progress, progress }, event.evidence, true);
             }
           }
           if (event.type === "tool_execution_end") {
@@ -2035,6 +2061,8 @@ async function executeAgentRun(
             steps,
           };
         } finally {
+          for (const timer of progressTimers.values()) clearTimeout(timer);
+          progressTimers.clear();
           releaseParentWait?.();
         }
         externalWaitByExecution.delete(subagent.id);
@@ -2159,7 +2187,7 @@ async function executeAgentRun(
       void publish({ trace, type: "tool.started" });
     }
     if (event.type === "tool_execution_progress") {
-      void publish({ chunk: event.chunk, toolCallId: event.toolCallId, type: "tool.output" });
+      void publish({ chunk: event.chunk, toolCallId: event.toolCallId, type: "tool.output", progress: true });
     }
     if (event.type === "tool_execution_end") {
       const text = aggregateToolText(event.result);

@@ -3322,9 +3322,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   ): Promise<string | undefined> {
     if (!runId || !trace.outputStream) return undefined;
     const records = await client.listRunStreamEvents(sessionId, runId, trace.outputStream);
-    return records
-      .flatMap((record) => record.event.type === "tool.output" ? [record.event.chunk] : [])
-      .join("") || undefined;
+    const outputs = records.flatMap(record => record.event.type === "tool.output" ? [record.event] : []);
+    const progress = outputs.filter(event => event.progress).map(event => event.chunk).join("");
+    const result = outputs.filter(event => !event.progress).map(event => event.chunk).join("");
+    return (progress && result ? `${progress}\n\n---\n\n${result}` : progress || result) || undefined;
   }
 
   function resumeSessionRun(

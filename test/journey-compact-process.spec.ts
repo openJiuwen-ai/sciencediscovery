@@ -137,7 +137,11 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(tool.locator(".timeline-command")).toContainText("sleep 6");
         await expect(tool.locator(".timeline-evidence")).toContainText("LIVE_EVIDENCE");
         await expect(tool.locator(".timeline-failure-summary")).toContainText("source unavailable");
+        await tool.locator(":scope > summary").click();
+        await expect(tool.locator(".tool-content")).toContainText("LIVE_EVIDENCE");
         await expect(tool).toHaveClass(/running/);
+        await tool.locator(":scope > summary").click();
+        await expect(tool).not.toHaveAttribute("open", "");
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const authorization = (await tool.locator(".tool-authorization").boundingBox())!;

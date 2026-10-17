@@ -22,6 +22,8 @@ import { resolve } from "node:path";
 import { installApiTestModelCatalog } from "../model-catalog.fixture.js";
 import { SessionStore } from "../store.js";
 import {
+  appendToolProgress,
+  publishRunEvent,
   buildCompletedToolTrace,
   buildSubagentToolStep,
   cloneRunEventDetails,
@@ -215,4 +217,26 @@ test("completed subagent tools retain intermediate output beside their final res
   assert.equal(step.content, "5 papers");
   assert.equal(step.progress, "Error: retrying\n");
   assert.equal(step.input, "query");
+});
+
+
+test("chatty subagent progress stays bounded and transient snapshots are not persisted", async () => {
+  const persisted: unknown[] = [];
+  const store = { appendRunStreamEvent: async (...args: unknown[]) => { persisted.push(args[3]); return { event: args[3] }; } } as unknown as SessionStore;
+  let progress = "first evidence\n";
+  for (let i = 0; i < 1000; i++) {
+    progress = appendToolProgress(progress, `${i}: ${"x".repeat(100)}\n`);
+    assert.ok(progress.length <= 16384);
+    await publishRunEvent(store, "session", "run", { type: "subagent.step", subagentId: "child",
+      step: { id: "tool", kind: "tool", createdAt: "now", content: progress, progress, status: "running" } }, { transient: true });
+  }
+  assert.equal(persisted.length, 0);
+  assert.ok(progress.startsWith("first evidence"));
+  assert.match(progress, /999: x/);
+  const step = buildSubagentToolStep({ type: "tool_execution_end", toolCallId: "tool", toolName: "run_shell", isError: false,
+    result: { content: [{ type: "text", text: "final result" }] } },
+    { id: "tool", kind: "tool", createdAt: "now", input: "command", content: progress, progress, status: "running" });
+  await publishRunEvent(store, "session", "run", { type: "subagent.step", subagentId: "child", step });
+  assert.equal(persisted.length, 1);
+  assert.ok(JSON.stringify(persisted).length < 17000);
 });

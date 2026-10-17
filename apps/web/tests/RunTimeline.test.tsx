@@ -1206,3 +1206,37 @@ test("plain reasoning uses a finished fallback after its response closes", () =>
     assert.doesNotMatch(html, /<details[^>]* open/);
   }
 });
+
+
+test("expanded streaming transcripts coalesce bursts, flush trailing output and cancel on collapse", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let entries = apply([
+    { type: "tool.started", trace: { id: "burst", name: "run_shell", status: "running" } },
+    { type: "tool.output", toolCallId: "burst", chunk: "first" },
+  ]).map(entry => entry.type === "tool" ? { ...entry, expanded: true } : entry);
+  const loads: number[] = [];
+  const onLoadToolOutput = async (trace: { outputChars?: number }) => { loads.push(trace.outputChars ?? 0); return "transcript"; };
+  const view = () => createElement(RunTimeline, { entries, isRunning: true, onToggle() {}, onLoadToolOutput });
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(view()); });
+  for (let i = 0; i < 20; i++) {
+    entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "burst", chunk: "x" });
+    await act(async () => { renderer!.update(view()); });
+  }
+  assert.deepEqual(loads, [5]);
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
+  assert.deepEqual(loads, [5, 25], "last revision loads even after the producer goes quiet");
+  entries = reduceRunTimeline(entries, { type: "tool.output", toolCallId: "burst", chunk: "pending" });
+  await act(async () => { renderer!.update(view()); });
+  entries = entries.map(entry => entry.type === "tool" ? { ...entry, expanded: false } : entry);
+  await act(async () => { renderer!.update(view()); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)); });
+  assert.equal(loads.length, 2);
+  await act(async () => { renderer!.unmount(); });
+});
+
+test("a failed summary without output appears only once in the collapsed card", () => {
+  const entries = apply([{ type: "tool.completed", trace: { id: "failed", name: "search", status: "failed", summary: "Source unavailable" } }]);
+  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle() {} }));
+  assert.equal((html.split("</summary>")[0]!.match(/Source unavailable/g) ?? []).length, 1);
+});

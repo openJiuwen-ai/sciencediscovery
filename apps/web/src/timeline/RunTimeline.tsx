@@ -825,14 +825,24 @@ export function RunTimeline({
   const [toolOutputs, setToolOutputs] = useState<Record<string, string>>({});
   const loadingToolIds = useRef(new Set<string>());
   const loadedToolRevisions = useRef(new Map<string, string>());
+  const toolLoadTimes = useRef(new Map<string, number>());
+  const [refreshTick, setRefreshTick] = useState(0);
   useEffect(() => {
     if (!onLoadToolOutput) return;
+    let refreshDelay = Infinity;
     for (const entry of entries) {
       if (entry.type !== "tool" || (!entry.expanded && entry.trace.name !== "create_skill")) continue;
       const trace = entry.trace;
       if (!trace.outputStream || trace.output !== undefined) continue;
       const revision = `${trace.status}:${trace.outputChars ?? 0}`;
       if (loadedToolRevisions.current.get(trace.id) === revision || loadingToolIds.current.has(trace.id)) continue;
+      // Coalesce live revisions without delaying the first load or terminal result.
+      const delay = 1000 - (Date.now() - (toolLoadTimes.current.get(trace.id) ?? -Infinity));
+      if (trace.status === "running" && delay > 0) {
+        refreshDelay = Math.min(refreshDelay, delay);
+        continue;
+      }
+      toolLoadTimes.current.set(trace.id, Date.now());
       loadingToolIds.current.add(trace.id);
       void onLoadToolOutput(trace)
         .then((output) => {
@@ -842,7 +852,11 @@ export function RunTimeline({
         .catch(() => { /* Keep the existing summary when loading the full result fails. */ })
         .finally(() => loadingToolIds.current.delete(trace.id));
     }
-  }, [entries, onLoadToolOutput, toolOutputs]);
+    if (Number.isFinite(refreshDelay)) {
+      const timer = setTimeout(() => setRefreshTick(tick => tick + 1), refreshDelay);
+      return () => clearTimeout(timer);
+    }
+  }, [entries, onLoadToolOutput, toolOutputs, refreshTick]);
   if (!entries.length || (!footer && entries.every((entry) => entry.type === "permission" && entry.request.state !== "pending"))) return null;
   const reviewTraces = entries.filter((entry): entry is Extract<RunTimelineEntry, { type: "tool" }> =>
     entry.type === "tool"
@@ -1022,7 +1036,7 @@ export function RunTimeline({
         const failure = entry.trace.status === "failed" && entry.trace.summary ? compactStatus(entry.trace.summary) : entry.liveFailure;
         const outputText = entry.trace.output ?? toolOutputs[entry.trace.id] ?? entry.trace.summary;
 
-        const preview = entry.paperCount !== undefined ? t("timeline.papersReturned", { count: entry.paperCount }) : entry.trace.name === "task" ? "" : evidencePreview(entry.preview ?? entry.trace.output ?? entry.trace.summary ?? "");
+        const preview = entry.paperCount !== undefined ? t("timeline.papersReturned", { count: entry.paperCount }) : entry.trace.name === "task" ? "" : evidencePreview(entry.preview ?? entry.trace.output ?? (failure ? "" : entry.trace.summary) ?? "");
         const command = entry.trace.name === "run_shell" && typeof entry.trace.args?.command === "string"
           ? compactStatus(entry.trace.args.command) : undefined;
         return (
