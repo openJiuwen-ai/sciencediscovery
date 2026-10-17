@@ -220,7 +220,7 @@ test("a running subagent card shows the current streamed step", () => {
   }));
 
   assert.match(html, /1 running · 1 total/);
-  assert.match(html, /vitamin C randomized trials/);
+  assert.match(html, /Searching the evidence catalog/);
   assert.doesNotMatch(html, /Subagent steps/);
 });
 
@@ -314,4 +314,16 @@ test("research branch progress advances through search, results and synthesis, r
   branch.steps.push({ id: "retry", createdAt: timestamp, kind: "thinking", content: "**Trying another source**" });
   assert.match(render(), /Source unavailable: network denied/);
   assert.match(render(), /Trying another source/);
+});
+
+
+test("running branch promotes an intermediate source failure over its phase", () => {
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent: () => undefined,
+    subagents: [buildSubagent({ status: "running", steps: [{
+      id: "search", createdAt: timestamp, kind: "tool", status: "running", input: "query",
+      content: "Searching PubMed\nError: source unavailable\n", toolName: "search_pubmed",
+    }] })],
+  }));
+  assert.match(html, /Error: source unavailable/);
 });

@@ -30,6 +30,6 @@ export interface McpTransportClient {
    * this.
    */
   close?(): Promise<void>;
-  invoke(request: McpInvokeRequest, signal?: AbortSignal): Promise<McpInvokeResponse>;
+  invoke(request: McpInvokeRequest, signal?: AbortSignal, onProgress?: (chunk: string) => void): Promise<McpInvokeResponse>;
   reload(proxies?: Record<string, ResolvedProxy>, signal?: AbortSignal): Promise<McpCatalog>;
 }

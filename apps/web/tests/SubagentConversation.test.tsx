@@ -142,7 +142,7 @@ test("running steps stay expanded and failed SubAgents expose their error", () =
     }],
   }));
   assert.equal(runningEntries[0]?.type === "tool" && runningEntries[0].expanded, true);
-  assert.equal(runningEntries[0]?.type === "tool" && runningEntries[0].trace.output, undefined);
+  assert.equal(runningEntries[0]?.type === "tool" && runningEntries[0].trace.output, "Waiting for results");
 
   const html = renderToStaticMarkup(createElement(SubagentConversation, {
     onBack: () => undefined,
@@ -152,4 +152,16 @@ test("running steps stay expanded and failed SubAgents expose their error", () =
   }));
   assert.match(html, /Provider interrupted the child run/);
   assert.match(html, /class="failed">failed<\/em>/);
+});
+
+
+test("completed child tool details retain progress without keeping a live failure", () => {
+  const entries = subagentTimelineEntries(buildSubagent({ steps: [{
+    id: "search", createdAt: timestamp, kind: "tool", status: "completed", input: "query",
+    content: "5 papers", progress: "Error: retrying\n", toolName: "search_pubmed",
+  }] }));
+  const entry = entries[0];
+  assert.ok(entry?.type === "tool");
+  assert.match(entry.trace.output!, /Error: retrying[\s\S]*5 papers/);
+  assert.equal(entry.liveFailure, undefined);
 });

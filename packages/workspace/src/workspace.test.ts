@@ -2137,3 +2137,39 @@ test("review_checkpoint exposes only versions and reason to its callback", async
   });
   assert.equal((result.details as { checkpoint: { status: string } }).checkpoint.status, "completed");
 });
+
+
+test("foreground Shell forwards incremental logs before completion without losing final output", async () => {
+  const job = { id: "job", state: "running" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const chunks: string[] = [];
+  const cursors: number[] = [];
+  let waits = 0;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("unused"); },
+    shellExecutions: {
+      start: async () => job,
+      wait: async (_id, ms) => {
+        assert.ok(ms <= 250);
+        waits++;
+        if (waits === 2) {
+          assert.deepEqual(chunks, ["Searching PubMed\nError: source unavailable\n"]);
+          return { ...job, state: "failed" };
+        }
+        return job;
+      },
+      logs: async (_id, cursor) => {
+        cursors.push(cursor!);
+        return { chunks: waits === 1 ? [
+          { cursor: 0, stream: "stdout" as const, text: "Searching PubMed\n" },
+          { cursor: 1, stream: "stderr" as const, text: "Error: source unavailable\n" },
+        ] : [], nextCursor: 2, retentionTruncated: false, truncated: false };
+      },
+      get: async () => job, list: () => [job], cancel: async () => job,
+    },
+  });
+  const result = await tools.find(tool => tool.name === "run_shell")!.execute("shell", { command: "search", wait_ms: 5000 }, undefined, chunk => chunks.push(chunk));
+  assert.equal(result.isError, true);
+  assert.deepEqual(cursors, [0, 2]);
+  assert.match(result.content[0]!.text, /failed/);
+});

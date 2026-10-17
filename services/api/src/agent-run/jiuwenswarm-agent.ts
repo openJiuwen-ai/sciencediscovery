@@ -284,6 +284,7 @@ class JiuwenSwarmAgent implements NativeAgentHandle {
     // The same registry the native loop dispatches through: output guard, detail sanitisation,
     // neutralised untrusted content, loop protection, the standard error shape.
     const registry = createToolRegistry(this.options, plugins, durable, {
+      onProgress: (call, chunk) => this.emit({ type: "tool_execution_progress", toolCallId: call.id, toolName: call.name, chunk }),
       ...(trajectory.enabled ? { recordResult: (input) => trajectory.observe(input as never) } : {}),
     });
     const tools = new Map(registry.values().map((tool) => [tool.name, tool]));

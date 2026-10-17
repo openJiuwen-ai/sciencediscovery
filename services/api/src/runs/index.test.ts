@@ -205,3 +205,14 @@ test("run snapshots narrow legacy Responses max to the selected model wire capab
   assert.equal(snapshot.thinkingMode, "enabled");
   assert.equal(snapshot.thinkingEffort, "xhigh");
 });
+
+
+test("completed subagent tools retain intermediate output beside their final result", () => {
+  const step = buildSubagentToolStep({ type: "tool_execution_end", toolCallId: "search", toolName: "search_pubmed", isError: false,
+    result: { content: [{ type: "text", text: "5 papers" }] },
+  }, { id: "search", createdAt: "2026-10-17T00:00:00Z", kind: "tool", status: "running", input: "query",
+    content: "Error: retrying\n", progress: "Error: retrying\n" });
+  assert.equal(step.content, "5 papers");
+  assert.equal(step.progress, "Error: retrying\n");
+  assert.equal(step.input, "query");
+});

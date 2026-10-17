@@ -19,6 +19,7 @@ export type AgentEvent = { evidence?: AgentEventEvidence } & (
   | { responseId: string; turn: number; type: "response_settled" }
   | { type: "model_usage"; usage?: ModelUsage; usageReported: boolean }
   | { args: Record<string, unknown>; toolCallId: string; toolName: string; type: "tool_execution_start" }
+  | { chunk: string; toolCallId: string; toolName: string; type: "tool_execution_progress" }
   | { isError: boolean; result: AgentToolResult; toolCallId: string; toolName: string; type: "tool_execution_end" }
   | { type: "usage"; usage: SubagentUsage }
   /** The last turn was cut at `max_tokens`. Emitted only when it was, so a

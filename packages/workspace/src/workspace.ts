@@ -289,7 +289,7 @@ export interface WorkspaceToolOptions {
   mcpTools?: Array<{
     description: string;
     displayName: string;
-    execute: (toolCallId: string, input: JsonValue, signal?: AbortSignal) => Promise<unknown>;
+    execute: (toolCallId: string, input: JsonValue, signal?: AbortSignal, onProgress?: (chunk: string) => void) => Promise<unknown>;
     inputSchema: Record<string, unknown>;
     name: string;
     routing: {
@@ -1389,7 +1389,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const runShell: AgentTool<typeof shellParameters> = {
       description: "Run a command (including python -m, Python files, or Rscript) in a fresh Runner sandbox Shell. Choose runner_id and environment_id from the catalogs; the environment's latest state is used and mounted read-only. cwd is relative to this Agent's workspace. Provide exactly one of command or scriptPath; scripts may also come from the read-only $SCIENCEDISCOVERY_SKILLS_DIR mount. cd/export and interpreter variables do not persist between calls. Install/update/remove dependencies with environment management tools, not Shell. Network and filesystem access follow the authorized sandbox policy. Large output is bounded; use read_tool_output for retained output."
         + (options.shellExecutions ? " Foreground execution waits up to wait_ms (default 10000); background=true returns after acceptance. A wait deadline does not stop the command. Retain the returned Execution ID and use execution_status/logs/cancel; do not resubmit a running or unknown command." : ""),
-      execute: async (toolCallId, params, signal) => {
+      execute: async (toolCallId, params, signal, onProgress) => {
         if (Boolean(params.command) === Boolean(params.scriptPath)) {
           throw new Error("Provide exactly one of command or scriptPath");
         }
@@ -1412,7 +1412,23 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           let execution = await options.shellExecutions.start(code, {
             environmentId: params.environment_id, cwd,
           }, signal, toolCallId, params.runner_id);
-          if (!params.background) execution = await options.shellExecutions.wait(execution.id, params.wait_ms ?? 10_000, signal);
+          if (!params.background) {
+            const deadline = Date.now() + (params.wait_ms ?? 10_000);
+            let cursor = 0;
+            do {
+              signal?.throwIfAborted();
+              execution = await options.shellExecutions.wait(execution.id,
+                onProgress ? Math.min(250, Math.max(0, deadline - Date.now())) : Math.max(0, deadline - Date.now()), signal);
+              if (onProgress) {
+                try {
+                  const page = await options.shellExecutions.logs(execution.id, cursor);
+                  cursor = page.nextCursor;
+                  const chunk = page.chunks.map((item) => item.text).join("");
+                  if (chunk) onProgress(chunk);
+                } catch { /* Log observation must not change the command outcome. */ }
+              }
+            } while (onProgress && (execution.state === "queued" || execution.state === "running") && Date.now() < deadline);
+          }
           const pending = execution.state === "queued" || execution.state === "running";
           return {
             isError: ["failed", "cancelled", "unknown"].includes(execution.state),
@@ -1949,8 +1965,8 @@ export function createMcpTools(options: Pick<WorkspaceToolOptions, "mcpTools" | 
     tools.push({
       deferred: true,
       description: mcpTool.description,
-      execute: async (toolCallId, params, signal) => {
-        const result = await mcpTool.execute(toolCallId, params as JsonValue, signal);
+      execute: async (toolCallId, params, signal, onProgress) => {
+        const result = await mcpTool.execute(toolCallId, params as JsonValue, signal, onProgress);
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
           details: result,

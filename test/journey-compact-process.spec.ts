@@ -49,7 +49,7 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
   const stub = await scriptedModel([
     [
       { tool: "run_shell", text: "我会先生成报告，再核对产物。", reasoning: "**先生成一个可核对的本地报告**\n完整内部推理仅供展开查看。", delayMs: 7000,
-        arguments: { command: "sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK; echo 'Error: quoted log contents'" } },
+        arguments: { command: "echo LIVE_EVIDENCE; echo 'Error: source unavailable, retrying' >&2; sleep 6; mkdir -p results; printf '# Card check\\n\\nCARD_OK\\n' > results/report.md; echo CARD_OK; echo 'Error: quoted log contents'" } },
       { tool: "declare_artifact", arguments: { path: "results/report.md" } },
       { text: "报告已生成，内容是 CARD_OK。" },
     ],
@@ -135,6 +135,9 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(tool).not.toHaveAttribute("open", "");
         await expect(tool.locator(".tool-content")).toBeHidden();
         await expect(tool.locator(".timeline-command")).toContainText("sleep 6");
+        await expect(tool.locator(".timeline-evidence")).toContainText("LIVE_EVIDENCE");
+        await expect(tool.locator(".timeline-failure-summary")).toContainText("source unavailable");
+        await expect(tool).toHaveClass(/running/);
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const authorization = (await tool.locator(".tool-authorization").boundingBox())!;
@@ -182,9 +185,10 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
         await expect(tool).not.toHaveAttribute("open", "");
         await tool.locator(":scope > summary").click();
         await expect(tool).not.toHaveCSS("border-top-width", "0px");
-        const stdout = tool.locator(".tool-io-section").filter({ hasText: "stdout" });
-        await stdout.locator(":scope > summary").click();
-        await expect(stdout.locator("pre")).toContainText("CARD_OK");
+        const output = tool.locator(".tool-io-section").filter({ hasText: "CARD_OK" }).filter({ hasNotText: "mkdir -p" });
+        await output.locator(":scope > summary").click();
+        await expect(output.locator("pre")).toContainText("CARD_OK");
+        await expect(output.locator("pre")).toContainText("LIVE_EVIDENCE");
         await expect(tool.locator(".tool-authorization")).toHaveText("已授权");
         const artifact = page.getByRole("region", { name: "本轮产物", exact: true });
         await expect(artifact).toBeVisible();

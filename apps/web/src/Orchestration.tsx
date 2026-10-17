@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { compactStatus, reasoningStatus, researchLabel, returnedPaperCount } from "./timeline/research-label.js";
+import { compactStatus, reasoningStatus, reportedFailure, researchLabel, returnedPaperCount } from "./timeline/research-label.js";
 import { ProjectRecordSlot } from "./plugins/project-views.js";
 import { useEffect, useState, type FormEvent } from "react";
 
@@ -55,9 +55,14 @@ function subagentSummary(subagent: Subagent, t: Translate): string {
   if (subagent.status === "running" && step?.kind === "thinking") return reasoningStatus(step.content) ?? t("timeline.thinking");
   if (subagent.status === "running" && step?.kind === "assistant") return compactStatus(step.content);
   if (subagent.status === "running" && step?.kind === "tool") {
-    const count = step.status === "completed" ? returnedPaperCount(step.content) : undefined;
+    const hasOutput = step.status === "completed" || step.content !== step.input;
+    if (hasOutput && step.status === "running") {
+      const failure = reportedFailure(step.content);
+      if (failure) return failure;
+    }
+    const count = hasOutput ? returnedPaperCount(step.content) : undefined;
     if (count !== undefined) return t("timeline.papersReturned", { count });
-    return (step.status === "completed" && step.content ? compactStatus(step.content) : undefined) ?? researchLabel({ name: step.toolName ?? t("subagent.step.tool"), args: step.args, input: step.input });
+    return (hasOutput && step.content ? compactStatus(step.content) : undefined) ?? researchLabel({ name: step.toolName ?? t("subagent.step.tool"), args: step.args, input: step.input });
   }
   return "";
 }

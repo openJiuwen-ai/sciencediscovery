@@ -21,6 +21,8 @@ import { MarkdownRenderer } from "./Markdown.js";
 import { subagentStatusLabel } from "./Orchestration.js";
 import { RunTimeline, type RunTimelineEntry } from "./timeline/RunTimeline.js";
 
+import { evidencePreview, reportedFailure } from "./timeline/research-label.js";
+
 const TURN_STARTED = /^Turn (\d+) started$/i;
 
 /** Project a persisted SubAgent child stream into the same timeline used by the main Agent. */
@@ -50,14 +52,17 @@ export function subagentTimelineEntries(subagent: Subagent): RunTimelineEntry[] 
     }
 
     if (step.kind === "tool") {
+      const output = status !== "running" || (step.input !== undefined && step.content !== step.input) ? step.content : undefined;
       entries.push({
+        ...(output ? { preview: evidencePreview(output), ...(status === "running" ? { liveFailure: reportedFailure(output) } : {}) } : {}),
         expanded: status === "running",
         id,
         trace: {
           id: `${subagent.id}:${step.toolCallId ?? step.id}`,
           ...(step.input !== undefined ? { input: step.input } : {}),
           name: step.toolName ?? "tool",
-          ...(status === "running" ? {} : { output: step.content }),
+          ...(output !== undefined ? { output: status !== "running" && step.progress ? `${step.progress}\n${output}` : output } : {}),
+          ...(step.args ? { args: step.args } : {}),
           status,
         },
         type: "tool",

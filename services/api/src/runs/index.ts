@@ -291,6 +291,7 @@ export function buildCompletedToolTrace(event: ToolExecutionEndRunEvent, text = 
 export function buildSubagentToolStep(event: ToolExecutionEndRunEvent, runningStep?: SubagentStep): SubagentStep {
   return {
     content: aggregateToolText(event.result) ?? (event.isError ? "Tool failed" : "Tool completed"),
+    ...(runningStep?.progress ? { progress: runningStep.progress } : {}),
     createdAt: runningStep?.createdAt ?? new Date().toISOString(),
     ...clonedDetailsEntry(event.result.details),
     id: event.toolCallId,
@@ -1933,6 +1934,13 @@ async function executeAgentRun(
               toolName: event.toolName,
             }, event.evidence);
           }
+          if (event.type === "tool_execution_progress") {
+            const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
+            if (runningStep) {
+              const progress = (runningStep.progress ?? "") + event.chunk;
+              publishStep({ ...runningStep, content: progress, progress }, event.evidence);
+            }
+          }
           if (event.type === "tool_execution_end") {
             activeMessageStep = undefined;
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
@@ -2149,6 +2157,9 @@ async function executeAgentRun(
       };
       traces.set(trace.id, trace);
       void publish({ trace, type: "tool.started" });
+    }
+    if (event.type === "tool_execution_progress") {
+      void publish({ chunk: event.chunk, toolCallId: event.toolCallId, type: "tool.output" });
     }
     if (event.type === "tool_execution_end") {
       const text = aggregateToolText(event.result);
