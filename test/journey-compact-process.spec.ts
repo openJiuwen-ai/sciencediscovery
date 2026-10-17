@@ -28,6 +28,7 @@ test.describe("journey-compact-process.spec", { tag: ["@isolation:fresh", "@cate
  *   1. Open a local Project and check default-open workspace folders and closed secondary sections.
  *   2. Collapse Files, send a request, verify streaming updates keep it closed, then grant permission and observe the running tool.
  *   3. Check completed records, copyable output and the unchanged declared Artifact card.
+ *      Inspect the trajectory transcript with a boundary between live progress and the final result.
  *   4. Run a failing tool and verify its compact error record.
  *   5. Reload on a narrow viewport and inspect persisted records and workspace files.
  * Environment: Isolated API/Runner on E2E_BASE_URL with a run-owned data directory.
@@ -240,6 +241,30 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       await expect(select).toHaveAttribute("aria-pressed", "false");
       await physical.locator(":scope > summary").click();
       await expect(physical.locator(":scope > summary button")).toHaveCount(0);
+    });
+    await journey.step("轨迹保留进度与最终结果的边界", "命令输出完整保留实时证据，并与最终 JSON 结果分隔。", async () => {
+      const base = `${apiBaseUrl()}/api/sessions/${fixture!.session.id}/trajectory`;
+      const response = await page.request.get(base, { headers: authorizationHeader() });
+      expect(response.ok()).toBe(true);
+      const index = await response.json() as { entries: Array<{ id: string; eventType?: string }> };
+      let target: { id: string; progress: string; result: string } | undefined;
+      for (const entry of index.entries.filter(entry => entry.eventType === "tool.output")) {
+        const detailResponse = await page.request.get(`${base}/detail?id=${encodeURIComponent(entry.id)}`, { headers: authorizationHeader() });
+        expect(detailResponse.ok()).toBe(true);
+        const detail = await detailResponse.json() as { value: { packets?: Array<{ event: { chunk?: string; progress?: boolean } }> } };
+        const packets = detail.value.packets ?? [];
+        const progress = packets.filter(p => p.event.progress === true).map(p => p.event.chunk ?? "").join("");
+        const result = packets.filter(p => p.event.progress !== true).map(p => p.event.chunk ?? "").join("");
+        if (progress.includes("LIVE_EVIDENCE") && result) { target = { id: entry.id, progress, result }; break; }
+      }
+      expect(target).toBeDefined();
+      await page.getByRole("button", { name: "轨迹", exact: true }).click();
+      const viewer = page.getByRole("region", { name: "Session 轨迹" });
+      await viewer.locator(`.trajectory-event-list [data-entry-id="${target!.id}"]`).click();
+      const output = viewer.locator(".trajectory-readable section").filter({ has: page.getByRole("heading", { name: "命令输出", exact: true }) }).locator("pre");
+      await expect(output).toHaveText(`${target!.progress}\n\n---\n\n${target!.result}`);
+      expect(JSON.parse(target!.result)).toBeTruthy();
+      await page.getByRole("button", { name: "轨迹", exact: true }).click();
     });
     await journey.step("失败也去框并保留错误", "失败工具有红点和失败文字，展开后错误原文可见。",
       async () => {

@@ -153,6 +153,21 @@ test("tools parse arguments, retain invalid JSON and show results, MCP payloads 
   assert.deepEqual(sections("mcp", { payloads: { request: { arguments: { query: "protein" } }, rawResponse: { content: [{ text: "result" }] } } }).map(s => s.value), [{ query: "protein" }, [{ text: "result" }]]);
 });
 
+test("command transcripts separate progress from final output without dropping either", () => {
+  for (const wrapped of [false, true]) {
+    const packets = [
+      { chunk: "searching ", progress: true }, { chunk: "papers", progress: true },
+      { chunk: '{"papers":' }, { chunk: "5}" },
+    ];
+    const render = (values: typeof packets) => sections("tool", { type: "tool.output",
+      packets: values.map(event => wrapped ? { event } : event) });
+    assert.equal(render(packets)[0]!.value, 'searching papers\n\n---\n\n{"papers":5}');
+    assert.equal(render(packets.slice(0, 2))[0]!.value, "searching papers");
+    assert.equal(render(packets.slice(2))[0]!.value, '{"papers":5}');
+    assert.equal(render([{ chunk: "", progress: true }, ...packets.slice(2)])[0]!.value, '{"papers":5}');
+  }
+});
+
 test("input and state summaries use frozen data, not an inferred current state", () => {
   assert.deepEqual(sections("input", { input: { systemPrompt: "rules", history: [{ role: "user", content: "question" }], tools: [] } }).map(s => s.value), ["rules", "question", []]);
   assert.deepEqual(sections("state", { phase: "completed", turn: 2, history: [], checkpoint: { components: [{ id: "plan", revision: "frozen", fidelity: "exact" }] } })[1]!.value, [{ id: "plan", revision: "frozen", fidelity: "exact" }]);
