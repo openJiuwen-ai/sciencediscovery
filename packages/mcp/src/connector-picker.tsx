@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConnectorId, ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -114,7 +114,7 @@ export function ConnectorPicker({
                   onChange={() => onToggle(connector.id)}
                   type="checkbox"
                 />
-                <span><strong>{name}</strong><small>{connector.publisher}</small>{unavailable ? <small className="connector-picker-status" role="status">{t("connectors.catalogUnavailable", { error: status.error ?? status.status })}</small> : null}</span>
+                <span><strong>{name}</strong><small>{connector.publisher}</small>{unavailable ? <small className="connector-picker-status" role="status">{status.status === "degraded" ? t("connectors.catalogDegraded", { error: status.error ?? status.status }) : t("connectors.catalogUnavailable", { error: status.error ?? status.status })}</small> : null}</span>
               </label>
               {connector.termsUrl ? <a
                 aria-label={policyLabel}

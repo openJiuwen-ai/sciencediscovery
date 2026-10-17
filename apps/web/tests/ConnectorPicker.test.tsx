@@ -117,6 +117,18 @@ test("surfaces catalog readiness when an enabled connector has no injectable too
   assert.match(markup, /MCP unavailable: MCP catalog has not been refreshed/);
 });
 
+test("distinguishes a degraded connector that still has usable MCP tools", () => {
+  const degraded: McpSourceStatus = {
+    availableTools: ["search"], error: "Missing or incompatible MCP tools: details", lastCheckedAt: "2026-10-17T00:00:00.000Z",
+    missingTools: ["details"], sourceId: "pubmed", status: "degraded",
+  };
+  const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
+    connectors, defaultOpen: true, enabledIds: ["pubmed"], onToggle: () => undefined,
+    sourceStatuses: { pubmed: degraded },
+  }));
+  assert.match(markup, /Some MCP tools unavailable: Missing or incompatible MCP tools: details/);
+});
+
 test("disables the checkboxes but keeps the list readable while a run is active", () => {
   const markup = renderToStaticMarkup(createElement(ConnectorPicker, {
     connectors,
