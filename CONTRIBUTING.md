@@ -457,6 +457,29 @@ why — do not weaken an assertion to get a green run.
 Check `git status` before committing: no `.tmp/`, no local editor or tooling
 config, no private notes.
 
+### From pull request to merge
+
+The steps above end with an open pull request. From there, the path into
+`main` is:
+
+1. GitHub Actions runs the L1 gate and then the L2 / `pr` gate on the pull
+   request — the four local slices above, run again on the PR head.
+2. Request review from the code owners listed in
+   [.github/CODEOWNERS](.github/CODEOWNERS). While you wait, an automated
+   review also runs on the pull request.
+3. Ask a maintainer to add the pull request to the merge queue, or wait for
+   the automation to accept it. A pull request enters the queue only when its
+   gates have passed and no code review comments are still open.
+4. The merge queue runs L3 / `merge` on the group SHA — the "Reviewed PR
+   enters merge queue" row in [What the pipeline covers](#what-the-pipeline-covers).
+5. When L3 passes, the pull request merges into `main` automatically.
+6. If L3 does not pass, the pull request is removed from the merge queue.
+   Address the failure, push the fix, and request review again.
+
+The queue's branch rules, required checks and Environment credentials are
+administrator configuration, not contributor steps; they are documented in
+[.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).
+
 ## License headers
 
 Every source file starts with the Apache-2.0 header below, written in that
