@@ -29,6 +29,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { resolveWorkspaceFile, scanWorkspace } from "@sciencediscovery/workspace";
 import { CasStore } from "@sciencediscovery/cas";
+import { normalizeUsage } from "@sciencediscovery/model";
 
 import { SessionStore } from "./store.js";
 
@@ -39,24 +40,6 @@ const MAX_VISION_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_VISION_TOTAL_BYTES = 12 * 1024 * 1024;
 const MAX_VISION_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_VISION_PROMPT = "Describe the scientific content of these extracted paper pages and figures. Transcribe only labels and values needed to explain plots, diagrams, or tables; do not invent unreadable details. Distinguish direct observations from interpretation.";
-
-function numberFromUsage(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
-}
-
-function extractOpenAiUsage(value: unknown): PaperVisionRun["modelUsage"] | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const usage = value as Record<string, unknown>;
-  const inputTokens = numberFromUsage(usage.prompt_tokens ?? usage.input_tokens);
-  const outputTokens = numberFromUsage(usage.completion_tokens ?? usage.output_tokens);
-  const totalTokens = numberFromUsage(usage.total_tokens);
-  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) return undefined;
-  return {
-    inputTokens: inputTokens ?? Math.max(0, (totalTokens ?? 0) - (outputTokens ?? 0)),
-    outputTokens: outputTokens ?? Math.max(0, (totalTokens ?? 0) - (inputTokens ?? 0)),
-    totalTokens: totalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0),
-  };
-}
 
 interface StorePaperOptions {
   bytes: Buffer;
@@ -323,7 +306,8 @@ export class PaperService {
     const responseBody = JSON.parse(responseBytes.toString("utf8")) as { choices?: Array<{ message?: { content?: string } }>; usage?: unknown };
     const content = responseBody.choices?.[0]?.message?.content?.trim();
     if (!content) throw new Error("Vision model returned no content");
-    const modelUsage = extractOpenAiUsage(responseBody.usage);
+    const usage = normalizeUsage(responseBody.usage, "openai-chat-completions");
+    const modelUsage = usage && { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, totalTokens: usage.totalTokens };
 
     const id = randomUUID();
     const resultPath = `${dirname(acquisition.pdfPath)}/vision/${id}.md`;

@@ -40,6 +40,7 @@ import type { ModelInvocationUsage } from "@sciencediscovery/schema";
 import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
 import { apiLog } from "../logging.js";
+import { parseProviderUsage } from "../provider-usage.js";
 import type { SessionStore } from "../store.js";
 
 /** What a run token is allowed to do, and for whom. */
@@ -251,20 +252,20 @@ export async function handleEvolveCompletion(
   const payload = await upstream.json().catch(() => ({})) as Record<string, unknown>;
   const choices = Array.isArray(payload.choices) ? payload.choices : [];
   const content = (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
-  const spend = (payload.usage ?? {}) as Record<string, unknown>;
+  const spend = parseProviderUsage(payload.usage, "openai-chat-completions");
   apiLog.info("evolve_llm_call_finished", {
     // Named "count", not "tokens": the operational logger redacts any field
     // whose name looks like a credential, and it redacted these — which left
     // the log unable to answer the one question it was added for. These are
     // counts of output, not secrets.
-    completionCount: Number(spend.completion_tokens ?? -1),
+    completionCount: spend.outputTokens ?? -1,
     contentChars: typeof content === "string" ? content.length : -1,
     elapsedMs: Date.now() - began,
     // The pair that separates "the model thought and said nothing" from "the
     // provider returned nothing at all": the first reports a completion count
     // with no content, the second reports neither. Only one is worth paying
     // for again, and they are indistinguishable from the sidecar.
-    promptCount: Number(spend.prompt_tokens ?? -1),
+    promptCount: spend.inputTokens ?? -1,
     runId,
     status: upstream.status,
   });
@@ -301,17 +302,15 @@ async function recordUsage(
   payload: Record<string, unknown>,
   startedAt: string,
 ): Promise<ModelInvocationUsage> {
-  const reported = payload.usage as
-    | { completion_tokens?: number; prompt_tokens?: number; total_tokens?: number }
-    | undefined;
+  const reported = parseProviderUsage(payload.usage, "openai-chat-completions");
   const record: ModelInvocationUsage = {
     attemptIndex: 0,
-    cacheReadTokens: null,
-    cacheWriteTokens: null,
+    cacheReadTokens: reported.cacheReadTokens,
+    cacheWriteTokens: reported.cacheWriteTokens,
     costUsd: null,
     finishedAt: new Date().toISOString(),
     id: randomBytes(16).toString("hex"),
-    inputTokens: reported?.prompt_tokens ?? null,
+    inputTokens: reported.inputTokens,
     invocationId: `evolve:${grant.runId}`,
     // Its own kind: a search's spend is not a chat turn, and the usage page has
     // to be able to say "this month went on evolution" rather than burying it.
@@ -319,14 +318,14 @@ async function recordUsage(
     model: model.model,
     modelProfileId: model.id,
     modelProfileName: model.name,
-    outputTokens: reported?.completion_tokens ?? null,
+    outputTokens: reported.outputTokens,
     runId: grant.runId,
     sessionId: grant.sessionId,
     startedAt,
-    totalTokens: reported?.total_tokens ?? null,
+    totalTokens: reported.totalTokens,
     // A provider that reports nothing is recorded as such rather than as zero:
     // "we do not know" and "it was free" are different facts.
-    usageStatus: reported?.total_tokens === undefined ? "provider-not-reported" : "reported",
+    usageStatus: reported.usageStatus,
   };
   await deps.store.appendModelInvocationUsage(record);
   return record;

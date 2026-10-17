@@ -56,3 +56,16 @@ test("USG-015 incomplete provider usage stays unreported", () => {
   assert.equal(missing.usageStatus, "provider-not-reported");
   assert.equal(missing.totalTokens, null);
 });
+
+test("API accounting respects the request dialect and exposes unknown alias conflicts", () => {
+  const raw = { prompt_tokens: 30393, completion_tokens: 84, input_tokens: 0, output_tokens: 0, total_tokens: 30477 };
+  const chat = parseProviderUsage(raw, "openai-chat-completions");
+  assert.equal(chat.inputTokens, 30393);
+  assert.equal(chat.outputTokens, 84);
+  assert.equal(chat.usageStatus, "reported");
+  const generic = parseProviderUsage(raw);
+  assert.equal(generic.outputTokens, 84);
+  assert.ok(generic.aliasConflict);
+  const responses = parseProviderUsage({ input_tokens: 8, output_tokens: 5, completion_tokens: 0, total_tokens: 13 }, "openai-responses");
+  assert.equal(responses.outputTokens, 5);
+});
