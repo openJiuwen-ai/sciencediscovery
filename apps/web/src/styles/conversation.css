@@ -159,6 +159,9 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .connector-picker-popover a { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 auto; border-radius: var(--radius-xs); color: var(--text-faint); }
 .connector-picker-popover a:hover { background: var(--accent-soft); color: var(--accent-ink); }
 .connector-picker-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.composer-network-preflight { display: grid; gap: 5px; margin: 8px 0; border: 1px solid var(--warning-accent); border-radius: var(--radius-m); background: var(--warning-soft); color: var(--text); padding: 9px 10px; font-size: 12px; }
+.composer-network-preflight > div { display: flex; gap: 8px; }
+.composer-network-preflight button { border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--accent-ink); cursor: pointer; font: inherit; font-weight: 700; padding: 0; text-decoration: underline; }
 .connector-picker-group { margin-top: 6px; }
 .connector-picker-group:first-of-type { margin-top: 0; }
 .connector-picker-group-label { display: block; margin-bottom: 2px; color: var(--text-faint); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
