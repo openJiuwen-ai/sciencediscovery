@@ -791,9 +791,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/schema
     devDependencies:
-      '@sciencediscovery/executor':
-        specifier: workspace:*
-        version: link:../../packages/executor
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1

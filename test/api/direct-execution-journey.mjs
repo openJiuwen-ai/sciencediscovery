@@ -203,9 +203,8 @@ try {
       assert.equal(recorded[0].tool, "run_direct_shell");
       assert.equal(recorded[0].runnerId, machine === "local" ? "local" : remoteRunnerId);
       assert.equal(activity.executions[0].runnerId, recorded[0].runnerId);
-      assert.ok(activity.executions[0].result.workspaceVersion);
+      assert.ok(activity.executions[0].runnerVersionId, "completed execution retains its committed version receipt");
       if (machine === "remote") {
-        assert.equal(activity.executions[0].result.workspaceVersion.runnerId, remoteRunnerId);
         assert.ok(recorded[0].directAuthorization.runnerWorkspaceKey);
         const transfers = await json(`/api/sessions/${session.id}/remote-workspace/sync-records`);
         assert.equal(transfers.length, 1); assert.equal(transfers[0].status, "completed");

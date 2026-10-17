@@ -19,8 +19,8 @@ import { mkdtemp, mkdir, rm, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
-import type { ShellExecutionRequest } from "@sciencediscovery/schema";
-import { RunnerClient } from "@sciencediscovery/executor";
+import type { ShellExecutionRequest, DirectExecutionCapability, ManagedExecution, ExecutionLogPage, ExecutionOwner, RunnerExecutionCapability } from "@sciencediscovery/schema";
+import { createExecutionSignature, EXECUTION_SIGNATURE_HEADER, EXECUTION_TIMESTAMP_HEADER } from "./request-auth.js";
 import type { AddressInfo } from "node:net";
 import { startRunnerServer } from "./server.js";
 import { directExecutionCapability, executeDirectShell, type ExecutorConfig } from "./executor.js";
@@ -92,7 +92,28 @@ async function remoteFixture(t: TestContext) {
   const server = await startRunnerServer({ ...f.config, authToken: "test-token", host: "127.0.0.1", port: 0,
     scientificEnvsEnabled: false, npuBrokerEnabled: false });
   t.after(async () => { server.closeAllConnections(); await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); });
-  const client = new RunnerClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "test-token");
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const json = async <T>(path: string, input?: unknown, signed = false): Promise<T> => {
+    const body = input === undefined ? undefined : JSON.stringify(input);
+    const timestamp = String(Date.now());
+    const response = await fetch(`${origin}${path}`, { method: body ? "POST" : "GET", body,
+      headers: { authorization: "Bearer test-token", "content-type": "application/json",
+        ...(signed ? { [EXECUTION_TIMESTAMP_HEADER]: timestamp,
+          [EXECUTION_SIGNATURE_HEADER]: createExecutionSignature("test-token", timestamp, body!) } : {}) },
+      signal: AbortSignal.timeout(5000) });
+    const value = await response.json();
+    if (!response.ok) throw new Error((value as { error: string }).error);
+    return value as T;
+  };
+  const client = {
+    executionCapability: () => json<RunnerExecutionCapability>("/execution-capability"),
+    directExecutionCapability: (_signal: undefined, scope: { runnerWorkspaceKey: string; cwd: string }) =>
+      json<DirectExecutionCapability>(`/direct-execution-capability?${new URLSearchParams(scope)}`),
+    startShellExecution: (request: ShellExecutionRequest) => json<ManagedExecution>("/direct-shell-executions", request, true),
+    getShellExecution: (id: string, owner: ExecutionOwner) => json<ManagedExecution>(`/shell-executions/${id}?${new URLSearchParams({ ...owner })}`),
+    shellExecutionLogs: (id: string, owner: ExecutionOwner) => json<ExecutionLogPage>(`/shell-executions/${id}/logs?${new URLSearchParams({ ...owner })}`),
+    cancelShellExecution: (id: string, owner: ExecutionOwner) => json<ManagedExecution>(`/shell-executions/${id}/cancel?${new URLSearchParams({ ...owner })}`, {}),
+  };
   const key = "session/main";
   const scope = await client.directExecutionCapability(undefined, { runnerWorkspaceKey: key, cwd: "" });
   assert.ok(scope.workspaceRoot);
