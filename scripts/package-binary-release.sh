@@ -26,7 +26,7 @@
 #
 # This is the binary deployment path and it never involves Docker, neither at
 # build time nor at run time. Container users take the separate image path
-# documented in docs/zh/how-to/deployment.md.
+# documented in docs/en/getting-started/deployment.md.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
