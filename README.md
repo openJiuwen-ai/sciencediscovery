@@ -90,7 +90,7 @@ Besides the browser, a running `serve` accepts tasks from the terminal. Run `run
 ./ScienceDiscovery run --auto-approve --output text "Explain what a p-value does and does not tell you, in one paragraph" > answer.md
 ```
 
-On a terminal, `run` writes the answer to stdout, progress to stderr, and asks you to approve each permission request. When stdout is piped or redirected, it defaults to JSONL, errors included, and it cannot ask for approval, so it refuses to start unless you pass `--auto-approve`. That option approves every tool action of the run's session without asking; use it only for tasks and data you would approve anyway. The [CLI reference](https://sciencediscovery.github.io/docs/reference/cli.html) lists every command and option.
+On a terminal, `run` writes the answer to stdout, progress to stderr, and asks you to approve each permission request. When stdout is piped or redirected, it defaults to JSONL, errors included, and it cannot ask for approval, so it refuses to start unless you pass `--auto-approve`. That option approves the session's tool actions without asking, except direct host execution after a sandbox failure, which always needs explicit consent; use it only for tasks and data you would approve anyway. The [CLI reference](https://sciencediscovery.github.io/docs/reference/cli.html) describes every command, and `./ScienceDiscovery help` prints every option.
 
 ## Requirements
 

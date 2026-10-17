@@ -84,7 +84,7 @@ ScienceDiscovery 不内置模型，需接入你自己的 API。打开左侧栏�
 ./ScienceDiscovery run --auto-approve --output text "用一段话解释 p 值能说明什么、不能说明什么" > answer.md
 ```
 
-在终端中，`run` 把答案写入 stdout、进度写入 stderr，并逐一询问权限请求。stdout 被管道或重定向时，默认输出 JSONL（错误也是 JSON 行），且无法询问审批，因此必须传入 `--auto-approve`，否则拒绝启动。该选项会让本次运行所在会话的所有工具操作无需询问即获批准，请只用于你本来就会批准的任务和数据。全部命令与选项参见 [CLI 参考](https://sciencediscovery.github.io/zh/docs/reference/cli.html)。
+在终端中，`run` 把答案写入 stdout、进度写入 stderr，并逐一询问权限请求。stdout 被管道或重定向时，默认输出 JSONL（错误也是 JSON 行），且无法询问审批，因此必须传入 `--auto-approve`，否则拒绝启动。该选项会让本次运行所在会话的工具操作无需询问即获批准，但沙箱失效后直接在主机上执行仍须明确同意；请只用于你本来就会批准的任务和数据。全部命令参见 [CLI 参考](https://sciencediscovery.github.io/zh/docs/reference/cli.html)，`./ScienceDiscovery help` 会列出全部选项。
 
 ## 环境要求
 
