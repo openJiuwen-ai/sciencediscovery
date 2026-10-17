@@ -189,7 +189,7 @@ test("Custom MCP and Inspector user journey", { tag: "@mocked" }, async ({ page,
  * Steps:
  *   1. Select the first custom connector and call its echo tool.
  *   2. Add a second connector to the Session and call its echo tool in a new run.
- *   3. Disable a selected server, verify an actionable failed Run, re-enable and recover; clean up.
+ *   3. Disable a selected server: a nonblocking run completes with the omission visible; a blocking run waits on the repair card, then recovers in the same run after re-enable; clean up.
  * Environment: Isolated local stack and data directory, current local working tree.
  * Type: mocked
  * LLM: Local deterministic OpenAI-compatible stub; no provider API is called.

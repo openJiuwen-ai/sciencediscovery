@@ -1413,7 +1413,7 @@ async function executeAgentRun(
           broker: mcpBroker,
           catalog: mcpCatalog,
           enabledSourceIds: settingsSnapshot.enabledConnectorIds,
-          reportReadiness: (summary) => responseSink.emit({ type: "mcp.readiness", summary }),
+          // Main-run setup already reports readiness for this same source selection.
           emitPermissionRequest: (permissionRequest) => {
             responseSink.emit({ request: permissionRequest, type: "permission.required" });
           },
