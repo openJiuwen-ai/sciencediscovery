@@ -216,9 +216,9 @@ a native-backend pass does not certify Swarm, or vice versa.
 - [Configuration reference](../reference/configuration.md)
 - [Ascend NPU Host Broker](ascend-npu-runner.md)
 
-## Explicit local direct-execution recovery
+## Explicit direct-execution recovery
 
-When the local Runner is reachable but its sandbox is unavailable, the Agent can
+When a configured local or remote Runner is reachable but its sandbox is unavailable, the Agent can
 call `request_direct_execution` with its failed operation ID, an exact shell
 command and a workspace-relative working directory. The conversation displays
 separate host-execution consent, including the target Runner instance, OS account,
@@ -261,9 +261,28 @@ tracking cover only the workspace, not all host effects. Cancellation kills the
 process group; descendants that escape it are not guaranteed to terminate. Host
 changes cannot generally be rolled back.
 
-Delivered scope for issue #276 is local ephemeral system-shell recovery. Managed
-environment selection, remote Runner direct execution, independent SSH maintenance
-and pre-failure direct execution are unavailable. Remote reachability and uncertain
-remote outcomes remain unfinished acceptance scope; #276 must remain open. The
-API journey is `node test/api/direct-execution-journey.mjs` after committing and
-building the candidate; it uses only isolated local services and a scripted model.
+Delivered scope for issue #276 includes local and configured reachable remote
+Runner ephemeral system-shell recovery. The failed operation pins the Runner;
+consent includes its Runner ID and instance, OS account and target-side workspace.
+The Runner validates the logical remote workspace and canonical cwd before consent
+and revalidates them before execution. Grants cannot cross local/remote Runners,
+workspaces or accounts. Prepare remote inputs explicitly; no local files are
+implicitly copied. Remote output remains in its Runner workspace with a committed
+workspace version and execution audit; use explicit workspace transfer to retrieve
+files rather than treating remote paths as local artifacts.
+
+A disconnect before submission executes nothing. A lost submission acknowledgement
+or unresolved observation is an **unknown outcome**, not proof that nothing ran.
+The API retains the Execution ID and never resubmits; reconcile that ID and target
+workspace before any new host command. Unknown outcomes block further direct
+consent for that Agent on the affected Runner. Timeout/cancel uses the existing
+remote execution controls and preserves final errors and workspace versions.
+
+Managed-environment selection, independent SSH maintenance and pre-failure direct
+execution remain unavailable. An unreachable Runner requires an independently
+configured and authorized transport; this path neither creates SSH credentials nor
+repairs that connection. #276 remains open for the deferred maintenance scope.
+The API journey is `node test/api/direct-execution-journey.mjs` after committing and
+building the candidate. Its remote fixture is a separately configured Runner on
+loopback with its own data directory; it does not certify real-network or SSH
+behavior and uses only a local scripted model.

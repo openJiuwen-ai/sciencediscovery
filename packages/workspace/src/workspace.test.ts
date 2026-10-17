@@ -44,6 +44,32 @@ import {
 import type { AgentTool } from "@sciencediscovery/tools";
 import { Type } from "typebox";
 
+test("direct recovery tools describe reachable remote scope and forward consent separately from submission", async () => {
+  const calls: unknown[] = [];
+  const controller = new AbortController();
+  const approved = { authorizationId: "approval", command: "printf hello", cwd: "sub", target: "instance", account: "user", dispatched: false };
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => ({}) as PythonExecutionResult,
+    directExecution: {
+      request: async (...args) => { calls.push(args); return approved; },
+      start: async (...args) => { calls.push(args); return { id: "execution", state: "running" }; },
+    },
+  });
+  const consent = tools.find(tool => tool.name === "request_direct_execution")!;
+  assert.match(consent.description, /configured, reachable local or remote Runner/);
+  assert.match(consent.description, /failed operation pins the Runner/);
+  assert.match(consent.description, /Sandbox Always Allow does not apply/);
+  assert.match(consent.description, /PATH=\/usr\/bin:\/bin/);
+  assert.match(consent.description, /SSH is not provided/);
+  const result = await consent.execute("consent-call", { operation_id: "blocked", command: approved.command, cwd: approved.cwd }, controller.signal);
+  assert.deepEqual(result.details, approved);
+  assert.deepEqual(calls, [[{ operationId: "blocked", command: approved.command, cwd: approved.cwd }, controller.signal, "consent-call"]]);
+  await tools.find(tool => tool.name === "run_direct_shell")!.execute("new-call", {
+    authorization_id: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account,
+  }, controller.signal);
+  assert.deepEqual(calls[1], [{ authorizationId: approved.authorizationId, command: approved.command, cwd: approved.cwd, target: approved.target, account: approved.account }, controller.signal, "new-call"]);
+});
+
 test("Runner waiting instructions distinguish a requested card from repair authorization", async () => {
   const calls: string[] = [];
   const tools = createWorkspaceTools(process.cwd(), {

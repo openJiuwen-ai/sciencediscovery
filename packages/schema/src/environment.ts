@@ -199,6 +199,8 @@ export const SYSTEM_SHELL_SEATBELT_ENVIRONMENT_REVISION_ID = "system-shell-seatb
 
 /** Explicit direct-path consent, carried only by the authenticated control plane. */
 export interface DirectExecutionAuthorization {
+  /** Logical remote workspace selected at consent; absent for local execution. */
+  runnerWorkspaceKey?: string;
   authorizationId: string;
   target: string;
   account: string;
@@ -209,6 +211,9 @@ export interface DirectExecutionAuthorization {
 }
 
 export interface DirectExecutionCapability {
+  /** Target-validated scope, present when a workspace probe was requested. */
+  workspaceRoot?: string;
+  cwd?: string;
   available: boolean;
   target: string;
   account: string;
