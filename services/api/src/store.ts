@@ -2272,7 +2272,7 @@ export class SessionStore {
       assertCurrent?.();
       const session = this.assertSessionWritable(sessionId);
       const normalized = this.normalizeSettings(value);
-      if (normalized.defaultApprovalMode !== undefined) throw new Error("Approval defaults are only supported at Global and Project scope");
+      if (normalized.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       session.settingsOverrides = normalized;
       session.updatedAt = new Date().toISOString();
       this.syncSessionCompatibility(session);
@@ -2756,7 +2756,7 @@ export class SessionStore {
     const settingsOverrides = this.normalizeSettings(typeof input === "string"
       ? { modelId: input, reviewModelId: input }
       : input);
-    if (settingsOverrides.defaultApprovalMode !== undefined) throw new Error("Approval defaults are only supported at Global and Project scope");
+    if (settingsOverrides.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
     const resolved = this.resolveSettingsLayers([
       ...this.projectSettingsLayers(project),
       { overrides: settingsOverrides, source: "session" },

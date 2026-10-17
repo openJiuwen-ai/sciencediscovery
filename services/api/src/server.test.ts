@@ -7859,3 +7859,36 @@ test("approval defaults API covers implicit first Sessions and explicit Session 
   const stillEditable = await request(`/api/sessions/${explicit.body.id}`, {title:"Still editable"}, "PATCH");
   assert.equal(stillEditable.response.status, 200);
 });
+
+test("Session-only approval defaults are HTTP client errors without mutations", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `approval-scope-http-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const request = <T>(path: string, body: unknown, method = "PUT") => jsonRequest<T>(origin + path, {
+    method, headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const project = await request<CreateProjectResponse>("/api/projects", { name: "Approval scope fixture" }, "POST");
+  const projectId = project.body.project.id;
+  const sessionId = project.body.firstSession.id;
+  const before = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {headers:authorization});
+  const invalidPut = await request(`/api/sessions/${sessionId}/settings`, {defaultApprovalMode:"always_allow"});
+  const invalidPost = await request(`/api/projects/${projectId}/sessions`, {title:"Denied creation", settingsOverrides:{defaultApprovalMode:"always_allow"}}, "POST");
+  console.log("Approval-scope HTTP probe", JSON.stringify({put:{status:invalidPut.response.status, body:invalidPut.body}, post:{status:invalidPost.response.status, body:invalidPost.body}}));
+  assert.deepEqual([invalidPut.response.status, invalidPost.response.status], [400, 400]);
+  for (const result of [invalidPut, invalidPost]) {
+    assert.match((result.body as {error:string}).error, /only supported at Global and Project scope/);
+  }
+  const after = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${sessionId}/settings`, {headers:authorization});
+  assert.deepEqual(after.body.overrides, before.body.overrides);
+  const sessions = await jsonRequest<Session[]>(`${origin}/api/projects/${projectId}/sessions`, {headers:authorization});
+  assert.deepEqual(sessions.body.map(session => session.id), [sessionId]);
+  const validPut = await request<RuntimeSettingsDetails>(`/api/sessions/${sessionId}/settings`, {semanticReviewEnabled:false});
+  assert.equal(validPut.response.status, 200);
+  assert.equal(validPut.body.overrides.semanticReviewEnabled, false);
+  const validPost = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Valid creation"}, "POST");
+  assert.equal(validPost.response.status, 201);
+  assert.equal(validPost.body.approvalMode, "ask_for_dangerous");
+  assert.equal(validPost.body.settingsOverrides.defaultApprovalMode, undefined);
+
+});

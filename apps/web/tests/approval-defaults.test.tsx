@@ -28,9 +28,12 @@ test('Global and Project controls require an explicit save; clearing restores in
     assert.equal(writes.length, 0);
     await act(async () => { await view.root.findByType('form').props.onSubmit({preventDefault(){}}); });
     assert.equal(writes[0]?.defaultApprovalMode, 'always_allow');
+    await act(async () => { select().props.onChange({target:{value:'ask_for_dangerous'}}); });
+    await act(async () => { await view.root.findByType('form').props.onSubmit({preventDefault(){}}); });
+    assert.equal(writes[1]?.defaultApprovalMode, 'ask_for_dangerous');
     await act(async () => { select().props.onChange({target:{value:''}}); });
     await act(async () => { await view.root.findByType('form').props.onSubmit({preventDefault(){}}); });
-    assert.equal('defaultApprovalMode' in writes[1]!, false);
+    assert.equal('defaultApprovalMode' in writes[2]!, false);
     await act(async () => view.unmount());
   }
 });
@@ -40,4 +43,14 @@ test('Session settings hide defaults; global drafts retain explicit Ask and perm
   assert.doesNotMatch(html, /Approval mode for new sessions/);
   assert.equal(globalSettingsDraft(details).defaultApprovalMode, 'ask_for_dangerous');
   assert.equal(globalSettingsDraft({...details, overrides:{}}).defaultApprovalMode, undefined);
+});
+
+
+test('Project defaults display inherited Always allow and disable editing when read-only', () => {
+  const inherited = {...details, overrides:{}, effective:{...details.effective, defaultApprovalMode:'always_allow' as const}};
+  const html = renderToStaticMarkup(createElement(ScopedSettingsEditor, {
+    details:inherited, connectors:[], models:[], skills:[], skillScope:'project', scopeLabel:'Project', disabled:true, onSave:()=>{},
+  }));
+  assert.match(html, /New sessions: Always allow \(source: Global setting\)/);
+  assert.match(html, /<select disabled=""><option value="" selected="">Use global default \(otherwise Ask\)/);
 });

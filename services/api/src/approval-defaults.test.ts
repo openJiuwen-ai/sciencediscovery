@@ -50,7 +50,9 @@ test('approval defaults resolve only at creation, persist, and never follow sibl
   await assert.rejects(store.replaceGlobalSettings({defaultApprovalMode:'invalid'}), /defaultApprovalMode/);
   await assert.rejects(store.replaceProjectSettings(project.id, {defaultApprovalMode:null}), /defaultApprovalMode/);
   await assert.rejects(store.replaceSessionSettings(old.id, {defaultApprovalMode:'always_allow'}), /only supported/);
-  await assert.rejects(store.updateSession(old.id, {defaultApprovalMode:'always_allow'}), /only supported/);
+  // Simulate untyped input at the runtime boundary; the public request type must forbid this field.
+  const invalidPatch: unknown = {defaultApprovalMode:'always_allow'};
+  await assert.rejects(store.updateSession(old.id, invalidPatch as Parameters<SessionStore['updateSession']>[1]), /only supported/);
   assert.equal(store.getSessionSettings(old.id).overrides.defaultApprovalMode, undefined);
   await assert.rejects(store.createSession(project.id, 'Invalid scope', {defaultApprovalMode:'always_allow'}), /only supported/);
   assert.deepEqual(normalizeRuntimeSettings({defaultApprovalMode:'invalid'}, new Set(), new Set(), false), {});
@@ -74,4 +76,29 @@ test('plugin experiment sessions retain explicit Ask under permissive saved defa
   for (const id of [prepared.experiments!.baselineSessionId, prepared.experiments!.candidateSessionId]) {
     assert.equal(store.getSession(id)?.approvalMode, 'ask_for_dangerous');
   }
+});
+
+
+test('failed plugin candidate creation cleans up its explicit-Ask baseline under permissive defaults', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'approval-experiment-failure-'));
+  const store = new SessionStore(root);
+  t.after(async () => { store.close(); await rm(root, {recursive:true, force:true}); });
+  await store.load();
+  store.setAvailableSkillIds([]);
+  await store.replaceGlobalSettings({defaultApprovalMode:'always_allow'});
+  const project = await store.createProject('Failed experiment');
+  const create = store.createSession.bind(store);
+  t.mock.method(store, 'createSession', async (...args: Parameters<SessionStore['createSession']>) => {
+    assert.equal(args[3]?.approvalMode, 'ask_for_dangerous');
+    assert.equal((args[2] as {defaultApprovalMode?: string}).defaultApprovalMode, undefined);
+    if (args[1] === 'Plugin experiment: candidate') throw new Error('Injected candidate admission failure');
+    const session = await create(...args);
+    assert.equal(session.approvalMode, 'ask_for_dangerous');
+    return session;
+  });
+  const control = store.plugins;
+  const candidate = await control.create(project.id, control.snapshot({projectId:project.id}).revision, {plugins:{plan:{enabled:false}}});
+  await assert.rejects(control.command(project.id, candidate.id, 'prepare', {}), /Injected candidate admission failure/);
+  assert.deepEqual(store.listSessions(project.id), []);
+  assert.equal(control.list(project.id)[0]?.status, 'candidate');
 });
