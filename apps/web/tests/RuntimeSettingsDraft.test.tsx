@@ -113,9 +113,13 @@ function editor(settings: RuntimeSettingsDetails, key?: string) {
 }
 
 function settingsControls(root: ReactTestInstance) {
-  const selects = root.findAllByType("select").filter((select) => !select.props["aria-label"]?.endsWith(" plugin"));
+  const allSelects = root.findAllByType("select").filter((select) => !select.props["aria-label"]?.endsWith(" plugin"));
+  const approvalSelects = allSelects.filter((select) => select.findAllByType("option").some((option) => option.props.value === "always_allow"));
+  assert.ok(approvalSelects.length <= 1);
+  const selects = allSelects.filter((select) => !approvalSelects.includes(select));
   assert.equal(selects.length, 3);
   return {
+    approval: approvalSelects[0],
     connectorMode: selects[1]!,
     model: selects[0]!,
     skillMode: selects[2]!,
@@ -128,6 +132,8 @@ function selectedCheckboxes(root: ReactTestInstance): ReactTestInstance[] {
 
 async function chooseRuntimeDraft(root: ReactTestInstance): Promise<void> {
   let controls = settingsControls(root);
+  if (controls.approval) await act(async () => controls.approval!.props.onChange({ target: { value: "always_allow" } }));
+  controls = settingsControls(root);
   await act(async () => controls.model.props.onChange({ target: { value: model.id } }));
   controls = settingsControls(root);
   await act(async () => controls.connectorMode.props.onChange({ target: { value: "override" } }));
@@ -143,6 +149,7 @@ async function chooseRuntimeDraft(root: ReactTestInstance): Promise<void> {
 
 function assertRuntimeDraftSelected(root: ReactTestInstance): void {
   const controls = settingsControls(root);
+  if (controls.approval) assert.equal(controls.approval.props.value, "always_allow");
   assert.equal(controls.model.props.value, model.id);
   assert.equal(controls.connectorMode.props.value, "override");
   assert.equal(controls.skillMode.props.value, "selected");
