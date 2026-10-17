@@ -44,10 +44,11 @@ async function writeSkillFolder(root: string, files: Record<string, string>): Pr
  * E2E-META
  * Purpose: A user can hand the product a local Skill folder and find that Skill installed with its supporting files, and gets a readable reason when the folder is not one.
  * Steps:
- *   1. Simulate unavailable directory selection and verify disabled Folder plus ZIP/Git guidance; restore browser support. Open System settings and the Skills group; the Skill is not installed yet.
- *   2. Pick a folder without SKILL.md and read the refusal; nothing is installed.
- *   3. Pick the prepared Skill folder; the Skills Explorer opens on it and its file tree carries both packaged files.
- *   4. Close the Explorer and find the Skill card in the list with its description, and the installed count one higher.
+ *   1. Open System settings and the Skills group; the Skill is not installed yet.
+ *   2. Simulate unavailable directory selection and verify disabled Folder plus ZIP/Git guidance; restore browser support.
+ *   3. Pick a folder without SKILL.md and read the refusal; nothing is installed.
+ *   4. Pick the prepared Skill folder; the Skills Explorer opens on it and its file tree carries both packaged files.
+ *   5. Close the Explorer and find the Skill card in the list with its description, and the installed count one higher.
  * Environment: Isolated local stack at E2E_BASE_URL; folders are written into a temporary directory and uploaded through the browser.
  * Type: mocked
  * LLM: none — importing a Skill package never calls a model.
