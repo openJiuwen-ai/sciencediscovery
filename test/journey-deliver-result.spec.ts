@@ -36,7 +36,7 @@ test.describe("journey-deliver-result.spec", { tag: ["@isolation:session", "@cat
  * Purpose: A researcher can receive one declared report, inspect and download it, update it as a new version, and distinguish scratch files from Artifacts.
  * Steps:
  *   1. Prepare a local stub model and an isolated Project/Session; confirm the Artifact catalog is empty.
- *   2. Ask for an analysis whose Python step creates a scratch CSV and a declared Markdown summary.
+ *   2. Ask for an analysis; recover from a malformed artifacts alias and declare the existing Markdown summary.
  *   3. Inspect marked tool I/O, preview/download the report, check desktop/mobile tab alignment, and inspect its working-directory/process provenance.
  *   4. Ask for an update of the same report and verify one Artifact has two switchable versions.
  *   5. Verify @ suggestions include only the declared report while the separate workspace-file tree also exposes the scratch CSV.
@@ -70,7 +70,8 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
         delayMs: 500,
         tool: "run_shell",
       },
-      { arguments: { path: "results/summary.md" }, tool: "declare_artifact" },
+      { arguments: { artifacts: [{ name: "missing path" }] }, tool: "declare_artifact" },
+      { arguments: { artifacts: [{ path: "results/summary.md", name: "ignored alias name" }] }, tool: "declare_artifact" },
       { text: "The analysis is complete. Download or preview results/summary.md; its mean is 42.0." },
     ],
     [
@@ -139,6 +140,8 @@ test("J2 交付的报告可预览下载并保留版本", { tag: "@mocked" }, asy
         const firstDelivery = await collectFinalDelivery(page, fixture.session.id, firstChain.run.id, firstRun.id);
         expect(firstDelivery.status, firstDelivery.errors.join("; ")).toBe("passed");
         expect(firstDelivery.artifacts[0]?.text).toContain("mean=42.0");
+        expect(stub.calls.some(call => call.turn === 0 && call.toolResults?.some(result =>
+          result.includes("artifacts[].path") && result.includes("paths")))).toBe(true);
         firstVersionId = firstDelivery.artifacts[0]?.version;
         expect(stub.calls.some(call => call.turn === 0
           && call.toolResults?.some(result => result.includes(firstMarker)))).toBe(true);

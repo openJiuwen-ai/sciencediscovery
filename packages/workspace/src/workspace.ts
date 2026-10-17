@@ -890,6 +890,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
   if (options.declareArtifact) {
     const parameters = Type.Object({
       artifact_id: Type.Optional(Type.String({ minLength: 1 })),
+      // Validate this compatibility input here so malformed aliases get retry guidance,
+      // rather than being rejected by the gateway before execute runs.
+      artifacts: Type.Optional(Type.Unknown({ description: 'Compatibility alias for paths: [{path, name?, description?}]. Only each path is used; prefer path or paths.' })),
       base_version_id: Type.Optional(Type.String({ minLength: 1 })),
       description: Type.Optional(Type.String({ maxLength: 2_000 })),
       name: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
@@ -902,18 +905,29 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
     const declareArtifact: AgentTool<typeof parameters> = {
       description: "Declare existing files in your writable workspace as user-visible Project artifacts. To publish an edit of an existing Artifact, supply artifact_id and base_version_id together with one path (not paths/name). A stale base fails with ARTIFACT_VERSION_CONFLICT and preserves your local file. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: if declare_claim is available and a markdown/text artifact carries [alias] citation tokens, call declare_artifact(output) AFTER its declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
       execute: async (_toolCallId, params) => {
+        const pathGuidance = 'Use path for one file, paths for an array of file paths, or artifacts: [{path: "relative/file"}] with a nonempty artifacts[].path.';
+        let paths = params.paths;
+        if (paths === undefined && params.artifacts !== undefined) {
+          if (!Array.isArray(params.artifacts) || params.artifacts.length === 0) throw new Error(`artifacts must be a nonempty array. ${pathGuidance}`);
+          paths = params.artifacts.map((item: unknown) => {
+            if (!item || typeof item !== "object" || !("path" in item) || typeof item.path !== "string" || !item.path.trim()) {
+              throw new Error(`Invalid artifacts[].path. ${pathGuidance}`);
+            }
+            return item.path;
+          });
+        }
         if (!!params.artifact_id !== !!params.base_version_id) throw new Error("artifact_id and base_version_id are required together");
-        if (params.artifact_id && (params.paths !== undefined || params.name !== undefined)) throw new Error("Artifact revision requires one path and cannot rename or batch");
-        if (params.paths !== undefined) {
-          if (params.paths.length === 0) throw new Error("paths must contain at least one path");
-          if (params.paths.length > MAX_DECLARE_ARTIFACT_PATHS) {
-            throw new Error(`paths must contain at most ${MAX_DECLARE_ARTIFACT_PATHS} paths`);
+        if (params.artifact_id && (paths !== undefined || params.name !== undefined)) throw new Error("Artifact revision requires one path and cannot rename or batch");
+        if (paths !== undefined) {
+          if (paths.length === 0 || paths.some((path) => typeof path !== "string" || !path.trim())) throw new Error(`paths must contain at least one path and no empty paths. ${pathGuidance}`);
+          if (paths.length > MAX_DECLARE_ARTIFACT_PATHS) {
+            throw new Error(`paths must contain at most ${MAX_DECLARE_ARTIFACT_PATHS} paths. ${pathGuidance}`);
           }
           const artifacts: Array<
             | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string }
             | { error: string; ok: false; path: string }
           > = [];
-          for (const path of params.paths) {
+          for (const path of paths) {
             try {
               const result = await options.declareArtifact!({ path });
               artifacts.push({
@@ -936,7 +950,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           const details = { artifacts };
           return { content: [{ type: "text", text: JSON.stringify(details) }], details };
         }
-        if (!params.path) throw new Error("path or paths is required");
+        if (!params.path?.trim()) throw new Error(`path or paths is required. ${pathGuidance}`);
         const result = await options.declareArtifact!({
           ...(params.artifact_id ? { artifactId: params.artifact_id, baseVersionId: params.base_version_id, toolCallId: _toolCallId } : {}),
           ...(params.description ? { description: params.description } : {}),
