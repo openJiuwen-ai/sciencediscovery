@@ -1690,6 +1690,7 @@ test("SessionStore migrates legacy runtime settings once and preserves effective
       semanticReviewEnabled: false,
     },
     sources: {
+      defaultApprovalMode: "unset",
       plugins: "unset",
       enabledConnectorIds: "session",
       enabledSkillLibraries: "unset",
@@ -1791,6 +1792,7 @@ test("SessionStore resolves and persists hierarchical runtime settings", async (
     },
     overrides: { reviewModelId: modelB.id },
     sources: {
+      defaultApprovalMode: "unset",
       plugins: "unset",
       enabledConnectorIds: "project",
       enabledSkillLibraries: "unset",

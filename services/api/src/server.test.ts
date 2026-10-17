@@ -7821,3 +7821,35 @@ test("WPC-005 a reachable sidecar whose graph is down returns 502, not 404", asy
   assert.equal(response.status, 502);
   assert.match((await response.json() as { error?: string }).error ?? "", /memory graph unreachable/);
 });
+
+
+test("approval defaults API covers implicit first Sessions and explicit Session overrides", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `approval-defaults-api-${Date.now()}-${process.pid}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  const model = await createTestModel(origin, { model: "approval-fixture", name: "Approval fixture" });
+  const request = <T>(path: string, body: unknown, method = "PUT") => jsonRequest<T>(origin + path, {
+    method, headers: { ...authorization, "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  const global = await request<RuntimeSettingsDetails>("/api/settings", { modelId: model.id, defaultApprovalMode: "always_allow" });
+  assert.equal(global.response.status, 200);
+  const project = await request<CreateProjectResponse>("/api/projects", { name: "Inherits global" }, "POST");
+  assert.equal(project.response.status, 201);
+  assert.equal(project.body.firstSession.approvalMode, "always_allow");
+  const projectId = project.body.project.id;
+  const updated = await request<RuntimeSettingsDetails>(`/api/projects/${projectId}/settings`, { defaultApprovalMode: "ask_for_dangerous" });
+  assert.equal(updated.response.status, 200);
+  const inherited = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Project default"}, "POST");
+  assert.equal(inherited.response.status, 201);
+  assert.equal(inherited.body.approvalMode, "ask_for_dangerous");
+  const explicit = await request<Session>(`/api/projects/${projectId}/sessions`, {title:"Explicit override", approvalMode:"always_allow"}, "POST");
+  assert.equal(explicit.body.approvalMode, "always_allow");
+  await request(`/api/sessions/${explicit.body.id}`, {approvalMode:"ask_for_dangerous"}, "PATCH");
+  const current = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/projects/${projectId}/settings`, {headers:authorization});
+  assert.equal(current.body.overrides.defaultApprovalMode, "ask_for_dangerous");
+  const first = await jsonRequest<Session>(`${origin}/api/sessions/${project.body.firstSession.id}`, {headers:authorization});
+  assert.equal(first.body.approvalMode, "always_allow");
+  const invalid = await request("/api/settings", {defaultApprovalMode:"invalid"});
+  assert.equal(invalid.response.status, 400);
+});

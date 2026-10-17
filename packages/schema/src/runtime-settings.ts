@@ -18,6 +18,7 @@ import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 import type { NpuJob } from "./npu-job.js";
 
 export type RuntimeSettingsField =
+  | "defaultApprovalMode"
   | "plugins"
   | "enabledConnectorIds"
   | "enabledSkillLibraries"
@@ -50,6 +51,8 @@ export function isSkillSelectionMode(value: unknown): value is SkillSelectionMod
 }
 
 export interface RuntimeSettingsOverrides {
+  /** Global/Project default for new Sessions only; never changes existing Sessions. */
+  defaultApprovalMode?: import("./plan.js").ApprovalMode;
   /** Per-plugin overrides. Changes affect newly queued runs, never an active composition. */
   plugins?: Record<string, { enabled?: boolean; config?: Record<string, import("./mcp-result.js").JsonValue> }>;
   enabledConnectorIds?: ConnectorId[];
@@ -67,6 +70,7 @@ export interface RuntimeSettingsOverrides {
 }
 
 export interface EffectiveRuntimeSettings {
+  defaultApprovalMode?: import("./plan.js").ApprovalMode;
   plugins?: RuntimeSettingsOverrides["plugins"];
   enabledConnectorIds: ConnectorId[];
   /** Versioned skill libraries searched at run creation/execution time. */

@@ -193,7 +193,8 @@ test("renders Global settings as direct defaults without inheritance or skill co
   assert.match(html, /These settings are the defaults for all Projects and Sessions/);
   assert.match(html, /<option value="model-1" selected="">Primary model · test-model · OpenAI standard · Model default<\/option>/);
   assert.match(html, /type="checkbox" checked=""/);
-  assert.doesNotMatch(html, /Inherit|Override|Built-in fallback|Effective:/);
+  assert.doesNotMatch(html, /Inherit|Override|Effective:/);
+  assert.match(html, /New sessions: Ask for dangerous actions \(source: Built-in fallback\)/);
   assert.doesNotMatch(html, /settings mode/);
   assert.doesNotMatch(html, /managed-workflow|Only use selected skills|Allow all skills/);
 });

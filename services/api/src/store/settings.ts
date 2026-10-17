@@ -65,6 +65,7 @@ export function knownConnectorIdSet(): ReadonlySet<string> {
 }
 
 export const RUNTIME_SETTINGS_FIELDS = [
+  "defaultApprovalMode",
   "plugins",
   "enabledConnectorIds",
   "enabledSkillLibraries",
@@ -166,6 +167,13 @@ export function normalizeRuntimeSettings(
   }
 
   const normalized: RuntimeSettingsOverrides = {};
+  if (hasOwn(value, "defaultApprovalMode")) {
+    if (value.defaultApprovalMode === "ask_for_dangerous" || value.defaultApprovalMode === "always_allow") {
+      normalized.defaultApprovalMode = value.defaultApprovalMode;
+    } else if (strict) {
+      throw new Error("defaultApprovalMode must be ask_for_dangerous or always_allow");
+    }
+  }
   if (hasOwn(value, "plugins")) {
     // Persist the validated namespaced object in the existing settings catalog.
     // Invalid persisted overrides fail closed, rather than enabling a disabled feature.
