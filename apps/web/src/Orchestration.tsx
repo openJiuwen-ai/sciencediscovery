@@ -49,7 +49,8 @@ export function OrchestrationPanel(props: ActivityCardDisclosure & { plans:RunPl
 }
 
 function subagentSummary(subagent: Subagent, t: Translate): string {
-  const step = subagent.steps.at(-1);
+  // Turn/workspace bookkeeping carries no researcher-facing phase.
+  const step = subagent.steps.findLast(step => step.kind !== "system");
   if (subagent.error) return compactStatus(subagent.error);
   if (step?.status === "failed") return compactStatus(step.content);
   if (subagent.status === "running" && step?.kind === "thinking") return reasoningStatus(step.content) ?? t("timeline.thinking");
@@ -62,6 +63,10 @@ function subagentSummary(subagent: Subagent, t: Translate): string {
     }
     const count = hasOutput ? returnedPaperCount(step.content) : undefined;
     if (count !== undefined) return t("timeline.papersReturned", { count });
+    const command = step.args?.command ?? step.input;
+    if (step.toolName === "run_shell" && typeof command === "string" && command.trim()) {
+      return compactStatus(`${t(step.status === "running" ? "timeline.runningCommand" : "timeline.ranCommand")} · ${command}`);
+    }
     return (hasOutput && step.content ? compactStatus(step.content) : undefined) ?? researchLabel({ name: step.toolName ?? t("subagent.step.tool"), args: step.args, input: step.input });
   }
   return "";

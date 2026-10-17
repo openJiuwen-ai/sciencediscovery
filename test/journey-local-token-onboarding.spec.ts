@@ -147,7 +147,14 @@ for (const locale of ["en", "zh-CN"] as const) {
         expect(unauthorized).toEqual([]);
       });
       await journey.step("打开无效令牌链接", "错误令牌只显示一处恢复提示，没有额外 Toast 或设置警示条。", async () => {
-        await page.goto(`${apiBaseUrl()}/#token=invalid-link-token`);
+        // Keep the pathname unchanged to explicitly exercise a same-document
+        // fragment navigation, even if URL synchronization selected a Session.
+        const mounted = `mounted-${Date.now()}`;
+        await page.evaluate(value => { (window as Window & { onboardingMount?: string }).onboardingMount = value; }, mounted);
+        const invalid = new URL(page.url());
+        invalid.hash = "token=invalid-link-token";
+        await page.goto(invalid.href);
+        expect(await page.evaluate(() => (window as Window & { onboardingMount?: string }).onboardingMount)).toBe(mounted);
         await expect(page.getByRole("alert")).toHaveCount(1);
         await expect(page.getByRole("alert")).toContainText(rejected);
         expect(new URL(page.url()).hash).toBe("");

@@ -327,3 +327,32 @@ test("running branch promotes an intermediate source failure over its phase", ()
   }));
   assert.match(html, /Error: source unavailable/);
 });
+
+
+test("system turn bookkeeping does not erase the running branch's last research phase", () => {
+  const branch = buildSubagent({ status: "running", steps: [
+    { id: "search", createdAt: timestamp, kind: "tool", toolName: "search_pubmed", status: "completed",
+      content: JSON.stringify({ sourceId: "pubmed", toolId: "search", records: [{}, {}, {}] }) },
+    { id: "turn", createdAt: timestamp, kind: "system", status: "completed", content: "Turn 2 started" },
+  ] });
+  const render = () => renderToStaticMarkup(createElement(SubagentCards, { subagents: [branch], onOpenSubagent() {} }));
+  assert.match(render(), /3 papers returned by this search/);
+  assert.doesNotMatch(render(), /Turn 2 started/);
+  branch.steps.push({ id: "synthesis", createdAt: timestamp, kind: "thinking", content: "**Synthesizing evidence**" });
+  assert.match(render(), /Synthesizing evidence/);
+});
+
+
+test("a completed foreground shell keeps a readable command phase between subagent turns", () => {
+  const html = renderToStaticMarkup(createElement(SubagentCards, {
+    onOpenSubagent() {},
+    subagents: [buildSubagent({ status: "running", steps: [
+      { id: "shell", createdAt: timestamp, kind: "tool", toolName: "run_shell", status: "completed",
+        input: "printf FG-evidence", args: { command: "printf FG-evidence" },
+        content: JSON.stringify({ sessionId: "PRIVATE_SESSION_ID", agentId: "PRIVATE_AGENT_ID", result: { stdout: "FG-evidence" } }) },
+      { id: "turn", createdAt: timestamp, kind: "system", content: "Turn 2 started" },
+    ] })],
+  }));
+  assert.match(html, /Ran · printf FG-evidence/);
+  assert.doesNotMatch(html, /PRIVATE_SESSION_ID|PRIVATE_AGENT_ID|Turn 2 started/);
+});

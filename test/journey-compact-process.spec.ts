@@ -266,7 +266,9 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
       const output = viewer.locator(".trajectory-readable section").filter({ has: page.getByRole("heading", { name: "命令输出", exact: true }) }).locator("pre");
       await expect(output).toHaveText(`${target!.progress}\n\n---\n\n${target!.result}`);
       expect(JSON.parse(target!.result)).toBeTruthy();
-      await page.getByRole("button", { name: "轨迹", exact: true }).click();
+      await viewer.getByRole("button", { name: "返回对话", exact: true }).click();
+      await expect(viewer).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "轨迹", exact: true })).toBeVisible();
     });
     await journey.step("失败也去框并保留错误", "失败工具有红点和失败文字，展开后错误原文可见。",
       async () => {
