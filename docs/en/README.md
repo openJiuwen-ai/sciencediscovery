@@ -20,6 +20,8 @@ This is the complete English documentation set.
 - [Use PUCT to optimize a text compression algorithm](domains/evolve-a-solution.md) — run a program-evolution search end to end and judge whether the improvement is real.
 - [Analyze correlations and clusters of sepsis endotype scores](domains/analyze-sepsis-endotypes.md)
 - [Research how migrating birds determine location and direction](domains/literature-research.md)
+- [Explore water treatment catalysts with Idea Tree](domains/idea-tree-catalyst-design.md) — compare catalyst designs and choose what to validate next.
+- [Analyze immune features with Agent Team](domains/agent-team-data-analysis.md) — use specialist roles for correlation analysis, clustering, review, and reporting.
 
 ## Advanced setup
 

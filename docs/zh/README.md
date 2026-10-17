@@ -20,6 +20,8 @@
 - [在 Ascend NPU 上设计抗体](domains/antibody-design.md) — 使用 RFdiffusion、ProteinMPNN 和 Protenix 完成一次可追溯的抗体设计与筛选。
 - [分析脓毒症分型评分的相关性与聚类](domains/analyze-sepsis-endotypes.md) — 使用 BiomniBench 真实数据，从上传 CSV 到分析、交付和质量评价。
 - [调研鸟类迁徙如何定位与导航](domains/literature-research.md) — 以 DRB-59 为例，配置检索资源、综合文献证据并检查报告。
+- [用 Idea Tree 探索水处理催化剂](domains/idea-tree-catalyst-design.md) — 提出并比较催化剂设计，选择下一步验证方向。
+- [用 Agent Team 分析免疫特征](domains/agent-team-data-analysis.md) — 以多角色协作完成相关性分析、聚类、复核和报告。
 
 ## 进阶设置
 
