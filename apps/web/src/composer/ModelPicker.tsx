@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 
 import type {
   ModelProfile,
@@ -212,6 +212,7 @@ export function ModelPicker({
 }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
+  const scopeHintId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -255,17 +256,19 @@ export function ModelPicker({
       className="model-picker-trigger"
       disabled={disabled || !models.length}
       onClick={() => setOpen((current) => !current)}
+      title={t("composer.modelPicker.scopeHint")}
       type="button"
     >
       <i className="live-dot" />
       <span className="model-picker-trigger-name">{activeModel ? modelDisplayName(activeModel, activeProvider) : t("composer.noModel")}</span>
       {thinkingSummary ? <small className="model-picker-trigger-thinking">{thinkingSummary}</small> : null}
     </button>
-    {open ? <div aria-label={t("composer.modelPicker.title")} className="model-picker-popover" role="dialog">
+    {open ? <div aria-describedby={scopeHintId} aria-label={t("composer.modelPicker.title")} className="model-picker-popover" role="dialog">
       <div className="model-picker-heading">
         <strong>{t("composer.modelPicker.title")}</strong>
         <span>{t("composer.modelPicker.count", { total: models.length })}</span>
       </div>
+      <small className="model-picker-note" id={scopeHintId}>{t("composer.modelPicker.scopeHint")}</small>
       {groups.length ? <div className="model-picker-groups">
         {groups.map((group) => <div className="model-picker-group" key={group.provider?.id ?? "other"}>
           <h4>{group.provider ? group.provider.name : t("composer.modelPicker.otherGroup")}</h4>
