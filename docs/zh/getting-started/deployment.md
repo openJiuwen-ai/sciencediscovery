@@ -69,6 +69,18 @@ chmod +x ./ScienceDiscovery
 
 如果主机无法联网，请在联网环境提前准备数据目录，或配置可访问的软件源。相关变量见[配置参考](../reference/configuration.md)。
 
+### 命令
+
+```text
+ScienceDiscovery serve [options]        启动 Web UI、控制 API 和沙箱 Runner
+ScienceDiscovery run [input] [options]  向运行中的 serve 提交 Agent 任务
+ScienceDiscovery extract --to <dir>     解出内置运行时，但不启动服务
+ScienceDiscovery version                打印发布版本和内置运行时版本
+ScienceDiscovery help                   显示全部命令和选项
+```
+
+`run` 是面向脚本和管道的命令行客户端：在终端中输出文本，在管道中输出 JSONL；非交互运行必须传入 `--auto-approve`。选项和输出模式见 [CLI 参考](../reference/cli.md#run)。本地源码模式下，同一客户端的入口是 `node services/launcher/dist/main.js run`。
+
 ### 常用启动选项
 
 ```text
