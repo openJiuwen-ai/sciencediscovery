@@ -13,9 +13,9 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import type { ConnectorId, ConnectorManifest } from "@sciencediscovery/schema";
+import type { ConnectorId, ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -42,6 +42,7 @@ export function ConnectorPicker({
   disabled = false,
   enabledIds,
   onToggle,
+  sourceStatuses = {},
 }: {
   t: Translate; icons:{database:ReactNode;external:ReactNode};
   connectors: ConnectorManifest[];
@@ -49,6 +50,9 @@ export function ConnectorPicker({
   disabled?: boolean;
   enabledIds: readonly string[];
   onToggle: (connectorId: ConnectorId) => void;
+  /** Catalog readiness is separate from session selection.  Keep an enabled
+   * source selectable, but make a connector with no injectable tools visible. */
+  sourceStatuses?: Readonly<Record<string, McpSourceStatus>>;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +104,8 @@ export function ConnectorPicker({
           {group.items.map((connector) => {
             const name = connector.displayName ?? connectorName(connector.id);
             const policyLabel = t("connectors.providerPolicy", { name });
+            const status = sourceStatuses[connector.id];
+            const unavailable = enabledIds.includes(connector.id) && status && status.status !== "ready";
             return <li key={connector.id}>
               <label>
                 <input
@@ -108,7 +114,7 @@ export function ConnectorPicker({
                   onChange={() => onToggle(connector.id)}
                   type="checkbox"
                 />
-                <span><strong>{name}</strong><small>{connector.publisher}</small></span>
+                <span><strong>{name}</strong><small>{connector.publisher}</small>{unavailable ? <small className="connector-picker-status" role="status">{t("connectors.catalogUnavailable", { error: status.error ?? status.status })}</small> : null}</span>
               </label>
               {connector.termsUrl ? <a
                 aria-label={policyLabel}
