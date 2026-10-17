@@ -1100,6 +1100,10 @@ export async function startRunnerServer(config = loadRunnerConfig()): Promise<Se
   const readiness = new RunnerReadiness(sandbox, sandbox === "seatbelt" ? config.seatbeltPath ?? "/usr/bin/sandbox-exec" : config.bwrapPath);
   const capability = await readiness.get();
   if (!capability.ready) logger.warn("execution_unavailable", { ...capability });
+  // The operational log is a file. A missing sandbox executable is a setup
+  // step the operator must take, so it also goes to the terminal that started
+  // the Runner (source mode no longer blocks startup on it).
+  if (capability.reason === "dependency-unavailable" && capability.detail) console.warn(capability.detail);
   const environmentStore = new EnvironmentStore({
     allowedChannels: config.scientificAllowedChannels ?? ["conda-forge"],
     enabled: config.scientificEnvsEnabled === true,

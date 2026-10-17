@@ -4,7 +4,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { detectSandboxCapability, detectSeatbeltCapability, sandboxUnusableMessage, procFallbackMessage, disableUsernsOmittedMessage } from "@sciencediscovery/sandbox-capability";
+import { detectSandboxCapability, detectSeatbeltCapability, sandboxUnusableMessage, procFallbackMessage, disableUsernsOmittedMessage, missingSandboxExecutableMessage } from "@sciencediscovery/sandbox-capability";
 import type { RunnerExecutionCapability } from "@sciencediscovery/schema";
 
 const execute = promisify(execFile);
@@ -38,11 +38,15 @@ export class RunnerReadiness {
         if (missing.length) return { ...report, reason: "incompatible", detail: `Missing sandbox options: ${missing.join(", ")}` };
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A spawn failure means the executable is missing or not executable; say
+      // how to install it instead of passing on the bare ENOENT.
+      if (["ENOENT", "EACCES"].includes(String((error as NodeJS.ErrnoException).code))) {
+        return { ...report, detail: missingSandboxExecutableMessage(this.sandbox, this.executable, message) };
+      }
       // sandbox-exec's help returns nonzero on some macOS versions. Only a
       // spawn failure proves it missing; the real profile probe is authoritative.
-      if (this.sandbox === "bubblewrap" || ["ENOENT", "EACCES"].includes(String((error as NodeJS.ErrnoException).code))) {
-        return { ...report, detail: error instanceof Error ? error.message : String(error) };
-      }
+      if (this.sandbox === "bubblewrap") return { ...report, detail: message };
       report.dependencyAvailable = true;
     }
     try {

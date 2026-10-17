@@ -297,6 +297,35 @@ export const SANDBOX_UNUSABLE_HINT = [
 ].join("\n");
 
 /**
+ * Why the sandbox executable could not be started at all, and the one step that
+ * fixes it. Source mode no longer checks this before startup, so this is the
+ * first message a host without bubblewrap sees. It names the package and the
+ * binary separately because they differ (`bubblewrap` installs `bwrap`), and it
+ * says sandbox-exec ships with macOS, so a missing one points at the
+ * environment rather than an install.
+ */
+export function missingSandboxExecutableMessage(
+  sandbox: "bubblewrap" | "seatbelt",
+  executable: string,
+  cause: string,
+): string {
+  if (sandbox === "bubblewrap") {
+    return [
+      `bubblewrap is not available: "${executable}" could not be started (${cause}).`,
+      "Install the bubblewrap package, which provides the bwrap executable: sudo apt-get install -y bubblewrap"
+        + " (Debian/Ubuntu) or sudo dnf install -y bubblewrap (Fedora/RHEL/openEuler). Then recheck the Runner.",
+      "Details: docs/en/getting-started/deployment.md#linux-reports-missing-bwrap",
+    ].join("\n");
+  }
+  return [
+    `macOS sandbox-exec is not available: "${executable}" could not be started (${cause}).`,
+    "It ships with macOS and is not installed separately; this usually means ScienceDiscovery runs inside"
+      + " another sandbox, or SCIENCE_AGENT_SEATBELT_PATH points elsewhere.",
+    "Details: docs/en/getting-started/deployment.md#macos-reports-seatbelt-is-unavailable",
+  ].join("\n");
+}
+
+/**
  * The unusable-sandbox hint plus bubblewrap's own refusal. Never say executions
  * still run here: on this host every tool call fails, so reporting one of the
  * degradations instead would understate the problem.
