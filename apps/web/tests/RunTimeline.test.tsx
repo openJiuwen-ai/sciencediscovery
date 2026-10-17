@@ -1079,8 +1079,9 @@ test("legacy snapshots keep one answer and a cursor across repeated approval swi
 });
 
 test("MCP omissions remain visible on timeline replay without an agent tool call", () => {
-  const entries = apply([{ type: "mcp.readiness", agentId: "literature-child", summary: "arxiv unavailable; omitted tools: search" }]);
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0]!.type, "assistant");
+  const entries = apply([{ type: "mcp.readiness", agentId: "literature-child", summary: "arxiv unavailable; omitted tools: search" },
+    { type: "assistant.snapshot", content: "Continuing unrelated work" }]);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0]!.type, "mcp-readiness");
   assert.match(JSON.stringify(entries), /literature-child.*arxiv unavailable/);
 });

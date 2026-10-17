@@ -52,6 +52,7 @@ function isGraphToolTrace(trace: ToolTrace): boolean {
 }
 
 export type RunTimelineEntry =
+  | { id: string; type: "mcp-readiness"; content: string }
   | {
       id: string;
       researchId: string;
@@ -597,7 +598,7 @@ export function reduceRunTimeline(
   }
 
   if (event.type === "mcp.readiness") {
-    return [...entries, { id: `mcp-readiness-${entries.length}`, type: "assistant",
+    return [...entries, { id: `mcp-readiness-${entries.length}`, type: "mcp-readiness",
       content: `MCP (${event.agentId ?? "main"}): ${event.summary}` }];
   }
 
@@ -854,6 +855,12 @@ export function RunTimeline({
               <p><strong>{label}</strong>{entry.nodeId ? ` · ${entry.nodeId}` : ""}</p>
             </aside>
           );
+        }
+
+        if (entry.type === "mcp-readiness") {
+          return <aside className="boundary-note process-notice" key={entry.id}>
+            <span><WarningIcon size={15} /></span><p>{entry.content}</p>
+          </aside>;
         }
 
         if (entry.type === "history-truncated") {
