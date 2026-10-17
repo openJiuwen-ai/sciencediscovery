@@ -18,5 +18,15 @@
     "esbuild": "0.28.1",
     "postject": "1.0.0-alpha.6",
     "typescript": "7.0.2"
+  },
+  "exports": {
+    "./run": {
+      "types": "./src/run.ts",
+      "default": "./dist/run.js"
+    },
+    "./cli-options": {
+      "types": "./src/cli-options.ts",
+      "default": "./dist/cli-options.js"
+    }
   }
 }

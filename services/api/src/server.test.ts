@@ -7898,8 +7898,8 @@ test("CLI auto-created first Session honors explicit Ask despite global Always a
   await mkdir(root, {recursive:true});
   context.after(() => removeTestRoot(root));
   const { origin } = await startTestApi(context, root);
-  const { parseInvocation } = await import("../../launcher/src/cli-options.js");
-  const { runCommand } = await import("../../launcher/src/run.js");
+  const { parseInvocation } = await import("@sciencediscovery/launcher/cli-options");
+  const { runCommand } = await import("@sciencediscovery/launcher/run");
   const global = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/settings`, {
     method:"PUT", headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify({defaultApprovalMode:"always_allow"}),
   });
@@ -7938,8 +7938,8 @@ test("CLI approval flags, explicit Projects and existing Sessions preserve inten
   await mkdir(root, {recursive:true});
   context.after(() => removeTestRoot(root));
   const { origin } = await startTestApi(context, root);
-  const { parseInvocation } = await import("../../launcher/src/cli-options.js");
-  const { runCommand } = await import("../../launcher/src/run.js");
+  const { parseInvocation } = await import("@sciencediscovery/launcher/cli-options");
+  const { runCommand } = await import("@sciencediscovery/launcher/run");
   const request = <T>(path:string, body:unknown, method = "PUT") => jsonRequest<T>(origin+path, {method, headers:{...authorization,"content-type":"application/json"}, body:JSON.stringify(body)});
   await request("/api/settings", {defaultApprovalMode:"always_allow"});
   const fixture = await request<CreateProjectResponse>("/api/projects", {name:"Existing CLI target"}, "POST");

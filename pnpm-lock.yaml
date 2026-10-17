@@ -742,6 +742,9 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
     devDependencies:
+      '@sciencediscovery/launcher':
+        specifier: workspace:*
+        version: link:../launcher
       '@types/node':
         specifier: 26.1.1
         version: 26.1.1
