@@ -151,6 +151,7 @@ temperature_c,yield_g
 
 ## 5. 接下来做什么
 
+- **下一课：**[分析一份数据](analyze-a-dataset.md)使用仓库自带的样例 CSV。它是六节课中的第二课，每节课结尾都会指向下一课。
 - 想了解 ScienceDiscovery 能做什么：看[核心能力](../README.md#核心能力)。
 - 想照着真实科研案例做一遍：看[领域指南](../README.md#领域指南)。
 - 想跑一个具体的优化案例：看[使用PUCT优化一个文本压缩算法](../domains/evolve-a-solution.md)。

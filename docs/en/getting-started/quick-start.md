@@ -154,6 +154,7 @@ Different models may phrase the report differently. That is expected; what matte
 
 ## 5. Where to go next
 
+- **Next lesson:** [Analyze a dataset](analyze-a-dataset.md) uses a sample CSV shipped with the repository. It is the second of six lessons; each ends by pointing at the next.
 - To understand what ScienceDiscovery can do, see [Core capabilities](../README.md#core-capabilities).
 - To follow complete real research examples, see [Domain guides](../README.md#domain-guides).
 - For a concrete optimization walkthrough, see [Use PUCT to optimize a text compression algorithm](../domains/evolve-a-solution.md).
