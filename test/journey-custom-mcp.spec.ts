@@ -278,4 +278,122 @@ test("Agent uses selected custom MCP servers across runs", { tag: "@mocked" }, a
   }
 });
 
+/**
+ * E2E-META
+ * Purpose: Connectors follow their MCP server: a server that is off is neither offered nor given to the Agent, and a server that fails to connect is flagged.
+ * Steps:
+ *   1. Add a working and a failing stdio server; the picker lists both and flags only the failing one.
+ *   2. With both selected, the Agent calls the working server's tool.
+ *   3. Turn the working server off: its row and switch stay on the MCP page, its connector leaves the picker, and the next run is offered none of its tools.
+ *   4. Turn it back on: the connector returns, still selected.
+ * Environment: Isolated local stack and data directory, current local working tree.
+ * Type: mocked
+ * LLM: Local deterministic OpenAI-compatible stub; no provider API is called.
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: Real SDK stdio echo fixture, plus a stdio command that exits before the MCP handshake.
+ * OtherExternal: none; browser non-local requests are blocked.
+ * Credentials: E2E_API_TOKEN; local stub token has no external access.
+ * CostSideEffects: Temporary model, project and two MCP servers; removed in finally.
+ */
+test("Connectors follow whether their MCP server is on and connected", { tag: "@mocked" }, async ({ page, journey }) => {
+  await page.addInitScript(() => localStorage.setItem("science-agent-locale", "zh-CN"));
+  const name = `Availability MCP ${Date.now()}`;
+  const save = async (serverName: string, args: string[]) => {
+    const response = await page.request.post(`${apiBaseUrl()}/api/mcp/servers`, { headers: authorizationHeader(), data: {
+      name: serverName, command: process.execPath, args, enabled: true,
+    } });
+    expect(response.ok()).toBe(true);
+    return await response.json() as { id: string; name: string };
+  };
+  const working = await save(`${name} working`, [fileURLToPath(new URL("./fixtures/mcp-echo.mjs", import.meta.url))]);
+  const failing = await save(`${name} failing`, ["-e", "process.exit(3)"]);
+  const toolsResponse = await page.request.get(`${apiBaseUrl()}/api/mcp/sources/${working.id}/tools`, { headers: authorizationHeader() });
+  const echoTool = `mcp__${working.id}__${(await toolsResponse.json() as Array<{ id: string; mcpToolName: string }>).find((item) => item.mcpToolName === "echo")!.id}`;
+  const stub = await scriptedModel([
+    [
+      { tool: "tool_search", arguments: { query: `select:${echoTool}` } },
+      { tool: echoTool, arguments: { text: "server on" } },
+      { text: "SERVER ON" },
+    ],
+    [
+      { tool: "tool_search", arguments: { query: `select:${echoTool}` } },
+      { text: "SERVER OFF" },
+    ],
+  ]);
+  const fixture = await createProjectAndSession(page, {
+    projectName: name, sessionTitle: "MCP availability", approvalMode: "always_allow",
+    model: { apiToken: stub.apiToken, baseUrl: stub.baseUrl, model: stub.model, name: `${name} model` },
+  });
+  journey.scenario({ goal: "See which connectors can be used, and why one cannot", preconditions: ["Local MCP fixture connected", "Failing local MCP command", "Local scripted model"] });
+  const picker = page.locator(".connector-picker-popover");
+  const choice = (server: { name: string }) => picker.locator("li").filter({ has: page.getByRole("checkbox", { name: new RegExp(server.name) }) });
+  const dialog = page.getByRole("dialog", { name: "系统设置" });
+  const row = dialog.locator(".mcp-server").filter({ has: page.locator("strong", { hasText: working.name }) });
+  const toggleWorking = async (enabled: boolean) => {
+    await page.getByRole("button", { name: /^系统设置/ }).click();
+    await dialog.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: /^MCP 服务器/ }).click();
+    await row.getByRole("switch", { name: `启用 ${working.name}` }).click();
+    await expect(row.getByRole("switch", { name: `启用 ${working.name}` })).toBeChecked({ checked: enabled });
+  };
+  const invocations = async () => {
+    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture.session.id}/mcp/invocations`, { headers: authorizationHeader() });
+    return (await response.json() as Array<{ sourceId: string; status: string }>).filter((item) => item.sourceId === working.id);
+  };
+  try {
+    await openProjectSession(page, fixture);
+    await journey.step("查看连接器", "两个服务器都在列表中，只有连接失败的一项显示失败原因", async () => {
+      await page.locator(".connector-picker-trigger").click();
+      await expect(choice(failing).locator(".connector-picker-error")).toContainText("连接失败：");
+      await expect(choice(working)).toBeVisible();
+      await expect(choice(working).locator(".connector-picker-error")).toHaveCount(0);
+      await expect(picker.getByRole("checkbox", { name: /^Web/ })).toBeVisible();
+    });
+    await journey.step("选择两个服务器", "连接失败的服务器仍可勾选，入口提示有 1 个连接失败", async () => {
+      for (const server of [working, failing]) {
+        await choice(server).getByRole("checkbox").click();
+        await expect(choice(server).getByRole("checkbox")).toBeChecked();
+      }
+      await page.keyboard.press("Escape");
+      await expect(page.locator(".connector-picker-trigger")).toHaveAttribute("aria-label", /1 个连接失败/);
+    });
+    await journey.step("调用可用的服务器", "Agent 拿到可用服务器的工具并保存成功调用记录", async () => {
+      const run = await sendUserMessage(page, fixture.session.id, "请用本地 MCP echo 工具把 server on 转成大写。");
+      const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
+      expect(terminal.status, terminal.error).toBe("completed");
+      expect((await invocations()).filter((item) => item.status === "succeeded")).toHaveLength(1);
+      expect(stub.calls.some((call) => call.turn === 0 && call.offeredTools?.includes(echoTool))).toBe(true);
+    });
+    await journey.step("关闭服务器", "管理页保留这一行和它的开关；选择列表里不再出现它", async () => {
+      await toggleWorking(false);
+      await expect(row).toContainText("已停用");
+      await page.keyboard.press("Escape");
+      await page.locator(".connector-picker-trigger").click();
+      await expect(picker.getByRole("checkbox", { name: new RegExp(working.name) })).toHaveCount(0);
+      await expect(choice(failing).locator(".connector-picker-error")).toBeVisible();
+      await page.keyboard.press("Escape");
+    });
+    await journey.step("关闭后再运行", "Session 仍保留它的选择，但 Agent 拿不到它的工具", async () => {
+      const run = await sendUserMessage(page, fixture.session.id, "再试一次本地 MCP echo 工具。");
+      const terminal = await waitForRunTerminal(page, fixture.session.id, run.id, 60_000);
+      expect(terminal.status, terminal.error).toBe("completed");
+      const offered = stub.calls.filter((call) => call.turn === 1).flatMap((call) => call.offeredTools ?? []);
+      expect(offered.length).toBeGreaterThan(0);
+      expect(offered.filter((tool) => tool.startsWith(`mcp__${working.id}__`) || tool.startsWith(`mcp__${failing.id}__`))).toEqual([]);
+      expect(await invocations()).toHaveLength(1);
+    });
+    await journey.step("重新打开服务器", "连接器回到选择列表，并保持此前的勾选", async () => {
+      await toggleWorking(true);
+      await page.keyboard.press("Escape");
+      await page.locator(".connector-picker-trigger").click();
+      await expect(choice(working).getByRole("checkbox")).toBeChecked();
+    });
+  } finally {
+    await cleanupJourney(page, fixture);
+    await stub.stop();
+    await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${working.id}`, { headers: authorizationHeader() });
+    await page.request.delete(`${apiBaseUrl()}/api/mcp/servers/${failing.id}`, { headers: authorizationHeader() });
+  }
+});
+
 });
