@@ -4581,7 +4581,7 @@ export class SessionStore {
       throw new Error("Unsupported permission action");
     }
     const resource = resourceValue.trim().slice(0, 500);
-    const summary = action === "direct_code" ? summaryValue.trim() : summaryValue.trim().replace(/\s+/g, " ").slice(0, 500);
+    const summary = action === "direct_code" ? summaryValue.trim() : summaryValue.trim().replace(/\s+/g, " ").slice(0, action === "sandbox_network" ? 6000 : 500);
     if (!resource || !summary) throw new Error("Permission resource and summary are required");
     if (!context.executionId) {
       const approvedPreflight = this.catalog.permissionRequests.findLast((request) =>
