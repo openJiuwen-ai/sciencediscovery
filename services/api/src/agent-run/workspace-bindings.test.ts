@@ -1037,11 +1037,13 @@ for (const machine of ["local", "remote-1"]) {
     await assert.rejects(f.consent(), /changed during consent/);
     assert.equal(f.resources.length, 1); assert.equal(f.submissions(), 0);
   });
-  test(`${machine}: target cwd changes consume approval before dispatch`, async t => {
+  for (const field of ["cwd", "workspaceRoot"]) {
+  test(`${machine}: target ${field} changes consume approval before dispatch`, async t => {
     const f = await directBindingFixture(t, machine); const consent = await f.consent();
-    f.capability({ cwd: "redirected" });
+    f.capability({ [field]: "redirected" });
     await assert.rejects(f.binding.directExecution!.start(consent), /changed/);
     await assert.rejects(f.binding.directExecution!.start(consent), /consumed/);
     assert.equal(f.submissions(), 0);
   });
+  }
 }
