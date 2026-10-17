@@ -256,6 +256,12 @@ card recovery after a browser reload and cancellation returned to the model.
 The basic worker has no suite request or token budget and does not override
 per-request model token settings. Its ledger records forwarded requests,
 payload bytes and provider-reported input/output tokens across worker restarts.
+Provider usage is diagnostic evidence, not a real-E2E success or scoring gate.
+Missing, zero, or unavailable usage must not fail an otherwise completed task;
+missing accounting is not evidence of zero cost. Protocol parsing correctness
+remains enforced by deterministic model-client and gateway tests. Chat
+Completions reads `prompt_tokens`/`completion_tokens`, while Responses reads
+`input_tokens`/`output_tokens`; competing extra fields cannot override them.
 Cancelled calls or responses without usage stay in `unreportedCalls`; measured
 totals are incomplete when that count is nonzero. No token count is inferred
 from payload bytes. A fresh isolated run uses a fresh runtime root.

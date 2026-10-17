@@ -19,7 +19,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ModelRequestError, type ModelTurn, type streamModelTurn } from "@sciencediscovery/model";
+import { ModelRequestError, normalizeUsage, type ModelTurn, type streamModelTurn } from "@sciencediscovery/model";
 
 import { isSwarmCompaction, startModelGateway, toModelRequest, withoutWithheldNotice } from "./jiuwenswarm-model-gateway.js";
 
@@ -174,6 +174,28 @@ test("invalid truncated tool arguments are withheld for recovery without a termi
     assert.equal(warnings.some((line) => line.includes("private-payload")), false);
   } finally { await g.close(); }
 });
+
+for (const stream of [false, true]) {
+  for (const reported of [false, true]) {
+    test(`gateway preserves protocol usage without requiring accounting (stream=${stream}, reported=${reported})`, async () => {
+      const usage = normalizeUsage(reported ? {
+        prompt_tokens: 35, completion_tokens: 31, total_tokens: 66, input_tokens: 35, output_tokens: 0,
+      } : null, "openai-chat-completions");
+      const { streamer } = fakeStreamer(answer({ usage }));
+      const g = await gateway(streamer);
+      try {
+        const response = await post(g, { stream, messages: [{ role: "user", content: "hi" }] });
+        assert.equal(response.status, 200);
+        const wire = await response.text();
+        const body = stream
+          ? wire.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))).at(-1)
+          : JSON.parse(wire);
+        assert.deepEqual(body.usage, reported ? { prompt_tokens: 35, completion_tokens: 31, total_tokens: 66 } : undefined);
+        assert.equal(body.choices[0].finish_reason, "stop");
+      } finally { await g.close(); }
+    });
+  }
+}
 
 test("a chat-completions request is served in the model's own protocol, with the endpoint the run configured", async () => {
   const { calls, streamer } = fakeStreamer(answer());

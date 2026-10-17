@@ -758,12 +758,43 @@ test("toAnthropicMessages merges consecutive tool results into one user message"
   assert(messages[1]!.content.every((block) => block.type === "tool_result"));
 });
 
-test("usage normalization tolerates provider spellings", () => {
-  assert.deepEqual(normalizeUsage({ input_tokens: 1, output_tokens: 2 }), {
+for (const missingUsage of [false, true]) {
+  test(`chat completion survives mixed or missing accounting (missing=${missingUsage})`, async () => {
+    await withServer(async (request, response) => {
+      await readBody(request);
+      sse(response, [
+        { choices: [{ delta: { content: "OK" }, finish_reason: "stop" }] },
+        { choices: [], usage: missingUsage ? null : {
+          prompt_tokens: 35, completion_tokens: 31, total_tokens: 66,
+          input_tokens: 35, output_tokens: 0, usage_source: "anthropic",
+        } },
+      ]);
+    }, async (baseUrl) => {
+      const turn = await streamModelTurn({ apiProtocol: "openai-chat-completions", baseUrl, model: "stub" },
+        "s", [], [], policy, new AbortController().signal);
+      assert.equal(turn.assistantMessage.content, "OK");
+      assert.deepEqual(turn.usage, missingUsage ? undefined : {
+        inputTokens: 35, outputTokens: 31, totalTokens: 66, cacheReadTokens: null, cacheWriteTokens: null,
+      });
+    });
+  });
+}
+
+test("usage normalization follows the requested protocol", () => {
+  assert.deepEqual(normalizeUsage({ input_tokens: 1, output_tokens: 2 }, "openai-responses"), {
     inputTokens: 1, outputTokens: 2, totalTokens: 3, cacheReadTokens: null, cacheWriteTokens: null,
   });
-  assert.equal(normalizeUsage({ prompt_tokens: 1 }), undefined);
-  assert.equal(normalizeUsage(null), undefined);
+  assert.equal(normalizeUsage({ prompt_tokens: 1 }, "openai-chat-completions"), undefined);
+  assert.equal(normalizeUsage(null, "openai-responses"), undefined);
+  const mixed = { prompt_tokens: 35, completion_tokens: 31, input_tokens: 35, output_tokens: 0, total_tokens: 66 };
+  assert.equal(normalizeUsage(mixed, "openai-chat-completions")?.outputTokens, 31);
+  assert.equal(normalizeUsage(mixed, "openai-responses")?.outputTokens, 0);
+  assert.equal(normalizeUsage({ input_tokens: 35, output_tokens: 31 }, "openai-chat-completions"), undefined);
+  for (const value of [undefined, null, -1, NaN, Infinity, "31"]) {
+    assert.equal(normalizeUsage({ ...mixed, completion_tokens: value }, "openai-chat-completions"), undefined);
+  }
+  assert.equal(normalizeUsage({ ...mixed, completion_tokens: 0 }, "openai-chat-completions")?.outputTokens, 0);
+  assert.equal(normalizeUsage({ ...mixed, input_tokens: undefined }, "openai-responses"), undefined);
 });
 
 test("model client policy env parsing validates values", () => {
