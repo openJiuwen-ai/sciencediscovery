@@ -6,8 +6,10 @@ GitHub run status, logs, or artifacts.
 ## Coverage and runner behavior
 
 `.github/workflows/ci.yml` implements the cumulative profiles described in
-[the CI skill](../SKILL.md#what-runs-where). Every PR runs L1 plus hermetic
-UT/ST and the four mocked browser workers. Merge-group runs add basic real
+[the CI skill](../SKILL.md#what-runs-where). Non-draft PRs run L1 plus hermetic
+UT/ST and the four mocked browser workers on open, push, reopen and
+`ready_for_review`. Draft PRs skip every job, though GitHub may still create
+a skipped workflow run. Merge-group runs add basic real
 API journeys and distribution checks; nightly and release add research.
 `nightly.yml` and `release.yml` call the same workflow. Release currently takes
 the same eligible cases and evaluation modes as daily; it needs credentials.

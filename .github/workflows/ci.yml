@@ -23,11 +23,10 @@ name: CI
 on:
   push:
     branches: [main, master]
-  # These are the activity types GitHub applies by default; naming them keeps
-  # the contract visible: every pull request is checked when it is opened,
-  # whenever new commits are pushed to it, and if it is reopened.
+  # Check non-draft pull requests when opened, updated, reopened or marked
+  # ready for review. GitHub may create a run for a draft; all jobs skip it.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -80,6 +79,7 @@ jobs:
   # Routing must survive a failing L1 check so L4/L5 can still collect real evidence.
   policy:
     name: Select CI policy
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -101,6 +101,7 @@ jobs:
   l1:
     name: L1 (static checks)
     needs: policy
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -126,6 +127,7 @@ jobs:
   e2e-plan:
     name: Freeze mocked E2E matrix
     needs: [policy, l1]
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -189,6 +191,7 @@ jobs:
   ut:
     needs: [policy, l1]
     name: UT
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -286,7 +289,7 @@ jobs:
     # nothing to report. Release calls skip it: a tagged build publishes no
     # coverage.
     needs: [ut, st]
-    if: ${{ !cancelled() && github.workflow != 'Release' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && github.workflow != 'Release' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -363,6 +366,7 @@ jobs:
   st:
     needs: [policy, l1]
     name: ST
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -426,6 +430,7 @@ jobs:
   e2e:
     needs: [policy, l1, e2e-plan]
     name: L2 E2E (mocked, ${{ matrix.shard }})
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -544,7 +549,7 @@ jobs:
   # the four entry points end to end.
   binary:
     needs: [policy, l1]
-    if: ${{ needs.policy.outputs.distribution == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Binary release (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -629,7 +634,7 @@ jobs:
   # comes out actually serves.
   docker:
     needs: [policy, l1]
-    if: ${{ needs.policy.outputs.distribution == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && needs.policy.outputs.distribution == 'true' }}
     name: Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -794,7 +799,7 @@ jobs:
   merge-gate:
     name: merge-gate
     needs: [policy, l1, ut, st, e2e-plan, e2e, real-merge, real-scheduled, binary, docker]
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
