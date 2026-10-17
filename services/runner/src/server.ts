@@ -48,6 +48,7 @@ import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_WORKSPACE_BYTES,
   directExecutionCapability,
+  directExecutionWorkspace,
   executeDirectShell,
   executePython,
   executeShell,
@@ -565,7 +566,12 @@ export function createRunnerServer(
         return;
       }
       if (url.pathname === "/direct-execution-capability" && request.method === "GET") {
-        sendJson(response, 200, await directExecutionCapability());
+        const key = url.searchParams.get("runnerWorkspaceKey");
+        const root = url.searchParams.get("workspaceRoot");
+        if (key !== null && root !== null) throw new Error("Choose one direct workspace identity");
+        const workspace = key !== null ? await remoteWorkspaceRoot(config.dataDir, key) : root;
+        const scope = workspace !== null ? await directExecutionWorkspace(config, workspace, url.searchParams.get("cwd") ?? "") : {};
+        sendJson(response, 200, { ...await directExecutionCapability(), ...scope });
         return;
       }
       if (url.pathname === "/execution-capability" && ["GET", "POST"].includes(request.method ?? "")) {

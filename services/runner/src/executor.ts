@@ -1277,6 +1277,18 @@ export async function directExecutionCapability(): Promise<import("@sciencedisco
   return { available, target: directTargetIdentity, account: `${user.username}:${user.uid}:${user.gid}` };
 }
 
+/** Validate the consent workspace on the machine that will execute it. No code runs. */
+export async function directExecutionWorkspace(config: Pick<ExecutorConfig, "dataDir">, root: string, cwdValue: string) {
+  const workspaceRoot = await validatedWorkspace(config.dataDir, root);
+  if (isAbsolute(cwdValue)) throw new Error("Direct cwd must be workspace-relative");
+  const directory = await realpath(resolve(workspaceRoot, cwdValue));
+  const cwd = relative(workspaceRoot, directory);
+  if (cwd === ".." || cwd.startsWith(`..${sep}`) || isAbsolute(cwd) || !(await stat(directory)).isDirectory()) {
+    throw new Error("Direct cwd must be inside the approved workspace");
+  }
+  return { workspaceRoot, cwd };
+}
+
 /** Only called through the separately authenticated direct-execution endpoint. */
 export async function executeDirectShell(
   config: ExecutorConfig, request: ShellExecutionRequest, signal: AbortSignal,
@@ -1288,17 +1300,13 @@ export async function executeDirectShell(
   const authorization = request.directAuthorization;
   if (!capability.available || !authorization?.authorizationId || !authorization.runId
     || authorization.target !== capability.target || authorization.account !== capability.account
-    || authorization.agentId !== request.agentId || (request.cwd ?? "") !== authorization.cwd || request.runnerWorkspaceKey
+    || authorization.agentId !== request.agentId || (request.cwd ?? "") !== authorization.cwd || request.runnerWorkspaceKey !== authorization.runnerWorkspaceKey
     || request.environmentId || request.kernelMode === "persistent") {
-    throw new Error("Direct execution requires current target/account authorization and an ephemeral local shell");
+    throw new Error("Direct execution requires current target/account authorization and an ephemeral shell");
   }
-  const workspaceRoot = await validatedWorkspace(config.dataDir, request.workspaceRoot);
-  if (authorization.workspaceRoot !== workspaceRoot || isAbsolute(authorization.cwd)) throw new Error("Direct workspace scope changed");
-  const cwd = await realpath(resolve(workspaceRoot, authorization.cwd));
-  const within = relative(workspaceRoot, cwd);
-  if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within) || !(await stat(cwd)).isDirectory()) {
-    throw new Error("Direct cwd must be inside the approved workspace");
-  }
+  const { workspaceRoot, cwd: canonicalCwd } = await directExecutionWorkspace(config, request.workspaceRoot, authorization.cwd);
+  if (authorization.workspaceRoot !== workspaceRoot || authorization.cwd !== canonicalCwd) throw new Error("Direct workspace scope changed");
+  const cwd = resolve(workspaceRoot, canonicalCwd);
   const maxWorkspaceBytes = resolveQuotaBytes(request.maxWorkspaceBytes, config.maxWorkspaceBytes, "maxWorkspaceBytes");
   const maxOutputBytes = resolveQuotaBytes(request.maxOutputBytes, config.maxOutputBytes, "maxOutputBytes");
   await assertWorkspaceWithinQuota(workspaceRoot, maxWorkspaceBytes);

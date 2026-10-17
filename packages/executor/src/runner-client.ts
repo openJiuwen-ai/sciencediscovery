@@ -175,8 +175,9 @@ export class RunnerClient {
     });
   }
 
-  async directExecutionCapability(signal?: AbortSignal): Promise<import("@sciencediscovery/schema").DirectExecutionCapability> {
-    return this.request("/direct-execution-capability", { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000) });
+  async directExecutionCapability(signal?: AbortSignal, workspace?: { workspaceRoot?: string; runnerWorkspaceKey?: string; cwd: string }): Promise<import("@sciencediscovery/schema").DirectExecutionCapability> {
+    const query = workspace ? `?${new URLSearchParams(workspace)}` : "";
+    return this.request(`/direct-execution-capability${query}`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000) });
   }
 
   async status(): Promise<RunnerRuntimeStatus> {
