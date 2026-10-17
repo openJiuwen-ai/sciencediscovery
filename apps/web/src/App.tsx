@@ -281,6 +281,7 @@ import {
   type ComposerRunAction,
 } from "./composer/model.js";
 import { ModelPicker } from "./composer/ModelPicker.js";
+import { requestsResearchNetwork, SandboxNetworkPreflight, selectedResearchHosts } from "./composer/SandboxNetworkPreflight.js";
 import {
   isActiveRunStatus,
   isSessionRunning,
@@ -1128,6 +1129,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
+  const [networkPreflightApproved, setNetworkPreflightApproved] = useState(false);
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
   const showEvolveAlgorithmPicker =
     /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
@@ -3398,6 +3400,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return;
     }
     const content = message.trim();
+    const researchHosts = selectedResearchHosts(connectors, session.enabledConnectorIds);
+    if (sandboxNetworkSettings?.mode === "none" && !networkPreflightApproved
+      && requestsResearchNetwork(content, researchHosts)) {
+      return;
+    }
     const autoNameFirstMessage = session.title === UNTITLED_SESSION_TITLE
       && !session.messages.some((item) => item.role === "user");
     const titleRefinementStartedAt = Date.now();
@@ -4610,6 +4617,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   <textarea ref={composerTextarea} disabled={sessionArchived} value={message} onChange={(event) => {
                     const value = event.target.value;
                     setMessage(value);
+                    setNetworkPreflightApproved(false);
                     if (!value.startsWith("/evolve-design")) setEvolvePickerDismissed(false);
                   }} onKeyDown={(event) => {
                     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
@@ -4625,6 +4633,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
+                  {sandboxNetworkSettings?.mode === "none" && !networkPreflightApproved
+                    && requestsResearchNetwork(message, selectedResearchHosts(connectors, session.enabledConnectorIds)) ? <SandboxNetworkPreflight
+                      hosts={selectedResearchHosts(connectors, session.enabledConnectorIds)}
+                      onConfigure={() => openSystemSettings("sandbox-network")}
+                      onContinue={() => setNetworkPreflightApproved(true)}
+                    /> : null}
                   <div className="composer-footer">
                     <ModelPicker
                       activeModelId={session.modelId ?? undefined}
