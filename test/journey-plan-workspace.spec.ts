@@ -150,6 +150,7 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
         await expect(mainCard.locator(".plan-item-status.pending")).toHaveCount(1);
         // Check the active Plan before it is cleared. Unbroken task text must
         // wrap inside the card instead of overflowing the clipped Tasks fold.
+        const originalViewport = page.viewportSize();
         for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
           await page.setViewportSize(viewport);
           for (const width of [260, 320]) {
@@ -174,7 +175,7 @@ test("Workspace projects main and Subagent Plans independently", { tag: "@mocked
           }
         }
         await workspace.evaluate(el => { el.style.removeProperty("width"); el.style.removeProperty("max-width"); });
-        await page.setViewportSize({ width: 1440, height: 900 });
+        if (originalViewport) await page.setViewportSize(originalViewport);
       },
     );
 
