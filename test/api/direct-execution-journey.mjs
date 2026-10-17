@@ -69,7 +69,7 @@ const stub = createServer(async (request, response) => {
     const remote = String(messages[lastUser]?.content).includes("remote target");
     let call;
     if (!String(messages[lastUser]?.content).includes("[Execution notifications]")) {
-      if (!previous) call = { name: "run_shell", arguments: { command, ...(remote ? { machine: remoteRunnerId } : {}) } };
+      if (!previous) call = { name: "run_shell", arguments: { command, ...(remote ? { runner_id: remoteRunnerId } : {}) } };
       else if (previous === "run_shell") call = { name: "request_direct_execution", arguments: { operation_id: field(result, "operationId"), command, cwd: "" } };
       else if (previous === "request_direct_execution" && !String(result).includes("Permission denied") && !String(result).includes("unknown target execution outcome")) {
         call = { name: "run_direct_shell", arguments: { authorization_id: field(result, "authorizationId"), command,
@@ -150,7 +150,7 @@ async function json(path, body) {
   return JSON.parse(text);
 }
 async function step(name, expected, operation) {
-  try { steps.push({ name, expected, actual: await operation(), status: "PASS" }); }
+  try { steps.push({ name, expected, actual: await operation(), status: "PASS" }); console.log(`PASS: ${name}`); }
   catch (error) { steps.push({ name, expected, actual: redact(error.stack), status: "FAIL" }); throw error; }
 }
 let outcome = "FAIL";
@@ -177,6 +177,10 @@ try {
       let pending;
       await until(async () => {
         pending = (await json(`/api/permission-requests?sessionId=${session.id}`)).find(item => item.action === "direct_code" && item.state === "pending");
+        if (!pending) {
+          const run = (await json(`/api/sessions/${session.id}/runs`)).find(item => item.id === initial.id);
+          assert.ok(!["completed", "failed", "cancelled"].includes(run.status), `Run ended without direct consent: ${run.status}`);
+        }
         return pending;
       });
       assert.match(pending.summary, /DIRECT HOST EXECUTION.*account/);
