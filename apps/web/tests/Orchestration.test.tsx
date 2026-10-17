@@ -377,6 +377,6 @@ test("research lanes retain meaningful phases and deliberate failure states", ()
   assert.match(render({ steps: [step(result, "tool", { status: "completed" })] }), /2 papers returned/);
   assert.match(render({ steps: [step("result", "tool", { status: "completed", input: "echo result", toolName: "run_shell" })] }), /Ran · echo result/);
   assert.match(render({ steps: [step("result", "tool", { status: "completed" })] }), />result</);
-  assert.doesNotMatch(render({ steps: [] }), /tokens|general-purpose/);
+  assert.doesNotMatch(render({ status: "completed", steps: [] }), /150 tokens|general-purpose|2\/300/);
   assert.doesNotMatch(render({ status: "cancelled", steps: [step("private prose", "thinking")] }), /private prose|Thinking/);
 });

@@ -349,6 +349,10 @@ export interface ToolTrace {
   /** Child stream holding the full tool output, e.g. "tool-<toolCallId>". */
   outputStream?: string;
   outputTruncated?: boolean;
+  /** Bounded final-result evidence retained in the main stream for collapsed replay. */
+  preview?: string;
+  /** Actual returned literature records for this result, never provider total hits. */
+  paperCount?: number;
   status: "completed" | "failed" | "running";
   summary?: string;
 }

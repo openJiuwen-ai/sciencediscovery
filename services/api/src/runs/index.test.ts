@@ -132,6 +132,7 @@ test("completed tool traces retain cloneable details through the assembly path",
     id: "call-1",
     name: "run_shell",
     outputChars: 2,
+    preview: "ok",
     outputStream: "tool-call-1",
     status: "completed",
   });
@@ -239,4 +240,23 @@ test("chatty subagent progress stays bounded and transient snapshots are not per
   await publishRunEvent(store, "session", "run", { type: "subagent.step", subagentId: "child", step });
   assert.equal(persisted.length, 1);
   assert.ok(JSON.stringify(persisted).length < 17000);
+});
+
+test("completed traces retain bounded authoritative evidence and actual per-response paper counts", () => {
+  const trace = (text?:string) => buildCompletedToolTrace({ type:"tool_execution_end",toolCallId:"search",toolName:"search_pubmed",isError:false,
+    result:{content:text===undefined?[]:[{type:"text",text}]},
+  });
+  assert.equal(trace().preview,undefined);
+  assert.equal(trace("").preview,"");
+  assert.equal(trace("a\nb\nc\nd\ne").preview,"a\nb\nc\nd\ne");
+  assert.equal(trace("a\nb\nc\nd\ne\nf").preview,"a\nb\n…\ne\nf");
+  const long="h".repeat(100)+"t".repeat(100);
+  assert.equal(trace(long).preview,"h".repeat(80)+"…"+"t".repeat(77));
+  for(const sourceId of ["pubmed","arxiv","europe-pmc"]) {
+    const value=JSON.stringify({sourceId,toolId:"search",records:[{},{}],total:10000});
+    assert.equal(trace(value).paperCount,2);
+    assert.equal(trace(JSON.stringify({sourceId,toolId:"search",records:[]})).paperCount,0);
+  }
+  for(const value of ["null","plain evidence","{}",'{"sourceId":"other","toolId":"search","records":[]}',
+    '{"sourceId":"pubmed","toolId":"read","records":[]}','{"sourceId":"pubmed","toolId":"search","records":3}']) assert.equal(trace(value).paperCount,undefined);
 });

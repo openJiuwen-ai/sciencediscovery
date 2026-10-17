@@ -1036,7 +1036,8 @@ export function RunTimeline({
         const failure = entry.trace.status === "failed" && entry.trace.summary ? compactStatus(entry.trace.summary) : entry.liveFailure;
         const outputText = entry.trace.output ?? toolOutputs[entry.trace.id] ?? entry.trace.summary;
 
-        const preview = entry.paperCount !== undefined ? t("timeline.papersReturned", { count: entry.paperCount }) : entry.trace.name === "task" ? "" : evidencePreview(entry.preview ?? entry.trace.output ?? (failure ? "" : entry.trace.summary) ?? "");
+        const paperCount = entry.trace.paperCount ?? entry.paperCount;
+        const preview = paperCount !== undefined ? t("timeline.papersReturned", { count: paperCount }) : entry.trace.name === "task" ? "" : evidencePreview(entry.trace.preview ?? entry.preview ?? entry.trace.output ?? (failure ? "" : entry.trace.summary) ?? "");
         const command = entry.trace.name === "run_shell" && typeof entry.trace.args?.command === "string"
           ? compactStatus(entry.trace.args.command) : undefined;
         return (
@@ -1073,8 +1074,9 @@ export function RunTimeline({
         <div><span className="message-role">{agentLabel}</span>{modelName ? <details className="run-model-details"><summary>{t("timeline.details")}</summary>{modelName}</details> : null}</div>
       </header>
       {explorationGroups(entries).map(group => {
-        const latest = group.findLast(entry => entry.type === "tool" && (entry.preview || entry.trace.summary || entry.paperCount !== undefined));
-        const preview = latest?.type === "tool" ? latest.paperCount !== undefined ? t("timeline.papersReturned", { count: latest.paperCount }) : evidencePreview(latest.preview ?? latest.trace.summary ?? "") : "";
+        const latest = group.findLast(entry => entry.type === "tool" && (entry.trace.preview || entry.preview || entry.trace.summary || entry.trace.paperCount !== undefined || entry.paperCount !== undefined));
+        const paperCount = latest?.type === "tool" ? latest.trace.paperCount ?? latest.paperCount : undefined;
+        const preview = latest?.type === "tool" ? paperCount !== undefined ? t("timeline.papersReturned", { count: paperCount }) : evidencePreview(latest.trace.preview ?? latest.preview ?? latest.trace.summary ?? "") : "";
         return group.length === 1 ? renderEntry(group[0]!) : (
         <details className="timeline-exploration process-record" key={group[0]!.id}>
           <summary><strong>{t(group.some(entry => entry.type === "tool" && entry.trace.status === "running") ? "timeline.exploring" : "timeline.explored", { count: group.length })}</strong>

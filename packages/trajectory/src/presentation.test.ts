@@ -183,3 +183,9 @@ test("command transcript tolerates legacy packet fields without inventing output
 test("legacy single command chunks stay readable without a packet array", () => {
   assert.equal(sections("tool", { type: "tool.output", chunk: "legacy output" })[0]!.value, "legacy output");
 });
+
+test("single command output accepts legacy text and delta without a packet list", () => {
+  assert.equal(sections("tool", {type:"tool.output",text:"legacy text"})[0]!.value,"legacy text");
+  assert.equal(sections("tool", {type:"tool.output",delta:"legacy delta"})[0]!.value,"legacy delta");
+  assert.deepEqual(sections("tool", {type:"tool.output"}),[]);
+});

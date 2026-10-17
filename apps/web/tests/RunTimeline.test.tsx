@@ -1257,15 +1257,15 @@ test("restarted and identified reasoning retain explicit disclosure choices", ()
 });
 
 test("cancellation retains source warnings while success alone clears them", () => {
-  let entries = apply([
+  const running = apply([
     { type: "tool.started", trace: { id: "cancel", name: "run_shell", status: "running", args: { command: "search" } } },
     { type: "tool.output", toolCallId: "cancel", chunk: "Error: connector unavailable" },
-    { type: "tool.completed", trace: { id: "cancel", name: "run_shell", status: "cancelled" } },
   ]);
+  let entries = reduceRunTimeline(running, { type: "run.cancelled", runId: "fixture", reason: "Cancelled by user" });
   assert.equal(entries[0]?.type === "tool" && entries[0].liveFailure, "Error: connector unavailable");
   const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle() {} }));
   assert.match(html, /timeline-failure-summary/);
-  entries = reduceRunTimeline(entries, { type: "tool.completed", trace: { id: "cancel", name: "run_shell", status: "completed" } });
+  entries = reduceRunTimeline(running, { type: "tool.completed", trace: { id: "cancel", name: "run_shell", status: "completed" } });
   assert.equal(entries[0]?.type === "tool" && entries[0].liveFailure, undefined);
 });
 
@@ -1295,4 +1295,23 @@ test("an expanded stream with no recorded length tolerates an absent full transc
   })); });
   assert.equal(loads, 1, "an empty result records the revision instead of creating a refetch loop");
   await act(async () => { renderer!.unmount(); });
+});
+
+test("persisted evidence and counts render identically in standalone cards and Explored groups", () => {
+  const render=(entries:RunTimelineEntry[])=>renderToStaticMarkup(createElement(RunTimeline,{entries,isRunning:false,onToggle(){}}));
+  const shell=apply([{type:"tool.completed",trace:{id:"shell",name:"run_shell",status:"completed",preview:"first\nsecond\n…\nlast",outputStream:"tool-shell"}}]);
+  assert.match(render(shell),/first\nsecond\n…\nlast/);
+  const search=(id:string,paperCount?:number,preview?:string):RunStreamEvent=>({type:"tool.completed",trace:{id,name:"search_pubmed",status:"completed",...(paperCount!==undefined?{paperCount}:{}),...(preview!==undefined?{preview}:{}),outputStream:`tool-${id}`}});
+  assert.match(render(apply([search("one",0)])),/0 papers returned/);
+  const grouped=render(apply([search("one",2),search("two",0)]));
+  assert.match(grouped,/Explored/);
+  assert.match(grouped.split("<\/summary>")[0]!,/0 papers returned/);
+  assert.match(render(apply([search("one"),search("two",undefined,"Retrieved clinical evidence")])),/Retrieved clinical evidence/);
+});
+
+test("reopening a reasoning placeholder preserves earlier narrative and expansion choices", () => {
+  let entries=apply([{type:"assistant.delta",delta:"Research begins"},{type:"agent.phase",phase:"thinking",turn:1},{type:"assistant.thinking.delta",turn:1,delta:"**Searching**"}]);
+  entries=reduceRunTimeline(entries,{type:"agent.phase",phase:"thinking",turn:1});
+  assert.equal(entries[0]?.type==="assistant"&&entries[0].content,"Research begins");
+  assert.equal(entries[1]?.type==="thinking"&&entries[1].expanded,false);
 });

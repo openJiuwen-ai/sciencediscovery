@@ -276,13 +276,26 @@ function clonedDetailsEntry(details: unknown): { details?: unknown } {
   return cloned !== undefined ? { details: cloned } : {};
 }
 
+/** Small replay metadata; full text continues to live in tool streams. */
+function completedToolEvidence(text: string): Pick<ToolTrace, "preview" | "paperCount"> {
+  const lines = text.split("\n").map(line => line.length > 160 ? line.slice(0, 80) + "…" + line.slice(-77) : line);
+  const preview = (lines.length > 5 ? [...lines.slice(0, 2), "…", ...lines.slice(-2)] : lines).join("\n");
+  let paperCount: number | undefined;
+  try {
+    const result = JSON.parse(text);
+    if (result && ["arxiv", "pubmed", "europe-pmc"].includes(String(result.sourceId))
+      && result.toolId === "search" && Array.isArray(result.records)) paperCount = result.records.length;
+  } catch { /* Plain tool text is still useful bounded evidence. */ }
+  return { preview, ...(paperCount !== undefined ? { paperCount } : {}) };
+}
+
 export function buildCompletedToolTrace(event: ToolExecutionEndRunEvent, text = aggregateToolText(event.result)): ToolTrace {
   return {
     id: event.toolCallId,
     name: event.toolName,
     ...clonedDetailsEntry(event.result.details),
     ...(text !== undefined
-      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId) }
+      ? { outputChars: text.length, outputStream: toolOutputStreamId(event.toolCallId), ...completedToolEvidence(text) }
       : {}),
     status: event.isError ? "failed" : "completed",
   };
@@ -1961,7 +1974,7 @@ async function executeAgentRun(
             }, event.evidence);
           }
           if (event.type === "tool_execution_progress") {
-            const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
+            const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool" && step.status === "running");
             if (runningStep) {
               const progress = appendToolProgress(runningStep.progress ?? "", event.chunk);
               publishStep({ ...runningStep, content: progress, progress }, event.evidence, true);

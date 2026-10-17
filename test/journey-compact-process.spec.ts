@@ -30,7 +30,7 @@ test.describe("journey-compact-process.spec", { tag: ["@isolation:fresh", "@cate
  *   3. Check completed records, copyable output and the unchanged declared Artifact card.
  *      Inspect the trajectory transcript with a boundary between live progress and the final result.
  *   4. Run a failing tool and verify its compact error record.
- *   5. Reload on a narrow viewport and inspect persisted records and workspace files.
+ *   5. Reload on a narrow viewport and verify the same bounded evidence, persisted records and workspace files.
  * Environment: Isolated API/Runner on E2E_BASE_URL with a run-owned data directory.
  * Type: mocked
  * LLM: journey-owned local OpenAI-compatible scripted model.
@@ -346,8 +346,13 @@ test("完成的过程去框，运行卡片和文件操作保留", { tag: "@mocke
     await journey.step("窄屏刷新后访问原文件", "历史权限卡不会回来，目录仍默认关闭，文件可以从工作区入口访问且页面不横向溢出。",
       async () => {
         await page.setViewportSize({ width: 390, height: 844 });
+        const completed = page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" });
+        const evidence = completed.locator(":scope > summary .timeline-evidence");
+        await expect(evidence).not.toBeEmpty();
+        const retainedEvidence = await evidence.innerText();
         await page.reload();
         await expect(page.locator(".timeline-disclosure.tool.failed")).toBeVisible();
+        await expect(page.locator(".timeline-disclosure.tool.completed").filter({ hasText: "run_shell" }).locator(":scope > summary .timeline-evidence")).toHaveText(retainedEvidence);
         await expect(page.locator(".permission-card")).toHaveCount(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         // On mobile the existing workspace drawer must be opened first.
