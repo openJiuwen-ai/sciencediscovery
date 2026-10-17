@@ -4577,11 +4577,11 @@ export class SessionStore {
     | { allowed: false; request: PermissionRequest }
   > {
     const session = this.assertSessionWritable(sessionId);
-    if (!new Set<PermissionAction>(["direct_code", "artifact_download", "code", "connector", "directory", "host", "remote_job"]).has(action)) {
+    if (!new Set<PermissionAction>(["sandbox_network", "direct_code", "artifact_download", "code", "connector", "directory", "host", "remote_job"]).has(action)) {
       throw new Error("Unsupported permission action");
     }
     const resource = resourceValue.trim().slice(0, 500);
-    const summary = action === "direct_code" ? summaryValue.trim() : summaryValue.trim().replace(/\s+/g, " ").slice(0, 500);
+    const summary = action === "direct_code" ? summaryValue.trim() : summaryValue.trim().replace(/\s+/g, " ").slice(0, action === "sandbox_network" ? 6000 : 500);
     if (!resource || !summary) throw new Error("Permission resource and summary are required");
     if (!context.executionId) {
       const approvedPreflight = this.catalog.permissionRequests.findLast((request) =>

@@ -91,6 +91,62 @@ Properties:
 - Changing the policy rotates the Permission Epoch; new executions use the new policy snapshot.
 - Scientific environment install networking (conda channels, pip index, offline cache) is independent of this policy.
 
+#### In-conversation network consent
+
+Before a Skill script or command needs HTTP access, the Agent calls
+`request_sandbox_network` with exact `hosts` (optional `:port`), a short
+`purpose`, and the intended `runner_id`. In Ask mode this pauses on a
+conversation permission card showing the hosts and purpose. Allow once or
+Allow same type returns a one-use `authorizationId`; pass it as
+`network_authorization_id` on a **new** `run_shell` call. Always Allow
+automatically approves these exact-host permission requests.
+An explicit tool request declares hosts up front; an attributed allowlist denial
+can also create that request after the failed execution. It returns a token
+without replaying the execution. Only newly approved hosts are added; configured
+allowlist entries remain allowed, and configured `open` remains open. Wildcards,
+URLs and IP literals are not accepted by this consent path.
+
+Declare **all known required hosts together up front**. For example, if a script
+needs both `a.example.org` and `b.example.org`, request both in one `hosts` list.
+Approvals do not accumulate across executions: an observed denial includes only
+hosts attempted in that execution. A script that stops at its first failure can
+otherwise alternate between single-host requests. If another required host is
+discovered, reconcile the previous execution's effects, then request the complete
+known host set for a safe **new** execution. Consent never replays the script.
+
+The token belongs to this Agent, run and Runner. It is consumed before
+submission, including when the submission outcome is uncertain. Matching
+consent covers the identical host set and scope during that Agent run;
+revoking its grant invalidates unused tokens. It cannot pass to children,
+another Runner or a later run. The execution receives a separate immutable
+network epoch preserving configured access and adding approved hosts, with
+the deployment's private-address filter and
+outbound route. Neither the global setting nor the shared Session epoch is
+expanded, and calls without a token retain their normal policy.
+
+In allowlist mode each Shell execution has its own gateway. Missing-domain
+denials return `networkDeniedHosts`, mark managed execution as failed even if
+a script catches the HTTP error, and open the same permission card while the
+owning run is active. The resulting `networkPermission` contains a decision
+and, when approved, a token for a new call. **Nothing replays automatically**:
+inspect output, files and remote effects before deciding whether a new call is
+safe. Reconcile unknown execution outcomes before resubmitting. Unsupported
+observed host names stay blocked with per-host reasons in
+`networkPermission.blockedHosts`; they do not suppress cards for valid denied hosts.
+Private-address or outbound-route failures do not authorize a bypass through this card.
+
+Deny, cancellation or dismissal/expiry leaves egress blocked. Required
+retrieval must be reported as blocked/incomplete with its reason; do not
+silently substitute a web-search-only report that appears complete. In `none`
+mode the baseline socket filter, private namespace and absence of a bridge are
+unchanged. An opaque script cannot reliably reveal its intended hosts there:
+its failure remains visible, and the Agent/Skill must explicitly declare known
+hosts to request access. Automatic host-specific discovery is **not promised**.
+Skill authors should identify required hosts and instruct the Agent to request
+them before running their scripts. MCP/Web host-side access and durable System
+configuration → Sandbox network settings remain separate. A preflight banner
+may assist discovery but does not replace live conversation consent.
+
 ### 3.2 Ascend NPU inside the sandbox
 
 Selected Ascend chips are handed to the sandbox. An earlier revision of this document said they could not be, because a probe inside the bwrap namespace failed with `Container ID verify failed (session ct_id=0; device ct_id=...)`. That was measured while the host's whole `/dev` was visible, and it is what the driver does in that situation rather than a limit on device passthrough: inside a mount namespace the driver enumerates the cards it can see under the caller's `/dev`, all-or-nothing, so one card claimed by another tenant fails the call for every card. Exposing only the selected chips removes the condition, and `npu-smi info` and MindSpore both run inside the sandbox on a 910B3.

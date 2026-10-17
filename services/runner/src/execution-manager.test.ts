@@ -200,3 +200,30 @@ test("failed atomic ref publication never reports an unrooted Execution version"
   assert.match(execution.error!, /ref publication failure/);
   assert.throws(() => manager.start(request(workspace, "later"), async () => result("later")), /repair storage/);
 });
+
+test("a caught HTTP denial still fails the managed execution and commits its partial workspace", async context => {
+  const { manager, workspace, root } = await fixture(context);
+  manager.start(request(workspace, "caught-denial"), async () => {
+    await writeFile(resolve(workspace, "partial.txt"), "already wrote");
+    return { ...result("caught-denial"), networkDeniedHosts: ["pypi.org:443"] };
+  });
+  await until(() => manager.get("caught-denial", owner).state === "failed");
+  const record = manager.get("caught-denial", owner);
+  assert.equal(record.result!.exitCode, 0, "retain actual process exit status rather than falsifying it");
+  assert.deepEqual(record.result!.networkDeniedHosts, ["pypi.org:443"]);
+  assert.ok(record.version);
+  await new VersionStore(root).validateClosure(record.version!);
+});
+
+test("cancellation wins over a successful late process result without losing its audit", async context => {
+  const { manager, workspace } = await fixture(context);
+  manager.start(request(workspace, "late-success"), async signal => {
+    await new Promise<void>(done => signal.addEventListener("abort", () => done(), { once: true }));
+    return result("late-success");
+  });
+  await until(() => manager.get("late-success", owner).state === "running");
+  manager.cancel("late-success", owner);
+  await until(() => manager.get("late-success", owner).state === "cancelled");
+  assert.equal(manager.get("late-success", owner).result!.exitCode, 0);
+  assert.ok(manager.get("late-success", owner).version);
+});

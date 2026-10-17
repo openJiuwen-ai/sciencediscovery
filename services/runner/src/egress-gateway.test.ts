@@ -616,3 +616,42 @@ test("open mode passes IP literal targets through the private-address filter", a
     await allowed.close();
   }
 });
+
+test("execution gateways attribute only their own policy denials, without DNS, and release them", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "eg-consent-"));
+  let resolutions = 0;
+  const registry = new EgressGatewayRegistry(directory, undefined, async () => { resolutions++; return [{ address: "127.0.0.1", family: 4 }]; });
+  try {
+    const first = await registry.acquire(access({ revision: "execution-one" }));
+    const second = await registry.acquire(access({ revision: "execution-two" }));
+    assert.match(await overSocket(first.socketPath, "CONNECT pubmed.ncbi.nlm.nih.gov:443 HTTP/1.1\r\n\r\n"), /403/);
+    assert.deepEqual(await registry.deniedHosts("execution-one"), ["pubmed.ncbi.nlm.nih.gov:443"]);
+    assert.deepEqual(await registry.deniedHosts("execution-two"), []);
+    assert.equal(resolutions, 0, "a denied target must never reach DNS");
+    // Allowed domain resolving private is a different security boundary, not consentable here.
+    assert.match(await overSocket(second.socketPath, "CONNECT example.org:443 HTTP/1.1\r\n\r\n"), /403/);
+    assert.deepEqual(await registry.deniedHosts("execution-two"), []);
+    await registry.release("execution-one");
+    assert.deepEqual(await registry.deniedHosts("execution-one"), []);
+    await assert.rejects(stat(first.socketPath));
+  } finally { await registry.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("TCP gateway denial attribution and cleanup failure preserve fail-closed release", async () => {
+  const directory = await scratchDirectory();
+  const registry = new EgressGatewayRegistry(directory, undefined, async () => { throw new Error("No DNS for denied target"); });
+  try {
+    const gateway = await registry.acquireTcp(access({ revision: "tcp-execution" }));
+    const { request } = await import("node:http");
+    await new Promise<void>((done, reject) => {
+      const call = request(gateway.proxyUrl(), { method: "CONNECT", path: "blocked.example.org:443" });
+      call.on("connect", (response, socket) => { socket.destroy(); assert.equal(response.statusCode, 403); done(); });
+      call.on("error", reject); call.end();
+    });
+    assert.deepEqual(await registry.deniedHosts("tcp-execution"), ["blocked.example.org:443"]);
+    const close = gateway.close.bind(gateway);
+    gateway.close = async () => { await close(); throw new Error("Simulated post-close unlink failure"); };
+    await registry.release("tcp-execution");
+    assert.deepEqual(await registry.deniedHosts("tcp-execution"), []);
+  } finally { await registry.close(); }
+});

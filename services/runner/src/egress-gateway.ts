@@ -155,6 +155,9 @@ export interface EgressGatewayOptions {
 }
 
 export class EgressGateway {
+  private readonly deniedHosts = new Set<string>();
+  /** Only missing allowlist entries are consentable; private-address failures stay blocked. */
+  policyDeniedHosts(): string[] { return [...this.deniedHosts].toSorted(); }
   private readonly server: Server;
   private readonly log?: EgressGatewayLog;
   private readonly resolveAddresses: EgressAddressResolver;
@@ -307,6 +310,10 @@ export class EgressGateway {
   }
 
   private note(allowed: boolean, host: string, port: number, detail: { proxy?: string; reason?: string } = {}): void {
+    if (!allowed && this.access.mode === "domain-allowlist" && !isIpLiteral(host)
+      && !allowedDomainMatches(this.access.allowedDomains, host, port) && this.deniedHosts.size < 16) {
+      this.deniedHosts.add(`${host.toLowerCase().replace(/\.$/, "")}:${port}`);
+    }
     this.log?.(allowed ? "allowed" : "denied", {
       host,
       port,
@@ -580,6 +587,20 @@ export class EgressGatewayRegistry {
     const started = await gateway;
     started.setProxy(proxy);
     return started;
+  }
+
+  async deniedHosts(revision: string): Promise<string[]> {
+    const gateway = this.gateways.get(revision) ?? this.tcpGateways.get(revision);
+    return gateway ? (await gateway).policyDeniedHosts() : [];
+  }
+
+  /** Execution-specific gateways cannot accumulate or share denial attribution. */
+  async release(revision: string): Promise<void> {
+    for (const registry of [this.gateways, this.tcpGateways]) {
+      const gateway = registry.get(revision);
+      registry.delete(revision);
+      if (gateway) await gateway.then(value => value.close()).catch(() => undefined);
+    }
   }
 
   async close(): Promise<void> {
