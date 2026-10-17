@@ -356,3 +356,27 @@ test("a completed foreground shell keeps a readable command phase between subage
   assert.match(html, /Ran · printf FG-evidence/);
   assert.doesNotMatch(html, /PRIVATE_SESSION_ID|PRIVATE_AGENT_ID|Turn 2 started/);
 });
+
+test("research lanes retain meaningful phases and deliberate failure states", () => {
+  const render = (overrides: Partial<Subagent>) => renderToStaticMarkup(createElement(SubagentCards, {
+    subagents: [buildSubagent({ status: "running", ...overrides })], onOpenSubagent() {},
+  }));
+  const step = (content: string, kind: "thinking" | "assistant" | "tool", extra = {}) => ({
+    id: "phase", createdAt: timestamp, content, kind, status: "running" as const, ...extra,
+  });
+  assert.match(render({ error: " Network error: source down ", steps: [] }), /Network error: source down/);
+  assert.match(render({ steps: [step("Failure: source down", "tool", { status: "failed" })] }), /timeline-failure-summary/);
+  assert.match(render({ steps: [step("Synthesizing 5 papers", "assistant")] }), /Synthesizing 5 papers/);
+  assert.match(render({ steps: [step("private prose", "thinking")] }), /Thinking/);
+  assert.doesNotMatch(render({ steps: [step("private prose", "thinking")] }), /private prose/);
+  assert.match(render({ steps: [step("**Searching PubMed**", "thinking")] }), /Searching PubMed/);
+  assert.match(render({ steps: [step("input", "tool", { input: "input", args: { query: "Clinical evidence" } })] }), /Clinical evidence/);
+  assert.match(render({ steps: [step("", "tool", { status: "completed", args: { description: "Retrieve evidence" } })] }), /Retrieve evidence/);
+  assert.match(render({ steps: [step("Error: source down", "tool", { input: "query" })] }), /Error: source down/);
+  const result = JSON.stringify({ sourceId: "pubmed", toolId: "search", records: [{}, {}] });
+  assert.match(render({ steps: [step(result, "tool", { status: "completed" })] }), /2 papers returned/);
+  assert.match(render({ steps: [step("result", "tool", { status: "completed", input: "echo result", toolName: "run_shell" })] }), /Ran · echo result/);
+  assert.match(render({ steps: [step("result", "tool", { status: "completed" })] }), />result</);
+  assert.doesNotMatch(render({ steps: [] }), /tokens|general-purpose/);
+  assert.doesNotMatch(render({ status: "cancelled", steps: [step("private prose", "thinking")] }), /private prose|Thinking/);
+});

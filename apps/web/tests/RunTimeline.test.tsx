@@ -1240,3 +1240,31 @@ test("a failed summary without output appears only once in the collapsed card", 
   const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle() {} }));
   assert.equal((html.split("</summary>")[0]!.match(/Source unavailable/g) ?? []).length, 1);
 });
+
+test("restarted and identified reasoning retain explicit disclosure choices", () => {
+  const phase = { type: "agent.phase", phase: "thinking", turn: 1 } as const;
+  let entries = apply([phase, { type: "assistant.thinking.delta", turn: 1, delta: "**Searching**" }]);
+  entries = reduceRunTimeline(entries, phase);
+  assert.equal(entries[0]?.type === "thinking" && entries[0].expanded, false);
+  entries = entries.map(entry => entry.type === "thinking" ? { ...entry, expanded: true, userExpanded: true } : entry);
+  entries = reduceRunTimeline(entries, phase);
+  assert.equal(entries[0]?.type === "thinking" && entries[0].expanded, true);
+  let identified = apply([{ type: "assistant.thinking.delta", turn: 2, responseId: "r", delta: "**Searching**" }]);
+  assert.equal(identified[0]?.type === "thinking" && identified[0].expanded, false);
+  identified = reduceRunTimeline(identified, { type: "assistant.thinking.delta", turn: 2, responseId: "r", delta: " more" });
+  assert.equal(identified[0]?.type === "thinking" && identified[0].content, "**Searching** more");
+  assert.equal(identified[0]?.type === "thinking" && identified[0].expanded, false);
+});
+
+test("cancellation retains source warnings while success alone clears them", () => {
+  let entries = apply([
+    { type: "tool.started", trace: { id: "cancel", name: "run_shell", status: "running", args: { command: "search" } } },
+    { type: "tool.output", toolCallId: "cancel", chunk: "Error: connector unavailable" },
+    { type: "tool.completed", trace: { id: "cancel", name: "run_shell", status: "cancelled" } },
+  ]);
+  assert.equal(entries[0]?.type === "tool" && entries[0].liveFailure, "Error: connector unavailable");
+  const html = renderToStaticMarkup(createElement(RunTimeline, { entries, isRunning: false, onToggle() {} }));
+  assert.match(html, /timeline-failure-summary/);
+  entries = reduceRunTimeline(entries, { type: "tool.completed", trace: { id: "cancel", name: "run_shell", status: "completed" } });
+  assert.equal(entries[0]?.type === "tool" && entries[0].liveFailure, undefined);
+});

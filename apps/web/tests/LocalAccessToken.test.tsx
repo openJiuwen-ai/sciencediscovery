@@ -91,3 +91,14 @@ test("same-document sign-in links replace mounted credentials and unsubscribe cl
   target.dispatchEvent(new Event("hashchange"));
   assert.equal(tokens.length, 2);
 });
+
+test("mounted links consume empty credentials without losing a saved token", () => {
+  const b = browser("http://localhost:4320/#token=%20&section=notes", "saved");
+  const target = Object.assign(new EventTarget(), { location: b.location, history: b.history, localStorage: b.storage });
+  const tokens: string[] = [];
+  const stop = watchLocalAccessToken(target, token => tokens.push(token));
+  target.dispatchEvent(new Event("hashchange"));
+  assert.deepEqual(tokens, ["saved"]);
+  assert.equal(b.location.href, "http://localhost:4320/#section=notes");
+  stop();
+});

@@ -172,3 +172,10 @@ test("input and state summaries use frozen data, not an inferred current state",
   assert.deepEqual(sections("input", { input: { systemPrompt: "rules", history: [{ role: "user", content: "question" }], tools: [] } }).map(s => s.value), ["rules", "question", []]);
   assert.deepEqual(sections("state", { phase: "completed", turn: 2, history: [], checkpoint: { components: [{ id: "plan", revision: "frozen", fidelity: "exact" }] } })[1]!.value, [{ id: "plan", revision: "frozen", fidelity: "exact" }]);
 });
+
+test("command transcript tolerates legacy packet fields without inventing output", () => {
+  const values = sections("tool", { type: "tool.output", packets: [
+    { text: "searching", progress: true }, { content: "results" }, { delta: " done" }, {},
+  ] });
+  assert.equal(values[0]!.value, "searching\n\n---\n\nresults done");
+});

@@ -165,3 +165,25 @@ test("completed child tool details retain progress without keeping a live failur
   assert.equal(entry.trace.output, "Error: retrying\n\n\n---\n\n5 papers");
   assert.equal(entry.liveFailure, undefined);
 });
+
+test("child snapshots distinguish pending input, live evidence, and terminal results", () => {
+  const entry = (extra: Record<string, unknown>) => subagentTimelineEntries(buildSubagent({ status: "running", steps: [{
+    id: "tool", createdAt: timestamp, kind: "tool", status: "running", content: "query", input: "query", ...extra,
+  }] }))[0];
+  const pending = entry({ args: { query: "clinical" } });
+  assert.ok(pending?.type === "tool");
+  assert.equal(pending.trace.output, undefined);
+  assert.equal(pending.preview, undefined);
+  assert.deepEqual(pending.trace.args, { query: "clinical" });
+  const live = entry({ content: "Error: network unavailable" });
+  assert.ok(live?.type === "tool");
+  assert.equal(live.liveFailure, "Error: network unavailable");
+  assert.equal(live.trace.output, "Error: network unavailable");
+  const noInput = entry({ input: undefined, content: "query" });
+  assert.ok(noInput?.type === "tool");
+  assert.equal(noInput.trace.output, undefined);
+  const empty = entry({ status: "completed", content: "" });
+  assert.ok(empty?.type === "tool");
+  assert.equal(empty.trace.output, "");
+  assert.equal(empty.preview, undefined);
+});

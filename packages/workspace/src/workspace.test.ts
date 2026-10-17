@@ -2173,3 +2173,30 @@ test("foreground Shell forwards incremental logs before completion without losin
   assert.deepEqual(cursors, [0, 2]);
   assert.match(result.content[0]!.text, /failed/);
 });
+
+test("Shell progress observation failures and aborts preserve execution semantics", async () => {
+  const job = { id: "job", state: "running" } as import("@sciencediscovery/schema").AgentShellExecution;
+  let logs = 0;
+  let waits = 0;
+  const controller = new AbortController();
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("unused"); },
+    shellExecutions: {
+      start: async () => job,
+      wait: async () => { waits++; return { ...job, state: "completed" }; },
+      logs: async () => { logs++; throw new Error("observation unavailable"); },
+      get: async () => job, list: () => [job], cancel: async () => job,
+    },
+  });
+  const tool = tools.find(tool => tool.name === "run_shell")!;
+  const result = await tool.execute("shell", { command: "search" }, controller.signal, () => { throw new Error("observer"); });
+  assert.equal(result.isError, false);
+  assert.equal(logs, 1);
+  controller.abort(new Error("cancel requested"));
+  await assert.rejects(tool.execute("cancel", { command: "search" }, controller.signal, () => {}), /cancel requested/);
+  assert.equal(waits, 1, "an aborted foreground call never polls");
+  const withoutObserver = await tool.execute("plain", { command: "search" });
+  assert.equal(withoutObserver.isError, false);
+  assert.equal(logs, 1, "ordinary calls do not read live logs");
+});
