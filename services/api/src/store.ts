@@ -4317,6 +4317,7 @@ export class SessionStore {
       const { approvalMode, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
       const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
       const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
+      if (nextSettings.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
       const nextModel = this.getModel(nextSettings.modelId);
       if (nextModel && (nextSettings.thinkingMode !== undefined || nextSettings.thinkingEffort !== undefined)) {
         const constrained = constrainCatalogThinking(

@@ -7852,4 +7852,10 @@ test("approval defaults API covers implicit first Sessions and explicit Session 
   assert.equal(first.body.approvalMode, "always_allow");
   const invalid = await request("/api/settings", {defaultApprovalMode:"invalid"});
   assert.equal(invalid.response.status, 400);
+  const invalidSessionDefault = await request(`/api/sessions/${explicit.body.id}`, {defaultApprovalMode:"always_allow"}, "PATCH");
+  assert.equal(invalidSessionDefault.response.status, 400);
+  const sessionSettings = await jsonRequest<RuntimeSettingsDetails>(`${origin}/api/sessions/${explicit.body.id}/settings`, {headers:authorization});
+  assert.equal(sessionSettings.body.overrides.defaultApprovalMode, undefined);
+  const stillEditable = await request(`/api/sessions/${explicit.body.id}`, {title:"Still editable"}, "PATCH");
+  assert.equal(stillEditable.response.status, 200);
 });

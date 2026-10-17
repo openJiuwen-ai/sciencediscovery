@@ -50,6 +50,8 @@ test('approval defaults resolve only at creation, persist, and never follow sibl
   await assert.rejects(store.replaceGlobalSettings({defaultApprovalMode:'invalid'}), /defaultApprovalMode/);
   await assert.rejects(store.replaceProjectSettings(project.id, {defaultApprovalMode:null}), /defaultApprovalMode/);
   await assert.rejects(store.replaceSessionSettings(old.id, {defaultApprovalMode:'always_allow'}), /only supported/);
+  await assert.rejects(store.updateSession(old.id, {defaultApprovalMode:'always_allow'}), /only supported/);
+  assert.equal(store.getSessionSettings(old.id).overrides.defaultApprovalMode, undefined);
   await assert.rejects(store.createSession(project.id, 'Invalid scope', {defaultApprovalMode:'always_allow'}), /only supported/);
   assert.deepEqual(normalizeRuntimeSettings({defaultApprovalMode:'invalid'}, new Set(), new Set(), false), {});
 });
