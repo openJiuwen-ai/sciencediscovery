@@ -329,7 +329,7 @@ mirror: nothing runs there.
 `merge-gate`; queue success merges automatically, without Environment approval
 or a final approval job. Configure branch rules and scoped Environments as
 specified in [.ci/README.md](.ci/README.md#merge-queue-and-credentials-repository-setup).
-L5 failure blocks Release/assets while leaving the already-created tag intact.
+L5 failure blocks creating the draft Release and its assets while leaving the already-created tag intact. A person with write access reviews and publishes the draft from the Releases page before it becomes public.
 
 Backend selection (`--backend jiuwenswarm|legacy`, or `CI_E2E_BACKEND`) is
 independent of tiers and case selection. Native real ST and adapter live UT

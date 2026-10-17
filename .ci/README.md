@@ -26,7 +26,7 @@ No workflow maintains its own list of case titles.
 | L2 (`pr`) | Non-draft PR opened, synchronized, reopened or marked ready for review, after L1; also default-branch push | L1 + reviewed hermetic UT, ST and mock E2E; no external model credentials | Required before enqueue; UT 60, ST 30, mock E2E 90 minutes |
 | L3 (`merge`) | Maintainer reviews the current head and selects **Merge when ready**; `merge_group: checks_requested` | L2 rerun on the group SHA + nine short real API journeys (including Runner wait/finish decisions) + binary smoke and Docker distribution gates | Required before automatic merge; basic worker 60 minutes including setup, target 10–15 minutes of test time |
 | L4 (`daily`) | Daily at 16:00 UTC, or explicit dispatch | L3 + twelve nightly cases: DRB-58/59/62/64/75, research team, PUCT compression, J5 statistics, two provenance/card journeys, Biomni DA-13-3/DA-14-1 | Daily failure signal; each research worker 240 minutes including setup |
-| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks Release/assets, not the already-created tag; each research worker 240 minutes |
+| L5 (`release`) | Version tag push | Same current case set and evaluation modes as L4; separate profile retained for future release-only cases; no historical baseline gate | Blocks creating the draft Release and its assets, not the already-created tag; a person publishes the draft from the Releases page; each research worker 240 minutes |
 
 `l1` through `l5` are also explicit local profile names. `pr`, `merge`, `daily`
 and `release` alias L2, L3, L4 and L5. The release policy now includes paid
@@ -153,7 +153,8 @@ so a failed L1 check cannot hide the requested real suite. Real workers still
 require a successfully frozen real plan and respect workflow cancellation.
 This changes execution eligibility, not the final verdict: `merge-gate` still
 requires every selected job and complete mocked/real accounting; any failure
-continues to block Release/assets publication.
+continues to block creating the draft Release and its assets, which become
+public only after a person publishes the draft from the Releases page.
 No extra accounting job or human approval is added. The combined `e2e-results`
 artifact preserves worker HTML/image links and the suite-level plan/summary.
 

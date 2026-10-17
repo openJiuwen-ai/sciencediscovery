@@ -50,7 +50,7 @@ run is defined by the profiles below.
 | L2 / `pr` | Non-draft PR opened, synchronized, reopened or marked ready for review; push to `main` or `master`; default manual dispatch | L1 + hermetic UT/ST and mocked browser E2E; no model credentials or distribution jobs |
 | L3 / `merge` | `merge_group: checks_requested`, after maintainer review and enqueue | Rerun L1/L2 on the group SHA + basic real API journeys, x86_64/aarch64 binary smoke and Docker deployment checks; required before automatic merge |
 | L4 / `daily` | `nightly.yml`, 16:00 UTC daily or manual | L3 + all eligible nightly research journeys and their declared judging; records the nightly outcome and artifacts |
-| L5 / `release` | `release.yml`, version tag push | Currently the same eligible cases and evaluation modes as L4; retains its own extension tier. Failure blocks Release/assets publication, not creation of the already-pushed tag |
+| L5 / `release` | `release.yml`, version tag push | Currently the same eligible cases and evaluation modes as L4; retains its own extension tier. Failure blocks creating the draft Release and its assets, not creation of the already-pushed tag. A person publishes the draft from the Releases page before it becomes public |
 
 `ci.yml` also accepts `workflow_dispatch` and `workflow_call` profiles
 `pr`, `merge`, `daily`, and `release`. [.ci/tier-policy.mjs](../../../.ci/tier-policy.mjs)
